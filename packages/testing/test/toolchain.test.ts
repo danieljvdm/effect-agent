@@ -170,8 +170,8 @@ const forbiddenScaffoldDependencies = new Set([
 ]);
 const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"] as const;
 /**
- * The documented inward-only package graph (ARCHITECTURE.md §11, AGENTS.md
- * "Package dependency direction"): every `@effect-agent/*` edge a framework
+ * The documented inward-only package graph (AGENTS.md "Package dependency direction"):
+ * every `@effect-agent/*` edge a framework
  * manifest may declare, in any dependency section. `capabilities -> sandbox`
  * is the CodeExecutor port edge registered by ADR-0017 (declared here before
  * C1 adds the manifest edge). The `-> testing` entries are the two documented
@@ -259,12 +259,6 @@ const readWorkspaceNames = (path: string) =>
       }
     }
     return names;
-  });
-
-const exists = (path: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    return yield* fs.exists(path);
   });
 
 const runFixtureCommand = Effect.fn("toolchainTest.runFixtureCommand")(function* (
@@ -2035,39 +2029,5 @@ Exercise the generated release verifier.
           }
         }
       }),
-  );
-
-  it.effect("matches an initialized local Effect checkout to the catalog pin", () =>
-    Effect.gen(function* () {
-      const rootManifest = yield* readManifest(`${repositoryRoot}/package.json`);
-      const effectVersion = rootManifest.catalog?.effect;
-      const effectSource = `${repositoryRoot}/repos/effect`;
-      const effectPackagePath = `${effectSource}/packages/effect/package.json`;
-
-      // CI deliberately leaves source submodules uninitialized; installed packages remain authoritative there.
-      if (!(yield* exists(effectPackagePath))) {
-        return;
-      }
-
-      const effectPackage = yield* readManifest(effectPackagePath);
-      const tagsAtHead = yield* Effect.gen(function* () {
-        const child = yield* ChildProcess.make(
-          "git",
-          ["-C", effectSource, "tag", "--points-at", "HEAD"],
-          { stderr: "pipe", stdout: "pipe" },
-        );
-        const [output, exitCode] = yield* Effect.all([
-          Stream.mkString(Stream.decodeText(child.all)),
-          child.exitCode,
-        ]);
-
-        expect(exitCode).toBe(0);
-        return output.split("\n").filter(Boolean);
-      });
-
-      expect(effectPackage.name).toBe("effect");
-      expect(effectPackage.version).toBe(effectVersion);
-      expect(tagsAtHead).toContain(`effect@${effectVersion}`);
-    }),
   );
 });

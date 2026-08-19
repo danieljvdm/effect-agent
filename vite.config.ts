@@ -94,7 +94,6 @@ const generatedPaths = [
   "action/dist/**",
   "work-order-action/dist/**",
   "examples/demo/src/routeTree.gen.ts",
-  "repos/**",
 ];
 
 export default defineConfig({

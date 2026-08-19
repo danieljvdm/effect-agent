@@ -157,4 +157,3 @@ to a beta release, and there is no compatibility window yet.
 
 - [Getting started](./getting-started) — build the Definition and Binding yourself.
 - [Effect-native by construction](../concepts/effect-native) — why the architecture holds these properties structurally.
-- [Implementation status](../reference/status) — what is claimed, its evidence, and the explicit non-claims.

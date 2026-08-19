@@ -68,6 +68,5 @@ start:
 - stores implement fenced, idempotent canonical append;
 - provider SDK objects never become recovery truth.
 
-The [durability specification](../spec/durability) carries the normative admission, recovery, and
-Settlement contracts; [Implementation status](../reference/status) lists each claim's evidence and
-explicit non-claims.
+The [durability specification](../spec/durability) defines the admission, recovery, and Settlement
+contracts.

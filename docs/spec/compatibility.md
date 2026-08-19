@@ -58,11 +58,8 @@ accepted-work concerns, not model-provider abstractions.
 
 ## 4. Source material
 
-The exact inspected commits and findings live in
-the pull requests that introduced them. Specification text never interprets
-upstream internals in detail. The matching source snapshots are checked into this repository as
-shallow Git submodules: Flue at `repos/flue` and Pi at `repos/pi`. These paths provide local
-reference material only; product packages and CI do not depend on them.
+The exact inspected commits and findings live in the pull requests that introduced them.
+Specification text never interprets upstream internals in detail.
 
 Flue contributed research about:
 
@@ -105,7 +102,6 @@ Private development supports one exact Effect v4 version at a time.
 
 - the root Bun catalog pins it exactly and workspace manifests use `catalog:`;
 - all packages upgrade together;
-- `bun run sync:effect` checks out the matching `effect@<version>` source tag in `repos/effect`;
 - public examples are compile-time tests;
 - Tool/Toolkit type inference is checked;
 - Response/Prompt round-trips and provider smoke tests run;
@@ -115,8 +111,8 @@ Private development supports one exact Effect v4 version at a time.
 Effect v4 leaving beta does not automatically trigger an upgrade; the project upgrades after its
 suite passes.
 
-An Effect upgrade commits the root catalog, Bun lockfile, and Effect submodule pointer together.
-CI uses installed packages and does not require the source submodule.
+An Effect upgrade commits the root catalog and Bun lockfile together. Contributor tooling reads
+the matching installed source from `node_modules/effect`.
 
 ## 7. Stored data compatibility
 
@@ -150,9 +146,8 @@ Before open source:
 - **COMPAT-002**: Normative behavior is defined by Effect Agent specifications, not by an external
   project's implementation.
 - **COMPAT-003**: Flue and Pi are attributed source material and establish no runtime, API,
-  stored-data, provider, or authoring compatibility contract. Their pinned source snapshots live
-  at `repos/flue` and `repos/pi`.
-- **COMPAT-004**: Behavior derived from source research cites the inspected snapshot and maps to a
+  stored-data, provider, or authoring compatibility contract.
+- **COMPAT-004**: Behavior derived from source research cites the inspected revision and maps to a
   native requirement and test.
 - **COMPAT-005**: Generally useful missing Effect AI behavior is proposed upstream before creating
   a competing abstraction.
@@ -160,5 +155,5 @@ Before open source:
 - **COMPAT-007**: Effect upgrades run the complete type and semantic suite.
 - **COMPAT-008**: Private development makes no stored-data migration promise.
 - **COMPAT-009**: Public distribution decisions are deferred until open-source preparation.
-- **COMPAT-010**: The root catalog, lockfile, workspace manifests, and local Effect source checkout
-  resolve one exact Effect v4 release.
+- **COMPAT-010**: The root catalog, lockfile, and workspace manifests resolve one exact Effect v4
+  release.

@@ -1,4 +1,4 @@
-# Domain language
+# Glossary
 
 Use these terms consistently in code, specifications, telemetry, and user documentation.
 

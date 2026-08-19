@@ -123,7 +123,6 @@ Run commands from the repository root:
 | `bun --filter @effect-agent/example-demo dev` | Run the chat-first demo and Phase 2 simulator on port 4173                     |
 | `bun run ready`                               | Run check, test, and build; this is the local and CI handoff gate              |
 | `bun run format:write`                        | Apply repository formatting                                                    |
-| `bun run sync:effect`                         | Align the local Effect source checkout with the catalog pin                    |
 
 Vite+ owns shared configuration in `vite.config.ts`. Package-specific scripts remain in each
 package manifest so Vite+ can order and cache them from the actual workspace dependency graph.
@@ -259,17 +258,7 @@ transform-mode workers).
 
 `bun install` runs `vp config --no-agent --hooks-dir .vite-hooks` (the root `prepare` script),
 which materializes the repository's `.vite-hooks` Git hook dispatcher. It does not touch the
-Effect source checkout or the compiler patch; those are separate, explicit steps.
-
-`repos/effect` is a tracked Git submodule. `bun run sync:effect` (`scripts/sync-effect-source.ts`)
-initializes it on first use (`git submodule update --init`, which checks out the tree's currently
-committed gitlink) and then moves the working checkout to the exact tag of the installed `effect`
-npm package, fetching only that tag. Moving it away from the committed gitlink intentionally
-leaves the submodule modified in `git status` until a maintainer commits the pointer bump (see "To
-upgrade Effect" below). A fresh linked worktree (or any non-recursive clone) starts with
-`repos/effect` as an empty tracked directory; `bun run sync:effect` initializes it automatically,
-so a manual `git submodule update --init repos/effect` first is only needed to populate the
-checkout without also moving it to the installed version's tag.
+compiler patch; that remains a separate, explicit step.
 
 `bun run patch:tsgo` (`scripts/patch-effect-tsgo.ts`) applies the Effect TypeScript-Go compiler
 patch standalone, verifying the installed `@effect/tsgo` and `typescript` versions are the exact
@@ -277,35 +266,21 @@ pinned pair before patching.
 
 CI installs with lifecycle scripts suppressed and then runs `bun run patch:tsgo` explicitly in
 every job that checks, tests, or builds TypeScript. This preserves the compiler-patch invariant
-without cloning the Effect source checkout. Local development keeps the checkout because
-implementation agents often need to verify current Effect v4 and Effect AI behavior.
+without any source checkout. Contributor tooling reads the installed Effect source from
+`node_modules/effect` when it needs to verify current Effect v4 or Effect AI behavior.
 
 Known workaround: the `preferTypedSchemaDecoder` language-service rule is set to `"off"` in
 `tsconfig.base.json` because `@effect/tsgo` `0.33.0` nil-panics in that rule
 (`internal/rules/prefer_typed_schema_decoder.go:37`) while checking `packages/session`. Re-enable
 it once a fixed tsgo lands.
 
-The attributed Flue and Pi source snapshots are separate shallow Git submodules at `repos/flue`
-and `repos/pi`. Their gitlinks are pinned to the commits recorded in
-attributed research inputs. A recursive clone initializes them; an existing
-clone can initialize them with:
-
-```sh
-git submodule update --init -- repos/flue repos/pi
-```
-
-`bun install` and `bun run sync:effect` synchronize only `repos/effect`; they do not move the
-research snapshots. Updating a research snapshot requires updating its submodule pointer and the
-matching reference-analysis record together.
-
 To upgrade Effect:
 
 1. update every Effect-family catalog entry in root `package.json` as one change;
 2. run `bun install`;
-3. run `bun run sync:effect`;
-4. run `bun run ready`;
-5. run the Effect AI semantic/provider suite once it exists;
-6. commit the catalog, lockfile, and submodule pointer together.
+3. run `bun run ready`;
+4. run the Effect AI semantic/provider suite once it exists;
+5. commit the catalog and lockfile together.
 
 ## Contributor agent skills
 
@@ -336,7 +311,7 @@ the pull request that introduces it:
 5. add it to root `tsconfig.json` references;
 6. declare only inward workspace dependencies;
 7. provide `check`, `test`, and `build` scripts when the package has those behaviors;
-8. update `docs/ARCHITECTURE.md`;
+8. update the relevant package reference and specification pages;
 9. run `bun run ready`.
 
 Package export maps point to source during private development. Distribution builds are produced

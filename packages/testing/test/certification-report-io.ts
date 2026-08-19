@@ -4,8 +4,7 @@ import { Effect, FileSystem, Schema } from "effect";
 
 /**
  * Shared by the Node certification runners: write the Schema-encoded certificate when
- * regeneration is requested through `EFFECT_AGENT_CERTIFICATION_OUT=<directory>` (the
- * committed copies live in docs/certification/ — see docs/guide/certify-adapters.md).
+ * regeneration is requested through `EFFECT_AGENT_CERTIFICATION_OUT=<directory>`.
  * A no-op otherwise, so ordinary test runs never touch the working tree.
  */
 export const maybeWriteReport = (slug: string, report: CertificationReport) =>

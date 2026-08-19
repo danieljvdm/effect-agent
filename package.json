@@ -9,7 +9,6 @@
   "type": "module",
   "scripts": {
     "prepare": "vp config --no-agent --hooks-dir .vite-hooks",
-    "sync:effect": "bun scripts/sync-effect-source.ts",
     "patch:tsgo": "bun scripts/patch-effect-tsgo.ts",
     "changeset": "bun x changeset",
     "changeset:version": "bun x changeset version",
@@ -18,7 +17,6 @@
     "release:prepare": "bun scripts/release-publish.ts",
     "verify:changesets-release": "bun scripts/verify-changesets-release.ts",
     "ci:version": "bun x changeset version && bun install",
-    "requirements:coverage": "bun scripts/requirements-coverage.ts",
     "reset:development-storage": "bun scripts/reset-development-storage.ts",
     "formal:check": "bun scripts/formal-check.ts",
     "admin:durable": "node --experimental-transform-types scripts/durable-admin.ts",

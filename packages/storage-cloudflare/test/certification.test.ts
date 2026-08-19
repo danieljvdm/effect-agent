@@ -29,15 +29,14 @@ import { withConversationStorage } from "./harness.ts";
 //
 // Both ports share ONE SqlClient over the same `ctx.storage` (ADR-0011 D7's "same file" rule
 // transposed to one object's private database). One certification run is shared by every test
-// in this file; the committed report is docs/certification/storage-cloudflare.json — workerd
-// cannot write files, so regeneration flips PRINT_REPORT below and copies the logged JSON
-// (see docs/guide/certify-adapters.md).
+// in this file. Workerd cannot write files, so PRINT_REPORT can emit the encoded result when
+// local inspection is needed.
 //
 // Tier 3 is discharged by citation: the real loss levers for this adapter are the committed
 // eviction (`ctx.abort()`), cross-DO subagent, and Miniflare-restart suites.
 // ---------------------------------------------------------------------------
 
-/** Flip to true to log the Schema-encoded certificate for committing (workerd cannot write). */
+/** Flip to true to log the Schema-encoded certificate (workerd cannot write files). */
 const PRINT_REPORT = false;
 
 /** ConversationStore and SubmissionLedger sharing ONE SqlClient over one DO's storage. */
