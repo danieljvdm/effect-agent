@@ -53487,58 +53487,13 @@ var reproduceCheckedPatch = exports_Effect.fn("reproduceCheckedPatch")(function*
   }
 });
 
-// examples/pr-work-order-ingress/src/worker-contracts.ts
-class IsolatedCheckSpec extends exports_Schema.Class("@effect-agent/example-pr-work-order-ingress/IsolatedCheckSpec")({
-  name: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
-  command: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512)),
-  args: exports_Schema.Array(exports_Schema.String.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(20))
-}) {
-}
-
-class IsolatedCheckRequest extends exports_Schema.Class("@effect-agent/example-pr-work-order-ingress/IsolatedCheckRequest")({
-  worktreeRoot: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024)),
-  checks: exports_Schema.Array(IsolatedCheckSpec).check(exports_Schema.isMaxLength(20))
-}) {
-}
-
-class PublisherTrust extends exports_Schema.Class("@effect-agent/example-pr-work-order-ingress/PublisherTrust")({
-  workOrderId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
-  workOrderDigest: WorkOrderDigest,
-  repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
-  pullRequestNumber: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  expectedHeadSha: GitCommitSha,
-  allowedPaths: exports_Schema.Array(WorkspacePath).check(exports_Schema.isMaxLength(100)),
-  patchDigest: PatchDigest,
-  requiredChecks: exports_Schema.Array(exports_Schema.Struct({
-    name: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
-    status: exports_Schema.Literals(["passed", "failed"]),
-    summary: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2000))
-  })).check(exports_Schema.isMaxLength(20))
-}) {
-}
-
-class IsolatedPublishWorkerRequest extends exports_Schema.Class("@effect-agent/example-pr-work-order-ingress/IsolatedPublishWorkerRequest")({
-  patch: exports_Schema.String.check(exports_Schema.isMaxLength(1e6)),
-  trust: PublisherTrust
-}) {
-}
-var PublishFailpointLocation = exports_Schema.Literals([
-  "before-head-cas",
-  "after-head-cas",
-  "before-lock-release",
-  "after-lock-release",
-  "lock-release"
-]);
-
 // examples/pr-work-order-ingress/src/contracts.ts
 var DEFAULT_MENTION_COMMAND = "@effect-agent fix this";
-var DEFAULT_REACTION_CONTENT = "+1";
 
 class PlatformDelivery extends exports_Schema.Class("@effect-agent/example-pr-work-order-ingress/PlatformDelivery")({
   deliveryId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
   eventName: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(100)),
-  rawBody: exports_Schema.String.check(exports_Schema.isMaxLength(200000)),
-  signature: exports_Schema.optionalKey(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)))
+  rawBody: exports_Schema.String.check(exports_Schema.isMaxLength(200000))
 }) {
 }
 
@@ -53546,19 +53501,12 @@ class IngressPolicyConfig extends exports_Schema.Class("@effect-agent/example-pr
   repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
   pullRequestNumber: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
   authorizedActorIds: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(100))).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(100)),
-  mentionCommand: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
-  reactionContent: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(40)),
-  webhookSecret: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200))
+  mentionCommand: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200))
 }) {
 }
 
 class IngressPolicy extends exports_Context.Service()("@effect-agent/example-pr-work-order-ingress/IngressPolicy") {
   static layer = (config) => exports_Layer.succeed(IngressPolicy, IngressPolicy.of(config));
-}
-
-class DeliveryUnauthentic extends exports_Schema.TaggedError()("DeliveryUnauthentic", {
-  reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2048))
-}) {
 }
 
 class DispatchUnauthorized extends exports_Schema.TaggedError()("DispatchUnauthorized", {
@@ -53580,18 +53528,6 @@ class UntrustedPullRequest extends exports_Schema.TaggedError()("UntrustedPullRe
 class StaleCommentAnchor extends exports_Schema.TaggedError()("StaleCommentAnchor", {
   sourceSha: GitCommitSha,
   headSha: GitCommitSha
-}) {
-}
-
-class AttemptIncomplete extends exports_Schema.TaggedError()("AttemptIncomplete", {
-  eventId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
-  workOrderId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200))
-}) {
-}
-
-class StoredDeliveryFailure extends exports_Schema.TaggedError()("StoredDeliveryFailure", {
-  errorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
-  detail: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2048))
 }) {
 }
 
@@ -53625,29 +53561,6 @@ class PublicationUncertainty extends exports_Schema.TaggedError()("PublicationUn
 }) {
 }
 
-class PresentationFailure extends exports_Schema.TaggedError()("PresentationFailure", {
-  reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2048))
-}) {
-}
-
-class IsolationViolation extends exports_Schema.TaggedError()("IsolationViolation", {
-  process: exports_Schema.Literals(["check", "publish"]),
-  reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2048))
-}) {
-}
-
-class PublisherRequest extends exports_Schema.Class("@effect-agent/example-pr-work-order-ingress/PublisherRequest")({
-  patch: exports_Schema.String.check(exports_Schema.isMaxLength(1e6)),
-  trust: PublisherTrust
-}) {
-}
-
-class ThreadReply extends exports_Schema.Class("@effect-agent/example-pr-work-order-ingress/ThreadReply")({
-  kind: exports_Schema.Literals(["published", "settled", "failed"]),
-  body: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2000))
-}) {
-}
-
 class ReviewCommentView extends exports_Schema.Class("@effect-agent/example-pr-work-order-ingress/ReviewCommentView")({
   commentId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
   threadId: exports_Schema.optionalKey(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200))),
@@ -53673,19 +53586,12 @@ class PullRequestView extends exports_Schema.Class("@effect-agent/example-pr-wor
 }
 
 class DispatchTarget extends exports_Schema.Class("@effect-agent/example-pr-work-order-ingress/DispatchTarget")({
-  kind: exports_Schema.Literals(["mention", "reaction"]),
+  kind: exports_Schema.Literal("mention"),
   actorId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(100)),
   actorLogin: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(100)),
   targetCommentId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
   repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
   pullRequestNumber: exports_Schema.Int.check(exports_Schema.isGreaterThan(0))
-}) {
-}
-
-class IsolatedEnvironment extends exports_Schema.Class("@effect-agent/example-pr-work-order-ingress/IsolatedEnvironment")({
-  process: exports_Schema.Literals(["check", "publish"]),
-  hasWriteToken: exports_Schema.Boolean,
-  hasModelSecret: exports_Schema.Boolean
 }) {
 }
 
@@ -53720,16 +53626,8 @@ var GitHubReviewCommentWire = exports_Schema.Struct({
   line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int)),
   start_line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int)),
   original_line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int)),
-  body: exports_Schema.String,
-  pull_request_url: exports_Schema.NonEmptyString
+  body: exports_Schema.String
 });
-var pullNumberFromUrl = (url2) => {
-  const match9 = /\/pulls\/(\d+)$/.exec(url2);
-  if (match9?.[1] === undefined)
-    return;
-  const value4 = Number(match9[1]);
-  return Number.isInteger(value4) && value4 > 0 ? value4 : undefined;
-};
 var pullRequestFromWire = (repository, wire) => PullRequestView.make({
   repository,
   pullRequestNumber: wire.number,
@@ -53776,29 +53674,6 @@ var liveGitHubApiLayer = (options3) => exports_Layer.effect(GitHubApi, exports_E
       const response = yield* execute2("get review comment", withHeaders(exports_HttpClientRequest.get(`${apiUrl}/repos/${repository}/pulls/comments/${commentId}`)));
       const wire = yield* decodeJson(GitHubReviewCommentWire, "get review comment")(response);
       return reviewCommentFromWire(wire);
-    }),
-    currentHead: (repository, pullRequestNumber) => loadPull(repository, pullRequestNumber).pipe(exports_Effect.map((wire) => wire.head.sha)),
-    updateHead: () => GitHubApiFailure.make({
-      operation: "update pull-request head",
-      reason: "this entrypoint admits and replies; it does not publish commits"
-    }),
-    postThreadReply: (input) => exports_Effect.gen(function* () {
-      const toPresentation = (error2) => PresentationFailure.make({ reason: error2.reason });
-      const commentResponse = yield* execute2("read review comment for reply", withHeaders(exports_HttpClientRequest.get(`${apiUrl}/repos/${input.repository}/pulls/comments/${input.commentId}`))).pipe(exports_Effect.mapError(toPresentation));
-      const comment = yield* decodeJson(GitHubReviewCommentWire, "read review comment for reply")(commentResponse).pipe(exports_Effect.mapError(toPresentation));
-      const pullRequestNumber = pullNumberFromUrl(comment.pull_request_url);
-      if (pullRequestNumber === undefined) {
-        return yield* PresentationFailure.make({
-          reason: "review comment does not name a pull request"
-        });
-      }
-      yield* execute2("post thread reply", withHeaders(exports_HttpClientRequest.post(`${apiUrl}/repos/${input.repository}/pulls/${String(pullRequestNumber)}/comments`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({
-        body: input.reply.body,
-        in_reply_to: Number(input.commentId)
-      })))).pipe(exports_Effect.mapError(toPresentation));
-    }),
-    resolveThread: () => PresentationFailure.make({
-      reason: "ingress never resolves the source thread"
     })
   });
 }));
@@ -53958,96 +53833,6 @@ var liveWorkOrderGitHubLayer = (options3) => exports_Layer.effect(WorkOrderGitHu
   });
 }));
 
-// examples/pr-work-order-ingress/src/authenticate.ts
-class ObservedActionsIdentity extends exports_Context.Service()("@effect-agent/example-pr-work-order-ingress/ObservedActionsIdentity") {
-  static layerFromEnvironment = exports_Layer.effect(ObservedActionsIdentity, exports_Effect.gen(function* () {
-    const fs = yield* exports_FileSystem.FileSystem;
-    return ObservedActionsIdentity.of({
-      read: exports_Effect.gen(function* () {
-        if (process.env.GITHUB_ACTIONS !== "true")
-          return;
-        const repository = process.env.GITHUB_REPOSITORY;
-        const eventName = process.env.GITHUB_EVENT_NAME;
-        const eventPath = process.env.GITHUB_EVENT_PATH;
-        const runId = process.env.GITHUB_RUN_ID;
-        const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
-        if (repository === undefined || eventName === undefined || eventPath === undefined || runId === undefined) {
-          return;
-        }
-        const eventPayload = yield* fs.readFileString(eventPath).pipe(exports_Effect.orElseSucceed(() => {
-          return;
-        }));
-        if (eventPayload === undefined)
-          return;
-        return {
-          repository,
-          eventName,
-          eventPayload,
-          deliveryId: `${runId}:${runAttempt}`
-        };
-      })
-    });
-  }));
-  static layerAbsent = exports_Layer.succeed(ObservedActionsIdentity, ObservedActionsIdentity.of({
-    read: exports_Effect.void
-  }));
-}
-var hexToBytes = (hex2) => {
-  const decoded = exports_Encoding.decodeHex(hex2);
-  return exports_Result.isSuccess(decoded) ? decoded.success : undefined;
-};
-var hmacKey = (secret, usage) => exports_Effect.tryPromise({
-  try: () => globalThis.crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [...usage]),
-  catch: (cause) => DeliveryUnauthentic.make({
-    reason: `HMAC key import failed: ${String(cause).slice(0, 1000)}`
-  })
-});
-var signGitHubDelivery = exports_Effect.fn("signGitHubDelivery")(function* (secret, rawBody) {
-  const key = yield* hmacKey(secret, ["sign"]);
-  const signature = yield* exports_Effect.tryPromise({
-    try: () => globalThis.crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody)),
-    catch: (cause) => DeliveryUnauthentic.make({
-      reason: `HMAC sign failed: ${String(cause).slice(0, 1000)}`
-    })
-  });
-  return `sha256=${exports_Encoding.encodeHex(new Uint8Array(signature))}`;
-});
-var verifySignature = exports_Effect.fn("verifySignature")(function* (secret, rawBody, header) {
-  if (!header.startsWith("sha256="))
-    return false;
-  const bytes = hexToBytes(header.slice("sha256=".length));
-  if (bytes === undefined)
-    return false;
-  const key = yield* hmacKey(secret, ["verify"]);
-  const signature = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(signature).set(bytes);
-  return yield* exports_Effect.tryPromise({
-    try: () => globalThis.crypto.subtle.verify("HMAC", key, signature, new TextEncoder().encode(rawBody)),
-    catch: (cause) => DeliveryUnauthentic.make({
-      reason: `HMAC verify failed: ${String(cause).slice(0, 1000)}`
-    })
-  });
-});
-var authenticateDelivery = exports_Effect.fn("authenticateDelivery")(function* (delivery) {
-  const policy2 = yield* IngressPolicy;
-  if (delivery.signature !== undefined) {
-    const valid = yield* verifySignature(policy2.webhookSecret, delivery.rawBody, delivery.signature);
-    if (!valid) {
-      return yield* DeliveryUnauthentic.make({
-        reason: "delivery signature is not authentic"
-      });
-    }
-    return;
-  }
-  const actions = yield* (yield* ObservedActionsIdentity).read;
-  if (actions && actions.repository === policy2.repository && actions.eventName === delivery.eventName && actions.eventPayload === delivery.rawBody && actions.deliveryId === delivery.deliveryId) {
-    return;
-  }
-  return yield* DeliveryUnauthentic.make({
-    reason: "delivery has neither a valid signature nor a trusted Actions identity"
-  });
-});
-
 // examples/pr-work-order-ingress/src/construct.ts
 var constructWorkOrder = exports_Effect.fn("constructWorkOrder")(function* (target, eventId) {
   const policy2 = yield* IngressPolicy;
@@ -54131,7 +53916,7 @@ var signatureBuffer = (hex2) => {
   new Uint8Array(buffer3).set(decoded.success);
   return buffer3;
 };
-var hmacKey2 = (secret, operation) => exports_Effect.tryPromise({
+var hmacKey = (secret, operation) => exports_Effect.tryPromise({
   try: () => globalThis.crypto.subtle.importKey("raw", new TextEncoder().encode(exports_Redacted.value(secret)), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]),
   catch: (cause) => failure2(operation, cause)
 });
@@ -54141,7 +53926,7 @@ class WorkOrderJournalAuthenticator extends exports_Context.Service()("@effect-a
     render: (state, visible) => exports_Effect.gen(function* () {
       const json2 = yield* exports_Schema.encodeEffect(exports_Schema.fromJsonString(WorkOrderJournalState))(state).pipe(exports_Effect.mapError((cause) => failure2("encode work-order journal", cause)));
       const payload = exports_Encoding.encodeBase64(json2);
-      const key = yield* hmacKey2(secret, "sign work-order journal");
+      const key = yield* hmacKey(secret, "sign work-order journal");
       const signature = yield* exports_Effect.tryPromise({
         try: () => globalThis.crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${SIGNATURE_DOMAIN}${payload}`)),
         catch: (cause) => failure2("sign work-order journal", cause)
@@ -54155,7 +53940,7 @@ ${MARKER_PREFIX}${payload}.${hex2}${MARKER_SUFFIX}`;
       if (body.length > 60000)
         return exports_Effect.succeed(exports_Option.none());
       return exports_Effect.gen(function* () {
-        const key = yield* hmacKey2(secret, "verify work-order journal");
+        const key = yield* hmacKey(secret, "verify work-order journal");
         const candidates = [...body.matchAll(MARKER_PATTERN)].slice(-32).reverse();
         for (const match9 of candidates) {
           const payload = match9[1];
@@ -54232,27 +54017,9 @@ var MentionEvent = exports_Schema.Struct({
   repository: GitHubRepository,
   sender: GitHubActor
 });
-var ReactionEvent = exports_Schema.Struct({
-  action: exports_Schema.Literal("created"),
-  reaction: exports_Schema.Struct({
-    content: exports_Schema.String,
-    user: GitHubActor
-  }),
-  comment: exports_Schema.Struct({
-    id: exports_Schema.Int,
-    path: exports_Schema.optionalKey(exports_Schema.String),
-    user: GitHubActor
-  }),
-  pull_request: exports_Schema.Struct({
-    number: exports_Schema.Int
-  }),
-  repository: GitHubRepository,
-  sender: GitHubActor
-});
 var decodeJson = (rawBody) => exports_Schema.decodeUnknownEffect(exports_Schema.fromJsonString(exports_Schema.Unknown))(rawBody).pipe(exports_Effect.mapError(() => DispatchTargetRejected.make({
   reason: "delivery body is not JSON"
 })));
-var actorId = (id2) => String(id2);
 var parseDispatchTarget = exports_Effect.fn("parseDispatchTarget")(function* (delivery) {
   const policy2 = yield* IngressPolicy;
   const payload = yield* decodeJson(delivery.rawBody);
@@ -54266,49 +54033,31 @@ var parseDispatchTarget = exports_Effect.fn("parseDispatchTarget")(function* (de
       reason: "a review summary is not an inline review comment"
     });
   }
-  if (delivery.eventName === "pull_request_review_comment") {
-    const event = yield* exports_Schema.decodeUnknownEffect(MentionEvent)(payload).pipe(exports_Effect.mapError(() => DispatchTargetRejected.make({
-      reason: "mention delivery is not a created inline review comment"
-    })));
-    if (event.comment.body !== policy2.mentionCommand) {
-      return yield* DispatchTargetRejected.make({
-        reason: "mention command does not match configuration"
-      });
-    }
-    if (event.comment.in_reply_to_id === undefined) {
-      return yield* DispatchTargetRejected.make({
-        reason: "mention is not linked to one inline comment"
-      });
-    }
-    return DispatchTarget.make({
-      kind: "mention",
-      actorId: actorId(event.sender.id),
-      actorLogin: event.sender.login,
-      targetCommentId: String(event.comment.in_reply_to_id),
-      repository: event.repository.full_name,
-      pullRequestNumber: event.pull_request.number
+  if (delivery.eventName !== "pull_request_review_comment") {
+    return yield* DispatchTargetRejected.make({
+      reason: "event is not an inline review-comment mention reply"
     });
   }
-  if (delivery.eventName === "reaction") {
-    const event = yield* exports_Schema.decodeUnknownEffect(ReactionEvent)(payload).pipe(exports_Effect.mapError(() => DispatchTargetRejected.make({
-      reason: "reaction delivery does not name one review comment"
-    })));
-    if (event.reaction.content !== policy2.reactionContent) {
-      return yield* DispatchTargetRejected.make({
-        reason: "reaction does not match configuration"
-      });
-    }
-    return DispatchTarget.make({
-      kind: "reaction",
-      actorId: actorId(event.sender.id),
-      actorLogin: event.sender.login,
-      targetCommentId: String(event.comment.id),
-      repository: event.repository.full_name,
-      pullRequestNumber: event.pull_request.number
+  const event = yield* exports_Schema.decodeUnknownEffect(MentionEvent)(payload).pipe(exports_Effect.mapError(() => DispatchTargetRejected.make({
+    reason: "mention delivery is not a created inline review comment"
+  })));
+  if (event.comment.body !== policy2.mentionCommand) {
+    return yield* DispatchTargetRejected.make({
+      reason: "mention command does not match configuration"
     });
   }
-  return yield* DispatchTargetRejected.make({
-    reason: "event is not a mention reply or configured reaction"
+  if (event.comment.in_reply_to_id === undefined) {
+    return yield* DispatchTargetRejected.make({
+      reason: "mention is not linked to one inline comment"
+    });
+  }
+  return DispatchTarget.make({
+    kind: "mention",
+    actorId: String(event.sender.id),
+    actorLogin: event.sender.login,
+    targetCommentId: String(event.comment.in_reply_to_id),
+    repository: event.repository.full_name,
+    pullRequestNumber: event.pull_request.number
   });
 });
 
@@ -54551,24 +54300,13 @@ var admissionContext = exports_Effect.fn("workOrderAction.admissionContext")(fun
     repository,
     pullRequestNumber: event.pull_request.number,
     authorizedActorIds: [...configuredActors],
-    mentionCommand: DEFAULT_MENTION_COMMAND,
-    reactionContent: DEFAULT_REACTION_CONTENT,
-    webhookSecret: "actions-identity"
+    mentionCommand: DEFAULT_MENTION_COMMAND
   });
   const delivery = PlatformDelivery.make({ deliveryId: eventId, eventName, rawBody });
-  return {
-    repository,
-    eventName,
-    rawBody,
-    runId,
-    eventId,
-    delivery,
-    policy: policy2
-  };
+  return { runId, delivery, policy: policy2 };
 });
 var admitWorkOrder = exports_Effect.fn("workOrderAction.admit")(function* (request3) {
   const { delivery, runId } = request3;
-  yield* authenticateDelivery(delivery);
   const target = yield* parseDispatchTarget(delivery);
   const order = yield* constructWorkOrder(target, delivery.deliveryId);
   const eventId = order.dispatch.eventId;
@@ -54893,15 +54631,7 @@ var workOrderActionProgram = exports_Effect.gen(function* () {
     case "admit": {
       const context4 = yield* admissionContext();
       const options3 = yield* githubOptions();
-      const trustedIdentity = ObservedActionsIdentity.of({
-        read: exports_Effect.succeed({
-          repository: context4.repository,
-          eventName: context4.eventName,
-          eventPayload: context4.rawBody,
-          deliveryId: context4.eventId
-        })
-      });
-      const admissionLayer = exports_Layer.mergeAll(liveGitHubApiLayer(options3), IngressPolicy.layer(context4.policy), exports_Layer.succeed(ObservedActionsIdentity, trustedIdentity), exports_Layer.unwrap(journalLayer()));
+      const admissionLayer = exports_Layer.mergeAll(liveGitHubApiLayer(options3), IngressPolicy.layer(context4.policy), exports_Layer.unwrap(journalLayer()));
       return yield* admitWorkOrder({ delivery: context4.delivery, runId: context4.runId }).pipe(exports_Effect.provide(admissionLayer));
     }
     case "implement":

@@ -1,25 +1,7 @@
-import {
-  GitCommitSha,
-  type WorkOrderHostError,
-  type WorkspaceOperationFailure,
-  WorkspacePath,
-} from "@effect-agent/example-pr-work-orders";
+import { GitCommitSha, WorkspacePath } from "@effect-agent/example-pr-work-orders";
 import { Context, Layer, Schema } from "effect";
 
-import {
-  IsolatedCheckRequest,
-  IsolatedCheckSpec,
-  IsolatedPublishWorkerRequest,
-  PublisherTrust,
-} from "./worker-contracts.ts";
-
-export { IsolatedCheckRequest, IsolatedCheckSpec, IsolatedPublishWorkerRequest, PublisherTrust };
-
-export const GITHUB_WRITE_TOKEN_ENV = "EFFECT_AGENT_GITHUB_WRITE_TOKEN";
-export const MODEL_SECRET_ENV = "EFFECT_AGENT_MODEL_SECRET";
-
 export const DEFAULT_MENTION_COMMAND = "@effect-agent fix this";
-export const DEFAULT_REACTION_CONTENT = "+1";
 
 export class PlatformDelivery extends Schema.Class<PlatformDelivery>(
   "@effect-agent/example-pr-work-order-ingress/PlatformDelivery",
@@ -27,7 +9,6 @@ export class PlatformDelivery extends Schema.Class<PlatformDelivery>(
   deliveryId: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   eventName: Schema.NonEmptyString.check(Schema.isMaxLength(100)),
   rawBody: Schema.String.check(Schema.isMaxLength(200_000)),
-  signature: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(200))),
 }) {}
 
 export class IngressPolicyConfig extends Schema.Class<IngressPolicyConfig>(
@@ -40,8 +21,6 @@ export class IngressPolicyConfig extends Schema.Class<IngressPolicyConfig>(
     Schema.isMaxLength(100),
   ),
   mentionCommand: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
-  reactionContent: Schema.NonEmptyString.check(Schema.isMaxLength(40)),
-  webhookSecret: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
 }) {}
 
 export class IngressPolicy extends Context.Service<IngressPolicy, IngressPolicyConfig>()(
@@ -50,13 +29,6 @@ export class IngressPolicy extends Context.Service<IngressPolicy, IngressPolicyC
   static readonly layer = (config: IngressPolicyConfig) =>
     Layer.succeed(IngressPolicy, IngressPolicy.of(config));
 }
-
-export class DeliveryUnauthentic extends Schema.TaggedError<DeliveryUnauthentic>()(
-  "DeliveryUnauthentic",
-  {
-    reason: Schema.NonEmptyString.check(Schema.isMaxLength(2_048)),
-  },
-) {}
 
 export class DispatchUnauthorized extends Schema.TaggedError<DispatchUnauthorized>()(
   "DispatchUnauthorized",
@@ -85,22 +57,6 @@ export class StaleCommentAnchor extends Schema.TaggedError<StaleCommentAnchor>()
   {
     sourceSha: GitCommitSha,
     headSha: GitCommitSha,
-  },
-) {}
-
-export class AttemptIncomplete extends Schema.TaggedError<AttemptIncomplete>()(
-  "AttemptIncomplete",
-  {
-    eventId: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
-    workOrderId: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
-  },
-) {}
-
-export class StoredDeliveryFailure extends Schema.TaggedError<StoredDeliveryFailure>()(
-  "StoredDeliveryFailure",
-  {
-    errorTag: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
-    detail: Schema.NonEmptyString.check(Schema.isMaxLength(2_048)),
   },
 ) {}
 
@@ -141,52 +97,6 @@ export class PublicationUncertainty extends Schema.TaggedError<PublicationUncert
   },
 ) {}
 
-export class PresentationFailure extends Schema.TaggedError<PresentationFailure>()(
-  "PresentationFailure",
-  {
-    reason: Schema.NonEmptyString.check(Schema.isMaxLength(2_048)),
-  },
-) {}
-
-export class IsolationViolation extends Schema.TaggedError<IsolationViolation>()(
-  "IsolationViolation",
-  {
-    process: Schema.Literals(["check", "publish"]),
-    reason: Schema.NonEmptyString.check(Schema.isMaxLength(2_048)),
-  },
-) {}
-
-export type IngressError =
-  | DeliveryUnauthentic
-  | DispatchUnauthorized
-  | DispatchTargetRejected
-  | UntrustedPullRequest
-  | StaleCommentAnchor
-  | AttemptIncomplete
-  | StoredDeliveryFailure
-  | IngressStoreFailure
-  | GitHubApiFailure
-  | PublisherVerificationFailure
-  | PublicationUncertainty
-  | PresentationFailure
-  | IsolationViolation
-  | WorkspaceOperationFailure
-  | WorkOrderHostError;
-
-export class PublisherRequest extends Schema.Class<PublisherRequest>(
-  "@effect-agent/example-pr-work-order-ingress/PublisherRequest",
-)({
-  patch: Schema.String.check(Schema.isMaxLength(1_000_000)),
-  trust: PublisherTrust,
-}) {}
-
-export class ThreadReply extends Schema.Class<ThreadReply>(
-  "@effect-agent/example-pr-work-order-ingress/ThreadReply",
-)({
-  kind: Schema.Literals(["published", "settled", "failed"]),
-  body: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
-}) {}
-
 export class ReviewCommentView extends Schema.Class<ReviewCommentView>(
   "@effect-agent/example-pr-work-order-ingress/ReviewCommentView",
 )({
@@ -216,18 +126,10 @@ export class PullRequestView extends Schema.Class<PullRequestView>(
 export class DispatchTarget extends Schema.Class<DispatchTarget>(
   "@effect-agent/example-pr-work-order-ingress/DispatchTarget",
 )({
-  kind: Schema.Literals(["mention", "reaction"]),
+  kind: Schema.Literal("mention"),
   actorId: Schema.NonEmptyString.check(Schema.isMaxLength(100)),
   actorLogin: Schema.NonEmptyString.check(Schema.isMaxLength(100)),
   targetCommentId: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   repository: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   pullRequestNumber: Schema.Int.check(Schema.isGreaterThan(0)),
-}) {}
-
-export class IsolatedEnvironment extends Schema.Class<IsolatedEnvironment>(
-  "@effect-agent/example-pr-work-order-ingress/IsolatedEnvironment",
-)({
-  process: Schema.Literals(["check", "publish"]),
-  hasWriteToken: Schema.Boolean,
-  hasModelSecret: Schema.Boolean,
 }) {}

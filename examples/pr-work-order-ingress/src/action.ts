@@ -46,11 +46,9 @@ import {
   terminalFromSettlement,
 } from "./action-contracts.ts";
 import { liveWorkOrderGitHubLayer, WorkOrderGitHub } from "./action-github.ts";
-import { authenticateDelivery, ObservedActionsIdentity } from "./authenticate.ts";
 import { constructWorkOrder } from "./construct.ts";
 import {
   DEFAULT_MENTION_COMMAND,
-  DEFAULT_REACTION_CONTENT,
   IngressPolicy,
   IngressPolicyConfig,
   PlatformDelivery,
@@ -80,11 +78,7 @@ const ActionsEvent = Schema.Struct({
 });
 
 interface AdmissionRuntimeContext {
-  readonly repository: string;
-  readonly eventName: string;
-  readonly rawBody: string;
   readonly runId: string;
-  readonly eventId: string;
   readonly delivery: PlatformDelivery;
   readonly policy: IngressPolicyConfig;
 }
@@ -249,26 +243,15 @@ const admissionContext = Effect.fn("workOrderAction.admissionContext")(function*
     pullRequestNumber: event.pull_request.number,
     authorizedActorIds: [...configuredActors],
     mentionCommand: DEFAULT_MENTION_COMMAND,
-    reactionContent: DEFAULT_REACTION_CONTENT,
-    webhookSecret: "actions-identity",
   });
   const delivery = PlatformDelivery.make({ deliveryId: eventId, eventName, rawBody });
-  return {
-    repository,
-    eventName,
-    rawBody,
-    runId,
-    eventId,
-    delivery,
-    policy,
-  } satisfies AdmissionRuntimeContext;
+  return { runId, delivery, policy } satisfies AdmissionRuntimeContext;
 });
 
 export const admitWorkOrder = Effect.fn("workOrderAction.admit")(function* (
   request: AdmissionRequest,
 ) {
   const { delivery, runId } = request;
-  yield* authenticateDelivery(delivery);
   const target = yield* parseDispatchTarget(delivery);
   const order = yield* constructWorkOrder(target, delivery.deliveryId);
   const eventId = order.dispatch.eventId;
@@ -792,18 +775,9 @@ export const workOrderActionProgram = Effect.gen(function* () {
     case "admit": {
       const context = yield* admissionContext();
       const options = yield* githubOptions();
-      const trustedIdentity = ObservedActionsIdentity.of({
-        read: Effect.succeed({
-          repository: context.repository,
-          eventName: context.eventName,
-          eventPayload: context.rawBody,
-          deliveryId: context.eventId,
-        }),
-      });
       const admissionLayer = Layer.mergeAll(
         liveGitHubApiLayer(options),
         IngressPolicy.layer(context.policy),
-        Layer.succeed(ObservedActionsIdentity, trustedIdentity),
         Layer.unwrap(journalLayer()),
       );
       return yield* admitWorkOrder({ delivery: context.delivery, runId: context.runId }).pipe(

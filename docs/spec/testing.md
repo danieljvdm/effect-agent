@@ -260,13 +260,12 @@ or GitHub ingress. See [pull-request work orders](pr-work-orders.md) and
 ## 8.3 Pull-request work-order ingress evidence
 
 The private `examples/pr-work-order-ingress` leaf uses recorded GitHub event
-fixtures and a fake GitHub API. It proves authenticated mention and reaction
-dispatch, Actions payload binding, unique inline targeting, actor-id
-authorization, same-repository non-fork admission, stale-anchor rejection,
-duplicate-delivery replay, authenticated journal state, isolated check-process
-credentials, fail-closed complete patch paths, atomic compare-and-swap fencing,
-and one host-authored thread reply that does not resolve the thread. Tests do
-not call live GitHub. The enabled Actions workflow is asserted to use trusted
+fixtures and a fake GitHub API. It proves exact mention-reply dispatch, unique
+inline targeting, actor-id authorization, same-repository non-fork admission,
+stale-anchor rejection, duplicate-delivery replay against the authenticated
+journal, exact claim-echo acknowledgement, fail-closed ambiguous or tampered
+journal state, fail-closed complete patch paths, and atomic compare-and-swap
+fencing. Tests do not call live GitHub. The enabled Actions workflow is asserted to use trusted
 base code, immutable pins, five least-privilege jobs, exact-head checkouts, and
 a networkless check container that cannot see sibling artifacts or credentials.
 

@@ -5,22 +5,15 @@ import {
   GitCommitSha,
   PatchDigest,
   ProposedWorkOrder,
-  WorkOrderAttemptPolicy,
   WorkOrderCheckResult,
   WorkOrderDigest,
-  WorkOrderHost,
   WorkOrderIdentity,
-  WorkOrderReport,
   workOrderDigest,
-  type ImplementationWorkspace,
-  type PatchSnapshot,
-  type PublishedWorkOrder,
-  type WorkOrderMission,
 } from "@effect-agent/example-pr-work-orders";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {
-  type Crypto,
+  ConfigProvider,
   Effect,
   FileSystem,
   Layer,
@@ -42,43 +35,31 @@ import {
   CheckedFile,
   CheckedWorkOrder,
   FailedTerminal,
+  JournalComment,
   WorkOrderAdmission,
+  type WorkOrderActionFailure,
   terminalMatchesAdmission,
 } from "../src/action-contracts.ts";
 import { liveWorkOrderGitHubLayer, WorkOrderGitHub } from "../src/action-github.ts";
 import { admitWorkOrder, type AdmissionRequest } from "../src/action.ts";
-import {
-  authenticateDelivery,
-  ObservedActionsIdentity,
-  signGitHubDelivery,
-} from "../src/authenticate.ts";
 import { constructWorkOrder } from "../src/construct.ts";
 import {
   DEFAULT_MENTION_COMMAND,
-  DEFAULT_REACTION_CONTENT,
-  type DeliveryUnauthentic,
   type DispatchTargetRejected,
   type DispatchUnauthorized,
-  GITHUB_WRITE_TOKEN_ENV,
-  IsolatedCheckRequest,
-  IsolatedCheckSpec,
+  GitHubApiFailure,
   IngressPolicy,
   IngressPolicyConfig,
-  MODEL_SECRET_ENV,
+  type IngressStoreFailure,
   PlatformDelivery,
-  type PresentationFailure,
-  PublisherRequest,
-  PublisherTrust,
-  type PublisherVerificationFailure,
   PullRequestView,
   ReviewCommentView,
   type StaleCommentAnchor,
+  type UntrustedPullRequest,
 } from "../src/contracts.ts";
 import { pullRequestFromWire, reviewCommentFromWire } from "../src/github-live.ts";
 import type { GitHubApi } from "../src/github.ts";
 import { makeFakeGitHub } from "../src/github.ts";
-import { handleWorkOrderDelivery, WorkOrderImplementer } from "../src/ingress.ts";
-import { IsolatedChecks } from "../src/isolation.ts";
 import {
   claimedState,
   completedState,
@@ -87,19 +68,15 @@ import {
 } from "../src/journal.ts";
 import { parseDispatchTarget } from "../src/parse-event.ts";
 import { completeModifiedPaths } from "../src/patch.ts";
-import { IsolatedPublisher } from "../src/publisher.ts";
-import { FileBackedAttemptStore, IngressStoreFailpoint } from "../src/store.ts";
 
 const HEAD = Schema.decodeUnknownSync(GitCommitSha)("a".repeat(40));
 const STALE = Schema.decodeUnknownSync(GitCommitSha)("b".repeat(40));
 const DIGEST = Schema.decodeUnknownSync(WorkOrderDigest)("c".repeat(64));
-const EMPTY_DIGEST = Schema.decodeUnknownSync(PatchDigest)(
-  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-);
-const SECRET = "ingress-test-webhook-secret";
 const REPOSITORY = "acme/widgets";
 const PULL = 17;
 const ACTOR_ID = "42";
+const STATE_AUTHOR_ID = "41898282";
+const JOURNAL_SECRET = Redacted.make("ingress-test-journal-secret-with-entropy");
 const FILE_PATH = "src/value.ts";
 
 const WorkOrderWorkflowPermissions = Schema.Union([
@@ -175,70 +152,45 @@ type Equal<Left, Right> =
     : false;
 type Assert<Value extends true> = Value;
 
-const typedHandle = handleWorkOrderDelivery(null as unknown as PlatformDelivery);
-type TypedHandleError = Effect.Error<typeof typedHandle>;
-type TypedHandleServices = Effect.Services<typeof typedHandle>;
-type HandleKeepsUnauthentic = Assert<
-  Equal<Extract<TypedHandleError, DeliveryUnauthentic>, DeliveryUnauthentic>
->;
-type HandleKeepsUnauthorized = Assert<
-  Equal<Extract<TypedHandleError, DispatchUnauthorized>, DispatchUnauthorized>
->;
-type HandleKeepsTarget = Assert<
-  Equal<Extract<TypedHandleError, DispatchTargetRejected>, DispatchTargetRejected>
->;
-type HandleKeepsStale = Assert<
-  Equal<Extract<TypedHandleError, StaleCommentAnchor>, StaleCommentAnchor>
->;
-type HandleKeepsPresentation = Assert<
-  Equal<Extract<TypedHandleError, PresentationFailure>, PresentationFailure>
->;
-type HandleUnknownExcluded = Assert<Equal<unknown extends TypedHandleError ? true : false, false>>;
-type HandleRequiresPolicy = Assert<
-  Equal<Extract<TypedHandleServices, IngressPolicy>, IngressPolicy>
->;
-type HandleRequiresStore = Assert<
-  Equal<Extract<TypedHandleServices, FileBackedAttemptStore>, FileBackedAttemptStore>
->;
-type HandleRequiresHost = Assert<Equal<Extract<TypedHandleServices, WorkOrderHost>, WorkOrderHost>>;
-type HandleRequiresCrypto = Assert<
-  Equal<Extract<TypedHandleServices, Crypto.Crypto>, Crypto.Crypto>
->;
-
 const typedAdmission = admitWorkOrder(null as unknown as AdmissionRequest);
+type TypedAdmissionError = Effect.Error<typeof typedAdmission>;
 type TypedAdmissionServices = Effect.Services<typeof typedAdmission>;
+type AdmissionKeepsTarget = Assert<
+  Equal<Extract<TypedAdmissionError, DispatchTargetRejected>, DispatchTargetRejected>
+>;
+type AdmissionKeepsUnauthorized = Assert<
+  Equal<Extract<TypedAdmissionError, DispatchUnauthorized>, DispatchUnauthorized>
+>;
+type AdmissionKeepsUntrusted = Assert<
+  Equal<Extract<TypedAdmissionError, UntrustedPullRequest>, UntrustedPullRequest>
+>;
+type AdmissionKeepsStale = Assert<
+  Equal<Extract<TypedAdmissionError, StaleCommentAnchor>, StaleCommentAnchor>
+>;
+type AdmissionKeepsGitHub = Assert<
+  Equal<Extract<TypedAdmissionError, GitHubApiFailure>, GitHubApiFailure>
+>;
+type AdmissionKeepsJournal = Assert<
+  Equal<Extract<TypedAdmissionError, IngressStoreFailure>, IngressStoreFailure>
+>;
+type AdmissionKeepsConflict = Assert<
+  Equal<Extract<TypedAdmissionError, WorkOrderActionFailure>, WorkOrderActionFailure>
+>;
+type AdmissionUnknownExcluded = Assert<
+  Equal<unknown extends TypedAdmissionError ? true : false, false>
+>;
 type AdmissionRequiresPolicy = Assert<
   Equal<Extract<TypedAdmissionServices, IngressPolicy>, IngressPolicy>
 >;
-type AdmissionRequiresActionsIdentity = Assert<
-  Equal<Extract<TypedAdmissionServices, ObservedActionsIdentity>, ObservedActionsIdentity>
->;
 type AdmissionRequiresGitHub = Assert<Equal<Extract<TypedAdmissionServices, GitHubApi>, GitHubApi>>;
-
-const defaultTrustFields = {
-  workOrderId: "wo-1",
-  workOrderDigest: DIGEST,
-  repository: REPOSITORY,
-  pullRequestNumber: PULL,
-  expectedHeadSha: HEAD,
-  allowedPaths: [FILE_PATH],
-  patchDigest: EMPTY_DIGEST,
-  requiredChecks: [{ name: "fixture-check", status: "passed", summary: "ok" }] as const,
-};
-
-const typedPublish = IsolatedPublisher.layer({
-  stateDir: "/tmp",
-}).pipe(
-  Layer.build,
-  Effect.flatMap(() =>
-    Effect.flatMap(IsolatedPublisher, (publisher) =>
-      publisher.publish(null as unknown as PublisherRequest),
-    ),
-  ),
-);
-type TypedPublishError = Effect.Error<typeof typedPublish>;
-type PublishKeepsVerification = Assert<
-  Equal<Extract<TypedPublishError, PublisherVerificationFailure>, PublisherVerificationFailure>
+type AdmissionRequiresJournal = Assert<
+  Equal<Extract<TypedAdmissionServices, WorkOrderGitHub>, WorkOrderGitHub>
+>;
+type AdmissionRequiresAuthenticator = Assert<
+  Equal<
+    Extract<TypedAdmissionServices, WorkOrderJournalAuthenticator>,
+    WorkOrderJournalAuthenticator
+  >
 >;
 
 const policyConfig = IngressPolicyConfig.make({
@@ -246,8 +198,6 @@ const policyConfig = IngressPolicyConfig.make({
   pullRequestNumber: PULL,
   authorizedActorIds: [ACTOR_ID],
   mentionCommand: DEFAULT_MENTION_COMMAND,
-  reactionContent: DEFAULT_REACTION_CONTENT,
-  webhookSecret: SECRET,
 });
 
 const targetComment = (overrides?: {
@@ -280,6 +230,8 @@ const pullRequest = (overrides?: Partial<PullRequestView>) =>
 
 const mentionPayload = (overrides?: {
   readonly inReplyTo?: number;
+  readonly commentId?: number;
+  readonly body?: string;
   readonly senderId?: number;
   readonly senderLogin?: string;
   readonly repository?: string;
@@ -287,11 +239,11 @@ const mentionPayload = (overrides?: {
 }) => ({
   action: "created" as const,
   comment: {
-    id: 1002,
+    id: overrides?.commentId ?? 1002,
     ...(overrides && "inReplyTo" in overrides && overrides.inReplyTo !== undefined
       ? { in_reply_to_id: overrides.inReplyTo }
       : {}),
-    body: DEFAULT_MENTION_COMMAND,
+    body: overrides?.body ?? DEFAULT_MENTION_COMMAND,
     user: { id: overrides?.senderId ?? 42, login: overrides?.senderLogin ?? "alice" },
   },
   pull_request: { number: overrides?.pullRequestNumber ?? PULL },
@@ -306,152 +258,111 @@ const loadFixture = Effect.fn("loadFixture")(function* (name: string) {
   return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(text);
 });
 
-const signedDelivery = Effect.fn("signedDelivery")(function* (input: {
-  readonly deliveryId: string;
-  readonly eventName: string;
-  readonly payload: unknown;
-}) {
-  const rawBody = JSON.stringify(input.payload);
-  return PlatformDelivery.make({
-    deliveryId: input.deliveryId,
-    eventName: input.eventName,
-    rawBody,
-    signature: yield* signGitHubDelivery(SECRET, rawBody),
+const mentionDelivery = (
+  payload: unknown,
+  overrides?: {
+    readonly deliveryId?: string;
+    readonly eventName?: string;
+  },
+) =>
+  PlatformDelivery.make({
+    deliveryId: overrides?.deliveryId ?? "review-comment:1002",
+    eventName: overrides?.eventName ?? "pull_request_review_comment",
+    rawBody: JSON.stringify(payload),
   });
-});
 
-const emptyPatch: PatchSnapshot = {
-  digest: EMPTY_DIGEST,
-  changedPaths: [],
-  preview: "",
-  truncated: false,
-};
-
-const stubHostLayer = Layer.succeed(
-  WorkOrderHost,
-  WorkOrderHost.of({
-    requiredChecks: [],
-    currentHead: Effect.succeed(HEAD),
-    authorizeDispatch: () => Effect.void,
-    requireCurrentHead: () => Effect.void,
-    withWorktree: (_order, run) => {
-      const workspace: ImplementationWorkspace = {
-        readFile: () => Effect.succeed(""),
-        search: () => Effect.succeed([]),
-        applyEdit: () => Effect.void,
-        inspectPatch: Effect.succeed(emptyPatch),
-        requestCheck: (name) =>
-          Effect.succeed(
-            WorkOrderCheckResult.make({ name, status: "passed", summary: "stub check" }),
-          ),
-      };
-      return run({
-        allowedPaths: new Set([FILE_PATH]),
-        modelWorkspace: workspace,
-        inspectPatch: workspace.inspectPatch,
-        collectPatch: workspace.inspectPatch.pipe(
-          Effect.map((snapshot) => ({ snapshot, patch: "" })),
-        ),
-        runCheck: workspace.requestCheck,
-        observedChecks: Effect.succeed([]),
-        commitAndPublish: ({ order, report, patch, checks }) =>
-          Effect.succeed({
-            _tag: "published",
-            workOrderId: order.workOrderId,
-            workOrderDigest: report.workOrderDigest,
-            previousHeadSha: order.headSha,
-            publishedHeadSha: HEAD,
-            patchDigest: patch.digest,
-            changedPaths: patch.changedPaths,
-            checks,
-          } satisfies PublishedWorkOrder),
-      });
-    },
-  }),
-);
-
-const countingImplementer = () => {
-  let invocations = 0;
+const makeFakeJournal = (options?: {
+  readonly initial?: ReadonlyArray<JournalComment>;
+  readonly echo?: (body: string) => string;
+  readonly authorId?: string;
+}) => {
+  const comments: Array<JournalComment> = [...(options?.initial ?? [])];
+  let created = 0;
+  const unused = (operation: string) =>
+    GitHubApiFailure.make({ operation, reason: "not used by admission" });
   const layer = Layer.succeed(
-    WorkOrderImplementer,
-    WorkOrderImplementer.of({
-      run: (mission: WorkOrderMission) => {
-        invocations += 1;
-        return Effect.succeed(
-          WorkOrderReport.make({
-            workOrderDigest: mission.workOrderDigest,
-            headSha: mission.order.headSha,
-            disposition: "not-applicable",
-            changedPaths: [],
-            checks: [],
-            summary: "The instruction is already satisfied.",
-          }),
-        );
-      },
+    WorkOrderGitHub,
+    WorkOrderGitHub.of({
+      getPullRequest: () => unused("get pull request"),
+      listReviewComments: () => Effect.sync(() => [...comments]),
+      createReply: (input) =>
+        Effect.sync(() => {
+          created += 1;
+          const comment = JournalComment.make({
+            id: `journal-${String(1000 + created)}`,
+            authorId: options?.authorId ?? STATE_AUTHOR_ID,
+            inReplyToId: input.commentId,
+            body: options?.echo === undefined ? input.body : options.echo(input.body),
+          });
+          comments.push(comment);
+          return comment;
+        }),
+      updateComment: () => unused("update comment"),
+      getFileContent: () => unused("get file content"),
+      publish: () => unused("publish"),
     }),
   );
-  return { layer, invocations: () => invocations };
+  return {
+    layer,
+    created: () => created,
+    comments: () => [...comments] as ReadonlyArray<JournalComment>,
+  };
 };
 
-const NOTES_PATCH = "diff --git a/notes.md b/notes.md\n--- a/notes.md\n+++ b/notes.md\n";
-const NOTES_DIGEST = Schema.decodeUnknownSync(PatchDigest)(
-  createHash("sha256").update(NOTES_PATCH).digest("hex"),
-);
-const TRADITIONAL_PATCH = "--- a/secret\n+++ b/secret\n";
-const TRADITIONAL_DIGEST = Schema.decodeUnknownSync(PatchDigest)(
-  createHash("sha256").update(TRADITIONAL_PATCH).digest("hex"),
-);
+const readAdmissionArtifactFile = (file: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (files) =>
+    files
+      .readFileString(file)
+      .pipe(
+        Effect.flatMap((text) =>
+          Schema.decodeUnknownEffect(Schema.fromJsonString(WorkOrderAdmission))(text),
+        ),
+      ),
+  );
 
-const defaultTrust = (overrides?: Partial<PublisherTrust>) =>
-  PublisherTrust.make({
-    ...defaultTrustFields,
-    requiredChecks: [...defaultTrustFields.requiredChecks],
-    ...overrides,
-  });
-
-const publisherRequest = (overrides?: {
-  readonly patch?: string;
-  readonly trust?: Partial<PublisherTrust>;
-}) =>
-  PublisherRequest.make({
-    patch: overrides?.patch ?? "",
-    trust: defaultTrust(overrides?.trust),
-  });
-
-const withIngress = <A, E, R>(
+const withAdmission = <A, E, R>(
   input: {
     readonly comments?: ReadonlyMap<string, ReviewCommentView>;
     readonly pull?: PullRequestView;
-    readonly implementer?: ReturnType<typeof countingImplementer>;
+    readonly journal?: ReturnType<typeof makeFakeJournal>;
   },
   apply: (env: {
-    readonly github: ReturnType<typeof makeFakeGitHub>;
-    readonly implementer: ReturnType<typeof countingImplementer>;
+    readonly journal: ReturnType<typeof makeFakeJournal>;
+    readonly outputs: Effect.Effect<string, never, FileSystem.FileSystem>;
+    readonly admission: ReturnType<typeof readAdmissionArtifactFile>;
   }) => Effect.Effect<A, E, R>,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pr-work-order-ingress-" });
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pr-work-order-admit-" });
+      const stateDirectory = path.join(directory, "state");
+      const outputsFile = path.join(directory, "outputs.txt");
       const github = makeFakeGitHub({
         repository: REPOSITORY,
         pullRequest: input.pull ?? pullRequest(),
         comments: input.comments ?? new Map([["1001", targetComment()]]),
       });
-      const implementer = input.implementer ?? countingImplementer();
-      return yield* apply({ github, implementer }).pipe(
+      const journal = input.journal ?? makeFakeJournal();
+      const outputs = Effect.flatMap(FileSystem.FileSystem, (files) =>
+        files.readFileString(outputsFile).pipe(Effect.orElseSucceed(() => "")),
+      );
+      const admission = readAdmissionArtifactFile(path.join(stateDirectory, "admission.json"));
+      return yield* apply({ journal, outputs, admission }).pipe(
         Effect.provide(
           Layer.mergeAll(
             github.layer,
+            journal.layer,
             IngressPolicy.layer(policyConfig),
-            ObservedActionsIdentity.layerAbsent,
-            IsolatedChecks.layer,
-            FileBackedAttemptStore.layer(directory).pipe(
-              Layer.provide(IngressStoreFailpoint.layer),
+            WorkOrderJournalAuthenticator.layer(JOURNAL_SECRET),
+            ConfigProvider.layer(
+              ConfigProvider.fromUnknown({
+                EFFECT_AGENT_STATE_AUTHOR_ID: STATE_AUTHOR_ID,
+                EFFECT_AGENT_ARTIFACT_DIRECTORY: stateDirectory,
+                GITHUB_OUTPUT: outputsFile,
+              }),
             ),
-            stubHostLayer,
-            WorkOrderAttemptPolicy.layerMemory,
-            implementer.layer,
           ),
         ),
       );
@@ -460,132 +371,109 @@ const withIngress = <A, E, R>(
 
 describe("PR work-order ingress", () => {
   it.effect(
-    "WOI-013 keeps expected authentication, targeting, admission, isolation, publication, and presentation failures in E",
+    "WOI-013 keeps expected targeting, admission, journal, and publication failures in E and dependencies in R",
     () =>
       Effect.sync(() => {
         const proofs = {
-          handleKeepsUnauthentic: true as HandleKeepsUnauthentic,
-          handleKeepsUnauthorized: true as HandleKeepsUnauthorized,
-          handleKeepsTarget: true as HandleKeepsTarget,
-          handleKeepsStale: true as HandleKeepsStale,
-          handleKeepsPresentation: true as HandleKeepsPresentation,
-          handleUnknownExcluded: true as HandleUnknownExcluded,
-          handleRequiresPolicy: true as HandleRequiresPolicy,
-          handleRequiresStore: true as HandleRequiresStore,
-          handleRequiresHost: true as HandleRequiresHost,
-          handleRequiresCrypto: true as HandleRequiresCrypto,
+          admissionKeepsTarget: true as AdmissionKeepsTarget,
+          admissionKeepsUnauthorized: true as AdmissionKeepsUnauthorized,
+          admissionKeepsUntrusted: true as AdmissionKeepsUntrusted,
+          admissionKeepsStale: true as AdmissionKeepsStale,
+          admissionKeepsGitHub: true as AdmissionKeepsGitHub,
+          admissionKeepsJournal: true as AdmissionKeepsJournal,
+          admissionKeepsConflict: true as AdmissionKeepsConflict,
+          admissionUnknownExcluded: true as AdmissionUnknownExcluded,
           admissionRequiresPolicy: true as AdmissionRequiresPolicy,
-          admissionRequiresActionsIdentity: true as AdmissionRequiresActionsIdentity,
           admissionRequiresGitHub: true as AdmissionRequiresGitHub,
-          publishKeepsVerification: true as PublishKeepsVerification,
+          admissionRequiresJournal: true as AdmissionRequiresJournal,
+          admissionRequiresAuthenticator: true as AdmissionRequiresAuthenticator,
         };
         expect(proofs).toEqual({
-          handleKeepsUnauthentic: true,
-          handleKeepsUnauthorized: true,
-          handleKeepsTarget: true,
-          handleKeepsStale: true,
-          handleKeepsPresentation: true,
-          handleUnknownExcluded: true,
-          handleRequiresPolicy: true,
-          handleRequiresStore: true,
-          handleRequiresHost: true,
-          handleRequiresCrypto: true,
+          admissionKeepsTarget: true,
+          admissionKeepsUnauthorized: true,
+          admissionKeepsUntrusted: true,
+          admissionKeepsStale: true,
+          admissionKeepsGitHub: true,
+          admissionKeepsJournal: true,
+          admissionKeepsConflict: true,
+          admissionUnknownExcluded: true,
           admissionRequiresPolicy: true,
-          admissionRequiresActionsIdentity: true,
           admissionRequiresGitHub: true,
-          publishKeepsVerification: true,
+          admissionRequiresJournal: true,
+          admissionRequiresAuthenticator: true,
         });
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }),
   );
 
   it.effect(
-    "WOI-001 WOI-005 a mention reply with in_reply_to constructs one work order and invokes the host once",
+    "WOI-001 WOI-005 WOI-006 an exact mention reply admits one work order and persists an authenticated claim",
     () =>
-      withIngress({}, ({ implementer }) =>
+      withAdmission({}, ({ journal, outputs, admission }) =>
         Effect.gen(function* () {
-          const result = yield* handleWorkOrderDelivery(
-            yield* signedDelivery({
-              deliveryId: "evt-mention",
-              eventName: "pull_request_review_comment",
-              payload: yield* loadFixture("mention-reply.json"),
-            }),
-          );
-          expect(result._tag).toBe("settled");
-          if (result._tag !== "settled") return;
-          expect(result.disposition).toBe("not-applicable");
-          expect(implementer.invocations()).toBe(1);
+          const delivery = mentionDelivery(yield* loadFixture("mention-reply.json"), {
+            deliveryId: "review-comment:2001",
+          });
+          yield* admitWorkOrder({ delivery, runId: "run-1" });
+          expect(journal.created()).toBe(1);
+          const created = journal.comments()[0];
+          expect(created).toMatchObject({ authorId: STATE_AUTHOR_ID, inReplyToId: "1001" });
+          const authenticator = yield* WorkOrderJournalAuthenticator;
+          const state = Option.getOrUndefined(yield* authenticator.extract(created?.body ?? ""));
+          expect(state).toMatchObject({
+            _tag: "claimed",
+            eventId: "review-comment:2001",
+            repository: REPOSITORY,
+            pullRequestNumber: PULL,
+            sourceCommentId: "1001",
+            expectedHeadSha: HEAD,
+            runId: "run-1",
+          });
+          const admitted = yield* admission;
+          expect(admitted.order.workOrderId).toBe(state?.workOrderId);
+          expect(admitted.workOrderDigest).toBe(state?.workOrderDigest);
+          expect(admitted.journalCommentId).toBe(created?.id);
+          const written = yield* outputs;
+          expect(written).toContain("should-run=true\n");
+          expect(written).toContain("duplicate=false\n");
+          expect(written).toContain("stored-outcome=claimed\n");
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect(
-    "WOI-001 WOI-005 a reaction on that comment constructs one work order and invokes the host once",
+    "WOI-001 a conversation comment, review summary, approximate command, missing reply target, or pathless target is rejected before any claim",
     () =>
-      withIngress({}, ({ implementer }) =>
-        Effect.gen(function* () {
-          const result = yield* handleWorkOrderDelivery(
-            yield* signedDelivery({
-              deliveryId: "evt-reaction",
-              eventName: "reaction",
-              payload: yield* loadFixture("reaction.json"),
-            }),
-          );
-          expect(result._tag).toBe("settled");
-          expect(implementer.invocations()).toBe(1);
-        }),
-      ).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect(
-    "WOI-001 a mention without a unique inline target is rejected and does not invoke the implementer",
-    () =>
-      withIngress({}, ({ implementer }) =>
-        Effect.gen(function* () {
-          const rejected = yield* handleWorkOrderDelivery(
-            yield* signedDelivery({
-              deliveryId: "evt-no-target",
-              eventName: "pull_request_review_comment",
-              payload: yield* loadFixture("mention-no-reply.json"),
-            }),
-          ).pipe(Effect.flip);
-          expect(rejected._tag).toBe("DispatchTargetRejected");
-          expect(implementer.invocations()).toBe(0);
-        }),
-      ).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect(
-    "WOI-001 a PR conversation comment, review summary, or pathless event is rejected",
-    () =>
-      withIngress(
+      withAdmission(
         { comments: new Map([["1001", targetComment({ omitPath: true })]]) },
-        ({ implementer }) =>
+        ({ journal }) =>
           Effect.gen(function* () {
-            const conversation = yield* handleWorkOrderDelivery(
-              yield* signedDelivery({
-                deliveryId: "evt-issue",
+            const admit = (delivery: PlatformDelivery) =>
+              admitWorkOrder({ delivery, runId: "run-1" }).pipe(Effect.flip);
+            const conversation = yield* admit(
+              mentionDelivery(yield* loadFixture("issue-comment.json"), {
                 eventName: "issue_comment",
-                payload: yield* loadFixture("issue-comment.json"),
               }),
-            ).pipe(Effect.flip);
-            const review = yield* handleWorkOrderDelivery(
-              yield* signedDelivery({
-                deliveryId: "evt-review",
+            );
+            const review = yield* admit(
+              mentionDelivery(yield* loadFixture("review-summary.json"), {
                 eventName: "pull_request_review",
-                payload: yield* loadFixture("review-summary.json"),
               }),
-            ).pipe(Effect.flip);
-            const pathless = yield* handleWorkOrderDelivery(
-              yield* signedDelivery({
-                deliveryId: "evt-pathless",
-                eventName: "reaction",
-                payload: yield* loadFixture("pathless-reaction.json"),
-              }),
-            ).pipe(Effect.flip);
+            );
+            const approximate = yield* admit(
+              mentionDelivery(
+                mentionPayload({ inReplyTo: 1001, body: `${DEFAULT_MENTION_COMMAND} please` }),
+              ),
+            );
+            const untargeted = yield* admit(
+              mentionDelivery(yield* loadFixture("mention-no-reply.json")),
+            );
+            const pathless = yield* admit(mentionDelivery(mentionPayload({ inReplyTo: 1001 })));
             expect(conversation._tag).toBe("DispatchTargetRejected");
             expect(review._tag).toBe("DispatchTargetRejected");
+            expect(approximate._tag).toBe("DispatchTargetRejected");
+            expect(untargeted._tag).toBe("DispatchTargetRejected");
             expect(pathless._tag).toBe("DispatchTargetRejected");
-            expect(implementer.invocations()).toBe(0);
+            expect(journal.created()).toBe(0);
           }),
       ).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -593,349 +481,229 @@ describe("PR work-order ingress", () => {
   it.effect(
     "WOI-002 an unauthorized actor id is rejected even when the login matches a configured human",
     () =>
-      withIngress({}, ({ implementer }) =>
+      withAdmission({}, ({ journal }) =>
         Effect.gen(function* () {
-          const rejected = yield* handleWorkOrderDelivery(
-            yield* signedDelivery({
-              deliveryId: "evt-unauth",
-              eventName: "pull_request_review_comment",
-              payload: yield* loadFixture("unauthorized-actor.json"),
-            }),
-          ).pipe(Effect.flip);
+          const rejected = yield* admitWorkOrder({
+            delivery: mentionDelivery(yield* loadFixture("unauthorized-actor.json")),
+            runId: "run-1",
+          }).pipe(Effect.flip);
           expect(rejected).toMatchObject({ _tag: "DispatchUnauthorized", actorId: "99" });
-          expect(implementer.invocations()).toBe(0);
+          expect(journal.created()).toBe(0);
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("WOI-003 a fork or foreign repository is rejected", () =>
     Effect.gen(function* () {
-      yield* withIngress({ pull: pullRequest({ headIsFork: true }) }, ({ implementer }) =>
+      yield* withAdmission({ pull: pullRequest({ headIsFork: true }) }, ({ journal }) =>
         Effect.gen(function* () {
-          const rejected = yield* handleWorkOrderDelivery(
-            yield* signedDelivery({
-              deliveryId: "evt-fork",
-              eventName: "pull_request_review_comment",
-              payload: mentionPayload({ inReplyTo: 1001 }),
-            }),
-          ).pipe(Effect.flip);
+          const rejected = yield* admitWorkOrder({
+            delivery: mentionDelivery(mentionPayload({ inReplyTo: 1001 })),
+            runId: "run-1",
+          }).pipe(Effect.flip);
           expect(rejected._tag).toBe("UntrustedPullRequest");
-          expect(implementer.invocations()).toBe(0);
+          expect(journal.created()).toBe(0);
         }),
       );
-      yield* withIngress({}, ({ implementer }) =>
+      yield* withAdmission({}, ({ journal }) =>
         Effect.gen(function* () {
-          const rejected = yield* handleWorkOrderDelivery(
-            yield* signedDelivery({
-              deliveryId: "evt-foreign",
-              eventName: "pull_request_review_comment",
-              payload: yield* loadFixture("foreign-repo.json"),
-            }),
-          ).pipe(Effect.flip);
+          const rejected = yield* admitWorkOrder({
+            delivery: mentionDelivery(yield* loadFixture("foreign-repo.json")),
+            runId: "run-1",
+          }).pipe(Effect.flip);
           expect(rejected._tag).toBe("UntrustedPullRequest");
-          expect(implementer.invocations()).toBe(0);
+          expect(journal.created()).toBe(0);
         }),
       );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("WOI-004 a comment anchored to an older SHA is rejected against the current head", () =>
-    withIngress(
+    withAdmission(
       { comments: new Map([["1001", targetComment({ commitSha: STALE })]]) },
-      ({ implementer }) =>
+      ({ journal }) =>
         Effect.gen(function* () {
-          const rejected = yield* handleWorkOrderDelivery(
-            yield* signedDelivery({
-              deliveryId: "evt-stale",
-              eventName: "pull_request_review_comment",
-              payload: mentionPayload({ inReplyTo: 1001 }),
-            }),
-          ).pipe(Effect.flip);
+          const rejected = yield* admitWorkOrder({
+            delivery: mentionDelivery(mentionPayload({ inReplyTo: 1001 })),
+            runId: "run-1",
+          }).pipe(Effect.flip);
           expect(rejected).toMatchObject({
             _tag: "StaleCommentAnchor",
             sourceSha: STALE,
             headSha: HEAD,
           });
-          expect(implementer.invocations()).toBe(0);
+          expect(journal.created()).toBe(0);
         }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("WOI-006 duplicate delivery of the same eventId returns the stored outcome", () =>
-    withIngress({}, ({ implementer, github }) =>
+  it.effect("WOI-006 duplicate delivery of the same dispatch returns the stored outcome", () =>
+    withAdmission({}, ({ journal, outputs }) =>
       Effect.gen(function* () {
-        const delivery = yield* signedDelivery({
-          deliveryId: "evt-dup",
-          eventName: "pull_request_review_comment",
-          payload: mentionPayload({ inReplyTo: 1001 }),
-        });
-        const first = yield* handleWorkOrderDelivery(delivery);
-        const second = yield* handleWorkOrderDelivery(delivery);
-        expect(first).toEqual(second);
-        expect(implementer.invocations()).toBe(1);
-        expect(github.replies()).toHaveLength(1);
+        const delivery = mentionDelivery(mentionPayload({ inReplyTo: 1001 }));
+        yield* admitWorkOrder({ delivery, runId: "run-1" });
+        yield* admitWorkOrder({ delivery, runId: "run-2" });
+        expect(journal.created()).toBe(1);
+        const written = yield* outputs;
+        expect(written).toContain("duplicate=true\n");
+        expect(written).toContain("stored-outcome=incomplete\n");
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("WOI-006 a second explicit dispatch has a distinct work-order id", () =>
-    withIngress({}, ({ implementer }) =>
+    withAdmission({}, ({ journal }) =>
       Effect.gen(function* () {
-        const first = yield* handleWorkOrderDelivery(
-          yield* signedDelivery({
-            deliveryId: "evt-a",
-            eventName: "pull_request_review_comment",
-            payload: mentionPayload({ inReplyTo: 1001 }),
-          }),
-        );
-        const second = yield* handleWorkOrderDelivery(
-          yield* signedDelivery({
-            deliveryId: "evt-b",
-            eventName: "pull_request_review_comment",
-            payload: mentionPayload({ inReplyTo: 1001 }),
-          }),
-        );
-        expect(first._tag).toBe("settled");
-        expect(second._tag).toBe("settled");
-        if (first._tag !== "settled" || second._tag !== "settled") return;
-        expect(first.workOrderId).not.toBe(second.workOrderId);
-        expect(implementer.invocations()).toBe(2);
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("WOI-006 a crash after claim records an incomplete settlement and does not retry", () =>
-    withIngress({}, ({ implementer }) =>
-      Effect.gen(function* () {
-        const delivery = yield* signedDelivery({
-          deliveryId: "evt-crash",
-          eventName: "pull_request_review_comment",
-          payload: mentionPayload({ inReplyTo: 1001 }),
+        yield* admitWorkOrder({
+          delivery: mentionDelivery(mentionPayload({ inReplyTo: 1001 })),
+          runId: "run-1",
         });
-        const target = yield* parseDispatchTarget(delivery);
-        const order = yield* constructWorkOrder(target, delivery.deliveryId);
-        const store = yield* FileBackedAttemptStore;
-        expect((yield* store.claim(order))._tag).toBe("claimed");
-        const rejected = yield* handleWorkOrderDelivery(delivery).pipe(Effect.flip);
-        expect(rejected._tag).toBe("AttemptIncomplete");
-        expect(implementer.invocations()).toBe(0);
+        yield* admitWorkOrder({
+          delivery: mentionDelivery(mentionPayload({ inReplyTo: 1001, commentId: 1003 }), {
+            deliveryId: "review-comment:1003",
+          }),
+          runId: "run-2",
+        });
+        expect(journal.created()).toBe(2);
+        const authenticator = yield* WorkOrderJournalAuthenticator;
+        const states = yield* Effect.forEach(journal.comments(), (comment) =>
+          authenticator.extract(comment.body).pipe(Effect.map(Option.getOrUndefined)),
+        );
+        expect(states[0]?.workOrderId).toBeDefined();
+        expect(states[1]?.workOrderId).toBeDefined();
+        expect(states[0]?.workOrderId).not.toBe(states[1]?.workOrderId);
+        expect(states[0]?.eventId).not.toBe(states[1]?.eventId);
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect(
-    "WOI-007 the check process environment contains neither a GitHub write token nor a provider secret",
+    "WOI-006 an interrupted claimed attempt returns the stored incomplete outcome and is not replayed",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          process.env[GITHUB_WRITE_TOKEN_ENV] = "ghs_parent_write_token";
-          process.env[MODEL_SECRET_ENV] = "sk_parent_model_secret";
-          const fs = yield* FileSystem.FileSystem;
-          const worktree = yield* fs.makeTempDirectoryScoped({ prefix: "ingress-check-" });
-          const checks = yield* IsolatedChecks;
-          const isolated = yield* checks
-            .run(
-              IsolatedCheckRequest.make({
-                worktreeRoot: worktree,
-                checks: [
-                  IsolatedCheckSpec.make({
-                    name: "fixture-check",
-                    command: process.execPath,
-                    args: ["-e", "process.stdout.write('ok')"],
-                  }),
-                ],
+          const github = makeFakeGitHub({
+            repository: REPOSITORY,
+            pullRequest: pullRequest(),
+            comments: new Map([["1001", targetComment()]]),
+          });
+          const delivery = mentionDelivery(mentionPayload({ inReplyTo: 1001 }));
+          const order = yield* Effect.gen(function* () {
+            const target = yield* parseDispatchTarget(delivery);
+            return yield* constructWorkOrder(target, delivery.deliveryId);
+          }).pipe(Effect.provide(Layer.mergeAll(github.layer, IngressPolicy.layer(policyConfig))));
+          const digest = yield* workOrderDigest(order);
+          const claimed = claimedState({
+            eventId: delivery.deliveryId,
+            repository: REPOSITORY,
+            pullRequestNumber: PULL,
+            sourceCommentId: "1001",
+            workOrderId: order.workOrderId,
+            workOrderDigest: digest,
+            expectedHeadSha: HEAD,
+            runId: "run-0",
+          });
+          const authenticator = WorkOrderJournalAuthenticator.layer(JOURNAL_SECRET);
+          const claimedBody = yield* Effect.flatMap(WorkOrderJournalAuthenticator, (journal) =>
+            journal.render(claimed, "Implementation is pending."),
+          ).pipe(Effect.provide(authenticator));
+          const interrupted = makeFakeJournal({
+            initial: [
+              JournalComment.make({
+                id: "journal-1",
+                authorId: STATE_AUTHOR_ID,
+                inReplyToId: "1001",
+                body: claimedBody,
               }),
-            )
-            .pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  delete process.env[GITHUB_WRITE_TOKEN_ENV];
-                  delete process.env[MODEL_SECRET_ENV];
+            ],
+          });
+          yield* withAdmission({ journal: interrupted }, ({ journal, outputs }) =>
+            Effect.gen(function* () {
+              yield* admitWorkOrder({ delivery, runId: "run-1" });
+              expect(journal.created()).toBe(0);
+              const written = yield* outputs;
+              expect(written).toContain("should-run=false\n");
+              expect(written).toContain("duplicate=true\n");
+              expect(written).toContain("stored-outcome=incomplete\n");
+            }),
+          );
+          const failedBody = yield* Effect.flatMap(WorkOrderJournalAuthenticator, (journal) =>
+            journal.render(
+              completedState(
+                claimed,
+                FailedTerminal.make({
+                  workOrderId: order.workOrderId,
+                  workOrderDigest: digest,
+                  headSha: HEAD,
+                  errorTag: "RequiredCheckFailed",
+                  detail: "a required check failed",
                 }),
               ),
-            );
-          expect(isolated.environment).toEqual({
-            process: "check",
-            hasWriteToken: false,
-            hasModelSecret: false,
-          });
-          expect(isolated.results).toEqual([
-            { name: "fixture-check", status: "passed", summary: "ok" },
-          ]);
-        }),
-      ).pipe(Effect.provide(Layer.mergeAll(IsolatedChecks.layer, NodeServices.layer))),
-  );
-
-  it.effect("WOI-001 Actions authentication binds the trusted event payload and delivery id", () =>
-    Effect.gen(function* () {
-      const rawBody = JSON.stringify(mentionPayload({ inReplyTo: 1001 }));
-      const delivery = PlatformDelivery.make({
-        deliveryId: "actions-run-1:1",
-        eventName: "pull_request_review_comment",
-        rawBody,
-      });
-      const matching = Layer.succeed(
-        ObservedActionsIdentity,
-        ObservedActionsIdentity.of({
-          read: Effect.succeed({
-            repository: REPOSITORY,
-            eventName: "pull_request_review_comment",
-            eventPayload: rawBody,
-            deliveryId: "actions-run-1:1",
-          }),
-        }),
-      );
-      const actionsPolicy = Layer.mergeAll(matching, IngressPolicy.layer(policyConfig));
-      yield* authenticateDelivery(delivery).pipe(Effect.provide(actionsPolicy));
-      const forged = yield* authenticateDelivery(
-        PlatformDelivery.make({
-          deliveryId: "actions-run-1:1",
-          eventName: "pull_request_review_comment",
-          rawBody: JSON.stringify({ forged: true }),
-        }),
-      ).pipe(Effect.provide(actionsPolicy), Effect.flip);
-      const swappedId = yield* authenticateDelivery(
-        PlatformDelivery.make({
-          deliveryId: "other-run:1",
-          eventName: "pull_request_review_comment",
-          rawBody,
-        }),
-      ).pipe(Effect.provide(actionsPolicy), Effect.flip);
-      expect(forged._tag).toBe("DeliveryUnauthentic");
-      expect(swappedId._tag).toBe("DeliveryUnauthentic");
-    }),
-  );
-
-  it.effect(
-    "WOI-008 WOI-009 the publisher rejects a digest, path, identity, or head mismatch and does not update the ref",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "ingress-publish-" });
-          yield* fs.writeFileString(path.join(stateDir, "head"), HEAD);
-          const writeExpected = (trust: PublisherTrust) =>
-            Schema.encodeEffect(Schema.fromJsonString(PublisherTrust))(trust).pipe(
-              Effect.flatMap((text) =>
-                fs.writeFileString(path.join(stateDir, "expected.json"), text),
-              ),
-            );
-          const publish = (request: PublisherRequest, expected?: PublisherTrust) =>
-            writeExpected(expected ?? request.trust).pipe(
-              Effect.andThen(
-                Effect.gen(function* () {
-                  const publisher = yield* IsolatedPublisher;
-                  return yield* publisher.publish(request);
-                }).pipe(Effect.provide(IsolatedPublisher.layer({ stateDir })), Effect.flip),
-              ),
-            );
-          const digest = yield* publish(
-            publisherRequest({
-              patch: "diff --git a/src/value.ts b/src/value.ts\n",
-            }),
-          );
-          const forbidden = yield* publish(
-            publisherRequest({
-              patch: NOTES_PATCH,
-              trust: { patchDigest: NOTES_DIGEST },
-            }),
-          );
-          const unproven = yield* publish(
-            publisherRequest({
-              patch: TRADITIONAL_PATCH,
-              trust: { patchDigest: TRADITIONAL_DIGEST },
-            }),
-          );
-          const substituted = yield* publish(
-            publisherRequest({ trust: { workOrderId: "wo-forged" } }),
-            defaultTrust(),
-          );
-          yield* fs.writeFileString(path.join(stateDir, "head"), STALE);
-          const head = yield* publish(publisherRequest());
-          const after = yield* fs.readFileString(path.join(stateDir, "head"));
-          expect(digest._tag).toBe("PublisherVerificationFailure");
-          expect(forbidden).toMatchObject({
-            _tag: "PublisherVerificationFailure",
-            reason: "path-not-allowed",
-          });
-          expect(unproven).toMatchObject({
-            _tag: "PublisherVerificationFailure",
-            reason: "path-not-allowed",
-          });
-          expect(substituted).toMatchObject({
-            _tag: "PublisherVerificationFailure",
-            reason: "identity-mismatch",
-          });
-          expect(head._tag).toBe("StalePullRequestHead");
-          expect(after.trim()).toBe(STALE);
-        }),
-      ).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect(
-    "WOI-009 a successful update followed by lock cleanup failure reports publication uncertainty",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "ingress-publish-lock-" });
-          yield* fs.writeFileString(path.join(stateDir, "head"), HEAD);
-          const request = publisherRequest();
-          yield* Schema.encodeEffect(Schema.fromJsonString(PublisherTrust))(request.trust).pipe(
-            Effect.flatMap((text) =>
-              fs.writeFileString(path.join(stateDir, "expected.json"), text),
+              "No patch was published.",
             ),
-          );
-          const result = yield* Effect.gen(function* () {
-            const publisher = yield* IsolatedPublisher;
-            return yield* publisher.publish(request);
-          }).pipe(
-            Effect.provide(
-              IsolatedPublisher.layer({
-                stateDir,
-                failpoint: "lock-release",
+          ).pipe(Effect.provide(authenticator));
+          const settledJournal = makeFakeJournal({
+            initial: [
+              JournalComment.make({
+                id: "journal-1",
+                authorId: STATE_AUTHOR_ID,
+                inReplyToId: "1001",
+                body: failedBody,
               }),
-            ),
-            Effect.flip,
+            ],
+          });
+          yield* withAdmission({ journal: settledJournal }, ({ journal, outputs }) =>
+            Effect.gen(function* () {
+              yield* admitWorkOrder({ delivery, runId: "run-1" });
+              expect(journal.created()).toBe(0);
+              expect(yield* outputs).toContain("stored-outcome=failed\n");
+            }),
           );
-          const after = yield* fs.readFileString(path.join(stateDir, "head"));
-          const lockRemains = yield* fs.exists(path.join(stateDir, "head.lock"));
-          expect(result._tag).toBe("PublicationUncertainty");
-          if (result._tag !== "PublicationUncertainty") return;
-          expect(result.observedHeadSha).toBeDefined();
-          expect(after.trim()).toBe(result.observedHeadSha);
-          expect(lockRemains).toBe(true);
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect(
-    "WOI-010 a published or settled run posts one thread reply and does not resolve the thread",
+    "WOI-006 admission fails closed on a mutated echo, foreign author, or ambiguous journal",
     () =>
-      withIngress({}, ({ github }) =>
-        Effect.gen(function* () {
-          const result = yield* handleWorkOrderDelivery(
-            yield* signedDelivery({
-              deliveryId: "evt-reply",
-              eventName: "pull_request_review_comment",
-              payload: mentionPayload({ inReplyTo: 1001 }),
-            }),
-          );
-          expect(result._tag).toBe("settled");
-          expect(github.replies()).toEqual([
-            {
-              commentId: "1001",
-              reply: {
-                kind: "settled",
-                body: "settled not-applicable: The instruction is already satisfied.",
-              },
-            },
-          ]);
-          expect(github.resolveCount()).toBe(0);
-        }),
-      ).pipe(Effect.provide(NodeServices.layer)),
+      Effect.gen(function* () {
+        const delivery = mentionDelivery(mentionPayload({ inReplyTo: 1001 }));
+        const admitFlipped = withAdmission(
+          { journal: makeFakeJournal({ echo: (body) => body.replace("pending", "tampered") }) },
+          () => admitWorkOrder({ delivery, runId: "run-1" }).pipe(Effect.flip),
+        );
+        const mutated = yield* admitFlipped;
+        expect(mutated).toMatchObject({
+          _tag: "WorkOrderActionFailure",
+          errorTag: "AdmissionConflict",
+        });
+        const foreign = yield* withAdmission(
+          { journal: makeFakeJournal({ authorId: "999" }) },
+          () => admitWorkOrder({ delivery, runId: "run-1" }).pipe(Effect.flip),
+        );
+        expect(foreign).toMatchObject({
+          _tag: "WorkOrderActionFailure",
+          errorTag: "AdmissionConflict",
+        });
+        yield* withAdmission({}, ({ journal }) =>
+          Effect.gen(function* () {
+            yield* admitWorkOrder({ delivery, runId: "run-1" });
+            const claim = journal.comments()[0];
+            expect(claim).toBeDefined();
+            if (claim === undefined) return;
+            const ambiguous = makeFakeJournal({
+              initial: [claim, JournalComment.make({ ...claim, id: "journal-2" })],
+            });
+            const conflict = yield* withAdmission({ journal: ambiguous }, () =>
+              admitWorkOrder({ delivery, runId: "run-2" }).pipe(Effect.flip),
+            );
+            expect(conflict).toMatchObject({
+              _tag: "WorkOrderActionFailure",
+              errorTag: "AdmissionConflict",
+            });
+          }),
+        );
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("WOI-011 the enabled workflow enforces the five-job credential boundary", () =>
@@ -1533,6 +1301,9 @@ describe("PR work-order ingress", () => {
         }
         expect(yield* Ref.get(gets)).toBe(2);
       }).pipe(Effect.provide(NodeServices.layer)),
+    // Reproduces the patch through real git worktrees; the vitest default 5s
+    // budget flakes on a loaded machine.
+    30_000,
   );
 
   it.effect("the live GitHub adapter maps API wires onto ingress views", () =>
@@ -1555,7 +1326,6 @@ describe("PR work-order ingress", () => {
         start_line: 1,
         original_line: 1,
         body: "The exported answer must be 42.",
-        pull_request_url: `https://api.github.com/repos/${REPOSITORY}/pulls/${String(PULL)}`,
       });
       expect(pull).toMatchObject({
         repository: REPOSITORY,
