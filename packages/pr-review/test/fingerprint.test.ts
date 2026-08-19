@@ -1,4 +1,5 @@
-import { describe, expect, it } from "@effect/vitest";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it, layer } from "@effect/vitest";
 import { Effect } from "effect";
 
 import {
@@ -49,7 +50,7 @@ describe("fingerprint marker", () => {
   });
 });
 
-describe("computeChangesetFingerprint", () => {
+layer(NodeCrypto.layer)("computeChangesetFingerprint", (it) => {
   it.effect("ignores provider file ordering but not content or signature", () =>
     Effect.gen(function* () {
       const forward = yield* computeChangesetFingerprint([fileA, fileB], "sig");
@@ -159,7 +160,7 @@ describe("plan fingerprint embedding", () => {
 // configurations, and blind to ignored files.
 // ---------------------------------------------------------------------------
 
-describe("reviewer fingerprint", () => {
+layer(NodeCrypto.layer)("reviewer fingerprint", (it) => {
   const fixtureWith = (files: ReadonlyArray<ChangedFile>) =>
     FixturePullRequest.make({
       metadata: PullRequestMetadata.make({

@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Layer, Redacted, Ref, Schema } from "effect";
 import { Agent, AgentRuntime, IdGenerator, UsageBudgetLimits } from "effect-agent";
@@ -211,6 +212,7 @@ const runOfflineFanOut = (script: {
           fixturePullRequestSourceLayer(fixture),
           collectingReviewPublisherLayer(published),
           IdGenerator.layer,
+          NodeCrypto.layer,
         ),
       ),
       Effect.provideService(ReviewExecutionContext, {

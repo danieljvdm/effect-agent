@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Crypto, Effect, Encoding } from "effect";
 
 import type { ChangedFile } from "./diff.ts";
 
@@ -36,14 +36,14 @@ export const extractFingerprint = (body: string): string | undefined => {
   return last;
 };
 
-/** WebCrypto SHA-256; unavailable crypto is a defect, not an expected failure. */
-const sha256Hex = (text: string): Effect.Effect<string> =>
-  Effect.promise(async () => {
-    const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-    return Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-  });
+/** SHA-256 via `Crypto.Crypto`; unavailable crypto is a defect, not an expected failure. */
+const sha256Hex = Effect.fn("sha256Hex")(function* (
+  text: string,
+): Effect.fn.Return<string, never, Crypto.Crypto> {
+  const crypto = yield* Crypto.Crypto;
+  const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(text)).pipe(Effect.orDie);
+  return Encoding.encodeHex(digest);
+});
 
 const FIELD = "\u0000";
 const RECORD = "\u0001";
@@ -80,4 +80,10 @@ const canonicalChangeset = (files: ReadonlyArray<ChangedFile>): string =>
 export const computeChangesetFingerprint = (
   files: ReadonlyArray<ChangedFile>,
   signature: string,
-): Effect.Effect<string> => sha256Hex(`${canonicalChangeset(files)}${SECTION}${signature}`);
+): Effect.Effect<string, never, Crypto.Crypto> =>
+  sha256Hex(`${canonicalChangeset(files)}${SECTION}${signature}`);
+
+/** Profile fingerprints are SHA-256 over configuration-only signatures. */
+export const computeProfileFingerprint = (
+  signature: string,
+): Effect.Effect<string, never, Crypto.Crypto> => sha256Hex(signature);

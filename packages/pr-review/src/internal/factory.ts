@@ -11,7 +11,7 @@ import { Toolkit, type LanguageModel, type Model, type Tool } from "effect/unsta
 
 import type { ChangedFile } from "./diff.ts";
 import { makeFileReviewerDefinition } from "./fan-out.ts";
-import { computeChangesetFingerprint } from "./fingerprint.ts";
+import { computeChangesetFingerprint, computeProfileFingerprint } from "./fingerprint.ts";
 import { compileIgnoreGlobs, ignoringPullRequestSourceLayer } from "./ignore.ts";
 import {
   clampMaxFindings,
@@ -26,7 +26,7 @@ import {
   resolveGuidance as resolveReviewGuidance,
   type ReviewGuidance,
 } from "./review-agent.ts";
-import { buildProfileMission, computeProfileFingerprint } from "./review-state.ts";
+import { buildProfileMission } from "./review-state.ts";
 import {
   buildReviewMission,
   executeFanOutReview,
@@ -175,8 +175,8 @@ const makeReviewSnapshot = (ignore: ReadonlyArray<string> | undefined) =>
  * Build the flat reviewer: one bounded read-only agent over the whole
  * changeset. Returns the model-agnostic definition, the explicit binding, and
  * a `run` whose error and requirement channels stay fully inferred — the
- * pull-request source, the publisher, extra tool handlers, and the Model
- * Layer's requirements all remain visible to the caller.
+ * pull-request source, the publisher, `Crypto.Crypto`, extra tool handlers,
+ * and the Model Layer's requirements all remain visible to the caller.
  */
 const make = <
   Provider,
