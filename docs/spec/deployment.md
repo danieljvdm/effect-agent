@@ -354,10 +354,11 @@ explicitly allowed structured values, applies the configured Dynamic Worker CPU 
 limits plus an executor-owned wall-clock deadline (an asynchronously suspended pass consumes no
 CPU and must not outlive its deadline), invokes one fixed entrypoint, validates the returned
 envelope through Effect Schema, and disposes the entrypoint and Worker handles in Scope
-finalizers. Host callbacks run one at a time on retained independent root Effect fibers so their
-return RPC is not coupled to the still-open guest RPC; pass teardown closes callback admission,
-interrupts and awaits active work, and settles queued calls. One absolute monotonic deadline
-applies to the worker RPC and every host callback. A synchronous runaway program is stopped by
+finalizers. Host callbacks run one at a time on a Scope-owned child fiber of the pass so they
+inherit the `execute` Context and die with the pass Scope, while remaining a sibling of the
+guest RPC waiter so the return RPC is not coupled to the still-open `entrypoint.run()`; pass
+teardown closes callback admission, interrupts and awaits active work, and settles queued
+calls. One absolute monotonic deadline applies to the worker RPC and every host callback. A synchronous runaway program is stopped by
 platform CPU limits, not only by a JavaScript timer.
 
 The adapter records no persistent state and adds no deployment-class claim beyond `E`: the `DN`
