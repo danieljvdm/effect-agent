@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import {
   Agent,
   AgentPolicy,
@@ -296,9 +296,12 @@ const makeFanOut = <Provider, ModelProvides, ModelRequires>(
       : typeof options.guidance === "string"
         ? [options.guidance]
         : options.guidance;
-  const signature = (_mission: ReviewMission): string =>
+  const signature = (mission: ReviewMission): string =>
     [
       "pr-review-fan-out-host-scheduled-v1",
+      // Children never see the mission, but the documented skip-unchanged
+      // contract includes pull-request framing, so the fingerprint keeps it.
+      JSON.stringify(Schema.encodeSync(ReviewMission)(mission)),
       `childGuidance=${JSON.stringify(guidanceLines)}`,
       `maxFindings=${clampMaxFindings(options.maxFindings)}`,
       `applyVerdict=${String(options.applyVerdict ?? false)}`,

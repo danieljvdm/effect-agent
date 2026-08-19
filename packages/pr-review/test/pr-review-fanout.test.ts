@@ -454,7 +454,7 @@ describe("deterministic input and risk planning", () => {
     expect(plan.discoveryPasses[1]?.riskCategories).toEqual([]);
   });
 
-  it("reports undiffable paths informationally and over-capacity paths as coverage gaps", () => {
+  it("keeps undiffable and over-capacity paths as fail-closed coverage gaps", () => {
     const binary = ChangedFile.make({
       path: "assets/logo.png",
       status: "added",
@@ -486,12 +486,13 @@ describe("deterministic input and risk planning", () => {
       anchorFiles: files,
       totalAnchorFiles: files.length,
     });
-    // The binary can never be reviewed by re-running; it is reported but is
-    // not an incompleteness reason. The capacity overflow IS a gap.
+    // Fail-closed: an unreviewable binary keeps input coverage incomplete for
+    // as long as it is part of the pull request; ignore globs are the
+    // deliberate way to exclude it. The capacity overflow is a gap too.
     expect(inputCoverage.status).toBe("incomplete");
     expect(inputCoverage.undiffablePaths).toEqual(["assets/logo.png"]);
     expect(inputCoverage.unassignedPaths).toEqual([...plan.unassignedPaths].sort());
-    expect(inputCoverage.reasons.join("\n")).not.toContain("assets/logo.png");
+    expect(inputCoverage.reasons.join("\n")).toContain("assets/logo.png");
   });
 
   it("bounds overflow identifiers while preserving the exact shard count and every path", () => {
@@ -1041,7 +1042,7 @@ describe("host-scheduled discovery and verification pipeline", () => {
     }),
   );
 
-  it.effect("reports the undiffable surface informationally while settling the run", () =>
+  it.effect("keeps an undiffable path fail-closed: incomplete, carried, never skippable", () =>
     Effect.gen(function* () {
       const binaryFixture = FixturePullRequest.make({
         metadata: PullRequestMetadata.make({
@@ -1068,11 +1069,16 @@ describe("host-scheduled discovery and verification pipeline", () => {
         ],
       });
 
-      expect(result.outcome.inputCoverage.status).toBe("complete");
+      // An unreviewable change must never authorize a green check, and the
+      // carry keeps it in scope even after it leaves the incremental delta.
+      expect(result.outcome.inputCoverage.status).toBe("incomplete");
       expect(result.outcome.inputCoverage.undiffablePaths).toEqual(["assets/logo.png"]);
+      expect(result.outcome.inputCoverage.reasons.join("\n")).toContain("assets/logo.png");
       expect(result.outcome.assurance.status).toBe("settled");
-      expect(result.outcome.state?.settled).toBe(true);
-      expect(result.outcome.plan.body).toContain("no reviewable textual evidence");
+      expect(result.outcome.unreviewedPaths).toContain("assets/logo.png");
+      expect(result.outcome.state?.settled).toBe(false);
+      expect(result.outcome.state?.unreviewedPaths).toContain("assets/logo.png");
+      expect(result.outcome.plan.body).toContain("Incomplete input coverage");
     }),
   );
 });

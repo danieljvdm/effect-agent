@@ -69,9 +69,10 @@ export class ReviewInputCoverage extends Schema.Class<ReviewInputCoverage>(
   ),
   /**
    * Paths with neither a textual diff nor bounded base/head text (binaries,
-   * oversized files). A permanent property of the changeset: reported for
-   * honesty, but never a reason the status is incomplete — re-running can
-   * never review them, so treating them as gaps would fail every run forever.
+   * oversized files). Fail-closed: they keep the status incomplete for as
+   * long as they are part of the pull request — an unreviewable change must
+   * never authorize a green check. Exclude them deliberately with ignore
+   * globs when that is intended.
    */
   undiffablePaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
     Schema.isMaxLength(300),
@@ -243,6 +244,11 @@ export const assessFlatReview = (input: {
       `review range exposed ${input.files.length} of ${input.totalFiles} required files`,
     );
   }
+  if (undiffable.size > 0) {
+    reasons.push(
+      boundedListReason("required paths have no reviewable diff or bounded text", undiffable),
+    );
+  }
   if (failedPaths.size > 0) reasons.push(boundedListReason("diff reads failed", failedPaths));
   if (partial.size > 0) {
     reasons.push(boundedListReason("model-visible diff evidence was truncated", partial));
@@ -266,15 +272,18 @@ export const assessFlatReview = (input: {
   return {
     inputCoverage,
     assurance: flatAssurance(),
-    unreviewedPaths: unassigned,
+    // Everything still unreviewed and still part of the pull request carries
+    // forward — undiffable paths included, so the check stays fail-closed
+    // even after they leave the incremental delta.
+    unreviewedPaths: sortedUnique([...unassigned, ...undiffable]),
   };
 };
 
 /**
  * Input coverage of one host-scheduled fan-out plan: which required paths the
- * bounded plan actually assigned complete evidence for. Capacity overflow is
- * a real gap and is carried by the pipeline as retryable scope; undiffable
- * paths are reported informationally only.
+ * bounded plan actually assigned complete evidence for. Capacity overflow and
+ * undiffable paths are both real gaps; the pipeline carries them so the check
+ * stays fail-closed until they are reviewed, removed, or explicitly ignored.
  */
 export const fanOutInputCoverage = (input: {
   readonly plan: ReviewUnitPlan;
@@ -290,6 +299,14 @@ export const fanOutInputCoverage = (input: {
   if (plan.truncated) {
     reasons.push(
       `review range exposed ${input.files.length} of ${input.totalFiles} required files`,
+    );
+  }
+  if (plan.undiffablePaths.length > 0) {
+    reasons.push(
+      boundedListReason(
+        "required paths have no reviewable diff or bounded text",
+        plan.undiffablePaths,
+      ),
     );
   }
   if (plan.partialEvidencePaths.length > 0) {

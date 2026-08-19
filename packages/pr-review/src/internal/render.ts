@@ -507,12 +507,6 @@ export const planPublication = (
         "",
         `**Input coverage:** ${options.inputCoverage.status} (${options.inputCoverage.assignedPaths.length}/${options.inputCoverage.requiredPaths.length} paths assigned, ${options.inputCoverage.partialPaths.length} partial) · **Review assurance:** ${options.assurance.status} (${options.assurance.completedGeneralDiscoveryPasses}/${options.assurance.requiredGeneralDiscoveryPasses} general discovery, ${options.assurance.completedSpecialistPasses}/${options.assurance.requiredSpecialistPasses} specialist, ${options.assurance.completedVerificationPasses}/${options.assurance.requiredVerificationPasses} verification; ${options.assurance.confirmedCandidates} confirmed / ${options.assurance.rejectedCandidates} rejected / ${options.assurance.unsettledCandidates} unsettled${options.assurance.discardedInvalidFindings > 0 ? ` / ${options.assurance.discardedInvalidFindings} discarded` : ""} candidates)`,
       );
-      if (options.inputCoverage.undiffablePaths.length > 0) {
-        parts.push(
-          "",
-          `ℹ️ ${countNoun(options.inputCoverage.undiffablePaths.length, "path")} had no reviewable textual evidence (binary or oversized) and ${options.inputCoverage.undiffablePaths.length === 1 ? "is" : "are"} outside the review surface.`,
-        );
-      }
     }
     parts.push("", review.summary);
     if (walkthroughKept && walkthrough.length > 0) {

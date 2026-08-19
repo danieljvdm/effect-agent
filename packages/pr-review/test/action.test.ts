@@ -34,6 +34,7 @@ import {
   PullRequestMetadata,
   ReviewCoverage,
   ReviewAssurance,
+  ReviewExecutionContext,
   ReviewFinding,
   ReviewInputCoverage,
   ReviewRunOutcome,
@@ -806,13 +807,23 @@ describe("runReviewAction", () => {
         settled: false,
         lastReviewMode: "incremental",
       });
-      const invoked = yield* Ref.make(0);
+      const reviewedScopes = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
       const result = yield* runReviewAction(
         {
+          // Record the exact selected scope the harness provides, so this
+          // test proves the carried path is actually RE-REVIEWED — not merely
+          // that the skip was declined.
           run: () =>
-            Ref.update(invoked, (count) => count + 1).pipe(
-              Effect.map(() => fakeOutcome("comment")),
-            ),
+            Effect.gen(function* () {
+              const selection = Option.getOrUndefined(
+                yield* Effect.serviceOption(ReviewExecutionContext),
+              );
+              yield* Ref.update(reviewedScopes, (previous) => [
+                ...previous,
+                selection?.files.map((selected) => selected.path) ?? [],
+              ]);
+              return fakeOutcome("comment");
+            }),
           fingerprint: Effect.succeed(patchFingerprint),
           profileFingerprint: Effect.succeed(profileFingerprint),
           snapshot: Effect.succeed({ metadata, files: [file] }),
@@ -824,7 +835,7 @@ describe("runReviewAction", () => {
       ).pipe(Effect.provide(harness.layer));
 
       expect(result._tag).toBe("Completed");
-      expect(yield* Ref.get(invoked)).toBe(1);
+      expect(yield* Ref.get(reviewedScopes)).toEqual([["src/a.ts"]]);
       expect(yield* Ref.get(harness.written)).toContain("skipped=false");
     }),
   );

@@ -42406,6 +42406,9 @@ var assessFlatReview = (input) => {
   if (input.files.length < input.totalFiles) {
     reasons.push(`review range exposed ${input.files.length} of ${input.totalFiles} required files`);
   }
+  if (undiffable.size > 0) {
+    reasons.push(boundedListReason("required paths have no reviewable diff or bounded text", undiffable));
+  }
   if (failedPaths.size > 0)
     reasons.push(boundedListReason("diff reads failed", failedPaths));
   if (partial.size > 0) {
@@ -42426,7 +42429,7 @@ var assessFlatReview = (input) => {
   return {
     inputCoverage,
     assurance: flatAssurance(),
-    unreviewedPaths: unassigned
+    unreviewedPaths: sortedUnique([...unassigned, ...undiffable])
   };
 };
 var fanOutInputCoverage = (input) => {
@@ -42436,6 +42439,9 @@ var fanOutInputCoverage = (input) => {
   const reasons = [];
   if (plan.truncated) {
     reasons.push(`review range exposed ${input.files.length} of ${input.totalFiles} required files`);
+  }
+  if (plan.undiffablePaths.length > 0) {
+    reasons.push(boundedListReason("required paths have no reviewable diff or bounded text", plan.undiffablePaths));
   }
   if (plan.partialEvidencePaths.length > 0) {
     reasons.push(boundedListReason("fan-out capacity left some deterministic evidence shards unassigned", plan.partialEvidencePaths));
@@ -43160,7 +43166,7 @@ var composeSummary = (plan, assurance) => {
     parts2.push(`${countNoun(assurance.discardedInvalidFindings, "candidate")} discarded for anchors or paths outside the assigned evidence.`);
   }
   if (plan.undiffablePaths.length > 0) {
-    parts2.push(`${countNoun(plan.undiffablePaths.length, "path")} had no reviewable textual evidence.`);
+    parts2.push(`${countNoun(plan.undiffablePaths.length, "path")} had no reviewable textual evidence and keep input coverage incomplete; exclude such paths with ignore globs when that is intended.`);
   }
   if (plan.unassignedPaths.length > 0 || plan.unassignedEvidenceShardCount > 0) {
     parts2.push("The changeset exceeded the bounded fan-out capacity; unassigned scope is reported under input coverage.");
@@ -43223,7 +43229,8 @@ var runFanOutReview = (binding, input) => exports_Effect.gen(function* () {
       ...new Set([
         ...outcomes.flatMap((outcome) => outcome.unreviewedPaths),
         ...plan.unassignedPaths,
-        ...plan.partialEvidencePaths
+        ...plan.partialEvidencePaths,
+        ...plan.undiffablePaths
       ])
     ].sort(),
     turns: outcomes.reduce((total, outcome) => total + outcome.turns, 0)
@@ -44468,9 +44475,6 @@ var planPublication = (review, files, options3) => {
     parts2.push("", renderReviewStats(files, options3.totalChangedFiles, counts));
     if (options3.inputCoverage !== undefined && options3.assurance !== undefined) {
       parts2.push("", `**Input coverage:** ${options3.inputCoverage.status} (${options3.inputCoverage.assignedPaths.length}/${options3.inputCoverage.requiredPaths.length} paths assigned, ${options3.inputCoverage.partialPaths.length} partial) · **Review assurance:** ${options3.assurance.status} (${options3.assurance.completedGeneralDiscoveryPasses}/${options3.assurance.requiredGeneralDiscoveryPasses} general discovery, ${options3.assurance.completedSpecialistPasses}/${options3.assurance.requiredSpecialistPasses} specialist, ${options3.assurance.completedVerificationPasses}/${options3.assurance.requiredVerificationPasses} verification; ${options3.assurance.confirmedCandidates} confirmed / ${options3.assurance.rejectedCandidates} rejected / ${options3.assurance.unsettledCandidates} unsettled${options3.assurance.discardedInvalidFindings > 0 ? ` / ${options3.assurance.discardedInvalidFindings} discarded` : ""} candidates)`);
-      if (options3.inputCoverage.undiffablePaths.length > 0) {
-        parts2.push("", `ℹ️ ${countNoun2(options3.inputCoverage.undiffablePaths.length, "path")} had no reviewable textual evidence (binary or oversized) and ${options3.inputCoverage.undiffablePaths.length === 1 ? "is" : "are"} outside the review surface.`);
-      }
     }
     parts2.push("", review.summary);
     if (walkthroughKept2 && walkthrough.length > 0) {
@@ -44864,8 +44868,9 @@ var makeFanOut = (options3) => {
   const child = makeFileReviewerDefinition({ guidance: options3.guidance });
   const childBinding = Object.freeze({ definition: child, model: options3.model });
   const guidanceLines = options3.guidance === undefined ? [] : typeof options3.guidance === "string" ? [options3.guidance] : options3.guidance;
-  const signature = (_mission) => [
+  const signature = (mission) => [
     "pr-review-fan-out-host-scheduled-v1",
+    JSON.stringify(exports_Schema.encodeSync(ReviewMission)(mission)),
     `childGuidance=${JSON.stringify(guidanceLines)}`,
     `maxFindings=${clampMaxFindings(options3.maxFindings)}`,
     `applyVerdict=${String(options3.applyVerdict ?? false)}`,

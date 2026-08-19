@@ -255,6 +255,34 @@ describe("review state", () => {
     expect(selection.reason).toContain("retrying 1 carried unreviewed path(s)");
   });
 
+  it("keeps a carried unreviewed path in scope across a rename", () => {
+    const renamedFile = ChangedFile.make({
+      path: "src/renamed.ts",
+      previousPath: "src/accepted.ts",
+      status: "renamed",
+      additions: 0,
+      deletions: 0,
+      patch: "@@ -1 +1 @@\n-old\n+accepted",
+    });
+    const carryingState = ReviewState.make({
+      ...priorState,
+      unreviewedPaths: ["src/accepted.ts"],
+      settled: false,
+    });
+    const selection = select({
+      priorState: carryingState,
+      fullFiles: [renamedFile, correctiveFile],
+    });
+
+    expect(selection.mode).toBe("incremental");
+    expect(selection.files.map((file) => file.path)).toEqual([
+      "src/corrective.ts",
+      "src/renamed.ts",
+    ]);
+    expect(selection.affectedPaths).toContain("src/accepted.ts");
+    expect(selection.reason).toContain("retrying 1 carried unreviewed path(s)");
+  });
+
   it("forces fresh full-diff discovery only when final mode is explicit", () => {
     const selection = select({ requestedMode: "final" });
     expect(selection.mode).toBe("full");

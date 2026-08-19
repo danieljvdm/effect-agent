@@ -87,9 +87,10 @@ base, and other changes require both. Reviewers receive that content through
 the ordinary diff-read tool with non-anchorable `B`/`H` line labels and must
 report defects as review-body concerns. Invalid UTF-8, binary NUL content,
 missing sides, and files beyond the per-side read bound leave a path with no
-reviewable textual evidence; such paths are reported informationally — they
-can never be reviewed by re-running, so they are not incompleteness and are
-not carried as retryable scope.
+reviewable textual evidence. Such paths keep input coverage incomplete and are
+carried for as long as they are part of the pull request — an unreviewable
+change must never authorize a green check; exclude them deliberately with
+ignore globs when that is intended.
 
 ## Assurance model
 
@@ -98,11 +99,10 @@ The public result deliberately separates two claims:
 - **Input coverage** says every reviewable required path in the selected
   scope was assigned every deterministic bounded evidence shard and
   separately names partially assigned and over-capacity paths, the exact
-  unassigned-shard count with a bounded identifier sample, and source
-  truncation. Undiffable paths are listed informationally. A large textual
-  diff is split across shards and units instead of being called partial
-  merely for exceeding one prompt chunk. Input coverage does not say the
-  model understood the evidence.
+  unassigned-shard count with a bounded identifier sample, undiffable paths,
+  and source truncation. A large textual diff is split across shards and
+  units instead of being called partial merely for exceeding one prompt
+  chunk. Input coverage does not say the model understood the evidence.
 - **Review assurance** says every scheduled general discovery pass, required
   independent specialist pass, and candidate-verification pass settled after
   at most one retry. It reports discovered, confirmed, rejected, unsettled,
@@ -193,8 +193,10 @@ to the current head plus the carried unreviewed paths, not the complete
 base...HEAD diff. Unchanged settled scope is not sent back to the model;
 unchanged unresolved findings remain active; changed or reverted paths
 invalidate their prior findings and receive fresh discovery and verification.
-An over-capacity changeset is reviewed in bounded installments across pushes
-through the same carry. Non-anchored concerns are carried conservatively
+Whole overflow files are reviewed in bounded installments across pushes
+through the same carry; a single file beyond total plan capacity and
+undiffable paths stay explicitly incomplete instead — an unreviewable tail
+never moves behind a green check. Non-anchored concerns are carried conservatively
 until a full audit because they cannot be mapped safely to one path.
 
 The state marker must be terminal, signed with the configured stable

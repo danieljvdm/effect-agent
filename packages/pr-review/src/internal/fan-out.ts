@@ -723,7 +723,7 @@ const composeSummary = (plan: ReviewUnitPlan, assurance: ReviewAssurance): strin
   }
   if (plan.undiffablePaths.length > 0) {
     parts.push(
-      `${countNoun(plan.undiffablePaths.length, "path")} had no reviewable textual evidence.`,
+      `${countNoun(plan.undiffablePaths.length, "path")} had no reviewable textual evidence and keep input coverage incomplete; exclude such paths with ignore globs when that is intended.`,
     );
   }
   if (plan.unassignedPaths.length > 0 || plan.unassignedEvidenceShardCount > 0) {
@@ -851,14 +851,18 @@ export const runFanOutReview = <Provider, ModelProvides, ModelRequires>(
       review,
       assurance,
       plan,
-      // Retryable scope: unsettled units plus reviewable paths the bounded
-      // plan could not fit this run — the next run reviews them in
-      // installments instead of losing them behind an advancing baseline.
+      // Everything not fully reviewed this run and still part of the pull
+      // request carries forward, so the baseline can advance without ever
+      // moving unreviewed scope behind a green check: failed units retry,
+      // whole overflow files review in later installments, and partial or
+      // undiffable files keep the check fail-closed until they are reviewed,
+      // removed, or explicitly ignored.
       unreviewedPaths: [
         ...new Set([
           ...outcomes.flatMap((outcome) => outcome.unreviewedPaths),
           ...plan.unassignedPaths,
           ...plan.partialEvidencePaths,
+          ...plan.undiffablePaths,
         ]),
       ].sort(),
       turns: outcomes.reduce((total, outcome) => total + outcome.turns, 0),
