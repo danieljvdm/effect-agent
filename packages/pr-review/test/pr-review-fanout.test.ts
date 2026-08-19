@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Layer, Redacted, Ref, Schema } from "effect";
-import { Agent, AgentRuntime, IdGenerator } from "effect-agent";
+import { Agent, AgentRuntime, IdGenerator, UsageBudgetLimits } from "effect-agent";
 import { Tool } from "effect/unstable/ai";
 
 import {
@@ -184,6 +184,7 @@ const runOfflineFanOut = (script: {
   readonly children: ReadonlyArray<OfflineUnitScript>;
   readonly fixture?: FixturePullRequest | undefined;
   readonly maxFindings?: number | undefined;
+  readonly limits?: UsageBudgetLimits | undefined;
 }) =>
   Effect.gen(function* () {
     const fixture = script.fixture ?? highRiskFixture;
@@ -201,7 +202,7 @@ const runOfflineFanOut = (script: {
     const program = executeFanOutReview(childBinding, {
       post: true,
       applyVerdict: false,
-      limits: fanOutReviewBudgetLimits,
+      limits: script.limits ?? fanOutReviewBudgetLimits,
       ...(script.maxFindings === undefined ? {} : { maxFindings: script.maxFindings }),
       signature: () => "offline-assurance-profile-v3",
     }).pipe(
@@ -873,6 +874,31 @@ describe("host-scheduled discovery and verification pipeline", () => {
       expect(result.outcome.plan.body).toContain("Unsettled review passes");
       expect(result.outcome.plan.body).toContain("do not change code to satisfy this section");
       expect(result.outcome.plan.event).toBe("COMMENT");
+    }),
+  );
+
+  it.effect("never retries budget exhaustion and still advances continuity", () =>
+    Effect.gen(function* () {
+      const result = yield* runOfflineFanOut({
+        children: [
+          report(generalPass.passId, discoveryReport(generalPass, [])),
+          report(specialistPass.passId, discoveryReport(specialistPass, [])),
+        ],
+        // The first child's turn-seam consumption trips the shared budget, so
+        // every scheduled pass fails with BudgetExceeded. A retry would fail
+        // identically, so the pipeline must not double the child calls.
+        limits: UsageBudgetLimits.make({ maxInputTokens: 1 }),
+      });
+
+      expect(result.childCalls).toBeLessThanOrEqual(2);
+      expect(result.outcome.assurance.status).toBe("incomplete");
+      for (const pass of result.outcome.assurance.failedPasses) {
+        expect(pass.errorTag).toBe("BudgetExceeded");
+      }
+      // Continuity still advances; the whole unit is carried for retry.
+      expect(result.outcome.state?.reviewedHeadSha).toBe(FIXTURE_SHA);
+      expect(result.outcome.state?.settled).toBe(false);
+      expect(result.outcome.state?.unreviewedPaths).toEqual([...highRiskUnit.paths].sort());
     }),
   );
 
