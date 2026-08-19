@@ -891,8 +891,13 @@ describe("host-scheduled discovery and verification pipeline", () => {
         limits: UsageBudgetLimits.make({ maxInputTokens: 1 }),
       });
 
+      // At least one child ran into the budget; no pass spent the retry.
+      expect(result.childCalls).toBeGreaterThanOrEqual(1);
       expect(result.childCalls).toBeLessThanOrEqual(2);
       expect(result.outcome.assurance.status).toBe("incomplete");
+      expect(result.outcome.assurance.failedPasses.map((pass) => pass.workId).sort()).toEqual(
+        [generalPass.passId, specialistPass.passId].sort(),
+      );
       for (const pass of result.outcome.assurance.failedPasses) {
         expect(pass.errorTag).toBe("BudgetExceeded");
       }
