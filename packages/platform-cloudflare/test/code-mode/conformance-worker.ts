@@ -107,6 +107,7 @@ const workerdConformanceCaseNames: ReadonlyArray<string> = [
   "TEST-015 surfaces an uncaught program throw with its bounded log capture",
   "TEST-015 fails typed when the program returns a non-JSON value",
   "CAP-015 rejects a network allowlist it cannot enforce with a typed unsupported error",
+  "TEST-015 interruption reaches in-flight host calls and pass teardown",
 ];
 
 const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
@@ -244,12 +245,18 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
     return failures;
   });
 
+/**
+ * Distinguishes a `runFork` root fiber (default `"root"`) from a child of
+ * the `execute` Scope (provided `"executor"`). Host calls must see the pass
+ * Context — they still run on a sibling fiber of the guest RPC waiter so
+ * the return RPC is not coupled to `entrypoint.run()`.
+ */
 const ExecutorFiberMarker = Context.Reference<"root" | "executor">(
   "@effect-agent/platform-cloudflare/test/ExecutorFiberMarker",
   { defaultValue: () => "root" },
 );
 
-const runHostCallRegression = (env: WorkerEnv) => {
+const runHostCallScopeRegression = (env: WorkerEnv) => {
   const layer = executorLayerFor(env);
   const namespace = CodeExecutionNamespace.make({ name: "warehouse", methods: ["query"] });
   const host: CodeExecutionHost["Service"] = {
@@ -268,8 +275,8 @@ const runHostCallRegression = (env: WorkerEnv) => {
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     try {
-      if (new URL(request.url).pathname === "/host-call-root-fiber") {
-        return Response.json(await Effect.runPromise(runHostCallRegression(env)));
+      if (new URL(request.url).pathname === "/host-call-pass-scope") {
+        return Response.json(await Effect.runPromise(runHostCallScopeRegression(env)));
       }
       const failures = await Effect.runPromise(runAllChecks(env));
       return Response.json({ failures });

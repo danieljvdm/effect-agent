@@ -79,12 +79,12 @@ describe("DEPLOY-011 Cloudflare Dynamic Worker CodeExecutor", () => {
     expect(payload.failures).toEqual([]);
   }, 120_000);
 
-  it("runs guest host calls outside the in-flight executor fiber", async () => {
-    const response = await runtime.dispatchFetch("http://placeholder/host-call-root-fiber");
+  it("host calls inherit the pass Scope and stay off the guest RPC fiber", async () => {
+    const response = await runtime.dispatchFetch("http://placeholder/host-call-pass-scope");
     expect(response.ok).toBe(true);
     expect(await response.json()).toMatchObject({
       tag: "success",
-      detail: { value: "root" },
+      detail: { value: "executor" },
     });
   }, 30_000);
 });
