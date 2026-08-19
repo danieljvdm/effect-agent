@@ -33,7 +33,7 @@ import {
   type WorkOrderValidationFailure,
   type WorkspaceOperationFailure,
 } from "../src/contracts.ts";
-import { runWorkOrder } from "../src/host.ts";
+import { prepareWorkOrder, runWorkOrder } from "../src/host.ts";
 import { makeImplementationAgent, type WorkOrderMission } from "../src/implementation-agent.ts";
 import { localGitWorkOrderHostLayer, type LocalGitWorkOrderConfig } from "../src/local-git.ts";
 import {
@@ -120,6 +120,31 @@ type HostKeepsCheck = Assert<
 >;
 type HostUnknownExcluded = Assert<Equal<unknown extends TypedHostError ? true : false, false>>;
 
+const typedPreparation = prepareWorkOrder({
+  order: null as unknown as PullRequestWorkOrder,
+  implement: () => Effect.succeed(null as unknown as WorkOrderReport),
+});
+type TypedPreparationServices = Effect.Services<typeof typedPreparation>;
+type TypedPreparationError = Effect.Error<typeof typedPreparation>;
+type PreparationRequiresHost = Assert<
+  Equal<Extract<TypedPreparationServices, WorkOrderHost>, WorkOrderHost>
+>;
+type PreparationRequiresCrypto = Assert<
+  Equal<Extract<TypedPreparationServices, Crypto.Crypto>, Crypto.Crypto>
+>;
+type PreparationExcludesAttempts = Assert<
+  Equal<Extract<TypedPreparationServices, WorkOrderAttemptPolicy>, never>
+>;
+type PreparationExcludesCheckFailure = Assert<
+  Equal<Extract<TypedPreparationError, RequiredCheckFailed>, never>
+>;
+type PreparationExcludesReleaseFailure = Assert<
+  Equal<Extract<TypedPreparationError, WorkOrderReleaseFailure>, never>
+>;
+type PreparationUnknownExcluded = Assert<
+  Equal<unknown extends TypedPreparationError ? true : false, false>
+>;
+
 describe("implementation Agent type proofs", () => {
   it("WO-003 WO-012 keeps model requirements and host failures typed while hiding workspace internals", () => {
     const proofs = {
@@ -136,6 +161,12 @@ describe("implementation Agent type proofs", () => {
       hostKeepsTimeout: true as HostKeepsTimeout,
       hostKeepsCheck: true as HostKeepsCheck,
       hostUnknownExcluded: true as HostUnknownExcluded,
+      preparationRequiresHost: true as PreparationRequiresHost,
+      preparationRequiresCrypto: true as PreparationRequiresCrypto,
+      preparationExcludesAttempts: true as PreparationExcludesAttempts,
+      preparationExcludesCheckFailure: true as PreparationExcludesCheckFailure,
+      preparationExcludesReleaseFailure: true as PreparationExcludesReleaseFailure,
+      preparationUnknownExcluded: true as PreparationUnknownExcluded,
     };
     expect(proofs).toEqual({
       modelRequirementProof: true,
@@ -151,6 +182,12 @@ describe("implementation Agent type proofs", () => {
       hostKeepsTimeout: true,
       hostKeepsCheck: true,
       hostUnknownExcluded: true,
+      preparationRequiresHost: true,
+      preparationRequiresCrypto: true,
+      preparationExcludesAttempts: true,
+      preparationExcludesCheckFailure: true,
+      preparationExcludesReleaseFailure: true,
+      preparationUnknownExcluded: true,
     });
   });
 });
@@ -513,6 +550,61 @@ describe("PR work-order host", () => {
               `${publication.publishedHeadSha}:${FILE_PATH}`,
             ])).trim(),
           ).toBe("export const answer = 42;");
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
+  );
+
+  it.effect(
+    "WO-006 deferred preparation denies model check execution before any repository process runs",
+    () =>
+      withFixtureRepository((fixture) =>
+        Effect.gen(function* () {
+          const checkInvocations = yield* Ref.make(0);
+          const forbiddenCheck: HostCheck = {
+            name: REQUIRED_CHECK,
+            run: () =>
+              Ref.updateAndGet(checkInvocations, (count) => count + 1).pipe(
+                Effect.map(() =>
+                  WorkOrderCheckResult.make({
+                    name: REQUIRED_CHECK,
+                    status: "passed",
+                    summary: "must not execute in the model process",
+                  }),
+                ),
+              ),
+          };
+          const order = yield* orderFor(fixture, { eventId: "evt-deferred-check" });
+          const prepared = yield* prepareWorkOrder({
+            order,
+            implement: (mission, workspace) =>
+              Effect.gen(function* () {
+                const denied = yield* workspace.requestCheck(REQUIRED_CHECK).pipe(Effect.flip);
+                expect(denied).toMatchObject({
+                  _tag: "WorkspaceOperationFailure",
+                  operation: `request deferred check ${REQUIRED_CHECK}`,
+                });
+                return WorkOrderReport.make({
+                  workOrderDigest: mission.workOrderDigest,
+                  headSha: mission.order.headSha,
+                  disposition: "needs-human",
+                  changedPaths: [],
+                  checks: [],
+                  summary: "Deferred checks are unavailable in the model process.",
+                });
+              }),
+          }).pipe(
+            Effect.provide(
+              localGitWorkOrderHostLayer(
+                authorizedConfig(fixture, {
+                  checks: [forbiddenCheck],
+                  requiredChecks: [REQUIRED_CHECK],
+                }),
+              ),
+            ),
+          );
+          expect(prepared).toMatchObject({ _tag: "settled", disposition: "needs-human" });
+          expect(yield* Ref.get(checkInvocations)).toBe(0);
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     60_000,

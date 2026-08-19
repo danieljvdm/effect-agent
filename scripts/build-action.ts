@@ -4,17 +4,23 @@ import { Command as CliCommand, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
 // ---------------------------------------------------------------------------
-// Bundle the @effect-agent/pr-review GitHub Action entrypoint into the
-// committed `action/dist/index.mjs`. The committed bundle is a deliberate
-// exception to the dist-is-gitignored convention (see the pr-review ADR): a
-// node-runtime action must be runnable straight from a checkout, with no
-// install step. `--check` rebuilds to a scratch path and fails when the
-// committed bundle is stale, so `bun run check` keeps the two in sync.
+// Bundle both JavaScript Action entrypoints into committed dist files. A
+// node-runtime Action must run directly from an immutable checkout without an
+// install step. `--check` rebuilds to scratch paths and rejects stale bundles.
 // ---------------------------------------------------------------------------
 
-const ENTRY = "packages/pr-review/src/internal/action-entry.ts";
-const BUNDLE = "action/dist/index.mjs";
-const SCRATCH = "node_modules/.tmp/action-dist-check/index.mjs";
+const bundles = [
+  {
+    entry: "packages/pr-review/src/internal/action-entry.ts",
+    bundle: "action/dist/index.mjs",
+    scratch: "node_modules/.tmp/action-dist-check/review-index.mjs",
+  },
+  {
+    entry: "examples/pr-work-order-ingress/src/action-entry.ts",
+    bundle: "work-order-action/dist/index.mjs",
+    scratch: "node_modules/.tmp/action-dist-check/work-order-index.mjs",
+  },
+] as const;
 
 class CommandError extends Schema.TaggedError<CommandError>()("CommandError", {
   command: Schema.String,
@@ -32,7 +38,7 @@ class StaleBundleError extends Schema.TaggedError<StaleBundleError>()("StaleBund
   bundle: Schema.String,
 }) {
   override get message() {
-    return `${this.bundle} is stale: rebuild it with \`bun run action:build\` and commit the result.`;
+    return `${this.bundle} is stale: rebuild it with \`vp run action:build\` and commit the result.`;
   }
 }
 
@@ -53,10 +59,10 @@ const runCommand = Effect.fn("runCommand")(function* (
   return trimmed;
 });
 
-const bundleTo = Effect.fn("bundleTo")(function* (outfile: string) {
+const bundleTo = Effect.fn("bundleTo")(function* (entry: string, outfile: string) {
   yield* runCommand("bun", [
     "build",
-    ENTRY,
+    entry,
     "--target=node",
     "--format=esm",
     `--outfile=${outfile}`,
@@ -72,22 +78,28 @@ const command = CliCommand.make("build-action", { check: checkFlag }, ({ check }
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     if (!check) {
-      yield* bundleTo(BUNDLE);
-      const stat = yield* fs.stat(BUNDLE);
-      yield* Console.log(`Bundled ${ENTRY} -> ${BUNDLE} (${stat.size} bytes).`);
+      for (const item of bundles) {
+        yield* bundleTo(item.entry, item.bundle);
+        const stat = yield* fs.stat(item.bundle);
+        yield* Console.log(`Bundled ${item.entry} -> ${item.bundle} (${stat.size} bytes).`);
+      }
       return;
     }
-    yield* bundleTo(SCRATCH);
-    const committed = yield* fs.readFileString(BUNDLE).pipe(Effect.orElseSucceed(() => undefined));
-    const fresh = yield* fs.readFileString(SCRATCH);
-    if (committed !== fresh) {
-      return yield* StaleBundleError.make({ bundle: BUNDLE });
+    for (const item of bundles) {
+      yield* bundleTo(item.entry, item.scratch);
+      const committed = yield* fs
+        .readFileString(item.bundle)
+        .pipe(Effect.orElseSucceed(() => undefined));
+      const fresh = yield* fs.readFileString(item.scratch);
+      if (committed !== fresh) {
+        return yield* StaleBundleError.make({ bundle: item.bundle });
+      }
+      yield* Console.log(`${item.bundle} is up to date.`);
     }
-    yield* Console.log(`${BUNDLE} is up to date.`);
   }),
 ).pipe(
   CliCommand.withDescription(
-    "Bundle the pr-review GitHub Action entrypoint into action/dist/index.mjs.",
+    "Bundle the committed PR-review and PR-work-order GitHub Action entrypoints.",
   ),
 );
 

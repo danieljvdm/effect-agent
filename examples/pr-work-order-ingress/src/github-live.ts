@@ -2,16 +2,11 @@ import { GitCommitSha } from "@effect-agent/example-pr-work-orders";
 import { Effect, Layer, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
-import {
-  GitHubApiFailure,
-  PresentationFailure,
-  PullRequestView,
-  ReviewCommentView,
-} from "./contracts.ts";
+import { GitHubApiFailure, PullRequestView, ReviewCommentView } from "./contracts.ts";
 import { GitHubApi } from "./github.ts";
 
 const GitHubRepoWire = Schema.Struct({
-  full_name: Schema.NonEmptyString,
+  full_name: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   fork: Schema.Boolean,
 });
 
@@ -19,6 +14,7 @@ export const GitHubPullWire = Schema.Struct({
   number: Schema.Int,
   head: Schema.Struct({
     sha: GitCommitSha,
+    ref: Schema.NonEmptyString.check(Schema.isMaxLength(512)),
     repo: Schema.NullOr(GitHubRepoWire),
   }),
   base: Schema.Struct({
@@ -30,7 +26,7 @@ export const GitHubReviewCommentWire = Schema.Struct({
   id: Schema.Int,
   user: Schema.Struct({
     id: Schema.Int,
-    login: Schema.NonEmptyString,
+    login: Schema.NonEmptyString.check(Schema.isMaxLength(100)),
   }),
   commit_id: GitCommitSha,
   path: Schema.optionalKey(Schema.String),
@@ -38,15 +34,7 @@ export const GitHubReviewCommentWire = Schema.Struct({
   start_line: Schema.optionalKey(Schema.NullOr(Schema.Int)),
   original_line: Schema.optionalKey(Schema.NullOr(Schema.Int)),
   body: Schema.String,
-  pull_request_url: Schema.NonEmptyString,
 });
-
-const pullNumberFromUrl = (url: string): number | undefined => {
-  const match = /\/pulls\/(\d+)$/.exec(url);
-  if (match?.[1] === undefined) return undefined;
-  const value = Number(match[1]);
-  return Number.isInteger(value) && value > 0 ? value : undefined;
-};
 
 export const pullRequestFromWire = (
   repository: string,
@@ -56,6 +44,7 @@ export const pullRequestFromWire = (
     repository,
     pullRequestNumber: wire.number,
     headSha: wire.head.sha,
+    headRef: wire.head.ref,
     ...(wire.head.repo === null ? {} : { headRepository: wire.head.repo.full_name }),
     headIsFork: wire.head.repo?.fork === true,
     baseRepository: wire.base.repo.full_name,
@@ -147,53 +136,6 @@ export const liveGitHubApiLayer = (options: {
             );
             const wire = yield* decodeJson(GitHubReviewCommentWire, "get review comment")(response);
             return reviewCommentFromWire(wire);
-          }),
-        currentHead: (repository, pullRequestNumber) =>
-          loadPull(repository, pullRequestNumber).pipe(Effect.map((wire) => wire.head.sha)),
-        updateHead: () =>
-          GitHubApiFailure.make({
-            operation: "update pull-request head",
-            reason: "this entrypoint admits and replies; it does not publish commits",
-          }),
-        postThreadReply: (input) =>
-          Effect.gen(function* () {
-            const toPresentation = (error: GitHubApiFailure) =>
-              PresentationFailure.make({ reason: error.reason });
-            const commentResponse = yield* execute(
-              "read review comment for reply",
-              withHeaders(
-                HttpClientRequest.get(
-                  `${apiUrl}/repos/${input.repository}/pulls/comments/${input.commentId}`,
-                ),
-              ),
-            ).pipe(Effect.mapError(toPresentation));
-            const comment = yield* decodeJson(
-              GitHubReviewCommentWire,
-              "read review comment for reply",
-            )(commentResponse).pipe(Effect.mapError(toPresentation));
-            const pullRequestNumber = pullNumberFromUrl(comment.pull_request_url);
-            if (pullRequestNumber === undefined) {
-              return yield* PresentationFailure.make({
-                reason: "review comment does not name a pull request",
-              });
-            }
-            yield* execute(
-              "post thread reply",
-              withHeaders(
-                HttpClientRequest.post(
-                  `${apiUrl}/repos/${input.repository}/pulls/${String(pullRequestNumber)}/comments`,
-                ).pipe(
-                  HttpClientRequest.bodyJsonUnsafe({
-                    body: input.reply.body,
-                    in_reply_to: Number(input.commentId),
-                  }),
-                ),
-              ),
-            ).pipe(Effect.mapError(toPresentation));
-          }),
-        resolveThread: () =>
-          PresentationFailure.make({
-            reason: "ingress never resolves the source thread",
           }),
       });
     }),

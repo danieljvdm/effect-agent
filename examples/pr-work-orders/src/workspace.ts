@@ -53,6 +53,10 @@ export interface AcquiredWorktree {
   readonly allowedPaths: ReadonlySet<string>;
   readonly modelWorkspace: ImplementationWorkspace;
   readonly inspectPatch: Effect.Effect<PatchSnapshot, WorkspaceOperationFailure>;
+  readonly collectPatch: Effect.Effect<
+    { readonly snapshot: PatchSnapshot; readonly patch: string },
+    WorkspaceOperationFailure
+  >;
   readonly runCheck: (
     name: string,
   ) => Effect.Effect<WorkOrderCheckResult, WorkspaceOperationFailure>;

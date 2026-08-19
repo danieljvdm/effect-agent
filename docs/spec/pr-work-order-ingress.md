@@ -1,244 +1,271 @@
 # Pull-request work-order ingress
 
-Status: **Draft**
+Status: **Implemented**
 
-This specification is the GitHub-facing follow-up to
-[pull-request work orders](pr-work-orders.md). That document owns the canonical
-work order, the jailed implementer, and the deterministic host algorithm. This
-document owns how a human dispatch on GitHub becomes that work order, how
-production attempt admission is persisted in a file-backed store, how checks
-and credentials stay isolated, and how a validated patch is published back to
-the pull request.
+This specification is the operational GitHub surface for
+[pull-request work orders](pr-work-orders.md). The work-order specification owns the canonical
+instruction, bounded implementer, and deterministic host semantics. This document owns exact
+GitHub dispatch, persistent admission, Actions isolation, atomic publication, and thread
+presentation.
 
-The class E leaf `examples/pr-work-orders` remains the host proof. It does not
-implement this ingress. The first live Actions entrypoint admits an explicit
-mention reply and posts a host-authored thread reply. It does not run a model
-or publish commits.
+The product is a separately named, precompiled JavaScript Action at `work-order-action/` used in a
+five-job workflow. It is not exported from `@effect-agent/pr-review` or `action/`; those surfaces
+remain read-only.
 
-## 1. Product
+## 1. Product and authority
 
-A reviewer, human or bot, leaves an **inline** comment on one file. An
-authorized human then **dispatches that one comment**. Dispatch is:
+A human or bot may leave an inline review comment on one file. That comment is evidence only. An
+authorized human supplies implementation authority by posting a new inline reply whose complete
+body is exactly:
 
-- a reply whose body is exactly the configured mention command, default
-  `@effect-agent fix this`, and whose platform `in_reply_to` identity names
-  that inline comment; or
-- the configured reaction on that inline comment.
+```text
+@effect-agent fix this
+```
 
-The transport must prove which single inline, path-bearing review comment was
-targeted. If it cannot — a top-level review body, a PR conversation comment, a
-mention without `in_reply_to`, or more than one candidate — it rejects the
-event. It never infers a target from prose.
+The platform `in_reply_to_id` must identify one existing, path-bearing review comment. A top-level
+review body, PR conversation comment, pathless comment, approximate command, edited source anchor,
+or ambiguous target is rejected. The live Action does not admit reactions or general inline Q&A.
 
-The dispatching human supplies authority. The source comment's author does not.
-Automatic dispatch on review creation or every comment is forbidden.
+The dispatching actor is authorized by stable numeric GitHub user id. Login and source authorship
+are diagnostic metadata, never principals. The source may be a human comment or a read-only review
+finding; reviewer output does not transfer authority.
 
-One accepted event becomes one work order, then one host attempt. A later
-label or sweep, if added, must emit independently claimed work orders for
-explicitly selected comments. It must not grant one PR-wide patch.
+The first operational version accepts only a same-repository, non-fork pull request whose source
+comment is anchored to its still-current head. One explicit dispatch authorizes one immutable work
+order and one consumed attempt. A new attempt requires a new explicit dispatch reply.
 
-After the host settles, ingress may post a reply on the source thread. It must
-not resolve the thread. Ordinary CI or an independent reviewer may observe a
-published head. Re-review is not a stage of this pipeline.
+## 2. Authentication and work-order construction
 
-## 2. Event to work order
+The admission job runs only for the trusted `pull_request_review_comment: created` Actions event.
+It reads the event from `GITHUB_EVENT_PATH`, requires the repository/event identity supplied by
+Actions, and derives `dispatch.eventId` from the stable dispatch comment id:
+`review-comment:<comment-id>`. GitHub redelivery or workflow rerun therefore retains the same event
+identity; a second human reply has a different identity.
 
-Ingress authenticates the platform delivery, authorizes the actor, loads the
-target comment and the current pull-request head from GitHub, and constructs
-the canonical work order defined in [pr-work-orders.md](pr-work-orders.md) §2.
+Before admission, trusted base code:
 
-It must establish, before the host is invoked:
+1. decodes the bounded event and requires the exact command and `in_reply_to_id`;
+2. authorizes `sender.id` against the configured stable actor-id set;
+3. reloads the target review comment and pull request through GitHub;
+4. requires the configured repository and pull-request number, same base/head repository, and
+   `headIsFork === false`;
+5. normalizes the inline source path and bounds the comment/range snapshot; and
+6. requires `source.commitSha === current headSha` before constructing the canonical work order.
 
-1. the delivery signature is authentic, or the Actions-owned identity matches
-   the configured repository and event, the supplied body equals the trusted
-   `GITHUB_EVENT_PATH` payload, and the delivery id equals the trusted run
-   identity;
-2. `dispatch.actorId` is a configured human principal, using the stable
-   platform user id, not the login;
-3. the event targets one inline review comment on the configured repository
-   and pull-request number;
-4. that comment has a normalized repository-relative path;
-5. the pull request is not a fork and its repository identity matches
-   configuration;
-6. `source.commitSha` equals the current `headSha`; otherwise reject and tell
-   the dispatcher to re-establish the comment on the current head;
-7. the mention command or reaction matches configuration exactly.
+The work-order id and digest cover the full immutable snapshot. The source body and any suggestion
+remain untrusted input. No Schema-valid field is self-authorizing.
 
-`dispatch.eventId` is the platform delivery id. Duplicate HTTP or Action
-retries of the same delivery keep that id. A second human dispatch is a new
-event id and therefore a new work order.
+## 3. GitHub-retained admission journal
 
-No field copied from the comment, and no Schema-valid `dispatch.kind`,
-authorizes the run. Authorization is the authenticated actor plus repository
-policy.
+The repository-appropriate persistent attempt record is one bot-authored reply on the selected review
+thread. Before any model invocation, admission creates that reply with a bounded visible pending
+status and a hidden Schema-encoded journal state authenticated by HMAC-SHA-256. The marker binds:
 
-## 3. Attempt admission
+- version, repository, pull request, source comment, and stable event id;
+- work-order id and digest;
+- expected head;
+- owning Actions run id; and
+- either `claimed` or the typed terminal outcome.
 
-Production ingress must persist the attempt key
-`(repository, pullRequestNumber, headSha, workOrderId)` and the terminal
-host outcome. Claiming is atomic. Duplicate delivery returns the stored
-outcome and must not invoke another implementer.
+Admission accepts a marker only when both its HMAC and the reply author's configured stable GitHub
+actor id match. The workflow concurrency key serializes deliveries by repository id and dispatch
+comment id. If an authenticated marker already owns that event/work-order identity, admission
+returns its stored `claimed` or terminal outcome and sets `should-run=false`; no implementer job is
+started. Multiple matching authenticated markers fail closed. Admission proceeds only when the
+GitHub create response echoes the exact authenticated claim, bot actor id, and source-thread target.
 
-The in-memory policy in `examples/pr-work-orders` is not this store. A crash
-after claim and before a stored outcome still consumes the attempt: recovery
-records a typed incomplete settlement and does not retry. A later fix requires
-another explicit human dispatch.
+This GitHub flow is not an Effect Agent DN or DC assembly and makes no DN/DC guarantee.
+Its recovery boundary is GitHub's retention and availability of review comments: admission is
+recovered by rereading that authenticated external repository state across Actions jobs and runs.
 
-## 4. Isolation and publication
+The presenter updates that same reply from `claimed` to `completed`; it does not add a second status
+reply. A crash after claim leaves an authenticated incomplete attempt. While the journal reply is
+retained, rerunning or redelivering it returns the stored incomplete state and never replays the
+implementer. A new explicit dispatch creates a distinct work order and journal reply.
 
-Three processes stay separate. No process may hold credentials it does not
-need.
+The journal reply is also the only claim record. A principal with pull-request write authority can
+delete it, and a rerun after that deletion admits a fresh attempt, exactly as that principal could
+authorize a new attempt with a new explicit reply. Replay prevention is therefore scoped to GitHub's
+retention of the reply and to already-trusted write-authorized principals — it is not a defense
+against them — and publication stays fenced by the expected-head compare-and-swap either way.
 
-| Process         | May hold                                      | Must not hold                                       |
-| --------------- | --------------------------------------------- | --------------------------------------------------- |
-| Ingress / model | authenticated event, model-provider secret    | GitHub write token                                  |
-| Checks          | the detached worktree, host-configured checks | GitHub write token, model-provider secret           |
-| Publisher       | GitHub write token, host-validated artifacts  | model-provider secret, unrestricted worktree access |
+Actions artifacts carry bounded Schema-decoded envelopes between jobs in one run, but they are not
+the persistent duplicate-delivery authority. Artifact retention can expire without reopening an
+attempt. The HMAC secret must remain stable; rotation must retain the old secret until all claimed
+attempts are settled or intentionally abandoned.
 
-The publisher process acquires the GitHub write token and independently owned
-expected identity itself. Ingress sends only the host-validated patch and
-trust envelope over IPC and has no capability to provide or inspect publisher
-credentials or configuration. The publisher compares every identity field to
-its own configuration, derives every affected source and destination path
-from a fail-closed parse of the patch, and rejects any non-empty patch whose
-complete path set cannot be proven and checked against the allowlist. It re-reads the pull-request head and updates the ref only
-through an atomic compare-and-swap that still names that SHA. A lost race is
-`StalePullRequestHead`. A successful update followed by a cleanup failure
-reports publication uncertainty and the observed head. No exactly-once
-publication claim is made.
+## 4. Job and credential isolation
 
-Pull-request code and repository checks are untrusted. Until this isolation is
-implemented and tested, the repository must not add an enabled workflow that
-runs an implementer. An enabled admit-and-reply workflow must check out the
-pull-request base commit without persisted credentials so its authorization
-logic is trusted repository code, not the pull-request merge ref.
+The reference workflow declares `permissions: {}` globally and grants each job only its explicit
+scope:
 
-## 5. Presentation
+| Job         | Holds                                                       | Does not hold / execute                                               |
+| ----------- | ----------------------------------------------------------- | --------------------------------------------------------------------- |
+| `admit`     | contents read, PR write, journal HMAC secret                | model key, PR code, checks, contents write                            |
+| `implement` | contents read, one provider key, exact-head checkout        | GitHub write token, shell/process tool, repository-code execution     |
+| `checks`    | contents read, exact-head checkout, pinned check image      | provider key, GitHub write token, journal secret, publisher artifacts |
+| `publish`   | contents write, PR read, journal HMAC secret, checked files | provider key, PR checkout, repository-code execution                  |
+| `present`   | contents read, PR write, journal HMAC secret                | provider key, PR checkout, repository-code execution                  |
 
-Ingress may post one bounded reply on the source thread:
+The implementer exposes only Schema-defined read/search/exact-edit/inspect/check-request tools over
+a scoped detached worktree. In deferred Actions mode it cannot run checks; it returns an empty
+check claim and the host collects the complete patch, digest, and changed paths. It has no shell,
+network tool, GitHub capability, or publication capability. The Action runtime alone calls the
+configured model provider.
 
-- **published** — names the new head and the changed paths the host observed;
-- **settled** — names `not-applicable` or `needs-human` and the host-accepted
-  summary;
-- **failed** — names the typed host error.
+The checks phase first installs locked dependencies with lifecycle scripts disabled in a
+networked setup container that can see only the exact-head worktree and an ephemeral tool-runtime
+directory. The host then restores a separate copy of that validated patched worktree and tool
+runtime for each required check. Each required host-configured command is executed without a shell
+in a fresh container from that same immutable image with:
 
-The reply is host-authored. Model prose is not copied as status. The thread
-stays open.
+- no network;
+- read-only container root;
+- all Linux capabilities dropped and `no-new-privileges`;
+- bounded processes, CPU, memory, output, and timeout;
+- only the exact-head worktree and ephemeral tool-runtime directory mounted read/write.
 
-## 6. Placement
+Required-check containers have no network and cannot see sibling artifact state,
+provider/publisher credentials, the Docker socket, or the host filesystem outside those two
+mounts. A check therefore cannot alter a later check's worktree, dependencies, or runtime cache.
+Scoped finalizers forcibly remove every setup/check container and copied runtime directory on
+success, failure, timeout, or interruption. The host rejects a dirty post-install checkout, a
+patch that does not reproduce exactly in every restored worktree, false/missing check evidence, a
+failed check, or any check mutation of the accepted patch.
 
-`@effect-agent/pr-review` and `action/` remain the read-only reviewer. Ingress
-must not appear on that public surface.
+## 5. Independent publication
 
-The first executable proof belongs in a private leaf, for example
-`examples/pr-work-order-ingress`. It may depend inward on public framework
-packages, `@effect-agent/testing`, and the existing work-order host. It must
-not create a new public framework package. A production Action or webhook
-adapter is added only after the isolation proof, as a separate entrypoint, not
-as a reviewer export.
+The publisher never checks out or executes pull-request code. It first re-reads the bot-authored
+journal reply and verifies its HMAC, author id, source reply target, repository/pull/head identity,
+event id, work-order id/digest, and owning run. This prevents an untrusted cross-job artifact from
+creating publication authority.
 
-## 7. Deterministic proof obligations
+It then independently:
 
-Tests use recorded GitHub event fixtures and a fake GitHub API. They do not
-call the live GitHub network and they do not enable a repository workflow.
+1. recomputes the canonical work-order id and digest;
+2. reauthorizes the dispatch actor id from publisher configuration;
+3. normalizes the source and fixed support-path allowlist;
+4. parses every complete `diff --git`, source, and destination path pair;
+5. rejects additions, deletions, renames, copies, binary patches, mode changes, path escapes,
+   duplicate/ambiguous headers, and any path outside the allowlist;
+6. recomputes the patch digest and compares patch paths with proposal paths and checked files;
+7. requires the exact configured check-name set with every result `passed`;
+8. requires existing non-executable regular tracked UTF-8 files within the size bound and
+   reproduces the exact patch/final content from GitHub's expected-head blobs; and
+9. reloads the pull request and repeats same-repository/non-fork provenance and expected-head
+   checks.
 
-The suite must demonstrate:
+Publication uses GitHub GraphQL `createCommitOnBranch` with `expectedHeadOid=headSha` and the full
+accepted file set. That mutation is the compare-and-swap; a read followed by an unconditional push
+is forbidden. A lost race is `StalePullRequestHead`. When GitHub does not confirm the mutation, the
+publisher re-reads the head: movement is stale-head, while an unchanged or unreadable head is
+`PublicationUncertainty`. No exactly-once external-effect claim is made and failures are never
+automatically replayed.
 
-- a mention reply with `in_reply_to` naming one inline path-bearing comment
-  constructs one work order and invokes the host once;
-- a reaction on that comment does the same;
-- a mention without a unique inline target is rejected and does not invoke the
-  implementer;
-- a PR conversation comment, review summary, or pathless event is rejected;
-- an unauthorized actor id is rejected even when the login matches a
-  configured human;
-- a fork or foreign repository is rejected;
-- a comment anchored to an older SHA is rejected against the current head;
-- duplicate delivery of the same `eventId` returns the stored outcome;
-- a second explicit dispatch has a distinct work-order id;
-- the check process environment contains neither a GitHub write token nor a
-  provider secret;
-- Actions authentication rejects a payload or delivery id that does not match
-  the trusted Actions event;
-- the publisher rejects a digest, path, identity, or head mismatch and does
-  not update the ref;
-- the publisher rejects a non-empty patch whose complete source and
-  destination path set cannot be proven;
-- a published or settled run posts one thread reply and does not resolve the
-  thread.
+## 6. Presentation
 
-## 8. Out of scope
+The presenter updates the one authenticated admission reply with bounded host-authored text:
 
-- enabling a GitHub workflow that holds both a model secret and a commit
-  write token;
-- admitting fork or untrusted pull requests;
-- automatic dispatch on review creation or every comment;
-- general PR-conversation instructions;
-- one attempt spanning multiple comments or paths;
-- a label or sweep that grants one broad patch;
-- closed-loop review → implement → re-review;
-- automatic thread resolution;
-- a work-order API on `@effect-agent/pr-review`;
-- live GitHub in CI.
+- **published** — confirmed new head plus host-verified changed paths;
+- **settled** — `not-applicable` or `needs-human`, with no publication; or
+- **failed** — the typed error tag.
 
-## 9. Rejected alternatives
+Raw model prose is not copied as authoritative status. A missing terminal artifact is typed
+`AttemptIncomplete` before publisher eligibility and conservatively becomes
+`PublicationUncertainty` after validated check evidence made publication eligible.
+`PublicationUncertainty` is rendered as unconfirmed publication that requires head inspection,
+never as confirmed non-publication. The source thread remains open; no phase calls a
+thread-resolution API. Presentation succeeds only when the GitHub update response echoes the same
+journal comment, bot actor, source-thread target, response body, and exact authenticated terminal
+state — or when the reply already carries that exact authenticated terminal state from an earlier
+attempt whose acknowledgement was lost. A conflicting completed state fails closed.
 
-- **Inferring the target comment from mention prose.** Ambiguous targeting
-  must fail. Platform linkage is the only selector.
-- **Treating a PR conversation comment as a work order.** That comment has no
-  path.
-- **One workflow job that holds the model key and the GitHub write token.**
-  Isolation is the enablement gate.
-- **Publisher trusts the implementer-reported digest.** The publisher repeats
-  the host's verification.
-- **Treating ambient Actions repository and event-name variables as
-  authentication.** The trusted event payload and run identity must match.
-- **Accepting a patch whose complete path set cannot be proven.** Publication
-  is fail-closed.
-- **Read-then-write publication of the pull-request head.** The head update
-  must be an atomic compare-and-swap.
-- **Resolving the GitHub thread on `fixed`.** Presentation is a reply, not
-  closure.
+## 7. Trusted workflow and consumer surface
 
-## 10. Requirements
+Every job checks out the pull request's base SHA into a separate trusted Action directory with
+`persist-credentials: false`. Only `implement` and `checks` also check out the exact head SHA, also
+without persisted credentials. Publisher and presenter never check out the head. External Actions,
+the check image, and downstream uses of `work-order-action/` are pinned to immutable digests or full
+commit SHAs.
 
-- **WOI-001**: Ingress authenticates the platform delivery — a valid webhook
-  signature, or an Actions identity bound to the trusted event payload and
-  run id — and accepts a dispatch only when it uniquely names one inline,
+This prevents a pull request from changing the code that authenticates, authorizes, publishes, or
+presents its own work order. Downstream repositories adopt the separate `work-order-action/`
+surface through the documented multi-job workflow. Installing or upgrading
+`@effect-agent/pr-review` does not enable work orders.
+
+## 8. Deterministic proof obligations
+
+The committed suites preserve:
+
+- exact target parsing, stable-id authorization, same-repository provenance, and stale-anchor
+  rejection;
+- deterministic identity, persistent duplicate/incomplete settlement, and distinct new dispatches;
+- Schema/model `E` and `R` proofs and absence of unknown error widening;
+- worktree finalization on success, expected failure, timeout, interruption, and release failure;
+- false/failed/mutating checks and changed-path rejection;
+- patch escape, rename, copy, addition, deletion, binary, mode, and incomplete-header rejection;
+- digest, identity, required-check, stale-head, compare-and-swap, and publication-uncertainty
+  rejection;
+- HMAC journal tamper rejection and one non-resolving host reply; and
+- the enabled workflow's trusted-base checkouts, immutable pins, exact five-job permissions,
+  per-job secret set, exact-head isolation, and networkless check container shape.
+
+Live GitHub network calls are not made from deterministic CI tests.
+
+## 9. Out of scope and limits
+
+- fork pull requests and foreign head repositories;
+- reactions, general inline Q&A, PR-conversation instructions, labels, and broad sweeps;
+- automatic dispatch on reviewer output or review creation;
+- multiple source comments or dynamically model-selected support paths in one work order;
+- file additions/deletions, renames/copies, binary/executable changes, symlinks/submodules, or mode
+  changes;
+- checks that require network access or files outside the checked worktree;
+- automatic thread resolution or closed-loop re-review;
+- replay prevention against write-authorized principals who delete the bot journal reply; and
+- exactly-once GitHub publication.
+
+## 10. Rejected alternatives
+
+- **Reviewer output as authority.** Human dispatch is the only implementation authority.
+- **One job holding provider and write credentials.** The operational boundary is job separation.
+- **Runner-local or artifact-only admission.** Neither survives independent workflow runs; the
+  authenticated repository journal does.
+- **Running checks directly on the hosted runner.** Untrusted checks must not see sibling trust
+  artifacts or host credentials.
+- **Publisher trusts the implementer/check artifact.** It authenticates admission and repeats every
+  publication decision.
+- **Read-then-push publication.** GitHub must compare the expected head atomically.
+- **A work-order API on the reviewer Action.** The products retain separate authority and surfaces.
+- **Resolving the thread on `fixed`.** Presentation reports an outcome; humans own resolution.
+
+## 11. Requirements
+
+- **WOI-001**: Actions authentication and the exact command uniquely identify one inline,
   path-bearing review comment.
-- **WOI-002**: Only a configured stable actor id authorizes dispatch; source
-  authorship, logins, and comment prose do not.
-- **WOI-003**: Ingress admits only a trusted same-repository, non-fork pull
-  request whose identity matches configuration.
-- **WOI-004**: Ingress requires `source.commitSha === headSha` at construction
-  time; an older anchor is rejected.
-- **WOI-005**: Ingress constructs the canonical work order and invokes the
-  existing host; it does not widen implementer file, process, credential, or
-  publish authority.
-- **WOI-006**: Production admission persists
-  `(repository, pullRequestNumber, headSha, workOrderId)` in a file-backed
-  attempt store; duplicate delivery of `dispatch.eventId` is idempotent and
-  never retries automatically. This leaf does not claim DN or DC durability.
-- **WOI-007**: Checks, model/provider, and publication run in isolated
-  processes with fail-closed credential separation.
-- **WOI-008**: The publisher independently verifies patch digest, a proven
-  complete path set, required-check evidence, work-order identity, and
-  expected head against independently owned publisher configuration before
-  compare-and-swap.
-- **WOI-009**: Network publication is an atomic compare-and-swap against the
-  still-current `headSha`; post-publication uncertainty stays typed and makes
-  no exactly-once claim.
-- **WOI-010**: Presentation is one host-authored thread reply; the source
-  thread is never resolved.
-- **WOI-011**: An enabled workflow may admit a dispatch only after isolation
-  and credential separation are implemented and tested. The first live
-  entrypoint admits and replies; it does not hold a model secret or a commit
-  write token, and it is not an `@effect-agent/pr-review` export. It checks
-  out the pull-request base commit without persisted credentials so
-  authorization runs from trusted repository code.
-- **WOI-012**: `@effect-agent/pr-review` remains read-only; ingress is a
-  separate leaf or Action entrypoint.
-- **WOI-013**: Ingress operations keep expected authentication, targeting,
-  admission, isolation, publication, and presentation failures in `E`, keep
-  construction requirements visible in `R`, and acquire temporary resources
-  in `Scope`.
+- **WOI-002**: Only configured stable actor ids authorize; source authorship, login, and prose do
+  not.
+- **WOI-003**: Admission and publication require the configured same-repository, non-fork pull
+  request.
+- **WOI-004**: The source anchor and current head match at construction; publication atomically
+  compares that expected head again.
+- **WOI-005**: The existing bounded implementer runs for the immutable canonical work order;
+  `not-applicable` and `needs-human` remain valid no-publication settlements.
+- **WOI-006**: One authenticated GitHub-retained journal claim exists per explicit dispatch. Duplicate or
+  interrupted delivery returns stored state, never invokes another implementer, and never replays
+  automatically.
+- **WOI-007**: Model, untrusted checks, publisher, and presenter run in separate least-privilege jobs;
+  repository code executes only in the networkless bounded check container.
+- **WOI-008**: Publisher configuration and the authenticated journal independently bind actor,
+  identity, digest, complete allowed paths/files, required-check evidence, and expected head.
+- **WOI-009**: `createCommitOnBranch(expectedHeadOid)` is the atomic publication compare-and-swap;
+  stale-head and uncertain outcomes remain typed and make no exactly-once claim.
+- **WOI-010**: One bounded host-authored reply records pending and terminal state without resolving
+  the source thread or treating model prose as status.
+- **WOI-011**: Every enabled phase runs trusted base Action code, and untrusted head code cannot
+  modify its own authorization or publisher.
+- **WOI-012**: `work-order-action/` is a separate commit-pinnable consumer surface;
+  `@effect-agent/pr-review` stays read-only.
+- **WOI-013**: Expected authentication, admission, model, validation, check, publication,
+  presentation, timeout, interruption, and cleanup failures remain typed in `E`; dependencies stay
+  visible in `R`; acquired worktrees and check containers are scoped.
