@@ -266,6 +266,7 @@ const outcomeOutputs = (
   ["inline-comments", String(outcome.plan.comments.length)],
   ["demoted-findings", String(outcome.plan.demoted.length)],
   ["concerns", String(outcome.review.concerns?.length ?? 0)],
+  ["unreviewed-paths", String(outcome.unreviewedPaths.length)],
   ...(outcome.usage === undefined
     ? []
     : ([
@@ -286,14 +287,15 @@ const outcomeSummary = (
   `- Input coverage: **${outcome.inputCoverage.status}** · scope: ${outcome.reviewMode ?? "full"}`,
   `- Review assurance: **${outcome.assurance.status}** · general discovery ${outcome.assurance.completedGeneralDiscoveryPasses}/${outcome.assurance.requiredGeneralDiscoveryPasses} · specialist ${outcome.assurance.completedSpecialistPasses}/${outcome.assurance.requiredSpecialistPasses} · verification ${outcome.assurance.completedVerificationPasses}/${outcome.assurance.requiredVerificationPasses}`,
   `- Inline comments: ${outcome.plan.comments.length} · demoted findings: ${outcome.plan.demoted.length} · concerns: ${outcome.review.concerns?.length ?? 0}`,
+  ...(outcome.unreviewedPaths.length === 0
+    ? []
+    : [
+        `- Carried forward: ${outcome.unreviewedPaths.length} unreviewed path(s) retried automatically on the next run (reviewer-side gap, not a code defect)`,
+      ]),
   ...(modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``]),
   ...(outcome.usage === undefined
     ? []
-    : [
-        `- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out${
-          outcome.usageScope === "coordinator" ? " (coordinator)" : ""
-        }`,
-      ]),
+    : [`- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out`]),
   ...(outcome.published === undefined
     ? ["- Dry run: nothing posted"]
     : [`- Posted: ${outcome.published.url}`]),
@@ -366,32 +368,44 @@ const blockingReasons = (input: {
     .map((concern) => `blocking concern: ${concern.title}`),
 ];
 
-/** Host-derived check conclusion; model verdict prose cannot weaken it. */
+/**
+ * Host-derived check conclusion; model verdict prose cannot weaken it.
+ *
+ * Blocking code findings outrank machinery gaps — they are the actionable
+ * signal. A machinery gap (incomplete input, unsettled passes) concludes
+ * `incomplete` with reasons that explicitly say the failure is reviewer-side
+ * uncertainty carried forward for retry, never an invitation to change code.
+ * The flat reviewer's constant `unverified` assurance is not a gap.
+ */
 export const concludeReviewOutcome = (
   outcome: ReviewRunOutcome,
 ): {
   readonly conclusion: ReviewCheckConclusion;
   readonly reasons: ReadonlyArray<string>;
 } => {
-  if (outcome.inputCoverage.status === "incomplete") {
-    return { conclusion: "incomplete", reasons: outcome.inputCoverage.reasons };
+  const machinery: Array<string> = [];
+  if (outcome.inputCoverage.status === "incomplete" || outcome.assurance.status === "incomplete") {
+    machinery.push(
+      outcome.unreviewedPaths.length > 0
+        ? `review infrastructure did not settle — a reviewer-side gap, not a code defect; ${outcome.unreviewedPaths.length} path(s) are carried forward and retried automatically on the next run`
+        : "review infrastructure did not settle — a reviewer-side gap, not a code defect",
+    );
+    if (outcome.inputCoverage.status === "incomplete") {
+      machinery.push(...outcome.inputCoverage.reasons);
+    }
+    if (outcome.assurance.status === "incomplete") {
+      machinery.push(...outcome.assurance.reasons);
+    }
   }
-  if (outcome.assurance.status !== "settled") {
-    return {
-      conclusion: "incomplete",
-      reasons:
-        outcome.assurance.reasons.length > 0
-          ? outcome.assurance.reasons
-          : ["configured discovery and verification work did not settle"],
-    };
-  }
-  const reasons = blockingReasons({
+  const blocking = blockingReasons({
     findings: outcome.activeFindings,
     concerns: outcome.activeConcerns,
   });
-  return reasons.length > 0
-    ? { conclusion: "blocking", reasons }
-    : { conclusion: "success", reasons };
+  if (blocking.length > 0) {
+    return { conclusion: "blocking", reasons: [...blocking, ...machinery] };
+  }
+  if (machinery.length > 0) return { conclusion: "incomplete", reasons: machinery };
+  return { conclusion: "success", reasons: [] };
 };
 
 const concludeReviewState = (state: ReviewState) => {
@@ -522,6 +536,9 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
           (options.reviewMode ?? "incremental") === "incremental" &&
           options.skipUnchanged !== false &&
           recovered.state !== undefined &&
+          // Only a fully settled run may be skipped over: an unsettled state
+          // carries retryable scope the next run must actually retry.
+          recovered.state.settled &&
           currentFingerprint !== undefined &&
           validateReviewState(recovered.state, metadata, profileFingerprint) === undefined &&
           recovered.state.acceptedScopeFingerprint === currentFingerprint
@@ -594,7 +611,8 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
           options.skipUnchanged !== false &&
           selection.mode === "incremental" &&
           selection.files.length === 0 &&
-          selection.priorState !== undefined
+          selection.priorState !== undefined &&
+          selection.priorState.settled
         ) {
           const reason = "no changed review scope since the last settled review head";
           return yield* skipCoveredReview({

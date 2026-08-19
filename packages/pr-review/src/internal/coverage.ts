@@ -1,46 +1,23 @@
 import { Option, Schema } from "effect";
 import type { RunEvent } from "effect-agent";
 
-import { anchorViolation } from "./anchors.ts";
 import type { ChangedFile } from "./diff.ts";
 import { isReviewableFile } from "./diff.ts";
-import {
-  assessmentSettlesSuggestionExactly,
-  type CandidateAssessment,
-  confirmedFindingForPublication,
-  FileReviewDelegationFailure,
-  FileReviewRequest,
-  FileReviewUnitResult,
-  ReviewCandidate,
-  reviewCandidateSubjectKey,
-} from "./fan-out.ts";
-import {
-  FileDiffView,
-  FileDiffQuery,
-  type ReviewConcern,
-  type ReviewFinding,
-  type WalkthroughEntry,
-} from "./review-agent.ts";
-import {
-  findingAnchorInUnitEvidence,
-  planReviewUnits,
-  type ReviewDiscoveryPass,
-  type ReviewUnit,
-} from "./review-units.ts";
+import { FileDiffView, FileDiffQuery } from "./review-agent.ts";
+import type { ReviewUnitPlan } from "./review-units.ts";
 
 // ---------------------------------------------------------------------------
 // Two different claims are deliberately modeled:
 //
 // - input coverage: every required path was assigned bounded evidence or was
 //   explicitly reported outside the pipeline's capacity;
-// - review assurance: every configured discovery/specialist pass and every
-//   candidate-verification batch settled exactly.
+// - review assurance: every scheduled discovery/specialist pass and every
+//   candidate-verification pass settled.
 //
-// Neither claims that the model found every defect.
+// Neither claims that the model found every defect. The fan-out pipeline is
+// host-scheduled (fan-out.ts), so its assurance is computed from direct pass
+// results; only the flat reviewer is assessed from its Run event trace here.
 // ---------------------------------------------------------------------------
-
-export const ReviewShape = Schema.Literals(["flat", "fan-out"]);
-export type ReviewShape = typeof ReviewShape.Type;
 
 export class FailedReviewUnit extends Schema.Class<FailedReviewUnit>(
   "@effect-agent/pr-review/FailedReviewUnit",
@@ -90,6 +67,16 @@ export class ReviewInputCoverage extends Schema.Class<ReviewInputCoverage>(
   unassignedPaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
     Schema.isMaxLength(300),
   ),
+  /**
+   * Paths with neither a textual diff nor bounded base/head text (binaries,
+   * oversized files). Fail-closed: they keep the status incomplete for as
+   * long as they are part of the pull request — an unreviewable change must
+   * never authorize a green check. Exclude them deliberately with ignore
+   * globs when that is intended.
+   */
+  undiffablePaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
+    Schema.isMaxLength(300),
+  ),
   reasons: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(1_000))).check(
     Schema.isMaxLength(20),
   ),
@@ -103,6 +90,13 @@ export class FailedReviewPass extends Schema.Class<FailedReviewPass>(
   errorTag: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
 }) {}
 
+/**
+ * Settlement of scheduled review work. `incomplete` means reviewer-side work
+ * failed after its bounded retry — a machinery gap that is carried forward and
+ * retried on the next run, never a statement about the code under review.
+ * `unverified` is the flat reviewer's honest constant: one pass with no
+ * independent verifier is neither settled assurance nor a failure.
+ */
 export class ReviewAssurance extends Schema.Class<ReviewAssurance>(
   "@effect-agent/pr-review/ReviewAssurance",
 )({
@@ -117,7 +111,8 @@ export class ReviewAssurance extends Schema.Class<ReviewAssurance>(
   confirmedCandidates: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   rejectedCandidates: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   unsettledCandidates: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  /** Every failure remains visible within the coordinator's 32-call hard bound. */
+  /** Discovery claims discarded for anchors/paths outside their assigned evidence. */
+  discardedInvalidFindings: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   failedPasses: Schema.Array(FailedReviewPass).check(Schema.isMaxLength(64)),
   reasons: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(1_000))).check(
     Schema.isMaxLength(32),
@@ -145,7 +140,8 @@ const toolTrace = (events: ReadonlyArray<RunEvent>): ToolTrace => {
 const sortedUnique = (values: Iterable<string>): ReadonlyArray<string> =>
   [...new Set(values)].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 
-const boundedListReason = (label: string, values: Iterable<string>): string => {
+/** Render a bounded, deterministic "label (n): a, b, … (+k more)" reason line. */
+export const boundedListReason = (label: string, values: Iterable<string>): string => {
   const items = sortedUnique(values);
   const prefix = `${label} (${items.length}): `;
   let rendered = prefix;
@@ -163,12 +159,64 @@ const boundedListReason = (label: string, values: Iterable<string>): string => {
   return rendered;
 };
 
-const flatInputCoverage = (
-  files: ReadonlyArray<ChangedFile>,
-  totalFiles: number,
-  trace: ToolTrace,
-): ReviewInputCoverage => {
-  const requiredPaths = sortedUnique(files.map((file) => file.path));
+const anchorSurfaceAdjusted = (
+  inputCoverage: ReviewInputCoverage,
+  anchorFiles: ReadonlyArray<ChangedFile>,
+  totalAnchorFiles: number,
+): ReviewInputCoverage =>
+  anchorFiles.length >= totalAnchorFiles
+    ? inputCoverage
+    : ReviewInputCoverage.make({
+        ...inputCoverage,
+        status: "incomplete",
+        reasons: [
+          ...inputCoverage.reasons,
+          `full pull-request anchor surface exposed ${anchorFiles.length} of ${totalAnchorFiles} required files`,
+        ],
+      });
+
+/** The flat reviewer's honest constant assurance: one pass, no verifier. */
+export const flatAssurance = (): ReviewAssurance =>
+  ReviewAssurance.make({
+    status: "unverified",
+    requiredGeneralDiscoveryPasses: 1,
+    completedGeneralDiscoveryPasses: 1,
+    requiredSpecialistPasses: 0,
+    completedSpecialistPasses: 0,
+    requiredVerificationPasses: 0,
+    completedVerificationPasses: 0,
+    discoveredCandidates: 0,
+    confirmedCandidates: 0,
+    rejectedCandidates: 0,
+    unsettledCandidates: 0,
+    discardedInvalidFindings: 0,
+    failedPasses: [],
+    reasons: [
+      "flat review has no independent candidate-verification pass; use the fan-out pipeline for a settled assurance result",
+    ],
+  });
+
+export interface FlatReviewAssessment {
+  readonly inputCoverage: ReviewInputCoverage;
+  readonly assurance: ReviewAssurance;
+  /** Retryable evidence gaps (failed or missing diff reads), never undiffable paths. */
+  readonly unreviewedPaths: ReadonlyArray<string>;
+}
+
+/**
+ * Assess one settled flat run from its Run event trace: which required paths
+ * received successful bounded diff evidence. This observes tool INPUT
+ * assignment only — the host cannot know which evidence the model weighed.
+ */
+export const assessFlatReview = (input: {
+  readonly files: ReadonlyArray<ChangedFile>;
+  readonly totalFiles: number;
+  readonly anchorFiles: ReadonlyArray<ChangedFile>;
+  readonly totalAnchorFiles: number;
+  readonly events: ReadonlyArray<RunEvent>;
+}): FlatReviewAssessment => {
+  const trace = toolTrace(input.events);
+  const requiredPaths = sortedUnique(input.files.map((file) => file.path));
   const assigned = new Set<string>();
   const partial = new Set<string>();
   const failedPaths = new Set<string>();
@@ -184,15 +232,19 @@ const flatInputCoverage = (
     }
     if (trace.failed.has(toolCallId)) failedPaths.add(query.value.path);
   }
-  const undiffable = files.filter((file) => !isReviewableFile(file)).map((file) => file.path);
+  const undiffable = new Set(
+    input.files.filter((file) => !isReviewableFile(file)).map((file) => file.path),
+  );
   const unassigned = requiredPaths.filter(
-    (path) => !assigned.has(path) || undiffable.includes(path) || failedPaths.has(path),
+    (path) => !undiffable.has(path) && (!assigned.has(path) || failedPaths.has(path)),
   );
   const reasons: Array<string> = [];
-  if (files.length < totalFiles) {
-    reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
+  if (input.files.length < input.totalFiles) {
+    reasons.push(
+      `review range exposed ${input.files.length} of ${input.totalFiles} required files`,
+    );
   }
-  if (undiffable.length > 0) {
+  if (undiffable.size > 0) {
     reasons.push(
       boundedListReason("required paths have no reviewable diff or bounded text", undiffable),
     );
@@ -204,26 +256,50 @@ const flatInputCoverage = (
   if (unassigned.length > 0) {
     reasons.push(boundedListReason("required paths received no successful diff input", unassigned));
   }
-  return ReviewInputCoverage.make({
-    status: reasons.length === 0 ? "complete" : "incomplete",
-    requiredPaths,
-    assignedPaths: sortedUnique(assigned),
-    partialPaths: sortedUnique(partial),
-    unassignedPaths: sortedUnique(unassigned),
-    reasons,
-  });
+  const inputCoverage = anchorSurfaceAdjusted(
+    ReviewInputCoverage.make({
+      status: reasons.length === 0 ? "complete" : "incomplete",
+      requiredPaths,
+      assignedPaths: sortedUnique(assigned),
+      partialPaths: sortedUnique(partial),
+      unassignedPaths: sortedUnique(unassigned),
+      undiffablePaths: sortedUnique(undiffable),
+      reasons,
+    }),
+    input.anchorFiles,
+    input.totalAnchorFiles,
+  );
+  return {
+    inputCoverage,
+    assurance: flatAssurance(),
+    // Everything still unreviewed and still part of the pull request carries
+    // forward — undiffable paths included, so the check stays fail-closed
+    // even after they leave the incremental delta.
+    unreviewedPaths: sortedUnique([...unassigned, ...undiffable]),
+  };
 };
 
-const fanOutInputCoverage = (
-  files: ReadonlyArray<ChangedFile>,
-  totalFiles: number,
-): ReviewInputCoverage => {
-  const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
+/**
+ * Input coverage of one host-scheduled fan-out plan: which required paths the
+ * bounded plan actually assigned complete evidence for. Capacity overflow and
+ * undiffable paths are both real gaps; the pipeline carries them so the check
+ * stays fail-closed until they are reviewed, removed, or explicitly ignored.
+ */
+export const fanOutInputCoverage = (input: {
+  readonly plan: ReviewUnitPlan;
+  readonly files: ReadonlyArray<ChangedFile>;
+  readonly totalFiles: number;
+  readonly anchorFiles: ReadonlyArray<ChangedFile>;
+  readonly totalAnchorFiles: number;
+}): ReviewInputCoverage => {
+  const plan = input.plan;
   const assignedPaths = sortedUnique(plan.units.flatMap((unit) => unit.paths));
-  const unassignedPaths = sortedUnique([...plan.undiffablePaths, ...plan.unassignedPaths]);
+  const unassignedPaths = sortedUnique(plan.unassignedPaths);
   const reasons: Array<string> = [];
   if (plan.truncated) {
-    reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
+    reasons.push(
+      `review range exposed ${input.files.length} of ${input.totalFiles} required files`,
+    );
   }
   if (plan.undiffablePaths.length > 0) {
     reasons.push(
@@ -255,419 +331,23 @@ const fanOutInputCoverage = (
   if (plan.unassignedPaths.length > 0) {
     reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
   }
-  return ReviewInputCoverage.make({
-    status: reasons.length === 0 ? "complete" : "incomplete",
-    requiredPaths: sortedUnique(files.map((file) => file.path)),
-    assignedPaths,
-    partialPaths: plan.partialEvidencePaths,
-    unassignedPaths,
-    reasons,
-  });
-};
-
-const sameStrings = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
-  left.length === right.length && left.every((value, index) => value === right[index]);
-
-const candidateKey = (candidate: ReviewCandidate): string =>
-  JSON.stringify(Schema.encodeSync(ReviewCandidate)(candidate));
-
-const sameCandidates = (
-  left: ReadonlyArray<ReviewCandidate>,
-  right: ReadonlyArray<ReviewCandidate>,
-): boolean =>
-  left.length === right.length &&
-  left.every((candidate, index) => {
-    const corresponding = right[index];
-    return corresponding !== undefined && candidateKey(candidate) === candidateKey(corresponding);
-  });
-
-const delegationDeclarations = (trace: ToolTrace) =>
-  [...trace.declared].flatMap(([id, declaration]) => {
-    if (declaration.toolName !== "delegate_file_review") return [];
-    const request = Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
-    return Option.isNone(request) ? [] : [{ id, request: request.value }];
-  });
-
-const failureTag = (trace: ToolTrace, id: string): string | undefined => {
-  const failed = trace.failed.get(id);
-  if (failed !== undefined) return failed.errorTag;
-  const succeeded = trace.succeeded.get(id);
-  if (succeeded === undefined) return undefined;
-  const returned = Schema.decodeUnknownOption(FileReviewDelegationFailure)(succeeded.result);
-  if (Option.isNone(returned)) return undefined;
-  return returned.value._tag === "FileReviewUnitFailed"
-    ? `${returned.value._tag}:${returned.value.childErrorTag}`
-    : returned.value._tag;
-};
-
-const exactDiscoveryRequest = (request: FileReviewRequest, pass: ReviewDiscoveryPass): boolean =>
-  request.phase === "discovery" &&
-  request.workId === pass.passId &&
-  request.unitId === pass.unitId &&
-  request.perspective === pass.perspective &&
-  sameStrings(request.paths, pass.paths) &&
-  sameStrings(request.evidenceShardIds, pass.evidenceShardIds) &&
-  sameStrings(request.riskCategories, pass.riskCategories) &&
-  request.candidates.length === 0;
-
-const validCandidate = (
-  candidate: ReviewCandidate,
-  pass: ReviewDiscoveryPass,
-  unit: ReviewUnit,
-  files: ReadonlyArray<ChangedFile>,
-  anchorFiles: ReadonlyArray<ChangedFile>,
-): boolean => {
-  const allowed = new Set(pass.paths);
-  const kind = candidate._tag === "FindingCandidate" ? "finding" : "concern";
-  const idPrefix = `${pass.passId}:${kind}:`;
-  return (
-    candidate.candidateId.startsWith(idPrefix) &&
-    /^\d{3}$/.test(candidate.candidateId.slice(idPrefix.length)) &&
-    candidate.workId === pass.passId &&
-    candidate.unitId === pass.unitId &&
-    candidate.evidencePaths.length > 0 &&
-    candidate.evidencePaths.every((path) => allowed.has(path)) &&
-    (candidate._tag !== "FindingCandidate" ||
-      (allowed.has(candidate.finding.path) &&
-        anchorViolation(candidate.finding, anchorFiles) === undefined &&
-        findingAnchorInUnitEvidence(candidate.finding, unit, files)))
-  );
-};
-
-interface AssuranceAssessment {
-  readonly assurance: ReviewAssurance;
-  readonly confirmedFindings: ReadonlyArray<ReviewFinding>;
-  readonly confirmedConcerns: ReadonlyArray<ReviewConcern>;
-  readonly walkthrough: ReadonlyArray<WalkthroughEntry>;
-}
-
-const flatAssurance = (): AssuranceAssessment => ({
-  assurance: ReviewAssurance.make({
-    status: "unverified",
-    requiredGeneralDiscoveryPasses: 1,
-    completedGeneralDiscoveryPasses: 1,
-    requiredSpecialistPasses: 0,
-    completedSpecialistPasses: 0,
-    requiredVerificationPasses: 1,
-    completedVerificationPasses: 0,
-    discoveredCandidates: 0,
-    confirmedCandidates: 0,
-    rejectedCandidates: 0,
-    unsettledCandidates: 0,
-    failedPasses: [],
-    reasons: [
-      "flat review has no independent candidate-verification pass; use the fan-out pipeline for a settled assurance result",
-    ],
-  }),
-  confirmedFindings: [],
-  confirmedConcerns: [],
-  walkthrough: [],
-});
-
-const fanOutAssurance = (
-  files: ReadonlyArray<ChangedFile>,
-  totalFiles: number,
-  anchorFiles: ReadonlyArray<ChangedFile>,
-  trace: ToolTrace,
-): AssuranceAssessment => {
-  const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
-  const declarations = delegationDeclarations(trace);
-  const consumedDeclarationIds = new Set<string>();
-  const failedPasses: Array<FailedReviewPass> = [];
-  const reasons: Array<string> = [];
-  const candidatesByUnit = new Map<string, Array<ReviewCandidate>>();
-  const walkthrough: Array<WalkthroughEntry> = [];
-  let completedGeneralDiscoveryPasses = 0;
-  let completedSpecialistPasses = 0;
-
-  for (const pass of plan.discoveryPasses) {
-    const unit = plan.units.find((candidate) => candidate.unitId === pass.unitId);
-    const matching = declarations.filter(({ request }) => exactDiscoveryRequest(request, pass));
-    const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
-    if (matching.length !== 1) {
-      failedPasses.push(
-        FailedReviewPass.make({
-          workId: pass.passId,
-          stage,
-          errorTag: matching.length === 0 ? "PassNotAssigned" : "PassAssignedMultipleTimes",
-        }),
-      );
-      continue;
-    }
-    const call = matching[0];
-    if (call === undefined) {
-      failedPasses.push(
-        FailedReviewPass.make({
-          workId: pass.passId,
-          stage,
-          errorTag: "PassLookupInvariantFailed",
-        }),
-      );
-      continue;
-    }
-    consumedDeclarationIds.add(call.id);
-    const failure = failureTag(trace, call.id);
-    const succeeded = trace.succeeded.get(call.id);
-    const result =
-      succeeded === undefined
-        ? Option.none()
-        : Schema.decodeUnknownOption(FileReviewUnitResult)(succeeded.result);
-    if (
-      failure !== undefined ||
-      Option.isNone(result) ||
-      result.value.phase !== "discovery" ||
-      result.value.workId !== pass.passId ||
-      result.value.unitId !== pass.unitId ||
-      result.value.assessments.length !== 0
-    ) {
-      failedPasses.push(
-        FailedReviewPass.make({
-          workId: pass.passId,
-          stage,
-          errorTag: failure ?? "DiscoveryDidNotSettleExactly",
-        }),
-      );
-      continue;
-    }
-    const ids = new Set<string>();
-    let candidatesValid = true;
-    for (const candidate of result.value.candidates) {
-      if (
-        unit === undefined ||
-        ids.has(candidate.candidateId) ||
-        !validCandidate(candidate, pass, unit, files, anchorFiles)
-      ) {
-        candidatesValid = false;
-        break;
-      }
-      ids.add(candidate.candidateId);
-    }
-    const unitCandidates = candidatesByUnit.get(pass.unitId) ?? [];
-    const unitIds = new Set(unitCandidates.map((candidate) => candidate.candidateId));
-    if (result.value.candidates.some((candidate) => unitIds.has(candidate.candidateId))) {
-      candidatesValid = false;
-    }
-    if (!candidatesValid) {
-      failedPasses.push(
-        FailedReviewPass.make({
-          workId: pass.passId,
-          stage,
-          errorTag: "DiscoveryCandidateMismatch",
-        }),
-      );
-      continue;
-    }
-    if (stage === "specialist") {
-      completedSpecialistPasses += 1;
-    } else {
-      completedGeneralDiscoveryPasses += 1;
-    }
-    const subjectKeys = new Set(unitCandidates.map(reviewCandidateSubjectKey));
-    for (const candidate of result.value.candidates) {
-      const subjectKey = reviewCandidateSubjectKey(candidate);
-      if (subjectKeys.has(subjectKey)) continue;
-      subjectKeys.add(subjectKey);
-      unitCandidates.push(candidate);
-    }
-    candidatesByUnit.set(pass.unitId, unitCandidates);
-    if (pass.perspective === "general") {
-      const allowed = new Set(pass.paths);
-      walkthrough.push(...result.value.fileSummaries.filter((entry) => allowed.has(entry.path)));
-    }
-  }
-
-  const confirmedCandidates: Array<{
-    readonly assessment: CandidateAssessment;
-    readonly candidate: ReviewCandidate;
-  }> = [];
-  let rejectedCandidates = 0;
-  let unsettledCandidates = 0;
-  let requiredVerificationPasses = 0;
-  let completedVerificationPasses = 0;
-  for (const unit of plan.units) {
-    const candidates = candidatesByUnit.get(unit.unitId) ?? [];
-    if (candidates.length === 0) continue;
-    requiredVerificationPasses += 1;
-    const workId = `${unit.unitId}-verification`;
-    const matching = declarations.filter(
-      ({ request }) =>
-        request.phase === "verification" &&
-        request.workId === workId &&
-        request.unitId === unit.unitId &&
-        request.perspective === "candidate-verification" &&
-        sameStrings(request.paths, unit.paths) &&
-        sameStrings(
-          request.evidenceShardIds,
-          unit.evidenceShards.map((shard) => shard.shardId),
-        ) &&
-        sameStrings(request.riskCategories, unit.riskCategories) &&
-        sameCandidates(request.candidates, candidates),
-    );
-    if (matching.length !== 1) {
-      unsettledCandidates += candidates.length;
-      failedPasses.push(
-        FailedReviewPass.make({
-          workId,
-          stage: "verification",
-          errorTag:
-            matching.length === 0
-              ? "VerificationNotAssignedOrCandidateMismatch"
-              : "VerificationAssignedMultipleTimes",
-        }),
-      );
-      continue;
-    }
-    const call = matching[0];
-    if (call === undefined) {
-      unsettledCandidates += candidates.length;
-      failedPasses.push(
-        FailedReviewPass.make({
-          workId,
-          stage: "verification",
-          errorTag: "PassLookupInvariantFailed",
-        }),
-      );
-      continue;
-    }
-    consumedDeclarationIds.add(call.id);
-    const failure = failureTag(trace, call.id);
-    const succeeded = trace.succeeded.get(call.id);
-    const result =
-      succeeded === undefined
-        ? Option.none()
-        : Schema.decodeUnknownOption(FileReviewUnitResult)(succeeded.result);
-    if (
-      failure !== undefined ||
-      Option.isNone(result) ||
-      result.value.phase !== "verification" ||
-      result.value.workId !== workId ||
-      result.value.unitId !== unit.unitId ||
-      result.value.candidates.length !== 0 ||
-      result.value.fileSummaries.length !== 0
-    ) {
-      unsettledCandidates += candidates.length;
-      failedPasses.push(
-        FailedReviewPass.make({
-          workId,
-          stage: "verification",
-          errorTag: failure ?? "VerificationDidNotSettleExactly",
-        }),
-      );
-      continue;
-    }
-    const byId = new Map(
-      candidates.map((candidate) => [candidate.candidateId, candidate] as const),
-    );
-    const assessedIds = new Set<string>();
-    let suggestionSettlementExact = true;
-    const exactAssessments = result.value.assessments.every((assessment) => {
-      const candidate = byId.get(assessment.candidateId);
-      if (candidate === undefined || assessedIds.has(assessment.candidateId)) {
-        return false;
-      }
-      assessedIds.add(assessment.candidateId);
-      if (!assessmentSettlesSuggestionExactly(assessment, candidate)) {
-        suggestionSettlementExact = false;
-      }
-      return true;
-    });
-    if (
-      byId.size !== candidates.length ||
-      !exactAssessments ||
-      assessedIds.size !== byId.size ||
-      !suggestionSettlementExact
-    ) {
-      unsettledCandidates += candidates.length;
-      failedPasses.push(
-        FailedReviewPass.make({
-          workId,
-          stage: "verification",
-          errorTag:
-            exactAssessments && !suggestionSettlementExact
-              ? "SuggestionSettlementMismatch"
-              : "VerificationAssessmentMismatch",
-        }),
-      );
-      continue;
-    }
-    completedVerificationPasses += 1;
-    for (const assessment of result.value.assessments) {
-      if (assessment.disposition === "confirmed") {
-        const candidate = byId.get(assessment.candidateId);
-        if (candidate !== undefined) confirmedCandidates.push({ assessment, candidate });
-      } else {
-        rejectedCandidates += 1;
-      }
-    }
-  }
-
-  const unexpected = [...trace.declared].filter(
-    ([id, declaration]) =>
-      declaration.toolName === "delegate_file_review" && !consumedDeclarationIds.has(id),
-  );
-  for (const [, declaration] of unexpected) {
-    const request = Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
-    failedPasses.push(
-      FailedReviewPass.make({
-        workId: Option.isSome(request) ? request.value.workId : "invalid-delegation-request",
-        stage:
-          Option.isSome(request) && request.value.phase === "verification"
-            ? "verification"
-            : "discovery",
-        errorTag: "UnexpectedPass",
-      }),
-    );
-  }
-  if (failedPasses.length > 0) {
-    reasons.push(
-      boundedListReason(
-        "configured review passes did not settle",
-        failedPasses.map((pass) => `${pass.workId} (${pass.errorTag})`),
-      ),
-    );
-  }
-  if (unsettledCandidates > 0) {
-    reasons.push(
-      `${unsettledCandidates} discovered candidate(s) did not receive exact verification`,
-    );
-  }
-  const requiredSpecialistPasses = plan.discoveryPasses.filter(
-    (pass) => pass.perspective === "risk-specialist",
-  ).length;
-  const requiredGeneralDiscoveryPasses = plan.discoveryPasses.length - requiredSpecialistPasses;
-  const discoveredCandidates = [...candidatesByUnit.values()].reduce(
-    (total, candidates) => total + candidates.length,
-    0,
-  );
-  return {
-    assurance: ReviewAssurance.make({
-      status: reasons.length === 0 ? "settled" : "incomplete",
-      requiredGeneralDiscoveryPasses,
-      completedGeneralDiscoveryPasses,
-      requiredSpecialistPasses,
-      completedSpecialistPasses,
-      requiredVerificationPasses,
-      completedVerificationPasses,
-      discoveredCandidates,
-      confirmedCandidates: confirmedCandidates.length,
-      rejectedCandidates,
-      unsettledCandidates,
-      failedPasses,
+  return anchorSurfaceAdjusted(
+    ReviewInputCoverage.make({
+      status: reasons.length === 0 ? "complete" : "incomplete",
+      requiredPaths: sortedUnique(input.files.map((file) => file.path)),
+      assignedPaths,
+      partialPaths: plan.partialEvidencePaths,
+      unassignedPaths,
+      undiffablePaths: sortedUnique(plan.undiffablePaths),
       reasons,
     }),
-    confirmedFindings: confirmedCandidates.flatMap(({ assessment, candidate }) =>
-      candidate._tag === "FindingCandidate"
-        ? [confirmedFindingForPublication(assessment, candidate)]
-        : [],
-    ),
-    confirmedConcerns: confirmedCandidates.flatMap(({ candidate }) =>
-      candidate._tag === "ConcernCandidate" ? [candidate.concern] : [],
-    ),
-    walkthrough,
-  };
+    input.anchorFiles,
+    input.totalAnchorFiles,
+  );
 };
 
-const compatibilityCoverage = (
+/** Compatibility aggregate over the two precise claims. */
+export const compatibilityCoverage = (
   inputCoverage: ReviewInputCoverage,
   assurance: ReviewAssurance,
 ): ReviewCoverage => {
@@ -692,86 +372,5 @@ const compatibilityCoverage = (
     ]),
     failedUnits: [...failedUnits.values()].slice(0, 8),
     reasons: [...inputCoverage.reasons, ...(assuranceIncomplete ? assurance.reasons : [])],
-  });
-};
-
-export interface ReviewPipelineAssessment {
-  readonly inputCoverage: ReviewInputCoverage;
-  readonly assurance: ReviewAssurance;
-  /** Deprecated compatibility aggregate. */
-  readonly coverage: ReviewCoverage;
-  readonly confirmedFindings: ReadonlyArray<ReviewFinding>;
-  readonly confirmedConcerns: ReadonlyArray<ReviewConcern>;
-  readonly walkthrough: ReadonlyArray<WalkthroughEntry>;
-}
-
-/** Assess one settled run without trusting coordinator prose or findings. */
-export const assessReviewPipeline = (input: {
-  readonly shape: ReviewShape;
-  readonly files: ReadonlyArray<ChangedFile>;
-  readonly totalFiles: number;
-  readonly anchorFiles: ReadonlyArray<ChangedFile>;
-  readonly totalAnchorFiles: number;
-  readonly events: ReadonlyArray<RunEvent>;
-}): ReviewPipelineAssessment => {
-  const trace = toolTrace(input.events);
-  let inputCoverage =
-    input.shape === "fan-out"
-      ? fanOutInputCoverage(input.files, input.totalFiles)
-      : flatInputCoverage(input.files, input.totalFiles, trace);
-  if (input.anchorFiles.length < input.totalAnchorFiles) {
-    inputCoverage = ReviewInputCoverage.make({
-      ...inputCoverage,
-      status: "incomplete",
-      reasons: [
-        ...inputCoverage.reasons,
-        `full pull-request anchor surface exposed ${input.anchorFiles.length} of ${input.totalAnchorFiles} required files`,
-      ],
-    });
-  }
-  const assessed =
-    input.shape === "fan-out"
-      ? fanOutAssurance(input.files, input.totalFiles, input.anchorFiles, trace)
-      : flatAssurance();
-  return {
-    inputCoverage,
-    assurance: assessed.assurance,
-    coverage: compatibilityCoverage(inputCoverage, assessed.assurance),
-    confirmedFindings: assessed.confirmedFindings,
-    confirmedConcerns: assessed.confirmedConcerns,
-    walkthrough: assessed.walkthrough,
-  };
-};
-
-/** Compatibility helper; prefer assessReviewPipeline for precise claims. */
-export const assessReviewCoverage = (input: {
-  readonly shape: ReviewShape;
-  readonly files: ReadonlyArray<ChangedFile>;
-  readonly totalFiles: number;
-  readonly anchorFiles: ReadonlyArray<ChangedFile>;
-  readonly totalAnchorFiles: number;
-  readonly events: ReadonlyArray<RunEvent>;
-}): ReviewCoverage => assessReviewPipeline(input).coverage;
-
-/** Host-verified summaries from successful general discovery passes only. */
-export const collectUnitFileSummaries = (
-  events: ReadonlyArray<RunEvent>,
-): ReadonlyArray<WalkthroughEntry> => {
-  const trace = toolTrace(events);
-  return delegationDeclarations(trace).flatMap(({ id, request }) => {
-    if (request.phase !== "discovery" || request.perspective !== "general") return [];
-    const success = trace.succeeded.get(id);
-    if (success === undefined || trace.failed.has(id)) return [];
-    const result = Schema.decodeUnknownOption(FileReviewUnitResult)(success.result);
-    if (
-      Option.isNone(result) ||
-      result.value.phase !== "discovery" ||
-      result.value.workId !== request.workId ||
-      result.value.unitId !== request.unitId
-    ) {
-      return [];
-    }
-    const assigned = new Set(request.paths);
-    return result.value.fileSummaries.filter((entry) => assigned.has(entry.path));
   });
 };

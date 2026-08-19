@@ -6,6 +6,7 @@ import {
   fileReviewEvidenceChunks,
   type FindingSeverity,
   MAX_PATCH_CHARS,
+  type ReviewConcern,
   type ReviewFinding,
 } from "./review-agent.ts";
 
@@ -464,4 +465,28 @@ export const rankAndDedupeFindings = (
       return left.startLine - right.startLine;
     })
     .slice(0, MAX_MERGED_FINDINGS);
+};
+
+/**
+ * The concern analogue of `rankAndDedupeFindings`: dedupe by exact content
+ * keeping the most severe duplicate, rank by severity, and cap at the
+ * `CodeReview` concerns bound.
+ */
+export const rankAndDedupeConcerns = (
+  concerns: ReadonlyArray<ReviewConcern>,
+): ReadonlyArray<ReviewConcern> => {
+  const byContent = new Map<string, ReviewConcern>();
+  for (const concern of concerns) {
+    const key = `${concern.title}\u0000${concern.body}`;
+    const previous = byContent.get(key);
+    if (
+      previous === undefined ||
+      severityRank[concern.severity] < severityRank[previous.severity]
+    ) {
+      byContent.set(key, concern);
+    }
+  }
+  return [...byContent.values()]
+    .sort((left, right) => severityRank[left.severity] - severityRank[right.severity])
+    .slice(0, 10);
 };

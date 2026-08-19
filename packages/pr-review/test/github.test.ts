@@ -18,7 +18,7 @@ const REVIEWED_HEAD_SHA = "2".repeat(40);
 const FINGERPRINT = "a".repeat(64);
 
 const reviewState = ReviewState.make({
-  version: 1,
+  version: 2,
   repository: "acme/widgets",
   pullRequestNumber: 30,
   baseRef: "main",
@@ -30,6 +30,8 @@ const reviewState = ReviewState.make({
   reviewedPathCount: 1,
   unresolvedFindings: [],
   unresolvedConcerns: [],
+  unreviewedPaths: [],
+  settled: true,
   lastReviewMode: "full",
 });
 

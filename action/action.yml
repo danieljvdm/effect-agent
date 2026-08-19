@@ -61,9 +61,10 @@ inputs:
   fan-out:
     description: >-
       Use deterministic evidence sharding, independent general and specialist
-      discovery, and candidate verification with bounded subagent children.
-      Enabled by default because the flat shape has no independent verifier
-      and therefore cannot produce settled review assurance.
+      discovery, and candidate verification as host-scheduled child passes
+      (each retried once on failure). Enabled by default because the flat
+      shape has no independent verifier and therefore cannot produce settled
+      review assurance.
     required: false
     default: "true"
   guidance:
@@ -91,9 +92,10 @@ inputs:
   skip-unchanged:
     description: >-
       Skip model execution when the current effective patch matches the last
-      patch with settled stored assurance ('true', default), including commit-ID-only
-      rebases, while preserving the stored blocking/success conclusion. Set
-      'false' to force execution.
+      FULLY SETTLED stored review ('true', default), including commit-ID-only
+      rebases, while preserving the stored blocking/success conclusion. A
+      stored state carrying unreviewed scope is never skipped over — the next
+      run retries exactly that scope. Set 'false' to force execution.
     required: false
     default: "true"
   retire-stale-reviews:
@@ -105,9 +107,10 @@ inputs:
     default: "true"
   review-mode:
     description: >-
-      "incremental" (default) reviews changes since the last compatible,
-      complete-input, settled-assurance head. "final" deliberately performs
-      fresh discovery over the full current pull-request diff.
+      "incremental" (default) reviews changes since the last reviewed head
+      plus any carried unreviewed scope; the baseline advances on every
+      completed run. "final" deliberately performs fresh discovery over the
+      full current pull-request diff.
     required: false
     default: "incremental"
   progress-comment:
@@ -138,7 +141,9 @@ outputs:
   fingerprint:
     description: "Deprecated changeset-fingerprint output."
   conclusion:
-    description: "Host-derived check conclusion: success, blocking, or incomplete."
+    description: >-
+      Host-derived check conclusion: success, blocking (code findings), or
+      incomplete (reviewer-side gap carried forward and retried next run).
   input-coverage:
     description: "Host-derived path/evidence assignment: complete or incomplete."
   review-assurance:
@@ -157,10 +162,12 @@ outputs:
     description: "Number of findings whose anchors failed diff validation."
   concerns:
     description: "Number of non-anchored concerns rendered into the review body."
+  unreviewed-paths:
+    description: "Number of retryable unreviewed paths carried to the next run."
   input-tokens:
-    description: "Input tokens the run budget observed (coordinator only under fan-out)."
+    description: "Input tokens the run budget observed across the whole run."
   output-tokens:
-    description: "Output tokens the run budget observed (coordinator only under fan-out)."
+    description: "Output tokens the run budget observed across the whole run."
   review-url:
     description: "URL of the posted review (empty on dry runs)."
 runs:

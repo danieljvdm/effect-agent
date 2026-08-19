@@ -1,20 +1,20 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
   Agent,
   AgentPolicy,
-  Subagent,
-  SubagentPolicy,
-  SubagentRuntime,
-  ToolExecutionClass,
+  AgentRuntime,
   ToolResultBounds,
+  type BudgetAdapterError,
+  type BudgetExceeded,
+  type RunBudgetHook,
   type RuntimeBinding,
 } from "effect-agent";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/unstable/ai";
 
 import { anchorViolation } from "./anchors.ts";
-import { ChangedFileStatus, ChangedPath } from "./diff.ts";
+import { boundedListReason, FailedReviewPass, ReviewAssurance } from "./coverage.ts";
+import { ChangedFileStatus, ChangedPath, type ChangedFile } from "./diff.ts";
 import {
-  clampMaxFindings,
   CodeReview,
   fileReviewEvidenceChunks,
   MAX_PATCH_CHARS,
@@ -22,7 +22,6 @@ import {
   REVIEW_TOOL_RESULT_MAX_BYTES,
   ReviewConcern,
   ReviewFinding,
-  ReviewMission,
   WalkthroughEntry,
 } from "./review-agent.ts";
 import {
@@ -31,23 +30,31 @@ import {
   MAX_UNIT_FILES,
   findingAnchorInUnitEvidence,
   planReviewUnits,
+  rankAndDedupeConcerns,
+  rankAndDedupeFindings,
   ReviewEvidenceShardId,
   ReviewPassId,
   ReviewRiskCategory,
   ReviewUnitId,
-  ReviewUnitPlan,
+  type ReviewDiscoveryPass,
+  type ReviewUnit,
+  type ReviewUnitPlan,
 } from "./review-units.ts";
-import { PullRequestSource, PullRequestSourceFailure } from "./source.ts";
 
 // ---------------------------------------------------------------------------
 // The assured fan-out reviewer is a bounded, deterministic three-stage
-// pipeline driven through attached S1 children:
+// pipeline scheduled ENTIRELY by host code:
 //
 //   host plan -> independent discovery passes -> independent verification
 //
-// Host code owns partitioning, risk classification, bounded evidence, exact
-// pass settlement, candidate provenance, and the final confirmed-candidate
-// fold. The coordinator only schedules the declared work and writes prose.
+// `planReviewUnits` is a pure function, so dispatch is plain Effect structured
+// concurrency over its exact work list — there is no coordinator model, no
+// delegation tool, and therefore no prompt-compliance failure mode. A pass
+// that fails (child fault, malformed output) is retried once; a pass that
+// still fails is recorded and its unit's paths are carried forward as
+// retryable unreviewed scope instead of freezing the run's continuity
+// baseline. A finding whose anchor is invalid is discarded and counted —
+// never a reason to reject the whole pass.
 // ---------------------------------------------------------------------------
 
 /** One discovery pass returns at most this many anchored candidates. */
@@ -59,8 +66,15 @@ export const MAX_CHILD_CONCERNS = 3;
 /** Every unit receives independent general and specialist discovery passes. */
 export const MAX_UNIT_CANDIDATES = (MAX_CHILD_FINDINGS + MAX_CHILD_CONCERNS) * 2;
 
-/** General + specialist discovery for every unit, then one verifier per unit. */
+/**
+ * General + specialist discovery for every unit, then one verifier per unit.
+ * The one-retry budget doubles the worst-case child Run count, but the
+ * schedule itself never exceeds this bound.
+ */
 export const MAX_REVIEW_CHILDREN = MAX_REVIEW_UNITS * 3;
+
+/** Bounded structured concurrency across units; passes inside a unit are sequential. */
+export const REVIEW_UNIT_CONCURRENCY = 4;
 
 /** Structural minimum for a child that exposes no tools. */
 export const MAX_FILE_REVIEW_TOOL_CALLS = 1;
@@ -128,8 +142,8 @@ export class CandidateAssessment extends Schema.Class<CandidateAssessment>(
 
 /**
  * Exact suggestion settlement shape: a carried suggestion must be settled and
- * nothing else may be. Enforced identically by the live delegation projection
- * and the independent host coverage fold.
+ * nothing else may be. A verification report that violates it is treated as a
+ * misbehaving pass and retried within the pass budget.
  */
 export const assessmentSettlesSuggestionExactly = (
   assessment: CandidateAssessment,
@@ -181,21 +195,6 @@ const EvidenceShardIds = Schema.Array(ReviewEvidenceShardId)
   .check(Schema.isMinLength(1))
   .check(Schema.isMaxLength(MAX_UNIT_EVIDENCE_SHARDS));
 
-/** Strict-object coordinator request for either discovery or verification. */
-export class FileReviewRequest extends Schema.Class<FileReviewRequest>(
-  "@effect-agent/pr-review/FileReviewRequest",
-)({
-  phase: ReviewWorkPhase,
-  workId: ReviewPassId,
-  unitId: ReviewUnitId,
-  paths: UnitPaths,
-  evidenceShardIds: EvidenceShardIds,
-  perspective: ReviewWorkPerspective,
-  riskCategories: RiskCategories,
-  /** Empty for discovery; the exact discovered set for unit verification. */
-  candidates: Candidates,
-}) {}
-
 /** One complete host-selected evidence shard supplied to a review child. */
 export class FileReviewEvidence extends Schema.Class<FileReviewEvidence>(
   "@effect-agent/pr-review/FileReviewEvidence",
@@ -220,6 +219,7 @@ export class FileReviewBrief extends Schema.Class<FileReviewBrief>(
   evidenceShardIds: EvidenceShardIds,
   perspective: ReviewWorkPerspective,
   riskCategories: RiskCategories,
+  /** Empty for discovery; the exact discovered set for unit verification. */
   candidates: Candidates,
   evidence: Schema.Array(FileReviewEvidence)
     .check(Schema.isMinLength(1))
@@ -239,35 +239,19 @@ export class FileReviewReport extends Schema.Class<FileReviewReport>(
   assessments: Schema.Array(CandidateAssessment).check(Schema.isMaxLength(MAX_UNIT_CANDIDATES)),
 }) {}
 
-/** Bounded coordinator-visible result with host-assigned candidate IDs. */
-export class FileReviewUnitResult extends Schema.Class<FileReviewUnitResult>(
-  "@effect-agent/pr-review/FileReviewUnitResult",
-)({
-  phase: ReviewWorkPhase,
-  workId: ReviewPassId,
-  unitId: ReviewUnitId,
-  candidates: Candidates,
-  fileSummaries: Schema.Array(WalkthroughEntry).check(Schema.isMaxLength(MAX_UNIT_FILES)),
-  assessments: Schema.Array(CandidateAssessment).check(Schema.isMaxLength(MAX_UNIT_CANDIDATES)),
-}) {}
-
-export class FileReviewUnitFailed extends Schema.TaggedError<FileReviewUnitFailed>()(
-  "FileReviewUnitFailed",
-  {
-    childErrorTag: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
-    message: Schema.String.check(Schema.isMaxLength(400)),
-  },
-) {}
-
-export class FileReviewWorkRejected extends Schema.TaggedError<FileReviewWorkRejected>()(
-  "FileReviewWorkRejected",
+/**
+ * A structurally valid child report that does not answer the scheduled pass:
+ * wrong identity, phase-inapplicable fields, or an inexact assessment set.
+ * Retried once like any other pass fault, because it is model misbehavior,
+ * not evidence about the code under review.
+ */
+export class ReviewPassMisbehaved extends Schema.TaggedError<ReviewPassMisbehaved>()(
+  "ReviewPassMisbehaved",
   {
     workId: ReviewPassId,
     reason: Schema.NonEmptyString.check(Schema.isMaxLength(600)),
   },
 ) {}
-
-export const FileReviewFailure = Schema.Union([FileReviewUnitFailed, FileReviewWorkRejected]);
 
 export interface FanOutInstructionOptions {
   readonly guidance?: string | ReadonlyArray<string> | undefined;
@@ -327,9 +311,6 @@ export const fileReviewerInstructions = makeFileReviewerInstructions();
 
 export const FileReviewToolkit = Toolkit.empty;
 
-/** Compatibility export: the evidence-only child has no handler requirements. */
-export const FileReviewToolkitLayer = Layer.empty;
-
 export const defaultFileReviewerPolicy = AgentPolicy.make({
   maxTurns: 6,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
@@ -344,121 +325,74 @@ export const defaultFileReviewerPolicy = AgentPolicy.make({
   onExhaustion: "fail",
 });
 
-export const fileReviewPolicy = SubagentPolicy.make({
-  maxChildren: MAX_REVIEW_CHILDREN,
-  maxConcurrency: 4,
-  maxTurns: 6,
-  maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "6 minutes",
-  maxResultBytes: 256 * 1024,
-});
-
-export const mapFileReviewChildFailure = (failure: {
-  readonly _tag: string;
-  readonly message?: string;
-}): FileReviewUnitFailed =>
-  FileReviewUnitFailed.make({
-    childErrorTag: failure._tag,
-    message: (failure.message ?? "").slice(0, 400),
+export const makeFileReviewerDefinition = (options: FanOutInstructionOptions = {}) =>
+  Agent.define("pr-review-worker", {
+    input: FileReviewBrief,
+    output: FileReviewReport,
+    instructions: makeFileReviewerInstructions(options),
+    toolkit: FileReviewToolkit,
+    policy: defaultFileReviewerPolicy,
+    description:
+      "Perform one bounded discovery or independent candidate-verification pass over host-supplied pull-request evidence.",
+    metadata: { deploymentClass: "E", surface: "read-only", stage: "discovery-verification" },
   });
 
-const sameStrings = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
-  left.length === right.length && left.every((value, index) => value === right[index]);
+export const FileReviewer = makeFileReviewerDefinition();
 
-const rejectWork = (workId: string, reason: string) =>
-  FileReviewWorkRejected.make({ workId, reason });
+/** The exact child binding shape the host pipeline schedules. */
+export type FileReviewerBinding<Provider, ModelProvides, ModelRequires> = RuntimeBinding<
+  typeof FileReviewBrief,
+  typeof FileReviewReport,
+  ReturnType<typeof makeFileReviewerInstructions>,
+  Toolkit.Tools<typeof FileReviewToolkit>,
+  Provider,
+  ModelProvides,
+  ModelRequires
+>;
 
-/** Validate coordinator scheduling against the current deterministic plan. */
-const prepareReviewBrief = (request: FileReviewRequest) =>
+// ---------------------------------------------------------------------------
+// Host pipeline.
+// ---------------------------------------------------------------------------
+
+/** Everything one settled fan-out pipeline run produced, before publication. */
+export interface FanOutPipelineOutcome {
+  readonly review: CodeReview;
+  readonly assurance: ReviewAssurance;
+  readonly plan: ReviewUnitPlan;
+  /** Paths of units with an unsettled pass — retryable scope for the next run. */
+  readonly unreviewedPaths: ReadonlyArray<string>;
+  /** Total settled child turns across every scheduled pass. */
+  readonly turns: number;
+}
+
+export interface FanOutPipelineInput {
+  readonly files: ReadonlyArray<ChangedFile>;
+  readonly anchorFiles: ReadonlyArray<ChangedFile>;
+  readonly totalChangedFiles: number;
+  readonly maxFindings?: number | undefined;
+  /** Shared run budget observed by every child pass. */
+  readonly budget?: RunBudgetHook<BudgetExceeded | BudgetAdapterError> | undefined;
+}
+
+const candidateOrdinal = (index: number): string => String(index + 1).padStart(3, "0");
+
+/** Rebuild one unit's complete evidence from the same snapshot the plan used. */
+const unitEvidence = (
+  unit: ReviewUnit,
+  files: ReadonlyArray<ChangedFile>,
+): Effect.Effect<ReadonlyArray<FileReviewEvidence>> =>
   Effect.gen(function* () {
-    const source = yield* PullRequestSource;
-    const mapSourceFailure = (failure: PullRequestSourceFailure) =>
-      rejectWork(
-        request.workId,
-        `pull-request source ${failure.operation} failed: ${failure.reason}`.slice(0, 600),
-      );
-    const files = yield* source.changedFiles.pipe(Effect.mapError(mapSourceFailure));
-    const metadata = yield* source.metadata.pipe(Effect.mapError(mapSourceFailure));
-    const plan = planReviewUnits(files, { totalChangedFiles: metadata.totalChangedFiles });
-    const unit = plan.units.find((candidate) => candidate.unitId === request.unitId);
-    if (
-      unit === undefined ||
-      !sameStrings(request.paths, unit.paths) ||
-      !sameStrings(
-        request.evidenceShardIds,
-        unit.evidenceShards.map((shard) => shard.shardId),
-      )
-    ) {
-      return yield* rejectWork(request.workId, "request does not match a host-planned unit");
-    }
-
-    if (request.phase === "discovery") {
-      const pass = plan.discoveryPasses.find((candidate) => candidate.passId === request.workId);
-      if (
-        pass === undefined ||
-        pass.unitId !== request.unitId ||
-        !sameStrings(pass.paths, request.paths) ||
-        !sameStrings(pass.evidenceShardIds, request.evidenceShardIds) ||
-        pass.perspective !== request.perspective ||
-        !sameStrings(pass.riskCategories, request.riskCategories) ||
-        request.candidates.length !== 0
-      ) {
-        return yield* rejectWork(request.workId, "discovery request does not match the host plan");
-      }
-    } else {
-      if (
-        request.workId !== `${request.unitId}-verification` ||
-        request.perspective !== "candidate-verification" ||
-        !sameStrings(request.riskCategories, unit.riskCategories) ||
-        request.candidates.length === 0
-      ) {
-        return yield* rejectWork(
-          request.workId,
-          "verification request does not match the host-planned unit",
-        );
-      }
-      const candidateIds = new Set<string>();
-      const candidateSubjects = new Set<string>();
-      const allowed = new Set(unit.paths);
-      for (const candidate of request.candidates) {
-        const subjectKey = reviewCandidateSubjectKey(candidate);
-        if (
-          candidateIds.has(candidate.candidateId) ||
-          candidateSubjects.has(subjectKey) ||
-          candidate.unitId !== unit.unitId ||
-          candidate.evidencePaths.some((path) => !allowed.has(path)) ||
-          (candidate._tag === "FindingCandidate" && !allowed.has(candidate.finding.path))
-        ) {
-          return yield* rejectWork(
-            request.workId,
-            "verification candidates are duplicated or outside the planned unit",
-          );
-        }
-        candidateIds.add(candidate.candidateId);
-        candidateSubjects.add(subjectKey);
-      }
-    }
-
     const byPath = new Map(files.map((file) => [file.path, file] as const));
     const evidence: Array<FileReviewEvidence> = [];
     for (const shard of unit.evidenceShards) {
       const file = byPath.get(shard.path);
-      if (file === undefined) {
-        return yield* rejectWork(
-          request.workId,
-          `planned evidence path is unavailable: ${shard.path}`,
-        );
-      }
-      const chunks = fileReviewEvidenceChunks(file);
-      const chunk = chunks[shard.ordinal - 1];
-      if (
-        chunk === undefined ||
-        chunks.length !== shard.total ||
-        chunk.annotatedPatch.length !== shard.evidenceChars
-      ) {
-        return yield* rejectWork(
-          request.workId,
-          `planned evidence shard no longer matches source: ${shard.shardId}`,
+      const chunk =
+        file === undefined ? undefined : fileReviewEvidenceChunks(file)[shard.ordinal - 1];
+      if (file === undefined || chunk === undefined) {
+        // The plan and this evidence derive from the same immutable snapshot
+        // via the same pure function; a mismatch is a host defect, not input.
+        return yield* Effect.die(
+          new Error(`planned evidence shard has no source: ${shard.shardId} (${shard.path})`),
         );
       }
       evidence.push(
@@ -473,303 +407,464 @@ const prepareReviewBrief = (request: FileReviewRequest) =>
         }),
       );
     }
-    return FileReviewBrief.make({ ...request, evidence });
+    return evidence;
   });
 
-const candidateOrdinal = (index: number): string => String(index + 1).padStart(3, "0");
+interface SettledPass {
+  readonly report: FileReviewReport;
+  readonly turns: number;
+}
 
-const projectReviewResult = (
+type PassOutcome =
+  | ({ readonly _tag: "settled" } & SettledPass)
+  | { readonly _tag: "failed"; readonly errorTag: string };
+
+const misbehaved = (workId: string, reason: string) =>
+  ReviewPassMisbehaved.make({ workId, reason: reason.slice(0, 600) });
+
+/** Validate that a verification report assesses exactly the scheduled candidates. */
+const validateVerificationReport = (
+  brief: FileReviewBrief,
   report: FileReviewReport,
-  context: { readonly budgetExhausted: boolean },
-  request: FileReviewRequest,
-) => {
-  if (context.budgetExhausted) {
-    return Effect.fail(
-      rejectWork(report.workId, "review work exhausted its budget before exact settlement"),
-    );
+): ReviewPassMisbehaved | undefined => {
+  if (report.findings.length > 0 || report.concerns.length > 0 || report.fileSummaries.length > 0) {
+    return misbehaved(brief.workId, "verification output contained discovery-only fields");
   }
-  if (
-    report.phase !== request.phase ||
-    report.workId !== request.workId ||
-    report.unitId !== request.unitId
-  ) {
-    return Effect.fail(
-      rejectWork(request.workId, "review output identity does not match the scheduled request"),
-    );
-  }
-  if (report.phase === "verification") {
-    if (
-      report.findings.length > 0 ||
-      report.concerns.length > 0 ||
-      report.fileSummaries.length > 0
-    ) {
-      return Effect.fail(
-        rejectWork(report.workId, "verification output contained discovery-only fields"),
+  const expectedById = new Map(
+    brief.candidates.map((candidate) => [candidate.candidateId, candidate] as const),
+  );
+  const assessedIds = new Set<string>();
+  for (const assessment of report.assessments) {
+    const candidate = expectedById.get(assessment.candidateId);
+    if (candidate === undefined || assessedIds.has(assessment.candidateId)) {
+      return misbehaved(brief.workId, "verification output did not assess the exact candidate set");
+    }
+    if (!assessmentSettlesSuggestionExactly(assessment, candidate)) {
+      return misbehaved(
+        brief.workId,
+        "verification output did not settle suggestion publication exactly",
       );
     }
-    const expectedById = new Map(
-      request.candidates.map((candidate) => [candidate.candidateId, candidate] as const),
-    );
-    const assessedIds = new Set<string>();
-    for (const assessment of report.assessments) {
-      const candidate = expectedById.get(assessment.candidateId);
-      if (candidate === undefined || assessedIds.has(assessment.candidateId)) {
-        return Effect.fail(
-          rejectWork(report.workId, "verification output did not assess the exact candidate set"),
-        );
-      }
-      if (!assessmentSettlesSuggestionExactly(assessment, candidate)) {
-        return Effect.fail(
-          rejectWork(
-            report.workId,
-            "verification output did not settle suggestion publication exactly",
-          ),
-        );
-      }
-      assessedIds.add(assessment.candidateId);
-    }
-    if (assessedIds.size !== expectedById.size) {
-      return Effect.fail(
-        rejectWork(report.workId, "verification output did not assess the exact candidate set"),
-      );
-    }
-    return Effect.succeed(
-      FileReviewUnitResult.make({
-        phase: report.phase,
-        workId: report.workId,
-        unitId: report.unitId,
-        candidates: [],
-        fileSummaries: [],
-        assessments: report.assessments,
-      }),
-    );
+    assessedIds.add(assessment.candidateId);
   }
-  if (report.assessments.length > 0) {
-    return Effect.fail(
-      rejectWork(report.workId, "discovery output contained verification-only assessments"),
-    );
+  if (assessedIds.size !== expectedById.size) {
+    return misbehaved(brief.workId, "verification output did not assess the exact candidate set");
   }
-  const allowed = new Set(request.paths);
-  if (
-    report.findings.some((finding) => !allowed.has(finding.path)) ||
-    report.concerns.some((candidate) =>
-      candidate.evidencePaths.some((path) => !allowed.has(path)),
-    ) ||
-    report.fileSummaries.some((entry) => !allowed.has(entry.path))
-  ) {
-    return Effect.fail(
-      rejectWork(report.workId, "discovery output referenced evidence outside the scheduled unit"),
-    );
-  }
-  return Effect.gen(function* () {
-    const source = yield* PullRequestSource;
-    const mapSourceFailure = (failure: PullRequestSourceFailure) =>
-      rejectWork(
-        request.workId,
-        `pull-request source ${failure.operation} failed: ${failure.reason}`.slice(0, 600),
-      );
-    const files = yield* source.changedFiles.pipe(Effect.mapError(mapSourceFailure));
-    const metadata = yield* source.metadata.pipe(Effect.mapError(mapSourceFailure));
-    const anchorFiles = yield* source.anchorFiles.pipe(Effect.mapError(mapSourceFailure));
-    const unit = planReviewUnits(files, {
-      totalChangedFiles: metadata.totalChangedFiles,
-    }).units.find((candidate) => candidate.unitId === request.unitId);
-    if (unit === undefined) {
-      return yield* rejectWork(request.workId, "scheduled review unit is no longer available");
-    }
-    for (const finding of report.findings) {
-      const violation = anchorViolation(finding, anchorFiles);
-      if (violation !== undefined || !findingAnchorInUnitEvidence(finding, unit, files)) {
-        return yield* rejectWork(
-          request.workId,
-          `discovery finding has no valid anchor in its assigned evidence: ${violation ?? finding.path}`,
-        );
-      }
-    }
-    const findingCandidates = report.findings.map((finding, index) =>
-      FindingCandidate.make({
-        candidateId: `${request.workId}:finding:${candidateOrdinal(index)}`,
-        workId: request.workId,
-        unitId: request.unitId,
-        finding,
-        evidencePaths: [finding.path],
-      }),
-    );
-    const concernCandidates = report.concerns.map((candidate, index) =>
-      ConcernCandidate.make({
-        candidateId: `${request.workId}:concern:${candidateOrdinal(index)}`,
-        workId: request.workId,
-        unitId: request.unitId,
-        concern: candidate.concern,
-        evidencePaths: candidate.evidencePaths,
-      }),
-    );
-    return FileReviewUnitResult.make({
-      phase: report.phase,
-      workId: report.workId,
-      unitId: report.unitId,
-      candidates: [...findingCandidates, ...concernCandidates],
-      fileSummaries: report.fileSummaries,
-      assessments: [],
-    });
-  });
+  return undefined;
 };
 
-const delegationDescription =
-  "Run exactly one host-planned discovery or candidate-verification child. Copy every plan field and candidate verbatim; never retry failed work.";
-
-const makeFileReviewDelegation = (child: ReturnType<typeof makeFileReviewerDefinition>) =>
-  Subagent.define("delegate_file_review", {
-    description: delegationDescription,
-    target: child,
-    parameters: FileReviewRequest,
-    success: FileReviewUnitResult,
-    failure: FileReviewFailure,
-    failureMode: "return",
-    prepareInput: prepareReviewBrief,
-    projectResult: projectReviewResult,
-    policy: fileReviewPolicy,
-  });
-
-export class ListReviewUnitsQuery extends Schema.Class<ListReviewUnitsQuery>(
-  "@effect-agent/pr-review/ListReviewUnitsQuery",
-)({
-  scope: Schema.Literal("all"),
-}) {}
-
-export const ListReviewUnits = Tool.make("list_review_units", {
-  description:
-    "List deterministic bounded review units, explicit risk categories, every required discovery pass, and paths the pipeline cannot cover.",
-  parameters: ListReviewUnitsQuery,
-  success: ReviewUnitPlan,
-  failure: PullRequestSourceFailure,
-  failureMode: "error",
-  dependencies: [PullRequestSource],
-}).annotate(ToolExecutionClass, "readonly");
-
-export const FanOutCoordinatorToolkit = Toolkit.make(ListReviewUnits);
-
-export const FanOutCoordinatorToolkitLayer = FanOutCoordinatorToolkit.toLayer({
-  list_review_units: () =>
-    Effect.gen(function* () {
-      const source = yield* PullRequestSource;
-      const files = yield* source.changedFiles;
-      const metadata = yield* source.metadata;
-      return planReviewUnits(files, { totalChangedFiles: metadata.totalChangedFiles });
-    }),
-});
-
-export const makeFanOutReviewInstructions =
-  (options: FanOutInstructionOptions & { readonly maxFindings?: number | undefined } = {}) =>
-  (mission: ReviewMission): string => {
-    const maxFindings = clampMaxFindings(options.maxFindings);
-    return [
-      `You coordinate the bounded multi-pass review of pull request #${mission.number} ("${mission.title}") in ${mission.repository}.`,
-      mission.body.length > 0 ? `Author description:\n${mission.body}` : "No author description.",
-      ...staticGuidanceLines(options.guidance),
-      "1. Call list_review_units exactly once.",
-      '2. For EVERY discoveryPass, call delegate_file_review exactly once with phase "discovery", workId=passId, and the pass unitId/paths/evidenceShardIds/perspective/riskCategories verbatim; candidates must be []. Prefer one bounded parallel batch. Never retry.',
-      '3. Group candidates returned by all successful discovery passes by unit. Deterministically deduplicate byte-identical finding or concern payloads, retaining the first candidate in discoveryPass plan order. For every unit with at least one retained candidate, call delegate_file_review exactly once with phase "verification", workId "<unitId>-verification", perspective "candidate-verification", the unit paths/evidenceShardIds/riskCategories, and EVERY retained candidate copied byte-for-byte. Prefer one bounded parallel batch. Never retry.',
-      "4. Verification is authoritative: rejected candidates must not be reported. The host independently reconstructs publishable findings from exact confirmed assessments, so do not select, rewrite, downgrade, or invent findings.",
-      `5. Return ONLY CodeReview JSON. Write a concise summary of completed and failed stages. Set findings=[] and concerns=[]; the host injects exact confirmed candidates. Copy factual fileSummaries into walkthrough without invention. The host publication cap is ${maxFindings}.`,
-      "No configured pipeline can prove absence of defects. Describe settled work, never an exhaustive or defect-free review.",
-    ].join("\n");
-  };
-
-export const fanOutReviewInstructions = makeFanOutReviewInstructions();
-
-export const defaultFanOutPolicy = AgentPolicy.make({
-  maxTurns: 7,
-  maxToolCalls: 1 + MAX_REVIEW_CHILDREN,
-  maxDuration: "20 minutes",
-  toolConcurrency: 4,
-  repeatedFailureLimit: 3,
-  tokenBudget: 400_000,
-  contextTokenLimit: 150_000,
-  // Coordinator exhaustion cannot become an assured result; exact stage
-  // settlement, not this final prose, determines assurance.
-  onExhaustion: "final-answer",
-});
-
-export interface FanOutReviewSuite {
-  readonly child: ReturnType<typeof makeFileReviewerDefinition>;
-  readonly parent: ReturnType<typeof makeFanOutReviewerDefinition>;
-  readonly delegation: ReturnType<typeof makeFileReviewDelegation>;
-}
-
-const makeFileReviewerDefinition = (options: FanOutInstructionOptions = {}) =>
-  Agent.define("pr-review-worker", {
-    input: FileReviewBrief,
-    output: FileReviewReport,
-    instructions: makeFileReviewerInstructions(options),
-    toolkit: FileReviewToolkit,
-    policy: defaultFileReviewerPolicy,
-    description:
-      "Perform one bounded discovery or independent candidate-verification pass over host-supplied pull-request evidence.",
-    metadata: { deploymentClass: "E", surface: "read-only", stage: "discovery-verification" },
-  });
-
-const delegationToolFor = (delegation: ReturnType<typeof makeFileReviewDelegation>) =>
-  delegation.tool.annotate(ToolExecutionClass, "readonly");
-
-const makeFanOutReviewerDefinition = (
-  options: FanOutInstructionOptions & { readonly maxFindings?: number | undefined },
-  delegation: ReturnType<typeof makeFileReviewDelegation>,
+/**
+ * Run one scheduled pass: execute the child, decode its report, and enforce
+ * the pass contract. Any typed fault — child failure, malformed or misdirected
+ * output — is retried once; budget exhaustion is terminal because a retry
+ * would fail the same way. The settled outcome is a value either way, so one
+ * flaky pass can never fail the whole pipeline.
+ */
+const runReviewPass = <Provider, ModelProvides, ModelRequires>(
+  binding: FileReviewerBinding<Provider, ModelProvides, ModelRequires>,
+  brief: FileReviewBrief,
+  budget: RunBudgetHook<BudgetExceeded | BudgetAdapterError> | undefined,
 ) =>
-  Agent.define("pr-fanout-reviewer", {
-    input: ReviewMission,
-    output: CodeReview,
-    instructions: makeFanOutReviewInstructions(options),
-    toolkit: Toolkit.make(ListReviewUnits, delegationToolFor(delegation)),
-    policy: defaultFanOutPolicy,
-    description:
-      "Coordinate deterministic general/specialist discovery and independent candidate verification over bounded review units.",
-    metadata: {
-      deploymentClass: "E",
-      surface: "read-only",
-      delegation: "S1-attached",
-      assurance: "multi-pass",
-    },
-  });
+  Effect.gen(function* () {
+    const result = yield* AgentRuntime.run(binding, brief, {
+      ...(budget === undefined ? {} : { budget }),
+      estimateCostMicrousd: () => Effect.succeed(500),
+    });
+    const report = yield* Schema.decodeUnknownEffect(FileReviewReport)(result.output).pipe(
+      Effect.mapError((error) =>
+        misbehaved(brief.workId, `child report failed to decode: ${error.message}`),
+      ),
+    );
+    if (
+      report.phase !== brief.phase ||
+      report.workId !== brief.workId ||
+      report.unitId !== brief.unitId
+    ) {
+      return yield* misbehaved(
+        brief.workId,
+        "child report identity does not match the scheduled pass",
+      );
+    }
+    if (brief.phase === "verification") {
+      const violation = validateVerificationReport(brief, report);
+      if (violation !== undefined) return yield* violation;
+    } else if (report.assessments.length > 0) {
+      return yield* misbehaved(
+        brief.workId,
+        "discovery output contained verification-only assessments",
+      );
+    }
+    return { report, turns: result.turns } satisfies SettledPass;
+  }).pipe(
+    Effect.scoped,
+    Effect.retry({ times: 1, while: (error) => error._tag !== "BudgetExceeded" }),
+    Effect.map((settled): PassOutcome => ({ _tag: "settled", ...settled })),
+    Effect.catch((error) =>
+      Effect.succeed<PassOutcome>({ _tag: "failed", errorTag: String(error._tag).slice(0, 256) }),
+    ),
+  );
 
-export interface FanOutSuiteOptions extends FanOutInstructionOptions {
-  readonly maxFindings?: number | undefined;
+interface DiscoveryHarvest {
+  readonly candidates: ReadonlyArray<ReviewCandidate>;
+  readonly fileSummaries: ReadonlyArray<WalkthroughEntry>;
+  readonly discarded: number;
 }
 
-export const makeFanOutReviewSuite = (options: FanOutSuiteOptions = {}): FanOutReviewSuite => {
-  const child = makeFileReviewerDefinition({ guidance: options.guidance });
-  const delegation = makeFileReviewDelegation(child);
+/**
+ * Keep only findings anchored inside the pass's exact assigned evidence and
+ * concerns bound to unit paths. Everything else is discarded and counted —
+ * an invalid anchor invalidates one claim, never the pass that produced it.
+ */
+const harvestDiscovery = (
+  pass: ReviewDiscoveryPass,
+  unit: ReviewUnit,
+  files: ReadonlyArray<ChangedFile>,
+  anchorFiles: ReadonlyArray<ChangedFile>,
+  report: FileReviewReport,
+): DiscoveryHarvest => {
+  const allowed = new Set(pass.paths);
+  let discarded = 0;
+  const keptFindings: Array<ReviewFinding> = [];
+  for (const finding of report.findings) {
+    if (
+      !allowed.has(finding.path) ||
+      anchorViolation(finding, anchorFiles) !== undefined ||
+      !findingAnchorInUnitEvidence(finding, unit, files)
+    ) {
+      discarded += 1;
+      continue;
+    }
+    keptFindings.push(finding);
+  }
+  const keptConcerns: Array<DiscoveredConcern> = [];
+  for (const candidate of report.concerns) {
+    if (candidate.evidencePaths.some((path) => !allowed.has(path))) {
+      discarded += 1;
+      continue;
+    }
+    keptConcerns.push(candidate);
+  }
   return {
-    child,
-    parent: makeFanOutReviewerDefinition(options, delegation),
-    delegation,
+    candidates: [
+      ...keptFindings.map((finding, index) =>
+        FindingCandidate.make({
+          candidateId: `${pass.passId}:finding:${candidateOrdinal(index)}`,
+          workId: pass.passId,
+          unitId: pass.unitId,
+          finding,
+          evidencePaths: [finding.path],
+        }),
+      ),
+      ...keptConcerns.map((candidate, index) =>
+        ConcernCandidate.make({
+          candidateId: `${pass.passId}:concern:${candidateOrdinal(index)}`,
+          workId: pass.passId,
+          unitId: pass.unitId,
+          concern: candidate.concern,
+          evidencePaths: candidate.evidencePaths,
+        }),
+      ),
+    ],
+    fileSummaries: report.fileSummaries.filter((entry) => allowed.has(entry.path)),
+    discarded,
   };
 };
 
-const defaultSuite = makeFanOutReviewSuite();
+interface UnitReviewOutcome {
+  readonly failedPasses: ReadonlyArray<FailedReviewPass>;
+  readonly discoveredCandidates: number;
+  readonly confirmed: ReadonlyArray<{
+    readonly assessment: CandidateAssessment;
+    readonly candidate: ReviewCandidate;
+  }>;
+  readonly rejectedCandidates: number;
+  readonly unsettledCandidates: number;
+  readonly discardedFindings: number;
+  readonly walkthrough: ReadonlyArray<WalkthroughEntry>;
+  readonly turns: number;
+  readonly completedGeneralPasses: number;
+  readonly completedSpecialistPasses: number;
+  readonly requiredVerificationPasses: number;
+  readonly completedVerificationPasses: number;
+  readonly unreviewedPaths: ReadonlyArray<string>;
+}
 
-export const FileReviewer = defaultSuite.child;
-export const FanOutReviewer = defaultSuite.parent;
-export const fileReviewDelegation = defaultSuite.delegation;
-export const DelegateFileReview = delegationToolFor(fileReviewDelegation);
-export const FanOutReviewToolkit = FanOutReviewer.toolkit;
-export const FileReviewDelegationFailure = fileReviewDelegation.containedFailure;
+const reviewUnit = <Provider, ModelProvides, ModelRequires>(
+  binding: FileReviewerBinding<Provider, ModelProvides, ModelRequires>,
+  unit: ReviewUnit,
+  passes: ReadonlyArray<ReviewDiscoveryPass>,
+  input: FanOutPipelineInput,
+) =>
+  Effect.gen(function* () {
+    const evidence = yield* unitEvidence(unit, input.files);
+    const failedPasses: Array<FailedReviewPass> = [];
+    const candidates: Array<ReviewCandidate> = [];
+    const subjects = new Set<string>();
+    const walkthrough: Array<WalkthroughEntry> = [];
+    let discardedFindings = 0;
+    let turns = 0;
+    let completedGeneralPasses = 0;
+    let completedSpecialistPasses = 0;
+    for (const pass of passes) {
+      const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
+      const brief = FileReviewBrief.make({
+        phase: "discovery",
+        workId: pass.passId,
+        unitId: pass.unitId,
+        paths: pass.paths,
+        evidenceShardIds: pass.evidenceShardIds,
+        perspective: pass.perspective,
+        riskCategories: pass.riskCategories,
+        candidates: [],
+        evidence,
+      });
+      const outcome = yield* runReviewPass(binding, brief, input.budget);
+      if (outcome._tag === "failed") {
+        failedPasses.push(
+          FailedReviewPass.make({ workId: pass.passId, stage, errorTag: outcome.errorTag }),
+        );
+        continue;
+      }
+      turns += outcome.turns;
+      if (stage === "specialist") {
+        completedSpecialistPasses += 1;
+      } else {
+        completedGeneralPasses += 1;
+      }
+      const harvest = harvestDiscovery(pass, unit, input.files, input.anchorFiles, outcome.report);
+      discardedFindings += harvest.discarded;
+      if (pass.perspective === "general") walkthrough.push(...harvest.fileSummaries);
+      for (const candidate of harvest.candidates) {
+        const subject = reviewCandidateSubjectKey(candidate);
+        if (subjects.has(subject)) continue;
+        subjects.add(subject);
+        candidates.push(candidate);
+      }
+    }
+    const confirmed: Array<{
+      readonly assessment: CandidateAssessment;
+      readonly candidate: ReviewCandidate;
+    }> = [];
+    let rejectedCandidates = 0;
+    let unsettledCandidates = 0;
+    let completedVerificationPasses = 0;
+    const requiredVerificationPasses = candidates.length > 0 ? 1 : 0;
+    if (candidates.length > 0) {
+      const workId = `${unit.unitId}-verification`;
+      const brief = FileReviewBrief.make({
+        phase: "verification",
+        workId,
+        unitId: unit.unitId,
+        paths: unit.paths,
+        evidenceShardIds: unit.evidenceShards.map((shard) => shard.shardId),
+        perspective: "candidate-verification",
+        riskCategories: unit.riskCategories,
+        candidates,
+        evidence,
+      });
+      const outcome = yield* runReviewPass(binding, brief, input.budget);
+      if (outcome._tag === "failed") {
+        unsettledCandidates = candidates.length;
+        failedPasses.push(
+          FailedReviewPass.make({ workId, stage: "verification", errorTag: outcome.errorTag }),
+        );
+      } else {
+        turns += outcome.turns;
+        completedVerificationPasses = 1;
+        const byId = new Map(candidates.map((candidate) => [candidate.candidateId, candidate]));
+        for (const assessment of outcome.report.assessments) {
+          const candidate = byId.get(assessment.candidateId);
+          if (candidate === undefined) continue;
+          if (assessment.disposition === "confirmed") {
+            confirmed.push({ assessment, candidate });
+          } else {
+            rejectedCandidates += 1;
+          }
+        }
+      }
+    }
+    return {
+      failedPasses,
+      discoveredCandidates: candidates.length,
+      confirmed,
+      rejectedCandidates,
+      unsettledCandidates,
+      discardedFindings,
+      walkthrough,
+      turns,
+      completedGeneralPasses,
+      completedSpecialistPasses,
+      requiredVerificationPasses,
+      completedVerificationPasses,
+      unreviewedPaths: failedPasses.length > 0 ? unit.paths : [],
+    } satisfies UnitReviewOutcome;
+  });
 
-export const fanOutHandlersLayerFor =
-  (delegation: ReturnType<typeof makeFileReviewDelegation>) =>
-  <Provider, ModelProvides, ModelRequires>(
-    childBinding: RuntimeBinding<
-      typeof FileReviewBrief,
-      typeof FileReviewReport,
-      ReturnType<typeof makeFileReviewerInstructions>,
-      Toolkit.Tools<typeof FileReviewToolkit>,
-      Provider,
-      ModelProvides,
-      ModelRequires
-    >,
-  ) =>
-    SubagentRuntime.layer(delegation, childBinding, {
-      mapChildFailure: mapFileReviewChildFailure,
+const countNoun = (count: number, noun: string): string =>
+  `${count} ${noun}${count === 1 ? "" : "s"}`;
+
+const composeSummary = (plan: ReviewUnitPlan, assurance: ReviewAssurance): string => {
+  const requiredDiscovery =
+    assurance.requiredGeneralDiscoveryPasses + assurance.requiredSpecialistPasses;
+  const completedDiscovery =
+    assurance.completedGeneralDiscoveryPasses + assurance.completedSpecialistPasses;
+  const parts = [
+    `Reviewed ${countNoun(plan.totalFiles, "changed file")} across ${countNoun(plan.units.length, "bounded unit")}: ${completedDiscovery}/${requiredDiscovery} discovery and ${assurance.completedVerificationPasses}/${assurance.requiredVerificationPasses} verification pass(es) settled; ${assurance.confirmedCandidates} of ${countNoun(assurance.discoveredCandidates, "discovered candidate")} confirmed by independent verification.`,
+  ];
+  if (assurance.failedPasses.length > 0) {
+    parts.push(
+      `${countNoun(assurance.failedPasses.length, "pass")} did not settle; the affected paths are carried forward and retried on the next run. This is a reviewer-side gap, not a code defect.`,
+    );
+  }
+  if (assurance.discardedInvalidFindings > 0) {
+    parts.push(
+      `${countNoun(assurance.discardedInvalidFindings, "candidate")} discarded for anchors or paths outside the assigned evidence.`,
+    );
+  }
+  if (plan.undiffablePaths.length > 0) {
+    parts.push(
+      `${countNoun(plan.undiffablePaths.length, "path")} had no reviewable textual evidence and keep input coverage incomplete; exclude such paths with ignore globs when that is intended.`,
+    );
+  }
+  if (plan.unassignedPaths.length > 0 || plan.unassignedEvidenceShardCount > 0) {
+    parts.push(
+      "The changeset exceeded the bounded fan-out capacity; unassigned scope is reported under input coverage.",
+    );
+  }
+  parts.push(
+    "No configured pipeline can prove absence of defects; this describes settled work only.",
+  );
+  return parts.join(" ").slice(0, 4_000);
+};
+
+/**
+ * Run the complete host-scheduled fan-out pipeline over one selected
+ * changeset snapshot: plan, independent discovery, exact verification, and a
+ * deterministic host-composed CodeReview from verifier-confirmed candidates
+ * only. The verdict is derived from confirmed severities, never model prose.
+ */
+export const runFanOutReview = <Provider, ModelProvides, ModelRequires>(
+  binding: FileReviewerBinding<Provider, ModelProvides, ModelRequires>,
+  input: FanOutPipelineInput,
+) =>
+  Effect.gen(function* () {
+    const plan = planReviewUnits(input.files, { totalChangedFiles: input.totalChangedFiles });
+    const passesByUnit = new Map<string, Array<ReviewDiscoveryPass>>();
+    for (const pass of plan.discoveryPasses) {
+      const passes = passesByUnit.get(pass.unitId) ?? [];
+      passes.push(pass);
+      passesByUnit.set(pass.unitId, passes);
+    }
+    const outcomes = yield* Effect.forEach(
+      plan.units,
+      (unit) => reviewUnit(binding, unit, passesByUnit.get(unit.unitId) ?? [], input),
+      { concurrency: REVIEW_UNIT_CONCURRENCY },
+    );
+    const failedPasses = outcomes.flatMap((outcome) => outcome.failedPasses);
+    const unsettledCandidates = outcomes.reduce(
+      (total, outcome) => total + outcome.unsettledCandidates,
+      0,
+    );
+    const reasons: Array<string> = [];
+    if (failedPasses.length > 0) {
+      reasons.push(
+        boundedListReason(
+          "configured review passes did not settle",
+          failedPasses.map((pass) => `${pass.workId} (${pass.errorTag})`),
+        ),
+      );
+    }
+    if (unsettledCandidates > 0) {
+      reasons.push(
+        `${unsettledCandidates} discovered candidate(s) did not receive exact verification`,
+      );
+    }
+    const requiredSpecialistPasses = plan.discoveryPasses.filter(
+      (pass) => pass.perspective === "risk-specialist",
+    ).length;
+    const confirmed = outcomes.flatMap((outcome) => outcome.confirmed);
+    const assurance = ReviewAssurance.make({
+      status: reasons.length === 0 ? "settled" : "incomplete",
+      requiredGeneralDiscoveryPasses: plan.discoveryPasses.length - requiredSpecialistPasses,
+      completedGeneralDiscoveryPasses: outcomes.reduce(
+        (total, outcome) => total + outcome.completedGeneralPasses,
+        0,
+      ),
+      requiredSpecialistPasses,
+      completedSpecialistPasses: outcomes.reduce(
+        (total, outcome) => total + outcome.completedSpecialistPasses,
+        0,
+      ),
+      requiredVerificationPasses: outcomes.reduce(
+        (total, outcome) => total + outcome.requiredVerificationPasses,
+        0,
+      ),
+      completedVerificationPasses: outcomes.reduce(
+        (total, outcome) => total + outcome.completedVerificationPasses,
+        0,
+      ),
+      discoveredCandidates: outcomes.reduce(
+        (total, outcome) => total + outcome.discoveredCandidates,
+        0,
+      ),
+      confirmedCandidates: confirmed.length,
+      rejectedCandidates: outcomes.reduce(
+        (total, outcome) => total + outcome.rejectedCandidates,
+        0,
+      ),
+      unsettledCandidates,
+      discardedInvalidFindings: outcomes.reduce(
+        (total, outcome) => total + outcome.discardedFindings,
+        0,
+      ),
+      failedPasses,
+      reasons,
     });
-
-export const fanOutHandlersLayer = fanOutHandlersLayerFor(fileReviewDelegation);
+    const findings = rankAndDedupeFindings(
+      confirmed.flatMap(({ assessment, candidate }) =>
+        candidate._tag === "FindingCandidate"
+          ? [confirmedFindingForPublication(assessment, candidate)]
+          : [],
+      ),
+    );
+    const concerns = rankAndDedupeConcerns(
+      confirmed.flatMap(({ candidate }) =>
+        candidate._tag === "ConcernCandidate" ? [candidate.concern] : [],
+      ),
+    );
+    const walkthrough = outcomes.flatMap((outcome) => outcome.walkthrough);
+    const blocking =
+      findings.some((finding) => finding.severity === "blocking") ||
+      concerns.some((concern) => concern.severity === "blocking");
+    const review = CodeReview.make({
+      summary: composeSummary(plan, assurance),
+      verdict: blocking
+        ? "request-changes"
+        : findings.length > 0 || concerns.length > 0
+          ? "comment"
+          : "approve",
+      findings,
+      ...(concerns.length === 0 ? {} : { concerns }),
+      ...(walkthrough.length === 0 ? {} : { walkthrough }),
+    });
+    return {
+      review,
+      assurance,
+      plan,
+      // Everything not fully reviewed this run and still part of the pull
+      // request carries forward, so the baseline can advance without ever
+      // moving unreviewed scope behind a green check: failed units retry,
+      // whole overflow files review in later installments, and partial or
+      // undiffable files keep the check fail-closed until they are reviewed,
+      // removed, or explicitly ignored.
+      unreviewedPaths: [
+        ...new Set([
+          ...outcomes.flatMap((outcome) => outcome.unreviewedPaths),
+          ...plan.unassignedPaths,
+          ...plan.partialEvidencePaths,
+          ...plan.undiffablePaths,
+        ]),
+      ].sort(),
+      turns: outcomes.reduce((total, outcome) => total + outcome.turns, 0),
+    } satisfies FanOutPipelineOutcome;
+  });

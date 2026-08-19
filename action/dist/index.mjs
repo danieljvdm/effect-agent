@@ -39850,82 +39850,6 @@ class SubagentExecutionFailure extends exports_Schema.TaggedError()("SubagentExe
 var DelegationToolName = exports_Schema.String.pipe(exports_Schema.refine((name) => name.startsWith(delegationToolPrefix) && name.length > delegationToolPrefix.length, { expected: `a delegation Tool name of the form "${delegationToolPrefix}<target>"` }));
 var decodeDelegationToolName = exports_Schema.decodeSync(DelegationToolName);
 var decodeDelegationId = exports_Schema.decodeSync(DelegationId);
-var define = (name, options) => {
-  decodeDelegationToolName(name);
-  for (const childToolName of Object.keys(options.target.toolkit.tools)) {
-    if (isDelegationToolName(childToolName)) {
-      throw new Error(`Subagent.define(${JSON.stringify(name)}): target Agent ${options.target.id} exposes delegation Tool ${childToolName}; S1 rejects every nested delegation (SUB-029)`);
-    }
-  }
-  const delegationId = decodeDelegationId(name);
-  const grant = options.grant ?? SubagentGrant.make({
-    allowedToolNames: Object.keys(options.target.toolkit.tools),
-    maxDepth: 1
-  });
-  const failureMode = options.failureMode ?? "error";
-  const containedFailure = exports_Schema.Union([
-    options.failure,
-    SubagentPrestartDenied,
-    SubagentBudgetExhausted,
-    SubagentProjectionFailure,
-    SubagentExecutionFailure
-  ]);
-  const returnModeTool = exports_Tool.make(name, {
-    description: options.description,
-    parameters: options.parameters,
-    success: exports_Schema.Union([options.success, containedFailure]),
-    failure: exports_Schema.Union([ToolCallWaiting, SubagentDurabilityError]),
-    needsApproval: options.needsApproval
-  });
-  const errorModeTool = exports_Tool.make(name, {
-    description: options.description,
-    parameters: options.parameters,
-    success: options.success,
-    failure: exports_Schema.Union([
-      options.failure,
-      SubagentPrestartDenied,
-      SubagentBudgetExhausted,
-      SubagentProjectionFailure,
-      SubagentExecutionFailure,
-      ToolCallWaiting,
-      SubagentDurabilityError
-    ]),
-    needsApproval: options.needsApproval
-  });
-  const tool = (failureMode === "return" ? returnModeTool : errorModeTool).addDependency(AgentSpawner).addDependency(RunEventSink).addDependency(SubagentDurability).addDependency(IdGenerator);
-  return Object.freeze({
-    ...options,
-    name,
-    delegationId,
-    grant,
-    failureMode,
-    containedFailure,
-    tool
-  });
-};
-var Subagent = { define };
-var millisOfMaxDuration = (policy2) => Math.max(1, Math.ceil(exports_Duration.toMillis(policy2.maxDuration)));
-var delegationCapsFromPolicy = (policy2) => SubagentDelegationCaps.make({
-  maxTotalChildInvocations: policy2.maxChildren,
-  maxConcurrentChildren: policy2.maxConcurrency,
-  maxTurns: policy2.maxChildren * policy2.maxTurns,
-  maxToolCalls: policy2.maxChildren * policy2.maxToolCalls,
-  maxDurationMillis: policy2.maxChildren * millisOfMaxDuration(policy2),
-  ...policy2.maxInputTokens === undefined ? {} : { maxInputTokens: policy2.maxChildren * policy2.maxInputTokens },
-  ...policy2.maxOutputTokens === undefined ? {} : { maxOutputTokens: policy2.maxChildren * policy2.maxOutputTokens },
-  ...policy2.maxCostMicrousd === undefined ? {} : { maxCostMicrousd: policy2.maxChildren * policy2.maxCostMicrousd },
-  ...policy2.maxResultBytes === undefined ? {} : { maxResultBytes: policy2.maxChildren * policy2.maxResultBytes }
-});
-var delegationAllocationFromPolicy = (policy2) => SubagentReservationAmounts.make({
-  turns: policy2.maxTurns,
-  toolCalls: policy2.maxToolCalls,
-  durationMillis: millisOfMaxDuration(policy2),
-  inputTokens: policy2.maxInputTokens ?? 0,
-  outputTokens: policy2.maxOutputTokens ?? 0,
-  costMicrousd: policy2.maxCostMicrousd ?? 0,
-  resultBytes: policy2.maxResultBytes ?? 0
-});
-
 class SubagentDurableAccounting extends exports_Schema.Class("@effect-agent/capabilities/SubagentDurableAccounting")({
   allocation: SubagentReservationAmounts,
   consumed: SubagentReservationAmounts,
@@ -39934,31 +39858,11 @@ class SubagentDurableAccounting extends exports_Schema.Class("@effect-agent/capa
 }) {
 }
 var maxEventTextLength = 4 * 1024;
-var boundedEventText = (text) => text.length <= maxEventTextLength ? text : `${text.slice(0, maxEventTextLength - 1)}…`;
 var ErrorMessage2 = exports_Schema.Struct({ message: exports_Schema.String });
 var ErrorTag2 = exports_Schema.Struct({ _tag: exports_Schema.NonEmptyString });
-var errorMessageOf = (error2) => exports_Option.match(exports_Schema.decodeUnknownOption(ErrorMessage2)(error2), {
-  onNone: () => String(error2),
-  onSome: ({ message }) => message
-});
-var errorTagOf = (error2) => exports_Option.match(exports_Schema.decodeUnknownOption(ErrorTag2)(error2), {
-  onNone: () => "UnknownError",
-  onSome: ({ _tag }) => _tag
-});
-var boundedErrorTag = (tag2) => {
-  const nonEmpty = tag2.length === 0 ? "UnknownError" : tag2;
-  return nonEmpty.length <= maxErrorTagLength ? nonEmpty : nonEmpty.slice(0, maxErrorTagLength);
-};
 var ChildFailureProjection = exports_Schema.Struct({
   errorTag: exports_Schema.NonEmptyString,
   message: exports_Schema.String
-});
-var childFailureProjectionOf = (encodedResult) => exports_Option.match(exports_Schema.decodeUnknownOption(ChildFailureProjection)(encodedResult), {
-  onNone: () => ({
-    errorTag: errorTagOf(encodedResult),
-    message: errorMessageOf(encodedResult)
-  }),
-  onSome: (projection) => projection
 });
 var zeroReservationAmounts = SubagentReservationAmounts.make({
   turns: 0,
@@ -39975,22 +39879,6 @@ var encodeBudgetFailure = exports_Schema.encodeEffect(SubagentBudgetExhausted);
 var encodeExecutionFailure = exports_Schema.encodeEffect(SubagentExecutionFailure);
 var encodeGrant = exports_Schema.encodeEffect(SubagentGrant);
 var encodeAllocationAmounts = exports_Schema.encodeEffect(SubagentReservationAmounts);
-var utf8ByteLength2 = (value4) => {
-  let total = 0;
-  for (const character of value4) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    total += codePoint <= 127 ? 1 : codePoint <= 2047 ? 2 : codePoint <= 65535 ? 3 : 4;
-  }
-  return total;
-};
-var toNatural = (value4) => Number.isFinite(value4) && value4 > 0 ? Math.floor(value4) : 0;
-var observedUsageFromDelta = (delta) => SubagentObservedUsage.make({
-  turns: delta.modelCalls,
-  toolCalls: toNatural(delta.toolCalls),
-  inputTokens: toNatural(delta.inputTokens),
-  outputTokens: toNatural(delta.outputTokens),
-  costMicrousd: toNatural(delta.costMicrousd)
-});
 var neverStartedUsage = SubagentObservedUsage.make({
   turns: 0,
   toolCalls: 0,
@@ -40000,344 +39888,10 @@ var neverStartedUsage = SubagentObservedUsage.make({
   costMicrousd: 0,
   resultBytes: 0
 });
-var settleReservation = (reservations, reservationId, startedAt) => exports_Effect.gen(function* () {
-  const started = yield* exports_Ref.get(startedAt);
-  if (started === undefined) {
-    yield* reservations.observe(reservationId, neverStartedUsage);
-  } else {
-    const now3 = yield* exports_Clock.currentTimeMillis;
-    yield* reservations.observe(reservationId, SubagentObservedUsage.make({ durationMillis: Math.max(0, Math.floor(now3 - started)) }));
-  }
-  yield* reservations.release(reservationId);
-}).pipe(exports_Effect.orDie);
-
-class GenuineEngineSignal {
-  signal;
-  _tag = "GenuineEngineSignal";
-  constructor(signal) {
-    this.signal = signal;
-  }
-}
-var wrapEngineSignal = (signal) => new GenuineEngineSignal(signal);
-var layer15 = (delegation, childBinding, options) => {
-  const caps = options.parentCaps ?? delegationCapsFromPolicy(delegation.policy);
-  const allocation = delegationAllocationFromPolicy(delegation.policy);
-  const toolkit = exports_Toolkit.make(delegation.tool);
-  const contained = delegation.failureMode === "return";
-  const encodeChildInput = exports_Schema.encodeEffect(delegation.target.input);
-  const encodeSuccess = exports_Schema.encodeEffect(delegation.success);
-  const decodeChildOutput = exports_Schema.decodeUnknownEffect(delegation.target.output);
-  const encodeDeclaredFailure = exports_Schema.encodeEffect(delegation.failure);
-  const childToolNames = Object.keys(delegation.target.toolkit.tools);
-  const durableDeclaration = options.durable === undefined ? undefined : {
-    targetDigests: {
-      agent: options.durable.targetDigests.agent,
-      model: options.durable.targetDigests.model,
-      tools: options.durable.targetDigests.tools
-    }
-  };
-  const executionFailure = (classification, errorTag2, message, child) => SubagentExecutionFailure.make({
-    delegationId: delegation.delegationId,
-    targetAgentId: delegation.target.id,
-    classification,
-    errorTag: boundedErrorTag(errorTag2),
-    message: boundedEventText(message),
-    ...child === undefined ? {} : {
-      childConversationId: child.childConversationId,
-      childSubmissionId: child.childSubmissionId,
-      childRunId: child.childRunId
-    }
-  });
-  const prestartDenied = (reason, message) => SubagentPrestartDenied.make({
-    delegationId: delegation.delegationId,
-    targetAgentId: delegation.target.id,
-    reason,
-    message: boundedEventText(message)
-  });
-  const build2 = exports_Effect.gen(function* () {
-    const captured = yield* exports_Effect.context();
-    const encodedGrant = yield* encodeGrant(delegation.grant).pipe(exports_Effect.orDie);
-    const encodedAllocation = yield* encodeAllocationAmounts(allocation).pipe(exports_Effect.orDie);
-    const conservativeAccounting = yield* encodeDurableAccounting(SubagentDurableAccounting.make({
-      allocation,
-      consumed: allocation,
-      released: zeroReservationAmounts,
-      basis: "reserved-conservative"
-    })).pipe(exports_Effect.orDie);
-    const invoke = exports_Effect.fn(`SubagentRuntime.${delegation.name}`)(function* (parameters, handlerContext) {
-      const spawner = yield* AgentSpawner;
-      const sink = yield* RunEventSink;
-      const reservations = yield* SubagentReservations;
-      const toolCallId = yield* exports_Schema.decodeUnknownEffect(ToolCallId)(handlerContext.toolCallId).pipe(exports_Effect.orDie);
-      if (spawner.depth + 1 > delegation.grant.maxDepth) {
-        return yield* prestartDenied("nested-delegation", `Delegation ${delegation.name} was requested at depth ${spawner.depth}; S1 rejects every nested delegation`);
-      }
-      for (const childToolName of childToolNames) {
-        if (isDelegationToolName(childToolName)) {
-          return yield* prestartDenied("nested-delegation", `Child Toolkit exposes delegation Tool ${childToolName}; S1 rejects every nested delegation`);
-        }
-        if (!delegation.grant.allowedToolNames.includes(childToolName)) {
-          return yield* prestartDenied("grant-violation", `Child Tool ${childToolName} is outside the delegation grant ceiling`);
-        }
-      }
-      const prepared = yield* delegation.prepareInput(parameters, {
-        delegationId: delegation.delegationId,
-        toolCallId,
-        parent: spawner.parent
-      });
-      const encodedInput = yield* encodeChildInput(prepared).pipe(exports_Effect.mapError(() => SubagentProjectionFailure.make({
-        delegationId: delegation.delegationId,
-        stage: "input",
-        message: "Prepared child input did not satisfy the target Agent input Schema"
-      })));
-      const parentRunId = spawner.parent.runId;
-      yield* reservations.registerParent(parentRunId, caps).pipe(exports_Effect.catchTag("SubagentParentBudgetConflict", () => exports_Effect.fail(prestartDenied("budget-conflict", "The parent Run is already registered with different delegation caps; supply shared parentCaps explicitly"))));
-      const reservationId = makeBudgetReservationId(parentRunId, toolCallId);
-      const startedAt = yield* exports_Ref.make(undefined);
-      yield* exports_Effect.acquireRelease(reservations.reserve(SubagentReservationRequest.make({
-        parentRunId,
-        parentToolCallId: toolCallId,
-        allocation
-      })).pipe(exports_Effect.catchTags({
-        SubagentReservationConflict: (conflict) => exports_Effect.die(conflict),
-        SubagentParentBudgetUnknown: (unknown2) => exports_Effect.die(unknown2)
-      })), () => settleReservation(reservations, reservationId, startedAt));
-      yield* reservations.acquireChildSlot(parentRunId).pipe(exports_Effect.catchTag("SubagentParentBudgetUnknown", (unknown2) => exports_Effect.die(unknown2)));
-      const seededChild = options.child;
-      const seededBudget = seededChild?.budget;
-      const budget = {
-        guard: seededBudget === undefined ? (effect2) => effect2 : (effect2) => seededBudget.guard(effect2),
-        consume: (delta) => reservations.observe(reservationId, observedUsageFromDelta(delta)).pipe(exports_Effect.orDie, exports_Effect.andThen(seededBudget === undefined ? exports_Effect.void : seededBudget.consume(delta)))
-      };
-      const allowanceOption = delegation.toolCallAllowance;
-      const extracted = allowanceOption?.fromParameters?.(parameters);
-      const requestedAllowance = allowanceOption === undefined ? undefined : extracted !== undefined && Number.isFinite(extracted) ? extracted : Number.isFinite(allowanceOption.default) ? allowanceOption.default : delegation.policy.maxToolCalls;
-      const toolCallAllowance = requestedAllowance === undefined ? undefined : Math.min(Math.max(1, Math.floor(requestedAllowance)), delegation.policy.maxToolCalls);
-      const childOptions = {
-        ...seededChild,
-        budget,
-        ...toolCallAllowance === undefined ? {} : { toolCallAllowance }
-      };
-      yield* exports_Ref.set(startedAt, yield* exports_Clock.currentTimeMillis);
-      const child = yield* spawner.spawn(childBinding, encodedInput, { delegationId: delegation.delegationId, parentToolCallId: toolCallId }, childOptions);
-      const payload = {
-        toolCallId,
-        delegationId: delegation.delegationId,
-        childConversationId: child.conversationId,
-        childRunId: child.runId,
-        targetAgentId: delegation.target.id,
-        depth: child.parentLink.depth
-      };
-      const emit = (event) => sink.emit(event).pipe(exports_Effect.orDie);
-      yield* emit({ _tag: "SubagentRequested", ...payload });
-      yield* emit({ _tag: "SubagentStarted", ...payload });
-      const joined = exports_Effect.gen(function* () {
-        const result4 = yield* child.await.pipe(exports_Effect.catch((childFailure) => emit({
-          _tag: "SubagentFailed",
-          ...payload,
-          errorTag: errorTagOf(childFailure),
-          message: boundedEventText(errorMessageOf(childFailure))
-        }).pipe(exports_Effect.andThen(exports_Effect.fail(options.mapChildFailure(childFailure))))), exports_Effect.timeoutOrElse({
-          duration: exports_Duration.millis(allocation.durationMillis),
-          orElse: () => emit({
-            _tag: "SubagentFailed",
-            ...payload,
-            errorTag: "SubagentBudgetExhausted",
-            message: `Attached child exceeded its ${allocation.durationMillis}ms delegation duration budget`
-          }).pipe(exports_Effect.andThen(exports_Effect.fail(SubagentBudgetExhausted.make({
-            parentRunId,
-            dimension: "duration",
-            limitValue: allocation.durationMillis,
-            observedValue: allocation.durationMillis
-          }))))
-        }));
-        yield* emit({
-          _tag: "SubagentCompleted",
-          ...payload,
-          turns: result4.turns,
-          finishReason: result4.finishReason,
-          ...result4.exhausted !== undefined ? { exhausted: result4.exhausted } : {}
-        });
-        const projected = yield* delegation.projectResult(result4.output, {
-          budgetExhausted: result4.finishReason === "budget-exhausted"
-        }, parameters);
-        const encodedResult = yield* encodeSuccess(projected).pipe(exports_Effect.mapError(() => SubagentProjectionFailure.make({
-          delegationId: delegation.delegationId,
-          stage: "result",
-          message: "Projected child result did not satisfy the delegation success Schema"
-        })));
-        const resultBytes = utf8ByteLength2(JSON.stringify(encodedResult) ?? "");
-        yield* reservations.observe(reservationId, SubagentObservedUsage.make({ resultBytes })).pipe(exports_Effect.orDie);
-        if (delegation.policy.maxResultBytes !== undefined && resultBytes > delegation.policy.maxResultBytes) {
-          yield* emit({
-            _tag: "SubagentFailed",
-            ...payload,
-            errorTag: "SubagentBudgetExhausted",
-            message: `Projected child result of ${resultBytes} bytes exceeds the ${delegation.policy.maxResultBytes}-byte delegation budget`
-          });
-          return yield* SubagentBudgetExhausted.make({
-            parentRunId,
-            dimension: "result-bytes",
-            limitValue: delegation.policy.maxResultBytes,
-            observedValue: resultBytes
-          });
-        }
-        yield* emit({ _tag: "SubagentJoined", ...payload });
-        return projected;
-      });
-      return yield* joined.pipe(exports_Effect.onInterrupt(() => sink.emit({
-        _tag: "SubagentInterrupted",
-        ...payload,
-        reason: "Parent Run interrupted the attached child before it settled"
-      }).pipe(exports_Effect.ignore)));
-    });
-    const invokeDurable = exports_Effect.fn(`SubagentRuntime.${delegation.name}.durable`)(function* (parameters, handlerContext, durability) {
-      const spawner = yield* AgentSpawner;
-      const sink = yield* RunEventSink;
-      const toolCallId = yield* exports_Schema.decodeUnknownEffect(ToolCallId)(handlerContext.toolCallId).pipe(exports_Effect.orDie);
-      const emit = (event) => sink.emit(event).pipe(exports_Effect.orDie);
-      if (durableDeclaration === undefined) {
-        return yield* executionFailure("declaration-unavailable", "SubagentDeclarationUnavailable", `Delegation ${delegation.name} runs under a durable coordinator but its handler Layer was constructed without SubagentRuntimeOptions.durable`);
-      }
-      const depth = spawner.depth + 1;
-      if (depth > delegation.grant.maxDepth) {
-        return yield* prestartDenied("nested-delegation", `Delegation ${delegation.name} was requested at depth ${spawner.depth}; S2 rejects every nested delegation`);
-      }
-      for (const childToolName of childToolNames) {
-        if (isDelegationToolName(childToolName)) {
-          return yield* prestartDenied("nested-delegation", `Child Toolkit exposes delegation Tool ${childToolName}; S2 rejects every nested delegation`);
-        }
-        if (!delegation.grant.allowedToolNames.includes(childToolName)) {
-          return yield* prestartDenied("grant-violation", `Child Tool ${childToolName} is outside the delegation grant ceiling`);
-        }
-      }
-      const prepared = yield* delegation.prepareInput(parameters, {
-        delegationId: delegation.delegationId,
-        toolCallId,
-        parent: spawner.parent
-      });
-      const encodedInput = yield* encodeChildInput(prepared).pipe(exports_Effect.mapError(() => SubagentProjectionFailure.make({
-        delegationId: delegation.delegationId,
-        stage: "input",
-        message: "Prepared child input did not satisfy the target Agent input Schema"
-      })));
-      const status = yield* exports_Effect.mapError(wrapEngineSignal)(durability.establish({
-        toolCallId,
-        delegationId: delegation.delegationId,
-        targetAgentId: delegation.target.id,
-        depth,
-        targetDigests: durableDeclaration.targetDigests,
-        encodedChildInput: encodedInput,
-        encodedGrant,
-        encodedAllocation
-      }));
-      switch (status._tag) {
-        case "denied": {
-          return yield* executionFailure("establishment-denied", status.errorTag, status.message);
-        }
-        case "waiting": {
-          const payload = {
-            toolCallId,
-            delegationId: delegation.delegationId,
-            childConversationId: status.childConversationId,
-            childRunId: status.childRunId,
-            targetAgentId: delegation.target.id,
-            depth
-          };
-          yield* emit({ _tag: "SubagentRequested", ...payload });
-          yield* emit({ _tag: "SubagentStarted", ...payload });
-          return yield* exports_Effect.mapError(wrapEngineSignal)(durability.waiting(toolCallId, status));
-        }
-        case "settled": {
-          const payload = {
-            toolCallId,
-            delegationId: delegation.delegationId,
-            childConversationId: status.childConversationId,
-            childRunId: status.childRunId,
-            targetAgentId: delegation.target.id,
-            depth
-          };
-          const settleFailure = (failure, encodedFailure) => emit({
-            _tag: "SubagentFailed",
-            ...payload,
-            errorTag: errorTagOf(failure),
-            message: boundedEventText(errorMessageOf(failure))
-          }).pipe(exports_Effect.andThen(exports_Effect.mapError(wrapEngineSignal)(durability.join({
-            toolCallId,
-            encodedResult: encodedFailure,
-            isFailure: !contained,
-            encodedAccounting: conservativeAccounting
-          }))), exports_Effect.andThen(exports_Effect.fail(failure)));
-          if (status.outcome !== "completed") {
-            const projection = childFailureProjectionOf(status.encodedResult);
-            const failure = executionFailure(status.outcome === "aborted" ? "child-aborted" : projection.errorTag === "ChildCompatibilityFailure" ? "child-compatibility" : "child-failed", projection.errorTag, projection.message, status);
-            const encodedFailure = yield* encodeExecutionFailure(failure).pipe(exports_Effect.orDie);
-            return yield* settleFailure(failure, encodedFailure);
-          }
-          const decoded = yield* decodeChildOutput(status.encodedResult).pipe(exports_Effect.catch(() => {
-            const failure = SubagentProjectionFailure.make({
-              delegationId: delegation.delegationId,
-              stage: "result",
-              message: "Settled child output did not satisfy the target Agent output Schema"
-            });
-            return encodeProjectionFailure(failure).pipe(exports_Effect.orDie, exports_Effect.flatMap((encodedFailure) => settleFailure(failure, encodedFailure)));
-          }));
-          const projected = yield* delegation.projectResult(decoded, {
-            budgetExhausted: status.finishReason === "budget-exhausted"
-          }, parameters).pipe(exports_Effect.catch((declared) => encodeDeclaredFailure(declared).pipe(exports_Effect.orDie, exports_Effect.flatMap((encodedFailure) => settleFailure(declared, encodedFailure)))));
-          const encodedResult = yield* encodeSuccess(projected).pipe(exports_Effect.catch(() => {
-            const failure = SubagentProjectionFailure.make({
-              delegationId: delegation.delegationId,
-              stage: "result",
-              message: "Projected child result did not satisfy the delegation success Schema"
-            });
-            return encodeProjectionFailure(failure).pipe(exports_Effect.orDie, exports_Effect.flatMap((encodedFailure) => settleFailure(failure, encodedFailure)));
-          }));
-          const resultBytes = utf8ByteLength2(JSON.stringify(encodedResult) ?? "");
-          if (delegation.policy.maxResultBytes !== undefined && resultBytes > delegation.policy.maxResultBytes) {
-            const failure = SubagentBudgetExhausted.make({
-              parentRunId: spawner.parent.runId,
-              dimension: "result-bytes",
-              limitValue: delegation.policy.maxResultBytes,
-              observedValue: resultBytes
-            });
-            const encodedFailure = yield* encodeBudgetFailure(failure).pipe(exports_Effect.orDie);
-            return yield* settleFailure(failure, encodedFailure);
-          }
-          yield* exports_Effect.mapError(wrapEngineSignal)(durability.join({
-            toolCallId,
-            encodedResult,
-            isFailure: false,
-            encodedAccounting: conservativeAccounting
-          }));
-          yield* emit({ _tag: "SubagentJoined", ...payload });
-          return projected;
-        }
-      }
-    });
-    const containSignals = (failure) => failure instanceof GenuineEngineSignal ? exports_Effect.fail(failure.signal) : exports_Effect.succeed(failure);
-    const unwrapSignals = (failure) => failure instanceof GenuineEngineSignal ? failure.signal : failure;
-    const handlerImpl = (parameters, handlerContext) => exports_Effect.gen(function* () {
-      const spawner = yield* AgentSpawner;
-      const sink = yield* RunEventSink;
-      const durability = yield* SubagentDurability;
-      if (durability.mode === "durable") {
-        const durable = invokeDurable(parameters, handlerContext, durability).pipe(exports_Effect.scoped, exports_Effect.provideService(AgentSpawner, spawner), exports_Effect.provideService(RunEventSink, sink), exports_Effect.provideService(SubagentDurability, durability), exports_Effect.provide(captured));
-        return yield* contained ? durable.pipe(exports_Effect.catch(containSignals)) : durable.pipe(exports_Effect.mapError(unwrapSignals));
-      }
-      const ephemeral = invoke(parameters, handlerContext).pipe(exports_Effect.scoped, exports_Effect.provideService(AgentSpawner, spawner), exports_Effect.provideService(RunEventSink, sink), exports_Effect.provideService(SubagentDurability, durability), exports_Effect.provide(captured));
-      return yield* contained ? ephemeral.pipe(exports_Effect.catch(containSignals)) : ephemeral.pipe(exports_Effect.mapError(unwrapSignals));
-    });
-    const handler = handlerImpl;
-    return { [delegation.name]: handler };
-  });
-  return toolkit.toLayer(build2);
-};
-var SubagentRuntime = { layer: layer15 };
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/FetchHttpClient.js
 var exports_FetchHttpClient = {};
 __export(exports_FetchHttpClient, {
-  layer: () => layer16,
+  layer: () => layer15,
   RequestInit: () => RequestInit,
   Fetch: () => Fetch
 });
@@ -42149,7 +41703,7 @@ var fetch = /* @__PURE__ */ make58((request3, url2, signal, fiber3) => {
   }
   return send(undefined);
 });
-var layer16 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
+var layer15 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
 // packages/pr-review/src/internal/effort.ts
 var EFFORT_ALIASES = {
   low: 0,
@@ -42714,6 +42268,223 @@ var PullRequestReviewer = Agent.define("pr-reviewer", {
   metadata: { deploymentClass: "E", surface: "read-only" }
 });
 
+// packages/pr-review/src/internal/coverage.ts
+class FailedReviewUnit extends exports_Schema.Class("@effect-agent/pr-review/FailedReviewUnit")({
+  unitId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(32)),
+  errorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256))
+}) {
+}
+
+class ReviewCoverage extends exports_Schema.Class("@effect-agent/pr-review/ReviewCoverage")({
+  status: exports_Schema.Literals(["complete", "incomplete"]),
+  requiredPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  reviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  unreviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  failedUnits: exports_Schema.Array(FailedReviewUnit).check(exports_Schema.isMaxLength(8)),
+  reasons: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000))).check(exports_Schema.isMaxLength(32))
+}) {
+}
+
+class ReviewInputCoverage extends exports_Schema.Class("@effect-agent/pr-review/ReviewInputCoverage")({
+  status: exports_Schema.Literals(["complete", "incomplete"]),
+  requiredPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  assignedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  partialPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  unassignedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  undiffablePaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  reasons: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000))).check(exports_Schema.isMaxLength(20))
+}) {
+}
+
+class FailedReviewPass extends exports_Schema.Class("@effect-agent/pr-review/FailedReviewPass")({
+  workId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(96)),
+  stage: exports_Schema.Literals(["discovery", "specialist", "verification"]),
+  errorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256))
+}) {
+}
+
+class ReviewAssurance extends exports_Schema.Class("@effect-agent/pr-review/ReviewAssurance")({
+  status: exports_Schema.Literals(["settled", "incomplete", "unverified"]),
+  requiredGeneralDiscoveryPasses: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  completedGeneralDiscoveryPasses: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  requiredSpecialistPasses: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  completedSpecialistPasses: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  requiredVerificationPasses: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  completedVerificationPasses: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  discoveredCandidates: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  confirmedCandidates: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  rejectedCandidates: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  unsettledCandidates: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  discardedInvalidFindings: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  failedPasses: exports_Schema.Array(FailedReviewPass).check(exports_Schema.isMaxLength(64)),
+  reasons: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000))).check(exports_Schema.isMaxLength(32))
+}) {
+}
+var toolTrace = (events2) => {
+  const declared = new Map;
+  const succeeded = new Map;
+  const failed = new Map;
+  for (const event of events2) {
+    if (event._tag === "ToolCallDeclared")
+      declared.set(event.toolCallId, event);
+    if (event._tag === "ToolCallSucceeded")
+      succeeded.set(event.toolCallId, event);
+    if (event._tag === "ToolCallFailed")
+      failed.set(event.toolCallId, event);
+  }
+  return { declared, succeeded, failed };
+};
+var sortedUnique = (values3) => [...new Set(values3)].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+var boundedListReason = (label, values3) => {
+  const items = sortedUnique(values3);
+  const prefix = `${label} (${items.length}): `;
+  let rendered = prefix;
+  for (let index2 = 0;index2 < items.length; index2 += 1) {
+    const item = items[index2] ?? "";
+    const separator = index2 === 0 ? "" : ", ";
+    const omitted = items.length - index2 - 1;
+    const suffix = omitted === 0 ? "" : ` … (+${omitted} more)`;
+    if (`${rendered}${separator}${item}${suffix}`.length > 1000) {
+      const omission = `… (+${items.length - index2} more)`;
+      return `${rendered.slice(0, 1000 - omission.length)}${omission}`;
+    }
+    rendered = `${rendered}${separator}${item}`;
+  }
+  return rendered;
+};
+var anchorSurfaceAdjusted = (inputCoverage, anchorFiles, totalAnchorFiles) => anchorFiles.length >= totalAnchorFiles ? inputCoverage : ReviewInputCoverage.make({
+  ...inputCoverage,
+  status: "incomplete",
+  reasons: [
+    ...inputCoverage.reasons,
+    `full pull-request anchor surface exposed ${anchorFiles.length} of ${totalAnchorFiles} required files`
+  ]
+});
+var flatAssurance = () => ReviewAssurance.make({
+  status: "unverified",
+  requiredGeneralDiscoveryPasses: 1,
+  completedGeneralDiscoveryPasses: 1,
+  requiredSpecialistPasses: 0,
+  completedSpecialistPasses: 0,
+  requiredVerificationPasses: 0,
+  completedVerificationPasses: 0,
+  discoveredCandidates: 0,
+  confirmedCandidates: 0,
+  rejectedCandidates: 0,
+  unsettledCandidates: 0,
+  discardedInvalidFindings: 0,
+  failedPasses: [],
+  reasons: [
+    "flat review has no independent candidate-verification pass; use the fan-out pipeline for a settled assurance result"
+  ]
+});
+var assessFlatReview = (input) => {
+  const trace3 = toolTrace(input.events);
+  const requiredPaths = sortedUnique(input.files.map((file2) => file2.path));
+  const assigned = new Set;
+  const partial = new Set;
+  const failedPaths = new Set;
+  for (const [toolCallId, declaration] of trace3.declared) {
+    if (declaration.toolName !== "read_file_diff")
+      continue;
+    const query = exports_Schema.decodeUnknownOption(FileDiffQuery)(declaration.parameters);
+    if (exports_Option.isNone(query))
+      continue;
+    const success = trace3.succeeded.get(toolCallId);
+    if (success !== undefined) {
+      assigned.add(query.value.path);
+      const view = exports_Schema.decodeUnknownOption(FileDiffView)(success.result);
+      if (exports_Option.isSome(view) && view.value.truncated)
+        partial.add(query.value.path);
+    }
+    if (trace3.failed.has(toolCallId))
+      failedPaths.add(query.value.path);
+  }
+  const undiffable = new Set(input.files.filter((file2) => !isReviewableFile(file2)).map((file2) => file2.path));
+  const unassigned = requiredPaths.filter((path) => !undiffable.has(path) && (!assigned.has(path) || failedPaths.has(path)));
+  const reasons = [];
+  if (input.files.length < input.totalFiles) {
+    reasons.push(`review range exposed ${input.files.length} of ${input.totalFiles} required files`);
+  }
+  if (undiffable.size > 0) {
+    reasons.push(boundedListReason("required paths have no reviewable diff or bounded text", undiffable));
+  }
+  if (failedPaths.size > 0)
+    reasons.push(boundedListReason("diff reads failed", failedPaths));
+  if (partial.size > 0) {
+    reasons.push(boundedListReason("model-visible diff evidence was truncated", partial));
+  }
+  if (unassigned.length > 0) {
+    reasons.push(boundedListReason("required paths received no successful diff input", unassigned));
+  }
+  const inputCoverage = anchorSurfaceAdjusted(ReviewInputCoverage.make({
+    status: reasons.length === 0 ? "complete" : "incomplete",
+    requiredPaths,
+    assignedPaths: sortedUnique(assigned),
+    partialPaths: sortedUnique(partial),
+    unassignedPaths: sortedUnique(unassigned),
+    undiffablePaths: sortedUnique(undiffable),
+    reasons
+  }), input.anchorFiles, input.totalAnchorFiles);
+  return {
+    inputCoverage,
+    assurance: flatAssurance(),
+    unreviewedPaths: sortedUnique([...unassigned, ...undiffable])
+  };
+};
+var fanOutInputCoverage = (input) => {
+  const plan = input.plan;
+  const assignedPaths = sortedUnique(plan.units.flatMap((unit) => unit.paths));
+  const unassignedPaths = sortedUnique(plan.unassignedPaths);
+  const reasons = [];
+  if (plan.truncated) {
+    reasons.push(`review range exposed ${input.files.length} of ${input.totalFiles} required files`);
+  }
+  if (plan.undiffablePaths.length > 0) {
+    reasons.push(boundedListReason("required paths have no reviewable diff or bounded text", plan.undiffablePaths));
+  }
+  if (plan.partialEvidencePaths.length > 0) {
+    reasons.push(boundedListReason("fan-out capacity left some deterministic evidence shards unassigned", plan.partialEvidencePaths));
+  }
+  if (plan.unassignedEvidenceShardCount > 0) {
+    reasons.push(`${plan.unassignedEvidenceShardCount} deterministic evidence shard(s) exceeded fan-out capacity`);
+    reasons.push(boundedListReason(`unassigned evidence shard identifier sample (${plan.unassignedEvidenceShardIds.length} of ${plan.unassignedEvidenceShardCount})`, plan.unassignedEvidenceShardIds));
+  }
+  if (plan.unassignedPaths.length > 0) {
+    reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
+  }
+  return anchorSurfaceAdjusted(ReviewInputCoverage.make({
+    status: reasons.length === 0 ? "complete" : "incomplete",
+    requiredPaths: sortedUnique(input.files.map((file2) => file2.path)),
+    assignedPaths,
+    partialPaths: plan.partialEvidencePaths,
+    unassignedPaths,
+    undiffablePaths: sortedUnique(plan.undiffablePaths),
+    reasons
+  }), input.anchorFiles, input.totalAnchorFiles);
+};
+var compatibilityCoverage = (inputCoverage, assurance) => {
+  const assuranceIncomplete = assurance.status === "incomplete";
+  const failedUnits = new Map;
+  for (const pass of assurance.failedPasses) {
+    const unitId = pass.workId.slice(0, "unit-000".length);
+    if (!failedUnits.has(unitId)) {
+      failedUnits.set(unitId, FailedReviewUnit.make({ unitId, errorTag: `${pass.stage}:${pass.errorTag}` }));
+    }
+  }
+  return ReviewCoverage.make({
+    status: inputCoverage.status === "complete" && !assuranceIncomplete ? "complete" : "incomplete",
+    requiredPaths: inputCoverage.requiredPaths,
+    reviewedPaths: inputCoverage.assignedPaths,
+    unreviewedPaths: sortedUnique([
+      ...inputCoverage.partialPaths,
+      ...inputCoverage.unassignedPaths
+    ]),
+    failedUnits: [...failedUnits.values()].slice(0, 8),
+    reasons: [...inputCoverage.reasons, ...assuranceIncomplete ? assurance.reasons : []]
+  });
+};
+
 // packages/pr-review/src/internal/review-units.ts
 var MAX_REVIEW_UNITS = 8;
 var MAX_UNIT_FILES = 12;
@@ -43001,12 +42772,24 @@ var rankAndDedupeFindings = (findings) => {
     return left.startLine - right.startLine;
   }).slice(0, MAX_MERGED_FINDINGS);
 };
+var rankAndDedupeConcerns = (concerns) => {
+  const byContent = new Map;
+  for (const concern of concerns) {
+    const key = `${concern.title}\x00${concern.body}`;
+    const previous = byContent.get(key);
+    if (previous === undefined || severityRank[concern.severity] < severityRank[previous.severity]) {
+      byContent.set(key, concern);
+    }
+  }
+  return [...byContent.values()].sort((left, right) => severityRank[left.severity] - severityRank[right.severity]).slice(0, 10);
+};
 
 // packages/pr-review/src/internal/fan-out.ts
 var MAX_CHILD_FINDINGS = 6;
 var MAX_CHILD_CONCERNS = 3;
 var MAX_UNIT_CANDIDATES = (MAX_CHILD_FINDINGS + MAX_CHILD_CONCERNS) * 2;
 var MAX_REVIEW_CHILDREN = MAX_REVIEW_UNITS * 3;
+var REVIEW_UNIT_CONCURRENCY = 4;
 var MAX_FILE_REVIEW_TOOL_CALLS = 1;
 var ReviewWorkPhase = exports_Schema.Literals(["discovery", "verification"]);
 var ReviewWorkPerspective = exports_Schema.Literals([
@@ -43064,18 +42847,6 @@ var RiskCategories = exports_Schema.Array(ReviewRiskCategory).check(exports_Sche
 var Candidates = exports_Schema.Array(ReviewCandidate).check(exports_Schema.isMaxLength(MAX_UNIT_CANDIDATES));
 var EvidenceShardIds2 = exports_Schema.Array(ReviewEvidenceShardId).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_EVIDENCE_SHARDS));
 
-class FileReviewRequest extends exports_Schema.Class("@effect-agent/pr-review/FileReviewRequest")({
-  phase: ReviewWorkPhase,
-  workId: ReviewPassId,
-  unitId: ReviewUnitId,
-  paths: UnitPaths,
-  evidenceShardIds: EvidenceShardIds2,
-  perspective: ReviewWorkPerspective,
-  riskCategories: RiskCategories,
-  candidates: Candidates
-}) {
-}
-
 class FileReviewEvidence extends exports_Schema.Class("@effect-agent/pr-review/FileReviewEvidence")({
   shardId: ReviewEvidenceShardId,
   path: ChangedPath,
@@ -43111,28 +42882,11 @@ class FileReviewReport extends exports_Schema.Class("@effect-agent/pr-review/Fil
 }) {
 }
 
-class FileReviewUnitResult extends exports_Schema.Class("@effect-agent/pr-review/FileReviewUnitResult")({
-  phase: ReviewWorkPhase,
-  workId: ReviewPassId,
-  unitId: ReviewUnitId,
-  candidates: Candidates,
-  fileSummaries: exports_Schema.Array(WalkthroughEntry).check(exports_Schema.isMaxLength(MAX_UNIT_FILES)),
-  assessments: exports_Schema.Array(CandidateAssessment).check(exports_Schema.isMaxLength(MAX_UNIT_CANDIDATES))
-}) {
-}
-
-class FileReviewUnitFailed extends exports_Schema.TaggedError()("FileReviewUnitFailed", {
-  childErrorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256)),
-  message: exports_Schema.String.check(exports_Schema.isMaxLength(400))
-}) {
-}
-
-class FileReviewWorkRejected extends exports_Schema.TaggedError()("FileReviewWorkRejected", {
+class ReviewPassMisbehaved extends exports_Schema.TaggedError()("ReviewPassMisbehaved", {
   workId: ReviewPassId,
   reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(600))
 }) {
 }
-var FileReviewFailure = exports_Schema.Union([FileReviewUnitFailed, FileReviewWorkRejected]);
 var staticGuidanceLines = (guidance) => {
   if (guidance === undefined)
     return [];
@@ -43175,7 +42929,6 @@ var makeFileReviewerInstructions = (options3 = {}) => (brief) => {
 };
 var fileReviewerInstructions = makeFileReviewerInstructions();
 var FileReviewToolkit = exports_Toolkit.empty;
-var FileReviewToolkitLayer = exports_Layer.empty;
 var defaultFileReviewerPolicy = AgentPolicy.make({
   maxTurns: 6,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
@@ -43187,62 +42940,25 @@ var defaultFileReviewerPolicy = AgentPolicy.make({
   toolResultBounds: ToolResultBounds.make({ maxBytes: REVIEW_TOOL_RESULT_MAX_BYTES }),
   onExhaustion: "fail"
 });
-var fileReviewPolicy = SubagentPolicy.make({
-  maxChildren: MAX_REVIEW_CHILDREN,
-  maxConcurrency: 4,
-  maxTurns: 6,
-  maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "6 minutes",
-  maxResultBytes: 256 * 1024
+var makeFileReviewerDefinition = (options3 = {}) => Agent.define("pr-review-worker", {
+  input: FileReviewBrief,
+  output: FileReviewReport,
+  instructions: makeFileReviewerInstructions(options3),
+  toolkit: FileReviewToolkit,
+  policy: defaultFileReviewerPolicy,
+  description: "Perform one bounded discovery or independent candidate-verification pass over host-supplied pull-request evidence.",
+  metadata: { deploymentClass: "E", surface: "read-only", stage: "discovery-verification" }
 });
-var mapFileReviewChildFailure = (failure) => FileReviewUnitFailed.make({
-  childErrorTag: failure._tag,
-  message: (failure.message ?? "").slice(0, 400)
-});
-var sameStrings = (left, right) => left.length === right.length && left.every((value4, index2) => value4 === right[index2]);
-var rejectWork = (workId, reason) => FileReviewWorkRejected.make({ workId, reason });
-var prepareReviewBrief = (request3) => exports_Effect.gen(function* () {
-  const source = yield* PullRequestSource;
-  const mapSourceFailure = (failure) => rejectWork(request3.workId, `pull-request source ${failure.operation} failed: ${failure.reason}`.slice(0, 600));
-  const files = yield* source.changedFiles.pipe(exports_Effect.mapError(mapSourceFailure));
-  const metadata = yield* source.metadata.pipe(exports_Effect.mapError(mapSourceFailure));
-  const plan = planReviewUnits(files, { totalChangedFiles: metadata.totalChangedFiles });
-  const unit = plan.units.find((candidate) => candidate.unitId === request3.unitId);
-  if (unit === undefined || !sameStrings(request3.paths, unit.paths) || !sameStrings(request3.evidenceShardIds, unit.evidenceShards.map((shard) => shard.shardId))) {
-    return yield* rejectWork(request3.workId, "request does not match a host-planned unit");
-  }
-  if (request3.phase === "discovery") {
-    const pass = plan.discoveryPasses.find((candidate) => candidate.passId === request3.workId);
-    if (pass === undefined || pass.unitId !== request3.unitId || !sameStrings(pass.paths, request3.paths) || !sameStrings(pass.evidenceShardIds, request3.evidenceShardIds) || pass.perspective !== request3.perspective || !sameStrings(pass.riskCategories, request3.riskCategories) || request3.candidates.length !== 0) {
-      return yield* rejectWork(request3.workId, "discovery request does not match the host plan");
-    }
-  } else {
-    if (request3.workId !== `${request3.unitId}-verification` || request3.perspective !== "candidate-verification" || !sameStrings(request3.riskCategories, unit.riskCategories) || request3.candidates.length === 0) {
-      return yield* rejectWork(request3.workId, "verification request does not match the host-planned unit");
-    }
-    const candidateIds = new Set;
-    const candidateSubjects = new Set;
-    const allowed = new Set(unit.paths);
-    for (const candidate of request3.candidates) {
-      const subjectKey = reviewCandidateSubjectKey(candidate);
-      if (candidateIds.has(candidate.candidateId) || candidateSubjects.has(subjectKey) || candidate.unitId !== unit.unitId || candidate.evidencePaths.some((path) => !allowed.has(path)) || candidate._tag === "FindingCandidate" && !allowed.has(candidate.finding.path)) {
-        return yield* rejectWork(request3.workId, "verification candidates are duplicated or outside the planned unit");
-      }
-      candidateIds.add(candidate.candidateId);
-      candidateSubjects.add(subjectKey);
-    }
-  }
+var FileReviewer = makeFileReviewerDefinition();
+var candidateOrdinal = (index2) => String(index2 + 1).padStart(3, "0");
+var unitEvidence = (unit, files) => exports_Effect.gen(function* () {
   const byPath = new Map(files.map((file2) => [file2.path, file2]));
   const evidence = [];
   for (const shard of unit.evidenceShards) {
     const file2 = byPath.get(shard.path);
-    if (file2 === undefined) {
-      return yield* rejectWork(request3.workId, `planned evidence path is unavailable: ${shard.path}`);
-    }
-    const chunks2 = fileReviewEvidenceChunks(file2);
-    const chunk = chunks2[shard.ordinal - 1];
-    if (chunk === undefined || chunks2.length !== shard.total || chunk.annotatedPatch.length !== shard.evidenceChars) {
-      return yield* rejectWork(request3.workId, `planned evidence shard no longer matches source: ${shard.shardId}`);
+    const chunk = file2 === undefined ? undefined : fileReviewEvidenceChunks(file2)[shard.ordinal - 1];
+    if (file2 === undefined || chunk === undefined) {
+      return yield* exports_Effect.die(new Error(`planned evidence shard has no source: ${shard.shardId} (${shard.path})`));
     }
     evidence.push(FileReviewEvidence.make({
       shardId: shard.shardId,
@@ -43254,198 +42970,272 @@ var prepareReviewBrief = (request3) => exports_Effect.gen(function* () {
       annotatedPatch: chunk.annotatedPatch
     }));
   }
-  return FileReviewBrief.make({ ...request3, evidence });
+  return evidence;
 });
-var candidateOrdinal = (index2) => String(index2 + 1).padStart(3, "0");
-var projectReviewResult = (report2, context4, request3) => {
-  if (context4.budgetExhausted) {
-    return exports_Effect.fail(rejectWork(report2.workId, "review work exhausted its budget before exact settlement"));
+var misbehaved = (workId, reason) => ReviewPassMisbehaved.make({ workId, reason: reason.slice(0, 600) });
+var validateVerificationReport = (brief, report2) => {
+  if (report2.findings.length > 0 || report2.concerns.length > 0 || report2.fileSummaries.length > 0) {
+    return misbehaved(brief.workId, "verification output contained discovery-only fields");
   }
-  if (report2.phase !== request3.phase || report2.workId !== request3.workId || report2.unitId !== request3.unitId) {
-    return exports_Effect.fail(rejectWork(request3.workId, "review output identity does not match the scheduled request"));
+  const expectedById = new Map(brief.candidates.map((candidate) => [candidate.candidateId, candidate]));
+  const assessedIds = new Set;
+  for (const assessment of report2.assessments) {
+    const candidate = expectedById.get(assessment.candidateId);
+    if (candidate === undefined || assessedIds.has(assessment.candidateId)) {
+      return misbehaved(brief.workId, "verification output did not assess the exact candidate set");
+    }
+    if (!assessmentSettlesSuggestionExactly(assessment, candidate)) {
+      return misbehaved(brief.workId, "verification output did not settle suggestion publication exactly");
+    }
+    assessedIds.add(assessment.candidateId);
   }
-  if (report2.phase === "verification") {
-    if (report2.findings.length > 0 || report2.concerns.length > 0 || report2.fileSummaries.length > 0) {
-      return exports_Effect.fail(rejectWork(report2.workId, "verification output contained discovery-only fields"));
-    }
-    const expectedById = new Map(request3.candidates.map((candidate) => [candidate.candidateId, candidate]));
-    const assessedIds = new Set;
-    for (const assessment of report2.assessments) {
-      const candidate = expectedById.get(assessment.candidateId);
-      if (candidate === undefined || assessedIds.has(assessment.candidateId)) {
-        return exports_Effect.fail(rejectWork(report2.workId, "verification output did not assess the exact candidate set"));
-      }
-      if (!assessmentSettlesSuggestionExactly(assessment, candidate)) {
-        return exports_Effect.fail(rejectWork(report2.workId, "verification output did not settle suggestion publication exactly"));
-      }
-      assessedIds.add(assessment.candidateId);
-    }
-    if (assessedIds.size !== expectedById.size) {
-      return exports_Effect.fail(rejectWork(report2.workId, "verification output did not assess the exact candidate set"));
-    }
-    return exports_Effect.succeed(FileReviewUnitResult.make({
-      phase: report2.phase,
-      workId: report2.workId,
-      unitId: report2.unitId,
-      candidates: [],
-      fileSummaries: [],
-      assessments: report2.assessments
-    }));
+  if (assessedIds.size !== expectedById.size) {
+    return misbehaved(brief.workId, "verification output did not assess the exact candidate set");
   }
-  if (report2.assessments.length > 0) {
-    return exports_Effect.fail(rejectWork(report2.workId, "discovery output contained verification-only assessments"));
-  }
-  const allowed = new Set(request3.paths);
-  if (report2.findings.some((finding) => !allowed.has(finding.path)) || report2.concerns.some((candidate) => candidate.evidencePaths.some((path) => !allowed.has(path))) || report2.fileSummaries.some((entry) => !allowed.has(entry.path))) {
-    return exports_Effect.fail(rejectWork(report2.workId, "discovery output referenced evidence outside the scheduled unit"));
-  }
-  return exports_Effect.gen(function* () {
-    const source = yield* PullRequestSource;
-    const mapSourceFailure = (failure) => rejectWork(request3.workId, `pull-request source ${failure.operation} failed: ${failure.reason}`.slice(0, 600));
-    const files = yield* source.changedFiles.pipe(exports_Effect.mapError(mapSourceFailure));
-    const metadata = yield* source.metadata.pipe(exports_Effect.mapError(mapSourceFailure));
-    const anchorFiles = yield* source.anchorFiles.pipe(exports_Effect.mapError(mapSourceFailure));
-    const unit = planReviewUnits(files, {
-      totalChangedFiles: metadata.totalChangedFiles
-    }).units.find((candidate) => candidate.unitId === request3.unitId);
-    if (unit === undefined) {
-      return yield* rejectWork(request3.workId, "scheduled review unit is no longer available");
-    }
-    for (const finding of report2.findings) {
-      const violation = anchorViolation(finding, anchorFiles);
-      if (violation !== undefined || !findingAnchorInUnitEvidence(finding, unit, files)) {
-        return yield* rejectWork(request3.workId, `discovery finding has no valid anchor in its assigned evidence: ${violation ?? finding.path}`);
-      }
-    }
-    const findingCandidates = report2.findings.map((finding, index2) => FindingCandidate.make({
-      candidateId: `${request3.workId}:finding:${candidateOrdinal(index2)}`,
-      workId: request3.workId,
-      unitId: request3.unitId,
-      finding,
-      evidencePaths: [finding.path]
-    }));
-    const concernCandidates = report2.concerns.map((candidate, index2) => ConcernCandidate.make({
-      candidateId: `${request3.workId}:concern:${candidateOrdinal(index2)}`,
-      workId: request3.workId,
-      unitId: request3.unitId,
-      concern: candidate.concern,
-      evidencePaths: candidate.evidencePaths
-    }));
-    return FileReviewUnitResult.make({
-      phase: report2.phase,
-      workId: report2.workId,
-      unitId: report2.unitId,
-      candidates: [...findingCandidates, ...concernCandidates],
-      fileSummaries: report2.fileSummaries,
-      assessments: []
-    });
+  return;
+};
+var runReviewPass = (binding, brief, budget2) => exports_Effect.gen(function* () {
+  const result4 = yield* AgentRuntime.run(binding, brief, {
+    ...budget2 === undefined ? {} : { budget: budget2 },
+    estimateCostMicrousd: () => exports_Effect.succeed(500)
   });
-};
-var delegationDescription = "Run exactly one host-planned discovery or candidate-verification child. Copy every plan field and candidate verbatim; never retry failed work.";
-var makeFileReviewDelegation = (child) => Subagent.define("delegate_file_review", {
-  description: delegationDescription,
-  target: child,
-  parameters: FileReviewRequest,
-  success: FileReviewUnitResult,
-  failure: FileReviewFailure,
-  failureMode: "return",
-  prepareInput: prepareReviewBrief,
-  projectResult: projectReviewResult,
-  policy: fileReviewPolicy
-});
-
-class ListReviewUnitsQuery extends exports_Schema.Class("@effect-agent/pr-review/ListReviewUnitsQuery")({
-  scope: exports_Schema.Literal("all")
-}) {
-}
-var ListReviewUnits = exports_Tool.make("list_review_units", {
-  description: "List deterministic bounded review units, explicit risk categories, every required discovery pass, and paths the pipeline cannot cover.",
-  parameters: ListReviewUnitsQuery,
-  success: ReviewUnitPlan,
-  failure: PullRequestSourceFailure,
-  failureMode: "error",
-  dependencies: [PullRequestSource]
-}).annotate(ToolExecutionClass, "readonly");
-var FanOutCoordinatorToolkit = exports_Toolkit.make(ListReviewUnits);
-var FanOutCoordinatorToolkitLayer = FanOutCoordinatorToolkit.toLayer({
-  list_review_units: () => exports_Effect.gen(function* () {
-    const source = yield* PullRequestSource;
-    const files = yield* source.changedFiles;
-    const metadata = yield* source.metadata;
-    return planReviewUnits(files, { totalChangedFiles: metadata.totalChangedFiles });
-  })
-});
-var makeFanOutReviewInstructions = (options3 = {}) => (mission) => {
-  const maxFindings = clampMaxFindings(options3.maxFindings);
-  return [
-    `You coordinate the bounded multi-pass review of pull request #${mission.number} ("${mission.title}") in ${mission.repository}.`,
-    mission.body.length > 0 ? `Author description:
-${mission.body}` : "No author description.",
-    ...staticGuidanceLines(options3.guidance),
-    "1. Call list_review_units exactly once.",
-    '2. For EVERY discoveryPass, call delegate_file_review exactly once with phase "discovery", workId=passId, and the pass unitId/paths/evidenceShardIds/perspective/riskCategories verbatim; candidates must be []. Prefer one bounded parallel batch. Never retry.',
-    '3. Group candidates returned by all successful discovery passes by unit. Deterministically deduplicate byte-identical finding or concern payloads, retaining the first candidate in discoveryPass plan order. For every unit with at least one retained candidate, call delegate_file_review exactly once with phase "verification", workId "<unitId>-verification", perspective "candidate-verification", the unit paths/evidenceShardIds/riskCategories, and EVERY retained candidate copied byte-for-byte. Prefer one bounded parallel batch. Never retry.',
-    "4. Verification is authoritative: rejected candidates must not be reported. The host independently reconstructs publishable findings from exact confirmed assessments, so do not select, rewrite, downgrade, or invent findings.",
-    `5. Return ONLY CodeReview JSON. Write a concise summary of completed and failed stages. Set findings=[] and concerns=[]; the host injects exact confirmed candidates. Copy factual fileSummaries into walkthrough without invention. The host publication cap is ${maxFindings}.`,
-    "No configured pipeline can prove absence of defects. Describe settled work, never an exhaustive or defect-free review."
-  ].join(`
-`);
-};
-var fanOutReviewInstructions = makeFanOutReviewInstructions();
-var defaultFanOutPolicy = AgentPolicy.make({
-  maxTurns: 7,
-  maxToolCalls: 1 + MAX_REVIEW_CHILDREN,
-  maxDuration: "20 minutes",
-  toolConcurrency: 4,
-  repeatedFailureLimit: 3,
-  tokenBudget: 400000,
-  contextTokenLimit: 150000,
-  onExhaustion: "final-answer"
-});
-var makeFileReviewerDefinition = (options3 = {}) => Agent.define("pr-review-worker", {
-  input: FileReviewBrief,
-  output: FileReviewReport,
-  instructions: makeFileReviewerInstructions(options3),
-  toolkit: FileReviewToolkit,
-  policy: defaultFileReviewerPolicy,
-  description: "Perform one bounded discovery or independent candidate-verification pass over host-supplied pull-request evidence.",
-  metadata: { deploymentClass: "E", surface: "read-only", stage: "discovery-verification" }
-});
-var delegationToolFor = (delegation) => delegation.tool.annotate(ToolExecutionClass, "readonly");
-var makeFanOutReviewerDefinition = (options3, delegation) => Agent.define("pr-fanout-reviewer", {
-  input: ReviewMission,
-  output: CodeReview,
-  instructions: makeFanOutReviewInstructions(options3),
-  toolkit: exports_Toolkit.make(ListReviewUnits, delegationToolFor(delegation)),
-  policy: defaultFanOutPolicy,
-  description: "Coordinate deterministic general/specialist discovery and independent candidate verification over bounded review units.",
-  metadata: {
-    deploymentClass: "E",
-    surface: "read-only",
-    delegation: "S1-attached",
-    assurance: "multi-pass"
+  const report2 = yield* exports_Schema.decodeUnknownEffect(FileReviewReport)(result4.output).pipe(exports_Effect.mapError((error2) => misbehaved(brief.workId, `child report failed to decode: ${error2.message}`)));
+  if (report2.phase !== brief.phase || report2.workId !== brief.workId || report2.unitId !== brief.unitId) {
+    return yield* misbehaved(brief.workId, "child report identity does not match the scheduled pass");
   }
-});
-var makeFanOutReviewSuite = (options3 = {}) => {
-  const child = makeFileReviewerDefinition({ guidance: options3.guidance });
-  const delegation = makeFileReviewDelegation(child);
+  if (brief.phase === "verification") {
+    const violation = validateVerificationReport(brief, report2);
+    if (violation !== undefined)
+      return yield* violation;
+  } else if (report2.assessments.length > 0) {
+    return yield* misbehaved(brief.workId, "discovery output contained verification-only assessments");
+  }
+  return { report: report2, turns: result4.turns };
+}).pipe(exports_Effect.scoped, exports_Effect.retry({ times: 1, while: (error2) => error2._tag !== "BudgetExceeded" }), exports_Effect.map((settled) => ({ _tag: "settled", ...settled })), exports_Effect.catch((error2) => exports_Effect.succeed({ _tag: "failed", errorTag: String(error2._tag).slice(0, 256) })));
+var harvestDiscovery = (pass, unit, files, anchorFiles, report2) => {
+  const allowed = new Set(pass.paths);
+  let discarded = 0;
+  const keptFindings = [];
+  for (const finding of report2.findings) {
+    if (!allowed.has(finding.path) || anchorViolation(finding, anchorFiles) !== undefined || !findingAnchorInUnitEvidence(finding, unit, files)) {
+      discarded += 1;
+      continue;
+    }
+    keptFindings.push(finding);
+  }
+  const keptConcerns = [];
+  for (const candidate of report2.concerns) {
+    if (candidate.evidencePaths.some((path) => !allowed.has(path))) {
+      discarded += 1;
+      continue;
+    }
+    keptConcerns.push(candidate);
+  }
   return {
-    child,
-    parent: makeFanOutReviewerDefinition(options3, delegation),
-    delegation
+    candidates: [
+      ...keptFindings.map((finding, index2) => FindingCandidate.make({
+        candidateId: `${pass.passId}:finding:${candidateOrdinal(index2)}`,
+        workId: pass.passId,
+        unitId: pass.unitId,
+        finding,
+        evidencePaths: [finding.path]
+      })),
+      ...keptConcerns.map((candidate, index2) => ConcernCandidate.make({
+        candidateId: `${pass.passId}:concern:${candidateOrdinal(index2)}`,
+        workId: pass.passId,
+        unitId: pass.unitId,
+        concern: candidate.concern,
+        evidencePaths: candidate.evidencePaths
+      }))
+    ],
+    fileSummaries: report2.fileSummaries.filter((entry) => allowed.has(entry.path)),
+    discarded
   };
 };
-var defaultSuite = makeFanOutReviewSuite();
-var FileReviewer = defaultSuite.child;
-var FanOutReviewer = defaultSuite.parent;
-var fileReviewDelegation = defaultSuite.delegation;
-var DelegateFileReview = delegationToolFor(fileReviewDelegation);
-var FanOutReviewToolkit = FanOutReviewer.toolkit;
-var FileReviewDelegationFailure = fileReviewDelegation.containedFailure;
-var fanOutHandlersLayerFor = (delegation) => (childBinding) => SubagentRuntime.layer(delegation, childBinding, {
-  mapChildFailure: mapFileReviewChildFailure
+var reviewUnit = (binding, unit, passes, input) => exports_Effect.gen(function* () {
+  const evidence = yield* unitEvidence(unit, input.files);
+  const failedPasses = [];
+  const candidates = [];
+  const subjects = new Set;
+  const walkthrough = [];
+  let discardedFindings = 0;
+  let turns = 0;
+  let completedGeneralPasses = 0;
+  let completedSpecialistPasses = 0;
+  for (const pass of passes) {
+    const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
+    const brief = FileReviewBrief.make({
+      phase: "discovery",
+      workId: pass.passId,
+      unitId: pass.unitId,
+      paths: pass.paths,
+      evidenceShardIds: pass.evidenceShardIds,
+      perspective: pass.perspective,
+      riskCategories: pass.riskCategories,
+      candidates: [],
+      evidence
+    });
+    const outcome = yield* runReviewPass(binding, brief, input.budget);
+    if (outcome._tag === "failed") {
+      failedPasses.push(FailedReviewPass.make({ workId: pass.passId, stage, errorTag: outcome.errorTag }));
+      continue;
+    }
+    turns += outcome.turns;
+    if (stage === "specialist") {
+      completedSpecialistPasses += 1;
+    } else {
+      completedGeneralPasses += 1;
+    }
+    const harvest = harvestDiscovery(pass, unit, input.files, input.anchorFiles, outcome.report);
+    discardedFindings += harvest.discarded;
+    if (pass.perspective === "general")
+      walkthrough.push(...harvest.fileSummaries);
+    for (const candidate of harvest.candidates) {
+      const subject = reviewCandidateSubjectKey(candidate);
+      if (subjects.has(subject))
+        continue;
+      subjects.add(subject);
+      candidates.push(candidate);
+    }
+  }
+  const confirmed = [];
+  let rejectedCandidates = 0;
+  let unsettledCandidates = 0;
+  let completedVerificationPasses = 0;
+  const requiredVerificationPasses = candidates.length > 0 ? 1 : 0;
+  if (candidates.length > 0) {
+    const workId = `${unit.unitId}-verification`;
+    const brief = FileReviewBrief.make({
+      phase: "verification",
+      workId,
+      unitId: unit.unitId,
+      paths: unit.paths,
+      evidenceShardIds: unit.evidenceShards.map((shard) => shard.shardId),
+      perspective: "candidate-verification",
+      riskCategories: unit.riskCategories,
+      candidates,
+      evidence
+    });
+    const outcome = yield* runReviewPass(binding, brief, input.budget);
+    if (outcome._tag === "failed") {
+      unsettledCandidates = candidates.length;
+      failedPasses.push(FailedReviewPass.make({ workId, stage: "verification", errorTag: outcome.errorTag }));
+    } else {
+      turns += outcome.turns;
+      completedVerificationPasses = 1;
+      const byId = new Map(candidates.map((candidate) => [candidate.candidateId, candidate]));
+      for (const assessment of outcome.report.assessments) {
+        const candidate = byId.get(assessment.candidateId);
+        if (candidate === undefined)
+          continue;
+        if (assessment.disposition === "confirmed") {
+          confirmed.push({ assessment, candidate });
+        } else {
+          rejectedCandidates += 1;
+        }
+      }
+    }
+  }
+  return {
+    failedPasses,
+    discoveredCandidates: candidates.length,
+    confirmed,
+    rejectedCandidates,
+    unsettledCandidates,
+    discardedFindings,
+    walkthrough,
+    turns,
+    completedGeneralPasses,
+    completedSpecialistPasses,
+    requiredVerificationPasses,
+    completedVerificationPasses,
+    unreviewedPaths: failedPasses.length > 0 ? unit.paths : []
+  };
 });
-var fanOutHandlersLayer = fanOutHandlersLayerFor(fileReviewDelegation);
+var countNoun = (count2, noun) => `${count2} ${noun}${count2 === 1 ? "" : "s"}`;
+var composeSummary = (plan, assurance) => {
+  const requiredDiscovery = assurance.requiredGeneralDiscoveryPasses + assurance.requiredSpecialistPasses;
+  const completedDiscovery = assurance.completedGeneralDiscoveryPasses + assurance.completedSpecialistPasses;
+  const parts2 = [
+    `Reviewed ${countNoun(plan.totalFiles, "changed file")} across ${countNoun(plan.units.length, "bounded unit")}: ${completedDiscovery}/${requiredDiscovery} discovery and ${assurance.completedVerificationPasses}/${assurance.requiredVerificationPasses} verification pass(es) settled; ${assurance.confirmedCandidates} of ${countNoun(assurance.discoveredCandidates, "discovered candidate")} confirmed by independent verification.`
+  ];
+  if (assurance.failedPasses.length > 0) {
+    parts2.push(`${countNoun(assurance.failedPasses.length, "pass")} did not settle; the affected paths are carried forward and retried on the next run. This is a reviewer-side gap, not a code defect.`);
+  }
+  if (assurance.discardedInvalidFindings > 0) {
+    parts2.push(`${countNoun(assurance.discardedInvalidFindings, "candidate")} discarded for anchors or paths outside the assigned evidence.`);
+  }
+  if (plan.undiffablePaths.length > 0) {
+    parts2.push(`${countNoun(plan.undiffablePaths.length, "path")} had no reviewable textual evidence and keep input coverage incomplete; exclude such paths with ignore globs when that is intended.`);
+  }
+  if (plan.unassignedPaths.length > 0 || plan.unassignedEvidenceShardCount > 0) {
+    parts2.push("The changeset exceeded the bounded fan-out capacity; unassigned scope is reported under input coverage.");
+  }
+  parts2.push("No configured pipeline can prove absence of defects; this describes settled work only.");
+  return parts2.join(" ").slice(0, 4000);
+};
+var runFanOutReview = (binding, input) => exports_Effect.gen(function* () {
+  const plan = planReviewUnits(input.files, { totalChangedFiles: input.totalChangedFiles });
+  const passesByUnit = new Map;
+  for (const pass of plan.discoveryPasses) {
+    const passes = passesByUnit.get(pass.unitId) ?? [];
+    passes.push(pass);
+    passesByUnit.set(pass.unitId, passes);
+  }
+  const outcomes = yield* exports_Effect.forEach(plan.units, (unit) => reviewUnit(binding, unit, passesByUnit.get(unit.unitId) ?? [], input), { concurrency: REVIEW_UNIT_CONCURRENCY });
+  const failedPasses = outcomes.flatMap((outcome) => outcome.failedPasses);
+  const unsettledCandidates = outcomes.reduce((total, outcome) => total + outcome.unsettledCandidates, 0);
+  const reasons = [];
+  if (failedPasses.length > 0) {
+    reasons.push(boundedListReason("configured review passes did not settle", failedPasses.map((pass) => `${pass.workId} (${pass.errorTag})`)));
+  }
+  if (unsettledCandidates > 0) {
+    reasons.push(`${unsettledCandidates} discovered candidate(s) did not receive exact verification`);
+  }
+  const requiredSpecialistPasses = plan.discoveryPasses.filter((pass) => pass.perspective === "risk-specialist").length;
+  const confirmed = outcomes.flatMap((outcome) => outcome.confirmed);
+  const assurance = ReviewAssurance.make({
+    status: reasons.length === 0 ? "settled" : "incomplete",
+    requiredGeneralDiscoveryPasses: plan.discoveryPasses.length - requiredSpecialistPasses,
+    completedGeneralDiscoveryPasses: outcomes.reduce((total, outcome) => total + outcome.completedGeneralPasses, 0),
+    requiredSpecialistPasses,
+    completedSpecialistPasses: outcomes.reduce((total, outcome) => total + outcome.completedSpecialistPasses, 0),
+    requiredVerificationPasses: outcomes.reduce((total, outcome) => total + outcome.requiredVerificationPasses, 0),
+    completedVerificationPasses: outcomes.reduce((total, outcome) => total + outcome.completedVerificationPasses, 0),
+    discoveredCandidates: outcomes.reduce((total, outcome) => total + outcome.discoveredCandidates, 0),
+    confirmedCandidates: confirmed.length,
+    rejectedCandidates: outcomes.reduce((total, outcome) => total + outcome.rejectedCandidates, 0),
+    unsettledCandidates,
+    discardedInvalidFindings: outcomes.reduce((total, outcome) => total + outcome.discardedFindings, 0),
+    failedPasses,
+    reasons
+  });
+  const findings = rankAndDedupeFindings(confirmed.flatMap(({ assessment, candidate }) => candidate._tag === "FindingCandidate" ? [confirmedFindingForPublication(assessment, candidate)] : []));
+  const concerns = rankAndDedupeConcerns(confirmed.flatMap(({ candidate }) => candidate._tag === "ConcernCandidate" ? [candidate.concern] : []));
+  const walkthrough = outcomes.flatMap((outcome) => outcome.walkthrough);
+  const blocking = findings.some((finding) => finding.severity === "blocking") || concerns.some((concern) => concern.severity === "blocking");
+  const review = CodeReview.make({
+    summary: composeSummary(plan, assurance),
+    verdict: blocking ? "request-changes" : findings.length > 0 || concerns.length > 0 ? "comment" : "approve",
+    findings,
+    ...concerns.length === 0 ? {} : { concerns },
+    ...walkthrough.length === 0 ? {} : { walkthrough }
+  });
+  return {
+    review,
+    assurance,
+    plan,
+    unreviewedPaths: [
+      ...new Set([
+        ...outcomes.flatMap((outcome) => outcome.unreviewedPaths),
+        ...plan.unassignedPaths,
+        ...plan.partialEvidencePaths,
+        ...plan.undiffablePaths
+      ])
+    ].sort(),
+    turns: outcomes.reduce((total, outcome) => total + outcome.turns, 0)
+  };
+});
 
 // packages/pr-review/src/internal/fingerprint.ts
 var MARKER_PREFIX = "<!-- effect-agent-pr-review fingerprint=sha256:";
@@ -43529,9 +43319,10 @@ class StoredReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/
   body: StoredText
 }) {
 }
+var MAX_STORED_UNREVIEWED_PATHS = 100;
 
 class ReviewState extends exports_Schema.Class("@effect-agent/pr-review/ReviewState")({
-  version: exports_Schema.Literal(1),
+  version: exports_Schema.Literal(2),
   repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
   pullRequestNumber: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
   baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
@@ -43543,6 +43334,8 @@ class ReviewState extends exports_Schema.Class("@effect-agent/pr-review/ReviewSt
   reviewedPathCount: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 0, maximum: 300 })),
   unresolvedFindings: exports_Schema.Array(StoredReviewFinding).check(exports_Schema.isMaxLength(20)),
   unresolvedConcerns: exports_Schema.Array(StoredReviewConcern).check(exports_Schema.isMaxLength(10)),
+  unreviewedPaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(MAX_STORED_UNREVIEWED_PATHS)),
+  settled: exports_Schema.Boolean,
   lastReviewMode: ReviewScopeMode
 }) {
 }
@@ -43568,12 +43361,12 @@ var toStoredConcern = (concern) => StoredReviewConcern.make({
   body: concern.body.slice(0, 800)
 });
 var fromStoredConcern = (concern) => ReviewConcern.make({ severity: concern.severity, title: concern.title, body: concern.body });
-var STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
+var STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v2:";
 var STATE_MARKER_SUFFIX = " -->";
-var STATE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
-var STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\x00";
+var STATE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-pr-review state-v2:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
+var STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v2\x00";
 var MAX_REVIEW_STATE_MARKER_CHARS = 24000;
-var ReviewStateMarker = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS), exports_Schema.isPattern(/^<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/)).pipe(exports_Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
+var ReviewStateMarker = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS), exports_Schema.isPattern(/^<!-- effect-agent-pr-review state-v2:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/)).pipe(exports_Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
 
 class ReviewStateAuthenticationFailure extends exports_Schema.TaggedError()("ReviewStateAuthenticationFailure", {
   operation: exports_Schema.Literals(["sign", "verify"]),
@@ -43752,17 +43545,22 @@ var selectReviewRange = (input) => {
       selectedByPath.set(file2.path, file2);
     }
   }
-  if (input.priorState.baseSha !== input.current.baseSha) {
+  const carriedPaths = new Set(input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path)));
+  for (const path of carriedPaths)
+    affectedPaths.add(path);
+  const rescuePaths = input.priorState.baseSha !== input.current.baseSha;
+  if (rescuePaths || carriedPaths.size > 0) {
     for (const file2 of input.fullFiles) {
-      if (affectedPaths.has(file2.path) || file2.previousPath !== undefined && affectedPaths.has(file2.previousPath)) {
+      const affected = rescuePaths && (affectedPaths.has(file2.path) || file2.previousPath !== undefined && affectedPaths.has(file2.previousPath)) || carriedPaths.has(file2.path) || file2.previousPath !== undefined && carriedPaths.has(file2.previousPath);
+      if (affected)
         selectedByPath.set(file2.path, file2);
-      }
     }
   }
   const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  const carriedReason = carriedPaths.size === 0 ? "" : `; retrying ${carriedPaths.size} carried unreviewed path(s)`;
   return {
     mode: "incremental",
-    reason: `changes since settled review head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
+    reason: `changes since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}${carriedReason}`,
     files: selectedFiles,
     affectedPaths: [...affectedPaths].sort(),
     totalFiles: selectedFiles.length,
@@ -43814,466 +43612,6 @@ var buildProfileMission = (metadata, files) => ReviewMission.make({
   changedFileCount: files.length
 });
 
-// packages/pr-review/src/internal/coverage.ts
-var ReviewShape = exports_Schema.Literals(["flat", "fan-out"]);
-
-class FailedReviewUnit extends exports_Schema.Class("@effect-agent/pr-review/FailedReviewUnit")({
-  unitId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(32)),
-  errorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256))
-}) {
-}
-
-class ReviewCoverage extends exports_Schema.Class("@effect-agent/pr-review/ReviewCoverage")({
-  status: exports_Schema.Literals(["complete", "incomplete"]),
-  requiredPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  reviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  unreviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  failedUnits: exports_Schema.Array(FailedReviewUnit).check(exports_Schema.isMaxLength(8)),
-  reasons: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000))).check(exports_Schema.isMaxLength(32))
-}) {
-}
-
-class ReviewInputCoverage extends exports_Schema.Class("@effect-agent/pr-review/ReviewInputCoverage")({
-  status: exports_Schema.Literals(["complete", "incomplete"]),
-  requiredPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  assignedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  partialPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  unassignedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  reasons: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000))).check(exports_Schema.isMaxLength(20))
-}) {
-}
-
-class FailedReviewPass extends exports_Schema.Class("@effect-agent/pr-review/FailedReviewPass")({
-  workId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(96)),
-  stage: exports_Schema.Literals(["discovery", "specialist", "verification"]),
-  errorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256))
-}) {
-}
-
-class ReviewAssurance extends exports_Schema.Class("@effect-agent/pr-review/ReviewAssurance")({
-  status: exports_Schema.Literals(["settled", "incomplete", "unverified"]),
-  requiredGeneralDiscoveryPasses: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  completedGeneralDiscoveryPasses: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  requiredSpecialistPasses: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  completedSpecialistPasses: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  requiredVerificationPasses: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  completedVerificationPasses: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  discoveredCandidates: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  confirmedCandidates: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  rejectedCandidates: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  unsettledCandidates: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  failedPasses: exports_Schema.Array(FailedReviewPass).check(exports_Schema.isMaxLength(64)),
-  reasons: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000))).check(exports_Schema.isMaxLength(32))
-}) {
-}
-var toolTrace = (events2) => {
-  const declared = new Map;
-  const succeeded = new Map;
-  const failed = new Map;
-  for (const event of events2) {
-    if (event._tag === "ToolCallDeclared")
-      declared.set(event.toolCallId, event);
-    if (event._tag === "ToolCallSucceeded")
-      succeeded.set(event.toolCallId, event);
-    if (event._tag === "ToolCallFailed")
-      failed.set(event.toolCallId, event);
-  }
-  return { declared, succeeded, failed };
-};
-var sortedUnique = (values3) => [...new Set(values3)].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
-var boundedListReason = (label, values3) => {
-  const items = sortedUnique(values3);
-  const prefix = `${label} (${items.length}): `;
-  let rendered = prefix;
-  for (let index2 = 0;index2 < items.length; index2 += 1) {
-    const item = items[index2] ?? "";
-    const separator = index2 === 0 ? "" : ", ";
-    const omitted = items.length - index2 - 1;
-    const suffix = omitted === 0 ? "" : ` … (+${omitted} more)`;
-    if (`${rendered}${separator}${item}${suffix}`.length > 1000) {
-      const omission = `… (+${items.length - index2} more)`;
-      return `${rendered.slice(0, 1000 - omission.length)}${omission}`;
-    }
-    rendered = `${rendered}${separator}${item}`;
-  }
-  return rendered;
-};
-var flatInputCoverage = (files, totalFiles, trace3) => {
-  const requiredPaths = sortedUnique(files.map((file2) => file2.path));
-  const assigned = new Set;
-  const partial = new Set;
-  const failedPaths = new Set;
-  for (const [toolCallId, declaration] of trace3.declared) {
-    if (declaration.toolName !== "read_file_diff")
-      continue;
-    const query = exports_Schema.decodeUnknownOption(FileDiffQuery)(declaration.parameters);
-    if (exports_Option.isNone(query))
-      continue;
-    const success = trace3.succeeded.get(toolCallId);
-    if (success !== undefined) {
-      assigned.add(query.value.path);
-      const view = exports_Schema.decodeUnknownOption(FileDiffView)(success.result);
-      if (exports_Option.isSome(view) && view.value.truncated)
-        partial.add(query.value.path);
-    }
-    if (trace3.failed.has(toolCallId))
-      failedPaths.add(query.value.path);
-  }
-  const undiffable = files.filter((file2) => !isReviewableFile(file2)).map((file2) => file2.path);
-  const unassigned = requiredPaths.filter((path) => !assigned.has(path) || undiffable.includes(path) || failedPaths.has(path));
-  const reasons = [];
-  if (files.length < totalFiles) {
-    reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
-  }
-  if (undiffable.length > 0) {
-    reasons.push(boundedListReason("required paths have no reviewable diff or bounded text", undiffable));
-  }
-  if (failedPaths.size > 0)
-    reasons.push(boundedListReason("diff reads failed", failedPaths));
-  if (partial.size > 0) {
-    reasons.push(boundedListReason("model-visible diff evidence was truncated", partial));
-  }
-  if (unassigned.length > 0) {
-    reasons.push(boundedListReason("required paths received no successful diff input", unassigned));
-  }
-  return ReviewInputCoverage.make({
-    status: reasons.length === 0 ? "complete" : "incomplete",
-    requiredPaths,
-    assignedPaths: sortedUnique(assigned),
-    partialPaths: sortedUnique(partial),
-    unassignedPaths: sortedUnique(unassigned),
-    reasons
-  });
-};
-var fanOutInputCoverage = (files, totalFiles) => {
-  const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
-  const assignedPaths = sortedUnique(plan.units.flatMap((unit) => unit.paths));
-  const unassignedPaths = sortedUnique([...plan.undiffablePaths, ...plan.unassignedPaths]);
-  const reasons = [];
-  if (plan.truncated) {
-    reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
-  }
-  if (plan.undiffablePaths.length > 0) {
-    reasons.push(boundedListReason("required paths have no reviewable diff or bounded text", plan.undiffablePaths));
-  }
-  if (plan.partialEvidencePaths.length > 0) {
-    reasons.push(boundedListReason("fan-out capacity left some deterministic evidence shards unassigned", plan.partialEvidencePaths));
-  }
-  if (plan.unassignedEvidenceShardCount > 0) {
-    reasons.push(`${plan.unassignedEvidenceShardCount} deterministic evidence shard(s) exceeded fan-out capacity`);
-    reasons.push(boundedListReason(`unassigned evidence shard identifier sample (${plan.unassignedEvidenceShardIds.length} of ${plan.unassignedEvidenceShardCount})`, plan.unassignedEvidenceShardIds));
-  }
-  if (plan.unassignedPaths.length > 0) {
-    reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
-  }
-  return ReviewInputCoverage.make({
-    status: reasons.length === 0 ? "complete" : "incomplete",
-    requiredPaths: sortedUnique(files.map((file2) => file2.path)),
-    assignedPaths,
-    partialPaths: plan.partialEvidencePaths,
-    unassignedPaths,
-    reasons
-  });
-};
-var sameStrings2 = (left, right) => left.length === right.length && left.every((value4, index2) => value4 === right[index2]);
-var candidateKey = (candidate) => JSON.stringify(exports_Schema.encodeSync(ReviewCandidate)(candidate));
-var sameCandidates = (left, right) => left.length === right.length && left.every((candidate, index2) => {
-  const corresponding = right[index2];
-  return corresponding !== undefined && candidateKey(candidate) === candidateKey(corresponding);
-});
-var delegationDeclarations = (trace3) => [...trace3.declared].flatMap(([id2, declaration]) => {
-  if (declaration.toolName !== "delegate_file_review")
-    return [];
-  const request3 = exports_Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
-  return exports_Option.isNone(request3) ? [] : [{ id: id2, request: request3.value }];
-});
-var failureTag2 = (trace3, id2) => {
-  const failed = trace3.failed.get(id2);
-  if (failed !== undefined)
-    return failed.errorTag;
-  const succeeded = trace3.succeeded.get(id2);
-  if (succeeded === undefined)
-    return;
-  const returned = exports_Schema.decodeUnknownOption(FileReviewDelegationFailure)(succeeded.result);
-  if (exports_Option.isNone(returned))
-    return;
-  return returned.value._tag === "FileReviewUnitFailed" ? `${returned.value._tag}:${returned.value.childErrorTag}` : returned.value._tag;
-};
-var exactDiscoveryRequest = (request3, pass) => request3.phase === "discovery" && request3.workId === pass.passId && request3.unitId === pass.unitId && request3.perspective === pass.perspective && sameStrings2(request3.paths, pass.paths) && sameStrings2(request3.evidenceShardIds, pass.evidenceShardIds) && sameStrings2(request3.riskCategories, pass.riskCategories) && request3.candidates.length === 0;
-var validCandidate = (candidate, pass, unit, files, anchorFiles) => {
-  const allowed = new Set(pass.paths);
-  const kind = candidate._tag === "FindingCandidate" ? "finding" : "concern";
-  const idPrefix = `${pass.passId}:${kind}:`;
-  return candidate.candidateId.startsWith(idPrefix) && /^\d{3}$/.test(candidate.candidateId.slice(idPrefix.length)) && candidate.workId === pass.passId && candidate.unitId === pass.unitId && candidate.evidencePaths.length > 0 && candidate.evidencePaths.every((path) => allowed.has(path)) && (candidate._tag !== "FindingCandidate" || allowed.has(candidate.finding.path) && anchorViolation(candidate.finding, anchorFiles) === undefined && findingAnchorInUnitEvidence(candidate.finding, unit, files));
-};
-var flatAssurance = () => ({
-  assurance: ReviewAssurance.make({
-    status: "unverified",
-    requiredGeneralDiscoveryPasses: 1,
-    completedGeneralDiscoveryPasses: 1,
-    requiredSpecialistPasses: 0,
-    completedSpecialistPasses: 0,
-    requiredVerificationPasses: 1,
-    completedVerificationPasses: 0,
-    discoveredCandidates: 0,
-    confirmedCandidates: 0,
-    rejectedCandidates: 0,
-    unsettledCandidates: 0,
-    failedPasses: [],
-    reasons: [
-      "flat review has no independent candidate-verification pass; use the fan-out pipeline for a settled assurance result"
-    ]
-  }),
-  confirmedFindings: [],
-  confirmedConcerns: [],
-  walkthrough: []
-});
-var fanOutAssurance = (files, totalFiles, anchorFiles, trace3) => {
-  const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
-  const declarations = delegationDeclarations(trace3);
-  const consumedDeclarationIds = new Set;
-  const failedPasses = [];
-  const reasons = [];
-  const candidatesByUnit = new Map;
-  const walkthrough = [];
-  let completedGeneralDiscoveryPasses = 0;
-  let completedSpecialistPasses = 0;
-  for (const pass of plan.discoveryPasses) {
-    const unit = plan.units.find((candidate) => candidate.unitId === pass.unitId);
-    const matching = declarations.filter(({ request: request3 }) => exactDiscoveryRequest(request3, pass));
-    const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
-    if (matching.length !== 1) {
-      failedPasses.push(FailedReviewPass.make({
-        workId: pass.passId,
-        stage,
-        errorTag: matching.length === 0 ? "PassNotAssigned" : "PassAssignedMultipleTimes"
-      }));
-      continue;
-    }
-    const call = matching[0];
-    if (call === undefined) {
-      failedPasses.push(FailedReviewPass.make({
-        workId: pass.passId,
-        stage,
-        errorTag: "PassLookupInvariantFailed"
-      }));
-      continue;
-    }
-    consumedDeclarationIds.add(call.id);
-    const failure = failureTag2(trace3, call.id);
-    const succeeded = trace3.succeeded.get(call.id);
-    const result4 = succeeded === undefined ? exports_Option.none() : exports_Schema.decodeUnknownOption(FileReviewUnitResult)(succeeded.result);
-    if (failure !== undefined || exports_Option.isNone(result4) || result4.value.phase !== "discovery" || result4.value.workId !== pass.passId || result4.value.unitId !== pass.unitId || result4.value.assessments.length !== 0) {
-      failedPasses.push(FailedReviewPass.make({
-        workId: pass.passId,
-        stage,
-        errorTag: failure ?? "DiscoveryDidNotSettleExactly"
-      }));
-      continue;
-    }
-    const ids = new Set;
-    let candidatesValid = true;
-    for (const candidate of result4.value.candidates) {
-      if (unit === undefined || ids.has(candidate.candidateId) || !validCandidate(candidate, pass, unit, files, anchorFiles)) {
-        candidatesValid = false;
-        break;
-      }
-      ids.add(candidate.candidateId);
-    }
-    const unitCandidates = candidatesByUnit.get(pass.unitId) ?? [];
-    const unitIds = new Set(unitCandidates.map((candidate) => candidate.candidateId));
-    if (result4.value.candidates.some((candidate) => unitIds.has(candidate.candidateId))) {
-      candidatesValid = false;
-    }
-    if (!candidatesValid) {
-      failedPasses.push(FailedReviewPass.make({
-        workId: pass.passId,
-        stage,
-        errorTag: "DiscoveryCandidateMismatch"
-      }));
-      continue;
-    }
-    if (stage === "specialist") {
-      completedSpecialistPasses += 1;
-    } else {
-      completedGeneralDiscoveryPasses += 1;
-    }
-    const subjectKeys = new Set(unitCandidates.map(reviewCandidateSubjectKey));
-    for (const candidate of result4.value.candidates) {
-      const subjectKey = reviewCandidateSubjectKey(candidate);
-      if (subjectKeys.has(subjectKey))
-        continue;
-      subjectKeys.add(subjectKey);
-      unitCandidates.push(candidate);
-    }
-    candidatesByUnit.set(pass.unitId, unitCandidates);
-    if (pass.perspective === "general") {
-      const allowed = new Set(pass.paths);
-      walkthrough.push(...result4.value.fileSummaries.filter((entry) => allowed.has(entry.path)));
-    }
-  }
-  const confirmedCandidates = [];
-  let rejectedCandidates = 0;
-  let unsettledCandidates = 0;
-  let requiredVerificationPasses = 0;
-  let completedVerificationPasses = 0;
-  for (const unit of plan.units) {
-    const candidates = candidatesByUnit.get(unit.unitId) ?? [];
-    if (candidates.length === 0)
-      continue;
-    requiredVerificationPasses += 1;
-    const workId = `${unit.unitId}-verification`;
-    const matching = declarations.filter(({ request: request3 }) => request3.phase === "verification" && request3.workId === workId && request3.unitId === unit.unitId && request3.perspective === "candidate-verification" && sameStrings2(request3.paths, unit.paths) && sameStrings2(request3.evidenceShardIds, unit.evidenceShards.map((shard) => shard.shardId)) && sameStrings2(request3.riskCategories, unit.riskCategories) && sameCandidates(request3.candidates, candidates));
-    if (matching.length !== 1) {
-      unsettledCandidates += candidates.length;
-      failedPasses.push(FailedReviewPass.make({
-        workId,
-        stage: "verification",
-        errorTag: matching.length === 0 ? "VerificationNotAssignedOrCandidateMismatch" : "VerificationAssignedMultipleTimes"
-      }));
-      continue;
-    }
-    const call = matching[0];
-    if (call === undefined) {
-      unsettledCandidates += candidates.length;
-      failedPasses.push(FailedReviewPass.make({
-        workId,
-        stage: "verification",
-        errorTag: "PassLookupInvariantFailed"
-      }));
-      continue;
-    }
-    consumedDeclarationIds.add(call.id);
-    const failure = failureTag2(trace3, call.id);
-    const succeeded = trace3.succeeded.get(call.id);
-    const result4 = succeeded === undefined ? exports_Option.none() : exports_Schema.decodeUnknownOption(FileReviewUnitResult)(succeeded.result);
-    if (failure !== undefined || exports_Option.isNone(result4) || result4.value.phase !== "verification" || result4.value.workId !== workId || result4.value.unitId !== unit.unitId || result4.value.candidates.length !== 0 || result4.value.fileSummaries.length !== 0) {
-      unsettledCandidates += candidates.length;
-      failedPasses.push(FailedReviewPass.make({
-        workId,
-        stage: "verification",
-        errorTag: failure ?? "VerificationDidNotSettleExactly"
-      }));
-      continue;
-    }
-    const byId = new Map(candidates.map((candidate) => [candidate.candidateId, candidate]));
-    const assessedIds = new Set;
-    let suggestionSettlementExact = true;
-    const exactAssessments = result4.value.assessments.every((assessment) => {
-      const candidate = byId.get(assessment.candidateId);
-      if (candidate === undefined || assessedIds.has(assessment.candidateId)) {
-        return false;
-      }
-      assessedIds.add(assessment.candidateId);
-      if (!assessmentSettlesSuggestionExactly(assessment, candidate)) {
-        suggestionSettlementExact = false;
-      }
-      return true;
-    });
-    if (byId.size !== candidates.length || !exactAssessments || assessedIds.size !== byId.size || !suggestionSettlementExact) {
-      unsettledCandidates += candidates.length;
-      failedPasses.push(FailedReviewPass.make({
-        workId,
-        stage: "verification",
-        errorTag: exactAssessments && !suggestionSettlementExact ? "SuggestionSettlementMismatch" : "VerificationAssessmentMismatch"
-      }));
-      continue;
-    }
-    completedVerificationPasses += 1;
-    for (const assessment of result4.value.assessments) {
-      if (assessment.disposition === "confirmed") {
-        const candidate = byId.get(assessment.candidateId);
-        if (candidate !== undefined)
-          confirmedCandidates.push({ assessment, candidate });
-      } else {
-        rejectedCandidates += 1;
-      }
-    }
-  }
-  const unexpected = [...trace3.declared].filter(([id2, declaration]) => declaration.toolName === "delegate_file_review" && !consumedDeclarationIds.has(id2));
-  for (const [, declaration] of unexpected) {
-    const request3 = exports_Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
-    failedPasses.push(FailedReviewPass.make({
-      workId: exports_Option.isSome(request3) ? request3.value.workId : "invalid-delegation-request",
-      stage: exports_Option.isSome(request3) && request3.value.phase === "verification" ? "verification" : "discovery",
-      errorTag: "UnexpectedPass"
-    }));
-  }
-  if (failedPasses.length > 0) {
-    reasons.push(boundedListReason("configured review passes did not settle", failedPasses.map((pass) => `${pass.workId} (${pass.errorTag})`)));
-  }
-  if (unsettledCandidates > 0) {
-    reasons.push(`${unsettledCandidates} discovered candidate(s) did not receive exact verification`);
-  }
-  const requiredSpecialistPasses = plan.discoveryPasses.filter((pass) => pass.perspective === "risk-specialist").length;
-  const requiredGeneralDiscoveryPasses = plan.discoveryPasses.length - requiredSpecialistPasses;
-  const discoveredCandidates = [...candidatesByUnit.values()].reduce((total, candidates) => total + candidates.length, 0);
-  return {
-    assurance: ReviewAssurance.make({
-      status: reasons.length === 0 ? "settled" : "incomplete",
-      requiredGeneralDiscoveryPasses,
-      completedGeneralDiscoveryPasses,
-      requiredSpecialistPasses,
-      completedSpecialistPasses,
-      requiredVerificationPasses,
-      completedVerificationPasses,
-      discoveredCandidates,
-      confirmedCandidates: confirmedCandidates.length,
-      rejectedCandidates,
-      unsettledCandidates,
-      failedPasses,
-      reasons
-    }),
-    confirmedFindings: confirmedCandidates.flatMap(({ assessment, candidate }) => candidate._tag === "FindingCandidate" ? [confirmedFindingForPublication(assessment, candidate)] : []),
-    confirmedConcerns: confirmedCandidates.flatMap(({ candidate }) => candidate._tag === "ConcernCandidate" ? [candidate.concern] : []),
-    walkthrough
-  };
-};
-var compatibilityCoverage = (inputCoverage, assurance) => {
-  const assuranceIncomplete = assurance.status === "incomplete";
-  const failedUnits = new Map;
-  for (const pass of assurance.failedPasses) {
-    const unitId = pass.workId.slice(0, "unit-000".length);
-    if (!failedUnits.has(unitId)) {
-      failedUnits.set(unitId, FailedReviewUnit.make({ unitId, errorTag: `${pass.stage}:${pass.errorTag}` }));
-    }
-  }
-  return ReviewCoverage.make({
-    status: inputCoverage.status === "complete" && !assuranceIncomplete ? "complete" : "incomplete",
-    requiredPaths: inputCoverage.requiredPaths,
-    reviewedPaths: inputCoverage.assignedPaths,
-    unreviewedPaths: sortedUnique([
-      ...inputCoverage.partialPaths,
-      ...inputCoverage.unassignedPaths
-    ]),
-    failedUnits: [...failedUnits.values()].slice(0, 8),
-    reasons: [...inputCoverage.reasons, ...assuranceIncomplete ? assurance.reasons : []]
-  });
-};
-var assessReviewPipeline = (input) => {
-  const trace3 = toolTrace(input.events);
-  let inputCoverage = input.shape === "fan-out" ? fanOutInputCoverage(input.files, input.totalFiles) : flatInputCoverage(input.files, input.totalFiles, trace3);
-  if (input.anchorFiles.length < input.totalAnchorFiles) {
-    inputCoverage = ReviewInputCoverage.make({
-      ...inputCoverage,
-      status: "incomplete",
-      reasons: [
-        ...inputCoverage.reasons,
-        `full pull-request anchor surface exposed ${input.anchorFiles.length} of ${input.totalAnchorFiles} required files`
-      ]
-    });
-  }
-  const assessed = input.shape === "fan-out" ? fanOutAssurance(input.files, input.totalFiles, input.anchorFiles, trace3) : flatAssurance();
-  return {
-    inputCoverage,
-    assurance: assessed.assurance,
-    coverage: compatibilityCoverage(inputCoverage, assessed.assurance),
-    confirmedFindings: assessed.confirmedFindings,
-    confirmedConcerns: assessed.confirmedConcerns,
-    walkthrough: assessed.walkthrough
-  };
-};
-
 // packages/pr-review/src/internal/retirement.ts
 var PositiveLine = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 
@@ -44317,7 +43655,7 @@ class ReviewRetirementReport extends exports_Schema.Class("@effect-agent/pr-revi
 var findingIdentity = (finding) => `${finding.path}\x00${finding.startLine}\x00${finding.endLine}\x00${finding.title}`;
 var REVIEW_METADATA_PATTERN = /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->/g;
 var FINGERPRINT_PATTERN = /<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->/g;
-var STATE_PATTERN = /<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g;
+var STATE_PATTERN = /<!-- effect-agent-pr-review state-v\d+:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g;
 var RETIRED_ORIGINAL_PATTERN = /<!-- effect-agent-pr-review retired-original:start -->\n([\s\S]*?)\n<!-- effect-agent-pr-review retired-original:end -->/;
 var MACHINE_COMMENT_PATTERN = new RegExp(`${REVIEW_METADATA_PATTERN.source}|${FINGERPRINT_PATTERN.source}|${STATE_PATTERN.source}`, "g");
 var VERDICT_CALLOUT_PATTERN = /^(?:> \[!(?:CAUTION|IMPORTANT)\]\n> [^\n]*(?:\n> [^\n]*)*|> (?:ℹ️|✅)[^\n]*)\n*/;
@@ -44963,7 +44301,7 @@ var agentPromptDetails = (summary2, prompt) => {
 var renderAgentPromptBlock = (finding, headSha) => agentPromptDetails("Prompt for AI agents", `${AGENT_PROMPT_PREAMBLE}
 
 ${renderAgentPrompt(finding, headSha)}`);
-var renderConsolidatedAgentPrompt = (entries3) => agentPromptDetails(`Prompt for all ${countNoun(entries3.length, "finding")} with AI agents`, [
+var renderConsolidatedAgentPrompt = (entries3) => agentPromptDetails(`Prompt for all ${countNoun2(entries3.length, "finding")} with AI agents`, [
   AGENT_PROMPT_PREAMBLE,
   ...entries3.map(({ finding, writtenAtSha }) => renderAgentPrompt(finding, writtenAtSha))
 ].join(`
@@ -44985,7 +44323,7 @@ var renderDemoted = (finding, reason) => {
   const location2 = `\`${finding.path}:${finding.startLine}${finding.endLine !== finding.startLine ? `-${finding.endLine}` : ""}\``;
   return `- ${location2} **[${findingLabel(finding)}] ${finding.title}** — ${finding.body} _(demoted: ${reason})_`;
 };
-var countNoun = (count2, noun) => `${count2} ${noun}${count2 === 1 ? "" : "s"}`;
+var countNoun2 = (count2, noun) => `${count2} ${noun}${count2 === 1 ? "" : "s"}`;
 var severityCounts = (review, carriedFindings = [], carriedConcerns = []) => {
   const severities = [
     ...review.findings.map((finding) => finding.severity),
@@ -45001,23 +44339,19 @@ var severityCounts = (review, carriedFindings = [], carriedConcerns = []) => {
 };
 var renderVerdictCallout = (review, options3) => {
   const counts = severityCounts(review, options3.carriedFindings, options3.carriedConcerns);
-  if (options3.inputCoverage?.status === "incomplete" || options3.inputCoverage === undefined && options3.coverage?.status === "incomplete") {
-    const suffix = counts.blocking > 0 ? ` It also has ${countNoun(counts.blocking, "blocking finding")}.` : "";
-    return `> [!CAUTION]
-> Input coverage is incomplete — the check must not pass.${suffix}`;
-  }
-  if (options3.assurance !== undefined && options3.assurance.status !== "settled") {
-    const suffix = counts.blocking > 0 ? ` It also has ${countNoun(counts.blocking, "blocking finding")}.` : "";
-    return `> [!CAUTION]
-> Configured review assurance did not settle — the check must not pass.${suffix}`;
-  }
   if (counts.blocking > 0) {
     return `> [!CAUTION]
-> ${countNoun(counts.blocking, "blocking finding")} — do not merge before addressing ${counts.blocking === 1 ? "it" : "them"}.`;
+> ${countNoun2(counts.blocking, "blocking finding")} — do not merge before addressing ${counts.blocking === 1 ? "it" : "them"}.`;
+  }
+  const carried = options3.unreviewedPaths?.length ?? 0;
+  if (options3.inputCoverage?.status === "incomplete" || options3.assurance?.status === "incomplete") {
+    const carriedNote = carried > 0 ? ` ${countNoun2(carried, "affected path")} ${carried === 1 ? "is" : "are"} carried forward and retried automatically on the next run.` : "";
+    return `> [!WARNING]
+> Review infrastructure did not settle — a reviewer-side gap, NOT a request to change code.${carriedNote} The check reports "incomplete" until a run settles.`;
   }
   if (counts.important > 0) {
     return `> [!IMPORTANT]
-> ${countNoun(counts.important, "important finding")} to address before merging.`;
+> ${countNoun2(counts.important, "important finding")} to address before merging.`;
   }
   if (counts.total > 0) {
     return "> ℹ️ Minor suggestions only — mergeable as-is.";
@@ -45041,7 +44375,7 @@ var planWalkthrough = (entries3, files) => {
 var tableCell = (value4) => value4.replaceAll(/\r?\n/g, " ").replaceAll("|", "\\|");
 var renderWalkthrough = (entries3) => [
   "<details>",
-  `<summary>\uD83D\uDCDD Walkthrough (${countNoun(entries3.length, "file")})</summary>`,
+  `<summary>\uD83D\uDCDD Walkthrough (${countNoun2(entries3.length, "file")})</summary>`,
   "",
   "| File | Summary |",
   "| --- | --- |",
@@ -45060,7 +44394,7 @@ var estimateReviewEffort = (files) => {
 var renderReviewStats = (files, totalChangedFiles, counts) => {
   const additions = files.reduce((total, file2) => total + file2.additions, 0);
   const deletions = files.reduce((total, file2) => total + file2.deletions, 0);
-  const fileCount = files.length < totalChangedFiles ? `${files.length} of ${totalChangedFiles} files` : countNoun(files.length, "file");
+  const fileCount = files.length < totalChangedFiles ? `${files.length} of ${totalChangedFiles} files` : countNoun2(files.length, "file");
   const nits = counts.total - counts.blocking - counts.important;
   const tally = counts.total === 0 ? "none" : [
     ...counts.blocking > 0 ? [`${counts.blocking} blocking`] : [],
@@ -45105,9 +44439,8 @@ var planPublication = (review, files, options3) => {
   const footerParts = ["Automated review by @effect-agent/pr-review"];
   if (options3.modelLabel !== undefined)
     footerParts.push(options3.modelLabel);
-  if (options3.usage !== undefined && options3.usageScope !== undefined) {
-    const scope3 = options3.usageScope === "coordinator" ? " (coordinator)" : "";
-    footerParts.push(`${options3.usage.inputTokens} in / ${options3.usage.outputTokens} out tokens${scope3}`);
+  if (options3.usage !== undefined) {
+    footerParts.push(`${options3.usage.inputTokens} in / ${options3.usage.outputTokens} out tokens`);
   }
   if (options3.runUrl !== undefined)
     footerParts.push(`[run](${options3.runUrl})`);
@@ -45128,9 +44461,9 @@ var planPublication = (review, files, options3) => {
       renderVerdictCallout(review, {
         carriedFindings,
         carriedConcerns,
-        coverage: options3.coverage,
         inputCoverage: options3.inputCoverage,
-        assurance: options3.assurance
+        assurance: options3.assurance,
+        unreviewedPaths: options3.unreviewedPaths
       })
     ];
     if (options3.reviewMode !== undefined && options3.reviewReason !== undefined) {
@@ -45141,7 +44474,7 @@ var planPublication = (review, files, options3) => {
     }
     parts2.push("", renderReviewStats(files, options3.totalChangedFiles, counts));
     if (options3.inputCoverage !== undefined && options3.assurance !== undefined) {
-      parts2.push("", `**Input coverage:** ${options3.inputCoverage.status} (${options3.inputCoverage.assignedPaths.length}/${options3.inputCoverage.requiredPaths.length} paths assigned, ${options3.inputCoverage.partialPaths.length} partial) · **Review assurance:** ${options3.assurance.status} (${options3.assurance.completedGeneralDiscoveryPasses}/${options3.assurance.requiredGeneralDiscoveryPasses} general discovery, ${options3.assurance.completedSpecialistPasses}/${options3.assurance.requiredSpecialistPasses} specialist, ${options3.assurance.completedVerificationPasses}/${options3.assurance.requiredVerificationPasses} verification; ${options3.assurance.confirmedCandidates} confirmed / ${options3.assurance.rejectedCandidates} rejected / ${options3.assurance.unsettledCandidates} unsettled candidates)`);
+      parts2.push("", `**Input coverage:** ${options3.inputCoverage.status} (${options3.inputCoverage.assignedPaths.length}/${options3.inputCoverage.requiredPaths.length} paths assigned, ${options3.inputCoverage.partialPaths.length} partial) · **Review assurance:** ${options3.assurance.status} (${options3.assurance.completedGeneralDiscoveryPasses}/${options3.assurance.requiredGeneralDiscoveryPasses} general discovery, ${options3.assurance.completedSpecialistPasses}/${options3.assurance.requiredSpecialistPasses} specialist, ${options3.assurance.completedVerificationPasses}/${options3.assurance.requiredVerificationPasses} verification; ${options3.assurance.confirmedCandidates} confirmed / ${options3.assurance.rejectedCandidates} rejected / ${options3.assurance.unsettledCandidates} unsettled${options3.assurance.discardedInvalidFindings > 0 ? ` / ${options3.assurance.discardedInvalidFindings} discarded` : ""} candidates)`);
     }
     parts2.push("", review.summary);
     if (walkthroughKept2 && walkthrough.length > 0) {
@@ -45150,12 +44483,10 @@ var planPublication = (review, files, options3) => {
       parts2.push("", "⚠️ Walkthrough omitted — the body exceeded GitHub's review size cap.");
     }
     if (options3.inputCoverage?.status === "incomplete") {
-      parts2.push("", "### \uD83D\uDED1 Incomplete input coverage", "", ...options3.inputCoverage.reasons.map((reason) => `- ${reason}`));
-    } else if (options3.inputCoverage === undefined && options3.coverage?.status === "incomplete") {
-      parts2.push("", "### \uD83D\uDED1 Incomplete coverage", "", ...options3.coverage.reasons.map((reason) => `- ${reason}`));
+      parts2.push("", "### ⚠️ Incomplete input coverage", "", ...options3.inputCoverage.reasons.map((reason) => `- ${reason}`));
     }
-    if (options3.assurance !== undefined && options3.assurance.status !== "settled") {
-      parts2.push("", "### \uD83D\uDED1 Incomplete review assurance", "", ...options3.assurance.reasons.map((reason) => `- ${reason}`));
+    if (options3.assurance?.status === "incomplete") {
+      parts2.push("", "### ⚠️ Unsettled review passes", "", "The passes below failed on the reviewer's side after a bounded retry. Their paths are carried forward and re-reviewed automatically on the next run — do not change code to satisfy this section.", "", ...options3.assurance.reasons.map((reason) => `- ${reason}`));
     }
     if (carriedFindings.length > 0) {
       parts2.push("", "<details>", `<summary>Unresolved findings carried from unchanged scope (${carriedFindings.length})</summary>`, "", ...carriedFindings.map(renderCarriedFinding), "", "</details>");
@@ -45178,14 +44509,15 @@ var planPublication = (review, files, options3) => {
       parts2.push("", promptsKept2 ? renderConsolidatedAgentPrompt(promptEntries) : "⚠️ Consolidated agent prompt omitted — the body exceeded GitHub's review size cap.");
     }
     if (omitted2 > 0) {
-      parts2.push("", `⚠️ ${countNoun(omitted2, "review item")} omitted — the body exceeded GitHub's review size cap.`);
+      parts2.push("", `⚠️ ${countNoun2(omitted2, "review item")} omitted — the body exceeded GitHub's review size cap.`);
     }
     parts2.push("", footer);
     return parts2.join(`
 `);
   };
   const counts = severityCounts(review, options3.carriedFindings ?? [], options3.carriedConcerns ?? []);
-  const event = !options3.applyVerdict ? "COMMENT" : options3.inputCoverage?.status === "incomplete" || options3.inputCoverage === undefined && options3.coverage?.status === "incomplete" || options3.assurance !== undefined && options3.assurance.status !== "settled" || counts.blocking > 0 ? "REQUEST_CHANGES" : review.verdict === "approve" && counts.important === 0 ? "APPROVE" : "COMMENT";
+  const unclean = options3.inputCoverage?.status === "incomplete" || options3.assurance?.status === "incomplete";
+  const event = !options3.applyVerdict ? "COMMENT" : counts.blocking > 0 ? "REQUEST_CHANGES" : review.verdict === "approve" && counts.important === 0 && !unclean ? "APPROVE" : "COMMENT";
   const tail = [
     renderReviewMetadata({
       headSha: options3.headSha,
@@ -45255,11 +44587,11 @@ class ReviewRunOutcome extends exports_Schema.Class("@effect-agent/pr-review/Rev
   coverage: ReviewCoverage,
   inputCoverage: ReviewInputCoverage,
   assurance: ReviewAssurance,
+  unreviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
   plan: ReviewPublicationPlan,
   published: exports_Schema.optionalKey(PublishedReview),
-  turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  turns: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
   usage: exports_Schema.optionalKey(UsageTotals),
-  usageScope: exports_Schema.optionalKey(exports_Schema.Literals(["run", "coordinator"])),
   reviewMode: exports_Schema.optionalKey(exports_Schema.Literals(["incremental", "full"])),
   reviewReason: exports_Schema.optionalKey(exports_Schema.String.check(exports_Schema.isMaxLength(1000))),
   state: exports_Schema.optionalKey(ReviewState)
@@ -45282,57 +44614,13 @@ var enforceFindingsBound = (review, maxFindings) => review.findings.length <= ma
   ...review.walkthrough !== undefined ? { walkthrough: review.walkthrough } : {}
 });
 var findingKey = (finding) => `${finding.path}\x00${finding.startLine}\x00${finding.endLine}\x00${finding.severity}\x00${finding.title}`;
-var severityRank3 = {
-  blocking: 0,
-  important: 1,
-  nit: 2
-};
-var rankAndDedupeConcerns = (concerns) => {
-  const byContent = new Map;
-  for (const concern of concerns) {
-    const key = `${concern.title}\x00${concern.body}`;
-    const previous = byContent.get(key);
-    if (previous === undefined || severityRank3[concern.severity] < severityRank3[previous.severity]) {
-      byContent.set(key, concern);
-    }
-  }
-  return [...byContent.values()].sort((left, right) => severityRank3[left.severity] - severityRank3[right.severity]).slice(0, 10);
-};
-var executeReview = (binding, options3) => exports_Effect.gen(function* () {
-  const source = yield* PullRequestSource;
-  const metadata = yield* source.metadata;
-  const files = yield* source.changedFiles;
-  const anchorFiles = yield* source.anchorFiles;
+var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function* () {
+  const { metadata, files, anchorFiles, fingerprint, usage } = context4;
   const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
-  const mission = buildReviewMission(metadata, files);
-  const fullMission = buildReviewMission(metadata, anchorFiles);
-  const fingerprint = options3.signature === undefined ? undefined : yield* computeChangesetFingerprint(anchorFiles, options3.signature(fullMission));
-  const budget2 = yield* makeUsageBudget(options3.limits ?? reviewBudgetLimits);
-  const detached = yield* AgentRuntime.start(binding, mission, {
-    budget: toRunBudgetHook(budget2),
-    estimateCostMicrousd: () => exports_Effect.succeed(500)
-  });
-  const result4 = yield* detached.await;
-  const events2 = yield* detached.events;
-  const decoded = yield* exports_Schema.decodeUnknownEffect(CodeReview)(result4.output);
+  const review = enforceFindingsBound(core2.review, clampMaxFindings(options3.maxFindings));
+  const { inputCoverage, assurance } = core2;
+  const unreviewedPaths = [...new Set(core2.unreviewedPaths)].sort();
   const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
-  const pipeline = assessReviewPipeline({
-    shape: options3.reviewShape ?? "flat",
-    files,
-    totalFiles: reviewTotalFiles,
-    anchorFiles,
-    totalAnchorFiles: metadata.totalChangedFiles,
-    events: events2
-  });
-  const verifiedReview = options3.reviewShape !== "fan-out" ? decoded : CodeReview.make({
-    summary: decoded.summary,
-    verdict: decoded.verdict,
-    findings: rankAndDedupeFindings(pipeline.confirmedFindings),
-    ...pipeline.confirmedConcerns.length === 0 ? {} : { concerns: rankAndDedupeConcerns(pipeline.confirmedConcerns) },
-    ...pipeline.walkthrough.length === 0 ? {} : { walkthrough: pipeline.walkthrough }
-  });
-  const review = enforceFindingsBound(verifiedReview, clampMaxFindings(options3.maxFindings));
-  const usage = yield* budget2.snapshot;
   const affectedPaths = new Set(executionContext?.affectedPaths ?? files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]));
   const priorState = executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
   const carriedCandidates = priorState?.unresolvedFindings.filter((finding) => !affectedPaths.has(finding.path)).map(fromStoredFinding) ?? [];
@@ -45351,9 +44639,11 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     const key = `${concern.title}\x00${concern.body}`;
     return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
   });
-  const { assurance, coverage, inputCoverage } = pipeline;
-  const stateCandidate = executionContext !== undefined && inputCoverage.status === "complete" && assurance.status === "settled" && fingerprint !== undefined && metadata.baseSha !== undefined && executionContext.stateAuthenticator?.status === "available" ? ReviewState.make({
-    version: 1,
+  const settled = inputCoverage.status === "complete" && assurance.status !== "incomplete" && unreviewedPaths.length === 0;
+  const skipFingerprint = settled ? fingerprint : undefined;
+  const carriedScopeFits = unreviewedPaths.length <= MAX_STORED_UNREVIEWED_PATHS;
+  const stateCandidate = executionContext !== undefined && fingerprint !== undefined && metadata.baseSha !== undefined && anchorFiles.length >= metadata.totalChangedFiles && carriedScopeFits && executionContext.stateAuthenticator?.status === "available" ? ReviewState.make({
+    version: 2,
     repository: metadata.repository,
     pullRequestNumber: metadata.number,
     baseRef: metadata.baseRef,
@@ -45365,12 +44655,14 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     reviewedPathCount: anchorFiles.length,
     unresolvedFindings: activeFindings.map(toStoredFinding),
     unresolvedConcerns: activeConcerns.map(toStoredConcern),
+    unreviewedPaths,
+    settled,
     lastReviewMode: executionContext.mode
   }) : undefined;
   const continuity = stateCandidate === undefined || executionContext?.stateAuthenticator === undefined ? {
     state: undefined,
     marker: undefined,
-    notice: executionContext?.stateAuthenticator?.status === "unavailable" && inputCoverage.status === "complete" && assurance.status === "settled" ? executionContext.stateAuthenticator.unavailableReason ?? "authenticated continuity state is unavailable" : undefined
+    notice: executionContext !== undefined && !carriedScopeFits ? `carried unreviewed scope (${unreviewedPaths.length} paths) exceeded the ${MAX_STORED_UNREVIEWED_PATHS}-path continuity bound` : executionContext?.stateAuthenticator?.status === "unavailable" ? executionContext.stateAuthenticator.unavailableReason ?? "authenticated continuity state is unavailable" : undefined
   } : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(exports_Effect.match({
     onFailure: (error2) => ({
       state: undefined,
@@ -45388,11 +44680,10 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     modelLabel: options3.modelLabel,
     runUrl: options3.runUrl,
     usage,
-    usageScope: options3.usageScope,
-    fingerprint: inputCoverage.status === "complete" && assurance.status === "settled" ? fingerprint : undefined,
-    coverage,
+    fingerprint: skipFingerprint,
     inputCoverage,
     assurance,
+    unreviewedPaths,
     carriedFindings,
     carriedConcerns,
     reviewMode: executionContext?.mode,
@@ -45403,40 +44694,91 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     stateMarker: continuity.marker,
     stateNotice: continuity.notice
   });
-  const scope3 = options3.usageScope === undefined ? {} : { usageScope: options3.usageScope };
-  if (!options3.post) {
-    return ReviewRunOutcome.make({
-      review,
-      activeFindings,
-      activeConcerns,
-      coverage,
-      inputCoverage,
-      assurance,
-      plan,
-      turns: result4.turns,
-      usage,
-      ...scope3,
-      ...executionContext === undefined ? {} : { reviewMode: executionContext.mode, reviewReason: executionContext.reason },
-      ...continuity.state === undefined ? {} : { state: continuity.state }
-    });
-  }
-  const publisher = yield* ReviewPublisher;
-  const published = yield* publisher.publish(plan);
-  return ReviewRunOutcome.make({
+  const shared = {
     review,
     activeFindings,
     activeConcerns,
-    coverage,
+    coverage: compatibilityCoverage(inputCoverage, assurance),
     inputCoverage,
     assurance,
+    unreviewedPaths,
     plan,
-    published,
-    turns: result4.turns,
-    usage,
-    ...scope3,
+    turns: core2.turns,
+    ...usage === undefined ? {} : { usage },
     ...executionContext === undefined ? {} : { reviewMode: executionContext.mode, reviewReason: executionContext.reason },
     ...continuity.state === undefined ? {} : { state: continuity.state }
+  };
+  if (!options3.post)
+    return ReviewRunOutcome.make(shared);
+  const publisher = yield* ReviewPublisher;
+  const published = yield* publisher.publish(plan);
+  return ReviewRunOutcome.make({ ...shared, published });
+});
+var executeReview = (binding, options3) => exports_Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  const metadata = yield* source.metadata;
+  const files = yield* source.changedFiles;
+  const anchorFiles = yield* source.anchorFiles;
+  const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
+  const mission = buildReviewMission(metadata, files);
+  const fullMission = buildReviewMission(metadata, anchorFiles);
+  const fingerprint = options3.signature === undefined ? undefined : yield* computeChangesetFingerprint(anchorFiles, options3.signature(fullMission));
+  const budget2 = yield* makeUsageBudget(options3.limits ?? reviewBudgetLimits);
+  const detached = yield* AgentRuntime.start(binding, mission, {
+    budget: toRunBudgetHook(budget2),
+    estimateCostMicrousd: () => exports_Effect.succeed(500)
   });
+  const result4 = yield* detached.await;
+  const events2 = yield* detached.events;
+  const review = yield* exports_Schema.decodeUnknownEffect(CodeReview)(result4.output);
+  const assessment = assessFlatReview({
+    files,
+    totalFiles: executionContext?.totalFiles ?? metadata.totalChangedFiles,
+    anchorFiles,
+    totalAnchorFiles: metadata.totalChangedFiles,
+    events: events2
+  });
+  const usage = yield* budget2.snapshot;
+  return yield* settleReviewRun({
+    review,
+    inputCoverage: assessment.inputCoverage,
+    assurance: assessment.assurance,
+    unreviewedPaths: assessment.unreviewedPaths,
+    turns: result4.turns
+  }, { metadata, files, anchorFiles, fingerprint, usage }, options3);
+});
+var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  const metadata = yield* source.metadata;
+  const files = yield* source.changedFiles;
+  const anchorFiles = yield* source.anchorFiles;
+  const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
+  const fullMission = buildReviewMission(metadata, anchorFiles);
+  const fingerprint = options3.signature === undefined ? undefined : yield* computeChangesetFingerprint(anchorFiles, options3.signature(fullMission));
+  const budget2 = yield* makeUsageBudget(options3.limits ?? fanOutReviewBudgetLimits);
+  const totalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
+  const pipeline = yield* runFanOutReview(binding, {
+    files,
+    anchorFiles,
+    totalChangedFiles: totalFiles,
+    maxFindings: options3.maxFindings,
+    budget: toRunBudgetHook(budget2)
+  });
+  const inputCoverage = fanOutInputCoverage({
+    plan: pipeline.plan,
+    files,
+    totalFiles,
+    anchorFiles,
+    totalAnchorFiles: metadata.totalChangedFiles
+  });
+  const usage = yield* budget2.snapshot;
+  return yield* settleReviewRun({
+    review: pipeline.review,
+    inputCoverage,
+    assurance: pipeline.assurance,
+    unreviewedPaths: pipeline.unreviewedPaths,
+    turns: pipeline.turns
+  }, { metadata, files, anchorFiles, fingerprint, usage }, options3);
 });
 
 // packages/pr-review/src/internal/factory.ts
@@ -45507,9 +44849,7 @@ var make59 = (options3) => {
     maxFindings: clampMaxFindings(options3.maxFindings),
     signature,
     modelLabel: options3.modelLabel,
-    runUrl: runOptions.runUrl,
-    usageScope: "run",
-    reviewShape: "flat"
+    runUrl: runOptions.runUrl
   }).pipe(exports_Effect.provide(exports_Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
   return {
     definition,
@@ -45525,42 +44865,36 @@ var make59 = (options3) => {
   };
 };
 var makeFanOut = (options3) => {
-  const suite = makeFanOutReviewSuite({
-    guidance: options3.guidance,
-    maxFindings: options3.maxFindings
-  });
-  const binding = Object.freeze({ definition: suite.parent, model: options3.model });
-  const childBinding = Object.freeze({ definition: suite.child, model: options3.model });
+  const child = makeFileReviewerDefinition({ guidance: options3.guidance });
+  const childBinding = Object.freeze({ definition: child, model: options3.model });
   const guidanceLines = options3.guidance === undefined ? [] : typeof options3.guidance === "string" ? [options3.guidance] : options3.guidance;
   const signature = (mission) => [
-    suite.parent.instructions(mission),
+    "pr-review-fan-out-host-scheduled-v1",
+    JSON.stringify(exports_Schema.encodeSync(ReviewMission)(mission)),
     `childGuidance=${JSON.stringify(guidanceLines)}`,
+    `maxFindings=${clampMaxFindings(options3.maxFindings)}`,
     `applyVerdict=${String(options3.applyVerdict ?? false)}`,
     ...options3.modelLabel === undefined ? [] : [`model=${options3.modelLabel}`]
   ].join(" ");
   const profileSignature = (_mission) => [
-    "pr-review-profile-v3-sharded-request-bound-assurance",
+    "pr-review-profile-v4-host-scheduled",
     JSON.stringify(guidanceLines),
     JSON.stringify(options3.ignore ?? []),
     `maxFindings=${clampMaxFindings(options3.maxFindings)}`,
     `applyVerdict=${String(options3.applyVerdict ?? false)}`,
     ...options3.modelLabel === undefined ? [] : [`model=${options3.modelLabel}`]
-  ].join("\x00");
-  const delegationLayer = fanOutHandlersLayerFor(suite.delegation)(childBinding).pipe(exports_Layer.provide(exports_Layer.mergeAll(FileReviewToolkitLayer, SubagentReservationsMemoryLive, IdGenerator.layer)));
-  const run5 = (runOptions = {}) => provideIgnore(executeReview(binding, {
+  ].join(" ");
+  const run5 = (runOptions = {}) => provideIgnore(executeFanOutReview(childBinding, {
     post: runOptions.post ?? false,
     applyVerdict: options3.applyVerdict ?? false,
     limits: options3.budget ?? fanOutReviewBudgetLimits,
     maxFindings: clampMaxFindings(options3.maxFindings),
     signature,
     modelLabel: options3.modelLabel,
-    runUrl: runOptions.runUrl,
-    usageScope: "coordinator",
-    reviewShape: "fan-out"
-  }).pipe(exports_Effect.provide(exports_Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
+    runUrl: runOptions.runUrl
+  }).pipe(exports_Effect.provide(IdGenerator.layer), exports_Effect.scoped), options3.ignore);
   return {
-    definition: suite.parent,
-    binding,
+    definition: child,
     childBinding,
     run: run5,
     fingerprint: makeFingerprint(signature, options3.ignore),
@@ -45892,7 +45226,7 @@ var exports_AnthropicClient = {};
 __export(exports_AnthropicClient, {
   make: () => make61,
   layerConfig: () => layerConfig,
-  layer: () => layer17,
+  layer: () => layer16,
   AnthropicClient: () => AnthropicClient
 });
 
@@ -50537,7 +49871,7 @@ var make61 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createMessageStream
   });
 }, withRedactedHeaders);
-var layer17 = (options3) => effect(AnthropicClient, make61(options3));
+var layer16 = (options3) => effect(AnthropicClient, make61(options3));
 var layerConfig = (options3) => effect(AnthropicClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
@@ -50555,7 +49889,7 @@ __export(exports_AnthropicLanguageModel, {
   withConfigOverride: () => withConfigOverride,
   model: () => model,
   make: () => make63,
-  layer: () => layer18,
+  layer: () => layer17,
   Config: () => Config
 });
 
@@ -51220,9 +50554,9 @@ var Proto19 = {
     };
   }
 };
-var make62 = (provider, modelName, layer18) => Object.assign(Object.create(Proto19), {
+var make62 = (provider, modelName, layer17) => Object.assign(Object.create(Proto19), {
   provider
-}, merge3(layer18, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
+}, merge3(layer17, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
 
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicTelemetry.js
 var addAnthropicRequestAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.anthropic.request", camelToSnake);
@@ -51264,7 +50598,7 @@ var formatIssue2 = /* @__PURE__ */ makeFormatterDefault();
 
 class Config extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicLanguageModel/Config")) {
 }
-var model = (model2, config) => make62("anthropic", model2, layer18({
+var model = (model2, config) => make62("anthropic", model2, layer17({
   model: model2,
   config
 }));
@@ -51391,7 +50725,7 @@ var make63 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer18 = (options3) => effect(LanguageModel, make63(options3));
+var layer17 = (options3) => effect(LanguageModel, make63(options3));
 var withConfigOverride = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config), (config) => provideService2(self, Config, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -53182,7 +52516,7 @@ __export(exports_OpenAiClient, {
   make: () => make65,
   layerWebSocketMode: () => layerWebSocketMode,
   layerConfig: () => layerConfig2,
-  layer: () => layer19,
+  layer: () => layer18,
   OpenAiSocket: () => OpenAiSocket,
   OpenAiClient: () => OpenAiClient
 });
@@ -54089,7 +53423,7 @@ var make65 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createEmbedding
   });
 }, withRedactedHeaders2);
-var layer19 = (options3) => effect(OpenAiClient, make65(options3));
+var layer18 = (options3) => effect(OpenAiClient, make65(options3));
 var layerConfig2 = (options3) => effect(OpenAiClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
@@ -54256,7 +53590,7 @@ __export(exports_OpenAiLanguageModel, {
   withConfigOverride: () => withConfigOverride2,
   model: () => model2,
   make: () => make66,
-  layer: () => layer20,
+  layer: () => layer19,
   Config: () => Config2
 });
 
@@ -54306,7 +53640,7 @@ var SharedModelIds = ModelIdsShared.members[1];
 
 class Config2 extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiLanguageModel/Config")) {
 }
-var model2 = (model3, config) => make62("openai", model3, layer20({
+var model2 = (model3, config) => make62("openai", model3, layer19({
   model: model3,
   config
 }));
@@ -54414,7 +53748,7 @@ var make66 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer20 = (options3) => effect(LanguageModel, make66(options3));
+var layer19 = (options3) => effect(LanguageModel, make66(options3));
 var withConfigOverride2 = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config2), (config) => provideService2(self, Config2, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -56659,6 +55993,7 @@ var outcomeOutputs = (outcome, conclusion) => [
   ["inline-comments", String(outcome.plan.comments.length)],
   ["demoted-findings", String(outcome.plan.demoted.length)],
   ["concerns", String(outcome.review.concerns?.length ?? 0)],
+  ["unreviewed-paths", String(outcome.unreviewedPaths.length)],
   ...outcome.usage === undefined ? [] : [
     ["input-tokens", String(outcome.usage.inputTokens)],
     ["output-tokens", String(outcome.usage.outputTokens)]
@@ -56672,10 +56007,11 @@ var outcomeSummary = (outcome, modelLabel, conclusion) => [
   `- Input coverage: **${outcome.inputCoverage.status}** · scope: ${outcome.reviewMode ?? "full"}`,
   `- Review assurance: **${outcome.assurance.status}** · general discovery ${outcome.assurance.completedGeneralDiscoveryPasses}/${outcome.assurance.requiredGeneralDiscoveryPasses} · specialist ${outcome.assurance.completedSpecialistPasses}/${outcome.assurance.requiredSpecialistPasses} · verification ${outcome.assurance.completedVerificationPasses}/${outcome.assurance.requiredVerificationPasses}`,
   `- Inline comments: ${outcome.plan.comments.length} · demoted findings: ${outcome.plan.demoted.length} · concerns: ${outcome.review.concerns?.length ?? 0}`,
-  ...modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``],
-  ...outcome.usage === undefined ? [] : [
-    `- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out${outcome.usageScope === "coordinator" ? " (coordinator)" : ""}`
+  ...outcome.unreviewedPaths.length === 0 ? [] : [
+    `- Carried forward: ${outcome.unreviewedPaths.length} unreviewed path(s) retried automatically on the next run (reviewer-side gap, not a code defect)`
   ],
+  ...modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``],
+  ...outcome.usage === undefined ? [] : [`- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out`],
   ...outcome.published === undefined ? ["- Dry run: nothing posted"] : [`- Posted: ${outcome.published.url}`]
 ];
 var skip = (reason) => exports_Effect.gen(function* () {
@@ -56700,20 +56036,26 @@ var blockingReasons = (input) => [
   ...input.concerns.filter((concern) => concern.severity === "blocking").map((concern) => `blocking concern: ${concern.title}`)
 ];
 var concludeReviewOutcome = (outcome) => {
-  if (outcome.inputCoverage.status === "incomplete") {
-    return { conclusion: "incomplete", reasons: outcome.inputCoverage.reasons };
+  const machinery = [];
+  if (outcome.inputCoverage.status === "incomplete" || outcome.assurance.status === "incomplete") {
+    machinery.push(outcome.unreviewedPaths.length > 0 ? `review infrastructure did not settle — a reviewer-side gap, not a code defect; ${outcome.unreviewedPaths.length} path(s) are carried forward and retried automatically on the next run` : "review infrastructure did not settle — a reviewer-side gap, not a code defect");
+    if (outcome.inputCoverage.status === "incomplete") {
+      machinery.push(...outcome.inputCoverage.reasons);
+    }
+    if (outcome.assurance.status === "incomplete") {
+      machinery.push(...outcome.assurance.reasons);
+    }
   }
-  if (outcome.assurance.status !== "settled") {
-    return {
-      conclusion: "incomplete",
-      reasons: outcome.assurance.reasons.length > 0 ? outcome.assurance.reasons : ["configured discovery and verification work did not settle"]
-    };
-  }
-  const reasons = blockingReasons({
+  const blocking = blockingReasons({
     findings: outcome.activeFindings,
     concerns: outcome.activeConcerns
   });
-  return reasons.length > 0 ? { conclusion: "blocking", reasons } : { conclusion: "success", reasons };
+  if (blocking.length > 0) {
+    return { conclusion: "blocking", reasons: [...blocking, ...machinery] };
+  }
+  if (machinery.length > 0)
+    return { conclusion: "incomplete", reasons: machinery };
+  return { conclusion: "success", reasons: [] };
 };
 var concludeReviewState = (state) => {
   const reasons = blockingReasons({
@@ -56783,7 +56125,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
           failure: undefined
         })
       }));
-      const equivalentPatchState = (options3.reviewMode ?? "incremental") === "incremental" && options3.skipUnchanged !== false && recovered.state !== undefined && currentFingerprint !== undefined && validateReviewState(recovered.state, metadata, profileFingerprint) === undefined && recovered.state.acceptedScopeFingerprint === currentFingerprint ? recovered.state : undefined;
+      const equivalentPatchState = (options3.reviewMode ?? "incremental") === "incremental" && options3.skipUnchanged !== false && recovered.state !== undefined && recovered.state.settled && currentFingerprint !== undefined && validateReviewState(recovered.state, metadata, profileFingerprint) === undefined && recovered.state.acceptedScopeFingerprint === currentFingerprint ? recovered.state : undefined;
       if (equivalentPatchState !== undefined) {
         return yield* skipCoveredReview({
           repository: target.repository,
@@ -56841,7 +56183,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
         }),
         stateAuthenticator
       };
-      if (options3.skipUnchanged !== false && selection.mode === "incremental" && selection.files.length === 0 && selection.priorState !== undefined) {
+      if (options3.skipUnchanged !== false && selection.mode === "incremental" && selection.files.length === 0 && selection.priorState !== undefined && selection.priorState.settled) {
         const reason = "no changed review scope since the last settled review head";
         return yield* skipCoveredReview({
           repository: target.repository,

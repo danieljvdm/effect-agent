@@ -1,28 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Layer, Redacted, Ref, Schema } from "effect";
-import {
-  Agent,
-  AgentRuntime,
-  IdGenerator,
-  RunEvent,
-  SubagentReservationsMemoryLive,
-} from "effect-agent";
+import { Agent, AgentRuntime, IdGenerator, UsageBudgetLimits } from "effect-agent";
 import { Tool } from "effect/unstable/ai";
-import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
 import {
   CandidateAssessment,
   ChangedFile,
   annotatePatch,
-  CodeReview,
-  DelegateFileReview,
-  executeReview,
-  assessReviewPipeline,
-  fanOutHandlersLayer,
-  FanOutCoordinatorToolkitLayer,
+  executeFanOutReview,
+  fanOutInputCoverage,
   fanOutReviewBudgetLimits,
   fanOutReviewerProfile,
-  FanOutReviewer,
   FanOutReviewerProfile,
   findingAnchorInUnitEvidence,
   fileReviewEvidenceChunks,
@@ -30,16 +18,8 @@ import {
   FileReviewBrief,
   FileReviewEvidence,
   FileReviewReport,
-  FileReviewRequest,
   FileReviewToolkit,
-  FileReviewToolkitLayer,
-  FileReviewUnitFailed,
-  FileReviewUnitResult,
-  type FileReviewWorkRejected,
-  FindingCandidate,
-  ListReviewUnits,
-  makeFanOutReviewInstructions,
-  makeFanOutReviewSuite,
+  makeFileReviewerDefinition,
   MAX_FILE_REVIEW_TOOL_CALLS,
   MAX_PATCH_CHARS,
   MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS,
@@ -50,21 +30,19 @@ import {
   rankAndDedupeFindings,
   ReviewFinding,
   ReviewExecutionContext,
-  ReviewMission,
+  type ReviewPassMisbehaved,
   type ReviewPublicationPlan,
   ReviewStateAuthenticator,
   type ReviewRiskCategory,
   WalkthroughEntry,
   webCryptoReviewStateAuthenticatorLayer,
   defaultFileReviewerPolicy,
-  fileReviewPolicy,
 } from "../src/index.ts";
 import {
   collectingReviewPublisherLayer,
   FixtureFile,
   FixturePullRequest,
   fixturePullRequestSourceLayer,
-  makeOfflineFanOutCoordinatorModel,
   makeOfflineFileReviewerModel,
   type OfflineUnitScript,
 } from "../src/testing.ts";
@@ -120,7 +98,7 @@ const highRiskFixture = FixturePullRequest.make({
     repository: "acme/ingress",
     number: 110,
     title: "Authenticate and publish work-order events",
-    body: `Regression fixture; ${MISSION_MARKER} stays with the coordinator.`,
+    body: `Regression fixture; ${MISSION_MARKER} stays with the host.`,
     baseRef: "main",
     baseSha: "0123456789abcdef0123456789abcdef01234567",
     headRef: "work-order-ingress",
@@ -140,6 +118,7 @@ const generalPass = highRiskPlan.discoveryPasses.find((pass) => pass.perspective
 const specialistPass = highRiskPlan.discoveryPasses.find(
   (pass) => pass.perspective === "risk-specialist",
 )!;
+const verificationWorkId = `${highRiskUnit.unitId}-verification`;
 
 const supportedFinding = ReviewFinding.make({
   path: "examples/pr-work-order-ingress/src/authenticate.ts",
@@ -161,33 +140,9 @@ const unsupportedFinding = ReviewFinding.make({
   body: "The candidate claims the true literal disables the path, but the bounded evidence does not support that behavior.",
 });
 
-const candidateFor = (
-  finding: ReviewFinding,
-  index: number,
-  pass: typeof specialistPass = specialistPass,
-): FindingCandidate =>
-  FindingCandidate.make({
-    candidateId: `${pass.passId}:finding:${String(index).padStart(3, "0")}`,
-    workId: pass.passId,
-    unitId: pass.unitId,
-    finding,
-    evidencePaths: [finding.path],
-  });
-
-const supportedCandidate = candidateFor(supportedFinding, 1);
-const unsupportedCandidate = candidateFor(unsupportedFinding, 2);
-
-const discoveryRequest = (pass: typeof generalPass): FileReviewRequest =>
-  FileReviewRequest.make({
-    phase: "discovery",
-    workId: pass.passId,
-    unitId: pass.unitId,
-    paths: pass.paths,
-    evidenceShardIds: pass.evidenceShardIds,
-    perspective: pass.perspective,
-    riskCategories: pass.riskCategories,
-    candidates: [],
-  });
+/** The host assigns candidate IDs by kept-finding position, 1-based. */
+const candidateId = (passId: string, index: number): string =>
+  `${passId}:finding:${String(index).padStart(3, "0")}`;
 
 const discoveryReport = (
   pass: typeof generalPass,
@@ -208,69 +163,33 @@ const discoveryReport = (
     assessments: [],
   });
 
-const verificationRequest = FileReviewRequest.make({
-  phase: "verification",
-  workId: `${highRiskUnit.unitId}-verification`,
-  unitId: highRiskUnit.unitId,
-  paths: highRiskUnit.paths,
-  evidenceShardIds: highRiskUnit.evidenceShards.map((shard) => shard.shardId),
-  perspective: "candidate-verification",
-  riskCategories: highRiskUnit.riskCategories,
-  candidates: [supportedCandidate, unsupportedCandidate],
+const verificationReport = (assessments: ReadonlyArray<CandidateAssessment>): FileReviewReport =>
+  FileReviewReport.make({
+    phase: "verification",
+    workId: verificationWorkId,
+    unitId: highRiskUnit.unitId,
+    findings: [],
+    concerns: [],
+    fileSummaries: [],
+    assessments,
+  });
+
+const report = (workId: string, value: FileReviewReport): OfflineUnitScript => ({
+  workId,
+  outcomes: [{ _tag: "report", report: value }],
 });
 
-const verificationReport = FileReviewReport.make({
-  phase: "verification",
-  workId: verificationRequest.workId,
-  unitId: verificationRequest.unitId,
-  findings: [],
-  concerns: [],
-  fileSummaries: [],
-  assessments: [
-    CandidateAssessment.make({
-      candidateId: supportedCandidate.candidateId,
-      disposition: "confirmed",
-      rationale: "The changed authentication mode is reachable without an identity check.",
-    }),
-    CandidateAssessment.make({
-      candidateId: unsupportedCandidate.candidateId,
-      disposition: "rejected",
-      rationale: "The evidence contains no disabling branch and does not establish the claim.",
-    }),
-  ],
-});
-
-const coordinatorReview = CodeReview.make({
-  summary: "General and specialist discovery completed; candidate verification settled.",
-  verdict: "comment",
-  findings: [unsupportedFinding],
-  concerns: [],
-});
-
+/** Run the host-scheduled pipeline offline over the fixture pull request. */
 const runOfflineFanOut = (script: {
-  readonly discoveryReports: ReadonlyArray<OfflineUnitScript>;
-  readonly discoveryCalls?: ReadonlyArray<FileReviewRequest> | undefined;
-  readonly verificationReports?: ReadonlyArray<OfflineUnitScript> | undefined;
-  readonly verificationCalls?: ReadonlyArray<FileReviewRequest> | undefined;
-  readonly review?: CodeReview | undefined;
+  readonly children: ReadonlyArray<OfflineUnitScript>;
   readonly fixture?: FixturePullRequest | undefined;
+  readonly maxFindings?: number | undefined;
+  readonly limits?: UsageBudgetLimits | undefined;
 }) =>
   Effect.gen(function* () {
     const fixture = script.fixture ?? highRiskFixture;
     const reviewFiles = fixture.files.map((entry) => entry.file);
-    const reviewPlan = planReviewUnits(reviewFiles, {
-      totalChangedFiles: fixture.metadata.totalChangedFiles,
-    });
-    const coordinator = yield* makeOfflineFanOutCoordinatorModel({
-      discoveryCalls: script.discoveryCalls ?? reviewPlan.discoveryPasses.map(discoveryRequest),
-      verificationCalls: script.verificationCalls ?? [],
-      review: script.review ?? coordinatorReview,
-    });
-    const children = yield* makeOfflineFileReviewerModel([
-      ...script.discoveryReports,
-      ...(script.verificationReports ?? []),
-    ]);
-    const parentBinding = Agent.withModel(FanOutReviewer, coordinator.model);
+    const children = yield* makeOfflineFileReviewerModel(script.children);
     const childBinding = Agent.withModel(FileReviewer, children.model);
     const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
     const stateAuthenticator = yield* Effect.gen(function* () {
@@ -280,23 +199,16 @@ const runOfflineFanOut = (script: {
         webCryptoReviewStateAuthenticatorLayer(Redacted.make("offline-assurance-secret")),
       ),
     );
-    const sourceLayer = fixturePullRequestSourceLayer(fixture);
-    const childSupportLayer = Layer.mergeAll(
-      FileReviewToolkitLayer,
-      SubagentReservationsMemoryLive,
-      IdGenerator.layer,
-    ).pipe(Layer.provideMerge(sourceLayer));
-    const program = executeReview(parentBinding, {
+    const program = executeFanOutReview(childBinding, {
       post: true,
       applyVerdict: false,
-      limits: fanOutReviewBudgetLimits,
-      reviewShape: "fan-out",
-      signature: () => "offline-assurance-profile-v2",
+      limits: script.limits ?? fanOutReviewBudgetLimits,
+      ...(script.maxFindings === undefined ? {} : { maxFindings: script.maxFindings }),
+      signature: () => "offline-assurance-profile-v3",
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          FanOutCoordinatorToolkitLayer.pipe(Layer.provideMerge(sourceLayer)),
-          fanOutHandlersLayer(childBinding).pipe(Layer.provide(childSupportLayer)),
+          fixturePullRequestSourceLayer(fixture),
           collectingReviewPublisherLayer(published),
           IdGenerator.layer,
         ),
@@ -318,42 +230,36 @@ const runOfflineFanOut = (script: {
     return {
       outcome,
       published: yield* Ref.get(published),
-      coordinatorCalls: yield* coordinator.calls,
-      coordinatorPrompts: yield* coordinator.prompts,
       childCalls: yield* children.calls,
       childPrompts: yield* children.prompts,
     };
   });
 
 describe("fan-out review contract", () => {
-  const mission = ReviewMission.make({
-    repository: "acme/ingress",
-    number: 110,
-    title: "Authenticate ingress",
-    body: "",
-    baseRef: "main",
-    headRef: "work-order-ingress",
-    changedFileCount: 2,
-  });
-
-  it("requires discovery, exact independent verification, and honest non-exhaustive prose", () => {
-    const instructions = makeFanOutReviewInstructions({
-      guidance: "Review architecture first.",
-      maxFindings: 7,
-    })(mission);
-    expect(instructions).toContain("Review architecture first.");
-    expect(instructions).toContain("EVERY discoveryPass");
-    expect(instructions).toContain("EVERY retained candidate copied byte-for-byte");
-    expect(instructions).toContain("retaining the first candidate in discoveryPass plan order");
-    expect(instructions).toContain("never an exhaustive or defect-free review");
-    expect(instructions).toContain("publication cap is 7");
+  const discoveryBrief = FileReviewBrief.make({
+    phase: "discovery",
+    workId: generalPass.passId,
+    unitId: generalPass.unitId,
+    paths: generalPass.paths,
+    evidenceShardIds: generalPass.evidenceShardIds,
+    perspective: generalPass.perspective,
+    riskCategories: generalPass.riskCategories,
+    candidates: [],
+    evidence: [
+      FileReviewEvidence.make({
+        shardId: "shard-0001",
+        path: generalPass.paths[0]!,
+        status: "modified",
+        reviewMode: "diff",
+        ordinal: 1,
+        total: 1,
+        annotatedPatch: "@@ -1 +1 @@\nR1 + export const value = 1;",
+      }),
+    ],
   });
 
   it("spells the finding shape and committable-suggestion rule out to discovery workers", () => {
-    const instructions = FileReviewer.instructions({
-      ...discoveryRequest(generalPass),
-      evidence: [],
-    });
+    const instructions = FileReviewer.instructions(discoveryBrief);
     expect(instructions).toContain(
       '"suggestion": <string, OPTIONAL: replacement source code for exactly lines startLine..endLine, ready to commit>',
     );
@@ -367,10 +273,24 @@ describe("fan-out review contract", () => {
   });
 
   it("requires verifiers to settle every carried suggestion exactly", () => {
-    const instructions = FileReviewer.instructions({
-      ...verificationRequest,
-      evidence: [],
-    });
+    const instructions = FileReviewer.instructions(
+      FileReviewBrief.make({
+        ...discoveryBrief,
+        phase: "verification",
+        workId: verificationWorkId,
+        perspective: "candidate-verification",
+        candidates: [
+          {
+            _tag: "FindingCandidate",
+            candidateId: candidateId(specialistPass.passId, 1),
+            workId: specialistPass.passId,
+            unitId: specialistPass.unitId,
+            finding: supportedFinding,
+            evidencePaths: [supportedFinding.path],
+          },
+        ],
+      }),
+    );
     expect(instructions).toContain('"suggestion": <"committable" | "not-committable"');
     expect(instructions).toContain(
       "full replacement source for exactly lines startLine..endLine and nothing else",
@@ -381,14 +301,11 @@ describe("fan-out review contract", () => {
     );
   });
 
-  it("configures evidence-only children with the framework's bounded concurrency policy", () => {
+  it("configures evidence-only children with the packaged bounded policy", () => {
     expect(Object.keys(FileReviewToolkit.tools)).toEqual([]);
     expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(1);
     expect(defaultFileReviewerPolicy.maxToolCalls).toBe(1);
-    expect(fileReviewPolicy.maxToolCalls).toBe(1);
-    expect(fileReviewPolicy.maxConcurrency).toBe(4);
-    // The shared attached-subagent scheduler's Scope-owned slot gate is
-    // exercised with deterministic gated children in capabilities tests.
+    expect(defaultFileReviewerPolicy.onExhaustion).toBe("fail");
     expect(Duration.toMillis(defaultFileReviewerPolicy.maxDuration)).toBe(6 * 60_000);
   });
 
@@ -398,20 +315,14 @@ describe("fan-out review contract", () => {
     );
     expect(decoded).toEqual(fanOutReviewerProfile);
     expect(fanOutReviewerProfile).toMatchObject({
+      hostScheduledPasses: true,
+      failedPassesRetriedOnceThenCarried: true,
       hostOwnedRiskClassification: true,
       redundantHighRiskDiscovery: true,
       independentCandidateVerification: true,
       defectAbsenceProven: false,
       exactlyOnceExternalEffects: false,
     });
-  });
-
-  it("keeps coordinator tools compatible with strict provider object schemas", () => {
-    for (const tool of [ListReviewUnits, DelegateFileReview]) {
-      const jsonSchema = Tool.getJsonSchema(tool, { transformer: toCodecOpenAI });
-      expect(jsonSchema.type).toBe("object");
-      expect(jsonSchema.anyOf).toBeUndefined();
-    }
   });
 
   it.effect("selects scripted child outcomes by an exact work-ID marker", () =>
@@ -430,8 +341,8 @@ describe("fan-out review contract", () => {
         workId: "unit-001-general",
       });
       const scripted = yield* makeOfflineFileReviewerModel([
-        { workId: prefixReport.workId, outcome: { _tag: "report", report: prefixReport } },
-        { workId: exactReport.workId, outcome: { _tag: "report", report: exactReport } },
+        report(prefixReport.workId, prefixReport),
+        report(exactReport.workId, exactReport),
       ]);
       const binding = Agent.withModel(FileReviewer, scripted.model);
       const output = yield* AgentRuntime.run(
@@ -457,20 +368,15 @@ describe("fan-out review contract", () => {
             }),
           ],
         }),
-      ).pipe(Effect.provide(Layer.mergeAll(FileReviewToolkitLayer, IdGenerator.layer)));
+      ).pipe(Effect.provide(IdGenerator.layer), Effect.scoped);
 
       expect(output.output.workId).toBe(exactReport.workId);
     }),
   );
 
-  it("carries shared guidance to both coordinator and workers", () => {
-    const suite = makeFanOutReviewSuite({ guidance: "Architecture first.", maxFindings: 7 });
-    expect(suite.parent.instructions(mission)).toContain("Architecture first.");
-    const brief = {
-      ...discoveryRequest(generalPass),
-      evidence: [],
-    };
-    expect(suite.child.instructions(brief)).toContain("Architecture first.");
+  it("carries shared guidance to every worker", () => {
+    const child = makeFileReviewerDefinition({ guidance: "Architecture first." });
+    expect(child.instructions(discoveryBrief)).toContain("Architecture first.");
   });
 });
 
@@ -548,7 +454,7 @@ describe("deterministic input and risk planning", () => {
     expect(plan.discoveryPasses[1]?.riskCategories).toEqual([]);
   });
 
-  it("reports undiffable and over-capacity paths instead of dropping them", () => {
+  it("keeps undiffable and over-capacity paths as fail-closed coverage gaps", () => {
     const binary = ChangedFile.make({
       path: "assets/logo.png",
       status: "added",
@@ -564,13 +470,29 @@ describe("deterministic input and risk planning", () => {
         patch: patchFor("wide"),
       }),
     );
-    const plan = planReviewUnits([...many, binary], { totalChangedFiles: 121 });
+    const files = [...many, binary];
+    const plan = planReviewUnits(files, { totalChangedFiles: 121 });
     const assigned = plan.units.flatMap((unit) => unit.paths);
 
     expect(plan.undiffablePaths).toEqual(["assets/logo.png"]);
     expect([...assigned, ...plan.unassignedPaths].sort()).toEqual(
       many.map((file) => file.path).sort(),
     );
+
+    const inputCoverage = fanOutInputCoverage({
+      plan,
+      files,
+      totalFiles: files.length,
+      anchorFiles: files,
+      totalAnchorFiles: files.length,
+    });
+    // Fail-closed: an unreviewable binary keeps input coverage incomplete for
+    // as long as it is part of the pull request; ignore globs are the
+    // deliberate way to exclude it. The capacity overflow is a gap too.
+    expect(inputCoverage.status).toBe("incomplete");
+    expect(inputCoverage.undiffablePaths).toEqual(["assets/logo.png"]);
+    expect(inputCoverage.unassignedPaths).toEqual([...plan.unassignedPaths].sort());
+    expect(inputCoverage.reasons.join("\n")).toContain("assets/logo.png");
   });
 
   it("bounds overflow identifiers while preserving the exact shard count and every path", () => {
@@ -602,17 +524,16 @@ describe("deterministic input and risk planning", () => {
       [...new Set([...plan.units.flatMap((unit) => unit.paths), ...plan.unassignedPaths])].sort(),
     ).toEqual(files.map((file) => file.path).sort());
 
-    const assessment = assessReviewPipeline({
-      shape: "fan-out",
+    const inputCoverage = fanOutInputCoverage({
+      plan,
       files,
       totalFiles: files.length,
       anchorFiles: files,
       totalAnchorFiles: files.length,
-      events: [],
     });
-    expect(assessment.inputCoverage.status).toBe("incomplete");
-    expect(assessment.inputCoverage.unassignedPaths).toEqual(plan.unassignedPaths);
-    expect(assessment.inputCoverage.reasons.join("\n")).toContain(
+    expect(inputCoverage.status).toBe("incomplete");
+    expect(inputCoverage.unassignedPaths).toEqual([...plan.unassignedPaths].sort());
+    expect(inputCoverage.reasons.join("\n")).toContain(
       `${plan.unassignedEvidenceShardCount} deterministic evidence shard(s)`,
     );
   });
@@ -641,18 +562,17 @@ describe("deterministic input and risk planning", () => {
     expect(plan.partialEvidencePaths).toEqual([]);
     expect(plan.unassignedEvidenceShardIds).toEqual([]);
 
-    const assessment = assessReviewPipeline({
-      shape: "fan-out",
+    const inputCoverage = fanOutInputCoverage({
+      plan,
       files: [oversized],
       totalFiles: 1,
       anchorFiles: [oversized],
       totalAnchorFiles: 1,
-      events: [],
     });
-    expect(assessment.inputCoverage.status).toBe("complete");
-    expect(assessment.inputCoverage.assignedPaths).toEqual([oversized.path]);
-    expect(assessment.inputCoverage.partialPaths).toEqual([]);
-    expect(assessment.inputCoverage.reasons).toEqual([]);
+    expect(inputCoverage.status).toBe("complete");
+    expect(inputCoverage.assignedPaths).toEqual([oversized.path]);
+    expect(inputCoverage.partialPaths).toEqual([]);
+    expect(inputCoverage.reasons).toEqual([]);
   });
 
   it("binds finding anchors to the exact shards assigned to their unit", () => {
@@ -698,36 +618,39 @@ describe("deterministic input and risk planning", () => {
   });
 });
 
-describe("offline discovery and verification pipeline", () => {
+describe("host-scheduled discovery and verification pipeline", () => {
   const successfulDiscovery: ReadonlyArray<OfflineUnitScript> = [
-    {
-      workId: generalPass.passId,
-      outcome: { _tag: "report", report: discoveryReport(generalPass, []) },
-    },
-    {
-      workId: specialistPass.passId,
-      outcome: {
-        _tag: "report",
-        report: discoveryReport(specialistPass, [supportedFinding, unsupportedFinding]),
-      },
-    },
+    report(generalPass.passId, discoveryReport(generalPass, [])),
+    report(
+      specialistPass.passId,
+      discoveryReport(specialistPass, [supportedFinding, unsupportedFinding]),
+    ),
   ];
+  const settledVerification = report(
+    verificationWorkId,
+    verificationReport([
+      CandidateAssessment.make({
+        candidateId: candidateId(specialistPass.passId, 1),
+        disposition: "confirmed",
+        rationale: "The changed authentication mode is reachable without an identity check.",
+      }),
+      CandidateAssessment.make({
+        candidateId: candidateId(specialistPass.passId, 2),
+        disposition: "rejected",
+        rationale: "The evidence contains no disabling branch and does not establish the claim.",
+      }),
+    ]),
+  );
 
   it.effect(
     "finds a defect missed by general discovery and publishes only verifier-confirmed candidates",
     () =>
       Effect.gen(function* () {
         const result = yield* runOfflineFanOut({
-          discoveryReports: successfulDiscovery,
-          verificationCalls: [verificationRequest],
-          verificationReports: [
-            {
-              workId: verificationRequest.workId,
-              outcome: { _tag: "report", report: verificationReport },
-            },
-          ],
+          children: [...successfulDiscovery, settledVerification],
         });
 
+        expect(result.childCalls).toBe(3);
         expect(result.outcome.inputCoverage.status).toBe("complete");
         expect(result.outcome.assurance).toMatchObject({
           status: "settled",
@@ -741,15 +664,21 @@ describe("offline discovery and verification pipeline", () => {
           confirmedCandidates: 1,
           rejectedCandidates: 1,
           unsettledCandidates: 0,
+          discardedInvalidFindings: 0,
         });
         expect(result.outcome.review.findings).toEqual([supportedFinding]);
         expect(result.outcome.review.findings).not.toContainEqual(unsupportedFinding);
+        expect(result.outcome.review.verdict).toBe("comment");
+        expect(result.outcome.unreviewedPaths).toEqual([]);
+        expect(result.outcome.turns).toBeGreaterThan(0);
         expect(result.outcome.plan.comments.map((comment) => comment.path)).toEqual([
           supportedFinding.path,
         ]);
         expect(result.outcome.plan.body).toContain("**Review assurance:** settled");
         expect(result.outcome.state?.reviewedHeadSha).toBe(FIXTURE_SHA);
-        expect(result.outcome.plan.body).toContain("effect-agent-pr-review state-v1:");
+        expect(result.outcome.state?.settled).toBe(true);
+        expect(result.outcome.state?.unreviewedPaths).toEqual([]);
+        expect(result.outcome.plan.body).toContain("effect-agent-pr-review state-v2:");
         expect(result.published).toHaveLength(1);
 
         const generalPrompt = result.childPrompts.find((prompt) =>
@@ -758,60 +687,37 @@ describe("offline discovery and verification pipeline", () => {
         const specialistPrompt = result.childPrompts.find(
           (prompt) =>
             prompt.includes(specialistPass.passId) &&
-            !prompt.includes(supportedCandidate.candidateId),
+            !prompt.includes(candidateId(specialistPass.passId, 1)),
         );
         const verifierPrompt = result.childPrompts.find((prompt) =>
-          prompt.includes(verificationRequest.workId),
+          prompt.includes(verificationWorkId),
         );
         expect(generalPrompt).toBeDefined();
         expect(specialistPrompt).toBeDefined();
-        expect(verifierPrompt).toContain(supportedCandidate.candidateId);
+        expect(verifierPrompt).toContain(candidateId(specialistPass.passId, 1));
         expect(verifierPrompt).toContain("authenticateMode");
         expect(verifierPrompt).toContain("publishWebhookMode");
+        // Children receive host-planned evidence only, never the PR mission.
         for (const prompt of result.childPrompts) expect(prompt).not.toContain(MISSION_MARKER);
       }),
   );
 
   it.effect("verifies an equivalent cross-pass candidate once and publishes it once", () =>
     Effect.gen(function* () {
-      const canonicalCandidate = candidateFor(supportedFinding, 1, generalPass);
-      const deduplicatedVerificationRequest = FileReviewRequest.make({
-        ...verificationRequest,
-        candidates: [canonicalCandidate],
-      });
-      const deduplicatedVerificationReport = FileReviewReport.make({
-        ...verificationReport,
-        assessments: [
-          CandidateAssessment.make({
-            candidateId: canonicalCandidate.candidateId,
-            disposition: "confirmed",
-            rationale: "The bounded evidence confirms the authentication defect once.",
-          }),
-        ],
-      });
       const result = yield* runOfflineFanOut({
-        discoveryReports: [
-          {
-            workId: generalPass.passId,
-            outcome: {
-              _tag: "report",
-              report: discoveryReport(generalPass, [supportedFinding]),
-            },
-          },
-          {
-            workId: specialistPass.passId,
-            outcome: {
-              _tag: "report",
-              report: discoveryReport(specialistPass, [supportedFinding]),
-            },
-          },
-        ],
-        verificationCalls: [deduplicatedVerificationRequest],
-        verificationReports: [
-          {
-            workId: deduplicatedVerificationRequest.workId,
-            outcome: { _tag: "report", report: deduplicatedVerificationReport },
-          },
+        children: [
+          report(generalPass.passId, discoveryReport(generalPass, [supportedFinding])),
+          report(specialistPass.passId, discoveryReport(specialistPass, [supportedFinding])),
+          report(
+            verificationWorkId,
+            verificationReport([
+              CandidateAssessment.make({
+                candidateId: candidateId(generalPass.passId, 1),
+                disposition: "confirmed",
+                rationale: "The bounded evidence confirms the authentication defect once.",
+              }),
+            ]),
+          ),
         ],
       });
 
@@ -823,36 +729,6 @@ describe("offline discovery and verification pipeline", () => {
       });
       expect(result.outcome.review.findings).toEqual([supportedFinding]);
       expect(result.outcome.plan.comments).toHaveLength(1);
-    }),
-  );
-
-  it.effect("fails assurance when extra work reuses an expected verification ID", () =>
-    Effect.gen(function* () {
-      const alteredRequest = FileReviewRequest.make({
-        ...verificationRequest,
-        candidates: [supportedCandidate],
-      });
-      const result = yield* runOfflineFanOut({
-        discoveryReports: successfulDiscovery,
-        verificationCalls: [verificationRequest, alteredRequest],
-        verificationReports: [
-          {
-            workId: verificationRequest.workId,
-            outcome: { _tag: "report", report: verificationReport },
-          },
-        ],
-      });
-
-      expect(result.outcome.assurance.status).toBe("incomplete");
-      expect(result.outcome.assurance.failedPasses).toContainEqual(
-        expect.objectContaining({
-          workId: verificationRequest.workId,
-          stage: "verification",
-          errorTag: "UnexpectedPass",
-        }),
-      );
-      expect(result.outcome.state).toBeUndefined();
-      expect(result.outcome.plan.event).toBe("COMMENT");
     }),
   );
 
@@ -872,19 +748,8 @@ describe("offline discovery and verification pipeline", () => {
         }),
         files: [],
       });
-      const result = yield* runOfflineFanOut({
-        fixture: emptyFixture,
-        discoveryCalls: [],
-        discoveryReports: [],
-        review: CodeReview.make({
-          summary: "No reviewable changes were selected.",
-          verdict: "comment",
-          findings: [],
-          concerns: [],
-        }),
-      });
+      const result = yield* runOfflineFanOut({ fixture: emptyFixture, children: [] });
 
-      expect(result.coordinatorCalls).toBe(2);
       expect(result.childCalls).toBe(0);
       expect(result.outcome.inputCoverage.status).toBe("complete");
       expect(result.outcome.assurance).toMatchObject({
@@ -893,15 +758,102 @@ describe("offline discovery and verification pipeline", () => {
         requiredSpecialistPasses: 0,
         requiredVerificationPasses: 0,
       });
+      expect(result.outcome.review.verdict).toBe("approve");
+      expect(result.outcome.turns).toBe(0);
+      expect(result.outcome.state?.settled).toBe(true);
     }),
   );
 
-  it.effect("makes failed specialist discovery visible and prevents settled assurance", () =>
+  // The incident regression (issue #131): one invalid anchor used to reject
+  // the whole pass as FileReviewWorkRejected, which froze the continuity
+  // baseline and reopened the entire post-baseline scope on every push.
+  it.effect("discards an invalid-anchor finding without failing its pass or the baseline", () =>
+    Effect.gen(function* () {
+      const invalidAnchor = ReviewFinding.make({
+        ...supportedFinding,
+        startLine: 99,
+        endLine: 99,
+        title: "Invalid new-version anchor",
+      });
+      const result = yield* runOfflineFanOut({
+        children: [
+          report(generalPass.passId, discoveryReport(generalPass, [])),
+          report(
+            specialistPass.passId,
+            discoveryReport(specialistPass, [invalidAnchor, supportedFinding]),
+          ),
+          report(
+            verificationWorkId,
+            verificationReport([
+              CandidateAssessment.make({
+                // The invalid anchor was discarded, so the kept finding is 001.
+                candidateId: candidateId(specialistPass.passId, 1),
+                disposition: "confirmed",
+                rationale: "The changed mode reaches the authenticated path unchecked.",
+              }),
+            ]),
+          ),
+        ],
+      });
+
+      expect(result.outcome.assurance).toMatchObject({
+        status: "settled",
+        discardedInvalidFindings: 1,
+        discoveredCandidates: 1,
+        confirmedCandidates: 1,
+      });
+      expect(result.outcome.review.findings).toEqual([supportedFinding]);
+      expect(result.outcome.unreviewedPaths).toEqual([]);
+      expect(result.outcome.state?.settled).toBe(true);
+    }),
+  );
+
+  it.effect("retries a misdirected child report once and settles on the retry", () =>
+    Effect.gen(function* () {
+      const mismatched = FileReviewReport.make({
+        ...discoveryReport(specialistPass, [supportedFinding]),
+        workId: generalPass.passId,
+      });
+      const result = yield* runOfflineFanOut({
+        children: [
+          report(generalPass.passId, discoveryReport(generalPass, [])),
+          {
+            workId: specialistPass.passId,
+            outcomes: [
+              { _tag: "report", report: mismatched },
+              { _tag: "report", report: discoveryReport(specialistPass, [supportedFinding]) },
+            ],
+          },
+          report(
+            verificationWorkId,
+            verificationReport([
+              CandidateAssessment.make({
+                candidateId: candidateId(specialistPass.passId, 1),
+                disposition: "confirmed",
+                rationale: "Confirmed on the retried, correctly addressed pass.",
+              }),
+            ]),
+          ),
+        ],
+      });
+
+      expect(result.childCalls).toBe(4);
+      expect(result.outcome.assurance.status).toBe("settled");
+      expect(result.outcome.assurance.failedPasses).toEqual([]);
+      expect(result.outcome.review.findings).toEqual([supportedFinding]);
+      expect(result.outcome.state?.settled).toBe(true);
+    }),
+  );
+
+  // The second incident regression: a pass that stays failed no longer
+  // freezes continuity — the baseline advances and the unit's paths are
+  // carried as retryable scope for the next run.
+  it.effect("carries a persistently failed pass forward instead of freezing the baseline", () =>
     Effect.gen(function* () {
       const result = yield* runOfflineFanOut({
-        discoveryReports: [
-          successfulDiscovery[0]!,
-          { workId: specialistPass.passId, outcome: { _tag: "malformed-output" } },
+        children: [
+          report(generalPass.passId, discoveryReport(generalPass, [])),
+          { workId: specialistPass.passId, outcomes: [{ _tag: "malformed-output" }] },
         ],
       });
 
@@ -915,79 +867,53 @@ describe("offline discovery and verification pipeline", () => {
         }),
       );
       expect(result.outcome.coverage.status).toBe("incomplete");
-      expect(result.outcome.state).toBeUndefined();
-      expect(result.outcome.plan.body).toContain("Incomplete review assurance");
+      expect(result.outcome.unreviewedPaths).toEqual([...highRiskUnit.paths].sort());
+      // Continuity ADVANCES with the gap carried explicitly.
+      expect(result.outcome.state?.reviewedHeadSha).toBe(FIXTURE_SHA);
+      expect(result.outcome.state?.settled).toBe(false);
+      expect(result.outcome.state?.unreviewedPaths).toEqual([...highRiskUnit.paths].sort());
+      expect(result.outcome.plan.body).toContain("Unsettled review passes");
+      expect(result.outcome.plan.body).toContain("do not change code to satisfy this section");
       expect(result.outcome.plan.event).toBe("COMMENT");
     }),
   );
 
-  it.effect("rejects a discovery candidate before assurance when its diff anchor is invalid", () =>
+  it.effect("never retries budget exhaustion and still advances continuity", () =>
     Effect.gen(function* () {
-      const invalidAnchor = ReviewFinding.make({
-        ...supportedFinding,
-        startLine: 99,
-        endLine: 99,
-        title: "Invalid new-version anchor",
-      });
       const result = yield* runOfflineFanOut({
-        discoveryReports: [
-          successfulDiscovery[0]!,
-          {
-            workId: specialistPass.passId,
-            outcome: {
-              _tag: "report",
-              report: discoveryReport(specialistPass, [invalidAnchor]),
-            },
-          },
+        children: [
+          report(generalPass.passId, discoveryReport(generalPass, [])),
+          report(specialistPass.passId, discoveryReport(specialistPass, [])),
         ],
+        // The first child's turn-seam consumption trips the shared budget, so
+        // every scheduled pass fails with BudgetExceeded. A retry would fail
+        // identically, so the pipeline must not double the child calls.
+        limits: UsageBudgetLimits.make({ maxInputTokens: 1 }),
       });
 
+      // At least one child ran into the budget; no pass spent the retry.
+      expect(result.childCalls).toBeGreaterThanOrEqual(1);
+      expect(result.childCalls).toBeLessThanOrEqual(2);
       expect(result.outcome.assurance.status).toBe("incomplete");
-      expect(result.outcome.assurance.failedPasses).toContainEqual(
-        expect.objectContaining({
-          workId: specialistPass.passId,
-          errorTag: "FileReviewWorkRejected",
-        }),
+      expect(result.outcome.assurance.failedPasses.map((pass) => pass.workId).sort()).toEqual(
+        [generalPass.passId, specialistPass.passId].sort(),
       );
-      expect(result.outcome.review.findings).toEqual([]);
-      expect(result.outcome.state).toBeUndefined();
-    }),
-  );
-
-  it.effect("binds projected child output to the exact scheduled request", () =>
-    Effect.gen(function* () {
-      const mismatched = FileReviewReport.make({
-        ...discoveryReport(specialistPass, [supportedFinding]),
-        workId: generalPass.passId,
-      });
-      const result = yield* runOfflineFanOut({
-        discoveryReports: [
-          successfulDiscovery[0]!,
-          {
-            workId: specialistPass.passId,
-            outcome: { _tag: "report", report: mismatched },
-          },
-        ],
-      });
-
-      expect(result.outcome.assurance.status).toBe("incomplete");
-      expect(result.outcome.assurance.failedPasses).toContainEqual(
-        expect.objectContaining({
-          workId: specialistPass.passId,
-          errorTag: "FileReviewWorkRejected",
-        }),
-      );
-      expect(result.outcome.review.findings).toEqual([]);
+      for (const pass of result.outcome.assurance.failedPasses) {
+        expect(pass.errorTag).toBe("BudgetExceeded");
+      }
+      // Continuity still advances; the whole unit is carried for retry.
+      expect(result.outcome.state?.reviewedHeadSha).toBe(FIXTURE_SHA);
+      expect(result.outcome.state?.settled).toBe(false);
+      expect(result.outcome.state?.unreviewedPaths).toEqual([...highRiskUnit.paths].sort());
     }),
   );
 
   it.effect("leaves every candidate unsettled when independent verification fails", () =>
     Effect.gen(function* () {
       const result = yield* runOfflineFanOut({
-        discoveryReports: successfulDiscovery,
-        verificationCalls: [verificationRequest],
-        verificationReports: [
-          { workId: verificationRequest.workId, outcome: { _tag: "malformed-output" } },
+        children: [
+          ...successfulDiscovery,
+          { workId: verificationWorkId, outcomes: [{ _tag: "malformed-output" }] },
         ],
       });
 
@@ -1001,7 +927,7 @@ describe("offline discovery and verification pipeline", () => {
       });
       expect(result.outcome.assurance.failedPasses).toContainEqual(
         expect.objectContaining({
-          workId: verificationRequest.workId,
+          workId: verificationWorkId,
           stage: "verification",
           errorTag: expect.stringContaining("AgentOutputError"),
         }),
@@ -1009,7 +935,8 @@ describe("offline discovery and verification pipeline", () => {
       expect(result.outcome.review.findings).toEqual([]);
       expect(result.outcome.plan.comments).toEqual([]);
       expect(result.outcome.plan.event).toBe("COMMENT");
-      expect(result.outcome.state).toBeUndefined();
+      expect(result.outcome.state?.settled).toBe(false);
+      expect(result.outcome.state?.unreviewedPaths).toEqual([...highRiskUnit.paths].sort());
     }),
   );
 
@@ -1027,60 +954,36 @@ describe("offline discovery and verification pipeline", () => {
     body: "The new flag enables the mode unconditionally in every environment.",
     suggestion: "Move the flag behind the environment rollout guard before enabling it.",
   });
-  const committableCandidate = candidateFor(committableSuggestionFinding, 1);
-  const proseCandidate = candidateFor(proseSuggestionFinding, 2);
   const suggestionDiscovery: ReadonlyArray<OfflineUnitScript> = [
-    successfulDiscovery[0]!,
-    {
-      workId: specialistPass.passId,
-      outcome: {
-        _tag: "report",
-        report: discoveryReport(specialistPass, [
-          committableSuggestionFinding,
-          proseSuggestionFinding,
-        ]),
-      },
-    },
+    report(generalPass.passId, discoveryReport(generalPass, [])),
+    report(
+      specialistPass.passId,
+      discoveryReport(specialistPass, [committableSuggestionFinding, proseSuggestionFinding]),
+    ),
   ];
-  const suggestionVerificationRequest = FileReviewRequest.make({
-    ...verificationRequest,
-    candidates: [committableCandidate, proseCandidate],
-  });
 
   it.effect("publishes a suggestion only on an exact committable settlement", () =>
     Effect.gen(function* () {
       const result = yield* runOfflineFanOut({
-        discoveryReports: suggestionDiscovery,
-        verificationCalls: [suggestionVerificationRequest],
-        verificationReports: [
-          {
-            workId: suggestionVerificationRequest.workId,
-            outcome: {
-              _tag: "report",
-              report: FileReviewReport.make({
-                phase: "verification",
-                workId: suggestionVerificationRequest.workId,
-                unitId: suggestionVerificationRequest.unitId,
-                findings: [],
-                concerns: [],
-                fileSummaries: [],
-                assessments: [
-                  CandidateAssessment.make({
-                    candidateId: committableCandidate.candidateId,
-                    disposition: "confirmed",
-                    suggestion: "committable",
-                    rationale: "The replacement is the exact committable source for line 2.",
-                  }),
-                  CandidateAssessment.make({
-                    candidateId: proseCandidate.candidateId,
-                    disposition: "confirmed",
-                    suggestion: "not-committable",
-                    rationale: "The suggestion text is advice prose, not replacement source.",
-                  }),
-                ],
+        children: [
+          ...suggestionDiscovery,
+          report(
+            verificationWorkId,
+            verificationReport([
+              CandidateAssessment.make({
+                candidateId: candidateId(specialistPass.passId, 1),
+                disposition: "confirmed",
+                suggestion: "committable",
+                rationale: "The replacement is the exact committable source for line 2.",
               }),
-            },
-          },
+              CandidateAssessment.make({
+                candidateId: candidateId(specialistPass.passId, 2),
+                disposition: "confirmed",
+                suggestion: "not-committable",
+                rationale: "The suggestion text is advice prose, not replacement source.",
+              }),
+            ]),
+          ),
         ],
       });
 
@@ -1107,242 +1010,82 @@ describe("offline discovery and verification pipeline", () => {
     }),
   );
 
-  it.effect("leaves the unit unsettled when a carried suggestion is not settled", () =>
+  it.effect("treats an unsettled carried suggestion as a failed pass after its retry", () =>
     Effect.gen(function* () {
+      const inexact = verificationReport([
+        CandidateAssessment.make({
+          candidateId: candidateId(specialistPass.passId, 1),
+          disposition: "confirmed",
+          rationale: "Confirmed without settling the carried suggestion.",
+        }),
+        CandidateAssessment.make({
+          candidateId: candidateId(specialistPass.passId, 2),
+          disposition: "confirmed",
+          suggestion: "not-committable",
+          rationale: "The suggestion text is advice prose, not replacement source.",
+        }),
+      ]);
       const result = yield* runOfflineFanOut({
-        discoveryReports: suggestionDiscovery,
-        verificationCalls: [suggestionVerificationRequest],
-        verificationReports: [
-          {
-            workId: suggestionVerificationRequest.workId,
-            outcome: {
-              _tag: "report",
-              report: FileReviewReport.make({
-                phase: "verification",
-                workId: suggestionVerificationRequest.workId,
-                unitId: suggestionVerificationRequest.unitId,
-                findings: [],
-                concerns: [],
-                fileSummaries: [],
-                assessments: [
-                  CandidateAssessment.make({
-                    candidateId: committableCandidate.candidateId,
-                    disposition: "confirmed",
-                    rationale: "Confirmed without settling the carried suggestion.",
-                  }),
-                  CandidateAssessment.make({
-                    candidateId: proseCandidate.candidateId,
-                    disposition: "confirmed",
-                    suggestion: "not-committable",
-                    rationale: "The suggestion text is advice prose, not replacement source.",
-                  }),
-                ],
-              }),
-            },
-          },
+        children: [
+          ...suggestionDiscovery,
+          { workId: verificationWorkId, outcomes: [{ _tag: "report", report: inexact }] },
         ],
       });
 
       expect(result.outcome.assurance.status).toBe("incomplete");
       expect(result.outcome.assurance.failedPasses).toContainEqual(
         expect.objectContaining({
-          workId: suggestionVerificationRequest.workId,
+          workId: verificationWorkId,
           stage: "verification",
-          errorTag: "FileReviewWorkRejected",
+          errorTag: "ReviewPassMisbehaved",
         }),
       );
       expect(result.outcome.review.findings).toEqual([]);
       expect(result.outcome.plan.comments).toEqual([]);
-      expect(result.outcome.state).toBeUndefined();
+      expect(result.outcome.state?.settled).toBe(false);
+      expect(result.outcome.state?.unreviewedPaths).toEqual([...highRiskUnit.paths].sort());
     }),
   );
 
-  it("surfaces typed policy exhaustion as a failed specialist pass", () => {
-    const generalRequest = discoveryRequest(generalPass);
-    const specialistRequest = discoveryRequest(specialistPass);
-    const base = {
-      eventVersion: 1,
-      runId: "run-assurance-exhaustion",
-      conversationId: "conversation-assurance-exhaustion",
-      agentId: "pr-fanout-reviewer",
-      timestamp: "2026-08-17T20:00:00.000Z",
-      providerExecuted: false,
-    } as const;
-    const events = [
-      Schema.decodeUnknownSync(RunEvent)({
-        ...base,
-        _tag: "ToolCallDeclared",
-        sequence: 1,
-        toolCallId: "general-call",
-        toolName: "delegate_file_review",
-        parameters: Schema.encodeSync(FileReviewRequest)(generalRequest),
-      }),
-      Schema.decodeUnknownSync(RunEvent)({
-        ...base,
-        _tag: "ToolCallSucceeded",
-        sequence: 2,
-        toolCallId: "general-call",
-        toolName: "delegate_file_review",
-        result: Schema.encodeSync(FileReviewUnitResult)(
-          FileReviewUnitResult.make({
-            phase: "discovery",
-            workId: generalPass.passId,
-            unitId: generalPass.unitId,
-            candidates: [],
-            fileSummaries: [],
-            assessments: [],
-          }),
-        ),
-      }),
-      Schema.decodeUnknownSync(RunEvent)({
-        ...base,
-        _tag: "ToolCallDeclared",
-        sequence: 3,
-        toolCallId: "specialist-call",
-        toolName: "delegate_file_review",
-        parameters: Schema.encodeSync(FileReviewRequest)(specialistRequest),
-      }),
-      Schema.decodeUnknownSync(RunEvent)({
-        ...base,
-        _tag: "ToolCallSucceeded",
-        sequence: 4,
-        toolCallId: "specialist-call",
-        toolName: "delegate_file_review",
-        result: Schema.encodeSync(FileReviewUnitFailed)(
-          FileReviewUnitFailed.make({
-            childErrorTag: "AgentPolicyError",
-            message: "review worker exceeded its bounded turn budget",
-          }),
-        ),
-      }),
-    ];
-    const assessment = assessReviewPipeline({
-      shape: "fan-out",
-      files: highRiskFiles,
-      totalFiles: 2,
-      anchorFiles: highRiskFiles,
-      totalAnchorFiles: 2,
-      events,
-    });
-
-    expect(defaultFileReviewerPolicy.onExhaustion).toBe("fail");
-    expect(assessment.assurance.status).toBe("incomplete");
-    expect(assessment.assurance.failedPasses).toContainEqual(
-      expect.objectContaining({
-        workId: specialistPass.passId,
-        stage: "specialist",
-        errorTag: "FileReviewUnitFailed:AgentPolicyError",
-      }),
-    );
-    expect(assessment.coverage.status).toBe("incomplete");
-  });
-
-  // The independent fold must re-enforce suggestion settlement itself: a
-  // recorded trace can carry verification results the live projection never
-  // vetted, e.g. runs recorded before this contract existed.
-  it("independently rejects a recorded settlement that settles a suggestion nothing carried", () => {
-    const generalRequest = discoveryRequest(generalPass);
-    const specialistRequest = discoveryRequest(specialistPass);
-    const discoveredCandidate = candidateFor(supportedFinding, 1, generalPass);
-    const recordedVerificationRequest = FileReviewRequest.make({
-      ...verificationRequest,
-      candidates: [discoveredCandidate],
-    });
-    const base = {
-      eventVersion: 1,
-      runId: "run-suggestion-settlement",
-      conversationId: "conversation-suggestion-settlement",
-      agentId: "pr-fanout-reviewer",
-      timestamp: "2026-08-18T20:00:00.000Z",
-      providerExecuted: false,
-    } as const;
-    const declared = (sequence: number, toolCallId: string, request: FileReviewRequest) =>
-      Schema.decodeUnknownSync(RunEvent)({
-        ...base,
-        _tag: "ToolCallDeclared",
-        sequence,
-        toolCallId,
-        toolName: "delegate_file_review",
-        parameters: Schema.encodeSync(FileReviewRequest)(request),
-      });
-    const succeeded = (sequence: number, toolCallId: string, result: FileReviewUnitResult) =>
-      Schema.decodeUnknownSync(RunEvent)({
-        ...base,
-        _tag: "ToolCallSucceeded",
-        sequence,
-        toolCallId,
-        toolName: "delegate_file_review",
-        result: Schema.encodeSync(FileReviewUnitResult)(result),
-      });
-    const events = [
-      declared(1, "general-call", generalRequest),
-      succeeded(
-        2,
-        "general-call",
-        FileReviewUnitResult.make({
-          phase: "discovery",
-          workId: generalPass.passId,
-          unitId: generalPass.unitId,
-          candidates: [discoveredCandidate],
-          fileSummaries: [],
-          assessments: [],
+  it.effect("keeps an undiffable path fail-closed: incomplete, carried, never skippable", () =>
+    Effect.gen(function* () {
+      const binaryFixture = FixturePullRequest.make({
+        metadata: PullRequestMetadata.make({
+          ...highRiskFixture.metadata,
+          totalChangedFiles: 3,
         }),
-      ),
-      declared(3, "specialist-call", specialistRequest),
-      succeeded(
-        4,
-        "specialist-call",
-        FileReviewUnitResult.make({
-          phase: "discovery",
-          workId: specialistPass.passId,
-          unitId: specialistPass.unitId,
-          candidates: [],
-          fileSummaries: [],
-          assessments: [],
-        }),
-      ),
-      declared(5, "verification-call", recordedVerificationRequest),
-      succeeded(
-        6,
-        "verification-call",
-        FileReviewUnitResult.make({
-          phase: "verification",
-          workId: recordedVerificationRequest.workId,
-          unitId: recordedVerificationRequest.unitId,
-          candidates: [],
-          fileSummaries: [],
-          assessments: [
-            CandidateAssessment.make({
-              candidateId: discoveredCandidate.candidateId,
-              disposition: "confirmed",
-              // supportedFinding carries no suggestion, so settling one is
-              // an inexact recorded settlement the fold must reject.
-              suggestion: "committable",
-              rationale: "The recorded settlement names a suggestion the candidate never carried.",
+        files: [
+          ...highRiskFixture.files,
+          FixtureFile.make({
+            file: ChangedFile.make({
+              path: "assets/logo.png",
+              status: "added",
+              additions: 0,
+              deletions: 0,
             }),
-          ],
-        }),
-      ),
-    ];
-    const assessment = assessReviewPipeline({
-      shape: "fan-out",
-      files: highRiskFiles,
-      totalFiles: 2,
-      anchorFiles: highRiskFiles,
-      totalAnchorFiles: 2,
-      events,
-    });
+          }),
+        ],
+      });
+      const result = yield* runOfflineFanOut({
+        fixture: binaryFixture,
+        children: [
+          report(generalPass.passId, discoveryReport(generalPass, [])),
+          report(specialistPass.passId, discoveryReport(specialistPass, [])),
+        ],
+      });
 
-    expect(assessment.assurance.status).toBe("incomplete");
-    expect(assessment.assurance.failedPasses).toContainEqual(
-      expect.objectContaining({
-        workId: recordedVerificationRequest.workId,
-        stage: "verification",
-        errorTag: "SuggestionSettlementMismatch",
-      }),
-    );
-    expect(assessment.confirmedFindings).toEqual([]);
-  });
+      // An unreviewable change must never authorize a green check, and the
+      // carry keeps it in scope even after it leaves the incremental delta.
+      expect(result.outcome.inputCoverage.status).toBe("incomplete");
+      expect(result.outcome.inputCoverage.undiffablePaths).toEqual(["assets/logo.png"]);
+      expect(result.outcome.inputCoverage.reasons.join("\n")).toContain("assets/logo.png");
+      expect(result.outcome.assurance.status).toBe("settled");
+      expect(result.outcome.unreviewedPaths).toContain("assets/logo.png");
+      expect(result.outcome.state?.settled).toBe(false);
+      expect(result.outcome.state?.unreviewedPaths).toContain("assets/logo.png");
+      expect(result.outcome.plan.body).toContain("Incomplete input coverage");
+    }),
+  );
 });
 
 describe("deterministic finding merge", () => {
@@ -1359,22 +1102,14 @@ type OfflineFanOutProgram = ReturnType<typeof runOfflineFanOut>;
 type OfflineFanOutServices = Effect.Services<OfflineFanOutProgram>;
 type OfflineFanOutFailure = EffectError<OfflineFanOutProgram>;
 type OfflineFanOutRequirementsProof = Assert<Equal<OfflineFanOutServices, never>>;
-type UnitFailureContainedProof = Assert<
-  Equal<Extract<OfflineFanOutFailure, FileReviewUnitFailed>, never>
->;
-type WorkRejectionContainedProof = Assert<
-  Equal<Extract<OfflineFanOutFailure, FileReviewWorkRejected>, never>
+type PassMisbehaviorContainedProof = Assert<
+  Equal<Extract<OfflineFanOutFailure, ReviewPassMisbehaved>, never>
 >;
 
 describe("fan-out Effect channels", () => {
-  it("keeps provided requirements empty and expected child failures contained", () => {
+  it("keeps provided requirements empty and expected pass failures contained", () => {
     const noRequirements: OfflineFanOutRequirementsProof = true;
-    const unitFailuresAreResults: UnitFailureContainedProof = true;
-    const workRejectionsAreResults: WorkRejectionContainedProof = true;
-    expect([noRequirements, unitFailuresAreResults, workRejectionsAreResults]).toEqual([
-      true,
-      true,
-      true,
-    ]);
+    const passFailuresAreResults: PassMisbehaviorContainedProof = true;
+    expect([noRequirements, passFailuresAreResults]).toEqual([true, true]);
   });
 });

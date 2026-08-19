@@ -34,6 +34,7 @@ import {
   PullRequestMetadata,
   ReviewCoverage,
   ReviewAssurance,
+  ReviewExecutionContext,
   ReviewFinding,
   ReviewInputCoverage,
   ReviewRunOutcome,
@@ -213,6 +214,7 @@ const fakeOutcome = (
       assignedPaths: [],
       partialPaths: [],
       unassignedPaths: [],
+      undiffablePaths: [],
       reasons: options.incomplete ? ["review input was not completely assigned"] : [],
     }),
     assurance: ReviewAssurance.make({
@@ -227,12 +229,14 @@ const fakeOutcome = (
       confirmedCandidates: 0,
       rejectedCandidates: 0,
       unsettledCandidates: 0,
+      discardedInvalidFindings: 0,
       failedPasses: [],
       reasons:
         options.incomplete || options.assuranceIncomplete
           ? ["review discovery did not settle"]
           : [],
     }),
+    unreviewedPaths: options.incomplete || options.assuranceIncomplete ? ["src/a.ts"] : [],
     plan: planPublication(review, [], {
       applyVerdict: false,
       headSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
@@ -362,7 +366,7 @@ describe("runReviewAction", () => {
           }),
         );
         const state = ReviewState.make({
-          version: 1,
+          version: 2,
           repository: "acme/widgets",
           pullRequestNumber: 5,
           baseRef: "main",
@@ -374,6 +378,8 @@ describe("runReviewAction", () => {
           reviewedPathCount: 0,
           unresolvedFindings: [],
           unresolvedConcerns: [],
+          unreviewedPaths: [],
+          settled: true,
           lastReviewMode: "full",
         });
 
@@ -500,6 +506,33 @@ describe("runReviewAction", () => {
     }),
   );
 
+  it.effect(
+    "concludes blocking, not incomplete, when code findings and machinery gaps coexist",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* actionHarness(
+          JSON.stringify({
+            pull_request: { number: 5 },
+            repository: { full_name: "acme/widgets" },
+          }),
+        );
+        const exit = yield* runReviewAction(
+          {
+            run: () =>
+              Effect.succeed(fakeOutcome("comment", { blocking: true, assuranceIncomplete: true })),
+          },
+          { post: false },
+        ).pipe(Effect.provide(harness.layer), Effect.exit);
+        const failure = failureFrom(exit);
+        expect(Schema.is(ReviewGateFailed)(failure)).toBe(true);
+        if (Schema.is(ReviewGateFailed)(failure)) {
+          expect(failure.conclusion).toBe("blocking");
+          expect(failure.reasons[0]).toContain("blocking finding");
+          expect(failure.reasons.join("; ")).toContain("not a code defect");
+        }
+      }),
+  );
+
   it.effect("fails the check when required coverage is incomplete", () =>
     Effect.gen(function* () {
       const harness = yield* actionHarness(
@@ -543,6 +576,10 @@ describe("runReviewAction", () => {
       if (Schema.is(ReviewGateFailed)(failure)) {
         expect(failure.conclusion).toBe("incomplete");
         expect(failure.reasons).toContain("review discovery did not settle");
+        // The failure explicitly tells a coding agent this is reviewer-side
+        // uncertainty carried forward, never an invitation to expand the patch.
+        expect(failure.reasons[0]).toContain("not a code defect");
+        expect(failure.reasons[0]).toContain("carried forward and retried");
       }
       const outputs = yield* Ref.get(harness.written);
       expect(outputs).toContain("input-coverage=complete");
@@ -603,7 +640,7 @@ describe("runReviewAction", () => {
         totalChangedFiles: 0,
       });
       const state = ReviewState.make({
-        version: 1,
+        version: 2,
         repository: metadata.repository,
         pullRequestNumber: metadata.number,
         baseRef: metadata.baseRef,
@@ -624,6 +661,8 @@ describe("runReviewAction", () => {
           }),
         ],
         unresolvedConcerns: [],
+        unreviewedPaths: [],
+        settled: true,
         lastReviewMode: "full",
       });
       const invoked = yield* Ref.make(0);
@@ -681,7 +720,7 @@ describe("runReviewAction", () => {
         patch: "@@ -8 +8 @@\n-before\n+after",
       });
       const state = ReviewState.make({
-        version: 1,
+        version: 2,
         repository: metadata.repository,
         pullRequestNumber: metadata.number,
         baseRef: metadata.baseRef,
@@ -693,6 +732,8 @@ describe("runReviewAction", () => {
         reviewedPathCount: 1,
         unresolvedFindings: [],
         unresolvedConcerns: [],
+        unreviewedPaths: [],
+        settled: true,
         lastReviewMode: "full",
       });
       const invoked = yield* Ref.make(0);
@@ -720,6 +761,85 @@ describe("runReviewAction", () => {
     }),
   );
 
+  it.effect("re-reviews an unchanged patch when the stored state carries unreviewed scope", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+      );
+      const profileFingerprint = "a".repeat(64);
+      const patchFingerprint = "b".repeat(64);
+      const metadata = PullRequestMetadata.make({
+        repository: "acme/widgets",
+        number: 5,
+        title: "Review target",
+        body: "",
+        baseRef: "main",
+        baseSha: "3".repeat(40),
+        headRef: "fix/review",
+        headSha: "2".repeat(40),
+        totalChangedFiles: 1,
+      });
+      const file = ChangedFile.make({
+        path: "src/a.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -8 +8 @@\n-before\n+after",
+      });
+      const state = ReviewState.make({
+        version: 2,
+        repository: metadata.repository,
+        pullRequestNumber: metadata.number,
+        baseRef: metadata.baseRef,
+        baseSha: metadata.baseSha ?? "3".repeat(40),
+        headRef: metadata.headRef,
+        reviewedHeadSha: metadata.headSha,
+        profileFingerprint,
+        acceptedScopeFingerprint: patchFingerprint,
+        reviewedPathCount: 1,
+        unresolvedFindings: [],
+        unresolvedConcerns: [],
+        // A prior pass failed on src/a.ts; skipping would abandon the retry.
+        unreviewedPaths: ["src/a.ts"],
+        settled: false,
+        lastReviewMode: "incremental",
+      });
+      const reviewedScopes = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
+      const result = yield* runReviewAction(
+        {
+          // Record the exact selected scope the harness provides, so this
+          // test proves the carried path is actually RE-REVIEWED — not merely
+          // that the skip was declined.
+          run: () =>
+            Effect.gen(function* () {
+              const selection = Option.getOrUndefined(
+                yield* Effect.serviceOption(ReviewExecutionContext),
+              );
+              yield* Ref.update(reviewedScopes, (previous) => [
+                ...previous,
+                selection?.files.map((selected) => selected.path) ?? [],
+              ]);
+              return fakeOutcome("comment");
+            }),
+          fingerprint: Effect.succeed(patchFingerprint),
+          profileFingerprint: Effect.succeed(profileFingerprint),
+          snapshot: Effect.succeed({ metadata, files: [file] }),
+        },
+        {
+          post: false,
+          priorReviews: staticPriorReviews(Option.none(), { state: Option.some(state) }),
+        },
+      ).pipe(Effect.provide(harness.layer));
+
+      expect(result._tag).toBe("Completed");
+      expect(yield* Ref.get(reviewedScopes)).toEqual([["src/a.ts"]]);
+      expect(yield* Ref.get(harness.written)).toContain("skipped=false");
+    }),
+  );
+
   it.effect("reviews a rebased head when the effective patch changed", () =>
     Effect.gen(function* () {
       const harness = yield* actionHarness(
@@ -741,7 +861,7 @@ describe("runReviewAction", () => {
         totalChangedFiles: 0,
       });
       const state = ReviewState.make({
-        version: 1,
+        version: 2,
         repository: metadata.repository,
         pullRequestNumber: metadata.number,
         baseRef: metadata.baseRef,
@@ -753,6 +873,8 @@ describe("runReviewAction", () => {
         reviewedPathCount: 0,
         unresolvedFindings: [],
         unresolvedConcerns: [],
+        unreviewedPaths: [],
+        settled: true,
         lastReviewMode: "full",
       });
       const invoked = yield* Ref.make(0);

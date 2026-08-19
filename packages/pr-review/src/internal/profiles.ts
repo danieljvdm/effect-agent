@@ -38,18 +38,18 @@ export const pullRequestReviewerProfile = PullRequestReviewerProfile.make({
 export class FanOutReviewerProfile extends Schema.Class<FanOutReviewerProfile>(
   "@effect-agent/pr-review/FanOutReviewerProfile",
 )({
-  /** Ephemeral runtime: one bounded AgentRuntime.run per invocation. */
+  /** Ephemeral runtime: bounded host-scheduled child runs per invocation. */
   deploymentClass: Schema.Literal("E"),
-  /** Every model-callable tool — parent and child — is a read; none mutate. */
+  /** Every model-callable surface is evidence-only; children expose no tools. */
   readOnlyToolSurface: Schema.Literal(true),
   /** The review is posted by the host AFTER the run settles, never by a tool. */
   publicationOutsideAgentLoop: Schema.Literal(true),
   /** Child findings are untrusted; anchors are validated against the parsed diff. */
   anchorsValidatedBeforePublication: Schema.Literal(true),
-  /** S1 attached ephemeral delegation at depth 1; nested delegation is rejected. */
-  attachedEphemeralDelegation: Schema.Literal(true),
-  /** A failed unit surfaces to the coordinator as a typed failed result, never retried. */
-  failedUnitsReportedNotRetried: Schema.Literal(true),
+  /** Host code schedules every pass from the deterministic plan; no coordinator model. */
+  hostScheduledPasses: Schema.Literal(true),
+  /** A failed pass is retried once, then reported and carried as unreviewed scope. */
+  failedPassesRetriedOnceThenCarried: Schema.Literal(true),
   /** Risk categories and required specialist passes are pure host policy. */
   hostOwnedRiskClassification: Schema.Literal(true),
   /** Every host-classified high-risk unit receives a fresh specialist pass. */
@@ -69,8 +69,8 @@ export const fanOutReviewerProfile = FanOutReviewerProfile.make({
   readOnlyToolSurface: true,
   publicationOutsideAgentLoop: true,
   anchorsValidatedBeforePublication: true,
-  attachedEphemeralDelegation: true,
-  failedUnitsReportedNotRetried: true,
+  hostScheduledPasses: true,
+  failedPassesRetriedOnceThenCarried: true,
   hostOwnedRiskClassification: true,
   redundantHighRiskDiscovery: true,
   independentCandidateVerification: true,

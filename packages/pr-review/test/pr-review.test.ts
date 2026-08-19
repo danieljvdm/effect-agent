@@ -6,7 +6,7 @@ import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
 import {
   anchorViolation,
-  assessReviewCoverage,
+  assessFlatReview,
   annotatePatch,
   ChangedFile,
   CodeReview,
@@ -29,8 +29,8 @@ import {
   ReadFile,
   ReadFileDiff,
   ReviewConcern,
-  ReviewCoverage,
   ReviewExecutionContext,
+  ReviewInputCoverage,
   ReviewFinding,
   ReviewHeadComparison,
   ReviewPublicationPlan,
@@ -75,17 +75,18 @@ describe("host coverage diagnostics", () => {
         patch: "@@ -0,0 +1 @@\n+export {};",
       }),
     );
-    const coverage = assessReviewCoverage({
-      shape: "flat",
+    const assessment = assessFlatReview({
       files: longFiles,
       totalFiles: longFiles.length,
       anchorFiles: longFiles,
       totalAnchorFiles: longFiles.length,
       events: [],
     });
-    expect(coverage.status).toBe("incomplete");
-    expect(coverage.reasons.every((reason) => reason.length <= 1_000)).toBe(true);
-    expect(coverage.reasons.join("\n")).toContain("(+2 more)");
+    expect(assessment.inputCoverage.status).toBe("incomplete");
+    expect(assessment.inputCoverage.reasons.every((reason) => reason.length <= 1_000)).toBe(true);
+    expect(assessment.inputCoverage.reasons.join("\n")).toContain("(+2 more)");
+    // Every unassigned reviewable path is a retryable gap for the next run.
+    expect(assessment.unreviewedPaths).toEqual(longFiles.map((file) => file.path));
   });
 });
 
@@ -347,22 +348,26 @@ describe("publication planning", () => {
         totalChangedFiles: 2,
       }).event,
     ).toBe("APPROVE");
-    const legacyIncomplete = planPublication(approving, files, {
+    // A machinery gap blocks APPROVE but never REQUEST_CHANGES: requesting
+    // changes for a reviewer-side fault would tell the author to edit code
+    // nobody reviewed.
+    const machineryGap = planPublication(approving, files, {
       applyVerdict: true,
       headSha: FIXTURE_SHA,
       totalChangedFiles: 2,
-      coverage: ReviewCoverage.make({
+      inputCoverage: ReviewInputCoverage.make({
         status: "incomplete",
-        requiredPaths: [],
-        reviewedPaths: [],
-        unreviewedPaths: [],
-        failedUnits: [],
-        reasons: ["required review unit did not complete"],
+        requiredPaths: ["src/hello.ts"],
+        assignedPaths: [],
+        partialPaths: [],
+        unassignedPaths: ["src/hello.ts"],
+        undiffablePaths: [],
+        reasons: ["required paths received no successful diff input (1): src/hello.ts"],
       }),
     });
-    expect(legacyIncomplete.event).toBe("REQUEST_CHANGES");
-    expect(legacyIncomplete.body).toContain("### 🛑 Incomplete coverage");
-    expect(legacyIncomplete.body).toContain("required review unit did not complete");
+    expect(machineryGap.event).toBe("COMMENT");
+    expect(machineryGap.body).toContain("### ⚠️ Incomplete input coverage");
+    expect(machineryGap.body).toContain("received no successful diff input");
   });
 
   it("extends the suggestion fence past any backticks in the replacement", () => {
@@ -891,7 +896,6 @@ describe("concerns, metadata, and footer", () => {
       totalChangedFiles: 2,
       modelLabel: "openai/gpt-5.6-sol (effort high)",
       usage: { inputTokens: 1234, outputTokens: 56 },
-      usageScope: "run",
       runUrl: "https://github.com/acme/widgets/actions/runs/42",
     });
     expect(plan.body).toContain(
@@ -966,17 +970,6 @@ describe("concerns, metadata, and footer", () => {
     expect(plan.body).toContain(`<!-- effect-agent-pr-review fingerprint=sha256:${"a".repeat(64)}`);
     // The plan's data is complete regardless of what the body could hold.
     expect(plan.demoted).toHaveLength(20);
-  });
-
-  it("labels coordinator-scoped usage honestly", () => {
-    const plan = planPublication(scriptedReview, files, {
-      applyVerdict: false,
-      headSha: FIXTURE_SHA,
-      totalChangedFiles: 2,
-      usage: { inputTokens: 10, outputTokens: 2 },
-      usageScope: "coordinator",
-    });
-    expect(plan.body).toContain("10 in / 2 out tokens (coordinator)");
   });
 });
 
@@ -1174,7 +1167,7 @@ describe("offline review run", () => {
         body: "A new delta touching this path invalidates the carried finding.",
       });
       const priorState = ReviewState.make({
-        version: 1,
+        version: 2,
         repository: metadata.repository,
         pullRequestNumber: metadata.number,
         baseRef: metadata.baseRef,
@@ -1186,6 +1179,8 @@ describe("offline review run", () => {
         reviewedPathCount: 2,
         unresolvedFindings: [priorFinding, affectedPriorFinding],
         unresolvedConcerns: [],
+        unreviewedPaths: [],
+        settled: true,
         lastReviewMode: "full",
       });
       const selection = selectReviewRange({
@@ -1230,7 +1225,6 @@ describe("offline review run", () => {
       const outcome = yield* executeReview(binding, {
         post: false,
         applyVerdict: false,
-        reviewShape: "flat",
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
