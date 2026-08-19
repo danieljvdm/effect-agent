@@ -1,9 +1,0 @@
-{
-  "name": "effect-agent",
-  "user": "node",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": "."
-  },
-  "install": "bun install --frozen-lockfile && bun run patch:tsgo"
-}
