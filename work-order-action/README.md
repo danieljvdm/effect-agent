@@ -72,7 +72,7 @@ jobs:
     steps:
       - id: work-order
         name: Authenticate, authorize, and claim the dispatch
-        uses: danieljvdm/effect-agent/work-order-action@926f0accff415775a1a5b12e3c455b937ff0f1c9
+        uses: danieljvdm/effect-agent/work-order-action@3658d16dfa2ec29b1a80ddf96cd21bf9b80ace86
         with:
           phase: admit
           artifact-directory: state
@@ -117,7 +117,7 @@ jobs:
 
       - id: work-order
         name: Run the bounded model implementer
-        uses: danieljvdm/effect-agent/work-order-action@926f0accff415775a1a5b12e3c455b937ff0f1c9
+        uses: danieljvdm/effect-agent/work-order-action@3658d16dfa2ec29b1a80ddf96cd21bf9b80ace86
         with:
           phase: implement
           artifact-directory: state
@@ -170,7 +170,7 @@ jobs:
 
       - id: work-order
         name: Reproduce patch and run required checks
-        uses: danieljvdm/effect-agent/work-order-action@926f0accff415775a1a5b12e3c455b937ff0f1c9
+        uses: danieljvdm/effect-agent/work-order-action@3658d16dfa2ec29b1a80ddf96cd21bf9b80ace86
         with:
           phase: checks
           artifact-directory: state
@@ -207,7 +207,7 @@ jobs:
           merge-multiple: true
 
       - name: Revalidate and compare-and-swap the pull-request head
-        uses: danieljvdm/effect-agent/work-order-action@926f0accff415775a1a5b12e3c455b937ff0f1c9
+        uses: danieljvdm/effect-agent/work-order-action@3658d16dfa2ec29b1a80ddf96cd21bf9b80ace86
         with:
           phase: publish
           artifact-directory: state
@@ -244,7 +244,7 @@ jobs:
           merge-multiple: true
 
       - name: Update the one authenticated journal reply
-        uses: danieljvdm/effect-agent/work-order-action@926f0accff415775a1a5b12e3c455b937ff0f1c9
+        uses: danieljvdm/effect-agent/work-order-action@3658d16dfa2ec29b1a80ddf96cd21bf9b80ace86
         with:
           phase: present
           artifact-directory: state
