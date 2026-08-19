@@ -103,7 +103,10 @@ export const readTerminalArtifactOption = Effect.fn("readTerminalArtifactOption"
   const fs = yield* FileSystem.FileSystem;
   for (const name of ["publicationTerminal", "checksTerminal", "implementationTerminal"] as const) {
     const target = yield* artifactPath(name);
-    if (yield* fs.exists(target)) return yield* readWithSchema(name, WorkOrderTerminal);
+    const present = yield* fs
+      .exists(target)
+      .pipe(Effect.mapError((cause) => failure(`inspect ${name} artifact`, cause)));
+    if (present) return yield* readWithSchema(name, WorkOrderTerminal);
   }
   return undefined;
 });
