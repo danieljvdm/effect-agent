@@ -1,5 +1,27 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.23
+
+### Minor Changes
+
+- [#132](https://github.com/danieljvdm/effect-agent/pull/132) [`15f041f`](https://github.com/danieljvdm/effect-agent/commit/15f041f6dcd092f5933ce528db391d6185dd85d6) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Make incremental reviews converge: the authenticated baseline now advances on every completed
+  run, carrying unsettled or unreviewable scope forward for automatic retry, and fan-out passes
+  are host-scheduled with one retry each so a flaky pass can no longer reopen the whole
+  post-baseline scope. BEHAVIOR CHANGE: stored review state moved to `state-v2` (the first run
+  after upgrading performs one full review), blocking findings now outrank machinery gaps in the
+  check conclusion, and the coordinator-model exports (`FanOutReviewer`, `makeFanOutReviewSuite`,
+  `fanOutHandlersLayer`, `DelegateFileReview`, `FileReviewRequest`, `FileReviewUnitResult`,
+  `FileReviewWorkRejected`, `FileReviewUnitFailed`, `ListReviewUnits`) and the
+  `usageScope`/`reviewShape` options are removed — fan-out runs report whole-run usage via
+  `executeFanOutReview`.
+
+### Patch Changes
+
+- [#125](https://github.com/danieljvdm/effect-agent/pull/125) [`1581182`](https://github.com/danieljvdm/effect-agent/commit/1581182cc7b06dcc340d15f32c8af93ecc4f0902) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Remove the ignored `failOn` option from `runReviewAction` and the `FailOnPolicy` export; host-derived check conclusions were already unconditional, so the option had no effect. The packaged Action still accepts the deprecated `fail-on` input and continues to ignore it.
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.23
+
 ## 0.1.0-beta.22
 
 ### Patch Changes

@@ -1,5 +1,20 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.23
+
+### Patch Changes
+
+- [#133](https://github.com/danieljvdm/effect-agent/pull/133) [`b130876`](https://github.com/danieljvdm/effect-agent/commit/b130876477ff39349e0d8249298cc0589d284540) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Run Dynamic Worker Code Mode host calls on a Scope-owned pass fiber so they inherit the `execute` Context and die with the pass.
+
+  BEHAVIOR CHANGE: `CodeExecutionHost.call` now sees services provided to `execute` instead of Effect defaults from a `runFork` root.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.23
+  - @effect-agent/engine@0.1.0-beta.23
+  - @effect-agent/sandbox@0.1.0-beta.23
+  - @effect-agent/session@0.1.0-beta.23
+  - @effect-agent/storage-cloudflare@0.1.0-beta.23
+
 ## 0.1.0-beta.22
 
 ### Minor Changes
