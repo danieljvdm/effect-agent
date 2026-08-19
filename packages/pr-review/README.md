@@ -59,21 +59,26 @@ re-validated against the parsed unified diff (invalid ones are demoted into
 the review body with the reason named, never trusted), the findings bound is
 enforced host-side, and publication happens only through the
 `ReviewPublisher` port after the run settles. `PrReview.makeFanOut` builds the
-assured delegating variant. The host deterministically partitions bounded
+assured host-scheduled variant. The host deterministically partitions bounded
 evidence, classifies high-risk units, requires a general discovery pass for
 every unit, adds a fresh specialist discovery pass for every unit, and uses
 deterministic host-classified risk categories as explicit focus labels. A
-fresh verifier must confirm or reject every discovered candidate. These are
-S1 attached ephemeral children using Effect structured concurrency. Verifiers
-receive the exact candidate claims and the complete bounded unit, including
-neighboring evidence that can falsify a locally plausible claim; they do not
-receive discovery reasoning.
-The host reconstructs publishable findings and concerns from exact confirmed
-candidate IDs, deduplicates byte-identical cross-pass claims in deterministic
-plan order, and requires every delegation declaration to be consumed by one
-exact planned request. Neither a discovery child nor the coordinator can publish
-an unsupported or invented finding. Shared `guidance` reaches both discovery
-and verification; `maxFindings` remains a host-enforced publication cap.
+fresh verifier must confirm or reject every discovered candidate. Every pass
+runs as a bounded evidence-only child dispatched directly by host code with
+Effect structured concurrency — there is no coordinator model and no
+delegation tool, so nothing depends on a model copying the plan correctly. A
+pass that fails (child fault, malformed or misdirected output) is retried
+once; a pass that stays failed is reported and its unit's paths carry forward
+as retryable scope. Verifiers receive the exact candidate claims and the
+complete bounded unit, including neighboring evidence that can falsify a
+locally plausible claim; they do not receive discovery reasoning.
+The host builds publishable findings and concerns from exact confirmed
+candidate IDs and deduplicates byte-identical cross-pass claims in
+deterministic plan order; a discovery claim anchored outside its assigned
+evidence is discarded and counted, never published and never pass-fatal. The
+summary and verdict are composed deterministically from the confirmed
+severities. Shared `guidance` reaches both discovery and verification;
+`maxFindings` remains a host-enforced publication cap.
 
 GitHub may omit the `patch` field for large textual files as well as binary
 files. The GitHub source recovers a missing patch by reading bounded, strict
@@ -81,24 +86,29 @@ UTF-8 base/head content: additions require the head, deletions require the
 base, and other changes require both. Reviewers receive that content through
 the ordinary diff-read tool with non-anchorable `B`/`H` line labels and must
 report defects as review-body concerns. Invalid UTF-8, binary NUL content,
-missing sides, files beyond the per-side read bound, and complete B/H evidence
-beyond the model-facing render bound remain explicit coverage gaps.
+missing sides, and files beyond the per-side read bound leave a path with no
+reviewable textual evidence; such paths are reported informationally — they
+can never be reviewed by re-running, so they are not incompleteness and are
+not carried as retryable scope.
 
 ## Assurance model
 
 The public result deliberately separates two claims:
 
-- **Input coverage** says every required path in the selected scope was
-  assigned every deterministic bounded evidence shard and separately names
-  partially assigned and unassigned paths, the exact unassigned-shard count
-  with a bounded identifier sample, undiffable paths, source truncation, or
-  over-capacity paths. A large textual diff is split across
-  shards and units instead of being called partial merely for exceeding one
-  prompt chunk. Input coverage does not say the model understood the evidence.
-- **Review assurance** says every configured general discovery pass, required
-  independent specialist pass, and candidate-verification batch settled
-  exactly. It reports discovered, confirmed, rejected, and unsettled
-  candidate counts plus failed pass IDs.
+- **Input coverage** says every reviewable required path in the selected
+  scope was assigned every deterministic bounded evidence shard and
+  separately names partially assigned and over-capacity paths, the exact
+  unassigned-shard count with a bounded identifier sample, and source
+  truncation. Undiffable paths are listed informationally. A large textual
+  diff is split across shards and units instead of being called partial
+  merely for exceeding one prompt chunk. Input coverage does not say the
+  model understood the evidence.
+- **Review assurance** says every scheduled general discovery pass, required
+  independent specialist pass, and candidate-verification pass settled after
+  at most one retry. It reports discovered, confirmed, rejected, unsettled,
+  and discarded (invalid-anchor) candidate counts plus failed pass IDs. A
+  failed pass is a reviewer-side gap: its unit's paths carry forward as
+  retryable scope and the next incremental run re-reviews exactly them.
 
 `settled` assurance means the configured work completed; it never means the
 review is exhaustive or the pull request is defect-free. Risk classification
@@ -126,10 +136,9 @@ discovery/specialist/verification settlement, and candidate dispositions.
 Below the summary, a collapsed **📝 Walkthrough** table carries the
 model's one-sentence per-file change summaries — walkthrough paths are
 validated like finding anchors, so entries naming files outside the changeset
-are dropped. Under fan-out the walkthrough is additionally host-verified
-against the delegation Tool events: only summaries a successfully settled
-child actually reported for its own unit's paths survive, so neither a child
-nor the coordinator can smuggle or invent entries. Non-anchored `concerns`
+are dropped. Under fan-out only summaries a
+successfully settled general pass actually reported for its own unit's paths
+survive, so a child cannot smuggle or invent entries. Non-anchored `concerns`
 (deletion plans, rollout sequencing,
 coverage gaps, scope questions — things with no diff line to point at) render
 as severity-tagged sections; demoted findings and findings carried from
@@ -172,17 +181,21 @@ ordinary gate.
 
 ## Incremental Action reviews
 
-A posted Action review with complete input coverage and settled review
-assurance carries bounded, versioned, HMAC-authenticated continuity state:
-the exact PR/base/head lineage, profile and settled-scope fingerprints, and
-the still-unresolved findings and concerns. A later Action run validates the
-state and reviews the GitHub comparison from that reviewed head to the
-current head, not the complete base...HEAD diff. Unchanged settled scope is
-not sent back to the model; unchanged unresolved findings remain active;
-changed or reverted paths invalidate their prior findings and receive fresh
-discovery and verification. Non-anchored
-concerns are carried conservatively until a full audit because they cannot be
-mapped safely to one path.
+Every completed Action review that can be signed carries bounded, versioned,
+HMAC-authenticated continuity state: the exact PR/base/head lineage, profile
+and settled-scope fingerprints, the still-unresolved findings and concerns,
+any retryable unreviewed paths, and whether the run fully settled. The
+baseline is monotone by design — a flaky or failed pass carries exactly its
+own scope forward instead of freezing the baseline and reopening everything
+reviewed since (the non-converging loop of issue #131). A later Action run
+validates the state and reviews the GitHub comparison from that reviewed head
+to the current head plus the carried unreviewed paths, not the complete
+base...HEAD diff. Unchanged settled scope is not sent back to the model;
+unchanged unresolved findings remain active; changed or reverted paths
+invalidate their prior findings and receive fresh discovery and verification.
+An over-capacity changeset is reviewed in bounded installments across pushes
+through the same carry. Non-anchored concerns are carried conservatively
+until a full audit because they cannot be mapped safely to one path.
 
 The state marker must be terminal, signed with the configured stable
 `PR_REVIEW_STATE_SECRET`, authored by the configured review-posting bot, and
@@ -198,11 +211,12 @@ full unless the authenticated settled-scope fingerprint still matches. The
 schema field retains the compatibility name `acceptedScopeFingerprint`. That
 fingerprint hashes the ignore-filtered effective diff, patchless base/head
 evidence, PR framing, and review-shaping profile while excluding commit IDs,
-base ancestry, and unified-diff hunk coordinates. Re-running the same settled
-head or a patch-equivalent rebase skips model execution by default while
-preserving its stored blocking/success conclusion and posting no duplicate
-review comments. Missing/corrupt state and any fingerprint or profile mismatch
-review conservatively.
+base ancestry, and unified-diff hunk coordinates. Re-running the same head or a
+patch-equivalent rebase skips model execution by default ONLY when the stored
+state fully settled — a state carrying unreviewed scope is always retried.
+The preserved skip keeps its stored blocking/success conclusion and posts no
+duplicate review comments. Missing/corrupt state and any fingerprint or
+profile mismatch review conservatively.
 
 After a new state-bearing Action review posts, prior marker-bearing bot reviews
 are retired by default: their bodies become collapsed, superseded history,

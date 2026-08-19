@@ -46,16 +46,22 @@ export class StoredReviewConcern extends Schema.Class<StoredReviewConcern>(
   body: StoredText,
 }) {}
 
+/** The carried-scope bound; a run that cannot fit its leftovers publishes no state. */
+export const MAX_STORED_UNREVIEWED_PATHS = 100;
+
 /**
- * Versioned state embedded only after complete input assignment and settled
- * configured review assurance. The head plus full-scope fingerprint forms an
- * incremental baseline; an absent unresolved item never means the path is
- * defect-free. The `acceptedScopeFingerprint` name is retained for wire
- * compatibility. Storing hundreds of path strings separately would not fit
- * GitHub's bounded review body in the worst case.
+ * Versioned state embedded after EVERY completed run that can be signed. The
+ * head plus full-scope fingerprint forms an incremental baseline; an absent
+ * unresolved item never means the path is defect-free. `unreviewedPaths`
+ * carries retryable review gaps (failed passes) forward so the next
+ * incremental run re-reviews exactly them plus the new delta — the baseline
+ * advances monotonically instead of freezing on one flaky pass and reopening
+ * the whole post-baseline scope. The `acceptedScopeFingerprint` name is
+ * retained for wire compatibility. Storing hundreds of path strings
+ * separately would not fit GitHub's bounded review body in the worst case.
  */
 export class ReviewState extends Schema.Class<ReviewState>("@effect-agent/pr-review/ReviewState")({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   repository: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   pullRequestNumber: Schema.Int.check(Schema.isGreaterThan(0)),
   baseRef: Schema.NonEmptyString.check(Schema.isMaxLength(300)),
@@ -67,6 +73,14 @@ export class ReviewState extends Schema.Class<ReviewState>("@effect-agent/pr-rev
   reviewedPathCount: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 300 })),
   unresolvedFindings: Schema.Array(StoredReviewFinding).check(Schema.isMaxLength(20)),
   unresolvedConcerns: Schema.Array(StoredReviewConcern).check(Schema.isMaxLength(10)),
+  /** Retryable review gaps carried into the next incremental run's scope. */
+  unreviewedPaths: Schema.Array(ChangedPath).check(Schema.isMaxLength(MAX_STORED_UNREVIEWED_PATHS)),
+  /**
+   * True only when the producing run had complete input coverage, no
+   * unsettled pass, and nothing carried. Skip-unchanged authority: an
+   * unchanged patch may skip re-review only over a settled state.
+   */
+  settled: Schema.Boolean,
   lastReviewMode: ReviewScopeMode,
 }) {}
 
@@ -100,15 +114,15 @@ export const toStoredConcern = (concern: ReviewConcern): StoredReviewConcern =>
 export const fromStoredConcern = (concern: StoredReviewConcern): ReviewConcern =>
   ReviewConcern.make({ severity: concern.severity, title: concern.title, body: concern.body });
 
-const STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
+const STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v2:";
 const STATE_MARKER_SUFFIX = " -->";
 const STATE_MARKER_PATTERN =
-  /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
-const STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\u0000";
+  /(?:^|\n)<!-- effect-agent-pr-review state-v2:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
+const STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v2\u0000";
 export const MAX_REVIEW_STATE_MARKER_CHARS = 24_000;
 export const ReviewStateMarker = Schema.NonEmptyString.check(
   Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS),
-  Schema.isPattern(/^<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/),
+  Schema.isPattern(/^<!-- effect-agent-pr-review state-v2:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/),
 ).pipe(Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
 export type ReviewStateMarker = typeof ReviewStateMarker.Type;
 
@@ -402,22 +416,32 @@ export const selectReviewRange = (input: {
       selectedByPath.set(file.path, file);
     }
   }
-  if (input.priorState.baseSha !== input.current.baseSha) {
+  // Retryable gaps carried by the prior state re-enter this run's scope; a
+  // carried path reverted out of the pull request has nothing left to review.
+  const carriedPaths = new Set(
+    input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path)),
+  );
+  for (const path of carriedPaths) affectedPaths.add(path);
+  const rescuePaths = input.priorState.baseSha !== input.current.baseSha;
+  if (rescuePaths || carriedPaths.size > 0) {
     for (const file of input.fullFiles) {
-      if (
-        affectedPaths.has(file.path) ||
-        (file.previousPath !== undefined && affectedPaths.has(file.previousPath))
-      ) {
-        selectedByPath.set(file.path, file);
-      }
+      const affected =
+        (rescuePaths &&
+          (affectedPaths.has(file.path) ||
+            (file.previousPath !== undefined && affectedPaths.has(file.previousPath)))) ||
+        carriedPaths.has(file.path) ||
+        (file.previousPath !== undefined && carriedPaths.has(file.previousPath));
+      if (affected) selectedByPath.set(file.path, file);
     }
   }
   const selectedFiles = [...selectedByPath.values()].sort((left, right) =>
     left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
   );
+  const carriedReason =
+    carriedPaths.size === 0 ? "" : `; retrying ${carriedPaths.size} carried unreviewed path(s)`;
   return {
     mode: "incremental",
-    reason: `changes since settled review head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
+    reason: `changes since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}${carriedReason}`,
     files: selectedFiles,
     affectedPaths: [...affectedPaths].sort(),
     totalFiles: selectedFiles.length,

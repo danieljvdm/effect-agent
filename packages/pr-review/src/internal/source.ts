@@ -1,6 +1,6 @@
 import { Context, Effect, Schema } from "effect";
 
-import { ChangedFile } from "./diff.ts";
+import type { ChangedFile } from "./diff.ts";
 
 // ---------------------------------------------------------------------------
 // The pull-request source port: everything the review tools may observe about

@@ -57,7 +57,7 @@ const unresolvedFinding = StoredReviewFinding.make({
 });
 
 const priorState = ReviewState.make({
-  version: 1,
+  version: 2,
   repository: metadata.repository,
   pullRequestNumber: metadata.number,
   baseRef: metadata.baseRef,
@@ -69,6 +69,8 @@ const priorState = ReviewState.make({
   reviewedPathCount: 1,
   unresolvedFindings: [unresolvedFinding],
   unresolvedConcerns: [],
+  unreviewedPaths: [],
+  settled: true,
   lastReviewMode: "full",
 });
 
@@ -230,6 +232,27 @@ describe("review state", () => {
     });
     expect(rewrittenBase.mode).toBe("full");
     expect(rewrittenBase.reason).toContain("changed materially");
+  });
+
+  it("retries carried unreviewed paths inside the incremental scope", () => {
+    const carryingState = ReviewState.make({
+      ...priorState,
+      unreviewedPaths: ["src/accepted.ts", "src/reverted.ts"],
+      settled: false,
+    });
+    const selection = select({ priorState: carryingState });
+
+    expect(selection.mode).toBe("incremental");
+    // The delta plus the carried path still present in the pull request; a
+    // carried path reverted out of the PR has nothing left to review.
+    expect(selection.files.map((file) => file.path)).toEqual([
+      "src/accepted.ts",
+      "src/corrective.ts",
+    ]);
+    // Carried paths count as affected: their stored findings are re-derived
+    // by the fresh re-review instead of being carried blindly.
+    expect(selection.affectedPaths).toContain("src/accepted.ts");
+    expect(selection.reason).toContain("retrying 1 carried unreviewed path(s)");
   });
 
   it("forces fresh full-diff discovery only when final mode is explicit", () => {

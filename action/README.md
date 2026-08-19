@@ -49,18 +49,21 @@ must not combine `guidance-file` with `pull_request_target`.)
 
 ## Incremental reviews and authenticated continuity state
 
-Every review with complete host-derived input coverage and settled discovery/
-verification assurance embeds a bounded, schema-validated, terminal state
-marker in its review body. `state-secret`
+Every completed review that can be signed embeds a bounded, schema-validated,
+terminal state marker in its review body — the baseline advances on every
+run, monotonically. `state-secret`
 HMAC-authenticates the marker so model text or another workflow cannot forge
 scope-narrowing authority. The marker records the PR
 identity, base/head lineage, reviewer-profile fingerprint, settled-scope
-fingerprint, and unresolved findings/concerns. On the next `synchronize`, the
+fingerprint, unresolved findings/concerns, any retryable unreviewed paths,
+and whether the run fully settled. On the next `synchronize`, the
 action validates that state and asks GitHub for the previous-head...current-head
-comparison. Only changed paths still present in the current PR diff are sent
-to the model; prior unresolved findings in unchanged paths remain active, and
-paths changed or reverted since the baseline receive fresh discovery and
-verification. A compatible
+comparison. Only changed paths still present in the current PR diff — plus
+carried unreviewed paths — are sent to the model; prior unresolved findings
+in unchanged paths remain active, and paths changed or reverted since the
+baseline receive fresh discovery and verification. A pass that failed on the
+reviewer's side costs exactly its own scope on the next run; it can never
+freeze the baseline and reopen everything reviewed since. A compatible
 ancestor advance of the base includes overlapping PR paths as affected
 context.
 
@@ -73,7 +76,8 @@ patchless base/head evidence, pull-request framing, and reviewer profile. It
 does not hash commit IDs or base ancestry. An equivalent rebase therefore
 creates the new head-bound workflow check but skips model execution and posts
 no duplicate review or findings; the stored blocking/success conclusion is
-preserved. A changed diff, PR framing, model, guidance, bounds, or ignore
+preserved. The skip requires a FULLY SETTLED stored state — one carrying
+unreviewed scope is always retried instead. A changed diff, PR framing, model, guidance, bounds, or ignore
 configuration reviews again.
 
 The action visibly falls back to the full current PR diff when state is
@@ -164,12 +168,16 @@ also writes a step summary and `conclusion`, `input-coverage`,
 `coverage` output remains as a deprecated compatibility aggregate.
 
 The check conclusion does not trust the model verdict. Any active blocking
-finding or concern fails the job. Incomplete or partial input evidence, a failed or
-exhausted discovery/specialist/verification pass, a mismatched candidate
-batch, or unsettled candidates is also non-success. Reading every path is not
-semantic completeness, and settled assurance never claims that every defect
-was found. Fan-out is enabled by default because the flat compatibility shape
-has no independent verifier and cannot produce settled assurance. Large textual
+finding or concern fails the job as `blocking` — code findings outrank
+machinery gaps. A failed or exhausted discovery/specialist/verification pass
+(after its bounded retry) or partial input evidence concludes `incomplete`,
+with reasons that explicitly name a reviewer-side gap whose paths are carried
+forward and retried automatically — never an invitation to change code. A
+finding whose anchor falls outside its assigned evidence is discarded and
+counted, not a failed pass. Reading every path is not semantic completeness,
+and settled assurance never claims that every defect was found. Fan-out is
+enabled by default because the flat compatibility shape has no independent
+verifier and cannot produce settled assurance. Large textual
 diffs are deterministically split into complete bounded
 evidence shards; a path is partial only if finite plan capacity leaves one or
 more shards unassigned. Overflow reports every affected path and the exact
@@ -191,6 +199,7 @@ posts nothing, while a budget-ended run fails typed with its forensics.
 Inputs, outputs, and defaults are documented in [`action.yml`](action.yml).
 Honest limits: execution remains deployment class E and posting is never
 exactly-once. Review progress survives across runs only through the bounded
-state in complete-input, settled-assurance GitHub reviews. A runtime failure posts
-nothing; a settled run with incomplete input or assurance is posted honestly
-and fails the check. A draft or non-PR event is a typed skip (`skipped=true`).
+authenticated state in posted GitHub reviews. A runtime failure posts
+nothing; a completed run with incomplete input or unsettled passes is posted
+honestly, fails the check as `incomplete`, and carries the gap forward for
+the next run. A draft or non-PR event is a typed skip (`skipped=true`).

@@ -119,13 +119,15 @@ The packaged GitHub pull-request reviewer: schema-first review contracts, the
 `PullRequestSource`/`ReviewPublisher` ports with GitHub REST adapters, fail-closed anchor
 validation and publication planning, a fail-open sticky progress comment
 (`ReviewProgressReporter`), flat and fan-out reviewer shapes, and the `PrReview`
-configuration factory. Fan-out uses deterministic host-owned evidence units and risk
-classification labels, complete bounded evidence sharding, redundant specialist discovery for
-every unit, fresh candidate verification over the complete bounded unit, and host-only publication
-of exactly confirmed candidates. Its public
-result separates path/input coverage from discovery and verification settlement; neither claim
-means exhaustive defect detection. Only complete input plus settled assurance can emit
-authenticated incremental state or a green Action conclusion. Subpath entries: `./testing`
+configuration factory. Fan-out is scheduled entirely by host code from the deterministic
+unit plan — no coordinator model, no delegation tool: independent general and specialist
+discovery plus fresh candidate verification run as bounded child passes with one retry each,
+and only exactly confirmed candidates publish. Its public result separates path/input
+coverage from pass settlement; neither claim means exhaustive defect detection. Every
+completed run that can be signed advances the authenticated incremental baseline; a pass
+that stays failed carries its paths forward as retryable scope inside the state instead of
+freezing the baseline, and only a fully settled state authorizes skip-unchanged. Subpath
+entries: `./testing`
 (fixture source, collecting publisher,
 prompt-keyed scripted models), `./action` and `./cli` (platform-node host entrypoints). Consumes
 the `effect-agent` umbrella — the first package-level consumer of that edge. Deployment class E
@@ -150,9 +152,11 @@ publication proof; `examples/repo-ops`
 is an internal repository-operations auditor. None is a framework
 or deployment package. The repository root also carries `action/`, the prebuilt
 node-runtime GitHub Action over `@effect-agent/pr-review` with its committed bundle.
-Its normal synchronize path recovers authenticated review state and reviews only affected scope;
-explicit final mode performs fresh discovery over the bounded full diff, and blocking,
-input-incomplete, or assurance-incomplete results fail the check host-side.
+Its normal synchronize path recovers authenticated review state and reviews only the new delta
+plus carried unreviewed scope; explicit final mode performs fresh discovery over the bounded
+full diff. Blocking findings fail the check first; a machinery-incomplete result fails it with
+reasons that explicitly name a reviewer-side gap carried forward for retry, never a request to
+change code.
 
 ## Dependency direction
 

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
-import { IdGenerator, ToolExecutionClass } from "effect-agent";
+import type { IdGenerator } from "effect-agent";
+import { ToolExecutionClass } from "effect-agent";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 
+import type { PullRequestSource, ReviewPublicationPlan, ReviewPublisher } from "../src/index.ts";
 import {
   ChangedFile,
   CodeReview,
@@ -10,10 +12,7 @@ import {
   enforceFindingsBound,
   PrReview,
   PullRequestMetadata,
-  PullRequestSource,
   ReviewFinding,
-  ReviewPublicationPlan,
-  ReviewPublisher,
 } from "../src/index.ts";
 import {
   collectingReviewPublisherLayer,

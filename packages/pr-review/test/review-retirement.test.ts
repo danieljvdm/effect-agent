@@ -47,7 +47,7 @@ const makeState = (
   unresolvedFindings: ReadonlyArray<StoredReviewFinding>,
 ) =>
   ReviewState.make({
-    version: 1,
+    version: 2,
     repository: "acme/widgets",
     pullRequestNumber: 42,
     baseRef: "main",
@@ -59,6 +59,8 @@ const makeState = (
     reviewedPathCount: 2,
     unresolvedFindings,
     unresolvedConcerns: [],
+    unreviewedPaths: [],
+    settled: true,
     lastReviewMode: "incremental",
   });
 
@@ -96,7 +98,7 @@ const renderPriorBody = Effect.gen(function* () {
 const machineComments = (body: string): ReadonlyArray<string> =>
   Array.from(
     body.matchAll(
-      /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->|<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->|<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g,
+      /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->|<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->|<!-- effect-agent-pr-review state-v\d+:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g,
     ),
     (match) => match[0],
   );

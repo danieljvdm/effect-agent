@@ -1,83 +1,14 @@
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model } from "effect/unstable/ai";
 
-import { FileReviewReport, FileReviewRequest } from "./fan-out.ts";
-import { CodeReview } from "./review-agent.ts";
-import { makePromptKeyedModel, scriptedFinalParts, scriptedToolTurn } from "./scripted.ts";
+import { FileReviewReport } from "./fan-out.ts";
+import { scriptedFinalParts } from "./scripted.ts";
 
-// Deterministic offline models for the complete fan-out protocol. Decisions
-// key on committed Tool Call IDs or work IDs in each prompt, never call order,
-// so bounded child concurrency cannot make the fixtures flaky.
-
-export const OFFLINE_UNITS_CALL_ID = "units-1";
-
-export const offlineUnitCallId = (workId: string): string => `delegate-${workId}`;
-
-export type OfflineUnitCall = FileReviewRequest;
-
-const scriptedUnitCallId = (calls: ReadonlyArray<OfflineUnitCall>, index: number): string => {
-  const call = calls[index];
-  if (call === undefined) return "delegate-none";
-  const occurrence = calls
-    .slice(0, index + 1)
-    .filter((candidate) => candidate.workId === call.workId).length;
-  const base = offlineUnitCallId(call.workId);
-  return occurrence === 1 ? base : `${base}-${occurrence}`;
-};
-
-export const makeOfflineFanOutCoordinatorModel = (script: {
-  readonly discoveryCalls: ReadonlyArray<OfflineUnitCall>;
-  readonly verificationCalls: ReadonlyArray<OfflineUnitCall>;
-  readonly review: CodeReview;
-}) => {
-  const firstDiscovery = scriptedUnitCallId(script.discoveryCalls, 0);
-  const firstVerification = scriptedUnitCallId(script.verificationCalls, 0);
-  return makePromptKeyedModel("pr-fanout-coordinator-offline", (promptJson) => {
-    if (script.discoveryCalls.length === 0 && promptJson.includes(OFFLINE_UNITS_CALL_ID)) {
-      return scriptedFinalParts(JSON.stringify(Schema.encodeSync(CodeReview)(script.review)));
-    }
-    if (
-      script.verificationCalls.length === 0
-        ? promptJson.includes(firstDiscovery)
-        : promptJson.includes(firstVerification)
-    ) {
-      return scriptedFinalParts(JSON.stringify(Schema.encodeSync(CodeReview)(script.review)));
-    }
-    if (promptJson.includes(firstDiscovery)) {
-      return scriptedToolTurn(
-        ...script.verificationCalls.map(
-          (call, index): Response.StreamPartEncoded => ({
-            type: "tool-call",
-            id: scriptedUnitCallId(script.verificationCalls, index),
-            name: "delegate_file_review",
-            params: Schema.encodeSync(FileReviewRequest)(call),
-            providerExecuted: false,
-          }),
-        ),
-      );
-    }
-    if (promptJson.includes(OFFLINE_UNITS_CALL_ID)) {
-      return scriptedToolTurn(
-        ...script.discoveryCalls.map(
-          (call, index): Response.StreamPartEncoded => ({
-            type: "tool-call",
-            id: scriptedUnitCallId(script.discoveryCalls, index),
-            name: "delegate_file_review",
-            params: Schema.encodeSync(FileReviewRequest)(call),
-            providerExecuted: false,
-          }),
-        ),
-      );
-    }
-    return scriptedToolTurn({
-      type: "tool-call",
-      id: OFFLINE_UNITS_CALL_ID,
-      name: "list_review_units",
-      params: { scope: "all" },
-      providerExecuted: false,
-    });
-  });
-};
+// Deterministic offline child models for the host-scheduled fan-out pipeline.
+// Decisions key on the work ID committed into each child's instructions,
+// never call order, so bounded pass concurrency cannot make fixtures flaky.
+// Each work ID carries a SEQUENCE of outcomes consumed per call, so tests can
+// script "fail once, then settle" and pin the pipeline's bounded retry.
 
 export type OfflineUnitOutcome =
   | { readonly _tag: "report"; readonly report: FileReviewReport }
@@ -85,13 +16,15 @@ export type OfflineUnitOutcome =
 
 export interface OfflineUnitScript {
   readonly workId: string;
-  readonly outcome: OfflineUnitOutcome;
+  /** Consumed one per child call for this work ID; the last outcome repeats. */
+  readonly outcomes: ReadonlyArray<OfflineUnitOutcome>;
 }
 
 export const makeOfflineFileReviewerModel = (scripts: ReadonlyArray<OfflineUnitScript>) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
     const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+    const callsByWorkId = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
     const model = Model.make(
       "scripted",
       "pr-fanout-file-reviewer-offline",
@@ -115,10 +48,23 @@ export const makeOfflineFileReviewerModel = (scripts: ReadonlyArray<OfflineUnitS
                 }
                 const [selected] = script;
                 if (selected === undefined) return yield* Effect.die("unreachable scripted match");
+                const occurrence = yield* Ref.modify(callsByWorkId, (byWorkId) => {
+                  const count = byWorkId.get(selected.workId) ?? 0;
+                  const next = new Map(byWorkId);
+                  next.set(selected.workId, count + 1);
+                  return [count, next] as const;
+                });
+                const outcome =
+                  selected.outcomes[Math.min(occurrence, selected.outcomes.length - 1)];
+                if (outcome === undefined) {
+                  return yield* Effect.die(
+                    new Error(`Work ID ${selected.workId} scripts no outcomes`),
+                  );
+                }
                 return Stream.fromIterable(
                   scriptedFinalParts(
-                    selected.outcome._tag === "report"
-                      ? JSON.stringify(Schema.encodeSync(FileReviewReport)(selected.outcome.report))
+                    outcome._tag === "report"
+                      ? JSON.stringify(Schema.encodeSync(FileReviewReport)(outcome.report))
                       : "this is not valid review JSON",
                   ),
                 );

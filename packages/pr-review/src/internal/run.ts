@@ -10,13 +10,15 @@ import {
 import { type Tool } from "effect/unstable/ai";
 
 import {
-  assessReviewPipeline,
+  assessFlatReview,
+  compatibilityCoverage,
+  fanOutInputCoverage,
   ReviewAssurance,
   ReviewCoverage,
   ReviewInputCoverage,
-  type ReviewShape,
 } from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
+import { runFanOutReview, type FileReviewerBinding } from "./fan-out.ts";
 import { computeChangesetFingerprint } from "./fingerprint.ts";
 import { PublishedReview, ReviewPublisher } from "./github.ts";
 import { planPublication, ReviewPublicationPlan } from "./render.ts";
@@ -30,19 +32,26 @@ import {
 import {
   fromStoredConcern,
   fromStoredFinding,
+  MAX_STORED_UNREVIEWED_PATHS,
   ReviewExecutionContext,
   ReviewState,
   toStoredConcern,
   toStoredFinding,
 } from "./review-state.ts";
-import { rankAndDedupeFindings } from "./review-units.ts";
+import { rankAndDedupeConcerns, rankAndDedupeFindings } from "./review-units.ts";
 import { PullRequestSource, type PullRequestMetadata } from "./source.ts";
 
 // ---------------------------------------------------------------------------
-// One review run, end to end: read the pull request, run the bounded agent,
-// validate the review against the real diff, then (optionally) publish.
-// Publication happens strictly AFTER the agent loop so no model turn can
-// observe or influence the mutation, and a failed run publishes nothing.
+// One review run, end to end: read the pull request, run the bounded review
+// (one flat agent, or the host-scheduled fan-out pipeline), validate the
+// review against the real diff, then (optionally) publish. Publication
+// happens strictly AFTER all model work so no model turn can observe or
+// influence the mutation, and a failed run publishes nothing.
+//
+// Continuity is monotone: every completed run that can be signed advances the
+// stored baseline, carrying genuinely-unsettled scope forward explicitly. A
+// flaky pass therefore costs exactly its own scope on the next run — it can
+// never freeze the baseline and reopen everything reviewed since.
 // ---------------------------------------------------------------------------
 
 /**
@@ -59,12 +68,9 @@ export const reviewBudgetLimits = UsageBudgetLimits.make({
 });
 
 /**
- * Run-level bounds for the fan-out coordinator. This budget observes only
- * the COORDINATOR'S own usage — delegated children are bounded separately by
- * the delegation's `SubagentPolicy` reservation and the child definition's
- * own `AgentPolicy`, never silently by the parent's budget. The duration
- * ceiling is wider because delegation Tool Calls hold the parent turn open
- * while bounded children run.
+ * Run-level bounds for the fan-out pipeline. One budget observes EVERY child
+ * pass, so the ceiling covers bounded parallel discovery and verification
+ * plus the one-retry allowance.
  */
 export const fanOutReviewBudgetLimits = UsageBudgetLimits.make({
   maxInputTokens: 600_000,
@@ -87,23 +93,18 @@ export class ReviewRunOutcome extends Schema.Class<ReviewRunOutcome>(
   coverage: ReviewCoverage,
   /** Exact path/evidence assignment, distinct from semantic review work. */
   inputCoverage: ReviewInputCoverage,
-  /** Settlement of configured discovery, specialist, and verification work. */
+  /** Settlement of scheduled discovery, specialist, and verification work. */
   assurance: ReviewAssurance,
+  /** Retryable scope this run could not settle; carried to the next run. */
+  unreviewedPaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
+    Schema.isMaxLength(300),
+  ),
   plan: ReviewPublicationPlan,
   published: Schema.optionalKey(PublishedReview),
-  turns: Schema.Int.check(Schema.isGreaterThan(0)),
-  /**
-   * The run budget's observed usage. For the fan-out reviewer this observes
-   * the COORDINATOR only — delegated children are bounded and accounted
-   * separately by their reservations.
-   */
+  /** Total settled model turns (all child passes for the fan-out pipeline). */
+  turns: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /** The run budget's observed usage across the whole run. */
   usage: Schema.optionalKey(UsageTotals),
-  /**
-   * What `usage` observed: the whole run, or a fan-out coordinator only.
-   * Absent when the caller declared no scope — consumers must not present
-   * unscoped usage as whole-run totals.
-   */
-  usageScope: Schema.optionalKey(Schema.Literals(["run", "coordinator"])),
   reviewMode: Schema.optionalKey(Schema.Literals(["incremental", "full"])),
   reviewReason: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(1_000))),
   state: Schema.optionalKey(ReviewState),
@@ -114,7 +115,7 @@ export interface ExecuteReviewOptions {
   readonly post: boolean;
   /** Map the model's verdict onto APPROVE/REQUEST_CHANGES instead of COMMENT. */
   readonly applyVerdict: boolean;
-  /** Run-level usage bounds; defaults to `reviewBudgetLimits`. */
+  /** Run-level usage bounds; defaults to the shape's packaged limits. */
   readonly limits?: UsageBudgetLimits | undefined;
   /**
    * Host-side findings bound (fail-closed backstop for the instruction-level
@@ -132,15 +133,6 @@ export interface ExecuteReviewOptions {
   readonly modelLabel?: string | undefined;
   /** Workflow-run URL rendered into the review footer. */
   readonly runUrl?: string | undefined;
-  /**
-   * What the run budget observes: the whole run, or a fan-out coordinator
-   * only. Without a declared scope the footer omits usage entirely — this
-   * generic path cannot know what a caller's binding shape observes, and an
-   * unlabeled number would read as whole-run totals.
-   */
-  readonly usageScope?: "run" | "coordinator" | undefined;
-  /** Host-owned coverage shape; defaults to the flat reviewer. */
-  readonly reviewShape?: ReviewShape | undefined;
 }
 
 /** Build the mission one review run frames from the source's snapshot. */
@@ -173,36 +165,190 @@ export const enforceFindingsBound = (review: CodeReview, maxFindings: number): C
 const findingKey = (finding: ReviewFinding): string =>
   `${finding.path}\u0000${finding.startLine}\u0000${finding.endLine}\u0000${finding.severity}\u0000${finding.title}`;
 
-const severityRank: Record<ReviewConcern["severity"], number> = {
-  blocking: 0,
-  important: 1,
-  nit: 2,
-};
-
-const rankAndDedupeConcerns = (
-  concerns: ReadonlyArray<ReviewConcern>,
-): ReadonlyArray<ReviewConcern> => {
-  const byContent = new Map<string, ReviewConcern>();
-  for (const concern of concerns) {
-    const key = `${concern.title}\u0000${concern.body}`;
-    const previous = byContent.get(key);
-    if (
-      previous === undefined ||
-      severityRank[concern.severity] < severityRank[previous.severity]
-    ) {
-      byContent.set(key, concern);
-    }
-  }
-  return [...byContent.values()]
-    .sort((left, right) => severityRank[left.severity] - severityRank[right.severity])
-    .slice(0, 10);
-};
+/** One shape-specific review result, before the shared settlement tail. */
+interface ReviewCore {
+  readonly review: CodeReview;
+  readonly inputCoverage: ReviewInputCoverage;
+  readonly assurance: ReviewAssurance;
+  readonly unreviewedPaths: ReadonlyArray<string>;
+  readonly turns: number;
+}
 
 /**
- * Execute one review with any explicit Agent Binding whose contract is
- * `ReviewMission -> CodeReview` — the flat reviewer or the fan-out
- * coordinator; the toolkit stays generic because publication only depends on
- * the shared output contract. The binding stays a parameter (D-027): tests
+ * The shared settlement tail: carry unchanged prior scope, decide whether
+ * this run's continuity state can be signed, plan the exact publication, and
+ * (optionally) post it. Continuity requires only that the run COMPLETED with
+ * a trustworthy full-surface fingerprint — never that every pass settled;
+ * unsettled scope travels inside the state instead of freezing it.
+ */
+const settleReviewRun = (
+  core: ReviewCore,
+  context: {
+    readonly metadata: PullRequestMetadata;
+    readonly files: ReadonlyArray<ChangedFile>;
+    readonly anchorFiles: ReadonlyArray<ChangedFile>;
+    readonly fingerprint: string | undefined;
+    readonly usage: UsageTotals | undefined;
+  },
+  options: ExecuteReviewOptions,
+) =>
+  Effect.gen(function* () {
+    const { metadata, files, anchorFiles, fingerprint, usage } = context;
+    const executionContext = Option.getOrUndefined(
+      yield* Effect.serviceOption(ReviewExecutionContext),
+    );
+    const review = enforceFindingsBound(core.review, clampMaxFindings(options.maxFindings));
+    const { inputCoverage, assurance } = core;
+    const unreviewedPaths = [...new Set(core.unreviewedPaths)].sort();
+    const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
+    const affectedPaths = new Set(
+      executionContext?.affectedPaths ??
+        files.flatMap((file) =>
+          file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
+        ),
+    );
+    const priorState =
+      executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
+    const carriedCandidates =
+      priorState?.unresolvedFindings
+        .filter((finding) => !affectedPaths.has(finding.path))
+        .map(fromStoredFinding) ?? [];
+    const activeFindings = rankAndDedupeFindings([...carriedCandidates, ...review.findings]).slice(
+      0,
+      clampMaxFindings(options.maxFindings),
+    );
+    const activeFindingKeys = new Set(activeFindings.map(findingKey));
+    const currentFindingKeys = new Set(review.findings.map(findingKey));
+    const carriedFindings = carriedCandidates.filter(
+      (finding) =>
+        activeFindingKeys.has(findingKey(finding)) && !currentFindingKeys.has(findingKey(finding)),
+    );
+    // Non-anchored concerns cannot be mapped safely to one affected path, so
+    // incremental runs carry them conservatively until the explicit final audit.
+    const carriedConcernCandidates = priorState?.unresolvedConcerns.map(fromStoredConcern) ?? [];
+    const activeConcerns = rankAndDedupeConcerns([
+      ...carriedConcernCandidates,
+      ...(review.concerns ?? []),
+    ]);
+    const currentConcernKeys = new Set(
+      (review.concerns ?? []).map((concern) => `${concern.title}\u0000${concern.body}`),
+    );
+    const activeConcernKeys = new Set(
+      activeConcerns.map((concern) => `${concern.title}\u0000${concern.body}`),
+    );
+    const carriedConcerns = carriedConcernCandidates.filter((concern) => {
+      const key = `${concern.title}\u0000${concern.body}`;
+      return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
+    });
+    const settled =
+      inputCoverage.status === "complete" &&
+      assurance.status !== "incomplete" &&
+      unreviewedPaths.length === 0;
+    // The fingerprint marker is standalone skip authority for fingerprint-only
+    // harnesses, so it is embedded only for a fully settled run.
+    const skipFingerprint = settled ? fingerprint : undefined;
+    const carriedScopeFits = unreviewedPaths.length <= MAX_STORED_UNREVIEWED_PATHS;
+    const stateCandidate =
+      executionContext !== undefined &&
+      fingerprint !== undefined &&
+      metadata.baseSha !== undefined &&
+      // The fingerprint and stored baseline describe the FULL pull-request
+      // surface; a truncated anchor surface cannot make either claim.
+      anchorFiles.length >= metadata.totalChangedFiles &&
+      carriedScopeFits &&
+      executionContext.stateAuthenticator?.status === "available"
+        ? ReviewState.make({
+            version: 2,
+            repository: metadata.repository,
+            pullRequestNumber: metadata.number,
+            baseRef: metadata.baseRef,
+            baseSha: metadata.baseSha,
+            headRef: metadata.headRef,
+            reviewedHeadSha: metadata.headSha,
+            profileFingerprint: executionContext.profileFingerprint,
+            acceptedScopeFingerprint: fingerprint,
+            reviewedPathCount: anchorFiles.length,
+            unresolvedFindings: activeFindings.map(toStoredFinding),
+            unresolvedConcerns: activeConcerns.map(toStoredConcern),
+            unreviewedPaths,
+            settled,
+            lastReviewMode: executionContext.mode,
+          })
+        : undefined;
+    const continuity =
+      stateCandidate === undefined || executionContext?.stateAuthenticator === undefined
+        ? {
+            state: undefined,
+            marker: undefined,
+            notice:
+              executionContext !== undefined && !carriedScopeFits
+                ? `carried unreviewed scope (${unreviewedPaths.length} paths) exceeded the ${MAX_STORED_UNREVIEWED_PATHS}-path continuity bound`
+                : executionContext?.stateAuthenticator?.status === "unavailable"
+                  ? (executionContext.stateAuthenticator.unavailableReason ??
+                    "authenticated continuity state is unavailable")
+                  : undefined,
+          }
+        : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(
+            Effect.match({
+              onFailure: (error) => ({
+                state: undefined,
+                marker: undefined,
+                notice:
+                  error._tag === "ReviewStateMarkerTooLarge"
+                    ? `authenticated continuity state exceeded its ${error.maximumChars}-character bound`
+                    : `authenticated continuity state could not be signed: ${error.reason}`,
+              }),
+              onSuccess: (marker) => ({ state: stateCandidate, marker, notice: undefined }),
+            }),
+          );
+    const plan = planPublication(review, anchorFiles, {
+      applyVerdict: options.applyVerdict,
+      headSha: metadata.headSha,
+      totalChangedFiles: metadata.totalChangedFiles,
+      baseRef: metadata.baseRef,
+      headRef: metadata.headRef,
+      modelLabel: options.modelLabel,
+      runUrl: options.runUrl,
+      usage,
+      fingerprint: skipFingerprint,
+      inputCoverage,
+      assurance,
+      unreviewedPaths,
+      carriedFindings,
+      carriedConcerns,
+      reviewMode: executionContext?.mode,
+      reviewReason: executionContext?.reason,
+      baselineSha: executionContext?.baselineSha,
+      reviewFilesVisible: files.length,
+      reviewTotalFiles,
+      stateMarker: continuity.marker,
+      stateNotice: continuity.notice,
+    });
+    const shared = {
+      review,
+      activeFindings,
+      activeConcerns,
+      coverage: compatibilityCoverage(inputCoverage, assurance),
+      inputCoverage,
+      assurance,
+      unreviewedPaths,
+      plan,
+      turns: core.turns,
+      ...(usage === undefined ? {} : { usage }),
+      ...(executionContext === undefined
+        ? {}
+        : { reviewMode: executionContext.mode, reviewReason: executionContext.reason }),
+      ...(continuity.state === undefined ? {} : { state: continuity.state }),
+    };
+    if (!options.post) return ReviewRunOutcome.make(shared);
+    const publisher = yield* ReviewPublisher;
+    const published = yield* publisher.publish(plan);
+    return ReviewRunOutcome.make({ ...shared, published });
+  });
+
+/**
+ * Execute one flat review with any explicit Agent Binding whose contract is
+ * `ReviewMission -> CodeReview`. The binding stays a parameter (D-027): tests
  * pass scripted models, hosts pass live provider bindings, and the model
  * Layer's requirements stay visible in this Effect's `R`.
  */
@@ -249,187 +395,78 @@ export const executeReview = <
 
     // The engine validated the terminal JSON against the output schema; this
     // decode recovers the typed value on this side of the generic boundary.
-    const decoded = yield* Schema.decodeUnknownEffect(CodeReview)(result.output);
-    const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
-    const pipeline = assessReviewPipeline({
-      shape: options.reviewShape ?? "flat",
+    const review = yield* Schema.decodeUnknownEffect(CodeReview)(result.output);
+    const assessment = assessFlatReview({
       files,
-      totalFiles: reviewTotalFiles,
+      totalFiles: executionContext?.totalFiles ?? metadata.totalChangedFiles,
       anchorFiles,
       totalAnchorFiles: metadata.totalChangedFiles,
       events,
     });
-    // The coordinator owns prose only. Fan-out findings and concerns are
-    // reconstructed from exact verifier-confirmed discovery candidates; an
-    // unsupported or coordinator-invented candidate cannot reach publication.
-    const verifiedReview =
-      options.reviewShape !== "fan-out"
-        ? decoded
-        : CodeReview.make({
-            summary: decoded.summary,
-            verdict: decoded.verdict,
-            findings: rankAndDedupeFindings(pipeline.confirmedFindings),
-            ...(pipeline.confirmedConcerns.length === 0
-              ? {}
-              : { concerns: rankAndDedupeConcerns(pipeline.confirmedConcerns) }),
-            ...(pipeline.walkthrough.length === 0 ? {} : { walkthrough: pipeline.walkthrough }),
-          });
-    const review = enforceFindingsBound(verifiedReview, clampMaxFindings(options.maxFindings));
     const usage = yield* budget.snapshot;
-    const affectedPaths = new Set(
-      executionContext?.affectedPaths ??
-        files.flatMap((file) =>
-          file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
-        ),
-    );
-    const priorState =
-      executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
-    const carriedCandidates =
-      priorState?.unresolvedFindings
-        .filter((finding) => !affectedPaths.has(finding.path))
-        .map(fromStoredFinding) ?? [];
-    const activeFindings = rankAndDedupeFindings([...carriedCandidates, ...review.findings]).slice(
-      0,
-      clampMaxFindings(options.maxFindings),
-    );
-    const activeFindingKeys = new Set(activeFindings.map(findingKey));
-    const currentFindingKeys = new Set(review.findings.map(findingKey));
-    const carriedFindings = carriedCandidates.filter(
-      (finding) =>
-        activeFindingKeys.has(findingKey(finding)) && !currentFindingKeys.has(findingKey(finding)),
-    );
-    // Non-anchored concerns cannot be mapped safely to one affected path, so
-    // incremental runs carry them conservatively until the explicit final audit.
-    const carriedConcernCandidates = priorState?.unresolvedConcerns.map(fromStoredConcern) ?? [];
-    const activeConcerns = rankAndDedupeConcerns([
-      ...carriedConcernCandidates,
-      ...(review.concerns ?? []),
-    ]);
-    const currentConcernKeys = new Set(
-      (review.concerns ?? []).map((concern) => `${concern.title}\u0000${concern.body}`),
-    );
-    const activeConcernKeys = new Set(
-      activeConcerns.map((concern) => `${concern.title}\u0000${concern.body}`),
-    );
-    const carriedConcerns = carriedConcernCandidates.filter((concern) => {
-      const key = `${concern.title}\u0000${concern.body}`;
-      return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
-    });
-    const { assurance, coverage, inputCoverage } = pipeline;
-    const stateCandidate =
-      executionContext !== undefined &&
-      inputCoverage.status === "complete" &&
-      assurance.status === "settled" &&
-      fingerprint !== undefined &&
-      metadata.baseSha !== undefined &&
-      executionContext.stateAuthenticator?.status === "available"
-        ? ReviewState.make({
-            version: 1,
-            repository: metadata.repository,
-            pullRequestNumber: metadata.number,
-            baseRef: metadata.baseRef,
-            baseSha: metadata.baseSha,
-            headRef: metadata.headRef,
-            reviewedHeadSha: metadata.headSha,
-            profileFingerprint: executionContext.profileFingerprint,
-            acceptedScopeFingerprint: fingerprint,
-            reviewedPathCount: anchorFiles.length,
-            unresolvedFindings: activeFindings.map(toStoredFinding),
-            unresolvedConcerns: activeConcerns.map(toStoredConcern),
-            lastReviewMode: executionContext.mode,
-          })
-        : undefined;
-    const continuity =
-      stateCandidate === undefined || executionContext?.stateAuthenticator === undefined
-        ? {
-            state: undefined,
-            marker: undefined,
-            notice:
-              executionContext?.stateAuthenticator?.status === "unavailable" &&
-              inputCoverage.status === "complete" &&
-              assurance.status === "settled"
-                ? (executionContext.stateAuthenticator.unavailableReason ??
-                  "authenticated continuity state is unavailable")
-                : undefined,
-          }
-        : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(
-            Effect.match({
-              onFailure: (error) => ({
-                state: undefined,
-                marker: undefined,
-                notice:
-                  error._tag === "ReviewStateMarkerTooLarge"
-                    ? `authenticated continuity state exceeded its ${error.maximumChars}-character bound`
-                    : `authenticated continuity state could not be signed: ${error.reason}`,
-              }),
-              onSuccess: (marker) => ({ state: stateCandidate, marker, notice: undefined }),
-            }),
-          );
-    const plan = planPublication(review, anchorFiles, {
-      applyVerdict: options.applyVerdict,
-      headSha: metadata.headSha,
-      totalChangedFiles: metadata.totalChangedFiles,
-      baseRef: metadata.baseRef,
-      headRef: metadata.headRef,
-      modelLabel: options.modelLabel,
-      runUrl: options.runUrl,
-      usage,
-      usageScope: options.usageScope,
-      fingerprint:
-        inputCoverage.status === "complete" && assurance.status === "settled"
-          ? fingerprint
-          : undefined,
-      coverage,
-      inputCoverage,
-      assurance,
-      carriedFindings,
-      carriedConcerns,
-      reviewMode: executionContext?.mode,
-      reviewReason: executionContext?.reason,
-      baselineSha: executionContext?.baselineSha,
-      reviewFilesVisible: files.length,
-      reviewTotalFiles,
-      stateMarker: continuity.marker,
-      stateNotice: continuity.notice,
-    });
-
-    const scope =
-      options.usageScope === undefined ? {} : ({ usageScope: options.usageScope } as const);
-    if (!options.post) {
-      return ReviewRunOutcome.make({
+    return yield* settleReviewRun(
+      {
         review,
-        activeFindings,
-        activeConcerns,
-        coverage,
-        inputCoverage,
-        assurance,
-        plan,
+        inputCoverage: assessment.inputCoverage,
+        assurance: assessment.assurance,
+        unreviewedPaths: assessment.unreviewedPaths,
         turns: result.turns,
-        usage,
-        ...scope,
-        ...(executionContext === undefined
-          ? {}
-          : { reviewMode: executionContext.mode, reviewReason: executionContext.reason }),
-        ...(continuity.state === undefined ? {} : { state: continuity.state }),
-      });
-    }
-    const publisher = yield* ReviewPublisher;
-    const published = yield* publisher.publish(plan);
-    return ReviewRunOutcome.make({
-      review,
-      activeFindings,
-      activeConcerns,
-      coverage,
-      inputCoverage,
-      assurance,
-      plan,
-      published,
-      turns: result.turns,
-      usage,
-      ...scope,
-      ...(executionContext === undefined
-        ? {}
-        : { reviewMode: executionContext.mode, reviewReason: executionContext.reason }),
-      ...(continuity.state === undefined ? {} : { state: continuity.state }),
+      },
+      { metadata, files, anchorFiles, fingerprint, usage },
+      options,
+    );
+  });
+
+/**
+ * Execute one host-scheduled fan-out review: deterministic planning,
+ * independent discovery and verification child passes with bounded retries,
+ * and a host-composed review from verifier-confirmed candidates only. One
+ * budget observes every child pass, so the reported usage is whole-run.
+ */
+export const executeFanOutReview = <Provider, ModelProvides, ModelRequires>(
+  binding: FileReviewerBinding<Provider, ModelProvides, ModelRequires>,
+  options: ExecuteReviewOptions,
+) =>
+  Effect.gen(function* () {
+    const source = yield* PullRequestSource;
+    const metadata = yield* source.metadata;
+    const files = yield* source.changedFiles;
+    const anchorFiles = yield* source.anchorFiles;
+    const executionContext = Option.getOrUndefined(
+      yield* Effect.serviceOption(ReviewExecutionContext),
+    );
+    const fullMission = buildReviewMission(metadata, anchorFiles);
+    const fingerprint =
+      options.signature === undefined
+        ? undefined
+        : yield* computeChangesetFingerprint(anchorFiles, options.signature(fullMission));
+
+    const budget = yield* makeUsageBudget(options.limits ?? fanOutReviewBudgetLimits);
+    const totalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
+    const pipeline = yield* runFanOutReview(binding, {
+      files,
+      anchorFiles,
+      totalChangedFiles: totalFiles,
+      maxFindings: options.maxFindings,
+      budget: toRunBudgetHook(budget),
     });
+    const inputCoverage = fanOutInputCoverage({
+      plan: pipeline.plan,
+      files,
+      totalFiles,
+      anchorFiles,
+      totalAnchorFiles: metadata.totalChangedFiles,
+    });
+    const usage = yield* budget.snapshot;
+    return yield* settleReviewRun(
+      {
+        review: pipeline.review,
+        inputCoverage,
+        assurance: pipeline.assurance,
+        unreviewedPaths: pipeline.unreviewedPaths,
+        turns: pipeline.turns,
+      },
+      { metadata, files, anchorFiles, fingerprint, usage },
+      options,
+    );
   });

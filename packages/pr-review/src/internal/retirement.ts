@@ -102,8 +102,10 @@ const findingIdentity = (finding: {
 
 const REVIEW_METADATA_PATTERN = /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->/g;
 const FINGERPRINT_PATTERN = /<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->/g;
+// Version-agnostic on purpose: retirement only RECOGNIZES machine markers to
+// keep them byte-identical through an edit; it never authenticates them.
 const STATE_PATTERN =
-  /<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g;
+  /<!-- effect-agent-pr-review state-v\d+:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g;
 const RETIRED_ORIGINAL_PATTERN =
   /<!-- effect-agent-pr-review retired-original:start -->\n([\s\S]*?)\n<!-- effect-agent-pr-review retired-original:end -->/;
 const MACHINE_COMMENT_PATTERN = new RegExp(

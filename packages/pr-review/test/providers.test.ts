@@ -1,4 +1,5 @@
-import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
+import type { OpenAiSchema } from "@effect/ai-openai";
+import { OpenAiClient } from "@effect/ai-openai";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Ref } from "effect";
 import { LanguageModel } from "effect/unstable/ai";

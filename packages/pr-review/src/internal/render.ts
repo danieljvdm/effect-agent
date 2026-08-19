@@ -2,7 +2,7 @@ import { Schema } from "effect";
 
 import { anchorViolation } from "./anchors.ts";
 export { anchorViolation } from "./anchors.ts";
-import type { ReviewAssurance, ReviewCoverage, ReviewInputCoverage } from "./coverage.ts";
+import type { ReviewAssurance, ReviewInputCoverage } from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
 import { renderFingerprintMarker } from "./fingerprint.ts";
 import {
@@ -215,27 +215,27 @@ const renderVerdictCallout = (
   options: {
     readonly carriedFindings?: ReadonlyArray<ReviewFinding> | undefined;
     readonly carriedConcerns?: ReadonlyArray<ReviewConcern> | undefined;
-    readonly coverage?: ReviewCoverage | undefined;
     readonly inputCoverage?: ReviewInputCoverage | undefined;
     readonly assurance?: ReviewAssurance | undefined;
+    readonly unreviewedPaths?: ReadonlyArray<string> | undefined;
   },
 ): string => {
   const counts = severityCounts(review, options.carriedFindings, options.carriedConcerns);
-  if (
-    options.inputCoverage?.status === "incomplete" ||
-    (options.inputCoverage === undefined && options.coverage?.status === "incomplete")
-  ) {
-    const suffix =
-      counts.blocking > 0 ? ` It also has ${countNoun(counts.blocking, "blocking finding")}.` : "";
-    return `> [!CAUTION]\n> Input coverage is incomplete — the check must not pass.${suffix}`;
-  }
-  if (options.assurance !== undefined && options.assurance.status !== "settled") {
-    const suffix =
-      counts.blocking > 0 ? ` It also has ${countNoun(counts.blocking, "blocking finding")}.` : "";
-    return `> [!CAUTION]\n> Configured review assurance did not settle — the check must not pass.${suffix}`;
-  }
+  // Code findings outrank machinery gaps: a blocking finding is the
+  // actionable signal, and unsettled reviewer-side work is carried forward.
   if (counts.blocking > 0) {
     return `> [!CAUTION]\n> ${countNoun(counts.blocking, "blocking finding")} — do not merge before addressing ${counts.blocking === 1 ? "it" : "them"}.`;
+  }
+  const carried = options.unreviewedPaths?.length ?? 0;
+  if (
+    options.inputCoverage?.status === "incomplete" ||
+    options.assurance?.status === "incomplete"
+  ) {
+    const carriedNote =
+      carried > 0
+        ? ` ${countNoun(carried, "affected path")} ${carried === 1 ? "is" : "are"} carried forward and retried automatically on the next run.`
+        : "";
+    return `> [!WARNING]\n> Review infrastructure did not settle — a reviewer-side gap, NOT a request to change code.${carriedNote} The check reports "incomplete" until a run settles.`;
   }
   if (counts.important > 0) {
     return `> [!IMPORTANT]\n> ${countNoun(counts.important, "important finding")} to address before merging.`;
@@ -393,22 +393,20 @@ export const planPublication = (
     readonly modelLabel?: string | undefined;
     /** Workflow-run URL rendered into the footer. */
     readonly runUrl?: string | undefined;
-    /** Observed run usage rendered into the footer. */
+    /** Observed whole-run usage rendered into the footer. */
     readonly usage?: { readonly inputTokens: number; readonly outputTokens: number } | undefined;
-    /** What the usage observed: the whole run, or the coordinator only. */
-    readonly usageScope?: "run" | "coordinator" | undefined;
     /**
      * Changeset fingerprint embedded invisibly in the review body so a later
      * run can skip re-reviewing an unchanged changeset.
      */
     readonly fingerprint?: string | undefined;
-    /** Host-owned coverage; incomplete coverage is rendered and fails the check. */
-    readonly coverage?: ReviewCoverage | undefined;
     /** Host-owned path/evidence assignment, separate from review assurance. */
     readonly inputCoverage?: ReviewInputCoverage | undefined;
     /** Host-owned discovery/specialist/verification settlement. */
     readonly assurance?: ReviewAssurance | undefined;
-    /** Unchanged unresolved items carried from the prior settled assurance baseline. */
+    /** Retryable scope this run could not settle; carried to the next run. */
+    readonly unreviewedPaths?: ReadonlyArray<string> | undefined;
+    /** Unchanged unresolved items carried from the prior reviewed baseline. */
     readonly carriedFindings?: ReadonlyArray<ReviewFinding> | undefined;
     readonly carriedConcerns?: ReadonlyArray<ReviewConcern> | undefined;
     /** Selected review scope, made visible whenever orchestration chose it. */
@@ -452,14 +450,8 @@ export const planPublication = (
 
   const footerParts = ["Automated review by @effect-agent/pr-review"];
   if (options.modelLabel !== undefined) footerParts.push(options.modelLabel);
-  // Usage renders only under an EXPLICIT scope: this planner cannot know
-  // whether a budget snapshot observed the whole run or only a fan-out
-  // coordinator, and omitting the number is honest where mislabeling is not.
-  if (options.usage !== undefined && options.usageScope !== undefined) {
-    const scope = options.usageScope === "coordinator" ? " (coordinator)" : "";
-    footerParts.push(
-      `${options.usage.inputTokens} in / ${options.usage.outputTokens} out tokens${scope}`,
-    );
+  if (options.usage !== undefined) {
+    footerParts.push(`${options.usage.inputTokens} in / ${options.usage.outputTokens} out tokens`);
   }
   if (options.runUrl !== undefined) footerParts.push(`[run](${options.runUrl})`);
   footerParts.push(`reviewed at ${options.headSha.slice(0, 7)}`);
@@ -490,9 +482,9 @@ export const planPublication = (
       renderVerdictCallout(review, {
         carriedFindings,
         carriedConcerns,
-        coverage: options.coverage,
         inputCoverage: options.inputCoverage,
         assurance: options.assurance,
+        unreviewedPaths: options.unreviewedPaths,
       }),
     ];
     if (options.reviewMode !== undefined && options.reviewReason !== undefined) {
@@ -513,8 +505,14 @@ export const planPublication = (
     if (options.inputCoverage !== undefined && options.assurance !== undefined) {
       parts.push(
         "",
-        `**Input coverage:** ${options.inputCoverage.status} (${options.inputCoverage.assignedPaths.length}/${options.inputCoverage.requiredPaths.length} paths assigned, ${options.inputCoverage.partialPaths.length} partial) · **Review assurance:** ${options.assurance.status} (${options.assurance.completedGeneralDiscoveryPasses}/${options.assurance.requiredGeneralDiscoveryPasses} general discovery, ${options.assurance.completedSpecialistPasses}/${options.assurance.requiredSpecialistPasses} specialist, ${options.assurance.completedVerificationPasses}/${options.assurance.requiredVerificationPasses} verification; ${options.assurance.confirmedCandidates} confirmed / ${options.assurance.rejectedCandidates} rejected / ${options.assurance.unsettledCandidates} unsettled candidates)`,
+        `**Input coverage:** ${options.inputCoverage.status} (${options.inputCoverage.assignedPaths.length}/${options.inputCoverage.requiredPaths.length} paths assigned, ${options.inputCoverage.partialPaths.length} partial) · **Review assurance:** ${options.assurance.status} (${options.assurance.completedGeneralDiscoveryPasses}/${options.assurance.requiredGeneralDiscoveryPasses} general discovery, ${options.assurance.completedSpecialistPasses}/${options.assurance.requiredSpecialistPasses} specialist, ${options.assurance.completedVerificationPasses}/${options.assurance.requiredVerificationPasses} verification; ${options.assurance.confirmedCandidates} confirmed / ${options.assurance.rejectedCandidates} rejected / ${options.assurance.unsettledCandidates} unsettled${options.assurance.discardedInvalidFindings > 0 ? ` / ${options.assurance.discardedInvalidFindings} discarded` : ""} candidates)`,
       );
+      if (options.inputCoverage.undiffablePaths.length > 0) {
+        parts.push(
+          "",
+          `ℹ️ ${countNoun(options.inputCoverage.undiffablePaths.length, "path")} had no reviewable textual evidence (binary or oversized) and ${options.inputCoverage.undiffablePaths.length === 1 ? "is" : "are"} outside the review surface.`,
+        );
+      }
     }
     parts.push("", review.summary);
     if (walkthroughKept && walkthrough.length > 0) {
@@ -525,22 +523,17 @@ export const planPublication = (
     if (options.inputCoverage?.status === "incomplete") {
       parts.push(
         "",
-        "### 🛑 Incomplete input coverage",
+        "### ⚠️ Incomplete input coverage",
         "",
         ...options.inputCoverage.reasons.map((reason) => `- ${reason}`),
       );
-    } else if (options.inputCoverage === undefined && options.coverage?.status === "incomplete") {
-      parts.push(
-        "",
-        "### 🛑 Incomplete coverage",
-        "",
-        ...options.coverage.reasons.map((reason) => `- ${reason}`),
-      );
     }
-    if (options.assurance !== undefined && options.assurance.status !== "settled") {
+    if (options.assurance?.status === "incomplete") {
       parts.push(
         "",
-        "### 🛑 Incomplete review assurance",
+        "### ⚠️ Unsettled review passes",
+        "",
+        "The passes below failed on the reviewer's side after a bounded retry. Their paths are carried forward and re-reviewed automatically on the next run — do not change code to satisfy this section.",
         "",
         ...options.assurance.reasons.map((reason) => `- ${reason}`),
       );
@@ -613,14 +606,16 @@ export const planPublication = (
     options.carriedFindings ?? [],
     options.carriedConcerns ?? [],
   );
+  // Machinery gaps (incomplete input or unsettled passes) block APPROVE but
+  // never REQUEST_CHANGES: requesting changes for a reviewer-side fault would
+  // tell the author to edit code nobody reviewed.
+  const unclean =
+    options.inputCoverage?.status === "incomplete" || options.assurance?.status === "incomplete";
   const event: ReviewEvent = !options.applyVerdict
     ? "COMMENT"
-    : options.inputCoverage?.status === "incomplete" ||
-        (options.inputCoverage === undefined && options.coverage?.status === "incomplete") ||
-        (options.assurance !== undefined && options.assurance.status !== "settled") ||
-        counts.blocking > 0
+    : counts.blocking > 0
       ? "REQUEST_CHANGES"
-      : review.verdict === "approve" && counts.important === 0
+      : review.verdict === "approve" && counts.important === 0 && !unclean
         ? "APPROVE"
         : "COMMENT";
 

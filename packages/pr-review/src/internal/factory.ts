@@ -4,19 +4,13 @@ import {
   AgentPolicy,
   getToolExecutionClass,
   IdGenerator,
-  SubagentReservationsMemoryLive,
   type AgentPolicyInput,
   type UsageBudgetLimits,
 } from "effect-agent";
 import { Toolkit, type LanguageModel, type Model, type Tool } from "effect/unstable/ai";
 
 import type { ChangedFile } from "./diff.ts";
-import {
-  fanOutHandlersLayerFor,
-  FanOutCoordinatorToolkitLayer,
-  FileReviewToolkitLayer,
-  makeFanOutReviewSuite,
-} from "./fan-out.ts";
+import { makeFileReviewerDefinition } from "./fan-out.ts";
 import { computeChangesetFingerprint } from "./fingerprint.ts";
 import { compileIgnoreGlobs, ignoringPullRequestSourceLayer } from "./ignore.ts";
 import {
@@ -35,6 +29,7 @@ import {
 import { buildProfileMission, computeProfileFingerprint } from "./review-state.ts";
 import {
   buildReviewMission,
+  executeFanOutReview,
   executeReview,
   fanOutReviewBudgetLimits,
   reviewBudgetLimits,
@@ -244,8 +239,6 @@ const make = <
         signature,
         modelLabel: options.modelLabel,
         runUrl: runOptions.runUrl,
-        usageScope: "run",
-        reviewShape: "flat",
       }).pipe(Effect.provide(Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)), Effect.scoped),
       options.ignore,
     );
@@ -264,77 +257,68 @@ const make = <
   } as const;
 };
 
-/** Options accepted by `PrReview.makeFanOut` (the delegating reviewer). */
+/** Options accepted by `PrReview.makeFanOut` (the host-scheduled pipeline). */
 export interface PrReviewFanOutOptions<
   Provider,
   ModelProvides,
   ModelRequires,
 > extends PrReviewSharedOptions {
-  /** The Effect AI Model bound to both the coordinator and its children. */
+  /** The Effect AI Model bound to every child review pass. */
   readonly model: Model.Model<Provider, LanguageModel.LanguageModel | ModelProvides, ModelRequires>;
   /**
    * Static guidance injected into every child reviewer's instructions. The
-   * coordinator's mission never crosses the delegation boundary, so
+   * pipeline schedules children from the deterministic plan, so
    * mission-dependent guidance cannot exist for children.
    */
   readonly guidance?: string | ReadonlyArray<string> | undefined;
 }
 
 /**
- * Build the fan-out reviewer: a coordinator schedules host-planned general
- * and specialist discovery plus independent candidate verification through
- * attached ephemeral children. Host code reconstructs publication only from
- * exactly confirmed candidates. Child and coordinator execution bounds are
- * packaged and not configurable here — the delegation reservation mirrors
- * the child policy, and letting the two drift apart is a published-API hazard.
+ * Build the fan-out reviewer: host code schedules host-planned general and
+ * specialist discovery plus independent candidate verification directly as
+ * bounded child runs — there is no coordinator model and no delegation tool,
+ * so review assurance cannot fail on scheduling compliance. Host code
+ * composes publication only from exactly confirmed candidates. Child
+ * execution bounds are packaged and not configurable here.
  */
 const makeFanOut = <Provider, ModelProvides, ModelRequires>(
   options: PrReviewFanOutOptions<Provider, ModelProvides, ModelRequires>,
 ) => {
-  const suite = makeFanOutReviewSuite({
-    guidance: options.guidance,
-    maxFindings: options.maxFindings,
-  });
-  // Structural bindings for the same reason as in `make` above.
-  const binding = Object.freeze({ definition: suite.parent, model: options.model });
-  const childBinding = Object.freeze({ definition: suite.child, model: options.model });
+  const child = makeFileReviewerDefinition({ guidance: options.guidance });
+  // Structural binding for the same reason as in `make` above.
+  const childBinding = Object.freeze({ definition: child, model: options.model });
 
-  // The coordinator's rendered instructions (mission, guidance, findings
-  // bound, contract) plus the review-shaping options they do not carry: the
-  // child guidance, the host knobs, and the model binding descriptor.
+  // Everything that shapes this pipeline's output: the child instructions
+  // (guidance included) plus the host knobs the children do not carry.
   const guidanceLines =
     options.guidance === undefined
       ? []
       : typeof options.guidance === "string"
         ? [options.guidance]
         : options.guidance;
-  const signature = (mission: ReviewMission): string =>
+  const signature = (_mission: ReviewMission): string =>
     [
-      suite.parent.instructions(mission),
+      "pr-review-fan-out-host-scheduled-v1",
       `childGuidance=${JSON.stringify(guidanceLines)}`,
+      `maxFindings=${clampMaxFindings(options.maxFindings)}`,
       `applyVerdict=${String(options.applyVerdict ?? false)}`,
       ...(options.modelLabel === undefined ? [] : [`model=${options.modelLabel}`]),
     ].join(" ");
   const profileSignature = (_mission: ReviewMission): string =>
     [
-      // v3 invalidates continuity produced before complete evidence sharding,
-      // universal specialist scrutiny, and request-bound result projection.
-      "pr-review-profile-v3-sharded-request-bound-assurance",
+      // v4 invalidates continuity produced by the coordinator-scheduled
+      // pipeline; the host now schedules every pass and retries failures.
+      "pr-review-profile-v4-host-scheduled",
       JSON.stringify(guidanceLines),
       JSON.stringify(options.ignore ?? []),
       `maxFindings=${clampMaxFindings(options.maxFindings)}`,
       `applyVerdict=${String(options.applyVerdict ?? false)}`,
       ...(options.modelLabel === undefined ? [] : [`model=${options.modelLabel}`]),
-    ].join("\u0000");
-  const delegationLayer = fanOutHandlersLayerFor(suite.delegation)(childBinding).pipe(
-    Layer.provide(
-      Layer.mergeAll(FileReviewToolkitLayer, SubagentReservationsMemoryLive, IdGenerator.layer),
-    ),
-  );
+    ].join(" ");
 
   const run = (runOptions: RunReviewOptions = {}) =>
     provideIgnore(
-      executeReview(binding, {
+      executeFanOutReview(childBinding, {
         post: runOptions.post ?? false,
         applyVerdict: options.applyVerdict ?? false,
         limits: options.budget ?? fanOutReviewBudgetLimits,
@@ -342,20 +326,12 @@ const makeFanOut = <Provider, ModelProvides, ModelRequires>(
         signature,
         modelLabel: options.modelLabel,
         runUrl: runOptions.runUrl,
-        usageScope: "coordinator",
-        reviewShape: "fan-out",
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer),
-        ),
-        Effect.scoped,
-      ),
+      }).pipe(Effect.provide(IdGenerator.layer), Effect.scoped),
       options.ignore,
     );
 
   return {
-    definition: suite.parent,
-    binding,
+    definition: child,
     childBinding,
     run,
     fingerprint: makeFingerprint(signature, options.ignore),
