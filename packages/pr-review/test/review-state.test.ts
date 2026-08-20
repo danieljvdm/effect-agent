@@ -10,6 +10,7 @@ import {
   ReviewStateAuthenticator,
   selectReviewRange,
   StoredReviewFinding,
+  StoredUnreviewedPass,
   webCryptoReviewStateAuthenticatorLayer,
 } from "../src/index.ts";
 
@@ -249,10 +250,57 @@ describe("review state", () => {
       "src/accepted.ts",
       "src/corrective.ts",
     ]);
-    // Carried paths count as affected: their stored findings are re-derived
-    // by the fresh re-review instead of being carried blindly.
+    // Legacy markers without unreviewedPasses still rediscover leftovers.
     expect(selection.affectedPaths).toContain("src/accepted.ts");
+    expect(selection.retryPaths).toEqual([]);
     expect(selection.reason).toContain("retrying 1 carried unreviewed path(s)");
+  });
+
+  it("retries an unchanged leftover without invalidating its stored findings", () => {
+    const carryingState = ReviewState.make({
+      ...priorState,
+      unreviewedPaths: ["src/accepted.ts"],
+      unreviewedPasses: [
+        StoredUnreviewedPass.make({ stage: "specialist", paths: ["src/accepted.ts"] }),
+      ],
+      settled: false,
+    });
+    const selection = select({ priorState: carryingState });
+
+    expect(selection.mode).toBe("incremental");
+    expect(selection.files.map((file) => file.path)).toEqual([
+      "src/accepted.ts",
+      "src/corrective.ts",
+    ]);
+    expect(selection.affectedPaths).not.toContain("src/accepted.ts");
+    expect(selection.retryPaths).toEqual(["src/accepted.ts"]);
+    expect(selection.retryStages).toEqual(["specialist"]);
+    expect(selection.reason).toContain("without rediscovery");
+  });
+
+  it("reviews only content-changed PR paths after a rewritten head", () => {
+    const rewritten = ReviewHeadComparison.make({
+      status: "diverged",
+      baseSha: REVIEWED_HEAD_SHA,
+      headSha: CURRENT_HEAD_SHA,
+      mergeBaseSha: "5".repeat(40),
+      files: [acceptedFile, correctiveFile],
+      truncated: false,
+    });
+    const contentComparison = ReviewHeadComparison.make({
+      status: "ahead",
+      baseSha: REVIEWED_HEAD_SHA,
+      headSha: CURRENT_HEAD_SHA,
+      mergeBaseSha: REVIEWED_HEAD_SHA,
+      files: [correctiveFile],
+      truncated: false,
+    });
+    const selection = select({ comparison: rewritten, contentComparison });
+
+    expect(selection.mode).toBe("incremental");
+    expect(selection.files.map((file) => file.path)).toEqual(["src/corrective.ts"]);
+    expect(selection.reason).toContain("rewritten history");
+    expect(selection.affectedPaths).toEqual(["src/corrective.ts"]);
   });
 
   it("keeps a carried unreviewed path in scope across a rename", () => {

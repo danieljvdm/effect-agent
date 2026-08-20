@@ -36,6 +36,7 @@ import {
   ReviewAssurance,
   ReviewExecutionContext,
   ReviewFinding,
+  ReviewHeadComparison,
   ReviewInputCoverage,
   ReviewRunOutcome,
   ReviewState,
@@ -837,6 +838,107 @@ describe("runReviewAction", () => {
       expect(result._tag).toBe("Completed");
       expect(yield* Ref.get(reviewedScopes)).toEqual([["src/a.ts"]]);
       expect(yield* Ref.get(harness.written)).toContain("skipped=false");
+    }),
+  );
+
+  it.effect("reviews only content-changed PR paths after a rewritten head", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+      );
+      const profileFingerprint = "a".repeat(64);
+      const reviewedHeadSha = "1".repeat(40);
+      const currentHeadSha = "2".repeat(40);
+      const metadata = PullRequestMetadata.make({
+        repository: "acme/widgets",
+        number: 5,
+        title: "Review target",
+        body: "",
+        baseRef: "main",
+        baseSha: "3".repeat(40),
+        headRef: "fix/review",
+        headSha: currentHeadSha,
+        totalChangedFiles: 2,
+      });
+      const changed = ChangedFile.make({
+        path: "src/fix.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\n-before\n+after",
+      });
+      const untouched = ChangedFile.make({
+        path: "src/untouched.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -1 +1 @@\n-old\n+kept",
+      });
+      const state = ReviewState.make({
+        version: 2,
+        repository: metadata.repository,
+        pullRequestNumber: metadata.number,
+        baseRef: metadata.baseRef,
+        baseSha: metadata.baseSha ?? "3".repeat(40),
+        headRef: metadata.headRef,
+        reviewedHeadSha,
+        profileFingerprint,
+        acceptedScopeFingerprint: "b".repeat(64),
+        reviewedPathCount: 2,
+        unresolvedFindings: [],
+        unresolvedConcerns: [],
+        unreviewedPaths: [],
+        unreviewedPasses: [],
+        settled: true,
+        lastReviewMode: "full",
+      });
+      const reviewedScopes = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
+      const result = yield* runReviewAction(
+        {
+          run: () =>
+            Effect.gen(function* () {
+              const selection = Option.getOrUndefined(
+                yield* Effect.serviceOption(ReviewExecutionContext),
+              );
+              yield* Ref.update(reviewedScopes, (previous) => [
+                ...previous,
+                selection?.files.map((selected) => selected.path) ?? [],
+              ]);
+              return fakeOutcome("comment");
+            }),
+          fingerprint: Effect.succeed("c".repeat(64)),
+          profileFingerprint: Effect.succeed(profileFingerprint),
+          snapshot: Effect.succeed({ metadata, files: [changed, untouched] }),
+        },
+        {
+          post: false,
+          priorReviews: staticPriorReviews(Option.none(), {
+            state: Option.some(state),
+            comparison: ReviewHeadComparison.make({
+              status: "diverged",
+              baseSha: reviewedHeadSha,
+              headSha: currentHeadSha,
+              mergeBaseSha: "4".repeat(40),
+              files: [changed, untouched],
+              truncated: false,
+            }),
+            treeComparison: ReviewHeadComparison.make({
+              status: "ahead",
+              baseSha: reviewedHeadSha,
+              headSha: currentHeadSha,
+              mergeBaseSha: reviewedHeadSha,
+              files: [changed],
+              truncated: false,
+            }),
+          }),
+        },
+      ).pipe(Effect.provide(harness.layer));
+
+      expect(result._tag).toBe("Completed");
+      expect(yield* Ref.get(reviewedScopes)).toEqual([["src/fix.ts"]]);
     }),
   );
 

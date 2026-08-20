@@ -120,6 +120,7 @@ export const staticPriorReviews = (
   options: {
     readonly state?: Option.Option<ReviewState> | undefined;
     readonly comparison?: ReviewHeadComparison | undefined;
+    readonly treeComparison?: ReviewHeadComparison | undefined;
   } = {},
 ): PriorReviews["Service"] =>
   PriorReviews.of({
@@ -129,6 +130,10 @@ export const staticPriorReviews = (
       options.comparison === undefined
         ? Effect.fail(PriorReviewLookupFailure.make({ reason: "no fixture comparison" }))
         : Effect.succeed(options.comparison),
+    compareTrees: () =>
+      options.treeComparison === undefined
+        ? Effect.fail(PriorReviewLookupFailure.make({ reason: "no fixture tree comparison" }))
+        : Effect.succeed(options.treeComparison),
   });
 
 /** Layer form for consumers whose Effect explicitly requires `PriorReviews`. */
@@ -137,6 +142,7 @@ export const staticPriorReviewsLayer = (
   options: {
     readonly state?: Option.Option<ReviewState> | undefined;
     readonly comparison?: ReviewHeadComparison | undefined;
+    readonly treeComparison?: ReviewHeadComparison | undefined;
   } = {},
 ): Layer.Layer<PriorReviews> =>
   Layer.succeed(PriorReviews)(staticPriorReviews(fingerprint, options));

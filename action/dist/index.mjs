@@ -43149,7 +43149,11 @@ var reviewUnit = (binding, unit, passes, input) => exports_Effect.gen(function* 
     completedSpecialistPasses,
     requiredVerificationPasses,
     completedVerificationPasses,
-    unreviewedPaths: failedPasses.length > 0 ? unit.paths : []
+    unreviewedPaths: failedPasses.length > 0 ? unit.paths : [],
+    unreviewedPasses: failedPasses.map((pass) => ({
+      stage: pass.stage,
+      paths: unit.paths
+    }))
   };
 });
 var countNoun = (count2, noun) => `${count2} ${noun}${count2 === 1 ? "" : "s"}`;
@@ -43174,14 +43178,99 @@ var composeSummary = (plan, assurance) => {
   parts2.push("No configured pipeline can prove absence of defects; this describes settled work only.");
   return parts2.join(" ").slice(0, 4000);
 };
-var runFanOutReview = (binding, input) => exports_Effect.gen(function* () {
-  const plan = planReviewUnits(input.files, { totalChangedFiles: input.totalChangedFiles });
+var remapPlanUnitIds = (plan, offset) => {
+  if (offset === 0)
+    return plan;
+  const units = plan.units.map((unit, index2) => ReviewUnit.make({
+    ...unit,
+    unitId: `unit-${String(offset + index2 + 1).padStart(3, "0")}`
+  }));
+  const mappedIds = new Map;
+  for (const [index2, unit] of plan.units.entries()) {
+    const remapped = units[index2];
+    if (remapped !== undefined) {
+      mappedIds.set(unit.unitId, remapped.unitId);
+    }
+  }
+  return ReviewUnitPlan.make({
+    ...plan,
+    units,
+    discoveryPasses: plan.discoveryPasses.map((pass) => {
+      const unitId = mappedIds.get(pass.unitId) ?? pass.unitId;
+      return ReviewDiscoveryPass.make({
+        ...pass,
+        unitId,
+        passId: `${unitId}${pass.passId.slice(pass.unitId.length)}`
+      });
+    })
+  });
+};
+var scheduleFanOutWork = (input) => {
+  const retryPathSet = new Set(input.retry?.paths ?? []);
+  const retryStages = new Set(input.retry?.stages ?? []);
+  if (retryPathSet.size === 0) {
+    const plan2 = planReviewUnits(input.files, { totalChangedFiles: input.totalChangedFiles });
+    const passesByUnit2 = new Map;
+    for (const pass of plan2.discoveryPasses) {
+      const passes = passesByUnit2.get(pass.unitId) ?? [];
+      passes.push(pass);
+      passesByUnit2.set(pass.unitId, passes);
+    }
+    return { plan: plan2, passesByUnit: passesByUnit2, overflowRetryPaths: [] };
+  }
+  const freshFiles = input.files.filter((file2) => !retryPathSet.has(file2.path));
+  const retryFiles = input.files.filter((file2) => retryPathSet.has(file2.path));
+  const freshPlan = planReviewUnits(freshFiles, { totalChangedFiles: input.totalChangedFiles });
+  const retryPlan = remapPlanUnitIds(planReviewUnits(retryFiles, { totalChangedFiles: input.totalChangedFiles }), freshPlan.units.length);
+  const acceptedFresh = freshPlan.units.slice(0, MAX_REVIEW_UNITS);
+  const acceptedRetry = retryPlan.units.slice(0, Math.max(0, MAX_REVIEW_UNITS - acceptedFresh.length));
+  const overflowRetryPaths = retryPlan.units.slice(acceptedRetry.length).flatMap((unit) => [...unit.paths]);
+  const retryPassFilter = (pass) => {
+    const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
+    return retryStages.has(stage);
+  };
+  const acceptedRetryIds = new Set(acceptedRetry.map((unit) => unit.unitId));
+  let retryPasses = retryPlan.discoveryPasses.filter((pass) => acceptedRetryIds.has(pass.unitId) && retryPassFilter(pass));
+  if (retryStages.has("verification") && !retryStages.has("discovery") && !retryStages.has("specialist")) {
+    retryPasses = retryPlan.discoveryPasses.filter((pass) => acceptedRetryIds.has(pass.unitId));
+  }
+  const acceptedFreshIds = new Set(acceptedFresh.map((unit) => unit.unitId));
+  const freshPasses = freshPlan.discoveryPasses.filter((pass) => acceptedFreshIds.has(pass.unitId));
+  const discoveryPasses = [...freshPasses, ...retryPasses];
+  const plan = ReviewUnitPlan.make({
+    totalFiles: input.files.length,
+    truncated: freshPlan.truncated || retryPlan.truncated,
+    units: [...acceptedFresh, ...acceptedRetry],
+    discoveryPasses,
+    undiffablePaths: [
+      ...new Set([...freshPlan.undiffablePaths, ...retryPlan.undiffablePaths])
+    ].sort(),
+    partialEvidencePaths: [
+      ...new Set([...freshPlan.partialEvidencePaths, ...retryPlan.partialEvidencePaths])
+    ].sort(),
+    unassignedEvidenceShardCount: freshPlan.unassignedEvidenceShardCount + retryPlan.unassignedEvidenceShardCount,
+    unassignedEvidenceShardIds: [
+      ...freshPlan.unassignedEvidenceShardIds,
+      ...retryPlan.unassignedEvidenceShardIds
+    ].slice(0, MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS),
+    unassignedPaths: [
+      ...new Set([
+        ...freshPlan.unassignedPaths,
+        ...retryPlan.unassignedPaths,
+        ...overflowRetryPaths
+      ])
+    ].sort()
+  });
   const passesByUnit = new Map;
-  for (const pass of plan.discoveryPasses) {
+  for (const pass of discoveryPasses) {
     const passes = passesByUnit.get(pass.unitId) ?? [];
     passes.push(pass);
     passesByUnit.set(pass.unitId, passes);
   }
+  return { plan, passesByUnit, overflowRetryPaths };
+};
+var runFanOutReview = (binding, input) => exports_Effect.gen(function* () {
+  const { plan, passesByUnit, overflowRetryPaths } = scheduleFanOutWork(input);
   const outcomes = yield* exports_Effect.forEach(plan.units, (unit) => reviewUnit(binding, unit, passesByUnit.get(unit.unitId) ?? [], input), { concurrency: REVIEW_UNIT_CONCURRENCY });
   const failedPasses = outcomes.flatMap((outcome) => outcome.failedPasses);
   const unsettledCandidates = outcomes.reduce((total, outcome) => total + outcome.unsettledCandidates, 0);
@@ -43233,6 +43322,10 @@ var runFanOutReview = (binding, input) => exports_Effect.gen(function* () {
         ...plan.undiffablePaths
       ])
     ].sort(),
+    unreviewedPasses: [
+      ...outcomes.flatMap((outcome) => outcome.unreviewedPasses),
+      ...overflowRetryPaths.length === 0 ? [] : ((input.retry?.stages.length) ? input.retry.stages : ["discovery", "specialist", "verification"]).map((stage) => ({ stage, paths: overflowRetryPaths }))
+    ],
     turns: outcomes.reduce((total, outcome) => total + outcome.turns, 0)
   };
 });
@@ -43322,6 +43415,14 @@ class StoredReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/
 }) {
 }
 var MAX_STORED_UNREVIEWED_PATHS = 100;
+var MAX_STORED_UNREVIEWED_PASSES = 24;
+var UnreviewedStage = exports_Schema.Literals(["discovery", "specialist", "verification"]);
+
+class StoredUnreviewedPass extends exports_Schema.Class("@effect-agent/pr-review/StoredUnreviewedPass")({
+  stage: UnreviewedStage,
+  paths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(12))
+}) {
+}
 
 class ReviewState extends exports_Schema.Class("@effect-agent/pr-review/ReviewState")({
   version: exports_Schema.Literal(2),
@@ -43337,6 +43438,7 @@ class ReviewState extends exports_Schema.Class("@effect-agent/pr-review/ReviewSt
   unresolvedFindings: exports_Schema.Array(StoredReviewFinding).check(exports_Schema.isMaxLength(20)),
   unresolvedConcerns: exports_Schema.Array(StoredReviewConcern).check(exports_Schema.isMaxLength(10)),
   unreviewedPaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(MAX_STORED_UNREVIEWED_PATHS)),
+  unreviewedPasses: exports_Schema.optionalKey(exports_Schema.Array(StoredUnreviewedPass).check(exports_Schema.isMaxLength(MAX_STORED_UNREVIEWED_PASSES))),
   settled: exports_Schema.Boolean,
   lastReviewMode: ReviewScopeMode
 }) {
@@ -43478,11 +43580,14 @@ var fullSelection = (input) => ({
   reason: input.reason,
   files: input.files,
   affectedPaths: input.files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]),
+  retryPaths: [],
+  retryStages: [],
   totalFiles: input.totalFiles,
   baselineSha: undefined,
   priorState: undefined,
   profileFingerprint: input.profileFingerprint
 });
+var isLineageAncestor = (comparison, priorState, currentHeadSha) => comparison.baseSha === priorState.reviewedHeadSha && comparison.headSha === currentHeadSha && comparison.mergeBaseSha === priorState.reviewedHeadSha && !comparison.truncated && (comparison.status === "ahead" || comparison.status === "identical");
 var validateReviewState = (state, current, profileFingerprint) => {
   if (state.repository !== current.repository || state.pullRequestNumber !== current.number) {
     return "stored state belongs to a different pull request";
@@ -43497,6 +43602,70 @@ var validateReviewState = (state, current, profileFingerprint) => {
     return "the reviewer profile or model configuration changed";
   }
   return;
+};
+var filePaths = (file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath];
+var incrementalFromDelta = (input) => {
+  const currentPaths = new Set(input.fullFiles.flatMap(filePaths));
+  const affectedPaths = new Set([
+    ...input.deltaFiles.flatMap(filePaths),
+    ...input.extraAffectedPaths ?? []
+  ]);
+  const selectedByPath = new Map;
+  for (const file2 of input.deltaFiles) {
+    if (currentPaths.has(file2.path) || file2.previousPath !== undefined && currentPaths.has(file2.previousPath)) {
+      selectedByPath.set(file2.path, file2);
+    }
+  }
+  const carriedPaths = input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path));
+  const surgical = input.priorState.unreviewedPasses !== undefined;
+  const retryOnly = new Set;
+  const retryStages = new Set;
+  for (const path of carriedPaths) {
+    if (affectedPaths.has(path))
+      continue;
+    retryOnly.add(path);
+    if (surgical) {
+      for (const pass of input.priorState.unreviewedPasses ?? []) {
+        if (pass.paths.includes(path))
+          retryStages.add(pass.stage);
+      }
+    } else {
+      affectedPaths.add(path);
+    }
+  }
+  if (surgical && retryStages.has("verification") && !retryStages.has("discovery") && !retryStages.has("specialist")) {
+    retryStages.add("discovery");
+    retryStages.add("specialist");
+  }
+  if (surgical && retryOnly.size > 0 && retryStages.size === 0) {
+    for (const path of retryOnly)
+      affectedPaths.add(path);
+    retryStages.add("discovery");
+    retryStages.add("specialist");
+    retryStages.add("verification");
+  }
+  if (carriedPaths.length > 0 || (input.extraAffectedPaths?.length ?? 0) > 0) {
+    for (const file2 of input.fullFiles) {
+      const needed = affectedPaths.has(file2.path) || file2.previousPath !== undefined && affectedPaths.has(file2.previousPath) || retryOnly.has(file2.path) || file2.previousPath !== undefined && retryOnly.has(file2.previousPath);
+      if (needed)
+        selectedByPath.set(file2.path, file2);
+    }
+  }
+  const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  const leftoverCount = [...retryOnly].filter((path) => !affectedPaths.has(path)).length;
+  const carriedReason = leftoverCount > 0 && surgical ? `; retrying ${leftoverCount} unchanged leftover path(s) without rediscovery` : carriedPaths.length > 0 ? `; retrying ${carriedPaths.length} carried unreviewed path(s)` : "";
+  return {
+    mode: "incremental",
+    reason: `${input.reason}${carriedReason}`,
+    files: selectedFiles,
+    affectedPaths: [...affectedPaths].sort(),
+    retryPaths: [...retryOnly].filter((path) => !affectedPaths.has(path)).sort(),
+    retryStages: [...retryStages].sort(),
+    totalFiles: selectedFiles.length,
+    baselineSha: input.priorState.reviewedHeadSha,
+    priorState: input.priorState,
+    profileFingerprint: input.profileFingerprint
+  };
 };
 var selectReviewRange = (input) => {
   const full = (reason) => fullSelection({
@@ -43516,60 +43685,47 @@ var selectReviewRange = (input) => {
   if (invalid2 !== undefined)
     return full(invalid2);
   const comparison = input.comparison;
+  if (comparison !== undefined && isLineageAncestor(comparison, input.priorState, input.current.headSha)) {
+    const extraAffected = [];
+    let baseReason = "";
+    if (input.priorState.baseSha !== input.current.baseSha) {
+      const baseComparison = input.baseComparison;
+      if (baseComparison === undefined) {
+        return full("the pull request base changed and its lineage comparison was unavailable");
+      }
+      if (baseComparison.baseSha !== input.priorState.baseSha || baseComparison.headSha !== input.current.baseSha || baseComparison.mergeBaseSha !== input.priorState.baseSha || baseComparison.status !== "ahead" && baseComparison.status !== "identical" || baseComparison.truncated) {
+        return full("the pull request base changed materially or exceeded the comparison bound");
+      }
+      for (const file2 of baseComparison.files)
+        extraAffected.push(...filePaths(file2));
+      baseReason = `; base advanced from ${input.priorState.baseSha.slice(0, 7)} and overlapping PR paths were included`;
+    }
+    return incrementalFromDelta({
+      current: input.current,
+      fullFiles: input.fullFiles,
+      profileFingerprint: input.profileFingerprint,
+      priorState: input.priorState,
+      deltaFiles: comparison.files,
+      extraAffectedPaths: extraAffected,
+      reason: `changes since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`
+    });
+  }
+  const contentComparison = input.contentComparison;
+  if (contentComparison !== undefined && !contentComparison.truncated) {
+    return incrementalFromDelta({
+      current: input.current,
+      fullFiles: input.fullFiles,
+      profileFingerprint: input.profileFingerprint,
+      priorState: input.priorState,
+      deltaFiles: contentComparison.files,
+      reason: `rewritten history; contents changed since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}`
+    });
+  }
   if (comparison === undefined)
     return full("the incremental head comparison was unavailable");
-  if (comparison.baseSha !== input.priorState.reviewedHeadSha || comparison.headSha !== input.current.headSha || comparison.mergeBaseSha !== input.priorState.reviewedHeadSha || comparison.status !== "ahead" && comparison.status !== "identical") {
-    return full("the prior reviewed head is not an ancestor of the current head");
-  }
   if (comparison.truncated)
     return full("the incremental comparison exceeded GitHub's file bound");
-  const affectedPaths = new Set(comparison.files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]));
-  let baseReason = "";
-  if (input.priorState.baseSha !== input.current.baseSha) {
-    const baseComparison = input.baseComparison;
-    if (baseComparison === undefined) {
-      return full("the pull request base changed and its lineage comparison was unavailable");
-    }
-    if (baseComparison.baseSha !== input.priorState.baseSha || baseComparison.headSha !== input.current.baseSha || baseComparison.mergeBaseSha !== input.priorState.baseSha || baseComparison.status !== "ahead" && baseComparison.status !== "identical" || baseComparison.truncated) {
-      return full("the pull request base changed materially or exceeded the comparison bound");
-    }
-    for (const file2 of baseComparison.files) {
-      affectedPaths.add(file2.path);
-      if (file2.previousPath !== undefined)
-        affectedPaths.add(file2.previousPath);
-    }
-    baseReason = `; base advanced from ${input.priorState.baseSha.slice(0, 7)} and overlapping PR paths were included`;
-  }
-  const currentPaths = new Set(input.fullFiles.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]));
-  const selectedByPath = new Map;
-  for (const file2 of comparison.files) {
-    if (currentPaths.has(file2.path) || file2.previousPath !== undefined && currentPaths.has(file2.previousPath)) {
-      selectedByPath.set(file2.path, file2);
-    }
-  }
-  const carriedPaths = new Set(input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path)));
-  for (const path of carriedPaths)
-    affectedPaths.add(path);
-  const rescuePaths = input.priorState.baseSha !== input.current.baseSha;
-  if (rescuePaths || carriedPaths.size > 0) {
-    for (const file2 of input.fullFiles) {
-      const affected = rescuePaths && (affectedPaths.has(file2.path) || file2.previousPath !== undefined && affectedPaths.has(file2.previousPath)) || carriedPaths.has(file2.path) || file2.previousPath !== undefined && carriedPaths.has(file2.previousPath);
-      if (affected)
-        selectedByPath.set(file2.path, file2);
-    }
-  }
-  const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  const carriedReason = carriedPaths.size === 0 ? "" : `; retrying ${carriedPaths.size} carried unreviewed path(s)`;
-  return {
-    mode: "incremental",
-    reason: `changes since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}${carriedReason}`,
-    files: selectedFiles,
-    affectedPaths: [...affectedPaths].sort(),
-    totalFiles: selectedFiles.length,
-    baselineSha: input.priorState.reviewedHeadSha,
-    priorState: input.priorState,
-    profileFingerprint: input.profileFingerprint
-  };
+  return full("the prior reviewed head is not an ancestor of the current head");
 };
 
 class ReviewExecutionContext extends exports_Context.Service()("@effect-agent/pr-review/ReviewExecutionContext") {
@@ -43863,8 +44019,8 @@ var GitHubReviewCommentWire = exports_Schema.Struct({
   node_id: exports_Schema.String,
   path: exports_Schema.String,
   body: exports_Schema.String,
-  line: exports_Schema.NullOr(exports_Schema.Int),
-  original_line: exports_Schema.NullOr(exports_Schema.Int),
+  line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int)),
+  original_line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int)),
   start_line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int)),
   original_start_line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int))
 });
@@ -44107,8 +44263,9 @@ var gitHubReviewRetirementHostLayer = exports_Layer.effect(ReviewRetirementHost)
       url: `${prefix}/reviews/${reviewId}/comments`,
       decode: decodeRetirement(GitHubReviewCommentsPageWire, "listReviewCommentsForRetirement")
     }).pipe(exports_Effect.map((comments) => comments.map((comment) => {
-      const endLine = comment.line ?? comment.original_line;
-      const startLine = comment.start_line ?? comment.original_start_line ?? endLine;
+      const positiveLine = (value4) => value4 !== undefined && value4 !== null && value4 > 0 ? value4 : null;
+      const endLine = positiveLine(comment.line ?? comment.original_line);
+      const startLine = positiveLine(comment.start_line ?? comment.original_start_line) ?? endLine;
       return RetirableReviewComment.make({
         nodeId: comment.node_id,
         path: comment.path,
@@ -44205,8 +44362,8 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
     }
     return { latestFingerprint: latest, latestState };
   }).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
-  const compareHeads = (baseSha, headSha) => exports_Effect.gen(function* () {
-    const response = yield* exports_HttpClient.execute(withCommonHeaders(exports_HttpClientRequest.get(`${target.apiUrl}/repos/${target.repository}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}`).pipe(exports_HttpClientRequest.acceptJson), target.token)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asLookupFailure));
+  const compareCommits = (baseSha, headSha, separator) => exports_Effect.gen(function* () {
+    const response = yield* exports_HttpClient.execute(withCommonHeaders(exports_HttpClientRequest.get(`${target.apiUrl}/repos/${target.repository}/compare/${encodeURIComponent(baseSha)}${separator}${encodeURIComponent(headSha)}`).pipe(exports_HttpClientRequest.acceptJson), target.token)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asLookupFailure));
     const wire = yield* response.json.pipe(exports_Effect.mapError(asLookupFailure), exports_Effect.flatMap((body) => exports_Schema.decodeUnknownEffect(GitHubCompareWire)(body).pipe(exports_Effect.mapError(asLookupFailure))));
     const files = wire.files.map(toChangedFile);
     return ReviewHeadComparison.make({
@@ -44218,13 +44375,22 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
       truncated: files.length >= MAX_CHANGED_FILES
     });
   }).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
+  const compareTrees = (baseSha, headSha) => compareCommits(baseSha, headSha, "..").pipe(exports_Effect.map((comparison) => ReviewHeadComparison.make({
+    status: comparison.status === "identical" ? "identical" : "ahead",
+    baseSha,
+    headSha,
+    mergeBaseSha: baseSha,
+    files: comparison.files,
+    truncated: comparison.truncated
+  })));
   return PriorReviews.of({
     latestFingerprint: readMarkers(exports_Option.none()).pipe(exports_Effect.map((markers) => markers.latestFingerprint)),
     latestState: exports_Effect.gen(function* () {
       const authenticator = yield* ReviewStateAuthenticator;
       return yield* readMarkers(exports_Option.some(authenticator)).pipe(exports_Effect.map((markers) => markers.latestState));
     }),
-    compareHeads
+    compareHeads: (baseSha, headSha) => compareCommits(baseSha, headSha, "..."),
+    compareTrees
   });
 }));
 // packages/pr-review/src/internal/render.ts
@@ -44654,6 +44820,7 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
     unresolvedFindings: activeFindings.map(toStoredFinding),
     unresolvedConcerns: activeConcerns.map(toStoredConcern),
     unreviewedPaths,
+    unreviewedPasses: (core2.unreviewedPasses ?? []).slice(0, MAX_STORED_UNREVIEWED_PASSES),
     settled,
     lastReviewMode: executionContext.mode
   }) : undefined;
@@ -44760,7 +44927,13 @@ var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* ()
     anchorFiles,
     totalChangedFiles: totalFiles,
     maxFindings: options3.maxFindings,
-    budget: toRunBudgetHook(budget2)
+    budget: toRunBudgetHook(budget2),
+    ...executionContext !== undefined && executionContext.retryPaths.length > 0 ? {
+      retry: {
+        paths: executionContext.retryPaths,
+        stages: executionContext.retryStages
+      }
+    } : {}
   });
   const inputCoverage = fanOutInputCoverage({
     plan: pipeline.plan,
@@ -44775,6 +44948,10 @@ var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* ()
     inputCoverage,
     assurance: pipeline.assurance,
     unreviewedPaths: pipeline.unreviewedPaths,
+    unreviewedPasses: pipeline.unreviewedPasses.slice(0, MAX_STORED_UNREVIEWED_PASSES).map((pass) => StoredUnreviewedPass.make({
+      stage: pass.stage,
+      paths: pass.paths.slice(0, 12)
+    })),
     turns: pipeline.turns
   }, { metadata, files, anchorFiles, fingerprint, usage }, options3);
 });
@@ -56135,6 +56312,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       }
       let comparison;
       let baseComparison;
+      let contentComparison;
       if ((options3.reviewMode ?? "incremental") === "incremental" && recovered.state !== undefined) {
         if (recovered.state.reviewedHeadSha === metadata.headSha) {
           comparison = ReviewHeadComparison.make({
@@ -56167,6 +56345,17 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
             });
           }
         }
+        if (recovered.state.reviewedHeadSha !== metadata.headSha && (comparison === undefined || !isLineageAncestor(comparison, recovered.state, metadata.headSha))) {
+          contentComparison = yield* history.compareTrees(recovered.state.reviewedHeadSha, metadata.headSha).pipe(exports_Effect.orElseSucceed(() => {
+            return;
+          }));
+          if (contentComparison !== undefined && reviewer.filterFiles !== undefined) {
+            contentComparison = ReviewHeadComparison.make({
+              ...contentComparison,
+              files: reviewer.filterFiles(contentComparison.files)
+            });
+          }
+        }
       }
       selection = {
         ...selectReviewRange({
@@ -56177,6 +56366,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
           priorState: recovered.state,
           comparison,
           baseComparison,
+          contentComparison,
           lookupFailure: recovered.failure
         }),
         stateAuthenticator

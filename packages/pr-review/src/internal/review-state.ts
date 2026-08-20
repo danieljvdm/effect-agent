@@ -49,6 +49,21 @@ export class StoredReviewConcern extends Schema.Class<StoredReviewConcern>(
 /** The carried-scope bound; a run that cannot fit its leftovers publishes no state. */
 export const MAX_STORED_UNREVIEWED_PATHS = 100;
 
+/** Failed-pass records stored beside the leftover paths; one per unit stage. */
+export const MAX_STORED_UNREVIEWED_PASSES = 24;
+
+/** Stages a leftover path may need retried without a second general discovery. */
+export const UnreviewedStage = Schema.Literals(["discovery", "specialist", "verification"]);
+export type UnreviewedStage = typeof UnreviewedStage.Type;
+
+/** One failed fan-out pass whose paths should be retried, not rediscovered. */
+export class StoredUnreviewedPass extends Schema.Class<StoredUnreviewedPass>(
+  "@effect-agent/pr-review/StoredUnreviewedPass",
+)({
+  stage: UnreviewedStage,
+  paths: Schema.Array(ChangedPath).check(Schema.isMinLength(1)).check(Schema.isMaxLength(12)),
+}) {}
+
 /**
  * Versioned state embedded after EVERY completed run that can be signed. The
  * head plus full-scope fingerprint forms an incremental baseline; an absent
@@ -75,6 +90,14 @@ export class ReviewState extends Schema.Class<ReviewState>("@effect-agent/pr-rev
   unresolvedConcerns: Schema.Array(StoredReviewConcern).check(Schema.isMaxLength(10)),
   /** Retryable review gaps carried into the next incremental run's scope. */
   unreviewedPaths: Schema.Array(ChangedPath).check(Schema.isMaxLength(MAX_STORED_UNREVIEWED_PATHS)),
+  /**
+   * Which failed pass produced those leftovers. Absent on state-v2 markers
+   * written before this field existed; those leftovers still re-enter scope
+   * but cannot skip rediscovery. Present (including empty) on new markers.
+   */
+  unreviewedPasses: Schema.optionalKey(
+    Schema.Array(StoredUnreviewedPass).check(Schema.isMaxLength(MAX_STORED_UNREVIEWED_PASSES)),
+  ),
   /**
    * True only when the producing run had complete input coverage, no
    * unsettled pass, and nothing carried. Skip-unchanged authority: an
@@ -292,6 +315,12 @@ export interface ReviewSelection {
   readonly files: ReadonlyArray<ChangedFile>;
   /** Paths whose changes invalidate prior findings, including paths reverted out of the PR. */
   readonly affectedPaths: ReadonlyArray<string>;
+  /**
+   * Leftover paths whose contents did not change. Fan-out retries only the
+   * recorded failed stages on these paths and keeps their stored findings.
+   */
+  readonly retryPaths: ReadonlyArray<string>;
+  readonly retryStages: ReadonlyArray<UnreviewedStage>;
   readonly totalFiles: number;
   readonly baselineSha: string | undefined;
   readonly priorState: ReviewState | undefined;
@@ -312,11 +341,25 @@ const fullSelection = (input: {
   affectedPaths: input.files.flatMap((file) =>
     file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
   ),
+  retryPaths: [],
+  retryStages: [],
   totalFiles: input.totalFiles,
   baselineSha: undefined,
   priorState: undefined,
   profileFingerprint: input.profileFingerprint,
 });
+
+/** Three-dot lineage from the reviewed head to the current head is usable. */
+export const isLineageAncestor = (
+  comparison: ReviewHeadComparison,
+  priorState: ReviewState,
+  currentHeadSha: string,
+): boolean =>
+  comparison.baseSha === priorState.reviewedHeadSha &&
+  comparison.headSha === currentHeadSha &&
+  comparison.mergeBaseSha === priorState.reviewedHeadSha &&
+  !comparison.truncated &&
+  (comparison.status === "ahead" || comparison.status === "identical");
 
 /**
  * Validate that persisted state belongs to this exact PR/base lineage and the
@@ -340,6 +383,96 @@ export const validateReviewState = (
   return undefined;
 };
 
+const filePaths = (file: ChangedFile): ReadonlyArray<string> =>
+  file.previousPath === undefined ? [file.path] : [file.path, file.previousPath];
+
+const incrementalFromDelta = (input: {
+  readonly current: PullRequestMetadata;
+  readonly fullFiles: ReadonlyArray<ChangedFile>;
+  readonly profileFingerprint: string;
+  readonly priorState: ReviewState;
+  readonly deltaFiles: ReadonlyArray<ChangedFile>;
+  readonly extraAffectedPaths?: ReadonlyArray<string> | undefined;
+  readonly reason: string;
+}): ReviewSelection => {
+  const currentPaths = new Set(input.fullFiles.flatMap(filePaths));
+  const affectedPaths = new Set([
+    ...input.deltaFiles.flatMap(filePaths),
+    ...(input.extraAffectedPaths ?? []),
+  ]);
+  const selectedByPath = new Map<string, ChangedFile>();
+  for (const file of input.deltaFiles) {
+    if (
+      currentPaths.has(file.path) ||
+      (file.previousPath !== undefined && currentPaths.has(file.previousPath))
+    ) {
+      selectedByPath.set(file.path, file);
+    }
+  }
+  const carriedPaths = input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path));
+  const surgical = input.priorState.unreviewedPasses !== undefined;
+  const retryOnly = new Set<string>();
+  const retryStages = new Set<UnreviewedStage>();
+  for (const path of carriedPaths) {
+    if (affectedPaths.has(path)) continue;
+    retryOnly.add(path);
+    if (surgical) {
+      for (const pass of input.priorState.unreviewedPasses ?? []) {
+        if (pass.paths.includes(path)) retryStages.add(pass.stage);
+      }
+    } else {
+      affectedPaths.add(path);
+    }
+  }
+  if (
+    surgical &&
+    retryStages.has("verification") &&
+    !retryStages.has("discovery") &&
+    !retryStages.has("specialist")
+  ) {
+    retryStages.add("discovery");
+    retryStages.add("specialist");
+  }
+  if (surgical && retryOnly.size > 0 && retryStages.size === 0) {
+    for (const path of retryOnly) affectedPaths.add(path);
+    retryStages.add("discovery");
+    retryStages.add("specialist");
+    retryStages.add("verification");
+  }
+  if (carriedPaths.length > 0 || (input.extraAffectedPaths?.length ?? 0) > 0) {
+    for (const file of input.fullFiles) {
+      const needed =
+        affectedPaths.has(file.path) ||
+        (file.previousPath !== undefined && affectedPaths.has(file.previousPath)) ||
+        retryOnly.has(file.path) ||
+        (file.previousPath !== undefined && retryOnly.has(file.previousPath));
+      if (needed) selectedByPath.set(file.path, file);
+    }
+  }
+  const selectedFiles = [...selectedByPath.values()].sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+  const leftoverCount = [...retryOnly].filter((path) => !affectedPaths.has(path)).length;
+  const carriedReason =
+    leftoverCount > 0 && surgical
+      ? `; retrying ${leftoverCount} unchanged leftover path(s) without rediscovery`
+      : carriedPaths.length > 0
+        ? `; retrying ${carriedPaths.length} carried unreviewed path(s)`
+        : "";
+  return {
+    mode: "incremental",
+    reason: `${input.reason}${carriedReason}`,
+    files: selectedFiles,
+    affectedPaths: [...affectedPaths].sort(),
+    retryPaths: [...retryOnly].filter((path) => !affectedPaths.has(path)).sort(),
+    retryStages: [...retryStages].sort(),
+    totalFiles: selectedFiles.length,
+    baselineSha: input.priorState.reviewedHeadSha,
+    priorState: input.priorState,
+    profileFingerprint: input.profileFingerprint,
+  };
+};
+
 /** Pure, deterministic range selection with conservative full-review fallbacks. */
 export const selectReviewRange = (input: {
   readonly requestedMode: ReviewMode;
@@ -349,6 +482,12 @@ export const selectReviewRange = (input: {
   readonly priorState: ReviewState | undefined;
   readonly comparison: ReviewHeadComparison | undefined;
   readonly baseComparison?: ReviewHeadComparison | undefined;
+  /**
+   * Two-dot tree comparison used when the reviewed head is not a git ancestor
+   * (rebase, amend, force-push). Intersected with the current PR path set so
+   * main-drift outside the pull request never re-enters scope.
+   */
+  readonly contentComparison?: ReviewHeadComparison | undefined;
   readonly lookupFailure?: string | undefined;
 }): ReviewSelection => {
   const full = (reason: string) =>
@@ -366,89 +505,53 @@ export const selectReviewRange = (input: {
   const invalid = validateReviewState(input.priorState, input.current, input.profileFingerprint);
   if (invalid !== undefined) return full(invalid);
   const comparison = input.comparison;
-  if (comparison === undefined) return full("the incremental head comparison was unavailable");
   if (
-    comparison.baseSha !== input.priorState.reviewedHeadSha ||
-    comparison.headSha !== input.current.headSha ||
-    comparison.mergeBaseSha !== input.priorState.reviewedHeadSha ||
-    (comparison.status !== "ahead" && comparison.status !== "identical")
+    comparison !== undefined &&
+    isLineageAncestor(comparison, input.priorState, input.current.headSha)
   ) {
-    return full("the prior reviewed head is not an ancestor of the current head");
+    const extraAffected: Array<string> = [];
+    let baseReason = "";
+    if (input.priorState.baseSha !== input.current.baseSha) {
+      const baseComparison = input.baseComparison;
+      if (baseComparison === undefined) {
+        return full("the pull request base changed and its lineage comparison was unavailable");
+      }
+      if (
+        baseComparison.baseSha !== input.priorState.baseSha ||
+        baseComparison.headSha !== input.current.baseSha ||
+        baseComparison.mergeBaseSha !== input.priorState.baseSha ||
+        (baseComparison.status !== "ahead" && baseComparison.status !== "identical") ||
+        baseComparison.truncated
+      ) {
+        return full("the pull request base changed materially or exceeded the comparison bound");
+      }
+      for (const file of baseComparison.files) extraAffected.push(...filePaths(file));
+      baseReason = `; base advanced from ${input.priorState.baseSha.slice(0, 7)} and overlapping PR paths were included`;
+    }
+    return incrementalFromDelta({
+      current: input.current,
+      fullFiles: input.fullFiles,
+      profileFingerprint: input.profileFingerprint,
+      priorState: input.priorState,
+      deltaFiles: comparison.files,
+      extraAffectedPaths: extraAffected,
+      reason: `changes since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
+    });
   }
+  const contentComparison = input.contentComparison;
+  if (contentComparison !== undefined && !contentComparison.truncated) {
+    return incrementalFromDelta({
+      current: input.current,
+      fullFiles: input.fullFiles,
+      profileFingerprint: input.profileFingerprint,
+      priorState: input.priorState,
+      deltaFiles: contentComparison.files,
+      reason: `rewritten history; contents changed since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}`,
+    });
+  }
+  if (comparison === undefined) return full("the incremental head comparison was unavailable");
   if (comparison.truncated) return full("the incremental comparison exceeded GitHub's file bound");
-  const affectedPaths = new Set(
-    comparison.files.flatMap((file) =>
-      file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
-    ),
-  );
-  let baseReason = "";
-  if (input.priorState.baseSha !== input.current.baseSha) {
-    const baseComparison = input.baseComparison;
-    if (baseComparison === undefined) {
-      return full("the pull request base changed and its lineage comparison was unavailable");
-    }
-    if (
-      baseComparison.baseSha !== input.priorState.baseSha ||
-      baseComparison.headSha !== input.current.baseSha ||
-      baseComparison.mergeBaseSha !== input.priorState.baseSha ||
-      (baseComparison.status !== "ahead" && baseComparison.status !== "identical") ||
-      baseComparison.truncated
-    ) {
-      return full("the pull request base changed materially or exceeded the comparison bound");
-    }
-    for (const file of baseComparison.files) {
-      affectedPaths.add(file.path);
-      if (file.previousPath !== undefined) affectedPaths.add(file.previousPath);
-    }
-    baseReason = `; base advanced from ${input.priorState.baseSha.slice(0, 7)} and overlapping PR paths were included`;
-  }
-  const currentPaths = new Set(
-    input.fullFiles.flatMap((file) =>
-      file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
-    ),
-  );
-  const selectedByPath = new Map<string, ChangedFile>();
-  for (const file of comparison.files) {
-    if (
-      currentPaths.has(file.path) ||
-      (file.previousPath !== undefined && currentPaths.has(file.previousPath))
-    ) {
-      selectedByPath.set(file.path, file);
-    }
-  }
-  // Retryable gaps carried by the prior state re-enter this run's scope; a
-  // carried path reverted out of the pull request has nothing left to review.
-  const carriedPaths = new Set(
-    input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path)),
-  );
-  for (const path of carriedPaths) affectedPaths.add(path);
-  const rescuePaths = input.priorState.baseSha !== input.current.baseSha;
-  if (rescuePaths || carriedPaths.size > 0) {
-    for (const file of input.fullFiles) {
-      const affected =
-        (rescuePaths &&
-          (affectedPaths.has(file.path) ||
-            (file.previousPath !== undefined && affectedPaths.has(file.previousPath)))) ||
-        carriedPaths.has(file.path) ||
-        (file.previousPath !== undefined && carriedPaths.has(file.previousPath));
-      if (affected) selectedByPath.set(file.path, file);
-    }
-  }
-  const selectedFiles = [...selectedByPath.values()].sort((left, right) =>
-    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
-  );
-  const carriedReason =
-    carriedPaths.size === 0 ? "" : `; retrying ${carriedPaths.size} carried unreviewed path(s)`;
-  return {
-    mode: "incremental",
-    reason: `changes since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}${carriedReason}`,
-    files: selectedFiles,
-    affectedPaths: [...affectedPaths].sort(),
-    totalFiles: selectedFiles.length,
-    baselineSha: input.priorState.reviewedHeadSha,
-    priorState: input.priorState,
-    profileFingerprint: input.profileFingerprint,
-  };
+  return full("the prior reviewed head is not an ancestor of the current head");
 };
 
 /** Per-run context consumed by orchestration and publication, not by the model. */

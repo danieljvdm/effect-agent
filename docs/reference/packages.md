@@ -129,7 +129,10 @@ and only exactly confirmed candidates publish. Its public result separates path/
 coverage from pass settlement; neither claim means exhaustive defect detection. Every
 completed run that can be signed advances the authenticated incremental baseline; a pass
 that stays failed carries its paths forward as retryable scope inside the state instead of
-freezing the baseline, and only a fully settled state authorizes skip-unchanged. Subpath
+freezing the baseline, and only a fully settled state authorizes skip-unchanged. A rewritten
+head that is no longer a git ancestor stays incremental when a two-dot tree comparison can
+name the current PR paths whose contents changed; unchanged leftovers retry only the failed
+pass and keep their stored findings. Subpath
 entries: `./testing`
 (fixture source, collecting publisher,
 prompt-keyed scripted models), `./action` and `./cli` (platform-node host entrypoints). Consumes

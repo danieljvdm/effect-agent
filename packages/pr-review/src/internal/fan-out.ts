@@ -25,6 +25,7 @@ import {
   WalkthroughEntry,
 } from "./review-agent.ts";
 import {
+  MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS,
   MAX_REVIEW_UNITS,
   MAX_UNIT_EVIDENCE_SHARDS,
   MAX_UNIT_FILES,
@@ -32,13 +33,13 @@ import {
   planReviewUnits,
   rankAndDedupeConcerns,
   rankAndDedupeFindings,
+  ReviewDiscoveryPass,
   ReviewEvidenceShardId,
   ReviewPassId,
   ReviewRiskCategory,
+  ReviewUnit,
   ReviewUnitId,
-  type ReviewDiscoveryPass,
-  type ReviewUnit,
-  type ReviewUnitPlan,
+  ReviewUnitPlan,
 } from "./review-units.ts";
 
 // ---------------------------------------------------------------------------
@@ -361,6 +362,11 @@ export interface FanOutPipelineOutcome {
   readonly plan: ReviewUnitPlan;
   /** Paths of units with an unsettled pass — retryable scope for the next run. */
   readonly unreviewedPaths: ReadonlyArray<string>;
+  /** Failed stages paired with the leftover paths they still own. */
+  readonly unreviewedPasses: ReadonlyArray<{
+    readonly stage: FailedReviewPass["stage"];
+    readonly paths: ReadonlyArray<string>;
+  }>;
   /** Total settled child turns across every scheduled pass. */
   readonly turns: number;
 }
@@ -372,6 +378,16 @@ export interface FanOutPipelineInput {
   readonly maxFindings?: number | undefined;
   /** Shared run budget observed by every child pass. */
   readonly budget?: RunBudgetHook<BudgetExceeded | BudgetAdapterError> | undefined;
+  /**
+   * Unchanged leftover paths from a prior failed pass. Those units retry only
+   * the recorded stages — no second general discovery on files nobody touched.
+   */
+  readonly retry?:
+    | {
+        readonly paths: ReadonlyArray<string>;
+        readonly stages: ReadonlyArray<FailedReviewPass["stage"]>;
+      }
+    | undefined;
 }
 
 const candidateOrdinal = (index: number): string => String(index + 1).padStart(3, "0");
@@ -587,6 +603,10 @@ interface UnitReviewOutcome {
   readonly requiredVerificationPasses: number;
   readonly completedVerificationPasses: number;
   readonly unreviewedPaths: ReadonlyArray<string>;
+  readonly unreviewedPasses: ReadonlyArray<{
+    readonly stage: FailedReviewPass["stage"];
+    readonly paths: ReadonlyArray<string>;
+  }>;
 }
 
 const reviewUnit = <Provider, ModelProvides, ModelRequires>(
@@ -697,6 +717,10 @@ const reviewUnit = <Provider, ModelProvides, ModelRequires>(
       requiredVerificationPasses,
       completedVerificationPasses,
       unreviewedPaths: failedPasses.length > 0 ? unit.paths : [],
+      unreviewedPasses: failedPasses.map((pass) => ({
+        stage: pass.stage,
+        paths: unit.paths,
+      })),
     } satisfies UnitReviewOutcome;
   });
 
@@ -737,6 +761,121 @@ const composeSummary = (plan: ReviewUnitPlan, assurance: ReviewAssurance): strin
   return parts.join(" ").slice(0, 4_000);
 };
 
+const remapPlanUnitIds = (plan: ReviewUnitPlan, offset: number): ReviewUnitPlan => {
+  if (offset === 0) return plan;
+  const units = plan.units.map((unit, index) =>
+    ReviewUnit.make({
+      ...unit,
+      unitId: `unit-${String(offset + index + 1).padStart(3, "0")}`,
+    }),
+  );
+  const mappedIds = new Map<string, string>();
+  for (const [index, unit] of plan.units.entries()) {
+    const remapped = units[index];
+    if (remapped !== undefined) {
+      mappedIds.set(unit.unitId, remapped.unitId);
+    }
+  }
+  return ReviewUnitPlan.make({
+    ...plan,
+    units,
+    discoveryPasses: plan.discoveryPasses.map((pass) => {
+      const unitId = mappedIds.get(pass.unitId) ?? pass.unitId;
+      return ReviewDiscoveryPass.make({
+        ...pass,
+        unitId,
+        passId: `${unitId}${pass.passId.slice(pass.unitId.length)}`,
+      });
+    }),
+  });
+};
+
+const scheduleFanOutWork = (
+  input: FanOutPipelineInput,
+): {
+  readonly plan: ReviewUnitPlan;
+  readonly passesByUnit: Map<string, ReadonlyArray<ReviewDiscoveryPass>>;
+  readonly overflowRetryPaths: ReadonlyArray<string>;
+} => {
+  const retryPathSet = new Set(input.retry?.paths ?? []);
+  const retryStages = new Set(input.retry?.stages ?? []);
+  if (retryPathSet.size === 0) {
+    const plan = planReviewUnits(input.files, { totalChangedFiles: input.totalChangedFiles });
+    const passesByUnit = new Map<string, Array<ReviewDiscoveryPass>>();
+    for (const pass of plan.discoveryPasses) {
+      const passes = passesByUnit.get(pass.unitId) ?? [];
+      passes.push(pass);
+      passesByUnit.set(pass.unitId, passes);
+    }
+    return { plan, passesByUnit, overflowRetryPaths: [] };
+  }
+  const freshFiles = input.files.filter((file) => !retryPathSet.has(file.path));
+  const retryFiles = input.files.filter((file) => retryPathSet.has(file.path));
+  const freshPlan = planReviewUnits(freshFiles, { totalChangedFiles: input.totalChangedFiles });
+  const retryPlan = remapPlanUnitIds(
+    planReviewUnits(retryFiles, { totalChangedFiles: input.totalChangedFiles }),
+    freshPlan.units.length,
+  );
+  const acceptedFresh = freshPlan.units.slice(0, MAX_REVIEW_UNITS);
+  const acceptedRetry = retryPlan.units.slice(
+    0,
+    Math.max(0, MAX_REVIEW_UNITS - acceptedFresh.length),
+  );
+  const overflowRetryPaths = retryPlan.units
+    .slice(acceptedRetry.length)
+    .flatMap((unit) => [...unit.paths]);
+  const retryPassFilter = (pass: ReviewDiscoveryPass): boolean => {
+    const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
+    return retryStages.has(stage);
+  };
+  const acceptedRetryIds = new Set(acceptedRetry.map((unit) => unit.unitId));
+  let retryPasses = retryPlan.discoveryPasses.filter(
+    (pass) => acceptedRetryIds.has(pass.unitId) && retryPassFilter(pass),
+  );
+  if (
+    retryStages.has("verification") &&
+    !retryStages.has("discovery") &&
+    !retryStages.has("specialist")
+  ) {
+    retryPasses = retryPlan.discoveryPasses.filter((pass) => acceptedRetryIds.has(pass.unitId));
+  }
+  const acceptedFreshIds = new Set(acceptedFresh.map((unit) => unit.unitId));
+  const freshPasses = freshPlan.discoveryPasses.filter((pass) => acceptedFreshIds.has(pass.unitId));
+  const discoveryPasses = [...freshPasses, ...retryPasses];
+  const plan = ReviewUnitPlan.make({
+    totalFiles: input.files.length,
+    truncated: freshPlan.truncated || retryPlan.truncated,
+    units: [...acceptedFresh, ...acceptedRetry],
+    discoveryPasses,
+    undiffablePaths: [
+      ...new Set([...freshPlan.undiffablePaths, ...retryPlan.undiffablePaths]),
+    ].sort(),
+    partialEvidencePaths: [
+      ...new Set([...freshPlan.partialEvidencePaths, ...retryPlan.partialEvidencePaths]),
+    ].sort(),
+    unassignedEvidenceShardCount:
+      freshPlan.unassignedEvidenceShardCount + retryPlan.unassignedEvidenceShardCount,
+    unassignedEvidenceShardIds: [
+      ...freshPlan.unassignedEvidenceShardIds,
+      ...retryPlan.unassignedEvidenceShardIds,
+    ].slice(0, MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS),
+    unassignedPaths: [
+      ...new Set([
+        ...freshPlan.unassignedPaths,
+        ...retryPlan.unassignedPaths,
+        ...overflowRetryPaths,
+      ]),
+    ].sort(),
+  });
+  const passesByUnit = new Map<string, Array<ReviewDiscoveryPass>>();
+  for (const pass of discoveryPasses) {
+    const passes = passesByUnit.get(pass.unitId) ?? [];
+    passes.push(pass);
+    passesByUnit.set(pass.unitId, passes);
+  }
+  return { plan, passesByUnit, overflowRetryPaths };
+};
+
 /**
  * Run the complete host-scheduled fan-out pipeline over one selected
  * changeset snapshot: plan, independent discovery, exact verification, and a
@@ -748,13 +887,7 @@ export const runFanOutReview = <Provider, ModelProvides, ModelRequires>(
   input: FanOutPipelineInput,
 ) =>
   Effect.gen(function* () {
-    const plan = planReviewUnits(input.files, { totalChangedFiles: input.totalChangedFiles });
-    const passesByUnit = new Map<string, Array<ReviewDiscoveryPass>>();
-    for (const pass of plan.discoveryPasses) {
-      const passes = passesByUnit.get(pass.unitId) ?? [];
-      passes.push(pass);
-      passesByUnit.set(pass.unitId, passes);
-    }
+    const { plan, passesByUnit, overflowRetryPaths } = scheduleFanOutWork(input);
     const outcomes = yield* Effect.forEach(
       plan.units,
       (unit) => reviewUnit(binding, unit, passesByUnit.get(unit.unitId) ?? [], input),
@@ -865,6 +998,15 @@ export const runFanOutReview = <Provider, ModelProvides, ModelRequires>(
           ...plan.undiffablePaths,
         ]),
       ].sort(),
+      unreviewedPasses: [
+        ...outcomes.flatMap((outcome) => outcome.unreviewedPasses),
+        ...(overflowRetryPaths.length === 0
+          ? []
+          : (input.retry?.stages.length
+              ? input.retry.stages
+              : (["discovery", "specialist", "verification"] as const)
+            ).map((stage) => ({ stage, paths: overflowRetryPaths }))),
+      ],
       turns: outcomes.reduce((total, outcome) => total + outcome.turns, 0),
     } satisfies FanOutPipelineOutcome;
   });

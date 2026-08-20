@@ -186,6 +186,12 @@ const runOfflineFanOut = (script: {
   readonly fixture?: FixturePullRequest | undefined;
   readonly maxFindings?: number | undefined;
   readonly limits?: UsageBudgetLimits | undefined;
+  readonly retry?:
+    | {
+        readonly paths: ReadonlyArray<string>;
+        readonly stages: ReadonlyArray<"discovery" | "specialist" | "verification">;
+      }
+    | undefined;
 }) =>
   Effect.gen(function* () {
     const fixture = script.fixture ?? highRiskFixture;
@@ -216,10 +222,15 @@ const runOfflineFanOut = (script: {
         ),
       ),
       Effect.provideService(ReviewExecutionContext, {
-        mode: "full",
-        reason: "offline full-diff assurance fixture",
+        mode: script.retry === undefined ? "full" : "incremental",
+        reason:
+          script.retry === undefined
+            ? "offline full-diff assurance fixture"
+            : "offline leftover-pass retry fixture",
         files: reviewFiles,
-        affectedPaths: reviewFiles.map((file) => file.path),
+        affectedPaths: script.retry === undefined ? reviewFiles.map((file) => file.path) : [],
+        retryPaths: script.retry?.paths ?? [],
+        retryStages: script.retry?.stages ?? [],
         totalFiles: reviewFiles.length,
         baselineSha: undefined,
         priorState: undefined,
@@ -874,9 +885,48 @@ describe("host-scheduled discovery and verification pipeline", () => {
       expect(result.outcome.state?.reviewedHeadSha).toBe(FIXTURE_SHA);
       expect(result.outcome.state?.settled).toBe(false);
       expect(result.outcome.state?.unreviewedPaths).toEqual([...highRiskUnit.paths].sort());
+      expect(result.outcome.state?.unreviewedPasses).toMatchObject([
+        {
+          stage: "specialist",
+          paths: highRiskUnit.paths,
+        },
+      ]);
       expect(result.outcome.plan.body).toContain("Unsettled review passes");
       expect(result.outcome.plan.body).toContain("do not change code to satisfy this section");
       expect(result.outcome.plan.event).toBe("COMMENT");
+    }),
+  );
+
+  it.effect("retries only the failed leftover pass without a second general discovery", () =>
+    Effect.gen(function* () {
+      const result = yield* runOfflineFanOut({
+        retry: { paths: [...highRiskUnit.paths], stages: ["specialist"] },
+        children: [
+          report(specialistPass.passId, discoveryReport(specialistPass, [supportedFinding])),
+          report(
+            verificationWorkId,
+            verificationReport([
+              CandidateAssessment.make({
+                candidateId: candidateId(specialistPass.passId, 1),
+                disposition: "confirmed",
+                rationale: "Confirmed on the leftover specialist retry.",
+              }),
+            ]),
+          ),
+        ],
+      });
+
+      expect(result.childCalls).toBe(2);
+      expect(result.outcome.assurance).toMatchObject({
+        status: "settled",
+        requiredGeneralDiscoveryPasses: 0,
+        completedGeneralDiscoveryPasses: 0,
+        requiredSpecialistPasses: 1,
+        completedSpecialistPasses: 1,
+      });
+      expect(result.outcome.review.findings).toEqual([supportedFinding]);
+      expect(result.outcome.unreviewedPaths).toEqual([]);
+      expect(result.outcome.state?.unreviewedPasses).toEqual([]);
     }),
   );
 

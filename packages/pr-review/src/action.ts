@@ -24,6 +24,7 @@ import {
   ReviewExecutionContext,
   ReviewHeadComparison,
   ReviewStateAuthenticator,
+  isLineageAncestor,
   type ReviewMode,
   type ReviewState,
   selectReviewRange,
@@ -558,6 +559,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         }
         let comparison: ReviewHeadComparison | undefined;
         let baseComparison: ReviewHeadComparison | undefined;
+        let contentComparison: ReviewHeadComparison | undefined;
         if (
           (options.reviewMode ?? "incremental") === "incremental" &&
           recovered.state !== undefined
@@ -593,6 +595,21 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
               });
             }
           }
+          if (
+            recovered.state.reviewedHeadSha !== metadata.headSha &&
+            (comparison === undefined ||
+              !isLineageAncestor(comparison, recovered.state, metadata.headSha))
+          ) {
+            contentComparison = yield* history
+              .compareTrees(recovered.state.reviewedHeadSha, metadata.headSha)
+              .pipe(Effect.orElseSucceed(() => undefined));
+            if (contentComparison !== undefined && reviewer.filterFiles !== undefined) {
+              contentComparison = ReviewHeadComparison.make({
+                ...contentComparison,
+                files: reviewer.filterFiles(contentComparison.files),
+              });
+            }
+          }
         }
         selection = {
           ...selectReviewRange({
@@ -603,6 +620,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             priorState: recovered.state,
             comparison,
             baseComparison,
+            contentComparison,
             lookupFailure: recovered.failure,
           }),
           stateAuthenticator,
