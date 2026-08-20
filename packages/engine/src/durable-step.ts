@@ -84,7 +84,7 @@ export class DurableStepError extends Schema.TaggedError<DurableStepError>()("Du
     "commit-failed",
     "no-active-tool-call",
   ]),
-  message: Schema.String,
+  message: Schema.String.check(Schema.isMaxLength(4_096)),
   toolCallId: Schema.optionalKey(ToolCallId),
 }) {}
 

@@ -1089,6 +1089,73 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
     }),
   );
 
+  it.effect("RUN-023: invalid restored usage fails before Run input or model execution", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("invalid-resume-usage", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const { model, requests } = scriptedModel([finalParts('{"answer":"never"}')]);
+      let inputStarts = 0;
+      const invalidSeeds = [
+        {
+          modelCalls: 1,
+          inputTokens: -1,
+          outputTokens: 0,
+          lastInputTokens: 0,
+          lastOutputTokens: 0,
+          costMicrousd: 0,
+        },
+        {
+          modelCalls: 1,
+          inputTokens: Number.NaN,
+          outputTokens: 0,
+          lastInputTokens: 0,
+          lastOutputTokens: 0,
+          costMicrousd: 0,
+        },
+        {
+          modelCalls: 1,
+          inputTokens: 1,
+          outputTokens: 0,
+          lastInputTokens: 2,
+          lastOutputTokens: 0,
+          costMicrousd: 0,
+        },
+      ];
+
+      for (const resumeUsage of invalidSeeds) {
+        const exit = yield* AgentRuntime.run(
+          Agent.withModel(definition, model),
+          { question: "q" },
+          {
+            input: {
+              start: () =>
+                Effect.sync(() => {
+                  inputStarts += 1;
+                }),
+              drain: () => Effect.succeed([]),
+            },
+            resumeUsage,
+          },
+        ).pipe(Effect.exit);
+        const failure = failureFrom(exit);
+        expect(failure).toBeInstanceOf(ModelProtocolError);
+      }
+
+      expect(inputStarts).toBe(0);
+      expect(requests).toHaveLength(0);
+    }),
+  );
+
   it.effect(
     "RUN-025: restored totals that already breach fail before any model call under fail mode",
     () =>

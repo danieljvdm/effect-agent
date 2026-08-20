@@ -19,6 +19,7 @@ import {
   DateTime,
   Deferred,
   Effect,
+  ErrorReporter,
   Exit,
   Fiber,
   Layer,
@@ -28,8 +29,14 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-import type { Prompt } from "effect/unstable/ai";
-import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import {
+  type Prompt,
+  LanguageModel,
+  Model,
+  type Response,
+  Tool,
+  Toolkit,
+} from "effect/unstable/ai";
 
 import {
   AgentRuntime,
@@ -744,6 +751,74 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       }),
   );
 
+  it.effect("resume rejects non-canonical settled results before any external execution", () =>
+    Effect.gen(function* () {
+      const marks = yield* Ref.make<ReadonlyArray<string>>([]);
+      let handlerStarts = 0;
+      let modelCalls = 0;
+      const Lookup = Tool.make("lookup", {
+        parameters: Schema.Struct({ key: Schema.String }),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Lookup);
+      const definition = Agent.define("resume-invalid-result", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Look everything up.",
+        toolkit: tools,
+        policy: policy(),
+      });
+      const model = Model.make(
+        "scripted",
+        "resume-invalid-result",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () => {
+              modelCalls += 1;
+              return Stream.fromIterable(finalParts('{"answer":"unreachable"}'));
+            },
+          }),
+        ),
+      );
+      const toolLayer = tools.toLayer({
+        lookup: () =>
+          Effect.sync(() => {
+            handlerStarts += 1;
+            return "unexpected";
+          }),
+      });
+      const cyclic: Record<string, Schema.Json> = {};
+      cyclic.self = cyclic;
+      const invalidResults: ReadonlyArray<Schema.Json> = [Number.NaN, cyclic];
+
+      for (const result of invalidResults) {
+        const resume: RunTurnResume = {
+          turn: 1,
+          turnId: resumeTurnId,
+          calls: [
+            { id: "call-settled", name: "lookup", params: { key: "a" } },
+            { id: "call-open", name: "lookup", params: { key: "b" } },
+          ],
+          settled: [{ id: "call-settled", result, isFailure: false }],
+        };
+        const exit = yield* AgentRuntime.run(
+          Agent.withModel(definition, model),
+          { question: "resume" },
+          { resume, durability: markingDurability(marks) },
+        ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+        const failure = failureFrom(exit);
+        expect(failure).toBeInstanceOf(ModelProtocolError);
+        expect((failure as ModelProtocolError).message).toContain("bounded canonical JSON");
+      }
+
+      expect(handlerStarts).toBe(0);
+      expect(modelCalls).toBe(0);
+      expect(yield* Ref.get(marks)).toEqual([]);
+    }),
+  );
+
   it.effect("an expired resumed batch fails before subscribing to unresolved Tool execution", () =>
     Effect.gen(function* () {
       const handlerStarts = yield* Ref.make(0);
@@ -1269,6 +1344,11 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
   it.effect("surfaces step hook failures as typed DurableStepError", () =>
     Effect.gen(function* () {
       let bodyRuns = 0;
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const reported: Array<string> = [];
+      const reporter = ErrorReporter.make(({ error }) => {
+        reported.push(error.message);
+      });
       const failingStepHook: RunStepHook<HookFailure> = {
         lookup: () => Effect.fail(HookFailure.make({ message: "lookup boom" })),
         commit: () => Effect.void,
@@ -1317,16 +1397,27 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
           }),
       });
 
-      const exit = yield* AgentRuntime.run(
+      const exit = yield* AgentRuntime.stream(
         Agent.withModel(definition, model),
         { question: "work" },
         { durability },
-      ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+      ).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(
+          Layer.merge(toolLayer, ErrorReporter.layer([reporter], { mergeWithExisting: true })),
+        ),
+        Effect.exit,
+      );
       const failure = failureFrom(exit);
+      const observed = yield* Ref.get(events);
 
       expect(failure).toBeInstanceOf(DurableStepError);
       expect((failure as DurableStepError).reason).toBe("lookup-failed");
-      expect((failure as DurableStepError).message).toContain("lookup boom");
+      expect((failure as DurableStepError).message).toBe("Durable Step lookup failed");
+      expect(JSON.stringify(failure)).not.toContain("lookup boom");
+      expect(JSON.stringify(observed)).not.toContain("lookup boom");
+      expect(reported.some((message) => message.includes("lookup boom"))).toBe(true);
       expect(bodyRuns).toBe(0);
     }),
   );

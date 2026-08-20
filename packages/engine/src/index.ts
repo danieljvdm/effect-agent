@@ -1,5 +1,5 @@
-import type { Agent } from "@effect-agent/core";
 import {
+  type Agent,
   AgentApprovalDenied,
   AgentApprovalPending,
   AgentInputError,
@@ -62,9 +62,9 @@ import {
   DateTime,
   Duration,
   Effect,
+  ErrorReporter,
   Exit,
   Fiber,
-  Layer,
   Metric,
   Option,
   PubSub,
@@ -74,8 +74,8 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import type { Tool } from "effect/unstable/ai";
 import {
+  type Tool,
   AiError,
   LanguageModel,
   type Model,
@@ -86,6 +86,7 @@ import {
 
 import { insertOutputContract, outputSchemaContract } from "./output-contract-internal.ts";
 import {
+  boundedCanonicalJsonSnapshot,
   boundedJsonSnapshot,
   type BoundedJsonSnapshot,
 } from "./provider-result-staging-internal.ts";
@@ -181,6 +182,7 @@ import {
   type ChildEstablishStatus,
   type CommandDrainPolicy,
   type RunApprovalDecision,
+  RunResumeUsageSchema,
   type RunOptions,
   type RunSchedulingHook,
   type RunSubagentChildIdentity,
@@ -189,6 +191,7 @@ import {
   type RunSubagentJoinRequest,
   type RunCompactionCommit,
   type RunToolCallDescriptor,
+  RunTurnResumeSettledCallSchema,
   type RunTurnResume,
   type RunUsageDelta,
 } from "./run-options.ts";
@@ -658,6 +661,55 @@ const decodeResumedToolCallParameters = <Tools extends Record<string, Tool.Any>>
     ),
   );
 };
+
+const decodeResumedSettledCall = Effect.fn("AgentRuntime.decodeResumedSettledCall")(
+  (input: unknown, maxResultBytes: number) =>
+    Effect.gen(function* () {
+      const raw = yield* Effect.try({
+        try: () => {
+          if (input === null || typeof input !== "object") {
+            throw new TypeError("settled Tool Call must be an object");
+          }
+          return {
+            id: Reflect.get(input, "id"),
+            result: Reflect.get(input, "result"),
+            isFailure: Reflect.get(input, "isFailure"),
+          };
+        },
+        catch: () =>
+          ModelProtocolError.make({
+            message: "Turn resume contains an invalid settled Tool Call",
+          }),
+      });
+      const result = boundedCanonicalJsonSnapshot(raw.result, maxResultBytes);
+      if (result === undefined) {
+        return yield* ModelProtocolError.make({
+          message: "Turn resume settled Tool result is not bounded canonical JSON",
+        });
+      }
+      return yield* Schema.decodeUnknownEffect(RunTurnResumeSettledCallSchema)({
+        ...raw,
+        result: result.value,
+      }).pipe(
+        Effect.mapError(() =>
+          ModelProtocolError.make({
+            message: "Turn resume contains an invalid settled Tool Call",
+          }),
+        ),
+      );
+    }),
+);
+
+const decodeResumeUsage = Effect.fn("AgentRuntime.decodeResumeUsage")((input: unknown) =>
+  Schema.decodeUnknownEffect(RunResumeUsageSchema)(input).pipe(
+    Effect.mapError(() =>
+      ModelProtocolError.make({
+        message:
+          "Run resume usage requires non-negative safe-integer totals and last-call tokens no greater than their cumulative totals",
+      }),
+    ),
+  ),
+);
 
 const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (
   context: RunContext,
@@ -3979,7 +4031,11 @@ const makeResumeTurn = <
         });
       }
       const settledIds = new Set<string>();
-      for (const settledCall of resume.settled) {
+      for (const settledInput of resume.settled) {
+        const settledCall = yield* decodeResumedSettledCall(
+          settledInput,
+          agent.definition.policy.toolResultBounds.maxBytes,
+        );
         const declared = declarationByCallId.get(settledCall.id);
         if (declared === undefined) {
           return failRunEventStream(
@@ -4232,6 +4288,10 @@ const stream = <
 > => {
   const interpreted = Stream.unwrap(
     Effect.gen(function* () {
+      const resumeUsage =
+        options.resumeUsage === undefined
+          ? undefined
+          : yield* decodeResumeUsage(options.resumeUsage);
       const attemptStartedAtMillis = yield* Clock.currentTimeMillis;
       const maxDurationMillis = Duration.toMillis(agent.definition.policy.maxDuration);
       const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
@@ -4261,13 +4321,13 @@ const stream = <
         // RUN-019: a resumed Attempt re-seeds cumulative usage from the
         // canonical response records so token budgets and the compaction
         // trigger keep accounting across ownership changes.
-        modelCalls: options.resumeUsage?.modelCalls ?? 0,
+        modelCalls: resumeUsage?.modelCalls ?? 0,
         consecutiveToolFailures: 0,
-        inputTokens: options.resumeUsage?.inputTokens ?? 0,
-        outputTokens: options.resumeUsage?.outputTokens ?? 0,
-        lastInputTokens: options.resumeUsage?.lastInputTokens ?? 0,
-        lastOutputTokens: options.resumeUsage?.lastOutputTokens ?? 0,
-        costMicrousd: options.resumeUsage?.costMicrousd ?? 0,
+        inputTokens: resumeUsage?.inputTokens ?? 0,
+        outputTokens: resumeUsage?.outputTokens ?? 0,
+        lastInputTokens: resumeUsage?.lastInputTokens ?? 0,
+        lastOutputTokens: resumeUsage?.lastOutputTokens ?? 0,
+        costMicrousd: resumeUsage?.costMicrousd ?? 0,
         lastCostMicrousd: 0,
         warnedLimits: new Set(),
         finalizing: false,
@@ -4281,7 +4341,7 @@ const stream = <
       // the resumed Attempt must never issue an unconstrained external call.
       // "fail" rejects before any model call or resumed handler runs;
       // "final-answer" starts already constrained via the one-shot flag.
-      if (options.resumeUsage !== undefined) {
+      if (resumeUsage !== undefined) {
         // Cost is an unconditional hard rail with no grace call in either
         // exhaustion mode (runtime spec §3): a resume whose seeded spend
         // already breaches the budget rejects before input, resumed
@@ -4660,7 +4720,7 @@ const closedDurableStep: DurableStepService = {
       DurableStepError.make({
         stepName: name,
         reason: "no-active-tool-call",
-        message: `Durable Step ${name} was executed outside an active Tool Call`,
+        message: "Durable Step was executed outside an active Tool Call",
       }),
     ),
 };
@@ -5164,7 +5224,7 @@ const passthroughDurableStep = (): DurableStepService => {
               DurableStepError.make({
                 stepName: name,
                 reason: "duplicate-step-name",
-                message: `Durable Step name ${name} was reused within one Tool Call`,
+                message: "Durable Step name was reused within one Tool Call",
               }),
             );
           }
@@ -5222,51 +5282,53 @@ const makeDurableStepService = <HookError, HookRequirements>(
             toolCallId,
             stepName: name,
             reason: "duplicate-step-name",
-            message: `Durable Step name ${name} was reused within Tool Call ${toolCallId}`,
+            message: "Durable Step name was reused within one Tool Call",
           });
         }
         usedNames.add(name);
         const key: RunStepKey = { toolCallId, stepName: name };
         const recorded = yield* provideHookServices(hook.lookup(key), hookServices).pipe(
-          Effect.mapError((cause) =>
+          Effect.tapError((error) => ErrorReporter.report(Cause.fail(error))),
+          Effect.mapError(() =>
             DurableStepError.make({
               toolCallId,
               stepName: name,
               reason: "lookup-failed",
-              message: `Durable Step lookup failed: ${errorMessage(cause)}`,
+              message: "Durable Step lookup failed",
             }),
           ),
         );
         if (Option.isSome(recorded)) {
           return yield* Schema.decodeUnknownEffect(output)(recorded.value.encodedOutput).pipe(
-            Effect.mapError((cause) =>
+            Effect.mapError(() =>
               DurableStepError.make({
                 toolCallId,
                 stepName: name,
                 reason: "recorded-result-invalid",
-                message: `Recorded Durable Step result did not decode through the declared output Schema: ${cause.message}`,
+                message: "Recorded Durable Step result failed the declared output Schema",
               }),
             ),
           );
         }
         const value = yield* execute;
         const encodedOutput = yield* Schema.encodeEffect(output)(value).pipe(
-          Effect.mapError((cause) =>
+          Effect.mapError(() =>
             DurableStepError.make({
               toolCallId,
               stepName: name,
               reason: "output-encoding-failed",
-              message: `Durable Step output did not encode through the declared output Schema: ${cause.message}`,
+              message: "Durable Step output failed the declared output Schema",
             }),
           ),
         );
         yield* provideHookServices(hook.commit(key, encodedOutput), hookServices).pipe(
-          Effect.mapError((cause) =>
+          Effect.tapError((error) => ErrorReporter.report(Cause.fail(error))),
+          Effect.mapError(() =>
             DurableStepError.make({
               toolCallId,
               stepName: name,
               reason: "commit-failed",
-              message: `Durable Step commit failed: ${errorMessage(cause)}`,
+              message: "Durable Step commit failed",
             }),
           ),
         );
@@ -5328,7 +5390,7 @@ export class SubagentDurabilityError extends Schema.TaggedError<SubagentDurabili
   {
     operation: Schema.Literals(["establish", "join", "waiting"]),
     reason: Schema.Literals(["hook-failed", "no-active-tool-batch"]),
-    message: Schema.String,
+    message: Schema.String.check(Schema.isMaxLength(4_096)),
     toolCallId: Schema.optionalKey(ToolCallId),
   },
 ) {}
@@ -5431,23 +5493,25 @@ const makeSubagentDurabilityService = <HookError, HookRequirements>(
   mode: "durable",
   establish: (request) =>
     provideHookServices(hook.establish(request), hookServices).pipe(
-      Effect.mapError((cause) =>
+      Effect.tapError((error) => ErrorReporter.report(Cause.fail(error))),
+      Effect.mapError(() =>
         SubagentDurabilityError.make({
           operation: "establish",
           reason: "hook-failed",
           toolCallId: request.toolCallId,
-          message: `Durable child establishment failed: ${errorMessage(cause)}`,
+          message: "Durable child establishment failed",
         }),
       ),
     ),
   join: (request) =>
     provideHookServices(hook.join(request), hookServices).pipe(
-      Effect.mapError((cause) =>
+      Effect.tapError((error) => ErrorReporter.report(Cause.fail(error))),
+      Effect.mapError(() =>
         SubagentDurabilityError.make({
           operation: "join",
           reason: "hook-failed",
           toolCallId: request.toolCallId,
-          message: `Durable child join failed: ${errorMessage(cause)}`,
+          message: "Durable child join failed",
         }),
       ),
     ),
@@ -5677,11 +5741,10 @@ export const withTerminalDefectEvent = <E, R>(
  * event stream exposed by `stream`.
  *
  * The bound Model is provided locally; all remaining requirements stay visible
- * in the returned Effect or Stream. `layer` is empty because this interpreter
- * owns no shared runtime state.
+ * in the returned Effect or Stream. The interpreter owns no shared service or
+ * Layer state.
  */
 export const AgentRuntime = {
-  layer: Layer.empty,
   run,
   start,
   stream,

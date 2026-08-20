@@ -171,6 +171,13 @@ but writes no new preparation. DN/DC then record the ordinary bounded failed Sub
 which is terminal and cannot select the call for another retry. A hook failure remains typed in the
 Run error channel and is likewise fail-closed.
 
+Before that resume can start input hooks, Handlers, or model execution, the engine Schema-decodes
+the prior-Attempt usage seed and every settled-call envelope. Settled results must be bounded
+canonical JSON and are copied into history only from an owned snapshot. Usage counts and
+microdollars must be non-negative safe integers, and each last-call token count must not exceed its
+cumulative total. Invalid recovery input fails with `ModelProtocolError`; the engine neither
+repairs it nor continues with weaker budget accounting.
+
 ### Scheduling
 
 The default is bounded parallel execution owned by the engine.
@@ -324,7 +331,9 @@ belongs to `costBudgetMicrousd`.
 Every application Tool result, including MCP results, is bounded once at the settle boundary by
 `AgentPolicy.toolResultBounds` (default 50 KiB) before it enters records or prompts, so both
 carry the same value. An oversized encoded result becomes the canonical `TruncatedToolResult`
-envelope preserving head, tail, and original byte size. Provider-executed results are exempt.
+envelope preserving head, tail, and original byte size. A durable resume rechecks the recorded
+settled result against the same bound and rejects non-JSON or hostile values instead of changing
+them. Provider-executed results are exempt.
 
 ### Run-status message
 
@@ -438,6 +447,10 @@ exported `withTerminalDefectEvent` combinator, whose contract is:
   value, then rethrows the original cause unchanged;
 - identity fields come from the last event already streamed; a defect before the first event is
   rethrown without an event, because the helper never fabricates Run identities.
+
+Engine-owned Durable Step and durable-Subagent infrastructure errors use fixed, bounded public
+messages. Foreign hook failures are reported through Effect's installed error reporters before
+the engine maps them, but their messages, stacks, and payloads never enter Tool or Run events.
 
 ## 11. Backpressure
 
@@ -597,7 +610,9 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   original byte size, and provider-executed results are exempt.
 - **RUN-023:** The engine accounts cache-read and cache-write input tokens distinctly from
   uncached input and tracks the most recent call's input/output tokens as the live-context
-  estimate, both visible through the budget hook.
+  estimate, both visible through the budget hook. A recovery usage seed must contain non-negative
+  safe integers with last-call token counts no greater than cumulative totals; invalid seeds fail
+  before Run input hooks or external execution.
 - **RUN-024:** With policy `runStatus: "appended"`, every outgoing model request carries a
   derived run-status message showing Turns, Tool Calls, tokens, and elapsed time; the
   message is never persisted as canonical history.

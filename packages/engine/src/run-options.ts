@@ -10,8 +10,7 @@ import type {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
-import type { Effect } from "effect";
-import { Context, type DateTime, Layer, Schema } from "effect";
+import { type Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
 import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
@@ -433,13 +432,45 @@ export interface RunTurnResumeCall {
   readonly params: unknown;
 }
 
-/** One already-settled Tool Call of a Turn being resumed; injected without execution. */
-export interface RunTurnResumeSettledCall {
-  readonly id: string;
-  /** The recorded encoded result, exactly as the Tool message will carry it. */
-  readonly result: unknown;
-  readonly isFailure: boolean;
-}
+/**
+ * One already-settled Tool Call of a Turn being resumed; injected without execution.
+ *
+ * The engine decodes this Schema at the recovery boundary before the value can
+ * enter official history. The result remains the exact canonical JSON value
+ * carried by the Tool message.
+ */
+export const RunTurnResumeSettledCallSchema = Schema.Struct({
+  id: Schema.NonEmptyString,
+  result: Schema.Json,
+  isFailure: Schema.Boolean,
+});
+
+export type RunTurnResumeSettledCall = typeof RunTurnResumeSettledCallSchema.Type;
+
+/**
+ * Canonical cumulative usage restored from prior Attempts.
+ *
+ * Counts and microdollars are non-negative safe integers. The most recent
+ * call cannot exceed its cumulative total.
+ */
+export const RunResumeUsageSchema = Schema.Struct({
+  modelCalls: Schema.Natural,
+  inputTokens: Schema.Natural,
+  outputTokens: Schema.Natural,
+  lastInputTokens: Schema.Natural,
+  lastOutputTokens: Schema.Natural,
+  costMicrousd: Schema.Natural,
+}).check(
+  Schema.makeFilter(
+    (usage) =>
+      usage.lastInputTokens <= usage.inputTokens && usage.lastOutputTokens <= usage.outputTokens,
+    {
+      expected: "last-call token usage no greater than cumulative token usage",
+    },
+  ),
+);
+
+export type RunResumeUsage = typeof RunResumeUsageSchema.Type;
 
 /**
  * Resume one canonically declared Tool batch without re-invoking the model.
@@ -569,6 +600,7 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * changes. Absent for fresh Runs and for records written before usage
    * re-seeding existed (seeds zero).
    */
+  readonly resumeUsage?: RunResumeUsage | undefined;
   /**
    * Per-Run Tool Call allowance (RUN-021): a TIGHTENING-ONLY bound below the
    * Agent Policy's `maxToolCalls` — the effective limit is
@@ -585,17 +617,6 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * `onExhaustion` resolution (RUN-019 grace) at the effective limit.
    */
   readonly turnAllowance?: number | undefined;
-  readonly resumeUsage?:
-    | {
-        readonly modelCalls: number;
-        readonly inputTokens: number;
-        readonly outputTokens: number;
-        readonly lastInputTokens: number;
-        readonly lastOutputTokens: number;
-        /** Cumulative estimated spend of prior Attempts; the cost budget resumes from it. */
-        readonly costMicrousd: number;
-      }
-    | undefined;
   /** Required when the core policy declares `costBudgetMicrousd`. */
   readonly estimateCostMicrousd?:
     | ((usage: Response.Usage) => Effect.Effect<number, HookError, HookRequirements>)
