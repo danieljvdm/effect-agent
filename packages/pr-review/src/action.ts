@@ -3,6 +3,7 @@ import { Config, Console, Effect, FileSystem, Layer, Option, Redacted, Schema } 
 import { BudgetExceeded, UsageBudgetLimits } from "effect-agent";
 import { FetchHttpClient } from "effect/unstable/http";
 
+import { collectReviewAdjudications } from "./internal/adjudication.ts";
 import type { ChangedFile } from "./internal/diff.ts";
 import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./internal/effort.ts";
 import { PrReview, type RunReviewOptions } from "./internal/factory.ts";
@@ -21,6 +22,8 @@ import {
 } from "./internal/providers.ts";
 import { retireStaleReviews } from "./internal/retirement.ts";
 import {
+  adjudicationIdentity,
+  findingIdentity,
   ReviewExecutionContext,
   ReviewHeadComparison,
   ReviewStateAuthenticator,
@@ -415,10 +418,12 @@ export const concludeReviewOutcome = (
   return { conclusion: "success", reasons: [] };
 };
 
-const concludeReviewState = (state: ReviewState) => {
+const concludeReviewState = (state: ReviewState, adjudicated: ReadonlySet<string>) => {
   const reasons = blockingReasons({
-    findings: state.unresolvedFindings,
-    concerns: state.unresolvedConcerns,
+    findings: state.unresolvedFindings.filter(
+      (finding) => !adjudicated.has(findingIdentity(finding)),
+    ),
+    concerns: state.unresolvedConcerns.filter((concern) => !adjudicated.has(concern.title)),
   });
   return reasons.length > 0
     ? ({ conclusion: "blocking", reasons } as const)
@@ -431,7 +436,11 @@ const skipCoveredReview = Effect.fn("skipCoveredReview")(function* (input: {
   readonly reason: string;
   readonly state: ReviewState;
 }) {
-  const result = concludeReviewState(input.state);
+  // A maintainer adjudication must lift a preserved blocking conclusion
+  // without a code push, so the skip path re-reads adjudications (fail-open;
+  // stored ones survive a listing fault) before enforcing the stored state.
+  const adjudications = yield* collectReviewAdjudications(input.state.adjudications ?? []);
+  const result = concludeReviewState(input.state, new Set(adjudications.map(adjudicationIdentity)));
   yield* Console.log(
     `Skipping review of ${input.repository}#${input.pullRequestNumber}: ${input.reason}.`,
   );

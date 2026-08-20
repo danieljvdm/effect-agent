@@ -98,6 +98,34 @@ The flat reviewer has path-input accounting but no independent verifier, so
 its assurance is `unverified` and the Action check cannot report success from
 that shape.
 
+## Maintainer adjudication
+
+A maintainer can settle a finding without changing code, from the pull request itself:
+
+- On a finding's inline thread, reply `/adjudicate accepted-risk|refuted|obsolete[: reason]`.
+  The thread names the target, so the verb alone suffices.
+- For an unanchored concern, comment
+  `/adjudicate <disposition> "<exact concern title>"[: reason]` in the PR conversation. The quoted
+  title is required and must match exactly.
+
+An adjudicated identity leaves active findings, verdict counts, and the check conclusion; it
+renders in a collapsed "Adjudicated" section instead, and the final audit distinguishes fixed,
+adjudicated, and still-open items. The reviewer prompt names each adjudication so the model does
+not re-raise it without materially new evidence. Identity is exact — path, line range, and title
+for findings, title alone for concerns — so a materially different finding at the same location is
+untouched. Adjudications persist in the signed review state, and the skip-unchanged path re-reads
+them, so an adjudication lifts a blocking check without a new commit.
+
+**Authorization is fail-closed**: only comments whose `author_association` is OWNER, MEMBER, or
+COLLABORATOR adjudicate. Anything else — third parties, bots, malformed commands — is ignored
+(logged at debug). Later adjudications of the same identity win by comment creation order, bounded
+at 20 stored entries (oldest dropped with a logged notice).
+
+**Rejected alternative — parsing free-text rebuttals** ("this is fine because …" replies): only an
+explicit, authorized verb is auditable and fail-closed. Inferring intent from prose would let model
+output or third-party comments silently suppress findings, and nobody could later say which comment
+dismissed what.
+
 ## What a posted review looks like
 
 The host derives callouts, statistics, walkthroughs, inline comments, and the final prompt from

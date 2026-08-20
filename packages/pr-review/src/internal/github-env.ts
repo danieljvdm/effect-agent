@@ -1,12 +1,14 @@
 import { Config, Effect, FileSystem, Layer, Option, Schema } from "effect";
 import type { HttpClient } from "effect/unstable/http";
 
+import type { ReviewAdjudicationHost } from "./adjudication.ts";
 import type { PriorReviews, ReviewPublisher } from "./github.ts";
 import {
   DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN,
   GitHubReviewTarget,
   gitHubPriorReviewsLayer,
   gitHubPullRequestSourceLayer,
+  gitHubReviewAdjudicationHostLayer,
   gitHubReviewPublisherLayer,
   gitHubReviewRetirementHostLayer,
 } from "./github.ts";
@@ -116,6 +118,7 @@ export const gitHubReviewLayers = (
   | ReviewPublisher
   | PriorReviews
   | ReviewRetirementHost
+  | ReviewAdjudicationHost
   | ReviewProgressReporter,
   Config.ConfigError,
   HttpClient.HttpClient
@@ -149,6 +152,7 @@ export const gitHubReviewLayers = (
         gitHubReviewPublisherLayer.pipe(Layer.provide(targetLayer)),
         gitHubPriorReviewsLayer.pipe(Layer.provide(targetLayer)),
         gitHubReviewRetirementHostLayer.pipe(Layer.provide(targetLayer)),
+        gitHubReviewAdjudicationHostLayer.pipe(Layer.provide(targetLayer)),
         gitHubReviewProgressLayer.pipe(Layer.provide(targetLayer)),
       );
     }),

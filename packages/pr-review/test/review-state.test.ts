@@ -9,6 +9,7 @@ import {
   ReviewState,
   ReviewStateAuthenticator,
   selectReviewRange,
+  StoredAdjudication,
   StoredReviewFinding,
   StoredUnreviewedPass,
   webCryptoReviewStateAuthenticatorLayer,
@@ -125,6 +126,43 @@ describe("review state", () => {
           yield* authenticate("<!-- effect-agent-pr-review state-v2:not-base64 -->"),
         ),
       ).toBeUndefined();
+    }),
+  );
+
+  it.effect("round-trips adjudications and still decodes markers without the field", () =>
+    Effect.gen(function* () {
+      const secret = Redacted.make("stable-state-secret");
+      const roundTrip = (state: ReviewState) =>
+        Effect.gen(function* () {
+          const authenticator = yield* ReviewStateAuthenticator;
+          const marker = yield* authenticator.render(state);
+          return yield* authenticator.extract(`review body\n${marker}`);
+        }).pipe(Effect.provide(webCryptoReviewStateAuthenticatorLayer(secret)));
+      const adjudicated = ReviewState.make({
+        ...priorState,
+        adjudications: [
+          StoredAdjudication.make({
+            path: "src/accepted.ts",
+            startLine: 1,
+            endLine: 1,
+            title: "Still requires attention",
+            disposition: "accepted-risk",
+            reason: "Known cost, accepted for launch",
+            actor: "dan",
+          }),
+          StoredAdjudication.make({
+            title: "No rollout note",
+            disposition: "refuted",
+            actor: "dan",
+          }),
+        ],
+      });
+      expect(Option.getOrUndefined(yield* roundTrip(adjudicated))).toEqual(adjudicated);
+      // A marker signed before the field existed carries no `adjudications`
+      // key and must keep decoding unchanged.
+      const legacy = Option.getOrUndefined(yield* roundTrip(priorState));
+      expect(legacy).toEqual(priorState);
+      expect(legacy?.adjudications).toBeUndefined();
     }),
   );
 

@@ -1,11 +1,13 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Layer, Ref, Schema } from "effect";
+import { DateTime, Effect, Exit, Layer, Redacted, Ref, Schema } from "effect";
 import { Agent, IdGenerator } from "effect-agent";
 import { Tool } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
 import {
+  AdjudicableThread,
+  AdjudicationComment,
   anchorViolation,
   assessFlatReview,
   annotatePatch,
@@ -29,6 +31,7 @@ import {
   pullRequestReviewerProfile,
   ReadFile,
   ReadFileDiff,
+  ReviewAdjudicationHost,
   ReviewConcern,
   ReviewExecutionContext,
   ReviewInputCoverage,
@@ -36,11 +39,15 @@ import {
   ReviewHeadComparison,
   ReviewPublicationPlan,
   ReviewState,
+  ReviewStateAuthenticator,
   ReviewToolkitLayer,
   selectReviewRange,
   selectedPullRequestSourceLayer,
+  StoredAdjudication,
+  StoredReviewConcern,
   StoredReviewFinding,
   WalkthroughEntry,
+  webCryptoReviewStateAuthenticatorLayer,
 } from "../src/index.ts";
 import {
   collectingReviewPublisherLayer,
@@ -601,6 +608,38 @@ describe("review presentation", () => {
       WalkthroughEntry.make({ path: "src/hello.ts", summary: "Fixes the constant." }),
     ]);
     expect(planWalkthrough(undefined, files)).toEqual([]);
+  });
+
+  it("renders the adjudicated section with locations, dispositions, and optional reasons", () => {
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+      adjudications: [
+        StoredAdjudication.make({
+          path: "src/hello.ts",
+          startLine: 3,
+          endLine: 3,
+          title: "Name the magic number",
+          disposition: "accepted-risk",
+          reason: "risk accepted",
+          actor: "dan",
+        }),
+        StoredAdjudication.make({
+          title: "Open question",
+          disposition: "obsolete",
+          actor: "maude",
+        }),
+      ],
+    });
+    expect(plan.body).toContain("<summary>Adjudicated (2)</summary>");
+    expect(plan.body).toContain(
+      "- `src/hello.ts:3` Name the magic number — accepted-risk by @dan: risk accepted",
+    );
+    // Unanchored entries render locationless, and a missing reason renders
+    // without the trailing colon.
+    expect(plan.body).toContain("- Open question — obsolete by @maude");
+    expect(plan.body).not.toContain("obsolete by @maude:");
   });
 
   it("renders the kept walkthrough as a collapsed table with escaped cells", () => {
@@ -1250,7 +1289,306 @@ describe("offline review run", () => {
       );
       expect(outcome.plan.body).toContain("Unresolved findings carried from unchanged scope");
       expect(outcome.plan.body).toContain(priorFinding.title);
-      expect((yield* scripted.prompts).join("\n")).not.toContain("src/unchanged.ts");
+      // The affected-path prior finding is dropped from the carry but injected
+      // as prompt context so the new round confirms, resolves, or withdraws it
+      // explicitly instead of silently contradicting the previous round.
+      const prompts = (yield* scripted.prompts).join("\n");
+      expect(prompts).toContain(affectedPriorFinding.title);
+      expect(prompts).toContain("acknowledging the reversal");
+      expect(prompts).not.toContain("src/unchanged.ts");
+    }),
+  );
+
+  it.effect("suppresses adjudicated identities but keeps different-title findings", () =>
+    Effect.gen(function* () {
+      const adjudicatedFinding = ReviewFinding.make({
+        path: "src/hello.ts",
+        startLine: 2,
+        endLine: 2,
+        severity: "blocking",
+        title: "Adjudicated blocker",
+        body: "Re-raised by the reviewer despite the maintainer verdict.",
+      });
+      const differentTitle = ReviewFinding.make({
+        path: "src/hello.ts",
+        startLine: 2,
+        endLine: 2,
+        severity: "important",
+        title: "Different finding at the same location",
+        body: "A materially different claim; must stay active.",
+      });
+      const review = CodeReview.make({
+        summary: "Re-raises one adjudicated identity and one genuinely new finding.",
+        verdict: "request-changes",
+        findings: [adjudicatedFinding, differentTitle],
+        concerns: [
+          ReviewConcern.make({
+            severity: "blocking",
+            title: "Adjudicated concern",
+            body: "Also settled by a maintainer.",
+          }),
+          ReviewConcern.make({ severity: "nit", title: "Open concern", body: "Still open." }),
+        ],
+      });
+      const host = ReviewAdjudicationHost.of({
+        listFindingThreads: Effect.succeed([
+          AdjudicableThread.make({
+            path: adjudicatedFinding.path,
+            startLine: adjudicatedFinding.startLine,
+            endLine: adjudicatedFinding.endLine,
+            rootBody: `**[🛑 blocking · security] ${adjudicatedFinding.title}**\n\nOriginal body.`,
+            replies: [
+              AdjudicationComment.make({
+                body: "/adjudicate accepted-risk: fixed upstream of this service",
+                authorAssociation: "OWNER",
+                authorLogin: "dan",
+                createdAt: DateTime.makeUnsafe("2026-08-15T09:00:00Z"),
+              }),
+            ],
+          }),
+        ]),
+        listIssueComments: Effect.succeed([
+          AdjudicationComment.make({
+            body: '/adjudicate refuted "Adjudicated concern": exercised by the e2e suite',
+            authorAssociation: "MEMBER",
+            authorLogin: "maude",
+            createdAt: DateTime.makeUnsafe("2026-08-15T09:05:00Z"),
+          }),
+        ]),
+      });
+      const scripted = yield* makeOfflineReviewerModel({
+        diffPath: "src/hello.ts",
+        readPath: "src/hello.ts",
+        review,
+      });
+      const binding = Agent.withModel(PullRequestReviewer, scripted.model);
+      const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
+      const outcome = yield* executeReview(binding, { post: false, applyVerdict: true }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
+            collectingReviewPublisherLayer(published),
+            IdGenerator.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+        Effect.provideService(ReviewAdjudicationHost, host),
+        Effect.scoped,
+      );
+
+      // The adjudicated identities left active findings, concerns, verdict
+      // counts, and the mapped event; the different-title finding at the same
+      // location is untouched.
+      expect(outcome.activeFindings.map((finding) => finding.title)).toEqual([
+        differentTitle.title,
+      ]);
+      expect(outcome.activeConcerns.map((concern) => concern.title)).toEqual(["Open concern"]);
+      expect(outcome.adjudications).toHaveLength(2);
+      // Adjudicated severities leave the counts: no blocking item remains, so
+      // neither the CAUTION callout nor REQUEST_CHANGES can fire, and the
+      // stats tally carries only the surviving finding and concern.
+      expect(outcome.plan.event).toBe("COMMENT");
+      expect(outcome.plan.body).not.toContain("[!CAUTION]");
+      expect(outcome.plan.body).toContain("**Findings:** 1 important, 1 nit");
+      expect(outcome.plan.comments).toHaveLength(1);
+      expect(outcome.plan.comments[0]?.body).toContain(differentTitle.title);
+      expect(outcome.plan.comments[0]?.body).not.toContain(adjudicatedFinding.title);
+      // The adjudicated section names both identities with their verdicts.
+      expect(outcome.plan.body).toContain("<summary>Adjudicated (2)</summary>");
+      expect(outcome.plan.body).toContain(
+        `- \`src/hello.ts:2\` ${adjudicatedFinding.title} — accepted-risk by @dan: fixed upstream of this service`,
+      );
+      expect(outcome.plan.body).toContain(
+        "- Adjudicated concern — refuted by @maude: exercised by the e2e suite",
+      );
+      // The reviewer prompt carried the do-not-re-raise instruction.
+      expect((yield* scripted.prompts)[0]).toContain("materially new evidence");
+    }),
+  );
+
+  it.effect("excludes adjudicated carried items from the audit and persists them in state", () =>
+    Effect.gen(function* () {
+      const baseSha = "1".repeat(40);
+      const reviewedHeadSha = "2".repeat(40);
+      const headSha = "3".repeat(40);
+      const profileFingerprint = "a".repeat(64);
+      const unchangedFile = ChangedFile.make({
+        path: "src/unchanged.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\n-old\n+unchanged",
+      });
+      const correctiveFile = ChangedFile.make({
+        path: "src/corrective.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\n-before\n+after",
+      });
+      const metadata = PullRequestMetadata.make({
+        repository: "acme/widgets",
+        number: 31,
+        title: "Adjudicate the carried blocker",
+        body: "",
+        baseRef: "main",
+        baseSha,
+        headRef: "fix/adjudicate",
+        headSha,
+        totalChangedFiles: 2,
+      });
+      const carriedBlocker = StoredReviewFinding.make({
+        path: "src/unchanged.ts",
+        startLine: 1,
+        endLine: 1,
+        severity: "blocking",
+        title: "Unchanged blocker",
+        body: "Would stay blocking forever without an adjudication.",
+      });
+      const adjudicatedConcern = StoredReviewConcern.make({
+        severity: "important",
+        title: "Adjudicated audit concern",
+        body: "Settled by a maintainer in the conversation.",
+      });
+      const openConcern = StoredReviewConcern.make({
+        severity: "nit",
+        title: "Open audit concern",
+        body: "Still carried to the final audit.",
+      });
+      const priorState = ReviewState.make({
+        version: 1,
+        repository: metadata.repository,
+        pullRequestNumber: metadata.number,
+        baseRef: metadata.baseRef,
+        baseSha,
+        headRef: metadata.headRef,
+        reviewedHeadSha,
+        profileFingerprint,
+        settledScopeFingerprint: "b".repeat(64),
+        reviewedPathCount: 2,
+        unresolvedFindings: [carriedBlocker],
+        unresolvedConcerns: [adjudicatedConcern, openConcern],
+        unreviewedPaths: [],
+        unreviewedPasses: [],
+        settled: true,
+        lastReviewMode: "full",
+      });
+      const authenticator = yield* Effect.gen(function* () {
+        return yield* ReviewStateAuthenticator;
+      }).pipe(
+        Effect.provide(webCryptoReviewStateAuthenticatorLayer(Redacted.make("adjudication-test"))),
+      );
+      const selection = {
+        ...selectReviewRange({
+          requestedMode: "incremental",
+          current: metadata,
+          fullFiles: [unchangedFile, correctiveFile],
+          profileFingerprint,
+          priorState,
+          comparison: ReviewHeadComparison.make({
+            status: "ahead",
+            baseSha: reviewedHeadSha,
+            headSha,
+            mergeBaseSha: reviewedHeadSha,
+            files: [correctiveFile],
+            truncated: false,
+          }),
+        }),
+        stateAuthenticator: authenticator,
+      };
+      const host = ReviewAdjudicationHost.of({
+        listFindingThreads: Effect.succeed([
+          AdjudicableThread.make({
+            path: carriedBlocker.path,
+            startLine: carriedBlocker.startLine,
+            endLine: carriedBlocker.endLine,
+            rootBody: `**[🛑 blocking · correctness] ${carriedBlocker.title}**\n\nOriginal.`,
+            replies: [
+              AdjudicationComment.make({
+                body: "/adjudicate obsolete: the flow was removed",
+                authorAssociation: "OWNER",
+                authorLogin: "dan",
+                createdAt: DateTime.makeUnsafe("2026-08-15T10:00:00Z"),
+              }),
+            ],
+          }),
+        ]),
+        listIssueComments: Effect.succeed([
+          AdjudicationComment.make({
+            body: `/adjudicate accepted-risk "${adjudicatedConcern.title}": accepted for launch`,
+            authorAssociation: "MEMBER",
+            authorLogin: "dan",
+            createdAt: DateTime.makeUnsafe("2026-08-15T10:01:00Z"),
+          }),
+        ]),
+      });
+      const scripted = yield* makeOfflineReviewerModel({
+        diffPath: correctiveFile.path,
+        readPath: correctiveFile.path,
+        review: CodeReview.make({
+          summary: "The corrective delta is clean.",
+          verdict: "approve",
+          findings: [],
+        }),
+      });
+      const binding = Agent.withModel(PullRequestReviewer, scripted.model);
+      const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
+      const fullSource = fixturePullRequestSourceLayer(
+        FixturePullRequest.make({
+          metadata,
+          files: [
+            FixtureFile.make({ file: unchangedFile, headContent: "unchanged" }),
+            FixtureFile.make({ file: correctiveFile, headContent: "after" }),
+          ],
+        }),
+      );
+      const outcome = yield* executeReview(binding, {
+        post: false,
+        applyVerdict: false,
+        signature: () => "adjudication-signature",
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ReviewToolkitLayer.pipe(
+              Layer.provideMerge(
+                selectedPullRequestSourceLayer(selection).pipe(Layer.provide(fullSource)),
+              ),
+            ),
+            collectingReviewPublisherLayer(published),
+            IdGenerator.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+        Effect.provideService(ReviewExecutionContext, selection),
+        Effect.provideService(ReviewAdjudicationHost, host),
+        Effect.scoped,
+      );
+
+      // The carried blocking finding was swallowed AFTER the carry merge, and
+      // the adjudicated concern left the carried-to-final-audit section; the
+      // open concern still travels.
+      expect(outcome.activeFindings).toHaveLength(0);
+      expect(outcome.activeConcerns.map((concern) => concern.title)).toEqual([openConcern.title]);
+      expect(outcome.plan.body).not.toContain("Unresolved findings carried from unchanged scope");
+      const carriedSection = outcome.plan.body.slice(
+        outcome.plan.body.indexOf("Unresolved concerns carried to the final audit"),
+        outcome.plan.body.indexOf("<summary>Adjudicated"),
+      );
+      expect(carriedSection).toContain(openConcern.title);
+      expect(carriedSection).not.toContain(adjudicatedConcern.title);
+      expect(outcome.plan.body).toContain("<summary>Adjudicated (2)</summary>");
+      expect(outcome.plan.body).toContain(`${carriedBlocker.title} — obsolete by @dan`);
+      expect(outcome.plan.body).toContain(
+        `- ${adjudicatedConcern.title} — accepted-risk by @dan: accepted for launch`,
+      );
+      // The signed continuity state persists both adjudications and stores no
+      // adjudicated identity as unresolved.
+      expect(outcome.state).toBeDefined();
+      expect(outcome.state?.adjudications).toHaveLength(2);
+      expect(outcome.state?.unresolvedFindings).toHaveLength(0);
+      expect(outcome.state?.unresolvedConcerns.map((concern) => concern.title)).toEqual([
+        openConcern.title,
+      ]);
     }),
   );
 });

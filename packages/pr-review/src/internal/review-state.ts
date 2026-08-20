@@ -46,6 +46,61 @@ export class StoredReviewConcern extends Schema.Class<StoredReviewConcern>(
   body: StoredText,
 }) {}
 
+/** How a maintainer settled a previously raised finding or concern. */
+export const AdjudicationDisposition = Schema.Literals(["accepted-risk", "refuted", "obsolete"]);
+export type AdjudicationDisposition = typeof AdjudicationDisposition.Type;
+
+/** The adjudications bound carried by the ReviewState schema. */
+export const MAX_STORED_ADJUDICATIONS = 20;
+
+/**
+ * One maintainer adjudication of a finding or concern identity. Anchored
+ * findings carry their full location identity; unanchored concerns are
+ * identified by title alone, so the location fields stay absent.
+ */
+export class StoredAdjudication extends Schema.Class<StoredAdjudication>(
+  "@effect-agent/pr-review/StoredAdjudication",
+)({
+  path: Schema.optionalKey(ChangedPath),
+  startLine: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  endLine: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  title: Schema.NonEmptyString.check(Schema.isMaxLength(120)),
+  disposition: AdjudicationDisposition,
+  reason: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(300))),
+  /** GitHub login of the maintainer whose comment adjudicated the identity. */
+  actor: Schema.NonEmptyString.check(Schema.isMaxLength(100)),
+}) {}
+
+/**
+ * The one finding-identity composition shared by retirement, adjudication,
+ * and settlement: path, startLine, endLine, and title joined with NUL. An
+ * adjudication suppresses exactly this identity — a materially different
+ * finding (different title or anchor) at the same location is untouched.
+ */
+export const findingIdentity = (finding: {
+  readonly path: string;
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly title: string;
+}): string =>
+  `${finding.path}\u0000${finding.startLine}\u0000${finding.endLine}\u0000${finding.title}`;
+
+/**
+ * An adjudication's identity: the shared finding identity when anchored, the
+ * title alone for an unanchored concern.
+ */
+export const adjudicationIdentity = (adjudication: StoredAdjudication): string =>
+  adjudication.path !== undefined &&
+  adjudication.startLine !== undefined &&
+  adjudication.endLine !== undefined
+    ? findingIdentity({
+        path: adjudication.path,
+        startLine: adjudication.startLine,
+        endLine: adjudication.endLine,
+        title: adjudication.title,
+      })
+    : adjudication.title;
+
 /** The carried-scope bound; a run that cannot fit its leftovers publishes no state. */
 export const MAX_STORED_UNREVIEWED_PATHS = 100;
 
@@ -100,6 +155,13 @@ export class ReviewState extends Schema.Class<ReviewState>("@effect-agent/pr-rev
    */
   settled: Schema.Boolean,
   lastReviewMode: ReviewScopeMode,
+  /**
+   * Maintainer adjudications standing against this pull request. optionalKey
+   * so state markers signed before the field existed still decode.
+   */
+  adjudications: Schema.optionalKey(
+    Schema.Array(StoredAdjudication).check(Schema.isMaxLength(MAX_STORED_ADJUDICATIONS)),
+  ),
 }) {}
 
 export const toStoredFinding = (finding: ReviewFinding): StoredReviewFinding =>

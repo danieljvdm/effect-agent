@@ -41704,44 +41704,6 @@ var fetch = /* @__PURE__ */ make58((request3, url2, signal, fiber3) => {
   return send(undefined);
 });
 var layer15 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
-// packages/pr-review/src/internal/effort.ts
-var EFFORT_ALIASES = {
-  low: 0,
-  medium: 0.25,
-  high: 0.5,
-  xhigh: 0.75,
-  max: 1
-};
-var aliasPosition = EFFORT_ALIASES;
-
-class InvalidEffortInput extends exports_Schema.TaggedError()("InvalidEffortInput", {
-  input: exports_Schema.String
-}) {
-  get message() {
-    return `Invalid effort '${this.input}': expected one of ` + `${Object.keys(EFFORT_ALIASES).join(", ")} or a number between 0 and 1.`;
-  }
-}
-var isEffortPosition = (value4) => Number.isFinite(value4) && value4 >= 0 && value4 <= 1;
-var parseEffortPosition = (raw2) => {
-  const normalized = raw2.trim().toLowerCase();
-  const named = aliasPosition[normalized];
-  if (named !== undefined)
-    return named;
-  if (normalized === "")
-    return;
-  const numeric = Number(normalized);
-  return isEffortPosition(numeric) ? numeric : undefined;
-};
-var resolveEffortRung = (position, rungs) => {
-  const clamped = Math.min(1, Math.max(0, position));
-  let selected = rungs[0];
-  for (const rung of rungs) {
-    if (EFFORT_ALIASES[rung] <= clamped)
-      selected = rung;
-  }
-  return selected;
-};
-
 // packages/pr-review/src/internal/diff.ts
 var ChangedPath = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512));
 var ChangedFileStatus = exports_Schema.Literals([
@@ -41887,25 +41849,6 @@ var annotatePatch = (patch3) => {
   }
   return output.join(`
 `);
-};
-
-// packages/pr-review/src/internal/anchors.ts
-var anchorViolation = (finding, files) => {
-  const file2 = files.find((candidate) => candidate.path === finding.path);
-  if (file2 === undefined)
-    return "path is not part of the changeset";
-  if (file2.patch === undefined)
-    return "file has no anchorable textual diff";
-  if (finding.endLine < finding.startLine)
-    return "endLine precedes startLine";
-  if (finding.endLine - finding.startLine + 1 > 100)
-    return "range is implausibly large";
-  const anchors = commentableLines(file2.patch);
-  for (let line = finding.startLine;line <= finding.endLine; line += 1) {
-    if (!anchors.has(line))
-      return `line ${line} is not part of the diff`;
-  }
-  return;
 };
 
 // packages/pr-review/src/internal/source.ts
@@ -42152,6 +42095,7 @@ var ReviewToolkitLayer = ReviewToolkit.toLayer({
   read_file_diff: readFileDiffHandler,
   read_file: readFileHandler
 });
+var ReviewContextLines = exports_Schema.Array(exports_Schema.String.check(exports_Schema.isMaxLength(1200))).check(exports_Schema.isMaxLength(20));
 
 class ReviewMission extends exports_Schema.Class("@effect-agent/pr-review/ReviewMission")({
   repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
@@ -42160,7 +42104,9 @@ class ReviewMission extends exports_Schema.Class("@effect-agent/pr-review/Review
   body: exports_Schema.String.check(exports_Schema.isMaxLength(20000)),
   baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
   headRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
-  changedFileCount: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
+  changedFileCount: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  adjudicatedContext: exports_Schema.optionalKey(ReviewContextLines),
+  priorFindingContext: exports_Schema.optionalKey(ReviewContextLines)
 }) {
 }
 var FindingSeverity = exports_Schema.Literals(["blocking", "important", "nit"]);
@@ -42230,6 +42176,14 @@ var makeReviewInstructions = (options3 = {}) => (mission) => {
     mission.body.length > 0 ? `Author description:
 ${mission.body}` : "The author provided no description.",
     ...resolveGuidance(options3.guidance, mission),
+    ...mission.adjudicatedContext === undefined || mission.adjudicatedContext.length === 0 ? [] : [
+      "A maintainer has adjudicated these previously raised review items (disposition, reason). Do not re-raise them unless you have materially new evidence, and if you do, say explicitly what changed since the adjudication:",
+      ...mission.adjudicatedContext.map((line) => `- ${line}`)
+    ],
+    ...mission.priorFindingContext === undefined || mission.priorFindingContext.length === 0 ? [] : [
+      "Your previous review raised these findings on the scope you are re-reviewing. For each, either confirm it still holds, state that it is fixed, or withdraw it; do not demand the opposite of your own prior guidance without explicitly acknowledging the reversal:",
+      ...mission.priorFindingContext.map((line) => `- ${line}`)
+    ],
     "Work in this order:",
     "1. Call list_changed_files once to see the selected input scope. In incremental reviews it is deliberately a subset of the pull request's full diff (totalFiles counts the whole pull request); omitted paths belong to settled prior scope or explicit host exclusions, not to this run.",
     "2. Call read_file_diff for every listed file. A normal diff marks new-version anchors as R<number>; only those numbers are valid startLine/endLine values. When GitHub omitted a diff, the tool may return bounded base/head content marked B/H instead. Review that content, but report its defects as non-anchored concerns because B/H lines cannot anchor GitHub comments. Never anchor a finding to a removed (-), B, or H line.",
@@ -42267,6 +42221,857 @@ var PullRequestReviewer = Agent.define("pr-reviewer", {
   description: "Review one pull request read-only: list the changeset, read annotated diffs and head-file context, and return a structured, line-anchored code review.",
   metadata: { deploymentClass: "E", surface: "read-only" }
 });
+
+// packages/pr-review/src/internal/review-state.ts
+var ReviewMode = exports_Schema.Literals(["incremental", "final"]);
+var ReviewScopeMode = exports_Schema.Literals(["incremental", "full"]);
+var GitCommitSha = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64), exports_Schema.isPattern(/^[0-9a-f]{40,64}$/));
+var Fingerprint = exports_Schema.String.check(exports_Schema.isPattern(/^[0-9a-f]{64}$/));
+var StoredText = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(800));
+
+class StoredReviewFinding extends exports_Schema.Class("@effect-agent/pr-review/StoredReviewFinding")({
+  path: ChangedPath,
+  startLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  endLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  severity: FindingSeverity,
+  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
+  body: StoredText
+}) {
+}
+
+class StoredReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/StoredReviewConcern")({
+  severity: FindingSeverity,
+  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
+  body: StoredText
+}) {
+}
+var AdjudicationDisposition = exports_Schema.Literals(["accepted-risk", "refuted", "obsolete"]);
+var MAX_STORED_ADJUDICATIONS = 20;
+
+class StoredAdjudication extends exports_Schema.Class("@effect-agent/pr-review/StoredAdjudication")({
+  path: exports_Schema.optionalKey(ChangedPath),
+  startLine: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isGreaterThan(0))),
+  endLine: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isGreaterThan(0))),
+  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
+  disposition: AdjudicationDisposition,
+  reason: exports_Schema.optionalKey(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300))),
+  actor: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(100))
+}) {
+}
+var findingIdentity = (finding) => `${finding.path}\x00${finding.startLine}\x00${finding.endLine}\x00${finding.title}`;
+var adjudicationIdentity = (adjudication) => adjudication.path !== undefined && adjudication.startLine !== undefined && adjudication.endLine !== undefined ? findingIdentity({
+  path: adjudication.path,
+  startLine: adjudication.startLine,
+  endLine: adjudication.endLine,
+  title: adjudication.title
+}) : adjudication.title;
+var MAX_STORED_UNREVIEWED_PATHS = 100;
+var MAX_STORED_UNREVIEWED_PASSES = 24;
+var UnreviewedStage = exports_Schema.Literals(["discovery", "specialist", "verification"]);
+
+class StoredUnreviewedPass extends exports_Schema.Class("@effect-agent/pr-review/StoredUnreviewedPass")({
+  stage: UnreviewedStage,
+  paths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(12))
+}) {
+}
+
+class ReviewState extends exports_Schema.Class("@effect-agent/pr-review/ReviewState")({
+  version: exports_Schema.Literal(1),
+  repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
+  pullRequestNumber: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
+  baseSha: GitCommitSha,
+  headRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
+  reviewedHeadSha: GitCommitSha,
+  profileFingerprint: Fingerprint,
+  settledScopeFingerprint: Fingerprint,
+  reviewedPathCount: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 0, maximum: 300 })),
+  unresolvedFindings: exports_Schema.Array(StoredReviewFinding).check(exports_Schema.isMaxLength(20)),
+  unresolvedConcerns: exports_Schema.Array(StoredReviewConcern).check(exports_Schema.isMaxLength(10)),
+  unreviewedPaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(MAX_STORED_UNREVIEWED_PATHS)),
+  unreviewedPasses: exports_Schema.Array(StoredUnreviewedPass).check(exports_Schema.isMaxLength(MAX_STORED_UNREVIEWED_PASSES)),
+  settled: exports_Schema.Boolean,
+  lastReviewMode: ReviewScopeMode,
+  adjudications: exports_Schema.optionalKey(exports_Schema.Array(StoredAdjudication).check(exports_Schema.isMaxLength(MAX_STORED_ADJUDICATIONS)))
+}) {
+}
+var toStoredFinding = (finding) => StoredReviewFinding.make({
+  path: finding.path,
+  startLine: finding.startLine,
+  endLine: finding.endLine,
+  severity: finding.severity,
+  title: finding.title,
+  body: finding.body.slice(0, 800)
+});
+var fromStoredFinding = (finding) => ReviewFinding.make({
+  path: finding.path,
+  startLine: finding.startLine,
+  endLine: finding.endLine,
+  severity: finding.severity,
+  title: finding.title,
+  body: finding.body
+});
+var toStoredConcern = (concern) => StoredReviewConcern.make({
+  severity: concern.severity,
+  title: concern.title,
+  body: concern.body.slice(0, 800)
+});
+var fromStoredConcern = (concern) => ReviewConcern.make({ severity: concern.severity, title: concern.title, body: concern.body });
+var STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
+var STATE_MARKER_SUFFIX = " -->";
+var STATE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
+var STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\x00";
+var MAX_REVIEW_STATE_MARKER_CHARS = 24000;
+var ReviewStateMarker = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS), exports_Schema.isPattern(/^<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/)).pipe(exports_Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
+
+class ReviewStateAuthenticationFailure extends exports_Schema.TaggedError()("ReviewStateAuthenticationFailure", {
+  operation: exports_Schema.Literals(["sign", "verify"]),
+  reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2048))
+}) {
+}
+
+class ReviewStateMarkerTooLarge extends exports_Schema.TaggedError()("ReviewStateMarkerTooLarge", {
+  observedChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  maximumChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0))
+}) {
+}
+
+class ReviewStateAuthenticator extends exports_Context.Service()("@effect-agent/pr-review/ReviewStateAuthenticator") {
+}
+var authenticationFailure = (operation, cause) => ReviewStateAuthenticationFailure.make({
+  operation,
+  reason: String(cause).slice(0, 2048)
+});
+var hmacKey = (secret, operation) => exports_Effect.tryPromise({
+  try: () => globalThis.crypto.subtle.importKey("raw", new TextEncoder().encode(exports_Redacted.value(secret)), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]),
+  catch: (cause) => authenticationFailure(operation, cause)
+});
+var signatureBytes = (signature) => {
+  const pairs = signature.match(/../g) ?? [];
+  const buffer3 = new ArrayBuffer(pairs.length);
+  const bytes = new Uint8Array(buffer3);
+  for (let index2 = 0;index2 < pairs.length; index2 += 1) {
+    bytes[index2] = Number.parseInt(pairs[index2] ?? "", 16);
+  }
+  return buffer3;
+};
+var webCryptoReviewStateAuthenticatorLayer = (secret) => exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
+  status: "available",
+  unavailableReason: undefined,
+  render: (state) => exports_Effect.gen(function* () {
+    const json2 = yield* exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(ReviewState))(state).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
+    const payload = exports_Encoding.encodeBase64(json2);
+    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+    const key = yield* hmacKey(secret, "sign");
+    const signature = yield* exports_Effect.tryPromise({
+      try: () => globalThis.crypto.subtle.sign("HMAC", key, message),
+      catch: (cause) => authenticationFailure("sign", cause)
+    });
+    const hex2 = Array.from(new Uint8Array(signature)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const marker = `${STATE_MARKER_PREFIX}${payload}.${hex2}${STATE_MARKER_SUFFIX}`;
+    if (marker.length > MAX_REVIEW_STATE_MARKER_CHARS) {
+      return yield* ReviewStateMarkerTooLarge.make({
+        observedChars: marker.length,
+        maximumChars: MAX_REVIEW_STATE_MARKER_CHARS
+      });
+    }
+    return yield* exports_Schema.decodeUnknownEffect(ReviewStateMarker)(marker).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
+  }),
+  extract: (body) => {
+    if (body.length > 60000)
+      return exports_Effect.succeed(exports_Option.none());
+    const match9 = STATE_MARKER_PATTERN.exec(body);
+    const payload = match9?.[1];
+    const signature = match9?.[2];
+    if (payload === undefined || signature === undefined)
+      return exports_Effect.succeed(exports_Option.none());
+    const marker = `${STATE_MARKER_PREFIX}${payload}.${signature}${STATE_MARKER_SUFFIX}`;
+    if (!exports_Schema.is(ReviewStateMarker)(marker))
+      return exports_Effect.succeed(exports_Option.none());
+    const json2 = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(payload));
+    if (json2 === undefined)
+      return exports_Effect.succeed(exports_Option.none());
+    const decoded = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(ReviewState))(json2);
+    if (exports_Option.isNone(decoded))
+      return exports_Effect.succeed(exports_Option.none());
+    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+    return exports_Effect.gen(function* () {
+      const key = yield* hmacKey(secret, "verify");
+      const valid = yield* exports_Effect.tryPromise({
+        try: () => globalThis.crypto.subtle.verify("HMAC", key, signatureBytes(signature), message),
+        catch: (cause) => authenticationFailure("verify", cause)
+      });
+      return valid ? exports_Option.some(decoded.value) : exports_Option.none();
+    });
+  }
+}));
+var unavailableReviewStateAuthenticatorLayer = (reason) => {
+  const safeReason = reason === "" ? "review-state authentication is unavailable" : reason;
+  return exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
+    status: "unavailable",
+    unavailableReason: safeReason.slice(0, 1000),
+    render: () => exports_Effect.fail(ReviewStateAuthenticationFailure.make({
+      operation: "sign",
+      reason: safeReason.slice(0, 2048)
+    })),
+    extract: () => exports_Effect.succeed(exports_Option.none())
+  }));
+};
+
+class ReviewHeadComparison extends exports_Schema.Class("@effect-agent/pr-review/ReviewHeadComparison")({
+  status: exports_Schema.Literals(["ahead", "behind", "diverged", "identical"]),
+  baseSha: GitCommitSha,
+  headSha: GitCommitSha,
+  mergeBaseSha: GitCommitSha,
+  files: exports_Schema.Array(ChangedFile).check(exports_Schema.isMaxLength(300)),
+  truncated: exports_Schema.Boolean
+}) {
+}
+var fullSelection = (input) => ({
+  mode: "full",
+  reason: input.reason,
+  files: input.files,
+  affectedPaths: input.files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]),
+  retryPaths: [],
+  retryStages: [],
+  totalFiles: input.totalFiles,
+  baselineSha: undefined,
+  priorState: undefined,
+  profileFingerprint: input.profileFingerprint
+});
+var isLineageAncestor = (comparison, priorState, currentHeadSha) => comparison.baseSha === priorState.reviewedHeadSha && comparison.headSha === currentHeadSha && comparison.mergeBaseSha === priorState.reviewedHeadSha && !comparison.truncated && (comparison.status === "ahead" || comparison.status === "identical");
+var validateReviewState = (state, current, profileFingerprint) => {
+  if (state.repository !== current.repository || state.pullRequestNumber !== current.number) {
+    return "stored state belongs to a different pull request";
+  }
+  if (current.baseSha === undefined)
+    return "the current base commit is unavailable";
+  if (state.baseRef !== current.baseRef)
+    return "the pull request base ref changed";
+  if (state.headRef !== current.headRef)
+    return "the pull request head ref changed";
+  if (state.profileFingerprint !== profileFingerprint) {
+    return "the reviewer profile or model configuration changed";
+  }
+  return;
+};
+var filePaths = (file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath];
+var incrementalFromDelta = (input) => {
+  const currentPaths = new Set(input.fullFiles.flatMap(filePaths));
+  const affectedPaths = new Set([
+    ...input.deltaFiles.flatMap(filePaths),
+    ...input.extraAffectedPaths ?? []
+  ]);
+  const selectedByPath = new Map;
+  for (const file2 of input.deltaFiles) {
+    if (currentPaths.has(file2.path) || file2.previousPath !== undefined && currentPaths.has(file2.previousPath)) {
+      selectedByPath.set(file2.path, file2);
+    }
+  }
+  const carriedPaths = input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path));
+  const retryOnly = new Set;
+  const retryStages = new Set;
+  for (const path of carriedPaths) {
+    if (affectedPaths.has(path))
+      continue;
+    retryOnly.add(path);
+    for (const pass of input.priorState.unreviewedPasses) {
+      if (pass.paths.includes(path))
+        retryStages.add(pass.stage);
+    }
+  }
+  if (retryStages.has("verification") && !retryStages.has("discovery") && !retryStages.has("specialist")) {
+    retryStages.add("discovery");
+    retryStages.add("specialist");
+  }
+  if (retryOnly.size > 0 && retryStages.size === 0) {
+    for (const path of retryOnly)
+      affectedPaths.add(path);
+    retryStages.add("discovery");
+    retryStages.add("specialist");
+    retryStages.add("verification");
+  }
+  if (carriedPaths.length > 0 || (input.extraAffectedPaths?.length ?? 0) > 0) {
+    for (const file2 of input.fullFiles) {
+      const needed = affectedPaths.has(file2.path) || file2.previousPath !== undefined && affectedPaths.has(file2.previousPath) || retryOnly.has(file2.path) || file2.previousPath !== undefined && retryOnly.has(file2.previousPath);
+      if (needed)
+        selectedByPath.set(file2.path, file2);
+    }
+  }
+  const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  const leftoverCount = [...retryOnly].filter((path) => !affectedPaths.has(path)).length;
+  const carriedReason = leftoverCount > 0 ? `; retrying ${leftoverCount} unchanged leftover path(s) without rediscovery` : carriedPaths.length > 0 ? `; retrying ${carriedPaths.length} carried unreviewed path(s)` : "";
+  return {
+    mode: "incremental",
+    reason: `${input.reason}${carriedReason}`,
+    files: selectedFiles,
+    affectedPaths: [...affectedPaths].sort(),
+    retryPaths: [...retryOnly].filter((path) => !affectedPaths.has(path)).sort(),
+    retryStages: [...retryStages].sort(),
+    totalFiles: selectedFiles.length,
+    baselineSha: input.priorState.reviewedHeadSha,
+    priorState: input.priorState,
+    profileFingerprint: input.profileFingerprint
+  };
+};
+var selectReviewRange = (input) => {
+  const full = (reason) => fullSelection({
+    reason,
+    files: input.fullFiles,
+    totalFiles: input.current.totalChangedFiles,
+    profileFingerprint: input.profileFingerprint
+  });
+  if (input.requestedMode === "final")
+    return full("explicit final full-diff audit requested");
+  if (input.lookupFailure !== undefined) {
+    return full(`stored review state could not be recovered: ${input.lookupFailure}`);
+  }
+  if (input.priorState === undefined)
+    return full("no compatible stored review state was found");
+  const invalid2 = validateReviewState(input.priorState, input.current, input.profileFingerprint);
+  if (invalid2 !== undefined)
+    return full(invalid2);
+  const comparison = input.comparison;
+  if (comparison !== undefined && isLineageAncestor(comparison, input.priorState, input.current.headSha)) {
+    const extraAffected = [];
+    let baseReason = "";
+    if (input.priorState.baseSha !== input.current.baseSha) {
+      const baseComparison = input.baseComparison;
+      if (baseComparison === undefined) {
+        return full("the pull request base changed and its lineage comparison was unavailable");
+      }
+      if (baseComparison.baseSha !== input.priorState.baseSha || baseComparison.headSha !== input.current.baseSha || baseComparison.mergeBaseSha !== input.priorState.baseSha || baseComparison.status !== "ahead" && baseComparison.status !== "identical" || baseComparison.truncated) {
+        return full("the pull request base changed materially or exceeded the comparison bound");
+      }
+      for (const file2 of baseComparison.files)
+        extraAffected.push(...filePaths(file2));
+      baseReason = `; base advanced from ${input.priorState.baseSha.slice(0, 7)} and overlapping PR paths were included`;
+    }
+    return incrementalFromDelta({
+      current: input.current,
+      fullFiles: input.fullFiles,
+      profileFingerprint: input.profileFingerprint,
+      priorState: input.priorState,
+      deltaFiles: comparison.files,
+      extraAffectedPaths: extraAffected,
+      reason: `changes since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`
+    });
+  }
+  const contentComparison = input.contentComparison;
+  if (contentComparison !== undefined && !contentComparison.truncated) {
+    return incrementalFromDelta({
+      current: input.current,
+      fullFiles: input.fullFiles,
+      profileFingerprint: input.profileFingerprint,
+      priorState: input.priorState,
+      deltaFiles: contentComparison.files,
+      reason: `rewritten history; contents changed since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}`
+    });
+  }
+  if (comparison === undefined)
+    return full("the incremental head comparison was unavailable");
+  if (comparison.truncated)
+    return full("the incremental comparison exceeded GitHub's file bound");
+  return full("the prior reviewed head is not an ancestor of the current head");
+};
+
+class ReviewExecutionContext extends exports_Context.Service()("@effect-agent/pr-review/ReviewExecutionContext") {
+}
+var selectedPullRequestSourceLayer = (selection) => exports_Layer.effect(PullRequestSource)(exports_Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  const selectedPaths = new Set(selection.files.map((file2) => file2.path));
+  const selectedFiles = source.changedFiles.pipe(exports_Effect.map((fullFiles) => {
+    const fullByPath = new Map(fullFiles.map((file2) => [file2.path, file2]));
+    return selection.files.map((file2) => {
+      if (file2.patch !== undefined)
+        return file2;
+      const full = fullByPath.get(file2.path);
+      return full === undefined ? file2 : ChangedFile.make({
+        ...file2,
+        ...full.reviewBaseContent === undefined ? {} : { reviewBaseContent: full.reviewBaseContent },
+        ...full.reviewHeadContent === undefined ? {} : { reviewHeadContent: full.reviewHeadContent }
+      });
+    });
+  }));
+  return PullRequestSource.of({
+    metadata: source.metadata,
+    changedFiles: selectedFiles,
+    anchorFiles: source.anchorFiles,
+    readFile: (path) => selectedPaths.has(path) ? source.readFile(path) : exports_Effect.fail(ReviewInputViolation.make({
+      input: path,
+      reason: "Path is outside this incremental review range."
+    }))
+  });
+}));
+var buildProfileMission = (metadata, files) => ReviewMission.make({
+  repository: metadata.repository,
+  number: metadata.number,
+  title: metadata.title,
+  body: metadata.body,
+  baseRef: metadata.baseRef,
+  headRef: metadata.headRef,
+  changedFileCount: files.length
+});
+
+// packages/pr-review/src/internal/retirement.ts
+var PositiveLine = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+
+class RetirableReview extends exports_Schema.Class("@effect-agent/pr-review/RetirableReview")({
+  reviewId: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  body: exports_Schema.String.check(exports_Schema.isMaxLength(60000)),
+  commitSha: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64)),
+  authorNodeId: exports_Schema.NullOr(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200))),
+  submittedAt: exports_Schema.NullOr(exports_Schema.DateTimeUtc)
+}) {
+}
+
+class RetirableReviewComment extends exports_Schema.Class("@effect-agent/pr-review/RetirableReviewComment")({
+  nodeId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
+  path: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(500)),
+  startLine: exports_Schema.NullOr(PositiveLine),
+  endLine: exports_Schema.NullOr(PositiveLine),
+  body: exports_Schema.String.check(exports_Schema.isMaxLength(65536))
+}) {
+}
+
+class ReviewRetirementFailure extends exports_Schema.TaggedError()("ReviewRetirementFailure", {
+  operation: exports_Schema.String,
+  reason: exports_Schema.String
+}) {
+  get message() {
+    return `Review retirement operation '${this.operation}' failed: ${this.reason}`;
+  }
+}
+
+class ReviewRetirementHost extends exports_Context.Service()("@effect-agent/pr-review/ReviewRetirementHost") {
+}
+
+class ReviewRetirementReport extends exports_Schema.Class("@effect-agent/pr-review/ReviewRetirementReport")({
+  reviewsRetired: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  findingsResolved: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  commentsMinimized: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  failures: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
+}) {
+}
+var REVIEW_METADATA_PATTERN = /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->/g;
+var FINGERPRINT_PATTERN = /<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->/g;
+var STATE_PATTERN = /<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g;
+var RETIRED_ORIGINAL_PATTERN = /<!-- effect-agent-pr-review retired-original:start -->\n([\s\S]*?)\n<!-- effect-agent-pr-review retired-original:end -->/;
+var MACHINE_COMMENT_PATTERN = new RegExp(`${REVIEW_METADATA_PATTERN.source}|${FINGERPRINT_PATTERN.source}|${STATE_PATTERN.source}`, "g");
+var VERDICT_CALLOUT_PATTERN = /^(?:> \[!(?:CAUTION|IMPORTANT)\]\n> [^\n]*(?:\n> [^\n]*)*|> (?:ℹ️|✅)[^\n]*)\n*/;
+var INLINE_FINDING_TITLE_PATTERN = /^\*\*\[(?:🛑 blocking|⚠️ important|💅 nit) · [a-z-]+\] ([^\n]+)\*\*$/;
+var MAX_REVIEW_BODY_CHARS = 60000;
+var hasReviewMetadataMarker = (body) => /<!-- effect-agent-pr-review metadata\n/.test(body);
+var machineComments = (body) => Array.from(body.matchAll(MACHINE_COMMENT_PATTERN), (match9) => match9[0]);
+var originalVisibleBody = (body) => {
+  const retired = RETIRED_ORIGINAL_PATTERN.exec(body)?.[1];
+  if (retired !== undefined)
+    return retired;
+  return body.replace(MACHINE_COMMENT_PATTERN, "").trim().replace(VERDICT_CALLOUT_PATTERN, "");
+};
+var findingLocation = (finding) => `${finding.path}:${finding.startLine}${finding.endLine === finding.startLine ? "" : `-${finding.endLine}`}`;
+var renderRetiredBody = (input) => {
+  const shortSha = input.currentState.reviewedHeadSha.slice(0, 7);
+  const comments = machineComments(input.priorBody);
+  const original = originalVisibleBody(input.priorBody);
+  const resolved2 = input.resolvedFindings.length === 0 ? [] : [
+    "### Findings resolved by later review",
+    "",
+    ...input.resolvedFindings.map((finding) => `- \`${findingLocation(finding)}\` ~~${finding.title}~~ · resolved at \`${shortSha}\``),
+    ""
+  ];
+  const prefix = [
+    `> ℹ️ Superseded — ${input.resolvedFindings.length} of ${input.priorState.unresolvedFindings.length} findings resolved at \`${shortSha}\`; see [the latest review](${input.currentReviewUrl}).`,
+    "",
+    "<details>",
+    "<summary>Previous review details</summary>",
+    "",
+    ...resolved2,
+    "<!-- effect-agent-pr-review retired-original:start -->"
+  ];
+  const suffix = [
+    "<!-- effect-agent-pr-review retired-original:end -->",
+    "",
+    "</details>",
+    ...comments.length === 0 ? [] : ["", ...comments]
+  ];
+  const render = (visible) => [...prefix, visible, ...suffix].join(`
+`);
+  if (render(original).length <= MAX_REVIEW_BODY_CHARS)
+    return render(original);
+  const truncationNotice = `
+
+_Original review content truncated during retirement._`;
+  const budget2 = Math.max(0, MAX_REVIEW_BODY_CHARS - render(truncationNotice).length);
+  return render(`${original.slice(0, budget2)}${truncationNotice}`);
+};
+var decideReviewRetirement = (input) => {
+  const current = new Set(input.currentState.unresolvedFindings.map(findingIdentity));
+  const adjudicated = new Set((input.currentState.adjudications ?? []).map((entry) => adjudicationIdentity(entry)));
+  const resolvedFindings = input.priorState.unresolvedFindings.filter((finding) => !current.has(findingIdentity(finding)) && !adjudicated.has(findingIdentity(finding)));
+  return {
+    body: renderRetiredBody({ ...input, resolvedFindings }),
+    resolvedFindings,
+    priorFindingCount: input.priorState.unresolvedFindings.length
+  };
+};
+var inlineCommentIdentity = (comment) => {
+  if (comment.startLine === null || comment.endLine === null)
+    return;
+  const firstLine = comment.body.split(`
+`, 1)[0] ?? "";
+  const title = INLINE_FINDING_TITLE_PATTERN.exec(firstLine)?.[1];
+  return title === undefined ? undefined : findingIdentity({
+    path: comment.path,
+    startLine: comment.startLine,
+    endLine: comment.endLine,
+    title
+  });
+};
+var failOpen = (effect2, fallback, message) => effect2.pipe(exports_Effect.catch((error2) => exports_Effect.logWarning(`${message}: ${String(error2)}`).pipe(exports_Effect.as(fallback))));
+var isStrictlyOlderReview = (review, input) => {
+  if (review.submittedAt === null)
+    return false;
+  const submittedAt = exports_DateTime.toEpochMillis(review.submittedAt);
+  const currentSubmittedAt = exports_DateTime.toEpochMillis(input.currentSubmittedAt);
+  return submittedAt < currentSubmittedAt || submittedAt === currentSubmittedAt && review.reviewId < input.currentReviewId;
+};
+var retireStaleReviews = exports_Effect.fn("retireStaleReviews")(function* (input) {
+  const host = yield* ReviewRetirementHost;
+  const authenticator = yield* ReviewStateAuthenticator;
+  if (authenticator.status !== "available") {
+    yield* exports_Effect.logWarning("Skipping stale-review retirement because authenticated review state is unavailable.");
+    return ReviewRetirementReport.make({
+      reviewsRetired: 0,
+      findingsResolved: 0,
+      commentsMinimized: 0,
+      failures: 0
+    });
+  }
+  let failures = 0;
+  let reviewsRetired = 0;
+  let findingsResolved = 0;
+  let commentsMinimized = 0;
+  const reviews = yield* failOpen(host.listReviews, undefined, "Could not list prior reviews");
+  if (reviews === undefined) {
+    return ReviewRetirementReport.make({
+      reviewsRetired,
+      findingsResolved,
+      commentsMinimized,
+      failures: 1
+    });
+  }
+  for (const review of reviews) {
+    if (review.authorNodeId !== input.currentAuthorNodeId || !isStrictlyOlderReview(review, input) || !hasReviewMetadataMarker(review.body)) {
+      continue;
+    }
+    const priorState = yield* failOpen(authenticator.extract(review.body), exports_Option.none(), `Could not authenticate prior review ${review.reviewId}`);
+    if (exports_Option.isNone(priorState))
+      continue;
+    const decision = decideReviewRetirement({
+      priorBody: review.body,
+      priorState: priorState.value,
+      currentState: input.currentState,
+      currentReviewUrl: input.currentReviewUrl
+    });
+    const updated = yield* failOpen(host.updateBody(review.reviewId, decision.body).pipe(exports_Effect.as(true)), false, `Could not retire prior review ${review.reviewId}`);
+    if (updated) {
+      reviewsRetired += 1;
+      findingsResolved += decision.resolvedFindings.length;
+    } else {
+      failures += 1;
+    }
+    if (decision.resolvedFindings.length === 0)
+      continue;
+    const comments = yield* failOpen(host.listComments(review.reviewId), undefined, `Could not list inline comments for prior review ${review.reviewId}`);
+    if (comments === undefined) {
+      failures += 1;
+      continue;
+    }
+    const resolved2 = new Set(decision.resolvedFindings.map(findingIdentity));
+    for (const comment of comments) {
+      const identity3 = inlineCommentIdentity(comment);
+      if (identity3 === undefined || !resolved2.has(identity3))
+        continue;
+      const minimized = yield* failOpen(host.minimizeComment(comment.nodeId).pipe(exports_Effect.as(true)), false, `Could not minimize resolved inline comment ${comment.nodeId}`);
+      if (minimized)
+        commentsMinimized += 1;
+      else
+        failures += 1;
+    }
+  }
+  return ReviewRetirementReport.make({
+    reviewsRetired,
+    findingsResolved,
+    commentsMinimized,
+    failures
+  });
+});
+
+// packages/pr-review/src/internal/adjudication.ts
+var PositiveLine2 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+
+class AdjudicationComment extends exports_Schema.Class("@effect-agent/pr-review/AdjudicationComment")({
+  body: exports_Schema.String.check(exports_Schema.isMaxLength(65536)),
+  authorAssociation: exports_Schema.String.check(exports_Schema.isMaxLength(40)),
+  authorLogin: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(100)),
+  createdAt: exports_Schema.NullOr(exports_Schema.DateTimeUtc)
+}) {
+}
+
+class AdjudicableThread extends exports_Schema.Class("@effect-agent/pr-review/AdjudicableThread")({
+  path: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(500)),
+  startLine: exports_Schema.NullOr(PositiveLine2),
+  endLine: exports_Schema.NullOr(PositiveLine2),
+  rootBody: exports_Schema.String.check(exports_Schema.isMaxLength(65536)),
+  replies: exports_Schema.Array(AdjudicationComment).check(exports_Schema.isMaxLength(100))
+}) {
+}
+
+class ReviewAdjudicationFailure extends exports_Schema.TaggedError()("ReviewAdjudicationFailure", {
+  operation: exports_Schema.String,
+  reason: exports_Schema.String
+}) {
+  get message() {
+    return `Review adjudication operation '${this.operation}' failed: ${this.reason}`;
+  }
+}
+
+class ReviewAdjudicationHost extends exports_Context.Service()("@effect-agent/pr-review/ReviewAdjudicationHost") {
+}
+var AUTHORIZED_ADJUDICATION_ASSOCIATIONS = new Set([
+  "OWNER",
+  "MEMBER",
+  "COLLABORATOR"
+]);
+var AdjudicationDispositionSchema = exports_Schema.Literals(["accepted-risk", "refuted", "obsolete"]);
+var THREAD_COMMAND_PATTERN = /^\/adjudicate[ \t]+([a-z-]+)[ \t]*(?::[ \t]*(.*\S))?[ \t]*$/;
+var ISSUE_COMMAND_PATTERN = /^\/adjudicate[ \t]+([a-z-]+)[ \t]+"([^"\n]+)"[ \t]*(?::[ \t]*(.*\S))?[ \t]*$/;
+var firstLine = (body) => (body.split(`
+`, 1)[0] ?? "").trim();
+var boundedReason = (raw2) => {
+  if (raw2 === undefined)
+    return;
+  const trimmed = raw2.trim().slice(0, 300);
+  return trimmed.length === 0 ? undefined : trimmed;
+};
+var parseThreadAdjudication = (body) => {
+  const line = firstLine(body);
+  if (!line.startsWith("/adjudicate"))
+    return;
+  const match9 = THREAD_COMMAND_PATTERN.exec(line);
+  const disposition = match9?.[1];
+  if (disposition === undefined || !exports_Schema.is(AdjudicationDispositionSchema)(disposition)) {
+    return "malformed";
+  }
+  return { disposition, reason: boundedReason(match9?.[2]) };
+};
+var parseIssueAdjudication = (body) => {
+  const line = firstLine(body);
+  if (!line.startsWith("/adjudicate"))
+    return;
+  const match9 = ISSUE_COMMAND_PATTERN.exec(line);
+  const disposition = match9?.[1];
+  const title = match9?.[2];
+  if (disposition === undefined || !exports_Schema.is(AdjudicationDispositionSchema)(disposition) || title === undefined || title.length > 120) {
+    return "malformed";
+  }
+  return { disposition, title, reason: boundedReason(match9?.[3]) };
+};
+var threadFindingTarget = (thread) => {
+  if (thread.startLine === null || thread.endLine === null)
+    return;
+  const title = INLINE_FINDING_TITLE_PATTERN.exec(firstLine(thread.rootBody))?.[1];
+  if (title === undefined || title.length > 120)
+    return;
+  return {
+    path: thread.path,
+    startLine: thread.startLine,
+    endLine: thread.endLine,
+    title
+  };
+};
+var deriveAdjudications = (input) => {
+  const candidates = [];
+  const ignored = [];
+  let sequence = 0;
+  const admit = (comment, command, target) => {
+    candidates.push({
+      adjudication: StoredAdjudication.make({
+        ...target.path === undefined ? {} : { path: target.path },
+        ...target.startLine === undefined ? {} : { startLine: target.startLine },
+        ...target.endLine === undefined ? {} : { endLine: target.endLine },
+        title: target.title,
+        disposition: command.disposition,
+        ...command.reason === undefined ? {} : { reason: command.reason },
+        actor: comment.authorLogin
+      }),
+      epochMillis: comment.createdAt === null ? -1 : exports_DateTime.toEpochMillis(comment.createdAt),
+      sequence
+    });
+  };
+  const authorized = (comment, surface) => {
+    if (AUTHORIZED_ADJUDICATION_ASSOCIATIONS.has(comment.authorAssociation))
+      return true;
+    ignored.push(`${surface}: unauthorized /adjudicate from @${comment.authorLogin} (${comment.authorAssociation})`);
+    return false;
+  };
+  for (const thread of input.threads) {
+    const target = threadFindingTarget(thread);
+    for (const reply of thread.replies) {
+      sequence += 1;
+      const command = parseThreadAdjudication(reply.body);
+      if (command === undefined)
+        continue;
+      const surface = `inline thread ${thread.path}`;
+      if (command === "malformed") {
+        ignored.push(`${surface}: malformed /adjudicate command from @${reply.authorLogin}`);
+        continue;
+      }
+      if (!authorized(reply, surface))
+        continue;
+      if (target === undefined) {
+        ignored.push(`${surface}: thread root names no parsable finding title`);
+        continue;
+      }
+      admit(reply, command, target);
+    }
+  }
+  for (const comment of input.issueComments) {
+    sequence += 1;
+    const command = parseIssueAdjudication(comment.body);
+    if (command === undefined)
+      continue;
+    const surface = "pull-request conversation";
+    if (command === "malformed") {
+      ignored.push(`${surface}: malformed /adjudicate command from @${comment.authorLogin}`);
+      continue;
+    }
+    if (!authorized(comment, surface))
+      continue;
+    if (command.title === undefined) {
+      ignored.push(`${surface}: /adjudicate without a quoted target title`);
+      continue;
+    }
+    admit(comment, command, { title: command.title });
+  }
+  const byIdentity = new Map;
+  const ordered = [...candidates].sort((left, right) => left.epochMillis - right.epochMillis || left.sequence - right.sequence);
+  for (const candidate of ordered) {
+    const identity3 = adjudicationIdentity(candidate.adjudication);
+    byIdentity.delete(identity3);
+    byIdentity.set(identity3, candidate);
+  }
+  const winners = [...byIdentity.values()];
+  const droppedOldest = Math.max(0, winners.length - MAX_STORED_ADJUDICATIONS);
+  return {
+    adjudications: winners.slice(droppedOldest).map((candidate) => candidate.adjudication),
+    ignored,
+    droppedOldest
+  };
+};
+var mergeAdjudications = (prior, fresh2) => {
+  const byIdentity = new Map;
+  for (const adjudication of [...prior, ...fresh2]) {
+    const identity3 = adjudicationIdentity(adjudication);
+    byIdentity.delete(identity3);
+    byIdentity.set(identity3, adjudication);
+  }
+  const merged = [...byIdentity.values()];
+  return merged.slice(Math.max(0, merged.length - MAX_STORED_ADJUDICATIONS));
+};
+var collectReviewAdjudications = exports_Effect.fn("collectReviewAdjudications")(function* (prior) {
+  const host = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewAdjudicationHost));
+  if (host === undefined)
+    return prior.slice(0, MAX_STORED_ADJUDICATIONS);
+  const threads = yield* host.listFindingThreads.pipe(exports_Effect.catch((error2) => exports_Effect.logWarning(`Could not list finding threads for adjudication: ${error2.reason}`).pipe(exports_Effect.as(undefined))));
+  const issueComments = yield* host.listIssueComments.pipe(exports_Effect.catch((error2) => exports_Effect.logWarning(`Could not list issue comments for adjudication: ${error2.reason}`).pipe(exports_Effect.as(undefined))));
+  const derived = deriveAdjudications({
+    threads: threads ?? [],
+    issueComments: issueComments ?? []
+  });
+  for (const note of derived.ignored) {
+    yield* exports_Effect.logDebug(`Ignored adjudication command — ${note}`);
+  }
+  if (derived.droppedOldest > 0) {
+    yield* exports_Effect.logWarning(`Dropped ${derived.droppedOldest} oldest adjudication(s) over the ${MAX_STORED_ADJUDICATIONS}-entry bound.`);
+  }
+  return mergeAdjudications(prior, derived.adjudications);
+});
+var lineRange = (startLine, endLine) => `${startLine}${endLine === startLine ? "" : `-${endLine}`}`;
+var renderAdjudicationContextLine = (adjudication) => {
+  const location2 = adjudication.path !== undefined && adjudication.startLine !== undefined && adjudication.endLine !== undefined ? `${adjudication.path}:${lineRange(adjudication.startLine, adjudication.endLine)}` : "(unanchored)";
+  const reason = adjudication.reason === undefined ? "" : `: ${adjudication.reason}`;
+  return `${location2} "${adjudication.title}" — ${adjudication.disposition} by @${adjudication.actor}${reason}`;
+};
+var renderPriorFindingContextLine = (finding) => `${finding.path}:${lineRange(finding.startLine, finding.endLine)} [${finding.severity}] "${finding.title}" — ${finding.body.slice(0, 400)}`;
+var buildPriorReviewContext = (adjudications, priorFindingsOnScope) => ({
+  adjudicated: adjudications.map((adjudication) => ({
+    path: adjudication.path,
+    line: renderAdjudicationContextLine(adjudication)
+  })),
+  priorFindings: priorFindingsOnScope.map((finding) => ({
+    path: finding.path,
+    line: renderPriorFindingContextLine(finding)
+  }))
+});
+
+// packages/pr-review/src/internal/effort.ts
+var EFFORT_ALIASES = {
+  low: 0,
+  medium: 0.25,
+  high: 0.5,
+  xhigh: 0.75,
+  max: 1
+};
+var aliasPosition = EFFORT_ALIASES;
+
+class InvalidEffortInput extends exports_Schema.TaggedError()("InvalidEffortInput", {
+  input: exports_Schema.String
+}) {
+  get message() {
+    return `Invalid effort '${this.input}': expected one of ` + `${Object.keys(EFFORT_ALIASES).join(", ")} or a number between 0 and 1.`;
+  }
+}
+var isEffortPosition = (value4) => Number.isFinite(value4) && value4 >= 0 && value4 <= 1;
+var parseEffortPosition = (raw2) => {
+  const normalized = raw2.trim().toLowerCase();
+  const named = aliasPosition[normalized];
+  if (named !== undefined)
+    return named;
+  if (normalized === "")
+    return;
+  const numeric = Number(normalized);
+  return isEffortPosition(numeric) ? numeric : undefined;
+};
+var resolveEffortRung = (position, rungs) => {
+  const clamped = Math.min(1, Math.max(0, position));
+  let selected = rungs[0];
+  for (const rung of rungs) {
+    if (EFFORT_ALIASES[rung] <= clamped)
+      selected = rung;
+  }
+  return selected;
+};
+
+// packages/pr-review/src/internal/anchors.ts
+var anchorViolation = (finding, files) => {
+  const file2 = files.find((candidate) => candidate.path === finding.path);
+  if (file2 === undefined)
+    return "path is not part of the changeset";
+  if (file2.patch === undefined)
+    return "file has no anchorable textual diff";
+  if (finding.endLine < finding.startLine)
+    return "endLine precedes startLine";
+  if (finding.endLine - finding.startLine + 1 > 100)
+    return "range is implausibly large";
+  const anchors = commentableLines(file2.patch);
+  for (let line = finding.startLine;line <= finding.endLine; line += 1) {
+    if (!anchors.has(line))
+      return `line ${line} is not part of the diff`;
+  }
+  return;
+};
 
 // packages/pr-review/src/internal/coverage.ts
 class ReviewInputCoverage extends exports_Schema.Class("@effect-agent/pr-review/ReviewInputCoverage")({
@@ -42806,6 +43611,7 @@ class DiscoveredConcern extends exports_Schema.Class("@effect-agent/pr-review/Di
 }) {
 }
 var UnitPaths = exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_FILES));
+var UnitContextLines = exports_Schema.Array(exports_Schema.String.check(exports_Schema.isMaxLength(1200))).check(exports_Schema.isMaxLength(20));
 var RiskCategories = exports_Schema.Array(ReviewRiskCategory).check(exports_Schema.isMaxLength(6));
 var Candidates = exports_Schema.Array(ReviewCandidate).check(exports_Schema.isMaxLength(MAX_UNIT_CANDIDATES));
 var EvidenceShardIds2 = exports_Schema.Array(ReviewEvidenceShardId).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_EVIDENCE_SHARDS));
@@ -42830,7 +43636,9 @@ class FileReviewBrief extends exports_Schema.Class("@effect-agent/pr-review/File
   perspective: ReviewWorkPerspective,
   riskCategories: RiskCategories,
   candidates: Candidates,
-  evidence: exports_Schema.Array(FileReviewEvidence).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_EVIDENCE_SHARDS))
+  evidence: exports_Schema.Array(FileReviewEvidence).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_EVIDENCE_SHARDS)),
+  adjudicatedContext: exports_Schema.optionalKey(UnitContextLines),
+  priorFindingContext: exports_Schema.optionalKey(UnitContextLines)
 }) {
 }
 
@@ -42879,9 +43687,19 @@ var makeFileReviewerInstructions = (options3 = {}) => (brief) => {
 `);
   }
   const focus = brief.perspective === "risk-specialist" ? brief.riskCategories.length > 0 ? `This is a fresh specialist discovery pass. Concentrate on these host-classified risks without relying on another pass: ${brief.riskCategories.join(", ")}.` : "This is a fresh specialist discovery pass. The host found no keyword-classified category, so independently scrutinize authentication/authorization, security boundaries, durability, concurrency, credentials, and external side effects rather than treating classification silence as low risk." : "This is the general discovery pass. Review broadly for correctness, security, concurrency, resource, API, and error-handling defects.";
+  const adjudicated = brief.adjudicatedContext ?? [];
+  const priorFindings = brief.priorFindingContext ?? [];
   return [
     ...common,
     focus,
+    ...adjudicated.length === 0 ? [] : [
+      "A maintainer has adjudicated these previously raised items on this unit (disposition, reason). Do not re-raise them unless you have materially new evidence, and if you do, say explicitly what changed since the adjudication:",
+      ...adjudicated.map((line) => `- ${line}`)
+    ],
+    ...priorFindings.length === 0 ? [] : [
+      "A previous review round raised these findings on this unit's paths. For each, either confirm it still holds, state that it is fixed, or withdraw it; do not demand the opposite of that prior guidance without explicitly acknowledging the reversal:",
+      ...priorFindings.map((line) => `- ${line}`)
+    ],
     "The discovery evidence array contains every complete shard in the unit. Review every entry and every shard of a multi-shard path. A later independent verifier, not you, decides which candidates publish.",
     "When a non-anchored concern depends on one or more unit files, list 1-3 exact evidencePaths to bind the claim to scheduled evidence.",
     `Return ONLY JSON with phase "discovery", the exact workId/unitId, up to ${MAX_CHILD_FINDINGS} findings, up to ${MAX_CHILD_CONCERNS} concerns shaped as {concern, evidencePaths}, one factual file summary per path (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars), and an empty assessments array. Empty candidate arrays are valid; do not invent defects.`,
@@ -43025,6 +43843,9 @@ var reviewUnit = (binding, unit, passes, input) => exports_Effect.gen(function* 
   let turns = 0;
   let completedGeneralPasses = 0;
   let completedSpecialistPasses = 0;
+  const unitPaths = new Set(unit.paths);
+  const adjudicatedContext = (input.priorContext?.adjudicated ?? []).filter((entry) => entry.path === undefined || unitPaths.has(entry.path)).map((entry) => entry.line).slice(0, 20);
+  const priorFindingContext = (input.priorContext?.priorFindings ?? []).filter((entry) => unitPaths.has(entry.path)).map((entry) => entry.line).slice(0, 20);
   for (const pass of passes) {
     const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
     const brief = FileReviewBrief.make({
@@ -43036,7 +43857,9 @@ var reviewUnit = (binding, unit, passes, input) => exports_Effect.gen(function* 
       perspective: pass.perspective,
       riskCategories: pass.riskCategories,
       candidates: [],
-      evidence
+      evidence,
+      ...adjudicatedContext.length === 0 ? {} : { adjudicatedContext },
+      ...priorFindingContext.length === 0 ? {} : { priorFindingContext }
     });
     const outcome = yield* runReviewPass(binding, brief, input.budget);
     if (outcome._tag === "failed") {
@@ -43353,571 +44176,6 @@ var ignoringPullRequestSourceLayer = (patterns) => exports_Layer.effect(PullRequ
     })) : source.readFile(path)
   });
 }));
-
-// packages/pr-review/src/internal/review-state.ts
-var ReviewMode = exports_Schema.Literals(["incremental", "final"]);
-var ReviewScopeMode = exports_Schema.Literals(["incremental", "full"]);
-var GitCommitSha = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64), exports_Schema.isPattern(/^[0-9a-f]{40,64}$/));
-var Fingerprint = exports_Schema.String.check(exports_Schema.isPattern(/^[0-9a-f]{64}$/));
-var StoredText = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(800));
-
-class StoredReviewFinding extends exports_Schema.Class("@effect-agent/pr-review/StoredReviewFinding")({
-  path: ChangedPath,
-  startLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  endLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  severity: FindingSeverity,
-  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
-  body: StoredText
-}) {
-}
-
-class StoredReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/StoredReviewConcern")({
-  severity: FindingSeverity,
-  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
-  body: StoredText
-}) {
-}
-var MAX_STORED_UNREVIEWED_PATHS = 100;
-var MAX_STORED_UNREVIEWED_PASSES = 24;
-var UnreviewedStage = exports_Schema.Literals(["discovery", "specialist", "verification"]);
-
-class StoredUnreviewedPass extends exports_Schema.Class("@effect-agent/pr-review/StoredUnreviewedPass")({
-  stage: UnreviewedStage,
-  paths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(12))
-}) {
-}
-
-class ReviewState extends exports_Schema.Class("@effect-agent/pr-review/ReviewState")({
-  version: exports_Schema.Literal(1),
-  repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
-  pullRequestNumber: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
-  baseSha: GitCommitSha,
-  headRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
-  reviewedHeadSha: GitCommitSha,
-  profileFingerprint: Fingerprint,
-  settledScopeFingerprint: Fingerprint,
-  reviewedPathCount: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 0, maximum: 300 })),
-  unresolvedFindings: exports_Schema.Array(StoredReviewFinding).check(exports_Schema.isMaxLength(20)),
-  unresolvedConcerns: exports_Schema.Array(StoredReviewConcern).check(exports_Schema.isMaxLength(10)),
-  unreviewedPaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(MAX_STORED_UNREVIEWED_PATHS)),
-  unreviewedPasses: exports_Schema.Array(StoredUnreviewedPass).check(exports_Schema.isMaxLength(MAX_STORED_UNREVIEWED_PASSES)),
-  settled: exports_Schema.Boolean,
-  lastReviewMode: ReviewScopeMode
-}) {
-}
-var toStoredFinding = (finding) => StoredReviewFinding.make({
-  path: finding.path,
-  startLine: finding.startLine,
-  endLine: finding.endLine,
-  severity: finding.severity,
-  title: finding.title,
-  body: finding.body.slice(0, 800)
-});
-var fromStoredFinding = (finding) => ReviewFinding.make({
-  path: finding.path,
-  startLine: finding.startLine,
-  endLine: finding.endLine,
-  severity: finding.severity,
-  title: finding.title,
-  body: finding.body
-});
-var toStoredConcern = (concern) => StoredReviewConcern.make({
-  severity: concern.severity,
-  title: concern.title,
-  body: concern.body.slice(0, 800)
-});
-var fromStoredConcern = (concern) => ReviewConcern.make({ severity: concern.severity, title: concern.title, body: concern.body });
-var STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
-var STATE_MARKER_SUFFIX = " -->";
-var STATE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
-var STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\x00";
-var MAX_REVIEW_STATE_MARKER_CHARS = 24000;
-var ReviewStateMarker = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS), exports_Schema.isPattern(/^<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/)).pipe(exports_Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
-
-class ReviewStateAuthenticationFailure extends exports_Schema.TaggedError()("ReviewStateAuthenticationFailure", {
-  operation: exports_Schema.Literals(["sign", "verify"]),
-  reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2048))
-}) {
-}
-
-class ReviewStateMarkerTooLarge extends exports_Schema.TaggedError()("ReviewStateMarkerTooLarge", {
-  observedChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  maximumChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0))
-}) {
-}
-
-class ReviewStateAuthenticator extends exports_Context.Service()("@effect-agent/pr-review/ReviewStateAuthenticator") {
-}
-var authenticationFailure = (operation, cause) => ReviewStateAuthenticationFailure.make({
-  operation,
-  reason: String(cause).slice(0, 2048)
-});
-var hmacKey = (secret, operation) => exports_Effect.tryPromise({
-  try: () => globalThis.crypto.subtle.importKey("raw", new TextEncoder().encode(exports_Redacted.value(secret)), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]),
-  catch: (cause) => authenticationFailure(operation, cause)
-});
-var signatureBytes = (signature) => {
-  const pairs = signature.match(/../g) ?? [];
-  const buffer3 = new ArrayBuffer(pairs.length);
-  const bytes = new Uint8Array(buffer3);
-  for (let index2 = 0;index2 < pairs.length; index2 += 1) {
-    bytes[index2] = Number.parseInt(pairs[index2] ?? "", 16);
-  }
-  return buffer3;
-};
-var webCryptoReviewStateAuthenticatorLayer = (secret) => exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
-  status: "available",
-  unavailableReason: undefined,
-  render: (state) => exports_Effect.gen(function* () {
-    const json2 = yield* exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(ReviewState))(state).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
-    const payload = exports_Encoding.encodeBase64(json2);
-    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
-    const key = yield* hmacKey(secret, "sign");
-    const signature = yield* exports_Effect.tryPromise({
-      try: () => globalThis.crypto.subtle.sign("HMAC", key, message),
-      catch: (cause) => authenticationFailure("sign", cause)
-    });
-    const hex2 = Array.from(new Uint8Array(signature)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-    const marker = `${STATE_MARKER_PREFIX}${payload}.${hex2}${STATE_MARKER_SUFFIX}`;
-    if (marker.length > MAX_REVIEW_STATE_MARKER_CHARS) {
-      return yield* ReviewStateMarkerTooLarge.make({
-        observedChars: marker.length,
-        maximumChars: MAX_REVIEW_STATE_MARKER_CHARS
-      });
-    }
-    return yield* exports_Schema.decodeUnknownEffect(ReviewStateMarker)(marker).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
-  }),
-  extract: (body) => {
-    if (body.length > 60000)
-      return exports_Effect.succeed(exports_Option.none());
-    const match9 = STATE_MARKER_PATTERN.exec(body);
-    const payload = match9?.[1];
-    const signature = match9?.[2];
-    if (payload === undefined || signature === undefined)
-      return exports_Effect.succeed(exports_Option.none());
-    const marker = `${STATE_MARKER_PREFIX}${payload}.${signature}${STATE_MARKER_SUFFIX}`;
-    if (!exports_Schema.is(ReviewStateMarker)(marker))
-      return exports_Effect.succeed(exports_Option.none());
-    const json2 = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(payload));
-    if (json2 === undefined)
-      return exports_Effect.succeed(exports_Option.none());
-    const decoded = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(ReviewState))(json2);
-    if (exports_Option.isNone(decoded))
-      return exports_Effect.succeed(exports_Option.none());
-    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
-    return exports_Effect.gen(function* () {
-      const key = yield* hmacKey(secret, "verify");
-      const valid = yield* exports_Effect.tryPromise({
-        try: () => globalThis.crypto.subtle.verify("HMAC", key, signatureBytes(signature), message),
-        catch: (cause) => authenticationFailure("verify", cause)
-      });
-      return valid ? exports_Option.some(decoded.value) : exports_Option.none();
-    });
-  }
-}));
-var unavailableReviewStateAuthenticatorLayer = (reason) => {
-  const safeReason = reason === "" ? "review-state authentication is unavailable" : reason;
-  return exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
-    status: "unavailable",
-    unavailableReason: safeReason.slice(0, 1000),
-    render: () => exports_Effect.fail(ReviewStateAuthenticationFailure.make({
-      operation: "sign",
-      reason: safeReason.slice(0, 2048)
-    })),
-    extract: () => exports_Effect.succeed(exports_Option.none())
-  }));
-};
-
-class ReviewHeadComparison extends exports_Schema.Class("@effect-agent/pr-review/ReviewHeadComparison")({
-  status: exports_Schema.Literals(["ahead", "behind", "diverged", "identical"]),
-  baseSha: GitCommitSha,
-  headSha: GitCommitSha,
-  mergeBaseSha: GitCommitSha,
-  files: exports_Schema.Array(ChangedFile).check(exports_Schema.isMaxLength(300)),
-  truncated: exports_Schema.Boolean
-}) {
-}
-var fullSelection = (input) => ({
-  mode: "full",
-  reason: input.reason,
-  files: input.files,
-  affectedPaths: input.files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]),
-  retryPaths: [],
-  retryStages: [],
-  totalFiles: input.totalFiles,
-  baselineSha: undefined,
-  priorState: undefined,
-  profileFingerprint: input.profileFingerprint
-});
-var isLineageAncestor = (comparison, priorState, currentHeadSha) => comparison.baseSha === priorState.reviewedHeadSha && comparison.headSha === currentHeadSha && comparison.mergeBaseSha === priorState.reviewedHeadSha && !comparison.truncated && (comparison.status === "ahead" || comparison.status === "identical");
-var validateReviewState = (state, current, profileFingerprint) => {
-  if (state.repository !== current.repository || state.pullRequestNumber !== current.number) {
-    return "stored state belongs to a different pull request";
-  }
-  if (current.baseSha === undefined)
-    return "the current base commit is unavailable";
-  if (state.baseRef !== current.baseRef)
-    return "the pull request base ref changed";
-  if (state.headRef !== current.headRef)
-    return "the pull request head ref changed";
-  if (state.profileFingerprint !== profileFingerprint) {
-    return "the reviewer profile or model configuration changed";
-  }
-  return;
-};
-var filePaths = (file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath];
-var incrementalFromDelta = (input) => {
-  const currentPaths = new Set(input.fullFiles.flatMap(filePaths));
-  const affectedPaths = new Set([
-    ...input.deltaFiles.flatMap(filePaths),
-    ...input.extraAffectedPaths ?? []
-  ]);
-  const selectedByPath = new Map;
-  for (const file2 of input.deltaFiles) {
-    if (currentPaths.has(file2.path) || file2.previousPath !== undefined && currentPaths.has(file2.previousPath)) {
-      selectedByPath.set(file2.path, file2);
-    }
-  }
-  const carriedPaths = input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path));
-  const retryOnly = new Set;
-  const retryStages = new Set;
-  for (const path of carriedPaths) {
-    if (affectedPaths.has(path))
-      continue;
-    retryOnly.add(path);
-    for (const pass of input.priorState.unreviewedPasses) {
-      if (pass.paths.includes(path))
-        retryStages.add(pass.stage);
-    }
-  }
-  if (retryStages.has("verification") && !retryStages.has("discovery") && !retryStages.has("specialist")) {
-    retryStages.add("discovery");
-    retryStages.add("specialist");
-  }
-  if (retryOnly.size > 0 && retryStages.size === 0) {
-    for (const path of retryOnly)
-      affectedPaths.add(path);
-    retryStages.add("discovery");
-    retryStages.add("specialist");
-    retryStages.add("verification");
-  }
-  if (carriedPaths.length > 0 || (input.extraAffectedPaths?.length ?? 0) > 0) {
-    for (const file2 of input.fullFiles) {
-      const needed = affectedPaths.has(file2.path) || file2.previousPath !== undefined && affectedPaths.has(file2.previousPath) || retryOnly.has(file2.path) || file2.previousPath !== undefined && retryOnly.has(file2.previousPath);
-      if (needed)
-        selectedByPath.set(file2.path, file2);
-    }
-  }
-  const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  const leftoverCount = [...retryOnly].filter((path) => !affectedPaths.has(path)).length;
-  const carriedReason = leftoverCount > 0 ? `; retrying ${leftoverCount} unchanged leftover path(s) without rediscovery` : carriedPaths.length > 0 ? `; retrying ${carriedPaths.length} carried unreviewed path(s)` : "";
-  return {
-    mode: "incremental",
-    reason: `${input.reason}${carriedReason}`,
-    files: selectedFiles,
-    affectedPaths: [...affectedPaths].sort(),
-    retryPaths: [...retryOnly].filter((path) => !affectedPaths.has(path)).sort(),
-    retryStages: [...retryStages].sort(),
-    totalFiles: selectedFiles.length,
-    baselineSha: input.priorState.reviewedHeadSha,
-    priorState: input.priorState,
-    profileFingerprint: input.profileFingerprint
-  };
-};
-var selectReviewRange = (input) => {
-  const full = (reason) => fullSelection({
-    reason,
-    files: input.fullFiles,
-    totalFiles: input.current.totalChangedFiles,
-    profileFingerprint: input.profileFingerprint
-  });
-  if (input.requestedMode === "final")
-    return full("explicit final full-diff audit requested");
-  if (input.lookupFailure !== undefined) {
-    return full(`stored review state could not be recovered: ${input.lookupFailure}`);
-  }
-  if (input.priorState === undefined)
-    return full("no compatible stored review state was found");
-  const invalid2 = validateReviewState(input.priorState, input.current, input.profileFingerprint);
-  if (invalid2 !== undefined)
-    return full(invalid2);
-  const comparison = input.comparison;
-  if (comparison !== undefined && isLineageAncestor(comparison, input.priorState, input.current.headSha)) {
-    const extraAffected = [];
-    let baseReason = "";
-    if (input.priorState.baseSha !== input.current.baseSha) {
-      const baseComparison = input.baseComparison;
-      if (baseComparison === undefined) {
-        return full("the pull request base changed and its lineage comparison was unavailable");
-      }
-      if (baseComparison.baseSha !== input.priorState.baseSha || baseComparison.headSha !== input.current.baseSha || baseComparison.mergeBaseSha !== input.priorState.baseSha || baseComparison.status !== "ahead" && baseComparison.status !== "identical" || baseComparison.truncated) {
-        return full("the pull request base changed materially or exceeded the comparison bound");
-      }
-      for (const file2 of baseComparison.files)
-        extraAffected.push(...filePaths(file2));
-      baseReason = `; base advanced from ${input.priorState.baseSha.slice(0, 7)} and overlapping PR paths were included`;
-    }
-    return incrementalFromDelta({
-      current: input.current,
-      fullFiles: input.fullFiles,
-      profileFingerprint: input.profileFingerprint,
-      priorState: input.priorState,
-      deltaFiles: comparison.files,
-      extraAffectedPaths: extraAffected,
-      reason: `changes since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`
-    });
-  }
-  const contentComparison = input.contentComparison;
-  if (contentComparison !== undefined && !contentComparison.truncated) {
-    return incrementalFromDelta({
-      current: input.current,
-      fullFiles: input.fullFiles,
-      profileFingerprint: input.profileFingerprint,
-      priorState: input.priorState,
-      deltaFiles: contentComparison.files,
-      reason: `rewritten history; contents changed since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}`
-    });
-  }
-  if (comparison === undefined)
-    return full("the incremental head comparison was unavailable");
-  if (comparison.truncated)
-    return full("the incremental comparison exceeded GitHub's file bound");
-  return full("the prior reviewed head is not an ancestor of the current head");
-};
-
-class ReviewExecutionContext extends exports_Context.Service()("@effect-agent/pr-review/ReviewExecutionContext") {
-}
-var selectedPullRequestSourceLayer = (selection) => exports_Layer.effect(PullRequestSource)(exports_Effect.gen(function* () {
-  const source = yield* PullRequestSource;
-  const selectedPaths = new Set(selection.files.map((file2) => file2.path));
-  const selectedFiles = source.changedFiles.pipe(exports_Effect.map((fullFiles) => {
-    const fullByPath = new Map(fullFiles.map((file2) => [file2.path, file2]));
-    return selection.files.map((file2) => {
-      if (file2.patch !== undefined)
-        return file2;
-      const full = fullByPath.get(file2.path);
-      return full === undefined ? file2 : ChangedFile.make({
-        ...file2,
-        ...full.reviewBaseContent === undefined ? {} : { reviewBaseContent: full.reviewBaseContent },
-        ...full.reviewHeadContent === undefined ? {} : { reviewHeadContent: full.reviewHeadContent }
-      });
-    });
-  }));
-  return PullRequestSource.of({
-    metadata: source.metadata,
-    changedFiles: selectedFiles,
-    anchorFiles: source.anchorFiles,
-    readFile: (path) => selectedPaths.has(path) ? source.readFile(path) : exports_Effect.fail(ReviewInputViolation.make({
-      input: path,
-      reason: "Path is outside this incremental review range."
-    }))
-  });
-}));
-var buildProfileMission = (metadata, files) => ReviewMission.make({
-  repository: metadata.repository,
-  number: metadata.number,
-  title: metadata.title,
-  body: metadata.body,
-  baseRef: metadata.baseRef,
-  headRef: metadata.headRef,
-  changedFileCount: files.length
-});
-
-// packages/pr-review/src/internal/retirement.ts
-var PositiveLine = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
-
-class RetirableReview extends exports_Schema.Class("@effect-agent/pr-review/RetirableReview")({
-  reviewId: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  body: exports_Schema.String.check(exports_Schema.isMaxLength(60000)),
-  commitSha: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64)),
-  authorNodeId: exports_Schema.NullOr(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200))),
-  submittedAt: exports_Schema.NullOr(exports_Schema.DateTimeUtc)
-}) {
-}
-
-class RetirableReviewComment extends exports_Schema.Class("@effect-agent/pr-review/RetirableReviewComment")({
-  nodeId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
-  path: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(500)),
-  startLine: exports_Schema.NullOr(PositiveLine),
-  endLine: exports_Schema.NullOr(PositiveLine),
-  body: exports_Schema.String.check(exports_Schema.isMaxLength(65536))
-}) {
-}
-
-class ReviewRetirementFailure extends exports_Schema.TaggedError()("ReviewRetirementFailure", {
-  operation: exports_Schema.String,
-  reason: exports_Schema.String
-}) {
-  get message() {
-    return `Review retirement operation '${this.operation}' failed: ${this.reason}`;
-  }
-}
-
-class ReviewRetirementHost extends exports_Context.Service()("@effect-agent/pr-review/ReviewRetirementHost") {
-}
-
-class ReviewRetirementReport extends exports_Schema.Class("@effect-agent/pr-review/ReviewRetirementReport")({
-  reviewsRetired: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  findingsResolved: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  commentsMinimized: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  failures: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
-}) {
-}
-var findingIdentity = (finding) => `${finding.path}\x00${finding.startLine}\x00${finding.endLine}\x00${finding.title}`;
-var REVIEW_METADATA_PATTERN = /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->/g;
-var FINGERPRINT_PATTERN = /<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->/g;
-var STATE_PATTERN = /<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g;
-var RETIRED_ORIGINAL_PATTERN = /<!-- effect-agent-pr-review retired-original:start -->\n([\s\S]*?)\n<!-- effect-agent-pr-review retired-original:end -->/;
-var MACHINE_COMMENT_PATTERN = new RegExp(`${REVIEW_METADATA_PATTERN.source}|${FINGERPRINT_PATTERN.source}|${STATE_PATTERN.source}`, "g");
-var VERDICT_CALLOUT_PATTERN = /^(?:> \[!(?:CAUTION|IMPORTANT)\]\n> [^\n]*(?:\n> [^\n]*)*|> (?:ℹ️|✅)[^\n]*)\n*/;
-var INLINE_FINDING_TITLE_PATTERN = /^\*\*\[(?:🛑 blocking|⚠️ important|💅 nit) · [a-z-]+\] ([^\n]+)\*\*$/;
-var MAX_REVIEW_BODY_CHARS = 60000;
-var hasReviewMetadataMarker = (body) => /<!-- effect-agent-pr-review metadata\n/.test(body);
-var machineComments = (body) => Array.from(body.matchAll(MACHINE_COMMENT_PATTERN), (match9) => match9[0]);
-var originalVisibleBody = (body) => {
-  const retired = RETIRED_ORIGINAL_PATTERN.exec(body)?.[1];
-  if (retired !== undefined)
-    return retired;
-  return body.replace(MACHINE_COMMENT_PATTERN, "").trim().replace(VERDICT_CALLOUT_PATTERN, "");
-};
-var findingLocation = (finding) => `${finding.path}:${finding.startLine}${finding.endLine === finding.startLine ? "" : `-${finding.endLine}`}`;
-var renderRetiredBody = (input) => {
-  const shortSha = input.currentState.reviewedHeadSha.slice(0, 7);
-  const comments = machineComments(input.priorBody);
-  const original = originalVisibleBody(input.priorBody);
-  const resolved2 = input.resolvedFindings.length === 0 ? [] : [
-    "### Findings resolved by later review",
-    "",
-    ...input.resolvedFindings.map((finding) => `- \`${findingLocation(finding)}\` ~~${finding.title}~~ · resolved at \`${shortSha}\``),
-    ""
-  ];
-  const prefix = [
-    `> ℹ️ Superseded — ${input.resolvedFindings.length} of ${input.priorState.unresolvedFindings.length} findings resolved at \`${shortSha}\`; see [the latest review](${input.currentReviewUrl}).`,
-    "",
-    "<details>",
-    "<summary>Previous review details</summary>",
-    "",
-    ...resolved2,
-    "<!-- effect-agent-pr-review retired-original:start -->"
-  ];
-  const suffix = [
-    "<!-- effect-agent-pr-review retired-original:end -->",
-    "",
-    "</details>",
-    ...comments.length === 0 ? [] : ["", ...comments]
-  ];
-  const render = (visible) => [...prefix, visible, ...suffix].join(`
-`);
-  if (render(original).length <= MAX_REVIEW_BODY_CHARS)
-    return render(original);
-  const truncationNotice = `
-
-_Original review content truncated during retirement._`;
-  const budget2 = Math.max(0, MAX_REVIEW_BODY_CHARS - render(truncationNotice).length);
-  return render(`${original.slice(0, budget2)}${truncationNotice}`);
-};
-var decideReviewRetirement = (input) => {
-  const current = new Set(input.currentState.unresolvedFindings.map(findingIdentity));
-  const resolvedFindings = input.priorState.unresolvedFindings.filter((finding) => !current.has(findingIdentity(finding)));
-  return {
-    body: renderRetiredBody({ ...input, resolvedFindings }),
-    resolvedFindings,
-    priorFindingCount: input.priorState.unresolvedFindings.length
-  };
-};
-var inlineCommentIdentity = (comment) => {
-  if (comment.startLine === null || comment.endLine === null)
-    return;
-  const firstLine = comment.body.split(`
-`, 1)[0] ?? "";
-  const title = INLINE_FINDING_TITLE_PATTERN.exec(firstLine)?.[1];
-  return title === undefined ? undefined : findingIdentity({
-    path: comment.path,
-    startLine: comment.startLine,
-    endLine: comment.endLine,
-    title
-  });
-};
-var failOpen = (effect2, fallback, message) => effect2.pipe(exports_Effect.catch((error2) => exports_Effect.logWarning(`${message}: ${String(error2)}`).pipe(exports_Effect.as(fallback))));
-var isStrictlyOlderReview = (review, input) => {
-  if (review.submittedAt === null)
-    return false;
-  const submittedAt = exports_DateTime.toEpochMillis(review.submittedAt);
-  const currentSubmittedAt = exports_DateTime.toEpochMillis(input.currentSubmittedAt);
-  return submittedAt < currentSubmittedAt || submittedAt === currentSubmittedAt && review.reviewId < input.currentReviewId;
-};
-var retireStaleReviews = exports_Effect.fn("retireStaleReviews")(function* (input) {
-  const host = yield* ReviewRetirementHost;
-  const authenticator = yield* ReviewStateAuthenticator;
-  if (authenticator.status !== "available") {
-    yield* exports_Effect.logWarning("Skipping stale-review retirement because authenticated review state is unavailable.");
-    return ReviewRetirementReport.make({
-      reviewsRetired: 0,
-      findingsResolved: 0,
-      commentsMinimized: 0,
-      failures: 0
-    });
-  }
-  let failures = 0;
-  let reviewsRetired = 0;
-  let findingsResolved = 0;
-  let commentsMinimized = 0;
-  const reviews = yield* failOpen(host.listReviews, undefined, "Could not list prior reviews");
-  if (reviews === undefined) {
-    return ReviewRetirementReport.make({
-      reviewsRetired,
-      findingsResolved,
-      commentsMinimized,
-      failures: 1
-    });
-  }
-  for (const review of reviews) {
-    if (review.authorNodeId !== input.currentAuthorNodeId || !isStrictlyOlderReview(review, input) || !hasReviewMetadataMarker(review.body)) {
-      continue;
-    }
-    const priorState = yield* failOpen(authenticator.extract(review.body), exports_Option.none(), `Could not authenticate prior review ${review.reviewId}`);
-    if (exports_Option.isNone(priorState))
-      continue;
-    const decision = decideReviewRetirement({
-      priorBody: review.body,
-      priorState: priorState.value,
-      currentState: input.currentState,
-      currentReviewUrl: input.currentReviewUrl
-    });
-    const updated = yield* failOpen(host.updateBody(review.reviewId, decision.body).pipe(exports_Effect.as(true)), false, `Could not retire prior review ${review.reviewId}`);
-    if (updated) {
-      reviewsRetired += 1;
-      findingsResolved += decision.resolvedFindings.length;
-    } else {
-      failures += 1;
-    }
-    if (decision.resolvedFindings.length === 0)
-      continue;
-    const comments = yield* failOpen(host.listComments(review.reviewId), undefined, `Could not list inline comments for prior review ${review.reviewId}`);
-    if (comments === undefined) {
-      failures += 1;
-      continue;
-    }
-    const resolved2 = new Set(decision.resolvedFindings.map(findingIdentity));
-    for (const comment of comments) {
-      const identity3 = inlineCommentIdentity(comment);
-      if (identity3 === undefined || !resolved2.has(identity3))
-        continue;
-      const minimized = yield* failOpen(host.minimizeComment(comment.nodeId).pipe(exports_Effect.as(true)), false, `Could not minimize resolved inline comment ${comment.nodeId}`);
-      if (minimized)
-        commentsMinimized += 1;
-      else
-        failures += 1;
-    }
-  }
-  return ReviewRetirementReport.make({
-    reviewsRetired,
-    findingsResolved,
-    commentsMinimized,
-    failures
-  });
-});
 
 // packages/pr-review/src/internal/github.ts
 var defaultGraphqlUrl = (apiUrl) => apiUrl === "https://api.github.com" ? "https://api.github.com/graphql" : apiUrl.replace(/\/api\/v3$/, "/api/graphql");
@@ -44248,6 +44506,121 @@ var gitHubReviewRetirementHostLayer = exports_Layer.effect(ReviewRetirementHost)
     })
   });
 }));
+var MAX_ADJUDICATION_PAGES = 5;
+var GitHubThreadCommentWire = exports_Schema.Struct({
+  id: exports_Schema.Int,
+  in_reply_to_id: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int)),
+  path: exports_Schema.String,
+  body: exports_Schema.String,
+  author_association: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.String)),
+  user: exports_Schema.NullOr(exports_Schema.Struct({ login: exports_Schema.String })),
+  created_at: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.String)),
+  line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int)),
+  original_line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int)),
+  start_line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int)),
+  original_start_line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int))
+});
+var GitHubThreadCommentsPageWire = exports_Schema.Array(GitHubThreadCommentWire);
+var GitHubIssueCommentWire = exports_Schema.Struct({
+  body: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.String)),
+  author_association: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.String)),
+  user: exports_Schema.NullOr(exports_Schema.Struct({ login: exports_Schema.String })),
+  created_at: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.String))
+});
+var GitHubIssueCommentsPageWire = exports_Schema.Array(GitHubIssueCommentWire);
+var toAdjudicationComment = (wire) => {
+  const login = wire.user?.login;
+  if (login === undefined || login.length === 0)
+    return;
+  return AdjudicationComment.make({
+    body: (wire.body ?? "").slice(0, 65536),
+    authorAssociation: (wire.author_association ?? "NONE").slice(0, 40),
+    authorLogin: login.slice(0, 100),
+    createdAt: parseGitHubSubmittedAt(wire.created_at ?? null)
+  });
+};
+var gitHubReviewAdjudicationHostLayer = exports_Layer.effect(ReviewAdjudicationHost)(exports_Effect.gen(function* () {
+  const target = yield* GitHubReviewTarget;
+  const client = yield* exports_HttpClient.HttpClient;
+  const reviewAuthorLogin = (target.reviewAuthorLogin ?? DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN).toLowerCase();
+  const asAdjudicationFailure = (operation) => (error2) => ReviewAdjudicationFailure.make({
+    operation,
+    reason: `${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
+  });
+  const decodeAdjudication = (schema3, operation) => {
+    const decode2 = exports_Schema.decodeUnknownEffect(schema3);
+    return (response) => response.json.pipe(exports_Effect.mapError(asAdjudicationFailure(operation)), exports_Effect.flatMap((body) => decode2(body).pipe(exports_Effect.mapError(asAdjudicationFailure(operation)))));
+  };
+  const listPaged = (input) => exports_Effect.gen(function* () {
+    const values3 = [];
+    const perPage = 100;
+    for (let page = 1;page <= MAX_ADJUDICATION_PAGES; page += 1) {
+      const response = yield* exports_HttpClient.execute(withCommonHeaders(exports_HttpClientRequest.get(input.url).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.setUrlParams({
+        per_page: String(perPage),
+        page: String(page),
+        sort: "created",
+        direction: "asc"
+      })), target.token)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asAdjudicationFailure(input.operation)));
+      const pageValues = yield* input.decode(response);
+      values3.push(...pageValues);
+      if (pageValues.length < perPage)
+        return values3;
+    }
+    return yield* ReviewAdjudicationFailure.make({
+      operation: input.operation,
+      reason: `history exceeds the bounded ${MAX_ADJUDICATION_PAGES * 100}-item lookup`
+    });
+  }).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
+  const listFindingThreads = exports_Effect.gen(function* () {
+    const wires = yield* listPaged({
+      operation: "listReviewCommentsForAdjudication",
+      url: `${target.apiUrl}/repos/${target.repository}/pulls/${target.number}/comments`,
+      decode: decodeAdjudication(GitHubThreadCommentsPageWire, "listReviewCommentsForAdjudication")
+    });
+    const positiveLine = (value4) => value4 !== undefined && value4 !== null && value4 > 0 ? value4 : null;
+    const threads = new Map;
+    for (const wire of wires) {
+      if (wire.in_reply_to_id !== undefined && wire.in_reply_to_id !== null)
+        continue;
+      if (wire.user?.login.toLowerCase() !== reviewAuthorLogin)
+        continue;
+      threads.set(wire.id, { root: wire, replies: [] });
+    }
+    for (const wire of wires) {
+      if (wire.in_reply_to_id === undefined || wire.in_reply_to_id === null)
+        continue;
+      const thread = threads.get(wire.in_reply_to_id);
+      if (thread === undefined)
+        continue;
+      const reply = toAdjudicationComment(wire);
+      if (reply !== undefined && thread.replies.length < 100)
+        thread.replies.push(reply);
+    }
+    return [...threads.values()].filter((thread) => thread.root.path.length > 0 && thread.root.path.length <= 500).map(({ root, replies }) => {
+      const endLine = positiveLine(root.line ?? root.original_line);
+      const startLine = positiveLine(root.start_line ?? root.original_start_line) ?? endLine;
+      return AdjudicableThread.make({
+        path: root.path,
+        startLine,
+        endLine,
+        rootBody: root.body.slice(0, 65536),
+        replies
+      });
+    });
+  });
+  const listIssueComments = exports_Effect.gen(function* () {
+    const wires = yield* listPaged({
+      operation: "listIssueCommentsForAdjudication",
+      url: `${target.apiUrl}/repos/${target.repository}/issues/${target.number}/comments`,
+      decode: decodeAdjudication(GitHubIssueCommentsPageWire, "listIssueCommentsForAdjudication")
+    });
+    return wires.flatMap((wire) => {
+      const comment = toAdjudicationComment(wire);
+      return comment === undefined ? [] : [comment];
+    });
+  });
+  return ReviewAdjudicationHost.of({ listFindingThreads, listIssueComments });
+}));
 
 class PriorReviewLookupFailure extends exports_Schema.TaggedError()("PriorReviewLookupFailure", {
   reason: exports_Schema.String
@@ -44483,6 +44856,11 @@ var renderVerdictCallout = (review, options3) => {
 var renderConcern = (concern) => [`### ${severityEmoji[concern.severity]} ${concern.title}`, "", concern.body].join(`
 `);
 var renderCarriedFinding = (finding) => `- \`${finding.path}:${finding.startLine}${finding.endLine === finding.startLine ? "" : `-${finding.endLine}`}\` **[${findingLabel(finding)}] ${finding.title}** — ${finding.body}`;
+var renderAdjudicated = (adjudication) => {
+  const location2 = adjudication.path !== undefined && adjudication.startLine !== undefined && adjudication.endLine !== undefined ? `\`${adjudication.path}:${adjudication.startLine}${adjudication.endLine === adjudication.startLine ? "" : `-${adjudication.endLine}`}\` ` : "";
+  const reason = adjudication.reason === undefined ? "" : `: ${adjudication.reason}`;
+  return `- ${location2}${adjudication.title} — ${adjudication.disposition} by @${adjudication.actor}${reason}`;
+};
 var planWalkthrough = (entries3, files) => {
   if (entries3 === undefined || entries3.length === 0)
     return [];
@@ -44576,7 +44954,7 @@ var planPublication = (review, files, options3) => {
     }))
   ];
   const consolidatedPromptWanted = promptEntries.length >= 2 || demoted.length > 0;
-  const renderHead = (concernsKept2, demotedKept2, omitted2, walkthroughKept2, promptsKept2) => {
+  const renderHead = (concernsKept2, demotedKept2, omitted2, walkthroughKept2, promptsKept2, adjudicationsKept2) => {
     const carriedFindings = options3.carriedFindings ?? [];
     const carriedConcerns = options3.carriedConcerns ?? [];
     const parts2 = [
@@ -44621,6 +44999,18 @@ var planPublication = (review, files, options3) => {
     for (const concern of sortedConcerns.slice(0, concernsKept2)) {
       parts2.push("", renderConcern(concern));
     }
+    const adjudications = options3.adjudications ?? [];
+    if (adjudications.length > 0) {
+      parts2.push("", adjudicationsKept2 ? [
+        "<details>",
+        `<summary>Adjudicated (${adjudications.length})</summary>`,
+        "",
+        ...adjudications.map(renderAdjudicated),
+        "",
+        "</details>"
+      ].join(`
+`) : "⚠️ Adjudicated section omitted — the body exceeded GitHub's review size cap.");
+    }
     if (files.length < options3.totalChangedFiles) {
       parts2.push("", `⚠️ Input exposed ${files.length} of ${options3.totalChangedFiles} changed files — the changeset exceeded the reviewer's file bound.`);
     }
@@ -44655,17 +45045,21 @@ var planPublication = (review, files, options3) => {
   ].join(`
 `);
   const headBudget = 60000 - tail.length - 1;
+  const adjudicationCount = options3.adjudications?.length ?? 0;
   let concernsKept = sortedConcerns.length;
   let demotedKept = sortedDemoted.length;
   let omitted = 0;
   let walkthroughKept = true;
   let promptsKept = true;
-  let head5 = renderHead(concernsKept, demotedKept, omitted, walkthroughKept, promptsKept);
-  while (head5.length > headBudget && (promptsKept && consolidatedPromptWanted || walkthroughKept && walkthrough.length > 0 || demotedKept > 0 || concernsKept > 0)) {
+  let adjudicationsKept = true;
+  let head5 = renderHead(concernsKept, demotedKept, omitted, walkthroughKept, promptsKept, adjudicationsKept);
+  while (head5.length > headBudget && (promptsKept && consolidatedPromptWanted || walkthroughKept && walkthrough.length > 0 || adjudicationsKept && adjudicationCount > 0 || demotedKept > 0 || concernsKept > 0)) {
     if (promptsKept && consolidatedPromptWanted) {
       promptsKept = false;
     } else if (walkthroughKept && walkthrough.length > 0) {
       walkthroughKept = false;
+    } else if (adjudicationsKept && adjudicationCount > 0) {
+      adjudicationsKept = false;
     } else if (demotedKept > 0) {
       demotedKept -= 1;
       omitted += 1;
@@ -44673,7 +45067,7 @@ var planPublication = (review, files, options3) => {
       concernsKept -= 1;
       omitted += 1;
     }
-    head5 = renderHead(concernsKept, demotedKept, omitted, walkthroughKept, promptsKept);
+    head5 = renderHead(concernsKept, demotedKept, omitted, walkthroughKept, promptsKept, adjudicationsKept);
   }
   const body = `${head5.slice(0, headBudget)}
 ${tail}`;
@@ -44715,17 +45109,20 @@ class ReviewRunOutcome extends exports_Schema.Class("@effect-agent/pr-review/Rev
   usage: exports_Schema.optionalKey(UsageTotals),
   reviewMode: exports_Schema.optionalKey(exports_Schema.Literals(["incremental", "full"])),
   reviewReason: exports_Schema.optionalKey(exports_Schema.String.check(exports_Schema.isMaxLength(1000))),
-  state: exports_Schema.optionalKey(ReviewState)
+  state: exports_Schema.optionalKey(ReviewState),
+  adjudications: exports_Schema.optionalKey(exports_Schema.Array(StoredAdjudication).check(exports_Schema.isMaxLength(20)))
 }) {
 }
-var buildReviewMission = (metadata, files) => ReviewMission.make({
+var buildReviewMission = (metadata, files, context4) => ReviewMission.make({
   repository: metadata.repository,
   number: metadata.number,
   title: metadata.title,
   body: metadata.body,
   baseRef: metadata.baseRef,
   headRef: metadata.headRef,
-  changedFileCount: files.length
+  changedFileCount: files.length,
+  ...context4?.adjudicated !== undefined && context4.adjudicated.length > 0 ? { adjudicatedContext: context4.adjudicated.slice(0, 20) } : {},
+  ...context4?.priorFindings !== undefined && context4.priorFindings.length > 0 ? { priorFindingContext: context4.priorFindings.slice(0, 20) } : {}
 });
 var enforceFindingsBound = (review, maxFindings) => review.findings.length <= maxFindings ? review : CodeReview.make({
   summary: review.summary,
@@ -44735,17 +45132,36 @@ var enforceFindingsBound = (review, maxFindings) => review.findings.length <= ma
   ...review.walkthrough !== undefined ? { walkthrough: review.walkthrough } : {}
 });
 var findingKey = (finding) => `${finding.path}\x00${finding.startLine}\x00${finding.endLine}\x00${finding.severity}\x00${finding.title}`;
+var resolveReviewContinuityContext = exports_Effect.fn("resolveReviewContinuityContext")(function* () {
+  const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
+  const priorState = executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
+  const adjudications = yield* collectReviewAdjudications(priorState?.adjudications ?? []);
+  const affectedPaths = new Set(executionContext?.affectedPaths ?? []);
+  const priorFindingsOnScope = priorState?.unresolvedFindings.filter((finding) => affectedPaths.has(finding.path)) ?? [];
+  return { adjudications, priorFindingsOnScope };
+});
 var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function* () {
   const { metadata, files, anchorFiles, fingerprint, usage } = context4;
   const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
-  const review = enforceFindingsBound(core2.review, clampMaxFindings(options3.maxFindings));
+  const adjudications = context4.adjudications ?? [];
+  const adjudicatedIdentities = new Set(adjudications.map(adjudicationIdentity));
+  const isAdjudicatedFinding = (finding) => adjudicatedIdentities.has(findingIdentity(finding));
+  const isAdjudicatedConcern = (concern) => adjudicatedIdentities.has(concern.title);
+  const bounded3 = enforceFindingsBound(core2.review, clampMaxFindings(options3.maxFindings));
+  const review = adjudicatedIdentities.size === 0 ? bounded3 : CodeReview.make({
+    summary: bounded3.summary,
+    verdict: bounded3.verdict,
+    findings: bounded3.findings.filter((finding) => !isAdjudicatedFinding(finding)),
+    ...bounded3.concerns === undefined ? {} : { concerns: bounded3.concerns.filter((concern) => !isAdjudicatedConcern(concern)) },
+    ...bounded3.walkthrough === undefined ? {} : { walkthrough: bounded3.walkthrough }
+  });
   const { inputCoverage, assurance } = core2;
   const unreviewedPaths = [...new Set(core2.unreviewedPaths)].sort();
   const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
   const affectedPaths = new Set(executionContext?.affectedPaths ?? files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]));
   const priorState = executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
   const carriedCandidates = priorState?.unresolvedFindings.filter((finding) => !affectedPaths.has(finding.path)).map(fromStoredFinding) ?? [];
-  const activeFindings = rankAndDedupeFindings([...carriedCandidates, ...review.findings]).slice(0, clampMaxFindings(options3.maxFindings));
+  const activeFindings = rankAndDedupeFindings([...carriedCandidates, ...review.findings]).slice(0, clampMaxFindings(options3.maxFindings)).filter((finding) => !isAdjudicatedFinding(finding));
   const activeFindingKeys = new Set(activeFindings.map(findingKey));
   const currentFindingKeys = new Set(review.findings.map(findingKey));
   const carriedFindings = carriedCandidates.filter((finding) => activeFindingKeys.has(findingKey(finding)) && !currentFindingKeys.has(findingKey(finding)));
@@ -44753,7 +45169,7 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
   const activeConcerns = rankAndDedupeConcerns([
     ...carriedConcernCandidates,
     ...review.concerns ?? []
-  ]);
+  ]).filter((concern) => !isAdjudicatedConcern(concern));
   const currentConcernKeys = new Set((review.concerns ?? []).map((concern) => `${concern.title}\x00${concern.body}`));
   const activeConcernKeys = new Set(activeConcerns.map((concern) => `${concern.title}\x00${concern.body}`));
   const carriedConcerns = carriedConcernCandidates.filter((concern) => {
@@ -44779,7 +45195,8 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
     unreviewedPaths,
     unreviewedPasses: (core2.unreviewedPasses ?? []).slice(0, MAX_STORED_UNREVIEWED_PASSES),
     settled,
-    lastReviewMode: executionContext.mode
+    lastReviewMode: executionContext.mode,
+    ...adjudications.length === 0 ? {} : { adjudications }
   }) : undefined;
   const continuity = stateCandidate === undefined || executionContext?.stateAuthenticator === undefined ? {
     state: undefined,
@@ -44814,7 +45231,8 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
     reviewFilesVisible: files.length,
     reviewTotalFiles,
     stateMarker: continuity.marker,
-    stateNotice: continuity.notice
+    stateNotice: continuity.notice,
+    ...adjudications.length === 0 ? {} : { adjudications }
   });
   const shared = {
     review,
@@ -44827,7 +45245,8 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
     turns: core2.turns,
     ...usage === undefined ? {} : { usage },
     ...executionContext === undefined ? {} : { reviewMode: executionContext.mode, reviewReason: executionContext.reason },
-    ...continuity.state === undefined ? {} : { state: continuity.state }
+    ...continuity.state === undefined ? {} : { state: continuity.state },
+    ...adjudications.length === 0 ? {} : { adjudications }
   };
   if (!options3.post)
     return ReviewRunOutcome.make(shared);
@@ -44841,7 +45260,11 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   const files = yield* source.changedFiles;
   const anchorFiles = yield* source.anchorFiles;
   const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
-  const mission = buildReviewMission(metadata, files);
+  const continuity = yield* resolveReviewContinuityContext();
+  const mission = buildReviewMission(metadata, files, {
+    adjudicated: continuity.adjudications.map(renderAdjudicationContextLine),
+    priorFindings: continuity.priorFindingsOnScope.map(renderPriorFindingContextLine)
+  });
   const fullMission = buildReviewMission(metadata, anchorFiles);
   const fingerprint = options3.signature === undefined ? undefined : yield* computeChangesetFingerprint(anchorFiles, options3.signature(fullMission));
   const budget2 = yield* makeUsageBudget(options3.limits ?? reviewBudgetLimits);
@@ -44866,7 +45289,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     assurance: assessment.assurance,
     unreviewedPaths: assessment.unreviewedPaths,
     turns: result4.turns
-  }, { metadata, files, anchorFiles, fingerprint, usage }, options3);
+  }, { metadata, files, anchorFiles, fingerprint, usage, adjudications: continuity.adjudications }, options3);
 });
 var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
@@ -44878,6 +45301,7 @@ var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* ()
   const fingerprint = options3.signature === undefined ? undefined : yield* computeChangesetFingerprint(anchorFiles, options3.signature(fullMission));
   const budget2 = yield* makeUsageBudget(options3.limits ?? fanOutReviewBudgetLimits);
   const totalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
+  const continuity = yield* resolveReviewContinuityContext();
   const pipeline = yield* runFanOutReview(binding, {
     files,
     anchorFiles,
@@ -44889,6 +45313,9 @@ var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* ()
         paths: executionContext.retryPaths,
         stages: executionContext.retryStages
       }
+    } : {},
+    ...continuity.adjudications.length > 0 || continuity.priorFindingsOnScope.length > 0 ? {
+      priorContext: buildPriorReviewContext(continuity.adjudications, continuity.priorFindingsOnScope)
     } : {}
   });
   const inputCoverage = fanOutInputCoverage({
@@ -44909,7 +45336,7 @@ var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* ()
       paths: pass.paths.slice(0, 12)
     })),
     turns: pipeline.turns
-  }, { metadata, files, anchorFiles, fingerprint, usage }, options3);
+  }, { metadata, files, anchorFiles, fingerprint, usage, adjudications: continuity.adjudications }, options3);
 });
 
 // packages/pr-review/src/internal/factory.ts
@@ -45110,12 +45537,12 @@ var noopReviewProgressReporterLayer = exports_Layer.succeed(ReviewProgressReport
   begin: () => exports_Effect.void,
   settle: () => exports_Effect.void
 }));
-var GitHubIssueCommentWire = exports_Schema.Struct({
+var GitHubIssueCommentWire2 = exports_Schema.Struct({
   id: exports_Schema.Int,
   body: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.String)),
   user: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Struct({ login: exports_Schema.String, type: exports_Schema.String })))
 });
-var GitHubIssueCommentsPageWire = exports_Schema.Array(GitHubIssueCommentWire);
+var GitHubIssueCommentsPageWire2 = exports_Schema.Array(GitHubIssueCommentWire2);
 var MAX_PROGRESS_LOOKUP_PAGES = 5;
 var pickNewestClaim = (candidates) => {
   let newest;
@@ -45170,7 +45597,7 @@ var gitHubReviewProgressLayer = exports_Layer.effect(ReviewProgressReporter)(exp
         per_page: String(perPage),
         page: String(page)
       }))));
-      const wires = yield* decodeJson(GitHubIssueCommentsPageWire, "listProgressComments")(response);
+      const wires = yield* decodeJson(GitHubIssueCommentsPageWire2, "listProgressComments")(response);
       for (const wire of wires) {
         if (wire.user?.login.toLowerCase() === authorLogin && wire.user.type === "Bot" && (wire.body ?? "").includes(PROGRESS_COMMENT_MARKER_PREFIX)) {
           found.push({ id: wire.id, body: wire.body ?? "" });
@@ -45184,8 +45611,8 @@ var gitHubReviewProgressLayer = exports_Layer.effect(ReviewProgressReporter)(exp
       reason: `comment history exceeds the bounded ${MAX_PROGRESS_LOOKUP_PAGES * 100}-comment lookup`
     });
   });
-  const readComment = (commentId) => execute2("readProgressComment", withHeaders(exports_HttpClientRequest.get(`${issuePrefix}/comments/${commentId}`))).pipe(exports_Effect.flatMap(decodeJson(GitHubIssueCommentWire, "readProgressComment")), exports_Effect.map((wire) => wire.body ?? ""));
-  const create = (body) => execute2("createProgressComment", withHeaders(exports_HttpClientRequest.post(`${issuePrefix}/${target.number}/comments`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({ body })))).pipe(exports_Effect.flatMap(decodeJson(GitHubIssueCommentWire, "createProgressComment")), exports_Effect.map((wire) => wire.id));
+  const readComment = (commentId) => execute2("readProgressComment", withHeaders(exports_HttpClientRequest.get(`${issuePrefix}/comments/${commentId}`))).pipe(exports_Effect.flatMap(decodeJson(GitHubIssueCommentWire2, "readProgressComment")), exports_Effect.map((wire) => wire.body ?? ""));
+  const create = (body) => execute2("createProgressComment", withHeaders(exports_HttpClientRequest.post(`${issuePrefix}/${target.number}/comments`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({ body })))).pipe(exports_Effect.flatMap(decodeJson(GitHubIssueCommentWire2, "createProgressComment")), exports_Effect.map((wire) => wire.id));
   const update3 = (commentId, body) => execute2("updateProgressComment", withHeaders(exports_HttpClientRequest.patch(`${issuePrefix}/comments/${commentId}`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({ body })))).pipe(exports_Effect.asVoid);
   const deleteComment = (commentId) => execute2("deleteProgressComment", withHeaders(exports_HttpClientRequest.delete(`${issuePrefix}/comments/${commentId}`))).pipe(exports_Effect.asVoid);
   const guardedUpdate = exports_Effect.fn("ReviewProgressReporter.guardedUpdate")(function* (commentId, body) {
@@ -45284,7 +45711,7 @@ var gitHubReviewLayers = (target) => exports_Layer.unwrap(exports_Effect.gen(fun
     token,
     reviewAuthorLogin
   });
-  return exports_Layer.mergeAll(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(targetLayer)), gitHubPriorReviewsLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewRetirementHostLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewProgressLayer.pipe(exports_Layer.provide(targetLayer)));
+  return exports_Layer.mergeAll(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(targetLayer)), gitHubPriorReviewsLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewRetirementHostLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewAdjudicationHostLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewProgressLayer.pipe(exports_Layer.provide(targetLayer)));
 }));
 
 // packages/pr-review/src/internal/logging.ts
@@ -56187,15 +56614,16 @@ var concludeReviewOutcome = (outcome) => {
     return { conclusion: "incomplete", reasons: machinery };
   return { conclusion: "success", reasons: [] };
 };
-var concludeReviewState = (state) => {
+var concludeReviewState = (state, adjudicated) => {
   const reasons = blockingReasons({
-    findings: state.unresolvedFindings,
-    concerns: state.unresolvedConcerns
+    findings: state.unresolvedFindings.filter((finding) => !adjudicated.has(findingIdentity(finding))),
+    concerns: state.unresolvedConcerns.filter((concern) => !adjudicated.has(concern.title))
   });
   return reasons.length > 0 ? { conclusion: "blocking", reasons } : { conclusion: "success", reasons: [] };
 };
 var skipCoveredReview = exports_Effect.fn("skipCoveredReview")(function* (input) {
-  const result4 = concludeReviewState(input.state);
+  const adjudications = yield* collectReviewAdjudications(input.state.adjudications ?? []);
+  const result4 = concludeReviewState(input.state, new Set(adjudications.map(adjudicationIdentity)));
   yield* exports_Console.log(`Skipping review of ${input.repository}#${input.pullRequestNumber}: ${input.reason}.`);
   yield* writeActionOutputs([
     ["skipped", "true"],

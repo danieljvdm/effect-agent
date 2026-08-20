@@ -76,6 +76,19 @@ With `retire-stale-reviews: "true"`, the action collapses older reviews from the
 resolved findings, and minimizes outdated inline comments. It never edits newer reviews or the
 signed state comment. Retirement is cosmetic and fail-open.
 
+## Maintainer adjudication
+
+A maintainer settles a finding without changing code by replying
+`/adjudicate accepted-risk|refuted|obsolete[: reason]` on its inline thread, or — for an unanchored
+concern — commenting `/adjudicate <disposition> "<exact title>"[: reason]` in the PR conversation.
+The exact identity leaves active findings, verdict counts, and the check conclusion, renders in a
+collapsed "Adjudicated" section, and persists in the signed state; re-running the action (the next
+push, or a manual re-run) applies it, and the skip-unchanged path re-reads adjudications so a
+blocking check lifts without a new commit. Only OWNER, MEMBER, or COLLABORATOR comments count —
+everything else is ignored fail-closed — the later adjudication of an identity wins, and an
+adjudication never strikes a finding as "resolved" during retirement (a verdict is not a fix).
+Free-text rebuttals are deliberately not parsed: only the explicit verb is auditable.
+
 ## Run visibility
 
 The action posts one sticky progress comment for each active review and rewrites it with the final

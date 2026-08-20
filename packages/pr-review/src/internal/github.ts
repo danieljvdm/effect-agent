@@ -2,6 +2,12 @@ import type { Redacted } from "effect";
 import { Context, DateTime, Effect, Layer, Option, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
+import {
+  AdjudicableThread,
+  AdjudicationComment,
+  ReviewAdjudicationFailure,
+  ReviewAdjudicationHost,
+} from "./adjudication.ts";
 import { ChangedFile } from "./diff.ts";
 import { extractFingerprint } from "./fingerprint.ts";
 import type { ReviewPublicationPlan } from "./render.ts";
@@ -639,6 +645,182 @@ export const gitHubReviewRetirementHostLayer: Layer.Layer<
           }
         }),
     });
+  }),
+);
+
+// --- Live ReviewAdjudicationHost ----------------------------------------------
+
+const MAX_ADJUDICATION_PAGES = 5;
+
+const GitHubThreadCommentWire = Schema.Struct({
+  id: Schema.Int,
+  in_reply_to_id: Schema.optionalKey(Schema.NullOr(Schema.Int)),
+  path: Schema.String,
+  body: Schema.String,
+  author_association: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  user: Schema.NullOr(Schema.Struct({ login: Schema.String })),
+  created_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  line: Schema.optionalKey(Schema.NullOr(Schema.Int)),
+  original_line: Schema.optionalKey(Schema.NullOr(Schema.Int)),
+  start_line: Schema.optionalKey(Schema.NullOr(Schema.Int)),
+  original_start_line: Schema.optionalKey(Schema.NullOr(Schema.Int)),
+});
+const GitHubThreadCommentsPageWire = Schema.Array(GitHubThreadCommentWire);
+
+const GitHubIssueCommentWire = Schema.Struct({
+  body: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  author_association: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  user: Schema.NullOr(Schema.Struct({ login: Schema.String })),
+  created_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
+const GitHubIssueCommentsPageWire = Schema.Array(GitHubIssueCommentWire);
+
+const toAdjudicationComment = (wire: {
+  readonly body?: string | null | undefined;
+  readonly author_association?: string | null | undefined;
+  readonly user: { readonly login: string } | null;
+  readonly created_at?: string | null | undefined;
+}): AdjudicationComment | undefined => {
+  // A comment without an attributable author cannot authorize anything —
+  // skip it fail-closed rather than inventing an actor.
+  const login = wire.user?.login;
+  if (login === undefined || login.length === 0) return undefined;
+  return AdjudicationComment.make({
+    body: (wire.body ?? "").slice(0, 65_536),
+    authorAssociation: (wire.author_association ?? "NONE").slice(0, 40),
+    authorLogin: login.slice(0, 100),
+    createdAt: parseGitHubSubmittedAt(wire.created_at ?? null),
+  });
+};
+
+/**
+ * GitHub-backed host reads for maintainer adjudication: this action's own
+ * inline finding threads (roots authored by the configured review author)
+ * with their replies, and the pull request's top-level conversation comments.
+ * Both listings are creation-ordered.
+ */
+export const gitHubReviewAdjudicationHostLayer: Layer.Layer<
+  ReviewAdjudicationHost,
+  never,
+  GitHubReviewTarget | HttpClient.HttpClient
+> = Layer.effect(ReviewAdjudicationHost)(
+  Effect.gen(function* () {
+    const target = yield* GitHubReviewTarget;
+    const client = yield* HttpClient.HttpClient;
+    const reviewAuthorLogin = (
+      target.reviewAuthorLogin ?? DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN
+    ).toLowerCase();
+    const asAdjudicationFailure =
+      (operation: string) =>
+      (error: { readonly _tag: string; readonly message?: string }): ReviewAdjudicationFailure =>
+        ReviewAdjudicationFailure.make({
+          operation,
+          reason: `${error._tag}: ${error.message ?? "request failed"}`.slice(0, 2_048),
+        });
+    const decodeAdjudication = <S extends Schema.Top>(schema: S, operation: string) => {
+      const decode = Schema.decodeUnknownEffect(schema);
+      return (response: HttpClientResponse.HttpClientResponse) =>
+        response.json.pipe(
+          Effect.mapError(asAdjudicationFailure(operation)),
+          Effect.flatMap((body) =>
+            decode(body).pipe(Effect.mapError(asAdjudicationFailure(operation))),
+          ),
+        );
+    };
+    const listPaged = <A>(input: {
+      readonly operation: string;
+      readonly url: string;
+      readonly decode: (
+        response: HttpClientResponse.HttpClientResponse,
+      ) => Effect.Effect<ReadonlyArray<A>, ReviewAdjudicationFailure>;
+    }) =>
+      Effect.gen(function* () {
+        const values: Array<A> = [];
+        const perPage = 100;
+        for (let page = 1; page <= MAX_ADJUDICATION_PAGES; page += 1) {
+          const response = yield* HttpClient.execute(
+            withCommonHeaders(
+              HttpClientRequest.get(input.url).pipe(
+                HttpClientRequest.acceptJson,
+                HttpClientRequest.setUrlParams({
+                  per_page: String(perPage),
+                  page: String(page),
+                  sort: "created",
+                  direction: "asc",
+                }),
+              ),
+              target.token,
+            ),
+          ).pipe(
+            Effect.flatMap(HttpClientResponse.filterStatusOk),
+            Effect.mapError(asAdjudicationFailure(input.operation)),
+          );
+          const pageValues = yield* input.decode(response);
+          values.push(...pageValues);
+          if (pageValues.length < perPage) return values;
+        }
+        return yield* ReviewAdjudicationFailure.make({
+          operation: input.operation,
+          reason: `history exceeds the bounded ${MAX_ADJUDICATION_PAGES * 100}-item lookup`,
+        });
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+    const listFindingThreads = Effect.gen(function* () {
+      const wires = yield* listPaged({
+        operation: "listReviewCommentsForAdjudication",
+        url: `${target.apiUrl}/repos/${target.repository}/pulls/${target.number}/comments`,
+        decode: decodeAdjudication(
+          GitHubThreadCommentsPageWire,
+          "listReviewCommentsForAdjudication",
+        ),
+      });
+      const positiveLine = (value: number | null | undefined): number | null =>
+        value !== undefined && value !== null && value > 0 ? value : null;
+      const threads = new Map<
+        number,
+        { readonly root: (typeof wires)[number]; readonly replies: Array<AdjudicationComment> }
+      >();
+      for (const wire of wires) {
+        if (wire.in_reply_to_id !== undefined && wire.in_reply_to_id !== null) continue;
+        // Only this action's own finding threads can be adjudicated inline.
+        if (wire.user?.login.toLowerCase() !== reviewAuthorLogin) continue;
+        threads.set(wire.id, { root: wire, replies: [] });
+      }
+      for (const wire of wires) {
+        if (wire.in_reply_to_id === undefined || wire.in_reply_to_id === null) continue;
+        const thread = threads.get(wire.in_reply_to_id);
+        if (thread === undefined) continue;
+        const reply = toAdjudicationComment(wire);
+        if (reply !== undefined && thread.replies.length < 100) thread.replies.push(reply);
+      }
+      return [...threads.values()]
+        .filter((thread) => thread.root.path.length > 0 && thread.root.path.length <= 500)
+        .map(({ root, replies }) => {
+          const endLine = positiveLine(root.line ?? root.original_line);
+          const startLine = positiveLine(root.start_line ?? root.original_start_line) ?? endLine;
+          return AdjudicableThread.make({
+            path: root.path,
+            startLine,
+            endLine,
+            rootBody: root.body.slice(0, 65_536),
+            replies,
+          });
+        });
+    });
+
+    const listIssueComments = Effect.gen(function* () {
+      const wires = yield* listPaged({
+        operation: "listIssueCommentsForAdjudication",
+        url: `${target.apiUrl}/repos/${target.repository}/issues/${target.number}/comments`,
+        decode: decodeAdjudication(GitHubIssueCommentsPageWire, "listIssueCommentsForAdjudication"),
+      });
+      return wires.flatMap((wire) => {
+        const comment = toAdjudicationComment(wire);
+        return comment === undefined ? [] : [comment];
+      });
+    });
+
+    return ReviewAdjudicationHost.of({ listFindingThreads, listIssueComments });
   }),
 );
 

@@ -11,6 +11,7 @@ import {
 } from "effect-agent";
 import { Toolkit } from "effect/unstable/ai";
 
+import type { PriorReviewContext } from "./adjudication.ts";
 import { anchorViolation } from "./anchors.ts";
 import { boundedListReason, FailedReviewPass, ReviewAssurance } from "./coverage.ts";
 import { ChangedFileStatus, ChangedPath, type ChangedFile } from "./diff.ts";
@@ -190,6 +191,11 @@ const UnitPaths = Schema.Array(ChangedPath)
   .check(Schema.isMinLength(1))
   .check(Schema.isMaxLength(MAX_UNIT_FILES));
 
+/** Bounded prior-review context lines injected into discovery instructions. */
+const UnitContextLines = Schema.Array(Schema.String.check(Schema.isMaxLength(1_200))).check(
+  Schema.isMaxLength(20),
+);
+
 const RiskCategories = Schema.Array(ReviewRiskCategory).check(Schema.isMaxLength(6));
 const Candidates = Schema.Array(ReviewCandidate).check(Schema.isMaxLength(MAX_UNIT_CANDIDATES));
 const EvidenceShardIds = Schema.Array(ReviewEvidenceShardId)
@@ -225,6 +231,10 @@ export class FileReviewBrief extends Schema.Class<FileReviewBrief>(
   evidence: Schema.Array(FileReviewEvidence)
     .check(Schema.isMinLength(1))
     .check(Schema.isMaxLength(MAX_UNIT_EVIDENCE_SHARDS)),
+  /** Maintainer-adjudicated identities on this unit; do not re-raise. */
+  adjudicatedContext: Schema.optionalKey(UnitContextLines),
+  /** Prior-round findings on this unit's re-reviewed paths. */
+  priorFindingContext: Schema.optionalKey(UnitContextLines),
 }) {}
 
 /** Child output; phase-inapplicable collections must be empty. */
@@ -297,9 +307,23 @@ export const makeFileReviewerInstructions =
           ? `This is a fresh specialist discovery pass. Concentrate on these host-classified risks without relying on another pass: ${brief.riskCategories.join(", ")}.`
           : "This is a fresh specialist discovery pass. The host found no keyword-classified category, so independently scrutinize authentication/authorization, security boundaries, durability, concurrency, credentials, and external side effects rather than treating classification silence as low risk."
         : "This is the general discovery pass. Review broadly for correctness, security, concurrency, resource, API, and error-handling defects.";
+    const adjudicated = brief.adjudicatedContext ?? [];
+    const priorFindings = brief.priorFindingContext ?? [];
     return [
       ...common,
       focus,
+      ...(adjudicated.length === 0
+        ? []
+        : [
+            "A maintainer has adjudicated these previously raised items on this unit (disposition, reason). Do not re-raise them unless you have materially new evidence, and if you do, say explicitly what changed since the adjudication:",
+            ...adjudicated.map((line) => `- ${line}`),
+          ]),
+      ...(priorFindings.length === 0
+        ? []
+        : [
+            "A previous review round raised these findings on this unit's paths. For each, either confirm it still holds, state that it is fixed, or withdraw it; do not demand the opposite of that prior guidance without explicitly acknowledging the reversal:",
+            ...priorFindings.map((line) => `- ${line}`),
+          ]),
       "The discovery evidence array contains every complete shard in the unit. Review every entry and every shard of a multi-shard path. A later independent verifier, not you, decides which candidates publish.",
       "When a non-anchored concern depends on one or more unit files, list 1-3 exact evidencePaths to bind the claim to scheduled evidence.",
       `Return ONLY JSON with phase "discovery", the exact workId/unitId, up to ${MAX_CHILD_FINDINGS} findings, up to ${MAX_CHILD_CONCERNS} concerns shaped as {concern, evidencePaths}, one factual file summary per path (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars), and an empty assessments array. Empty candidate arrays are valid; do not invent defects.`,
@@ -388,6 +412,12 @@ export interface FanOutPipelineInput {
         readonly stages: ReadonlyArray<FailedReviewPass["stage"]>;
       }
     | undefined;
+  /**
+   * Adjudicated identities and prior-round findings injected as discovery
+   * context on the units whose paths they touch. Context only — they never
+   * enter candidates or publication.
+   */
+  readonly priorContext?: PriorReviewContext | undefined;
 }
 
 const candidateOrdinal = (index: number): string => String(index + 1).padStart(3, "0");
@@ -625,6 +655,19 @@ const reviewUnit = <Provider, ModelProvides, ModelRequires>(
     let turns = 0;
     let completedGeneralPasses = 0;
     let completedSpecialistPasses = 0;
+    // Discovery-only context: adjudicated identities (path-free entries apply
+    // to every unit) and prior-round findings on this unit's paths. The
+    // verifier stays unbiased — it judges only the candidate claims and the
+    // bounded evidence.
+    const unitPaths = new Set(unit.paths);
+    const adjudicatedContext = (input.priorContext?.adjudicated ?? [])
+      .filter((entry) => entry.path === undefined || unitPaths.has(entry.path))
+      .map((entry) => entry.line)
+      .slice(0, 20);
+    const priorFindingContext = (input.priorContext?.priorFindings ?? [])
+      .filter((entry) => unitPaths.has(entry.path))
+      .map((entry) => entry.line)
+      .slice(0, 20);
     for (const pass of passes) {
       const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
       const brief = FileReviewBrief.make({
@@ -637,6 +680,8 @@ const reviewUnit = <Provider, ModelProvides, ModelRequires>(
         riskCategories: pass.riskCategories,
         candidates: [],
         evidence,
+        ...(adjudicatedContext.length === 0 ? {} : { adjudicatedContext }),
+        ...(priorFindingContext.length === 0 ? {} : { priorFindingContext }),
       });
       const outcome = yield* runReviewPass(binding, brief, input.budget);
       if (outcome._tag === "failed") {

@@ -11,6 +11,7 @@ import {
   ReviewState,
   ReviewStateAuthenticator,
   retireStaleReviews,
+  StoredAdjudication,
   StoredReviewFinding,
   webCryptoReviewStateAuthenticatorLayer,
 } from "../src/index.ts";
@@ -157,6 +158,47 @@ describe("review retirement", () => {
       const roundTripped = yield* authenticator.extract(decision.body);
       expect(Option.getOrUndefined(roundTripped)).toEqual(priorState);
       expect(decision.body.endsWith(prior.stateMarker)).toBe(true);
+    }).pipe(Effect.provide(webCryptoReviewStateAuthenticatorLayer(STATE_SECRET))),
+  );
+
+  it.effect("keeps adjudicated identities out of the resolved-by-later-review subset", () =>
+    Effect.gen(function* () {
+      const prior = yield* renderPriorBody;
+      const url = "https://github.com/acme/widgets/pull/42#pullrequestreview-2";
+      // The finding is absent from the newest unresolved set because a
+      // maintainer adjudicated it — that is a verdict, not a fix, so
+      // retirement must not strike it as resolved.
+      const adjudicatedState = ReviewState.make({
+        ...currentState,
+        adjudications: [
+          StoredAdjudication.make({
+            path: resolvedFinding.path,
+            startLine: resolvedFinding.startLine,
+            endLine: resolvedFinding.endLine,
+            title: resolvedFinding.title,
+            disposition: "accepted-risk",
+            actor: "dan",
+          }),
+        ],
+      });
+      const adjudicated = decideReviewRetirement({
+        priorBody: prior.body,
+        priorState,
+        currentState: adjudicatedState,
+        currentReviewUrl: url,
+      });
+      expect(adjudicated.resolvedFindings).toEqual([]);
+      expect(adjudicated.body).not.toContain("Findings resolved by later review");
+      expect(adjudicated.body).not.toContain(`~~${resolvedFinding.title}~~`);
+      // The resolved-by-later-review path itself is unchanged: without the
+      // adjudication the identical absence still resolves the finding.
+      const unadjudicated = decideReviewRetirement({
+        priorBody: prior.body,
+        priorState,
+        currentState,
+        currentReviewUrl: url,
+      });
+      expect(unadjudicated.resolvedFindings).toEqual([resolvedFinding]);
     }).pipe(Effect.provide(webCryptoReviewStateAuthenticatorLayer(STATE_SECRET))),
   );
 
