@@ -132,7 +132,7 @@ export const StructuralRedactorLive = Layer.succeed(Redactor)({
         return truncateUtf8(JSON.stringify(structurallyRedacted), MAX_REDACTED_PREVIEW_BYTES);
       },
       catch: (cause) =>
-        cause instanceof RedactionError
+        Schema.is(RedactionError)(cause)
           ? cause
           : RedactionError.make({
               reason: "encoding-failed",

@@ -1,13 +1,15 @@
-import {
-  ToolBroker,
+import type {
   ToolBrokerConfigurationError,
   ToolBrokerUnavailableError,
+} from "@effect-agent/engine";
+import {
+  ToolBroker,
   getToolExecutionClass,
   type ProgrammaticCallOutcome,
   type ToolBrokerPass,
 } from "@effect-agent/engine";
+import type { CodeExecutionError } from "@effect-agent/sandbox";
 import {
-  CodeExecutionError,
   CodeExecutionHost,
   CodeExecutionLimits,
   CodeExecutionNamespace,
@@ -19,7 +21,8 @@ import {
   type CodeHostCall,
   type CodeHostCallResult,
 } from "@effect-agent/sandbox";
-import { Duration, Effect, Layer, Option, Schema } from "effect";
+import type { Layer } from "effect";
+import { Duration, Effect, Option, Predicate, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 /**
@@ -210,9 +213,6 @@ const defaultMaxEgressBytes = 64 * 1024;
 // construction closed rather than degrading to `unknown`.
 // ---------------------------------------------------------------------------
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
 const MAX_RENDER_DEPTH = 24;
 
 const renderJsonSchemaType = (
@@ -224,7 +224,7 @@ const renderJsonSchemaType = (
   if (depth > MAX_RENDER_DEPTH) {
     throw new Error("Code Mode declaration rendering exceeded its depth bound");
   }
-  if (!isRecord(schema)) {
+  if (!Predicate.isObject(schema)) {
     throw new Error(`Code Mode cannot render the JSON schema fragment ${JSON.stringify(schema)}`);
   }
   const reference = schema.$ref;
@@ -276,7 +276,7 @@ const renderJsonSchemaType = (
     }
     case "object":
     case undefined: {
-      if (isRecord(schema.properties)) {
+      if (Predicate.isObject(schema.properties)) {
         const required = Array.isArray(schema.required) ? schema.required : [];
         const inner = `${indent}  `;
         const fields = Object.entries(schema.properties).map(([key, property]) => {
@@ -287,7 +287,7 @@ const renderJsonSchemaType = (
         });
         return fields.length === 0 ? "{}" : `{\n${fields.join("\n")}\n${indent}}`;
       }
-      if (isRecord(schema.additionalProperties)) {
+      if (Predicate.isObject(schema.additionalProperties)) {
         return `Record<string, ${renderJsonSchemaType(schema.additionalProperties, defs, depth + 1, indent)}>`;
       }
       // A bare `{ "type": "object" }` states "any JSON object" (Schema.Json's
@@ -309,7 +309,7 @@ const renderJsonSchemaType = (
 
 const renderTopLevel = (jsonSchema: unknown, indent: string): string => {
   const defs =
-    isRecord(jsonSchema) && isRecord(jsonSchema.$defs)
+    Predicate.isObject(jsonSchema) && Predicate.isObject(jsonSchema.$defs)
       ? jsonSchema.$defs
       : ({} as Record<string, unknown>);
   return renderJsonSchemaType(jsonSchema, defs, 0, indent);

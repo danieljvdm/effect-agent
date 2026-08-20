@@ -8,6 +8,7 @@ import {
   SubagentBudgetExhausted,
   SubagentDelegationCaps,
   SubagentObservedUsage,
+  SubagentParentBudgetActive,
   SubagentParentBudgetConflict,
   SubagentParentBudgetView,
   SubagentParentBudgetUnknown,
@@ -474,6 +475,72 @@ describe("subagent budget reservations", () => {
         const unknownRelease = yield* reservations.release(reservationId(9)).pipe(Effect.flip);
         expect(unknownRelease).toBeInstanceOf(SubagentReservationUnknown);
       }).pipe(Effect.provide(SubagentReservationsMemoryLive)),
+  );
+
+  it.effect("retires only terminal parent accounting and permits idempotent cleanup", () =>
+    Effect.gen(function* () {
+      const reservations = yield* SubagentReservations;
+      yield* reservations.registerParent(
+        runId,
+        SubagentDelegationCaps.make({ maxToolCalls: 4, maxTotalChildInvocations: 2 }),
+      );
+      yield* reservations.reserve(request(1, amounts({ toolCalls: 3 })));
+
+      const active = yield* reservations.retireParent(runId).pipe(Effect.flip);
+      const decodedActive = yield* Schema.decodeEffect(SubagentParentBudgetActive)(
+        yield* Schema.encodeEffect(SubagentParentBudgetActive)(active),
+      );
+      expect(Schema.is(SubagentParentBudgetActive)(decodedActive)).toBe(true);
+      expect(active.openReservations).toBe(1);
+      expect((yield* reservations.parentSnapshot(runId)).reservations).toHaveLength(1);
+
+      yield* reservations.release(reservationId(1));
+      yield* reservations.retireParent(runId);
+      yield* reservations.retireParent(runId);
+      const unknown = yield* reservations.parentSnapshot(runId).pipe(Effect.flip);
+      expect(Schema.is(SubagentParentBudgetUnknown)(unknown)).toBe(true);
+
+      const fresh = yield* reservations.registerParent(
+        runId,
+        SubagentDelegationCaps.make({ maxToolCalls: 4, maxTotalChildInvocations: 2 }),
+      );
+      expect(fresh.totalChildInvocations).toBe(0);
+      expect(fresh.reservations).toEqual([]);
+    }).pipe(Effect.provide(SubagentReservationsMemoryLive)),
+  );
+
+  it.effect("supports parent retirement finalizers on success, failure, and interruption", () =>
+    Effect.gen(function* () {
+      const reservations = yield* SubagentReservations;
+      const caps = SubagentDelegationCaps.make({ maxTotalChildInvocations: 1 });
+      const managed = (parentRunId: RunId) =>
+        Effect.acquireRelease(reservations.registerParent(parentRunId, caps), () =>
+          reservations.retireParent(parentRunId).pipe(Effect.orDie),
+        );
+      const successRunId = decodeRunId("retire-success");
+      const failureRunId = decodeRunId("retire-failure");
+      const interruptionRunId = decodeRunId("retire-interruption");
+
+      yield* Effect.scoped(managed(successRunId));
+      yield* Effect.scoped(
+        managed(failureRunId).pipe(Effect.andThen(Effect.fail("expected"))),
+      ).pipe(Effect.ignore);
+
+      const started = yield* Deferred.make<void>();
+      const interrupted = yield* Effect.scoped(
+        managed(interruptionRunId).pipe(
+          Effect.andThen(Deferred.succeed(started, undefined)),
+          Effect.andThen(Effect.never),
+        ),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(interrupted);
+
+      for (const parentRunId of [successRunId, failureRunId, interruptionRunId]) {
+        const unknown = yield* reservations.parentSnapshot(parentRunId).pipe(Effect.flip);
+        expect(Schema.is(SubagentParentBudgetUnknown)(unknown)).toBe(true);
+      }
+    }).pipe(Effect.provide(SubagentReservationsMemoryLive)),
   );
 
   it.effect("round-trips reservation accounting and typed errors through their Schemas", () =>
