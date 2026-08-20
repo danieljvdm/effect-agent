@@ -61,7 +61,7 @@ Only the packages the framework needs today exist:
 
 ```text
 packages/
-  effect-agent/         Umbrella: the pure authoring/interpreter/capabilities surface as one package
+  effect-agent/         Umbrella: the platform-neutral authoring, interpreter, and capabilities APIs
   core/                 Domain and Agent authoring package
   engine/               Ephemeral Agent interpreter
   capabilities/         Operational policy and capability adapters
@@ -163,11 +163,11 @@ Releases are automated: on every push to `main`, `.github/workflows/release.yml`
 maintains a "Version Packages (beta)" PR from the pending changesets. When no pending changeset
 remains, the workflow classifies the pushed tree against a clean Changesets regeneration from its
 first parent; only that exact generated tree may enter the publish jobs. An ordinary no-changeset
-push is not release authority. Merging the version PR publishes via npm **trusted publishing** — the workflow's OIDC
+push is not release authority. Merging the version PR publishes through npm trusted publishing. The workflow's OIDC
 identity is exchanged for short-lived credentials (no npm token, no OTP), with
 provenance attached. The generated PR is release metadata over code that
 already passed the ordinary PR gates: its Static checks, Tests, Build, and
-agentic Review workflows use `paths-ignore` for the narrow generated surface.
+agentic Review workflows use `paths-ignore` for those generated files.
 The trusted main-branch Release workflow independently resolves the PR returned
 by Changesets, validates its repository, branch, base, and commit identities,
 runs `changeset version` and lockfile generation in a temporary worktree, and
@@ -227,8 +227,8 @@ the OIDC exchange.
 The manual fallback from an authenticated npm session (`bunx npm login`, an
 owner of the `@effect-agent` scope):
 
-1. `bun run changeset` — describe the change (one exists for `0.0.1-beta.0`);
-2. `bun run changeset:version && bun install` — cut versions and changelogs;
+1. `bun run changeset` describes the change. One exists for `0.0.1-beta.0`;
+2. `bun run changeset:version && bun install` cuts versions and changelogs;
 3. `bun run ready`;
 4. `bun run release:publish -- --dry-run`, then without `--dry-run`
    (append `--otp <code>` when npm 2FA asks);
@@ -245,7 +245,7 @@ zero-config defaults.
 
 ## Script runners
 
-Repository scripts run under **Bun** (`bun scripts/<name>.ts`) — there is no
+Repository scripts run under **Bun** with `bun scripts/<name>.ts`. There is no
 `tsx` in this repository. The one exception is anything that imports
 `@effect-agent/storage-sqlite`: Bun does not implement `node:sqlite`, so
 `admin:durable` runs under `node --experimental-transform-types` (plain
@@ -302,7 +302,7 @@ the pull request that introduces it:
 
 1. add `packages/<name>/package.json`, `src/index.ts`, and `tsconfig.json`;
 2. use the working `@effect-agent/<name>` scope with the sibling manifest shape (MIT,
-   `publishConfig.access: public`, source-first exports) — packages publish on the `beta`
+   `publishConfig.access: public`, source-first exports). Packages publish on the `beta`
    dist-tag, and each new package needs its one-time npm trusted-publisher
    registration before CI can publish it; add the package to the single fixed release group in
    `.changeset/config.json`;
@@ -322,7 +322,7 @@ automation are deferred until open-source preparation.
 
 The CI workflow runs on pull requests, not again after their merge to `main`. Ordinary PRs install
 the exact Bun version with a frozen-lockfile install, then run the `ready` gate as three parallel
-jobs — Static checks (`bun run check`), Tests (`bun run test`), and Build (`bun run build`) — with
+jobs for static checks (`bun run check`), tests (`bun run test`), and builds (`bun run build`) with
 a fan-in job that keeps the required branch-protection check named `ready`. The exact internal
 Changesets release PR is the only exception: CI and PR Review path-filter the exact set of files
 Changesets may generate. GitHub suppresses `pull_request` workflows caused by `GITHUB_TOKEN`, so

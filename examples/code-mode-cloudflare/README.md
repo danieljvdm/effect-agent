@@ -29,8 +29,7 @@ warehouse only through the brokered `warehouse.query` method, which runs one
 **E**: the Agent runs ephemerally; the Durable Object is the warehouse data
 store, not a Conversation store.
 
-The response makes the Code Mode usage explicit — the tool, the isolated
-executor, and the **actual JavaScript the model wrote**, alongside its result:
+The response includes the Tool, isolated executor, generated JavaScript, and result:
 
 ```jsonc
 {
@@ -56,8 +55,8 @@ On the offline scripted profile `program` is a fixed demonstration program and
 The plan (§8.4) prescribes database authority as the read-only boundary. On
 Durable Object SQLite the `PRAGMA query_only` lock is blocked by the storage
 authorizer (`SQLITE_AUTH`), so this demo enforces read-only in application
-code. Because a denylist of write keywords is bypassable — a `WITH … DELETE`
-common-table expression does not _start_ with a write keyword — the scan is an
+code. A denylist of write keywords is bypassable. For example, a `WITH … DELETE`
+common-table expression does not _start_ with a write keyword. The scan therefore uses an
 **allowlist**: the statement must be a single read (`SELECT`, or a `WITH` whose
 body is a read) and must contain no write, DDL, transaction, or escape-hatch
 token (`INSERT`/`UPDATE`/`DELETE`/`DROP`/`PRAGMA`/`ATTACH`/`load_extension`/…)

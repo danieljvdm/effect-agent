@@ -1,7 +1,7 @@
 # PR work-order ingress
 
 Operational implementation behind the separately named
-[`work-order-action/`](../../work-order-action/) surface. An exact inline reply becomes one
+[`work-order-action/`](../../work-order-action/) workflow. An exact inline reply becomes one
 [work order](../../docs/spec/pr-work-order-ingress.md), is persistently claimed in an authenticated
 bot-authored thread journal, runs the bounded model implementer, executes required checks in a
 networkless container, and publishes only through an independent compare-and-swap publisher.

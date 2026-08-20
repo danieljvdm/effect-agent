@@ -68,7 +68,7 @@ The semantic rule stays identical even when the storage mechanism changes.
 
 ## Events observe; commands act
 
-`RunEvent` is a stable, typed observation surface. Subscribers may render, trace, meter, or project
+`RunEvent` is a stable, typed observation API. Subscribers may render, trace, meter, or project
 events. They do not participate in state transitions through arbitrary callbacks.
 
 Steering, approval, follow-up, durable abort, and operator recovery are explicit command/service
@@ -76,7 +76,7 @@ interfaces. Observation cannot secretly become control flow.
 
 ## Bounded concurrency
 
-Each complete Tool batch runs through finite `Semaphore` permits. Live progress may reflect actual
+Each complete Tool batch runs through finite `Semaphore` permits. Live progress may follow actual
 completion order; committed results always retain model declaration order. Outer Agent, tenant, or
 platform bounds may make concurrency stricter.
 

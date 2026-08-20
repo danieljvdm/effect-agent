@@ -130,7 +130,7 @@ A head-bound, path-scoped instruction on a pull request, admitted only by explic
 dispatch. An implementer proposes a patch; the host validates and publishes. See
 `docs/spec/pr-work-orders.md`. GitHub dispatch, persistent admission, isolated
 publication, and thread presentation are implemented by the separately named
-`work-order-action/` surface specified in `docs/spec/pr-work-order-ingress.md`.
+`work-order-action/` workflow specified in `docs/spec/pr-work-order-ingress.md`.
 
 **Sandbox**  
 A scoped capability set for filesystem, process, and optional network operations. It is not a
@@ -161,7 +161,7 @@ and acceptable final output.
 Creation of a model-context summary or branch that reduces future prompt size without erasing
 canonical evidence. Physical record deletion is a separate retention operation. The engine
 compacts natively at the pre-Turn seam when the estimated next context exceeds the Context Token
-Limit — pruning old Tool results, then summarizing through one metered model call — recording
+Limit. It prunes old Tool results, summarizes through one metered model call, and records
 each compaction in the DN and DC assemblies as a canonical `CompactionCreated` record that
 projections fold
 (RUN-026). Host-supplied, digest-bound compaction artifacts remain a separate capability.
@@ -182,7 +182,7 @@ carry the same bounded value.
 
 **Run Status Message**  
 A derived message appended to each outgoing model request (policy `runStatus: "appended"`)
-reflecting turns, Tool calls, tokens against budget, last-call context, and elapsed time. It is
+showing Turns, Tool Calls, tokens against budget, last-call context, and elapsed time. It is
 projection-time output, never persisted as canonical history.
 
 **Token Soft Landing**  

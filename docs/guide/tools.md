@@ -84,5 +84,5 @@ approval.
 
 An ephemeral Run loses an active Tool Call if the process dies. The durable assemblies persist a
 prepared boundary before ordinary external effects, refuse to replay an ambiguous unresolved
-call, and surface it as an explicit Unknown Outcome instead. See
+call, and record an explicit Unknown Outcome instead. See
 [Persistence & durability](../concepts/durability).

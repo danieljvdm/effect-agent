@@ -2,14 +2,14 @@
 
 Status: **Implemented**
 
-This specification is the operational GitHub surface for
+This specification defines the GitHub workflow for
 [pull-request work orders](pr-work-orders.md). The work-order specification owns the canonical
 instruction, bounded implementer, and deterministic host semantics. This document owns exact
 GitHub dispatch, persistent admission, Actions isolation, atomic publication, and thread
 presentation.
 
 The product is a separately named, precompiled JavaScript Action at `work-order-action/` used in a
-five-job workflow. It is not exported from `@effect-agent/pr-review` or `action/`; those surfaces
+five-job workflow. It is not exported from `@effect-agent/pr-review` or `action/`; those packages
 remain read-only.
 
 ## 1. Product and authority
@@ -86,8 +86,8 @@ implementer. A new explicit dispatch creates a distinct work order and journal r
 The journal reply is also the only claim record. A principal with pull-request write authority can
 delete it, and a rerun after that deletion admits a fresh attempt, exactly as that principal could
 authorize a new attempt with a new explicit reply. Replay prevention is therefore scoped to GitHub's
-retention of the reply and to already-trusted write-authorized principals — it is not a defense
-against them — and publication stays fenced by the expected-head compare-and-swap either way.
+retention of the reply and to already-trusted principals with write authority. It does not defend
+against them. Publication remains fenced by the expected-head compare-and-swap.
 
 Actions artifacts carry bounded Schema-decoded envelopes between jobs in one run, but they are not
 the persistent duplicate-delivery authority. Artifact retention can expire without reopening an
@@ -166,9 +166,9 @@ automatically replayed.
 
 The presenter updates the one authenticated admission reply with bounded host-authored text:
 
-- **published** — confirmed new head plus host-verified changed paths;
-- **settled** — `not-applicable` or `needs-human`, with no publication; or
-- **failed** — the typed error tag.
+- **published** records the confirmed new head and host-verified changed paths;
+- **settled** records `not-applicable` or `needs-human`, with no publication; or
+- **failed** records the typed error tag.
 
 Raw model prose is not copied as authoritative status. A missing terminal artifact is typed
 `AttemptIncomplete` before publisher eligibility and conservatively becomes
@@ -177,10 +177,10 @@ Raw model prose is not copied as authoritative status. A missing terminal artifa
 never as confirmed non-publication. The source thread remains open; no phase calls a
 thread-resolution API. Presentation succeeds only when the GitHub update response echoes the same
 journal comment, bot actor, source-thread target, response body, and exact authenticated terminal
-state — or when the reply already carries that exact authenticated terminal state from an earlier
+state, or when the reply already carries that exact authenticated terminal state from an earlier
 attempt whose acknowledgement was lost. A conflicting completed state fails closed.
 
-## 7. Trusted workflow and consumer surface
+## 7. Trusted workflow and consumer API
 
 Every job checks out the pull request's base SHA into a separate trusted Action directory with
 `persist-credentials: false`. Only `implement` and `checks` also check out the exact head SHA, also
@@ -190,7 +190,7 @@ commit SHAs.
 
 This prevents a pull request from changing the code that authenticates, authorizes, publishes, or
 presents its own work order. Downstream repositories adopt the separate `work-order-action/`
-surface through the documented multi-job workflow. Installing or upgrading
+workflow through the documented five-job workflow. Installing or upgrading
 `@effect-agent/pr-review` does not enable work orders.
 
 ## 8. Deterministic proof obligations
@@ -236,7 +236,7 @@ Live GitHub network calls are not made from deterministic CI tests.
 - **Publisher trusts the implementer/check artifact.** It authenticates admission and repeats every
   publication decision.
 - **Read-then-push publication.** GitHub must compare the expected head atomically.
-- **A work-order API on the reviewer Action.** The products retain separate authority and surfaces.
+- **A work-order API on the reviewer Action.** The products retain separate authority and APIs.
 - **Resolving the thread on `fixed`.** Presentation reports an outcome; humans own resolution.
 
 ## 11. Requirements
@@ -264,7 +264,7 @@ Live GitHub network calls are not made from deterministic CI tests.
   the source thread or treating model prose as status.
 - **WOI-011**: Every enabled phase runs trusted base Action code, and untrusted head code cannot
   modify its own authorization or publisher.
-- **WOI-012**: `work-order-action/` is a separate commit-pinnable consumer surface;
+- **WOI-012**: `work-order-action/` is a separate commit-pinnable consumer workflow;
   `@effect-agent/pr-review` stays read-only.
 - **WOI-013**: Expected authentication, admission, model, validation, check, publication,
   presentation, timeout, interruption, and cleanup failures remain typed in `E`; dependencies stay

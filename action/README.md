@@ -1,11 +1,12 @@
 # Effect Agent PR Review action
 
-Prebuilt node-runtime GitHub Action over
-[`@effect-agent/pr-review`](../packages/pr-review): a bounded, read-only
+This is a prebuilt Node runtime GitHub Action for
+[`@effect-agent/pr-review`](../packages/pr-review). Its bounded, read-only
 reviewer whose input assignment, verifier-confirmed findings, and anchors are
-validated host-side before the check concludes. No install step — the committed
+validated host-side before the check concludes. The committed
 `dist/index.mjs` bundle runs directly (`vp run action:build` regenerates it;
 `vp run check` fails when it is stale).
+No install step is required.
 
 ```yaml
 on:
@@ -41,16 +42,15 @@ jobs:
 
 No `actions/checkout` is required: the reviewer reads the pull request
 through the GitHub API and never checks out or executes untrusted PR code.
-(`guidance-file` is the exception: it reads from the workspace, so on
-`pull_request` events the profile comes from the PR's merge ref — the same
-trust level as the workflow file itself, which PRs can also edit. Repos that
-want a base-ref profile should check the file out from the base branch, and
-must not combine `guidance-file` with `pull_request_target`.)
+`guidance-file` is the exception because it reads from the workspace. On `pull_request` events,
+the profile comes from the PR's merge ref and has the same trust level as the workflow file, which
+PRs can also edit. Repositories that need a base-ref profile should check out the file from the
+base branch. Do not combine `guidance-file` with `pull_request_target`.
 
 ## Incremental reviews and authenticated continuity state
 
 Every completed review that can be signed embeds a bounded, schema-validated,
-terminal state marker in its review body — the baseline advances on every
+terminal state marker in its review body. The baseline advances on every
 run, monotonically. `state-secret`
 HMAC-authenticates the marker so model text or another workflow cannot forge
 scope-narrowing authority. The marker records the PR
@@ -58,8 +58,8 @@ identity, base/head lineage, reviewer-profile fingerprint, settled-scope
 fingerprint, unresolved findings/concerns, any retryable unreviewed paths,
 and whether the run fully settled. On the next `synchronize`, the
 action validates that state and asks GitHub for the previous-head...current-head
-comparison. Only changed paths still present in the current PR diff — plus
-carried unreviewed paths — are sent to the model; prior unresolved findings
+comparison. The model receives only changed paths still present in the current PR diff and
+carried unreviewed paths. Prior unresolved findings
 in unchanged paths remain active, and paths changed or reverted since the
 baseline receive fresh discovery and verification. A pass that failed on the
 reviewer's side costs exactly its own scope on the next run; it can never
@@ -76,7 +76,7 @@ patchless base/head evidence, pull-request framing, and reviewer profile. It
 does not hash commit IDs or base ancestry. An equivalent rebase therefore
 creates the new head-bound workflow check but skips model execution and posts
 no duplicate review or findings; the stored blocking/success conclusion is
-preserved. The skip requires a FULLY SETTLED stored state — one carrying
+preserved. The skip requires a fully settled stored state. A state carrying
 unreviewed scope is always retried instead. A changed diff, PR framing, model, guidance, bounds, or ignore
 configuration reviews again.
 
@@ -124,8 +124,8 @@ bodies and inline comments untouched.
 The moment a run starts reviewing (typed skips excluded), the action posts
 one sticky "review in progress" issue comment naming the selected scope, head
 commit, model, and workflow run, then rewrites that same comment in place
-with the settled outcome — the posted verdict, a blocking/incomplete callout,
-or the run failure. The comment is found by its invisible marker and the
+with the posted verdict, a blocking or incomplete callout, or the run failure. The comment is
+found by its invisible marker and the
 configured `review-author` bot identity, so a pasted marker in someone else's
 comment is never edited. Progress posting is at-least-once, never
 exactly-once: writes are generation-fenced (each run re-reads the comment and
@@ -139,9 +139,9 @@ and fail-open: GitHub faults here are logged and never change the review, the
 check conclusion, or the run result. Dry runs (`post: "false"`) post no
 progress. Disable it with `progress-comment: "false"`.
 
-Action logs render one compact line per event — tool executions as short
-progress lines, warnings and errors with their cause. Set `log-level: Debug`
-to additionally see the engine's per-turn and per-handler telemetry, or
+Action logs render one compact line per event. Tool executions appear as short
+progress lines, and warnings and errors include their cause. Set `log-level: Debug`
+to see the engine's per-turn and per-handler telemetry, or
 `Warn` to quiet routine runs.
 
 ## Final merge-readiness audit
@@ -168,11 +168,11 @@ also writes a step summary and `conclusion`, `input-coverage`,
 `coverage` output remains as a deprecated compatibility aggregate.
 
 The check conclusion does not trust the model verdict. Any active blocking
-finding or concern fails the job as `blocking` — code findings outrank
+finding or concern fails the job as `blocking`. Code findings outrank
 machinery gaps. A failed or exhausted discovery/specialist/verification pass
 (after its bounded retry) or partial input evidence concludes `incomplete`,
 with reasons that explicitly name a reviewer-side gap whose paths are carried
-forward and retried automatically — never an invitation to change code. A
+forward and retried automatically. This status does not ask the author to change code. A
 finding whose anchor falls outside its assigned evidence is discarded and
 counted, not a failed pass. Reading every path is not semantic completeness,
 and settled assurance never claims that every defect was found. Fan-out is
@@ -193,7 +193,7 @@ unchanged-review skip. That legacy shape still compiles, but runs again rather
 than converting unauthenticated prior-review text into a green assurance claim.
 
 If you set `max-duration-minutes` (or rely on the defaults: 8 flat / 20
-fan-out), keep the job's `timeout-minutes` above it — a runner-killed job
+fan-out), keep the job's `timeout-minutes` above it. A runner-killed job
 posts nothing, while a budget-ended run fails typed with its forensics.
 
 Inputs, outputs, and defaults are documented in [`action.yml`](action.yml).

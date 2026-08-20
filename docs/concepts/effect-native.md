@@ -86,7 +86,7 @@ option is to contribute it upstream.
 
 ## The architectural test
 
-Every public surface answers the same six questions: expected failure stays typed in `E`,
+Every public API answers the same six questions: expected failure stays typed in `E`,
 acquired capabilities stay visible in `R`, external input is Schema-decoded, every resource has
 one Scope owner, the behavior can be replaced with a Layer, and it adds an Agent concept rather
 than duplicating an Effect AI one. If a feature you are evaluating on top of the framework can

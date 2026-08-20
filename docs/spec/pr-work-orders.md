@@ -108,7 +108,7 @@ already-claimed outcome rather than invoke another implementer.
 
 The trusted-local proof may use an in-memory attempt policy and construct admitted work orders in
 process. The GitHub Action uses the authenticated GitHub-retained journal and job serialization specified
-in [work-order ingress](pr-work-order-ingress.md); that operational surface, rather than this local
+in [work-order ingress](pr-work-order-ingress.md). That operational workflow, rather than this local
 attempt policy, owns cross-job and cross-run duplicate delivery.
 
 ## 4. Outcomes
@@ -116,11 +116,11 @@ attempt policy, owns cross-job and cross-run duplicate delivery.
 The implementer returns one Schema-validated report bound to `workOrderDigest` and `headSha`. It
 must choose exactly one disposition:
 
-- **`fixed`** — proposes a non-empty patch and reports the host-observed changed paths, patch
+- **`fixed`.** Proposes a non-empty patch and reports the host-observed changed paths, patch
   digest, and named-check results;
-- **`not-applicable`** — explains why the instruction is incorrect or already satisfied and
+- **`not-applicable`.** Explains why the instruction is incorrect or already satisfied and
   proposes no patch; or
-- **`needs-human`** — explains the ambiguity, missing authority, or decision that prevents a safe
+- **`needs-human`.** Explains the ambiguity, missing authority, or decision that prevents a safe
   implementation and proposes no patch.
 
 `not-applicable` and `needs-human` are successful non-publication settlements, not implementation
@@ -138,15 +138,15 @@ and a typed failure. It must never report publication merely because the impleme
 
 Three principals remain distinct:
 
-- **Reviewer** — optional and separate. Read-only. It may post comments that later become untrusted
+- **Reviewer.** Optional, separate, and read-only. It may post comments that later become untrusted
   source evidence after human dispatch. It exports no work-order, handoff, edit, or publish API.
-- **Implementer** — receives the work order, its digest, and host policy metadata such as required
+- **Implementer.** Receives the work order, its digest, and host policy metadata such as required
   check names. Its complete model-visible authority is five Schema-defined tools on a scoped
   detached worktree: read an allowed file, search allowed files, perform an exact-string edit in
   an allowed file, inspect the host-collected patch, and request a named host-configured check. It
   receives no GitHub credential, provider secret, unrestricted process or shell, push tool, or
   publication capability.
-- **Host** — authenticates and authorizes ingress, constructs and claims the work order, acquires
+- **Host.** Authenticates and authorizes ingress, constructs and claims the work order, acquires
   and releases the worktree, collects the patch and digest, validates the report, compares
   model-reported checks with host-observed check-tool results, reruns required checks, and owns
   compare-and-swap publication.
@@ -207,7 +207,7 @@ comment, or a suggestion cannot substitute for authentication or authorization. 
 workflow runs authorization and publication from trusted base code, admits no fork, and separates
 model, untrusted checks, publisher, and presenter into jobs with least-privilege credentials.
 
-## 8. Leaf proof and retained substrate
+## 8. Leaf proof and retained code
 
 The executable proof belongs in a private leaf workspace under `examples/pr-work-orders`. It may
 depend inward on existing public framework packages and `@effect-agent/testing`, but it must not
@@ -218,7 +218,7 @@ reviewer-handoff Schemas, authenticators, exports, finding-accounting code, loop
 tests, and documentation must be removed rather than deprecated or adapted into pass-through
 abstractions. The old example name does not constrain the new leaf name.
 
-The proof retains the generally useful implementation substrate from the discarded loop design:
+The proof retains the reusable implementation code from the discarded loop design:
 
 - the separate bounded implementation Agent and its five model-visible tools;
 - scoped worktree acquisition and typed cleanup;
@@ -295,7 +295,7 @@ class E proof:
   Future label/sweep ingress may emit independently claimed work orders for explicitly selected
   comments.
 - **Keeping the earlier design because it exists.** Reviewer handoffs, finding accounting, and
-  built-in re-review are removed. Only substrate independently required by work orders remains.
+  built-in re-review are removed. Only code independently required by work orders remains.
 
 ## 12. Requirements
 
@@ -321,7 +321,7 @@ class E proof:
   operational GitHub product is a separately named, precompiled Action and enabled multi-job
   workflow, not a public framework package or reviewer export.
 - **WO-010**: `@effect-agent/pr-review` remains read-only and exports no work-order, remediation
-  handoff, implementer, edit, or publication surface.
+  handoff, implementation, editing, or publication API.
 - **WO-011**: Re-review and CI are independent downstream observers of a published head, not steps
   owned or graded by the work-order implementer.
 - **WO-012**: Public operations preserve expected admission, validation, check, stale-head,

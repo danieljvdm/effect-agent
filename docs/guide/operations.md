@@ -1,6 +1,6 @@
 ---
 title: Operations
-description: The operator surface of the durable runtime — administrative operations, obligation monitoring, and backup/restore for both deployment classes.
+description: Durable runtime administration, obligation monitoring, and backup and restore for both deployment classes.
 ---
 
 # Operations
@@ -14,23 +14,23 @@ and restore on Node/SQLite (`DN`) and Cloudflare Durable Objects (`DC`).
 Five operations are members of `DurableAgentRuntime`, implemented over the `SubmissionLedger`
 and `ConversationStore` ports only, so they behave identically on `DN` and `DC`:
 
-- `explain(submissionId)` / `explainConversation(conversationId)` — read-only recovery
+- `explain(submissionId)` / `explainConversation(conversationId)` returns a read-only recovery
   explanation: the classifier decision, its operator meaning, and the disposition a recovery
-  pass would report. Performs zero writes.
-- `verify(conversationId)` — read-only integrity checks with typed per-check results; never a
-  repair. The digest-chain check reports `skipped` with the honest reason unless per-batch
+  pass would report. It writes nothing.
+- `verify(conversationId)` runs read-only integrity checks with typed per-check results. It never
+  repairs. The digest-chain check reports `skipped` with the reason unless per-batch
   producer identity is supplied out-of-band.
-- `retry(submissionId, { author, reason })` — audited re-drive of exactly the classifier's one
-  decision, with typed refusals for settled work and for lanes owned by the
+- `retry(submissionId, { author, reason })` records an audit entry and re-drives exactly the
+  classifier's decision, with typed refusals for settled work and lanes owned by the
   `resolveUnknown`/`resolveApproval` paths. Author and reason are mandatory.
-- `wake(conversationId)` — the droppable liveness nudge.
-- `scanObligations(thresholds)` — the obligation report (next section).
+- `wake(conversationId)` sends a droppable liveness notification.
+- `scanObligations(thresholds)` returns the obligation report described below.
 
 On `DN`, `NodeDurableHost` re-exposes all five, and
 `bun run admin:durable -- <explain|verify|retry|wake|obligations> --database <file>` is the CLI.
 On `DC`, the Conversation Object exposes Schema-encoded entry points (`explainEncoded`,
 `verifyEncoded`, `retryEncoded`, `obligationsEncoded`, `wake`); deployments reach them through
-their own Worker. Every operation — plus `observe`, `resolveUnknown`, and `resolveApproval` —
+their own Worker. Every operation, including `observe`, `resolveUnknown`, and `resolveApproval`,
 consults the `OperationAuthorizer` fail-closed: the default Layer preserves service-possession
 behavior, and a host-supplied authorizer turns denials into the typed `OperationDenied` before
 any read or write.
@@ -46,9 +46,9 @@ Hosts own the alert loop. The framework deliberately does not schedule the scan 
 alerts: run `scanObligations` periodically from your host (cron, alarm, monitoring agent),
 export the rows as logs or metrics, and alert on:
 
-- any row with `blockedOn: "unknown"` — an Unknown Outcome needs an authorized
+- any row with `blockedOn: "unknown"`, because an Unknown Outcome needs an authorized
   `resolveUnknown` decision;
-- any row with severity `overdue` — accepted work without timely settlement;
+- any row with severity `overdue`, which marks accepted work without timely settlement;
 - a growing `approval` backlog.
 
 ## Backup and restore on DN
@@ -60,17 +60,17 @@ claimed `DN` deployment shape is one process owner per database file.
 Restoring a backup means accepting four semantics (the repository proves them with an executable
 restore drill):
 
-1. **Pre-backup history survives intact** — the restored store passes the same integrity checks
+1. **Pre-backup history survives intact.** The restored store passes the same integrity checks
    (`verify`) as the original.
-2. **Post-backup epochs are fenced** — an ownership token minted on the original timeline after
+2. **Post-backup epochs are fenced.** An ownership token minted on the original timeline after
    the backup point is rejected typed by the restored store. Before serving traffic from a
    restore, fence or terminate every producer that ever ran against the original store: a
    divergent producer must never be left assuming it still owns anything.
-3. **Post-backup external effects surface through the Unknown regime** — an external call whose
+3. **Post-backup external effects enter the Unknown regime.** An external call whose
    outcome was only recorded after the backup re-enters recovery as an open call and is marked
    `ToolCallUnknown`. It is never assumed rolled back and never automatically replayed: resolve
    each one through `resolveUnknown` from external truth (the supplier's records).
-4. **Post-backup admissions are gone** — Receipts issued after the backup point do not exist in
+4. **Post-backup admissions are gone.** Receipts issued after the backup point do not exist in
    the restored store. Clients holding such Receipts must resubmit (idempotency keys make the
    resubmission safe), and any external effects those lost Submissions performed must be
    reconciled through the same Unknown discipline.
@@ -98,8 +98,9 @@ is a manual runbook, not an executed claim:
 
 ## Next steps
 
-- [Persistence & durability](../concepts/durability) — the contract these operations administer.
-- [Certify storage adapters](./certify-adapters) — proving a third-party adapter honors the same
+- [Persistence and durability](../concepts/durability) defines the contract these operations
+  administer.
+- [Certify storage adapters](./certify-adapters) explains how a third-party adapter proves the same
   invariants.
-- [Security & operations specification](../spec/security-operations) — the normative
+- [Security and operations specification](../spec/security-operations) contains the normative
   authorization and audit requirements.

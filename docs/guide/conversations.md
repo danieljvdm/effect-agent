@@ -59,7 +59,7 @@ class ConversationStore extends Context.Service<ConversationStore, {
 Appends are atomic, digest-bound, idempotent by batch ID, conflict-checked against the expected
 tail, and fenced by producer epoch. Reads decode persisted values through Schema.
 
-## Storage Layers
+## Storage layers
 
 Two adapters implement the same current contract:
 

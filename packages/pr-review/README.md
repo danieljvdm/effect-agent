@@ -1,7 +1,7 @@
 # @effect-agent/pr-review
 
-A bounded, fail-closed GitHub pull-request reviewer built on the effect-agent
-public surface. Read-only Agents review host-partitioned pull-request evidence
+A bounded, fail-closed GitHub pull-request reviewer built on effect-agent's public APIs. Read-only
+Agents review host-partitioned pull-request evidence
 through typed ports; the host validates every finding anchor against the real
 diff and posts one review after the run settles.
 
@@ -53,7 +53,7 @@ const reviewer = PrReview.make({
 });
 ```
 
-Every knob widens what goes INTO the review. What leaves it is not
+Every option may widen what enters the review. What leaves it is not
 configurable: model output is untrusted input, so finding anchors are
 re-validated against the parsed unified diff (invalid ones are demoted into
 the review body with the reason named, never trusted), the findings bound is
@@ -65,8 +65,8 @@ every unit, adds a fresh specialist discovery pass for every unit, and uses
 deterministic host-classified risk categories as explicit focus labels. A
 fresh verifier must confirm or reject every discovered candidate. Every pass
 runs as a bounded evidence-only child dispatched directly by host code with
-Effect structured concurrency — there is no coordinator model and no
-delegation tool, so nothing depends on a model copying the plan correctly. A
+Effect structured concurrency. There is no coordinator model or delegation Tool, so the plan
+does not depend on a model copying it correctly. A
 pass that fails (child fault, malformed or misdirected output) is retried
 once; a pass that stays failed is reported and its unit's paths carry forward
 as retryable scope. Verifiers receive the exact candidate claims and the
@@ -88,8 +88,8 @@ the ordinary diff-read tool with non-anchorable `B`/`H` line labels and must
 report defects as review-body concerns. Invalid UTF-8, binary NUL content,
 missing sides, and files beyond the per-side read bound leave a path with no
 reviewable textual evidence. Such paths keep input coverage incomplete and are
-carried for as long as they are part of the pull request — an unreviewable
-change must never authorize a green check; exclude them deliberately with
+carried for as long as they are part of the pull request. An unreviewable
+change cannot authorize a green check. Exclude such files with
 ignore globs when that is intended.
 
 ## Assurance model
@@ -125,22 +125,22 @@ that shape.
 
 ## What a posted review looks like
 
-The body opens with a host-derived callout tier — `[!CAUTION]` when any
+The body opens with a host-derived callout tier. It uses `[!CAUTION]` when any
 finding is blocking, `[!IMPORTANT]` for important findings, an ℹ️ blockquote
-for nits, `✅` for a clean approval — computed from the validated severities,
+for nits, and `✅` for a clean approval. The host computes the tier from validated severities,
 never from model prose. Directly under it, one host-derived stats line names
 the changeset size (`N files (+adds / −dels)`), the severity tally, and a
-deterministic 1–5 review-effort estimate computed from the changeset shape
+deterministic review-effort estimate from 1 to 5, computed from the changeset shape
 alone. Fan-out reviews add a second host-derived line naming input assignment,
 discovery/specialist/verification settlement, and candidate dispositions.
 Below the summary, a collapsed **📝 Walkthrough** table carries the
-model's one-sentence per-file change summaries — walkthrough paths are
-validated like finding anchors, so entries naming files outside the changeset
+model's one-sentence per-file change summaries. The host validates walkthrough paths like finding
+anchors, so entries naming files outside the changeset
 are dropped. Under fan-out only summaries a
 successfully settled general pass actually reported for its own unit's paths
 survive, so a child cannot smuggle or invent entries. Non-anchored `concerns`
 (deletion plans, rollout sequencing,
-coverage gaps, scope questions — things with no diff line to point at) render
+coverage gaps, and scope questions with no diff line to point at) render
 as severity-tagged sections; demoted findings and findings carried from
 unchanged scope collapse into counted `<details>` sections.
 
@@ -148,10 +148,10 @@ Each inline comment is headed by its severity plus an optional model-claimed
 category chip (`**[⚠️ important · security] …**`), carries a committable
 GitHub `suggestion` fence when independent verification settled the model's
 suggestion as committable replacement source, and ends with a
-collapsed **🤖 Prompt for AI agents** — a copy-paste instruction derived
+collapsed **Prompt for AI agents** with a copyable instruction derived
 host-side from the validated finding, opening with a fixed preamble telling
 the receiving agent to treat the finding content as untrusted review data.
-The review body repeats every finding — anchored, demoted, and carried — in
+The review body repeats anchored, demoted, and carried findings in
 one consolidated prompt block so nothing needs to be collected by hand. The
 footer names the model binding, the observed token usage, and links to the
 workflow run; an invisible metadata comment pins the reviewed head commit so
@@ -161,7 +161,7 @@ later readers know when line callouts have gone stale.
 
 Tools observe the pull request only through `PullRequestSource`; publication
 happens only through `ReviewPublisher`. Provide your own Layers to review
-anything diff-shaped or publish anywhere else — the GitHub REST adapters are
+any diff-shaped input or publish elsewhere. The GitHub REST adapters are
 one implementation, not the contract.
 
 ## Test what you adapted
@@ -176,8 +176,8 @@ import {
 ```
 
 Deterministic in-memory adapters for both ports plus prompt-keyed scripted
-models that walk the real tool surface — no network, no credentials, every
-ordinary gate.
+models that call the real Tools. Tests need no network or credentials and exercise every ordinary
+gate.
 
 ## Incremental Action reviews
 
@@ -185,22 +185,22 @@ Every completed Action review that can be signed carries bounded, versioned,
 HMAC-authenticated continuity state: the exact PR/base/head lineage, profile
 and settled-scope fingerprints, the still-unresolved findings and concerns,
 any retryable unreviewed paths, and whether the run fully settled. The
-baseline is monotone by design — a flaky or failed pass carries exactly its
+baseline is monotone by design. A flaky or failed pass carries exactly its
 own scope forward instead of freezing the baseline and reopening everything
 reviewed since (the non-converging loop of issue #131). A later Action run
 validates the state and reviews the GitHub comparison from that reviewed head
 to the current head plus the carried unreviewed paths, not the complete
-base...HEAD diff. When that head is not a git ancestor — a rebase, amend, or
-force-push — the host falls back to a two-dot tree comparison and reviews only
+base...HEAD diff. After a rebase, amend, or force-push, that head may no longer be a git ancestor.
+The host then falls back to a two-dot tree comparison and reviews only
 the current PR paths whose contents actually changed, plus leftovers. Unchanged
 settled scope is not sent back to the model; unchanged unresolved findings
 remain active; changed or reverted paths invalidate their prior findings and
 receive fresh discovery and verification. An unchanged leftover from a failed
-pass retries only that failed stage and keeps its stored findings — it does
-not run a second general discovery.
+pass retries only that failed stage and keeps its stored findings. It does not run a second
+general discovery.
 Whole overflow files are reviewed in bounded installments across pushes
 through the same carry; a single file beyond total plan capacity and
-undiffable paths stay explicitly incomplete instead — an unreviewable tail
+undiffable paths stay explicitly incomplete instead. An unreviewable tail
 never moves behind a green check. Non-anchored concerns are carried conservatively
 until a full audit because they cannot be mapped safely to one path.
 
@@ -221,8 +221,8 @@ schema field retains the compatibility name `acceptedScopeFingerprint`. That
 fingerprint hashes the ignore-filtered effective diff, patchless base/head
 evidence, PR framing, and review-shaping profile while excluding commit IDs,
 base ancestry, and unified-diff hunk coordinates. Re-running the same head or a
-patch-equivalent rebase skips model execution by default ONLY when the stored
-state fully settled — a state carrying unreviewed scope is always retried.
+patch-equivalent rebase skips model execution by default only when the stored
+state fully settled. A state carrying unreviewed scope is always retried.
 The preserved skip keeps its stored blocking/success conclusion and posts no
 duplicate review comments. Missing/corrupt state and any fingerprint or
 profile mismatch review conservatively.
@@ -247,22 +247,21 @@ and with a bounded warning, so the next run safely performs a full review.
 prior assurance state, plans fresh discovery over the full current PR
 diff, verifies new candidates, and resets the incremental baseline; normal
 `synchronize` events use `incremental` and do not perform this audit.
-Because equivalence is based on the textual review surface, a base change that
+Because equivalence is based on the text sent for review, a base change that
 alters runtime meaning without changing the diff/context is not detectable;
 request `final` mode (or disable unchanged skipping) for that case.
 
 ## Hosts
 
-- **GitHub Actions**: the repository ships a prebuilt node-runtime action
-  supporting a committed review-profile document via `guidance-file` (this
-  repository's own profile lives at `.github/review-guidance.md`)
-  (`action/` at the repo root) — `uses` it with an API-key secret and nothing
-  else. Fan-out is the Action default because the flat compatibility shape
-  has no independent verifier and cannot settle review assurance. While a run executes it maintains one sticky, fail-open "review in
-  progress" comment updated in place with the settled outcome
-  (`progress-comment` input, default on; at-least-once with generation-fenced
-  writes and best-effort duplicate cleanup — strict single-comment behavior
-  comes from a per-PR workflow concurrency group), and its logs render one
+- **GitHub Actions.** The repository ships a prebuilt Node runtime Action at `action/`. It accepts
+  a committed review profile through `guidance-file`; this repository uses
+  `.github/review-guidance.md`. Reference the Action with `uses` and pass an API-key secret,
+  nothing else. Fan-out is the default because the flat compatibility shape has no independent
+  verifier and cannot settle review assurance. While a run executes, the Action maintains one
+  sticky, fail-open "review in progress" comment and updates it with the settled outcome. The
+  `progress-comment` input is on by default. Writes are at least once with generation fencing and
+  best-effort duplicate cleanup. A per-PR workflow concurrency group provides strict
+  single-comment behavior. Logs render one
   compact line per event (`log-level` input, default `Info`). For custom reviewers in
   CI, `@effect-agent/pr-review/action` exports `runReviewAction` (event
   resolution, typed draft/non-PR skips, bounded range selection, step
@@ -271,7 +270,7 @@ request `final` mode (or disable unchanged skipping) for that case.
   progress comment. A custom fingerprint-only harness remains source-compatible
   but cannot skip model work: unchanged skipping requires the profile fingerprint
   and authenticated state that prove the prior configured work settled.
-- **CLI**: `bun src/cli.ts --repo owner/name --pr 123 [--post] [--provider anthropic] [--fan-out]`
+- **CLI.** `bun src/cli.ts --repo owner/name --pr 123 [--post] [--provider anthropic] [--fan-out]`
   (also exported as the `./cli` entry).
 
 Environment: `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for the model,
@@ -287,7 +286,7 @@ variables inside Actions.
 Finite `AgentPolicy` on every definition plus run-level `UsageBudgetLimits`
 (tokens, tool calls, cost, duration). Reading either file version beyond 200k
 bytes or characters is refused typed; patchless content is reviewable only
-when its complete B/H rendering fits 220k characters. The changeset surface is
+when its complete B/H rendering fits 220k characters. The changeset is
 bounded at 300 files:
 files beyond the bound are not fetched, and the review body reports
 `Input exposed N of M changed files` instead of claiming completeness.
@@ -299,7 +298,7 @@ reported, with a deterministic identifier sample bounded to one plan's capacity;
 at most eight units produce at most 24 attached children (general and
 specialist discovery plus one verification batch per unit), with child
 concurrency capped at four. Any blocking active finding fails the Action
-check. Any input gap—including an unassigned evidence shard—failed or
+check. Any input gap, including an unassigned evidence shard, failed or
 exhausted configured pass, mismatched candidate batch, or unsettled
 verification is non-success rather than green. A settled
 clean result is evidence that these bounded passes completed, not proof that

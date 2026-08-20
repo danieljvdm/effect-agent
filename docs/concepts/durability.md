@@ -5,8 +5,9 @@ description: Why replayable history and accepted-work recovery are separate prod
 
 # Persistence and durability
 
-Persistence answers “can I rebuild what was recorded?” Durability answers “after I acknowledge
-work, who owes the terminal outcome?” The second promise requires substantially more machinery.
+Persistence answers "can I rebuild what was recorded?" Durability answers "after I acknowledge
+work, who owes the terminal outcome?" Durability requires a separate work ledger and recovery
+protocol.
 
 ## Four deployment classes
 
@@ -17,7 +18,7 @@ work, who owes the terminal outcome?” The second promise requires substantiall
 | `DN`  | durable admission and recovery on Node/SQLite            |
 | `DC`  | the equivalent contract on Cloudflare Durable Objects    |
 
-All four classes are implemented. No package or example uses “durable” without naming the
+All four classes are implemented. No package or example uses "durable" without naming the
 deployment class and tested adapter.
 
 ## Canonical history

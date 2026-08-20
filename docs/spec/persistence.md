@@ -1,4 +1,4 @@
-# Persistence Specification
+# Persistence specification
 
 Status: Draft
 
@@ -111,7 +111,7 @@ one cheap read inside the same consistency domain as `append`. A resuming produc
 its next `FencedAppendRequest` from this value instead of exporting the whole log.
 
 The shipped `@effect-agent/session` `SubmissionLedger` port implements exactly these semantic
-operations and additionally exposes strongly consistent `lookup`, graceful `releaseOwnership`,
+operations and also exposes strongly consistent `lookup`, graceful `releaseOwnership`,
 the idempotent `markInputApplied` canonical-input marker, idempotent `requestAbort`, the ordered
 `scanNonterminal` stream, and a `capabilities` durability declaration.
 
@@ -138,7 +138,7 @@ interface RecordEnvelope<A> {
 }
 ```
 
-Producer-written records additionally include producer identity and epoch. User or
+Producer-written records also include producer identity and epoch. User or
 tenant identity is included where authorization and retention require it.
 
 Timestamps support audit and operations but do not define conversation ordering.

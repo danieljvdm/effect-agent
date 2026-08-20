@@ -2,7 +2,7 @@
 
 Status: Draft
 
-Agents combine untrusted instructions, powerful credentials, external content, and
+Agents combine untrusted instructions, privileged credentials, external content, and
 side-effecting tools. Security is therefore part of the runtime contract rather
 than a collection of example-app concerns.
 
@@ -137,8 +137,8 @@ Every event field is classified as one of:
 - prohibited from persistence.
 
 Redaction occurs before telemetry export and before optional debug capture.
-Redaction is structural, based on Schema annotations and event types, not only
-regular expressions.
+Redaction is structural, based on Schema annotations and event types rather than
+regular expressions alone.
 
 Reasoning content, signatures, and redaction markers exposed through Effect AI are persisted as
 canonical model content. This data is sensitive and requires the same tenant isolation,
@@ -166,16 +166,16 @@ Local unisolated runners are development-only and clearly labeled.
 Code Mode generated programs are model output and therefore untrusted input executing in an
 isolated executor. The executor grants no ambient network, filesystem, environment,
 secrets, platform bindings, or host SDK; the only host authority is the narrow, Schema-validated
-Tool-broker RPC surface over the construction-time allowlist. Source inspection and AST
-normalization are usability checks, never the security boundary — genuine runtime isolation,
+Tool-broker RPC API over the construction-time allowlist. Source inspection and AST
+normalization are usability checks, never the security boundary. Genuine runtime isolation,
 least-authority bindings, and enforced limits are. No raw secret may be returned by a host Tool
 or included in an executor binding, and the deterministic test substitute identifies itself as
 `unisolated` rather than masquerading as a boundary.
 
 The read-only SQL reference Tool's guarantee is database authority, not SQL text inspection: a
 database identity without mutation, DDL, administrative, or extension privileges; denial of
-side-effecting functions reachable from a `SELECT` — installed extensions and user-defined
-functions included — through an explicit execution allowlist or revocation evaluated under the
+side-effecting functions reachable from a `SELECT`, including installed extensions and
+user-defined functions, through an explicit execution allowlist or revocation evaluated under the
 effective database identity (a restricted search path where the database has one); denial of
 cross-database, filesystem, and network access; host-owned tenant scoping; exactly one statement
 per call with bound parameters rather than interpolation; statement timeout and cancellation;
@@ -224,7 +224,7 @@ include principal, reason, and before/after state digests.
 
 ## 12. Telemetry
 
-The OpenTelemetry surface includes:
+OpenTelemetry records:
 
 - trace per admitted submission and attempt;
 - spans for model calls, tool calls, approvals, compaction, storage, sandbox executions, and
@@ -316,7 +316,7 @@ Malformed provider or tool streams must not grow unbounded buffers.
 - **SEC-012**: Resource and cost budgets are enforced hierarchically.
 - **SEC-013**: All untrusted input and stream buffers have explicit bounds.
 - **SEC-014**: Generated Code Mode programs execute only in an isolated executor with no ambient
-  authority; host Tools are reachable only through the brokered, Schema-validated RPC surface.
+  authority; host Tools are reachable only through the brokered, Schema-validated RPC API.
 - **SEC-015**: Read-only SQL exposure is enforced by database authority and host-owned tenant
   scoping, never by source-text inspection.
 - **OPS-001**: Accepted work settlement age is measurable and alertable.
