@@ -1,5 +1,15 @@
 # @effect-agent/session
 
+## 0.1.0-beta.24
+
+### Patch Changes
+
+- [#139](https://github.com/danieljvdm/effect-agent/pull/139) [`6e3f56f`](https://github.com/danieljvdm/effect-agent/commit/6e3f56fbadd831372124578b027ea2bd5ff8f008) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep the production session entrypoint free of certification, conformance, and Effect test-runtime code. Import adapter harnesses from `@effect-agent/session/testing`.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.24
+  - @effect-agent/engine@0.1.0-beta.24
+
 ## 0.1.0-beta.23
 
 ### Patch Changes

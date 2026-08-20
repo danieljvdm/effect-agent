@@ -1,5 +1,20 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.24
+
+### Patch Changes
+
+- [#138](https://github.com/danieljvdm/effect-agent/pull/138) [`00597ba`](https://github.com/danieljvdm/effect-agent/commit/00597ba82fdaeb698aa29e1b3385ea689a163d84) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep incremental reviews incremental after a rebase, and retry only the failed pass on unchanged leftover paths.
+
+  A rewritten head no longer fail-closes to a full-diff rediscovery when a two-dot tree comparison can name the current PR paths whose contents changed. Outdated GitHub comments that omit `line` no longer block stale-review retirement.
+
+- [#136](https://github.com/danieljvdm/effect-agent/pull/136) [`966fe3a`](https://github.com/danieljvdm/effect-agent/commit/966fe3ab5f01d4f812f97b6cda7a6ac7f3a46f68) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Hash review fingerprints through Effect `Crypto.Crypto` instead of `globalThis.crypto`.
+
+  BEHAVIOR CHANGE: `computeChangesetFingerprint`, `computeProfileFingerprint`, and `PrReview` fingerprint/`run` Effects now require `Crypto.Crypto`. Node CLI/Action hosts already satisfy this via `NodeServices.layer`.
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.24
+
 ## 0.1.0-beta.23
 
 ### Minor Changes
