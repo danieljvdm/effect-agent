@@ -42193,6 +42193,7 @@ class ReviewFinding extends exports_Schema.Class("@effect-agent/pr-review/Review
 var ReviewVerdict = exports_Schema.Literals(["approve", "comment", "request-changes"]);
 
 class ReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/ReviewConcern")({
+  evidencePaths: exports_Schema.optionalKey(exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(3))),
   severity: FindingSeverity,
   title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
   body: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2000))
@@ -42238,9 +42239,9 @@ ${mission.body}` : "The author provided no description.",
     "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
     "Go shallow only when the diff has no behavioral surface at all: doc typos, formatting, lockfile or generated-code regeneration, a mechanical rename. Line count is not the signal — a one-line change to auth, money, SQL, a comparison operator, or a config default is not trivial.",
     "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
-    '5. After collecting anchored findings, deliberately scan for concerns with NO line to point at: deletion or cleanup plans for code the diff replaces, rollout or migration sequencing, coverage gaps the diff implies but does not add, scope questions only the author can answer. Report each as a "concern", never as a finding with an invented anchor; report none when none exist.',
+    '5. After collecting anchored findings, deliberately scan for concerns with NO line to point at: deletion or cleanup plans for code the diff replaces, rollout or migration sequencing, coverage gaps the diff implies but does not add, scope questions only the author can answer. Report each as a "concern", never as a finding with an invented anchor. Every concern must list 1-3 exact changed evidencePaths that support it so later incremental reviews can recheck it when those files change. Report none when none exist, and never split one root concern into differently worded restatements.',
     `6. Write a walkthrough: for every file whose evidence you examined, one factual sentence (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars) describing what changed in that file — written for a reader scanning the pull request, never restating the diff line by line. Use only paths from list_changed_files; invented paths are dropped.`,
-    '7. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "category": <OPTIONAL: "correctness" | "security" | "concurrency" | "performance" | "resources" | "error-handling" | "testing" | "maintainability" | "style" | "docs">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for step-5 concerns with no valid anchor — never duplicate a finding here>, "walkthrough": <array, OPTIONAL: [{"path": <string, a changed file path>, "summary": <string, the step-6 sentence>}], one entry per reviewed file>}.',
+    '7. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "category": <OPTIONAL: "correctness" | "security" | "concurrency" | "performance" | "resources" | "error-handling" | "testing" | "maintainability" | "style" | "docs">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"evidencePaths": <array of 1-3 exact changed file paths>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for step-5 concerns with no valid anchor — never duplicate a finding here>, "walkthrough": <array, OPTIONAL: [{"path": <string, a changed file path>, "summary": <string, the step-6 sentence>}], one entry per reviewed file>}.',
     `Report at most ${maxFindings} findings and at most ${MAX_CONCERNS} concerns; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
     'Use verdict "request-changes" only when at least one finding or concern is "blocking". Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.'
   ].join(`
@@ -42735,10 +42736,11 @@ var rankAndDedupeFindings = (findings) => {
     return left.startLine - right.startLine;
   }).slice(0, MAX_MERGED_FINDINGS);
 };
+var reviewConcernKey = (concern) => `${(concern.evidencePaths ?? []).join("\x00")}\x01${concern.title}\x00${concern.body}`;
 var rankAndDedupeConcerns = (concerns) => {
   const byContent = new Map;
   for (const concern of concerns) {
-    const key = `${concern.title}\x00${concern.body}`;
+    const key = reviewConcernKey(concern);
     const previous = byContent.get(key);
     if (previous === undefined || severityRank[concern.severity] < severityRank[previous.severity]) {
       byContent.set(key, concern);
@@ -42883,7 +42885,7 @@ var makeFileReviewerInstructions = (options3 = {}) => (brief) => {
     ...common,
     focus,
     "The discovery evidence array contains every complete shard in the unit. Review every entry and every shard of a multi-shard path. A later independent verifier, not you, decides which candidates publish.",
-    "When a non-anchored concern depends on one or more unit files, list 1-3 exact evidencePaths to bind the claim to scheduled evidence.",
+    "Every non-anchored concern must list 1-3 exact evidencePaths to bind the claim to scheduled evidence. Report one root concern once; never split it into differently worded restatements.",
     `Return ONLY JSON with phase "discovery", the exact workId/unitId, up to ${MAX_CHILD_FINDINGS} findings, up to ${MAX_CHILD_CONCERNS} concerns shaped as {concern, evidencePaths}, one factual file summary per path (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars), and an empty assessments array. Empty candidate arrays are valid; do not invent defects.`,
     'Each finding is {"path": <a unit file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "category": <OPTIONAL problem-kind label>, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement source code for exactly lines startLine..endLine, ready to commit>}.',
     'Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement source for every line in the range and nothing else — never prose describing the change, which belongs in "body".'
@@ -43263,7 +43265,12 @@ var runFanOutReview = (binding, input) => exports_Effect.gen(function* () {
     reasons
   });
   const findings = rankAndDedupeFindings(confirmed.flatMap(({ assessment, candidate }) => candidate._tag === "FindingCandidate" ? [confirmedFindingForPublication(assessment, candidate)] : []));
-  const concerns = rankAndDedupeConcerns(confirmed.flatMap(({ candidate }) => candidate._tag === "ConcernCandidate" ? [candidate.concern] : []));
+  const concerns = rankAndDedupeConcerns(confirmed.flatMap(({ candidate }) => candidate._tag === "ConcernCandidate" ? [
+    ReviewConcern.make({
+      ...candidate.concern,
+      evidencePaths: [...new Set(candidate.evidencePaths)].sort()
+    })
+  ] : []));
   const walkthrough = outcomes.flatMap((outcome) => outcome.walkthrough);
   const blocking = findings.some((finding) => finding.severity === "blocking") || concerns.some((concern) => concern.severity === "blocking");
   const review = CodeReview.make({
@@ -43372,6 +43379,7 @@ class StoredReviewFinding extends exports_Schema.Class("@effect-agent/pr-review/
 }
 
 class StoredReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/StoredReviewConcern")({
+  evidencePaths: exports_Schema.optionalKey(exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(3))),
   severity: FindingSeverity,
   title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
   body: StoredText
@@ -43423,11 +43431,17 @@ var fromStoredFinding = (finding) => ReviewFinding.make({
   body: finding.body
 });
 var toStoredConcern = (concern) => StoredReviewConcern.make({
+  ...concern.evidencePaths === undefined ? {} : { evidencePaths: concern.evidencePaths },
   severity: concern.severity,
   title: concern.title,
   body: concern.body.slice(0, 800)
 });
-var fromStoredConcern = (concern) => ReviewConcern.make({ severity: concern.severity, title: concern.title, body: concern.body });
+var fromStoredConcern = (concern) => ReviewConcern.make({
+  ...concern.evidencePaths === undefined ? {} : { evidencePaths: concern.evidencePaths },
+  severity: concern.severity,
+  title: concern.title,
+  body: concern.body
+});
 var STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
 var STATE_MARKER_SUFFIX = " -->";
 var STATE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
@@ -43564,6 +43578,9 @@ var validateReviewState = (state, current, profileFingerprint) => {
   if (state.profileFingerprint !== profileFingerprint) {
     return "the reviewer profile or model configuration changed";
   }
+  if (state.unresolvedConcerns.some((concern) => concern.evidencePaths === undefined)) {
+    return "stored concerns predate affected-path tracking";
+  }
   return;
 };
 var filePaths = (file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath];
@@ -43573,6 +43590,22 @@ var incrementalFromDelta = (input) => {
     ...input.deltaFiles.flatMap(filePaths),
     ...input.extraAffectedPaths ?? []
   ]);
+  const initialAffectedCount = affectedPaths.size;
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    for (const concern of input.priorState.unresolvedConcerns) {
+      const paths = concern.evidencePaths ?? [];
+      if (!paths.some((path) => affectedPaths.has(path)))
+        continue;
+      for (const path of paths) {
+        if (!affectedPaths.has(path)) {
+          affectedPaths.add(path);
+          expanded = true;
+        }
+      }
+    }
+  }
   const selectedByPath = new Map;
   for (const file2 of input.deltaFiles) {
     if (currentPaths.has(file2.path) || file2.previousPath !== undefined && currentPaths.has(file2.previousPath)) {
@@ -43602,19 +43635,19 @@ var incrementalFromDelta = (input) => {
     retryStages.add("specialist");
     retryStages.add("verification");
   }
-  if (carriedPaths.length > 0 || (input.extraAffectedPaths?.length ?? 0) > 0) {
-    for (const file2 of input.fullFiles) {
-      const needed = affectedPaths.has(file2.path) || file2.previousPath !== undefined && affectedPaths.has(file2.previousPath) || retryOnly.has(file2.path) || file2.previousPath !== undefined && retryOnly.has(file2.previousPath);
-      if (needed)
-        selectedByPath.set(file2.path, file2);
-    }
+  for (const file2 of input.fullFiles) {
+    const needed = affectedPaths.has(file2.path) || file2.previousPath !== undefined && affectedPaths.has(file2.previousPath) || retryOnly.has(file2.path) || file2.previousPath !== undefined && retryOnly.has(file2.previousPath);
+    if (needed)
+      selectedByPath.set(file2.path, file2);
   }
   const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
   const leftoverCount = [...retryOnly].filter((path) => !affectedPaths.has(path)).length;
   const carriedReason = leftoverCount > 0 ? `; retrying ${leftoverCount} unchanged leftover path(s) without rediscovery` : carriedPaths.length > 0 ? `; retrying ${carriedPaths.length} carried unreviewed path(s)` : "";
+  const concernPathCount = affectedPaths.size - initialAffectedCount;
+  const concernReason = concernPathCount === 0 ? "" : `; reopening ${concernPathCount} related concern path(s) for context`;
   return {
     mode: "incremental",
-    reason: `${input.reason}${carriedReason}`,
+    reason: `${input.reason}${carriedReason}${concernReason}`,
     files: selectedFiles,
     affectedPaths: [...affectedPaths].sort(),
     retryPaths: [...retryOnly].filter((path) => !affectedPaths.has(path)).sort(),
@@ -44446,41 +44479,65 @@ var renderDemoted = (finding, reason) => {
   return `- ${location2} **[${findingLabel(finding)}] ${finding.title}** — ${finding.body} _(demoted: ${reason})_`;
 };
 var countNoun2 = (count2, noun) => `${count2} ${noun}${count2 === 1 ? "" : "s"}`;
+var tallySeverities = (items) => {
+  const blocking = items.filter((item) => item.severity === "blocking").length;
+  const important = items.filter((item) => item.severity === "important").length;
+  const nit = items.length - blocking - important;
+  return { blocking, important, nit, total: items.length };
+};
 var severityCounts = (review, carriedFindings = [], carriedConcerns = []) => {
-  const severities = [
-    ...review.findings.map((finding) => finding.severity),
-    ...(review.concerns ?? []).map((concern) => concern.severity),
-    ...carriedFindings.map((finding) => finding.severity),
-    ...carriedConcerns.map((concern) => concern.severity)
-  ];
+  const findings = tallySeverities(review.findings);
+  const concerns = tallySeverities(review.concerns ?? []);
+  const priorFindings = tallySeverities(carriedFindings);
+  const priorConcerns = tallySeverities(carriedConcerns);
   return {
-    blocking: severities.filter((severity2) => severity2 === "blocking").length,
-    important: severities.filter((severity2) => severity2 === "important").length,
-    total: severities.length
+    findings,
+    concerns,
+    carriedFindings: priorFindings,
+    carriedConcerns: priorConcerns,
+    total: {
+      blocking: findings.blocking + concerns.blocking + priorFindings.blocking + priorConcerns.blocking,
+      important: findings.important + concerns.important + priorFindings.important + priorConcerns.important,
+      nit: findings.nit + concerns.nit + priorFindings.nit + priorConcerns.nit,
+      total: findings.total + concerns.total + priorFindings.total + priorConcerns.total
+    }
   };
 };
+var joinItemCounts = (items) => items.length <= 1 ? items[0] ?? "none" : items.length === 2 ? `${items[0]} and ${items[1]}` : `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
+var severityItemParts = (counts, severity2) => [
+  ...counts.findings[severity2] === 0 ? [] : [countNoun2(counts.findings[severity2], `${severity2} finding`)],
+  ...counts.concerns[severity2] === 0 ? [] : [countNoun2(counts.concerns[severity2], `${severity2} concern`)],
+  ...counts.carriedFindings[severity2] === 0 ? [] : [countNoun2(counts.carriedFindings[severity2], `carried ${severity2} finding`)],
+  ...counts.carriedConcerns[severity2] === 0 ? [] : [countNoun2(counts.carriedConcerns[severity2], `carried ${severity2} concern`)]
+];
+var renderSeverityItems = (counts, severity2) => joinItemCounts(severityItemParts(counts, severity2));
 var renderVerdictCallout = (review, options3) => {
   const counts = severityCounts(review, options3.carriedFindings, options3.carriedConcerns);
-  if (counts.blocking > 0) {
+  if (counts.total.blocking > 0) {
     return `> [!CAUTION]
-> ${countNoun2(counts.blocking, "blocking finding")} — do not merge before addressing ${counts.blocking === 1 ? "it" : "them"}.`;
+> ${renderSeverityItems(counts, "blocking")}. Do not merge before addressing ${counts.total.blocking === 1 ? "it" : "them"}.`;
   }
   const carried = options3.unreviewedPaths?.length ?? 0;
   if (options3.inputCoverage?.status === "incomplete" || options3.assurance?.status === "incomplete") {
     const carriedNote = carried > 0 ? ` ${countNoun2(carried, "affected path")} ${carried === 1 ? "is" : "are"} carried forward and retried automatically on the next run.` : "";
     return `> [!WARNING]
-> Review infrastructure did not settle — a reviewer-side gap, NOT a request to change code.${carriedNote} The check reports "incomplete" until a run settles.`;
+> Review infrastructure did not settle. This is a reviewer-side gap, NOT a request to change code.${carriedNote} The check reports "incomplete" until a run settles.`;
   }
-  if (counts.important > 0) {
+  if (counts.total.important > 0) {
     return `> [!IMPORTANT]
-> ${countNoun2(counts.important, "important finding")} to address before merging.`;
+> ${renderSeverityItems(counts, "important")} to address before merging.`;
   }
-  if (counts.total > 0) {
-    return "> ℹ️ Minor suggestions only — mergeable as-is.";
+  if (counts.total.total > 0) {
+    return `> ℹ️ ${renderSeverityItems(counts, "nit")}; mergeable as-is.`;
   }
-  return review.verdict === "approve" ? "> ✅ No issues found." : "> ℹ️ No findings — see the summary.";
+  return review.verdict === "approve" ? "> ✅ No issues found." : "> ℹ️ No review items. See the summary.";
 };
-var renderConcern = (concern) => [`### ${severityEmoji[concern.severity]} ${concern.title}`, "", concern.body].join(`
+var renderConcern = (concern) => [
+  `### ${severityEmoji[concern.severity]} ${concern.title}`,
+  ...concern.evidencePaths === undefined ? [] : ["", `_Affected paths: ${concern.evidencePaths.map((path) => `\`${path}\``).join(", ")}_`],
+  "",
+  concern.body
+].join(`
 `);
 var renderCarriedFinding = (finding) => `- \`${finding.path}:${finding.startLine}${finding.endLine === finding.startLine ? "" : `-${finding.endLine}`}\` **[${findingLabel(finding)}] ${finding.title}** — ${finding.body}`;
 var planWalkthrough = (entries3, files) => {
@@ -44517,14 +44574,9 @@ var renderReviewStats = (files, totalChangedFiles, counts) => {
   const additions = files.reduce((total, file2) => total + file2.additions, 0);
   const deletions = files.reduce((total, file2) => total + file2.deletions, 0);
   const fileCount = files.length < totalChangedFiles ? `${files.length} of ${totalChangedFiles} files` : countNoun2(files.length, "file");
-  const nits = counts.total - counts.blocking - counts.important;
-  const tally = counts.total === 0 ? "none" : [
-    ...counts.blocking > 0 ? [`${counts.blocking} blocking`] : [],
-    ...counts.important > 0 ? [`${counts.important} important`] : [],
-    ...nits > 0 ? [`${nits} nit`] : []
-  ].join(", ");
+  const tally = counts.total.total === 0 ? "none" : joinItemCounts(["blocking", "important", "nit"].flatMap((severity2) => severityItemParts(counts, severity2)));
   const effort = estimateReviewEffort(files);
-  return `**Changeset:** ${fileCount} (+${additions} / −${deletions}) · **Findings:** ${tally} · **Review effort:** ${effort.score}/5 (${effort.label})`;
+  return `**Changeset:** ${fileCount} (+${additions} / −${deletions}) · **Review items:** ${tally} · **Review effort:** ${effort.score}/5 (${effort.label})`;
 };
 var commentSafe = (value4) => value4.replaceAll("--", "- -");
 var renderReviewMetadata = (options3) => [
@@ -44614,7 +44666,7 @@ var planPublication = (review, files, options3) => {
       parts2.push("", "<details>", `<summary>Unresolved findings carried from unchanged scope (${carriedFindings.length})</summary>`, "", ...carriedFindings.map(renderCarriedFinding), "", "</details>");
     }
     if (carriedConcerns.length > 0) {
-      parts2.push("", "### Unresolved concerns carried to the final audit");
+      parts2.push("", `### Unresolved concerns from unchanged paths (${carriedConcerns.length})`, "", "These concerns were reported in an earlier review and were not reverified in this incremental pass. They remain active because none of their affected paths changed.");
       for (const concern of carriedConcerns)
         parts2.push("", renderConcern(concern));
     }
@@ -44639,7 +44691,7 @@ var planPublication = (review, files, options3) => {
   };
   const counts = severityCounts(review, options3.carriedFindings ?? [], options3.carriedConcerns ?? []);
   const unclean = options3.inputCoverage?.status === "incomplete" || options3.assurance?.status === "incomplete";
-  const event = !options3.applyVerdict ? "COMMENT" : counts.blocking > 0 ? "REQUEST_CHANGES" : review.verdict === "approve" && counts.important === 0 && !unclean ? "APPROVE" : "COMMENT";
+  const event = !options3.applyVerdict ? "COMMENT" : counts.total.blocking > 0 ? "REQUEST_CHANGES" : review.verdict === "approve" && counts.total.important === 0 && !unclean ? "APPROVE" : "COMMENT";
   const tail = [
     renderReviewMetadata({
       headSha: options3.headSha,
@@ -44738,7 +44790,24 @@ var findingKey = (finding) => `${finding.path}\x00${finding.startLine}\x00${find
 var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function* () {
   const { metadata, files, anchorFiles, fingerprint, usage } = context4;
   const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
-  const review = enforceFindingsBound(core2.review, clampMaxFindings(options3.maxFindings));
+  const boundedReview = enforceFindingsBound(core2.review, clampMaxFindings(options3.maxFindings));
+  const reviewPaths = new Set(files.map((file2) => file2.path));
+  const review = CodeReview.make({
+    ...boundedReview,
+    ...boundedReview.concerns === undefined ? {} : {
+      concerns: boundedReview.concerns.map((concern) => {
+        const evidencePaths = concern.evidencePaths;
+        if (evidencePaths === undefined || evidencePaths.some((path) => !reviewPaths.has(path))) {
+          const { evidencePaths: _invalid, ...pathless } = concern;
+          return ReviewConcern.make(pathless);
+        }
+        return ReviewConcern.make({
+          ...concern,
+          evidencePaths: [...new Set(evidencePaths)].sort()
+        });
+      })
+    }
+  });
   const { inputCoverage, assurance } = core2;
   const unreviewedPaths = [...new Set(core2.unreviewedPaths)].sort();
   const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
@@ -44749,21 +44818,22 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
   const activeFindingKeys = new Set(activeFindings.map(findingKey));
   const currentFindingKeys = new Set(review.findings.map(findingKey));
   const carriedFindings = carriedCandidates.filter((finding) => activeFindingKeys.has(findingKey(finding)) && !currentFindingKeys.has(findingKey(finding)));
-  const carriedConcernCandidates = priorState?.unresolvedConcerns.map(fromStoredConcern) ?? [];
+  const carriedConcernCandidates = priorState?.unresolvedConcerns.filter((concern) => concern.evidencePaths !== undefined && concern.evidencePaths.every((path) => !affectedPaths.has(path))).map(fromStoredConcern) ?? [];
   const activeConcerns = rankAndDedupeConcerns([
     ...carriedConcernCandidates,
     ...review.concerns ?? []
   ]);
-  const currentConcernKeys = new Set((review.concerns ?? []).map((concern) => `${concern.title}\x00${concern.body}`));
-  const activeConcernKeys = new Set(activeConcerns.map((concern) => `${concern.title}\x00${concern.body}`));
+  const currentConcernKeys = new Set((review.concerns ?? []).map(reviewConcernKey));
+  const activeConcernKeys = new Set(activeConcerns.map(reviewConcernKey));
   const carriedConcerns = carriedConcernCandidates.filter((concern) => {
-    const key = `${concern.title}\x00${concern.body}`;
+    const key = reviewConcernKey(concern);
     return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
   });
   const settled = inputCoverage.status === "complete" && assurance.status !== "incomplete" && unreviewedPaths.length === 0;
-  const skipFingerprint = settled ? fingerprint : undefined;
+  const concernsHaveEvidencePaths = activeConcerns.every((concern) => concern.evidencePaths !== undefined);
+  const skipFingerprint = settled && concernsHaveEvidencePaths ? fingerprint : undefined;
   const carriedScopeFits = unreviewedPaths.length <= MAX_STORED_UNREVIEWED_PATHS;
-  const stateCandidate = executionContext !== undefined && fingerprint !== undefined && metadata.baseSha !== undefined && anchorFiles.length >= metadata.totalChangedFiles && carriedScopeFits && executionContext.stateAuthenticator?.status === "available" ? ReviewState.make({
+  const stateCandidate = executionContext !== undefined && fingerprint !== undefined && metadata.baseSha !== undefined && anchorFiles.length >= metadata.totalChangedFiles && carriedScopeFits && concernsHaveEvidencePaths && executionContext.stateAuthenticator?.status === "available" ? ReviewState.make({
     version: 1,
     repository: metadata.repository,
     pullRequestNumber: metadata.number,
@@ -44784,7 +44854,7 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
   const continuity = stateCandidate === undefined || executionContext?.stateAuthenticator === undefined ? {
     state: undefined,
     marker: undefined,
-    notice: executionContext !== undefined && !carriedScopeFits ? `carried unreviewed scope (${unreviewedPaths.length} paths) exceeded the ${MAX_STORED_UNREVIEWED_PATHS}-path continuity bound` : executionContext?.stateAuthenticator?.status === "unavailable" ? executionContext.stateAuthenticator.unavailableReason ?? "authenticated continuity state is unavailable" : undefined
+    notice: executionContext !== undefined && !carriedScopeFits ? `carried unreviewed scope (${unreviewedPaths.length} paths) exceeded the ${MAX_STORED_UNREVIEWED_PATHS}-path continuity bound` : executionContext !== undefined && !concernsHaveEvidencePaths ? "one or more review concerns lacked host-validated affected paths" : executionContext?.stateAuthenticator?.status === "unavailable" ? executionContext.stateAuthenticator.unavailableReason ?? "authenticated continuity state is unavailable" : undefined
   } : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(exports_Effect.match({
     onFailure: (error2) => ({
       state: undefined,
@@ -45087,7 +45157,7 @@ var settleCallout = (info2) => {
     case "success":
       return `> ✅ **Code review posted** — verdict \`${info2.verdict}\`, ${info2.inlineComments} inline comment(s), nothing blocking.`;
     case "blocking":
-      return `> \uD83D\uDED1 **Code review posted** — blocking findings; the check fails until they are addressed.`;
+      return `> \uD83D\uDED1 **Code review posted:** blocking review items; the check fails until they are addressed.`;
     case "incomplete":
       return `> ⚠️ **Code review posted** — input coverage or configured review assurance is incomplete, so the check fails.`;
   }

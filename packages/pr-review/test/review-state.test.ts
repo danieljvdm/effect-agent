@@ -9,6 +9,7 @@ import {
   ReviewState,
   ReviewStateAuthenticator,
   selectReviewRange,
+  StoredReviewConcern,
   StoredReviewFinding,
   StoredUnreviewedPass,
   webCryptoReviewStateAuthenticatorLayer,
@@ -183,6 +184,46 @@ describe("review state", () => {
     });
     expect(changedBase.mode).toBe("full");
     expect(changedBase.reason).toContain("base changed");
+  });
+
+  it("falls back to the full diff for legacy pathless concerns", () => {
+    const legacyState = ReviewState.make({
+      ...priorState,
+      unresolvedConcerns: [
+        StoredReviewConcern.make({
+          severity: "blocking",
+          title: "Legacy concern",
+          body: "This state predates affected-path tracking.",
+        }),
+      ],
+    });
+    const selection = select({ priorState: legacyState });
+
+    expect(selection.mode).toBe("full");
+    expect(selection.reason).toContain("concerns predate affected-path tracking");
+  });
+
+  it("reopens every current evidence path when a concern path changes", () => {
+    const concernState = ReviewState.make({
+      ...priorState,
+      unresolvedConcerns: [
+        StoredReviewConcern.make({
+          evidencePaths: ["src/accepted.ts", "src/corrective.ts"],
+          severity: "blocking",
+          title: "Cross-file cutover is incomplete",
+          body: "Both files are needed to reassess the cutover.",
+        }),
+      ],
+    });
+    const selection = select({ priorState: concernState });
+
+    expect(selection.mode).toBe("incremental");
+    expect(selection.files.map((file) => file.path)).toEqual([
+      "src/accepted.ts",
+      "src/corrective.ts",
+    ]);
+    expect(selection.affectedPaths).toEqual(["src/accepted.ts", "src/corrective.ts"]);
+    expect(selection.reason).toContain("reopening 1 related concern path(s) for context");
   });
 
   it("falls back to the full diff for unsafe or incomplete head comparisons", () => {

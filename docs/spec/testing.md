@@ -355,8 +355,11 @@ a defect missed by general discovery can still become a candidate; and an indepe
 rejects an unsupported candidate before host-side publication. Failed or exhausted discovery and
 verification passes remain visible, leave candidates unsettled, emit no authenticated continuity
 state, and cannot produce a successful Action conclusion. Incremental fixtures prove that newly
-affected paths invalidate carried findings while unchanged findings remain active. Explicit final
-mode discards prior assurance scope and plans fresh discovery over the complete bounded diff.
+affected paths invalidate carried findings while unchanged findings remain active. Confirmed
+non-anchored concerns retain their host-validated evidence paths; changing or deleting any one
+invalidates the old concern and reopens the remaining current paths for context, while legacy
+pathless concern state forces a full review. Explicit final mode discards prior assurance scope and
+plans fresh discovery over the complete bounded diff.
 Overflow fixtures preserve every affected path and the exact unassigned-shard count while bounding
 identifier diagnostics. Extra or duplicate delegation declarations cannot hide behind an expected
 work ID, equivalent cross-pass candidates are verified once, and an empty plan settles without

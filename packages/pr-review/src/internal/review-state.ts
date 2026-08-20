@@ -37,10 +37,14 @@ export class StoredReviewFinding extends Schema.Class<StoredReviewFinding>(
   body: StoredText,
 }) {}
 
-/** A compact unresolved non-anchored concern carried until a final audit. */
+/** A compact unresolved non-anchored concern with its invalidation paths. */
 export class StoredReviewConcern extends Schema.Class<StoredReviewConcern>(
   "@effect-agent/pr-review/StoredReviewConcern",
 )({
+  /** Absent only on legacy state written before concern path binding. */
+  evidencePaths: Schema.optionalKey(
+    Schema.Array(ChangedPath).check(Schema.isMinLength(1)).check(Schema.isMaxLength(3)),
+  ),
   severity: FindingSeverity,
   title: Schema.NonEmptyString.check(Schema.isMaxLength(120)),
   body: StoredText,
@@ -124,13 +128,19 @@ export const fromStoredFinding = (finding: StoredReviewFinding): ReviewFinding =
 
 export const toStoredConcern = (concern: ReviewConcern): StoredReviewConcern =>
   StoredReviewConcern.make({
+    ...(concern.evidencePaths === undefined ? {} : { evidencePaths: concern.evidencePaths }),
     severity: concern.severity,
     title: concern.title,
     body: concern.body.slice(0, 800),
   });
 
 export const fromStoredConcern = (concern: StoredReviewConcern): ReviewConcern =>
-  ReviewConcern.make({ severity: concern.severity, title: concern.title, body: concern.body });
+  ReviewConcern.make({
+    ...(concern.evidencePaths === undefined ? {} : { evidencePaths: concern.evidencePaths }),
+    severity: concern.severity,
+    title: concern.title,
+    body: concern.body,
+  });
 
 const STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
 const STATE_MARKER_SUFFIX = " -->";
@@ -375,6 +385,9 @@ export const validateReviewState = (
   if (state.profileFingerprint !== profileFingerprint) {
     return "the reviewer profile or model configuration changed";
   }
+  if (state.unresolvedConcerns.some((concern) => concern.evidencePaths === undefined)) {
+    return "stored concerns predate affected-path tracking";
+  }
   return undefined;
 };
 
@@ -395,6 +408,23 @@ const incrementalFromDelta = (input: {
     ...input.deltaFiles.flatMap(filePaths),
     ...(input.extraAffectedPaths ?? []),
   ]);
+  const initialAffectedCount = affectedPaths.size;
+  // Reopen every current path needed to reassess a concern touched by this
+  // delta. Repeat to a fixed point because two concerns may overlap on a path.
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    for (const concern of input.priorState.unresolvedConcerns) {
+      const paths = concern.evidencePaths ?? [];
+      if (!paths.some((path) => affectedPaths.has(path))) continue;
+      for (const path of paths) {
+        if (!affectedPaths.has(path)) {
+          affectedPaths.add(path);
+          expanded = true;
+        }
+      }
+    }
+  }
   const selectedByPath = new Map<string, ChangedFile>();
   for (const file of input.deltaFiles) {
     if (
@@ -428,15 +458,13 @@ const incrementalFromDelta = (input: {
     retryStages.add("specialist");
     retryStages.add("verification");
   }
-  if (carriedPaths.length > 0 || (input.extraAffectedPaths?.length ?? 0) > 0) {
-    for (const file of input.fullFiles) {
-      const needed =
-        affectedPaths.has(file.path) ||
-        (file.previousPath !== undefined && affectedPaths.has(file.previousPath)) ||
-        retryOnly.has(file.path) ||
-        (file.previousPath !== undefined && retryOnly.has(file.previousPath));
-      if (needed) selectedByPath.set(file.path, file);
-    }
+  for (const file of input.fullFiles) {
+    const needed =
+      affectedPaths.has(file.path) ||
+      (file.previousPath !== undefined && affectedPaths.has(file.previousPath)) ||
+      retryOnly.has(file.path) ||
+      (file.previousPath !== undefined && retryOnly.has(file.previousPath));
+    if (needed) selectedByPath.set(file.path, file);
   }
   const selectedFiles = [...selectedByPath.values()].sort((left, right) =>
     left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
@@ -448,9 +476,14 @@ const incrementalFromDelta = (input: {
       : carriedPaths.length > 0
         ? `; retrying ${carriedPaths.length} carried unreviewed path(s)`
         : "";
+  const concernPathCount = affectedPaths.size - initialAffectedCount;
+  const concernReason =
+    concernPathCount === 0
+      ? ""
+      : `; reopening ${concernPathCount} related concern path(s) for context`;
   return {
     mode: "incremental",
-    reason: `${input.reason}${carriedReason}`,
+    reason: `${input.reason}${carriedReason}${concernReason}`,
     files: selectedFiles,
     affectedPaths: [...affectedPaths].sort(),
     retryPaths: [...retryOnly].filter((path) => !affectedPaths.has(path)).sort(),
