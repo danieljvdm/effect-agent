@@ -91,9 +91,10 @@ AgentRuntime.run(agent, input, { toolCallAllowance: 8, turnAllowance: 4 });
 ```
 
 The effective limit is `min(policy bound, max(1, floor(allowance)))`, and the `onExhaustion`
-resolution uses the effective limits. The runtime rejects non-finite allowances. A `NaN`
-would otherwise poison every comparison and silently erase the bound. Allowances are the
-mechanism behind delegation budget extensions below. The Definition's policy remains the ceiling.
+resolution uses the effective limits. The runtime ignores non-finite allowances, leaving the
+Definition policy in force; a `NaN` must not poison comparisons and erase the bound. Allowances are
+the mechanism behind delegation budget extensions below. The Definition's policy remains the
+ceiling.
 
 ## Hierarchical usage budgets
 

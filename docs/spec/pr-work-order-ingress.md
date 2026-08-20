@@ -190,7 +190,7 @@ commit SHAs.
 
 This prevents a pull request from changing the code that authenticates, authorizes, publishes, or
 presents its own work order. Downstream repositories adopt the separate `work-order-action/`
-workflow through the documented five-job workflow. Installing or upgrading
+Action through the documented five-job workflow. Installing or upgrading
 `@effect-agent/pr-review` does not enable work orders.
 
 ## 8. Deterministic proof obligations
@@ -264,7 +264,7 @@ Live GitHub network calls are not made from deterministic CI tests.
   the source thread or treating model prose as status.
 - **WOI-011**: Every enabled phase runs trusted base Action code, and untrusted head code cannot
   modify its own authorization or publisher.
-- **WOI-012**: `work-order-action/` is a separate commit-pinnable consumer workflow;
+- **WOI-012**: `work-order-action/` is a separate commit-pinnable Action;
   `@effect-agent/pr-review` stays read-only.
 - **WOI-013**: Expected authentication, admission, model, validation, check, publication,
   presentation, timeout, interruption, and cleanup failures remain typed in `E`; dependencies stay

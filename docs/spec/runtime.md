@@ -484,7 +484,7 @@ Each Tool batch owns one sink backed by an unbounded queue drained by the
 Run's own stream. Consistent with the Run's existing buffering, the Run
 stream is the only consumer, so no external observer can backpressure the
 batch. Sink events appear inside the batch, and the batch settles, including on failure, only
-after already-emitted events have been observed. Emission after
+after already-emitted events have surfaced in the Run stream. Emission after
 the batch settled, or outside any Tool batch, fails closed with the typed
 `RunEventSinkClosedError`.
 

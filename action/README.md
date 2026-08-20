@@ -64,9 +64,9 @@ conclusion. Changed evidence or configuration reviews again.
 Only a terminal marker from `review-author`, pinned to the reviewed commit and signed with the same
 secret, may narrow scope. The default author is `github-actions[bot]`; custom GitHub App tokens
 require `<app-slug>[bot]`. The marker is capped at 24,000 characters. Missing, invalid, or oversized
-state forces a full review. So do incompatible identity, ancestry, profile, or comparison data,
-unless a two-dot content comparison can identify the changed PR paths. `skip-unchanged: "true"` is
-the default.
+state and incompatible PR or profile identity force a full review. After state passes those checks,
+an unavailable, truncated, or non-ancestor three-dot comparison may use a two-dot content
+comparison to identify changed PR paths. `skip-unchanged: "true"` is the default.
 
 The workflow needs `contents: read` and `pull-requests: write`, but not `checks: write`.
 Fingerprints compare text, not runtime meaning, so use `review-mode: final` when a base change needs
