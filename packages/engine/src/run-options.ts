@@ -528,6 +528,21 @@ export interface RunSchedulingHook {
 }
 
 /**
+ * Tightening-only memory limits for one Run. The engine supplies finite ceilings for every field;
+ * callers may lower them for a deployment or test but cannot widen the engine defaults.
+ */
+export interface RunBufferLimits {
+  /** Maximum decoded response parts retained from one model call, including compaction calls. */
+  readonly maxModelResponseParts?: number | undefined;
+  /** Maximum conservative retained-byte estimate for one model response. */
+  readonly maxModelResponseBytes?: number | undefined;
+  /** Maximum semantic Run events, including the reserved terminal event. */
+  readonly maxRunEvents?: number | undefined;
+  /** Maximum Subagent lifecycle payloads queued by one Tool batch. */
+  readonly maxSubagentEventsPerBatch?: number | undefined;
+}
+
+/**
  * Optional Phase 2 seams. Hook failures and requirements stay visible in the
  * returned Stream / Effect through the generic parameters.
  */
@@ -622,6 +637,8 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
     | ((usage: Response.Usage) => Effect.Effect<number, HookError, HookRequirements>)
     | undefined;
   readonly scheduling?: RunSchedulingHook | undefined;
+  /** Optional tightening-only overrides for the engine's finite in-memory buffer ceilings. */
+  readonly bufferLimits?: RunBufferLimits | undefined;
   /** Internal/public observation seam invoked whenever official history advances. */
   readonly onHistory?:
     | ((history: Prompt.Prompt) => Effect.Effect<void, HookError, HookRequirements>)

@@ -94,6 +94,8 @@ Generated command sequences cover:
 - child-agent completion/interruption;
 - budget exhaustion;
 - subscriber backpressure;
+- model-response part/byte ceilings and Run-event terminal-slot reservation;
+- hostile diagnostic getters, coercion hooks, proxies, and oversized messages;
 - parent Scope closure.
 
 Properties include:

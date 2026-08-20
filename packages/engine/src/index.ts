@@ -84,6 +84,7 @@ import {
   type Toolkit,
 } from "effect/unstable/ai";
 
+import { boundedValueFootprint, utf8ByteLength } from "./bounded-value-internal.ts";
 import { insertOutputContract, outputSchemaContract } from "./output-contract-internal.ts";
 import {
   boundedCanonicalJsonSnapshot,
@@ -182,6 +183,7 @@ import {
   type ChildEstablishStatus,
   type CommandDrainPolicy,
   type RunApprovalDecision,
+  type RunBufferLimits,
   RunResumeUsageSchema,
   type RunOptions,
   type RunSchedulingHook,
@@ -348,6 +350,8 @@ interface RunContext {
   exhaustedDimension: "tokens" | "tool-calls" | "turns" | undefined;
   /** Model-visible view state for engine-native compaction (RUN-026). */
   readonly compaction: ContextCompactionState;
+  /** Finite engine-owned memory ceilings, optionally tightened per Run. */
+  readonly bufferLimits: EffectiveRunBufferLimits;
   sequence: number;
   /**
    * Run-wide count of programmatic (broker) Tool invocations whose handler
@@ -378,6 +382,10 @@ const toolCounter = Metric.counter("effect_agent_tool_calls_total", {
  * value `prepareToolCall` re-encodes for it).
  */
 interface TurnTrace {
+  /** Number of decoded provider parts retained or inspected during this model call. */
+  responsePartCount: number;
+  /** Conservative retained-memory estimate across decoded provider parts. */
+  responsePartBytes: number;
   readonly parts: Array<Response.AnyPart>;
   readonly text: Array<string>;
   readonly textParts: Map<string, PartLifecycle>;
@@ -448,6 +456,89 @@ type ProviderResultEventPayload =
 // fail-closed only while the additional staging allocation itself is deterministic and bounded.
 const MAX_STAGED_PROVIDER_EVENTS = 256;
 const MAX_STAGED_PROVIDER_BYTES = 1024 * 1024;
+
+const DEFAULT_RUN_BUFFER_LIMITS = {
+  maxModelResponseParts: 16_384,
+  maxModelResponseBytes: 8 * 1024 * 1024,
+  maxRunEvents: 65_536,
+  maxSubagentEventsPerBatch: 1_024,
+} as const;
+
+interface EffectiveRunBufferLimits {
+  readonly maxModelResponseParts: number;
+  readonly maxModelResponseBytes: number;
+  readonly maxRunEvents: number;
+  readonly maxSubagentEventsPerBatch: number;
+}
+
+const tighteningBufferLimit = (
+  configured: number | undefined,
+  ceiling: number,
+  minimum: number,
+): number =>
+  configured === undefined || !Number.isFinite(configured)
+    ? ceiling
+    : Math.min(ceiling, Math.max(minimum, Math.floor(configured)));
+
+const effectiveRunBufferLimits = (
+  configured: RunBufferLimits | undefined,
+): EffectiveRunBufferLimits => ({
+  maxModelResponseParts: tighteningBufferLimit(
+    configured?.maxModelResponseParts,
+    DEFAULT_RUN_BUFFER_LIMITS.maxModelResponseParts,
+    1,
+  ),
+  maxModelResponseBytes: tighteningBufferLimit(
+    configured?.maxModelResponseBytes,
+    DEFAULT_RUN_BUFFER_LIMITS.maxModelResponseBytes,
+    1,
+  ),
+  // A Run always needs one ordinary event and one reserved typed terminal event.
+  maxRunEvents: tighteningBufferLimit(
+    configured?.maxRunEvents,
+    DEFAULT_RUN_BUFFER_LIMITS.maxRunEvents,
+    2,
+  ),
+  maxSubagentEventsPerBatch: tighteningBufferLimit(
+    configured?.maxSubagentEventsPerBatch,
+    DEFAULT_RUN_BUFFER_LIMITS.maxSubagentEventsPerBatch,
+    1,
+  ),
+});
+
+interface ModelResponseBufferUsage {
+  responsePartCount: number;
+  responsePartBytes: number;
+}
+
+const consumeModelResponsePart = (
+  usage: ModelResponseBufferUsage,
+  part: Response.AnyPart,
+  limits: EffectiveRunBufferLimits,
+): Effect.Effect<void, ModelProtocolError> =>
+  Effect.suspend(() => {
+    if (usage.responsePartCount >= limits.maxModelResponseParts) {
+      return Effect.fail(
+        ModelProtocolError.make({
+          message: `Model response exceeded the ${limits.maxModelResponseParts}-part response limit`,
+        }),
+      );
+    }
+    const bytes = boundedValueFootprint(
+      part,
+      limits.maxModelResponseBytes - usage.responsePartBytes,
+    );
+    if (bytes === undefined) {
+      return Effect.fail(
+        ModelProtocolError.make({
+          message: `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`,
+        }),
+      );
+    }
+    usage.responsePartCount += 1;
+    usage.responsePartBytes += bytes;
+    return Effect.void;
+  });
 
 type PartLifecycle = "open" | "closed";
 
@@ -782,7 +873,7 @@ const stampSubagentEvent = Effect.fn("AgentRuntime.stampSubagentEvent")(function
   context: RunContext,
   turnId: TurnId,
   payload: SubagentEventPayload,
-): Effect.fn.Return<RunEvent> {
+): Effect.fn.Return<RunEvent, ModelProtocolError> {
   const shared = {
     ...(yield* eventBase(context)),
     turnId,
@@ -981,7 +1072,11 @@ const preflightToolAuthorization = <HookError, HookRequirements>(
   turn: number,
   call: RunToolCallDescriptor,
   options: RunOptions<HookError, HookRequirements>,
-): Stream.Stream<RunEvent, HookError | AgentToolAuthorizationDenied, HookRequirements> => {
+): Stream.Stream<
+  RunEvent,
+  HookError | ModelProtocolError | AgentToolAuthorizationDenied,
+  HookRequirements
+> => {
   const authorization = options.toolAuthorization;
   if (authorization === undefined) return Stream.empty;
   return Stream.unwrap(
@@ -1486,7 +1581,11 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           ? descriptors
           : descriptors.filter((call) => !settledCallIds.has(call.toolCallId));
       const authorizationPreflight = executableDescriptors.reduce<
-        Stream.Stream<RunEvent, HookError | AgentToolAuthorizationDenied, HookRequirements>
+        Stream.Stream<
+          RunEvent,
+          HookError | ModelProtocolError | AgentToolAuthorizationDenied,
+          HookRequirements
+        >
       >(
         (stream, call) =>
           stream.pipe(
@@ -1617,12 +1716,13 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         return stream.pipe(Stream.concat(next));
       }, Stream.empty);
 
-      // This batch's live sink. The queue is unbounded and drained by the
-      // Run's own stream below, matching the Run's existing buffering:
-      // emission never blocks a handler and no external observer can
-      // backpressure the batch. Emitting after the batch settled fails closed
-      // with `RunEventSinkClosedError`.
-      const sinkQueue = yield* Queue.unbounded<SubagentEventPayload, Cause.Done>();
+      // This batch's live sink uses bounded structured backpressure. The Run's own stream drains
+      // it concurrently with handlers, so a burst may suspend its emitting handler but a detached
+      // external observer can never backpressure the batch. Emitting after settlement still fails
+      // closed with `RunEventSinkClosedError`.
+      const sinkQueue = yield* Queue.bounded<SubagentEventPayload, Cause.Done>(
+        context.bufferLimits.maxSubagentEventsPerBatch,
+      );
       const batchSink: RunEventSinkService = {
         emit: (payload) =>
           Queue.offer(sinkQueue, payload).pipe(
@@ -1721,18 +1821,38 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
 
 const ErrorMessage = Schema.Struct({ message: Schema.String });
 const ErrorTag = Schema.Struct({ _tag: Schema.NonEmptyString });
+const DIAGNOSTIC_MESSAGE_LIMIT = 4_096;
+const DIAGNOSTIC_TAG_LIMIT = 128;
 
-const errorMessage = (error: unknown): string =>
-  Option.match(Schema.decodeUnknownOption(ErrorMessage)(error), {
-    onNone: () => String(error),
-    onSome: ({ message }) => message,
-  });
+const boundedDiagnostic = (value: string, maxCharacters: number): string =>
+  value.length <= maxCharacters ? value : value.slice(0, maxCharacters);
 
-const errorTag = (error: unknown): string =>
-  Option.match(Schema.decodeUnknownOption(ErrorTag)(error), {
-    onNone: () => "UnknownError",
-    onSome: ({ _tag }) => _tag,
-  });
+/** Total, bounded projection for opaque failures. It never invokes arbitrary coercion hooks. */
+const errorMessage = (error: unknown): string => {
+  try {
+    const decoded = Schema.decodeUnknownOption(ErrorMessage)(error);
+    if (Option.isSome(decoded)) {
+      return boundedDiagnostic(decoded.value.message, DIAGNOSTIC_MESSAGE_LIMIT);
+    }
+  } catch {
+    // Hostile getters and proxy traps are opaque diagnostic values.
+  }
+  return typeof error === "string"
+    ? boundedDiagnostic(error, DIAGNOSTIC_MESSAGE_LIMIT)
+    : "Unknown error";
+};
+
+const errorTag = (error: unknown): string => {
+  try {
+    const decoded = Schema.decodeUnknownOption(ErrorTag)(error);
+    if (Option.isSome(decoded)) {
+      return boundedDiagnostic(decoded.value._tag, DIAGNOSTIC_TAG_LIMIT);
+    }
+  } catch {
+    // Hostile getters and proxy traps are opaque diagnostic values.
+  }
+  return "UnknownError";
+};
 
 const schedulingConcurrency = (
   configured: number,
@@ -1995,7 +2115,11 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
   usage: Response.Usage | undefined,
   toolCallCount: number,
   options: RunOptions<HookError, HookRequirements>,
-): Effect.Effect<ConsumedUsage, AgentPolicyError | HookError, HookRequirements> =>
+): Effect.Effect<
+  ConsumedUsage,
+  AgentPolicyError | ModelProtocolError | HookError,
+  HookRequirements
+> =>
   Effect.gen(function* () {
     if (usage === undefined) {
       return yield* AgentPolicyError.make({
@@ -2109,7 +2233,15 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
 // `Effect.fnUntraced`: this helper runs for every streamed Response Part, so a
 // named span here would emit one span per TextDelta/ReasoningDelta. Spans stay
 // on per-Run, per-Turn, and per-Tool operations.
-const eventBase = Effect.fnUntraced(function* (context: RunContext) {
+const eventBaseFor = Effect.fnUntraced(function* (context: RunContext, terminal: boolean) {
+  const ceiling = terminal
+    ? context.bufferLimits.maxRunEvents
+    : context.bufferLimits.maxRunEvents - 1;
+  if (context.sequence >= ceiling) {
+    return yield* ModelProtocolError.make({
+      message: `Run exceeded the ${context.bufferLimits.maxRunEvents}-event buffer limit`,
+    });
+  }
   const timestamp = DateTime.makeUnsafe(yield* Clock.currentTimeMillis);
   const sequence = context.sequence;
   context.sequence += 1;
@@ -2122,6 +2254,11 @@ const eventBase = Effect.fnUntraced(function* (context: RunContext) {
     timestamp,
   };
 });
+
+const eventBase = (context: RunContext) => eventBaseFor(context, false);
+
+/** The ordinary event budget always reserves one slot for this typed terminal projection. */
+const terminalEventBase = (context: RunContext) => eventBaseFor(context, true);
 
 const snapshotStagedProviderEvent = (
   trace: TurnTrace,
@@ -2221,7 +2358,7 @@ const stampProviderResultEvent = (
   context: RunContext,
   turnId: TurnId,
   payload: ProviderResultEventPayload,
-): Effect.Effect<RunEvent> =>
+): Effect.Effect<RunEvent, ModelProtocolError> =>
   Effect.map(eventBase(context), (base) => {
     switch (payload._tag) {
       case "ToolProgress":
@@ -2284,7 +2421,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
   forceSummarize: boolean,
 ): Effect.Effect<
   CompactionOutcome,
-  AgentPolicyError | AiError.AiError | HookError,
+  AgentPolicyError | ModelProtocolError | AiError.AiError | HookError,
   HookRequirements | LanguageModel.LanguageModel
 > =>
   Effect.gen(function* () {
@@ -2348,13 +2485,18 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
       }),
     ]);
     const pieces: Array<string> = [];
+    const responseUsage: ModelResponseBufferUsage = {
+      responsePartCount: 0,
+      responsePartBytes: 0,
+    };
     let summaryUsage: Response.Usage | undefined;
     yield* guardBudgetStream(
       LanguageModel.streamText({ prompt: summarizerPrompt }),
       options.budget,
     ).pipe(
       Stream.runForEach((part) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          yield* consumeModelResponsePart(responseUsage, part, context.bufferLimits);
           if (part.type === "text-delta") {
             pieces.push(part.delta);
           } else if (part.type === "finish") {
@@ -2635,6 +2777,7 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
   ModelProtocolError,
   Tool.HandlerServices<ToolUnion<Tools>>
 > {
+  yield* consumeModelResponsePart(trace, part, context.bufferLimits);
   if (trace.finished) {
     return yield* ModelProtocolError.make({
       message: "Model response emitted content after its finish part",
@@ -3131,6 +3274,8 @@ const makeTurn = <
                 : { outputContract: outputContractMessage }),
             });
       const trace: TurnTrace = {
+        responsePartCount: 0,
+        responsePartBytes: 0,
         parts: [],
         text: [],
         textParts: new Map(),
@@ -3962,6 +4107,8 @@ const makeResumeTurn = <
         );
       }
       const trace: TurnTrace = {
+        responsePartCount: 0,
+        responsePartBytes: 0,
         parts: [],
         text: [],
         textParts: new Map(),
@@ -4334,6 +4481,7 @@ const stream = <
         tokenExhausted: false,
         exhaustedDimension: undefined,
         compaction: initialCompactionState(),
+        bufferLimits: effectiveRunBufferLimits(options.bufferLimits),
         sequence: 0,
         programmaticToolCalls: 0,
       };
@@ -4462,12 +4610,12 @@ const stream = <
             Effect.gen(function* () {
               if (error instanceof AgentApprovalPending || error instanceof AgentChildPending) {
                 return RunSuspended.make({
-                  ...(yield* eventBase(context)),
+                  ...(yield* terminalEventBase(context)),
                   reason: error.message,
                 });
               }
               return RunFailed.make({
-                ...(yield* eventBase(context)),
+                ...(yield* terminalEventBase(context)),
                 errorTag: errorTag(error),
                 message: errorMessage(error),
               });
@@ -4604,10 +4752,11 @@ const run = Effect.fn("AgentRuntime.run")(function* <
  *
  * `observe` is a live multicast subscription: each subscription replays every
  * event the Run has already emitted, follows subsequent events as they occur,
- * and ends once the Run settles. Events are never dropped for a slow
- * subscriber, and publishing never blocks the Run. `events` remains the
- * complete replay, available after settlement. Both belong to the `start`
- * Scope; observing after that Scope closes interrupts the observer.
+ * and ends once the Run settles. The finite Run event ceiling sizes the replay
+ * buffer so events are never dropped for a slow subscriber and publishing
+ * never blocks the Run. `events` remains the complete bounded replay,
+ * available after settlement. Both belong to the `start` Scope; observing
+ * after that Scope closes interrupts the observer.
  */
 export interface DetachedRun<Output, Error> {
   readonly await: Effect.Effect<AgentResult<Output>, Error>;
@@ -4654,16 +4803,18 @@ const start = Effect.fn("AgentRuntime.start")(function* <
   AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements> | Scope.Scope
 > {
   yield* Scope.Scope;
+  const bufferLimits = effectiveRunBufferLimits(options.bufferLimits);
   // Single-writer append-only trace owned by the Run fiber; readers only see
-  // it after the fiber settles, so a plain array avoids the quadratic cost of
-  // copying an immutable Ref array per event.
+  // it after the fiber settles. `stream` admits at most `maxRunEvents`, so this
+  // array has the same finite ceiling without per-event immutable copies.
   const captured: Array<RunEvent> = [];
-  // The unbounded replay window keeps `observe` subscriptions live without
-  // backpressuring the Run: it retains references to the same events as
-  // `captured`, replays them to subscribers that attach mid-Run or after
-  // settlement, and the terminal `Exit.void` Take ends every subscription.
-  const pubsub = yield* PubSub.unbounded<Take.Take<RunEvent>>({
-    replay: Number.MAX_SAFE_INTEGER,
+  // One extra slot carries the terminal `Exit.void` Take after the bounded Run
+  // event trace. Dropping is non-blocking, while the capacity proof means the
+  // strategy never drops a valid event or the terminal marker.
+  const observationCapacity = bufferLimits.maxRunEvents + 1;
+  const pubsub = yield* PubSub.dropping<Take.Take<RunEvent>>({
+    capacity: observationCapacity,
+    replay: observationCapacity,
   });
   yield* Effect.addFinalizer(() => PubSub.shutdown(pubsub));
   const execution = reduceRunEvents(
@@ -4848,20 +4999,10 @@ const observeProgrammaticToolCall = <R>(
     );
   });
 
-// Platform-neutral UTF-8 byte counting (the engine's TS lib declares no
-// TextEncoder); same code-point walk as the capabilities redaction module.
-const brokerUtf8ByteLength = (value: string): number => {
-  let total = 0;
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    total += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
-  }
-  return total;
-};
 const brokerEncodedByteLength = (value: unknown): number | undefined => {
   try {
     const encoded = JSON.stringify(value);
-    return encoded === undefined ? undefined : brokerUtf8ByteLength(encoded);
+    return encoded === undefined ? undefined : utf8ByteLength(encoded);
   } catch {
     return undefined;
   }
@@ -4921,10 +5062,7 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
         }
         // A malformed result bound would fail open (`NaN` defeats every
         // comparison), so it is rejected typed before the pass opens.
-        if (
-          passOptions?.maxResultBytes !== undefined &&
-          (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0)
-        ) {
+        if (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0) {
           return yield* ToolBrokerConfigurationError.make({
             message: `maxResultBytes must be a positive safe integer; received ${String(passOptions.maxResultBytes)}`,
           });
@@ -5125,7 +5263,7 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                   );
                 }
                 let encodedResult = terminal.encodedResult;
-                if (passOptions?.redactResult !== undefined) {
+                if (passOptions.redactResult !== undefined) {
                   // A redactor is a substitution point: its replacement re-crosses
                   // the JSON boundary or the call fails closed.
                   const redacted = brokerDecodeJson(yield* passOptions.redactResult(encodedResult));
@@ -5138,15 +5276,13 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                   }
                   encodedResult = redacted.value;
                 }
-                if (passOptions?.maxResultBytes !== undefined) {
-                  const bytes = brokerEncodedByteLength(encodedResult);
-                  if (bytes === undefined || bytes > passOptions.maxResultBytes) {
-                    return programmaticOutcomeError(
-                      index,
-                      "ProgrammaticResultLimitError",
-                      `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`,
-                    );
-                  }
+                const bytes = brokerEncodedByteLength(encodedResult);
+                if (bytes === undefined || bytes > passOptions.maxResultBytes) {
+                  return programmaticOutcomeError(
+                    index,
+                    "ProgrammaticResultLimitError",
+                    `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`,
+                  );
                 }
                 return { _tag: "ProgrammaticCallSuccess", index, encodedResult } as const;
               }),

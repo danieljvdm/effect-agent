@@ -149,7 +149,9 @@ const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
                 const broker = yield* ToolBroker;
                 // Inside a live Tool batch the broker is always bound; an
                 // unavailable broker here is a harness defect, not a test case.
-                const pass = yield* broker.openPass(inner, options.passOptions).pipe(Effect.orDie);
+                const pass = yield* broker
+                  .openPass(inner, options.passOptions ?? { maxResultBytes: 1024 * 1024 })
+                  .pipe(Effect.orDie);
                 return yield* options.program(pass);
               }),
           };
@@ -666,6 +668,7 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
         innerToolkit,
         innerHandlers: handlers,
         passOptions: {
+          maxResultBytes: 1024,
           redactResult: () => Effect.succeed({ rows: "[REDACTED]" }),
         },
         program: (pass) =>
@@ -776,7 +779,9 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
               orchestrate: () =>
                 Effect.gen(function* () {
                   const broker = yield* ToolBroker;
-                  const pass = yield* broker.openPass(inner).pipe(Effect.orDie);
+                  const pass = yield* broker
+                    .openPass(inner, { maxResultBytes: 1024 })
+                    .pipe(Effect.orDie);
                   yield* pass.invoke({ toolName: "query", encodedArguments: { sql: "a" } });
                   yield* pass.invoke({ toolName: "query", encodedArguments: { sql: "b" } });
                   return null;

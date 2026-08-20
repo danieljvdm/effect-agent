@@ -3516,6 +3516,124 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     }),
   );
 
+  it.effect("bounds every decoded model response by part count and retained bytes", () =>
+    Effect.gen(function* () {
+      const countEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const countExit = yield* AgentRuntime.stream(
+        makeAgent(finalParts('{"answer":"count"}')),
+        { question: "count" },
+        { bufferLimits: { maxModelResponseParts: 2 } },
+      ).pipe(
+        Stream.tap((event) => Ref.update(countEvents, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const countFailure = failureFrom(countExit);
+      expect(countFailure).toBeInstanceOf(ModelProtocolError);
+      expect(countFailure.message).toContain("2-part response limit");
+      expect((yield* Ref.get(countEvents)).at(-1)?._tag).toBe("RunFailed");
+
+      const byteEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const byteExit = yield* AgentRuntime.stream(
+        makeAgent(finalParts(`{"answer":"${"x".repeat(4_096)}"}`)),
+        { question: "bytes" },
+        { bufferLimits: { maxModelResponseBytes: 1_024 } },
+      ).pipe(
+        Stream.tap((event) => Ref.update(byteEvents, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const byteFailure = failureFrom(byteExit);
+      expect(byteFailure).toBeInstanceOf(ModelProtocolError);
+      expect(byteFailure.message).toContain("1024-byte retained response limit");
+      expect((yield* Ref.get(byteEvents)).at(-1)?._tag).toBe("RunFailed");
+    }),
+  );
+
+  it.effect("reserves one bounded Run event slot for a typed terminal failure", () =>
+    Effect.gen(function* () {
+      const observed = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const exit = yield* AgentRuntime.stream(
+        makeAgent(finalParts('{"answer":"event bound"}')),
+        { question: "events" },
+        { bufferLimits: { maxRunEvents: 4 } },
+      ).pipe(
+        Stream.tap((event) => Ref.update(observed, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      const events = yield* Ref.get(observed);
+
+      expect(failure).toBeInstanceOf(ModelProtocolError);
+      expect(failure.message).toContain("4-event buffer limit");
+      expect(events).toHaveLength(4);
+      expect(events.map(({ sequence }) => sequence)).toEqual([0, 1, 2, 3]);
+      expect(events.at(-1)).toMatchObject({
+        _tag: "RunFailed",
+        errorTag: "ModelProtocolError",
+        message: "Run exceeded the 4-event buffer limit",
+      });
+    }),
+  );
+
+  it.effect("projects hostile and oversized provider failures without defecting", () =>
+    Effect.gen(function* () {
+      const hostile = Object.create(null) as Record<PropertyKey, unknown>;
+      Object.defineProperty(hostile, "message", {
+        enumerable: true,
+        get: () => {
+          throw new Error("message getter must not escape");
+        },
+      });
+      Object.defineProperty(hostile, "_tag", {
+        enumerable: true,
+        get: () => {
+          throw new Error("tag getter must not escape");
+        },
+      });
+      Object.defineProperty(hostile, Symbol.toPrimitive, {
+        value: () => {
+          throw new Error("coercion must not run");
+        },
+      });
+
+      const hostileEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const hostileExit = yield* AgentRuntime.stream(
+        makeAgent([{ type: "error", error: hostile }]),
+        { question: "hostile" },
+      ).pipe(
+        Stream.tap((event) => Ref.update(hostileEvents, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const hostileFailure = failureFrom(hostileExit);
+      expect(hostileFailure).toBeInstanceOf(ModelProtocolError);
+      expect(hostileFailure.message).toBe("Model response failed: Unknown error");
+      expect((yield* Ref.get(hostileEvents)).at(-1)).toMatchObject({
+        _tag: "RunFailed",
+        message: "Model response failed: Unknown error",
+      });
+
+      const oversizedEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const oversizedExit = yield* AgentRuntime.stream(
+        makeAgent([{ type: "error", error: { message: "x".repeat(8_192) } }]),
+        { question: "oversized" },
+      ).pipe(
+        Stream.tap((event) => Ref.update(oversizedEvents, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const oversizedFailure = failureFrom(oversizedExit);
+      expect(oversizedFailure).toBeInstanceOf(ModelProtocolError);
+      const terminal = (yield* Ref.get(oversizedEvents)).at(-1);
+      expect(terminal?._tag).toBe("RunFailed");
+      if (terminal?._tag === "RunFailed") {
+        expect(terminal.message.length).toBeLessThanOrEqual(4_096);
+      }
+    }),
+  );
+
   it("normalizes one bounded JSON snapshot without invoking dynamic serialization behavior", () => {
     let suffixReads = 0;
     const payload: Array<unknown> = ["x".repeat(32)];
@@ -5142,9 +5260,11 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("does not let a slow detached observer determine completion", () =>
     Effect.gen(function* () {
-      const detached = yield* AgentRuntime.start(makeAgent(finalParts('{"answer":"detached"}')), {
-        question: "complete independently",
-      });
+      const detached = yield* AgentRuntime.start(
+        makeAgent(finalParts('{"answer":"detached"}')),
+        { question: "complete independently" },
+        { bufferLimits: { maxRunEvents: 8 } },
+      );
       const slowObserver = yield* detached.observe.pipe(
         Stream.runForEach(() => Effect.never),
         Effect.forkChild,

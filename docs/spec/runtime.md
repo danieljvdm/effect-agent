@@ -462,6 +462,17 @@ Local `stream` uses a bounded queue:
 - disconnecting/interrupting the sole ephemeral consumer interrupts the Run unless execution was
   explicitly detached.
 
+Every Run also has tightening-only `RunOptions.bufferLimits`. Engine defaults cap one model call at
+16,384 decoded response parts and an 8 MiB conservative retained-memory estimate, one Run at 65,536
+semantic events including a reserved terminal slot, and one Tool batch at 1,024 queued Subagent
+events. Non-finite or wider overrides retain the engine ceiling; smaller positive values tighten it.
+Crossing a model-response or Run-event ceiling fails with `ModelProtocolError`. Compaction model
+calls use the same per-response limits as ordinary Turns.
+
+`AgentRuntime.start` sizes its non-blocking multicast and replay storage from the effective Run-event
+ceiling plus one settlement marker. `events` and `observe` therefore preserve a complete replay
+without allowing a slow observer to backpressure execution or retain an unbounded trace.
+
 Durable transports observe from the journal/projection and do not own execution liveness.
 
 ## 12. S1 Subagent execution seam
@@ -493,13 +504,12 @@ core event minus `eventVersion`, `runId`, `conversationId`, `agentId`,
 `sequence`, `timestamp`, and `turnId`); the engine stamps those fields through
 the same `eventBase` path as every other event, so the base identity and the
 emitting batch's Turn are authoritative and the Run sequence stays monotonic.
-Each Tool batch owns one sink backed by an unbounded queue drained by the
-Run's own stream. Consistent with the Run's existing buffering, the Run
-stream is the only consumer, so no external observer can backpressure the
-batch. Sink events appear inside the batch, and the batch settles, including on failure, only
-after already-emitted events have surfaced in the Run stream. Emission after
-the batch settled, or outside any Tool batch, fails closed with the typed
-`RunEventSinkClosedError`.
+Each Tool batch owns one sink backed by a bounded queue drained by the Run's own stream. When a
+handler burst fills that queue, structured backpressure suspends the handler until the internal Run
+stream drains capacity. A detached external observer cannot backpressure the batch. Sink events
+appear inside the batch, and the batch settles, including on failure, only after already-emitted
+events have surfaced in the Run stream. Emission after the batch settled, or outside any Tool batch,
+fails closed with the typed `RunEventSinkClosedError`.
 
 ### AgentSpawner
 
@@ -548,8 +558,8 @@ or forge it.
 Two behaviors are specific to the broker path. Tool-call and duration budgets are consumed and
 checked before every inner invocation, so budget exhaustion prevents the next call mid-pass;
 direct model-declared calls keep their Turn-boundary accounting unchanged. Result size bounds
-and redaction at the sandbox boundary are broker-owned; no such stage is added to the direct
-path. An inner call that would require approval fails with a typed policy failure and never
+and redaction at the sandbox boundary are broker-owned; `openPass` requires a positive finite
+`maxResultBytes`, and no such stage is added to the direct path. An inner call that would require approval fails with a typed policy failure and never
 suspends in the ephemeral slice. Per-Tool authorization remains application- and handler-owned;
 the engine contributes approval policy, scheduling, budgets, encoding, and telemetry only.
 
