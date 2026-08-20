@@ -101,7 +101,9 @@ const testOnlyModuleReason = (sourcePath: string): string | undefined => {
 };
 
 const isWorkspaceImport = (specifier: string): boolean =>
-  specifier === "effect-agent" || specifier.startsWith("@effect-agent/");
+  specifier === "effect-agent" ||
+  specifier.startsWith("effect-agent/") ||
+  specifier.startsWith("@effect-agent/");
 
 const displayNameFor = (packageName: string, exportPath: string): string =>
   exportPath === "." ? packageName : `${packageName}${exportPath.slice(1)}`;
