@@ -260,8 +260,6 @@ const outcomeOutputs = (
   ["verdict", outcome.review.verdict],
   ["input-coverage", outcome.inputCoverage.status],
   ["review-assurance", outcome.assurance.status],
-  // Compatibility output: the precise outputs above own new integrations.
-  ["coverage", outcome.coverage.status],
   ["review-mode", outcome.reviewMode ?? "full"],
   ["review-reason", outcome.reviewReason ?? "direct full review"],
   ["inline-comments", String(outcome.plan.comments.length)],
@@ -333,29 +331,37 @@ const resolveRunUrl = Effect.fn("resolveRunUrl")(function* () {
  * The reviewer surface the action harness drives. `PrReview.make` and
  * `PrReview.makeFanOut` provide the state-selection effects. A fingerprint is
  * skip authority only when a profile fingerprint and authenticated review
- * state bind it to settled assurance; a fingerprint-only custom harness
- * remains source-compatible but deliberately runs instead of claiming green
- * assurance from unauthenticated prior-review text.
+ * state bind it to settled assurance.
  */
-export interface HarnessedReviewer<E, R, FingerprintE, FingerprintR> {
+interface HarnessedReviewerBase<E, R> {
   readonly run: (runOptions?: RunReviewOptions) => Effect.Effect<ReviewRunOutcome, E, R>;
-  /** Current effective changeset fingerprint; not standalone skip authority. */
-  readonly fingerprint?: Effect.Effect<string, FingerprintE, FingerprintR> | undefined;
-  readonly profileFingerprint?: Effect.Effect<string, FingerprintE, FingerprintR> | undefined;
-  readonly snapshot?:
-    | Effect.Effect<
-        {
-          readonly metadata: PullRequestMetadata;
-          readonly files: ReadonlyArray<ChangedFile>;
-        },
-        FingerprintE,
-        FingerprintR
-      >
-    | undefined;
-  readonly filterFiles?:
-    | ((files: ReadonlyArray<ChangedFile>) => ReadonlyArray<ChangedFile>)
-    | undefined;
 }
+
+export type HarnessedReviewer<E, R, FingerprintE, FingerprintR> = HarnessedReviewerBase<E, R> &
+  (
+    | {
+        readonly fingerprint?: undefined;
+        readonly profileFingerprint?: undefined;
+        readonly snapshot?: undefined;
+        readonly filterFiles?: undefined;
+      }
+    | {
+        /** Current effective changeset fingerprint; not standalone skip authority. */
+        readonly fingerprint: Effect.Effect<string, FingerprintE, FingerprintR>;
+        readonly profileFingerprint: Effect.Effect<string, FingerprintE, FingerprintR>;
+        readonly snapshot: Effect.Effect<
+          {
+            readonly metadata: PullRequestMetadata;
+            readonly files: ReadonlyArray<ChangedFile>;
+          },
+          FingerprintE,
+          FingerprintR
+        >;
+        readonly filterFiles?:
+          | ((files: ReadonlyArray<ChangedFile>) => ReadonlyArray<ChangedFile>)
+          | undefined;
+      }
+  );
 
 const blockingReasons = (input: {
   readonly findings: ReadonlyArray<{ readonly severity: string; readonly title: string }>;
@@ -424,7 +430,6 @@ const skipCoveredReview = Effect.fn("skipCoveredReview")(function* (input: {
   readonly pullRequestNumber: number;
   readonly reason: string;
   readonly state: ReviewState;
-  readonly fingerprint?: string | undefined;
 }) {
   const result = concludeReviewState(input.state);
   yield* Console.log(
@@ -433,11 +438,9 @@ const skipCoveredReview = Effect.fn("skipCoveredReview")(function* (input: {
   yield* writeActionOutputs([
     ["skipped", "true"],
     ["skip-reason", input.reason],
-    ...(input.fingerprint === undefined ? [] : ([["fingerprint", input.fingerprint]] as const)),
     ["conclusion", result.conclusion],
     ["input-coverage", "complete"],
     ["review-assurance", "settled"],
-    ["coverage", "complete"],
     ["review-mode", "incremental"],
   ]);
   yield* writeStepSummary([
@@ -502,16 +505,13 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     return yield* Effect.gen(function* () {
       let selection: ReturnType<typeof selectReviewRange> | undefined;
       if (reviewer.profileFingerprint !== undefined) {
-        const source = yield* PullRequestSource;
         const [snapshot, profileFingerprint, currentFingerprint] = yield* Effect.all([
-          reviewer.snapshot ?? Effect.all({ metadata: source.metadata, files: source.anchorFiles }),
+          reviewer.snapshot,
           reviewer.profileFingerprint,
-          reviewer.fingerprint === undefined
-            ? Effect.succeed(undefined)
-            : reviewer.fingerprint.pipe(
-                Effect.map((fingerprint): string | undefined => fingerprint),
-                Effect.orElseSucceed(() => undefined),
-              ),
+          reviewer.fingerprint.pipe(
+            Effect.map((fingerprint): string | undefined => fingerprint),
+            Effect.orElseSucceed(() => undefined),
+          ),
         ]);
         const { metadata, files: fullFiles } = snapshot;
         const history = options.priorReviews ?? (yield* PriorReviews);
@@ -542,7 +542,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
           recovered.state.settled &&
           currentFingerprint !== undefined &&
           validateReviewState(recovered.state, metadata, profileFingerprint) === undefined &&
-          recovered.state.acceptedScopeFingerprint === currentFingerprint
+          recovered.state.settledScopeFingerprint === currentFingerprint
             ? recovered.state
             : undefined;
         if (equivalentPatchState !== undefined) {
@@ -554,7 +554,6 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
                 ? "the current head already has settled stored review assurance"
                 : "the effective pull-request patch is unchanged since the last settled review",
             state: equivalentPatchState,
-            fingerprint: currentFingerprint,
           });
         }
         let comparison: ReviewHeadComparison | undefined;

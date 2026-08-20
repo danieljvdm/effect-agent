@@ -82,13 +82,6 @@ inputs:
   max-findings:
     description: "Findings bound (1-20)."
     required: false
-  fail-on:
-    description: >-
-      Deprecated compatibility input. Blocking findings and incomplete
-      input coverage or review assurance always fail the check; model verdicts
-      never weaken that gate.
-    required: false
-    default: "never"
   skip-unchanged:
     description: >-
       Skip model execution when the current effective patch matches the last
@@ -138,8 +131,6 @@ outputs:
     description: "'true' when the event is not reviewable or the effective patch already has settled stored assurance."
   skip-reason:
     description: "Why the run skipped (set only when skipped is 'true')."
-  fingerprint:
-    description: "Deprecated changeset-fingerprint output."
   conclusion:
     description: >-
       Host-derived check conclusion: success, blocking (code findings), or
@@ -148,8 +139,6 @@ outputs:
     description: "Host-derived path/evidence assignment: complete or incomplete."
   review-assurance:
     description: "Configured discovery and verification settlement: settled, incomplete, or unverified."
-  coverage:
-    description: "Deprecated compatibility aggregate: complete or incomplete."
   review-mode:
     description: "Selected scope: incremental or full."
   review-reason:

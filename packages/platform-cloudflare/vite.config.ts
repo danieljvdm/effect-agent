@@ -38,14 +38,6 @@ export default defineConfig({
                   className: "DynamicBindingsConversationObject",
                   useSQLite: true,
                 },
-                ARRAY_BINDINGS: {
-                  className: "ArrayBindingsConversationObject",
-                  useSQLite: true,
-                },
-                EFFECT_BINDINGS: {
-                  className: "EffectBindingsConversationObject",
-                  useSQLite: true,
-                },
                 TELEMETRY: {
                   className: "TelemetryConversationObject",
                   useSQLite: true,

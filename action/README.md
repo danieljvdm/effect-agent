@@ -55,8 +55,8 @@ present in the PR plus carried unreviewed paths. Unchanged findings remain activ
 reverted paths receive fresh discovery. A failed pass carries only its own scope forward, and the
 baseline still advances. A compatible base advance also includes overlapping PR paths.
 
-Before comparing ancestry, the action checks the authenticated settled-scope fingerprint, whose
-wire name remains `acceptedScopeFingerprint`. It hashes the effective diff, bounded patchless
+Before comparing ancestry, the action checks the authenticated settled-scope fingerprint. It
+hashes the effective diff, bounded patchless
 evidence, PR framing, and reviewer profile, but excludes commit IDs, base ancestry, and hunk line
 coordinates. A fully settled, patch-equivalent rebase skips model work and keeps the prior
 conclusion. Changed evidence or configuration reviews again.
@@ -96,19 +96,18 @@ candidates. This repository runs it when an operator applies `pr-review:final-au
 Posted reviews contain a host-derived severity callout and statistics, a path-validated walkthrough,
 concerns, inline comments, a copyable agent prompt, and a run footer. Full-review fallbacks name
 their reason. The action also writes a step summary and `conclusion`, `input-coverage`,
-`review-assurance`, `review-mode`, and `review-reason` outputs. `coverage` remains as a deprecated
-compatibility output.
+`review-assurance`, `review-mode`, and `review-reason` outputs.
 
 The check ignores the model verdict. Blocking findings or concerns produce `blocking`; incomplete
 input or an unsettled pass produces `incomplete` and carries the affected paths forward. Invalid
 anchors are discarded and counted. Fan-out is the default because the flat reviewer has no
 independent verifier. Every assigned unit receives general and specialist discovery, and large
 diffs split into bounded evidence shards. Capacity overflow names every affected path and the exact
-shard count. The legacy `fail-on` input cannot weaken this gate. Settled assurance means the
-configured work completed, not that every defect was found.
+shard count. Settled assurance means the configured work completed, not that every defect was
+found.
 
 Custom `runReviewAction` hosts need a `profileFingerprint` and authenticated state to skip an
-unchanged review. The legacy fingerprint-only shape compiles but runs again.
+unchanged review.
 
 Keep job `timeout-minutes` above `max-duration-minutes`, whose defaults are 8 for flat reviews and
 20 for fan-out. A runner kill posts nothing; budget exhaustion fails typed.

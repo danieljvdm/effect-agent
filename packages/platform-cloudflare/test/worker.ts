@@ -41,7 +41,7 @@ const baseOptions: ConversationObjectOptions = {
   alarmBackoffBase: 10,
   alarmBackoffCap: 100,
   observationPollInterval: 10,
-  bindings: makeTestBindings,
+  bindings: () => makeTestBindings,
   toolReconciler: fixtureReconcilerLayer,
   storageFailpoint: storageEvictionFailpoint,
   runtimeFailpoint: runtimeEvictionFailpoint,
@@ -208,28 +208,6 @@ export class DynamicBindingsConversationObject extends makeConversationObjectCla
   }
 }
 
-/** Legacy array-form Binding capture probe. */
-export class ArrayBindingsConversationObject extends makeConversationObjectClass({
-  ...baseOptions,
-  namespaceBinding: "ARRAY_BINDINGS",
-  bindings: [],
-}) {
-  async bindingSourceKind(): Promise<string> {
-    return "array";
-  }
-}
-
-/** Legacy Effect-form Binding capture probe. */
-export class EffectBindingsConversationObject extends makeConversationObjectClass({
-  ...baseOptions,
-  namespaceBinding: "EFFECT_BINDINGS",
-  bindings: Effect.succeed([]),
-}) {
-  async bindingSourceKind(): Promise<string> {
-    return "effect";
-  }
-}
-
 /** Issue #49: a scoped run-context Layer captured once per Object incarnation. */
 export class ContextCompactorConversationObject extends makeConversationObjectClass({
   ...baseOptions,
@@ -266,7 +244,7 @@ export class TelemetryConversationObject extends makeConversationObjectClass(
 const SubagentConversationObjectBase = makeConversationObjectClass({
   ...baseOptions,
   namespaceBinding: "SUBAGENTS",
-  bindings: makeSubagentTestBindings,
+  bindings: () => makeSubagentTestBindings,
 });
 
 const faultableStub = <RpcService extends ConversationObjectRpc>(

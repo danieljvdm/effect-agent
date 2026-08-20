@@ -93,8 +93,7 @@ favors redundant work, but it cannot recognize every semantically risky
 change. The specialist pass is context-independent redundancy, not a claim of
 provider or model diversity. Running it for every unit prevents classifier
 silence from suppressing scrutiny; the category labels still cannot prove
-that every semantic risk was recognized. The legacy aggregate `coverage` field remains
-for compatibility; new hosts and UI use `inputCoverage` and `assurance`.
+that every semantic risk was recognized. Hosts and UI use `inputCoverage` and `assurance`.
 The flat reviewer has path-input accounting but no independent verifier, so
 its assurance is `unverified` and the Action check cannot report success from
 that shape.

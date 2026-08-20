@@ -58,7 +58,7 @@ const unresolvedFinding = StoredReviewFinding.make({
 });
 
 const priorState = ReviewState.make({
-  version: 2,
+  version: 1,
   repository: metadata.repository,
   pullRequestNumber: metadata.number,
   baseRef: metadata.baseRef,
@@ -66,11 +66,12 @@ const priorState = ReviewState.make({
   headRef: metadata.headRef,
   reviewedHeadSha: REVIEWED_HEAD_SHA,
   profileFingerprint: PROFILE_FINGERPRINT,
-  acceptedScopeFingerprint: SCOPE_FINGERPRINT,
+  settledScopeFingerprint: SCOPE_FINGERPRINT,
   reviewedPathCount: 1,
   unresolvedFindings: [unresolvedFinding],
   unresolvedConcerns: [],
   unreviewedPaths: [],
+  unreviewedPasses: [],
   settled: true,
   lastReviewMode: "full",
 });
@@ -121,7 +122,7 @@ describe("review state", () => {
       ).toBeUndefined();
       expect(
         Option.getOrUndefined(
-          yield* authenticate("<!-- effect-agent-pr-review state-v1:not-base64 -->"),
+          yield* authenticate("<!-- effect-agent-pr-review state-v2:not-base64 -->"),
         ),
       ).toBeUndefined();
     }),
@@ -250,7 +251,7 @@ describe("review state", () => {
       "src/accepted.ts",
       "src/corrective.ts",
     ]);
-    // Legacy markers without unreviewedPasses still rediscover leftovers.
+    // Paths without a recorded failed stage receive fresh discovery.
     expect(selection.affectedPaths).toContain("src/accepted.ts");
     expect(selection.retryPaths).toEqual([]);
     expect(selection.reason).toContain("retrying 1 carried unreviewed path(s)");

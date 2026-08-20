@@ -19,37 +19,6 @@ import type { ReviewUnitPlan } from "./review-units.ts";
 // results; only the flat reviewer is assessed from its Run event trace here.
 // ---------------------------------------------------------------------------
 
-export class FailedReviewUnit extends Schema.Class<FailedReviewUnit>(
-  "@effect-agent/pr-review/FailedReviewUnit",
-)({
-  unitId: Schema.NonEmptyString.check(Schema.isMaxLength(32)),
-  errorTag: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
-}) {}
-
-/**
- * Compatibility diagnostic retained for callers that consumed the original
- * `coverage` field. New UI and state decisions use ReviewInputCoverage and
- * ReviewAssurance directly.
- */
-export class ReviewCoverage extends Schema.Class<ReviewCoverage>(
-  "@effect-agent/pr-review/ReviewCoverage",
-)({
-  status: Schema.Literals(["complete", "incomplete"]),
-  requiredPaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
-    Schema.isMaxLength(300),
-  ),
-  reviewedPaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
-    Schema.isMaxLength(300),
-  ),
-  unreviewedPaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
-    Schema.isMaxLength(300),
-  ),
-  failedUnits: Schema.Array(FailedReviewUnit).check(Schema.isMaxLength(8)),
-  reasons: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(1_000))).check(
-    Schema.isMaxLength(32),
-  ),
-}) {}
-
 export class ReviewInputCoverage extends Schema.Class<ReviewInputCoverage>(
   "@effect-agent/pr-review/ReviewInputCoverage",
 )({
@@ -344,33 +313,4 @@ export const fanOutInputCoverage = (input: {
     input.anchorFiles,
     input.totalAnchorFiles,
   );
-};
-
-/** Compatibility aggregate over the two precise claims. */
-export const compatibilityCoverage = (
-  inputCoverage: ReviewInputCoverage,
-  assurance: ReviewAssurance,
-): ReviewCoverage => {
-  const assuranceIncomplete = assurance.status === "incomplete";
-  const failedUnits = new Map<string, FailedReviewUnit>();
-  for (const pass of assurance.failedPasses) {
-    const unitId = pass.workId.slice(0, "unit-000".length);
-    if (!failedUnits.has(unitId)) {
-      failedUnits.set(
-        unitId,
-        FailedReviewUnit.make({ unitId, errorTag: `${pass.stage}:${pass.errorTag}` }),
-      );
-    }
-  }
-  return ReviewCoverage.make({
-    status: inputCoverage.status === "complete" && !assuranceIncomplete ? "complete" : "incomplete",
-    requiredPaths: inputCoverage.requiredPaths,
-    reviewedPaths: inputCoverage.assignedPaths,
-    unreviewedPaths: sortedUnique([
-      ...inputCoverage.partialPaths,
-      ...inputCoverage.unassignedPaths,
-    ]),
-    failedUnits: [...failedUnits.values()].slice(0, 8),
-    reasons: [...inputCoverage.reasons, ...(assuranceIncomplete ? assurance.reasons : [])],
-  });
 };

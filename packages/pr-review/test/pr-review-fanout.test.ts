@@ -691,7 +691,7 @@ describe("host-scheduled discovery and verification pipeline", () => {
         expect(result.outcome.state?.reviewedHeadSha).toBe(FIXTURE_SHA);
         expect(result.outcome.state?.settled).toBe(true);
         expect(result.outcome.state?.unreviewedPaths).toEqual([]);
-        expect(result.outcome.plan.body).toContain("effect-agent-pr-review state-v2:");
+        expect(result.outcome.plan.body).toContain("effect-agent-pr-review state-v1:");
         expect(result.published).toHaveLength(1);
 
         const generalPrompt = result.childPrompts.find((prompt) =>
@@ -879,7 +879,6 @@ describe("host-scheduled discovery and verification pipeline", () => {
           errorTag: expect.stringContaining("AgentOutputError"),
         }),
       );
-      expect(result.outcome.coverage.status).toBe("incomplete");
       expect(result.outcome.unreviewedPaths).toEqual([...highRiskUnit.paths].sort());
       // Continuity ADVANCES with the gap carried explicitly.
       expect(result.outcome.state?.reviewedHeadSha).toBe(FIXTURE_SHA);

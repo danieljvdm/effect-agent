@@ -24,9 +24,6 @@ export const MAX_REVIEW_UNITS = 8;
 /** A unit never carries more files than this, regardless of their size. */
 export const MAX_UNIT_FILES = 12;
 
-/** Compatibility export; complete evidence chars now own unit packing. */
-export const UNIT_CHANGED_LINE_BUDGET = 800;
-
 /**
  * Bound the complete model-visible evidence assigned to one child. This is a
  * character bound rather than a token estimate because it is deterministic,
@@ -44,9 +41,6 @@ export const MAX_UNIT_EVIDENCE_SHARDS = 12;
  * authority for whether input coverage is complete.
  */
 export const MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS = MAX_REVIEW_UNITS * MAX_UNIT_EVIDENCE_SHARDS;
-
-/** @deprecated Use `MAX_PATCH_CHARS`; this is now the per-shard bound. */
-export const MAX_FILE_EVIDENCE_CHARS = MAX_PATCH_CHARS;
 
 /** The merged review never exceeds the `CodeReview` findings bound. */
 export const MAX_MERGED_FINDINGS = 20;

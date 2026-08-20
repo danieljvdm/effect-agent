@@ -102,10 +102,8 @@ const findingIdentity = (finding: {
 
 const REVIEW_METADATA_PATTERN = /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->/g;
 const FINGERPRINT_PATTERN = /<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->/g;
-// Version-agnostic on purpose: retirement only RECOGNIZES machine markers to
-// keep them byte-identical through an edit; it never authenticates them.
 const STATE_PATTERN =
-  /<!-- effect-agent-pr-review state-v\d+:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g;
+  /<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g;
 const RETIRED_ORIGINAL_PATTERN =
   /<!-- effect-agent-pr-review retired-original:start -->\n([\s\S]*?)\n<!-- effect-agent-pr-review retired-original:end -->/;
 const MACHINE_COMMENT_PATTERN = new RegExp(
@@ -114,11 +112,8 @@ const MACHINE_COMMENT_PATTERN = new RegExp(
 );
 const VERDICT_CALLOUT_PATTERN =
   /^(?:> \[!(?:CAUTION|IMPORTANT)\]\n> [^\n]*(?:\n> [^\n]*)*|> (?:ℹ️|✅)[^\n]*)\n*/;
-// Accepts both the pre-category first line (`**[⚠️ important] Title**`) and
-// the current one carrying an optional category chip (`… · security]`), so
-// retirement keeps matching inline comments posted by older package versions.
 const INLINE_FINDING_TITLE_PATTERN =
-  /^\*\*\[(?:🛑 blocking|⚠️ important|💅 nit)(?: · [a-z-]+)?\] ([^\n]+)\*\*$/;
+  /^\*\*\[(?:🛑 blocking|⚠️ important|💅 nit) · [a-z-]+\] ([^\n]+)\*\*$/;
 const MAX_REVIEW_BODY_CHARS = 60_000;
 
 /** The host-authored metadata marker is the authority gate for any edit. */

@@ -114,10 +114,9 @@ export interface CloudflareDurableRuntimeOptions {
   readonly toolReconciler?: Layer.Layer<ToolReconciler> | undefined;
   /**
    * Registered worker Bindings resolved at durable claim time (S2, spec/subagents.md §11):
-   * build each with `DurableWorkerBinding.make(binding, digests)`. An Effect or callback form is
-   * accepted because capture can be effectful. The callback receives the live Object context and
-   * derived identities and is evaluated once per incarnation during Layer construction. Defaults
-   * to the empty registration (every resolved claim fails closed).
+   * build each with `DurableWorkerBinding.make(binding, digests)`. The callback receives the live
+   * Object context and derived identities and is evaluated once per incarnation during Layer
+   * construction. Defaults to the empty registration (every resolved claim fails closed).
    */
   readonly bindings?: CloudflareBindingSource | undefined;
   /**
@@ -141,18 +140,10 @@ export interface CloudflareRuntimeSourceContext {
 /** Per-incarnation host values available while registered worker Bindings are captured. */
 export interface CloudflareBindingSourceContext extends CloudflareRuntimeSourceContext {}
 
-/**
- * Registered worker Bindings, or a closed Effect/callback that captures them once for each
- * Durable Object incarnation. Callback Effects cannot require services or fail typed.
- */
-export type CloudflareBindingSource =
-  | ReadonlyArray<ResolvedBinding>
-  | Effect.Effect<ReadonlyArray<ResolvedBinding>, never, never>
-  | ((
-      context: CloudflareBindingSourceContext,
-    ) =>
-      | ReadonlyArray<ResolvedBinding>
-      | Effect.Effect<ReadonlyArray<ResolvedBinding>, never, never>);
+/** Captures registered worker Bindings once for each Durable Object incarnation. */
+export type CloudflareBindingSource = (
+  context: CloudflareBindingSourceContext,
+) => Effect.Effect<ReadonlyArray<ResolvedBinding>, never, never>;
 
 /** A closed Run-context service whose only remaining requirement is platform Crypto. */
 export type CloudflareRunContextLayer = Layer.Layer<RunContextPreparation, never, Crypto.Crypto>;
@@ -267,16 +258,7 @@ const resolveBindings = (
   source: CloudflareDurableRuntimeOptions["bindings"],
   context: CloudflareBindingSourceContext,
 ): Effect.Effect<ReadonlyArray<ResolvedBinding>> =>
-  source === undefined
-    ? Effect.succeed([])
-    : Effect.isEffect(source)
-      ? source
-      : typeof source === "function"
-        ? Effect.suspend(() => {
-            const bindings = source(context);
-            return Effect.isEffect(bindings) ? bindings : Effect.succeed(bindings);
-          })
-        : Effect.succeed(source);
+  source === undefined ? Effect.succeed([]) : Effect.suspend(() => source(context));
 
 const resolveRunContext = (
   source: CloudflareRunContextSource,
