@@ -11,27 +11,27 @@ GitHub Actions workflow (`.github/workflows/formal.yml`).
 ## Toolchain
 
 - Java 17+ (any distribution; verified with Temurin 21).
-- `tla2tools.jar` — the TLA+ tools, version **1.8.0 or newer** (verified with
-  TLC2 version 2.19 of 08 August 2024). Download:
+- `tla2tools.jar` is the TLA+ tool bundle. Use version **1.8.0 or newer**. This repository was
+  verified with TLC2 version 2.19 of 08 August 2024. Download it from:
   <https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar>
 
 `bun run formal:check` locates `java` (honoring `JAVA_HOME`), downloads
 `tla2tools.jar` to a cache when absent (override with `--tools <path>` or
 `TLA2TOOLS_JAR`), runs TLC on every committed instance below, and asserts the
-expected verdict of each — including that the negative controls FAIL.
+expected verdict of each. The negative controls must fail.
 
 ## Files
 
 | File                             | What it is                                                                                                                                                      |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DurableSubmission.tla`          | PlusCal: one Conversation lane, FIFO Submissions, workers, recovery, resolution dependency, abort, lease expiry, crash at every durable boundary                |
-| `DurableSubmission.cfg`          | safety instance (2 Submissions, 2 workers, fault budget 2) — 8 invariants                                                                                       |
+| `DurableSubmission.cfg`          | safety instance with 2 Submissions, 2 workers, a fault budget of 2, and 8 invariants                                                                            |
 | `DurableSubmissionLiveness.cfg`  | liveness instance (1 worker): `EventuallySettled` under the documented fairness + fault-budget assumptions                                                      |
-| `DurableSubmissionNoFencing.cfg` | **negative control** — fencing disabled; TLC must report a `FencingSafety` violation                                                                            |
+| `DurableSubmissionNoFencing.cfg` | **negative control** with fencing disabled. TLC must report a `FencingSafety` violation                                                                         |
 | `SubagentEstablishment.tla`      | PlusCal: S2 establishment ladder, `waitingForChild`, at-least-once child-settled wake, canonical-settlement join, reservation lifecycle, request-abort-and-join |
-| `SubagentEstablishment.cfg`      | main instance under the CURRENT child-recovery discipline — 6 invariants + 2 liveness properties                                                                |
-| `SubagentEstablishmentRace.cfg`  | **negative control / plan §7(a)** — TLC must find the child-runs-before-lineage interleaving (`ChildTurnRequiresLineage` violation)                             |
-| `SubagentEstablishmentFix.cfg`   | the `AwaitParentEstablishment` fix discipline — the race is eliminated, all invariants + liveness hold                                                          |
+| `SubagentEstablishment.cfg`      | main instance under the current child-recovery discipline, with 6 invariants and 2 liveness properties                                                          |
+| `SubagentEstablishmentRace.cfg`  | **negative control / plan §7(a)**. TLC must find the child-runs-before-lineage interleaving as a `ChildTurnRequiresLineage` violation                           |
+| `SubagentEstablishmentFix.cfg`   | the `AwaitParentEstablishment` fix discipline. The race is eliminated, and all invariants and liveness properties hold                                          |
 
 ## Exact invocations
 

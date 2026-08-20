@@ -9,11 +9,11 @@ A storage adapter cannot be called compatible because it type-checks. Certificat
 point that runs three tiers against a candidate
 `SubmissionLedger`/`ConversationStore` Layer pair and produces one Schema-encoded certificate:
 
-| Tier                            | Claim                                                                                 | How it is discharged                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **1 — port contract**           | Both ports honor every documented contract case                                       | The two shared conformance case arrays (`submissionLedgerConformanceCases`, 32 cases; `conversationStoreConformanceCases`, 8 cases), run verbatim                                                                                                                                                                                          |
-| **2 — coordinator convergence** | The durable coordinator over YOUR adapters survives a fault at every durable boundary | Every `DurableRuntimeFailpointLocation` (28) is armed one-shot across six scenario shapes (plain, uncertain-tool, durable-steps, approval, join, delegation); after the fault the state must classify and the re-drive must converge to `verifyConversationInvariants` with every Submission settled and the digest chain fully recomputed |
-| **3 — real loss**               | The adapter survives ACTUAL loss (process kill, eviction), not only in-process faults | An adapter-supplied crash lever executed in this run, or citations of committed real-loss suites — recorded honestly, never silently claimed                                                                                                                                                                                               |
+| Tier                           | Claim                                                                                              | How it is discharged                                                                                                                                                                                                                                                                             |
+| ------------------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **1. Port contract**           | Both ports honor every documented contract case                                                    | Run the two shared conformance case arrays verbatim: 32 `submissionLedgerConformanceCases` and 8 `conversationStoreConformanceCases`                                                                                                                                                             |
+| **2. Coordinator convergence** | The durable coordinator converges after every failpoint reached by the six certification scenarios | Arm each of the 28 `DurableRuntimeFailpointLocation` values once in each scenario: plain, uncertain Tool, Durable Steps, approval, join, and delegation. Triggered cells must converge to `verifyConversationInvariants`; `not-triggered` cells record bounded scope rather than fault survival. |
+| **3. Process or runtime loss** | The adapter survives process termination or eviction, beyond failures contained within one process | Execute an adapter-supplied crash mechanism during the run or cite committed real-loss suites. The certificate records which evidence it used.                                                                                                                                                   |
 
 ## Run the certification
 
@@ -33,62 +33,62 @@ const certificate = Effect.gen(function* () {
 
 Requirements on the calling environment:
 
-- **`Crypto.Crypto`** must be provided (`NodeCrypto.layer` on Node, `BrowserCrypto.layer` in
-  workerd) — the invariant checker recomputes real digests.
+- **Provide `Crypto.Crypto`.** Use `NodeCrypto.layer` on Node or `BrowserCrypto.layer` in workerd.
+  The invariant checker recomputes real digests.
 - **A TestClock** must be active (`@effect/vitest`'s `it.effect`, or a manual
   `TestClock.layer()` root in workerd). Tier 1 drives lease expiry through virtual time, and
-  every Tier-2 re-drive round advances the clock past the ownership lease — the
-  adapter-neutral reclaim lever after a mid-Attempt fault. If your ledger is configured with a
+  every Tier 2 re-drive round advances the clock past the ownership lease. This lets any adapter
+  reclaim ownership after a mid-Attempt fault. If your ledger is configured with a
   non-default lease, pass `ownershipLeaseDuration`.
-- **One connection root for both ports** when your adapters must share one (the session
-  "same file" rule): pass the SAME combined Layer instance for both fields — Layer
+- **Use one connection root for both ports** when your adapters must share one. Pass the same
+  combined Layer instance for both fields so Layer
   memoization builds it once. All three shipped runners do this for their SQL adapters.
 
 The result is a `CertificationReport` (defined in `@effect-agent/session/testing`): adapter identity
 with the ledger's own `durability` claim, per-case Tier-1 results, per-cell Tier-2 sweep rows,
-and the Tier-3 record. `ok` is true exactly when every **executed** check passed; honest scope
-statements (`not-triggered`, `recorded-evidence`, `not-exercised`, `not-applicable`) are never
+and the Tier-3 record. `ok` is true exactly when every executed check passed. Scope
+statuses (`not-triggered`, `recorded-evidence`, `not-exercised`, `not-applicable`) are never
 silent passes and never failures.
 
 ## What Tier 2 asserts, exactly
 
-Each of the 168 sweep cells (6 scenarios × 28 locations) arms ONE coordinator failpoint
+Each of the 168 sweep cells (6 scenarios × 28 locations) arms one coordinator failpoint
 one-shot, submits fresh work on its own Conversation lane, drives the lane(s) with
 `processConversationResolved`, and then re-drives to convergence using only public levers:
 `runRecovery`, worker re-drives, and the authorized unblocking operations chosen from
 `explainConversation` evidence (`resolveUnknown` with `SafeToRetry`, `resolveApproval` with
 `approved`). A cell reports:
 
-- `converged` — the fault fired and the lane(s) settled with verified invariants;
-- `not-triggered` — the armed location is not on that scenario's coordinator path (the clean
-  run still settled and verified); this is recorded scope, not fault coverage;
-- `failed` — anything else, with a bounded detail.
+- `converged` means the fault fired and the lanes settled with verified invariants;
+- `not-triggered` means the armed location is not on that scenario's coordinator path. The clean
+  run still settled and verified. This records scope, not fault coverage;
+- `failed` covers every other outcome and includes bounded detail.
 
-The invariant verification is the same shared checker the admin `verify` operation uses —
-with one upgrade: the runner captures each batch's producer identity at append time, so the
-`digest-chain` check is FULLY recomputed from `EMPTY_TAIL_DIGEST` instead of reported
-`skipped` (the ConversationStore port deliberately does not export producer identity).
+The invariant verification uses the same shared checker as the admin `verify` operation. The
+runner also captures each batch's producer identity at append time, so the
+`digest-chain` check is recomputed from `EMPTY_TAIL_DIGEST` instead of reported
+`skipped`. The ConversationStore port does not export producer identity.
 
-Three locations never fire in these six shapes — `abort:after-intent`, `resolve:after-intent`,
+Three locations never fire in these six scenarios: `abort:after-intent`, `resolve:after-intent`,
 and `subagent:after-child-abort-intent` sit on operator/abort paths the shapes do not take.
 The runners assert the observed never-fired set equals exactly this documented list, so scoped
 coverage cannot silently grow; those locations are pinned by dedicated in-process suites and the
 crash matrices.
 
-## Tier 3 honestly
+## Tier 3 evidence
 
-- `@effect-agent/storage-memory` — `not-applicable`: the reference adapter declares
+- `@effect-agent/storage-memory` reports `not-applicable`. The reference adapter declares
   `non-durable` state; there is no real loss to exercise.
-- `@effect-agent/storage-sqlite` — `recorded-evidence`: the process-kill crash matrix
-  (`packages/platform-node/test/crash/crash.test.ts`,
-  `crash-subagents.test.ts`) kills real workers over these Layers (TEST-005).
-- `@effect-agent/storage-cloudflare` — `recorded-evidence`: the `ctx.abort()` eviction matrix,
+- `@effect-agent/storage-sqlite` reports `recorded-evidence` for the process-kill crash matrix in
+  `packages/platform-node/test/crash/crash.test.ts` and `crash-subagents.test.ts`. The tests kill
+  real workers over these Layers under TEST-005.
+- `@effect-agent/storage-cloudflare` reports `recorded-evidence` for the `ctx.abort()` eviction matrix,
   the cross-DO subagent matrix, and the Miniflare restart lane
   (`packages/platform-cloudflare/test/eviction.test.ts`, `subagents-cross-do.test.ts`,
   `restart/travel-planner-restart.test.ts`).
 - A third-party adapter passes `crashLever` (an Effect that kills/evicts/reopens around a
-  designated row subset and reports per-row results) to earn `exercised` — or its certificate
-  says `not-exercised`, visibly.
+  designated row subset and reports per-row results) to earn `exercised`. Otherwise its
+  certificate says `not-exercised`.
 
 ## Shipped adapter tests
 

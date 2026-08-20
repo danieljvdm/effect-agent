@@ -1,9 +1,9 @@
-# Subagent Specification
+# Subagent specification
 
 Status: **Proposed**
 
-Status note (2026-08-13): both §17 slices are implemented — S1 attached ephemeral Subagents
-and S2 durable attached Subagents (proven by the capabilities and testing suites).
+Status note (2026-08-13): both section 17 slices are implemented. S1 covers attached ephemeral
+Subagents, and S2 covers durable attached Subagents. The capabilities and testing suites prove both.
 
 This document specifies how one Agent delegates bounded work to another Agent while preserving
 Effect typing, structured concurrency, least authority, deterministic parent history, and the
@@ -73,7 +73,7 @@ child under the default `onExhaustion: "final-answer"` policy settles as success
 constrained grace Turn produces a real, Schema-decoded output that flows through
 `projectResult` and the normal Tool boundary like any other child output, with
 `SubagentCompleted.exhausted` making the degradation observable (RUN-025). The transcript
-invariant stands — a grace-Turn output is a declassified Output, not a transcript.
+invariant still holds. A grace-Turn output is a declassified Output, not a transcript.
 
 ### 2.3 A child is a normal Agent
 
@@ -140,7 +140,7 @@ The exact class names may change during the type proof. The following invariants
 
 ## 4. Authoring model
 
-The intended surface separates the pure declaration from the engine-owned handler Layer:
+The API separates the pure declaration from the engine-owned handler Layer:
 
 ```ts
 const ResearchDelegation = Subagent.define("delegate_research", {
@@ -211,9 +211,9 @@ declared Tool failure.
 
 The child Agent output is decoded by its normal output Schema before `projectResult` runs.
 `projectResult` produces the bounded value encoded by the delegation Tool success Schema; it also
-receives the framework's bounded result context (SUB-034) — currently the honest
-`budgetExhausted` marker — so a budget-truncated partial can be surfaced in the declared success
-Schema for the orchestrator's extension decision. The projection also receives the original
+receives the framework's bounded result context under SUB-034. The current context contains the
+`budgetExhausted` marker. The result Schema can expose that marker so the orchestrator can decide
+whether to extend the budget. The projection also receives the original
 Schema-decoded Tool parameters, allowing the declassification boundary to bind child output to
 the exact request without reparsing prompts or trusting echoed child identity fields.
 
@@ -228,15 +228,15 @@ Definition therefore MUST provide either:
 `failureMode: "error"` remains the default. An application may deliberately choose `"return"`
 (SUB-033, implemented) when Schema-backed child failures should be model-visible: the declared
 failure plus the framework delegation-failure family become result data in the Tool success
-union, so one failed child cannot fail the parent Tool batch. The mechanics are deliberately NOT
-Effect AI's native `failureMode: "return"` — that would convert every handler failure into a
+union, so one failed child cannot fail the parent Tool batch. The implementation does not use
+Effect AI's native `failureMode: "return"`, which would convert every handler failure into a
 result, including the engine-owned `ToolCallWaiting` suspension signal, silently orphaning a
 durable child. Instead the underlying Effect AI Tool keeps `failureMode: "error"`, the delegation
 handler contains exactly the expected failure family into the success channel, and
 `ToolCallWaiting` and `SubagentDurabilityError` stay raisable, preserving durable suspension by
 construction. On the durable path the settlement join records the contained failure with the
 same non-failure polarity the live batch continues with (SUB-019 coherence); the child's own
-failed Settlement and the `SubagentFailed` event remain the honest failure record. The mapping is
+failed Settlement and the `SubagentFailed` event remain the authoritative failure record. The mapping is
 exhaustive over expected child runtime failures. Ephemeral interruption propagates as
 interruption; a child defect fails the handler as a defect and is sandboxed by the ordinary Tool
 batch policy.
@@ -629,25 +629,25 @@ or rewrite it.
 
 Recovery classifies these states:
 
-| Parent/child evidence                                     | Recovery action                                                                                                                                                                                                                                                                                    |
-| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No reservation and no `SubagentRequested`                 | No child obligation exists; normal Tool preparation rules apply                                                                                                                                                                                                                                    |
-| Reservation exists, request absent                        | Under the parent fence, append the fixed request or release the unused reservation                                                                                                                                                                                                                 |
-| Requested, direct admission result `notAdmitted`          | Idempotently admit the intended child                                                                                                                                                                                                                                                              |
-| Requested, direct admission result `indeterminate`        | Wait/retry direct resolution; never infer absence from a projection                                                                                                                                                                                                                                |
-| Child admitted, its Conversation lacks the lineage record | The child lane defers its own materialization/readiness repair (`AwaitParentEstablishment`) and the worker claim path releases the admitted head; the parent's idempotent establishment (lineage before readiness) completes it — a child never runs a Turn before its lineage record is canonical |
-| Child admitted, parent start record missing               | Resolve by idempotency key and append the exact `SubagentStarted` link                                                                                                                                                                                                                             |
-| Started, child nonterminal                                | Enter/restore `waitingForChild`; never spawn a replacement invocation                                                                                                                                                                                                                              |
-| Child lost Attempt ownership before unsafe work           | Child recovery proceeds under its own higher ownership token and epoch                                                                                                                                                                                                                             |
-| Child has unresolved ordinary Tool outcome                | Child enters operator-resolution state; parent waits and no result is fabricated                                                                                                                                                                                                                   |
-| Child terminal, parent join missing                       | Verify the child Settlement and append the parent join/result batch                                                                                                                                                                                                                                |
-| Parent join canonical, budget release incomplete          | Apply the canonical accounting decision idempotently, then mark the reservation released                                                                                                                                                                                                           |
-| Parent Attempt ownership lost while child continues       | Fence stale parent; replacement observes the same child without holding a worker permit                                                                                                                                                                                                            |
-| Required child Binding digest unavailable                 | Write framework `ChildCompatibilityFailure`; never run different code                                                                                                                                                                                                                              |
-| Required parent declaration/projection digest unavailable | Record framework `SubagentExecutionFailure`; never invent an application result                                                                                                                                                                                                                    |
-| Parent abort canonical, child abort absent                | Idempotently append the child abort command and wait                                                                                                                                                                                                                                               |
-| Child abort canonical, parent propagation marker absent   | Repair the parent marker; do not issue a distinct command                                                                                                                                                                                                                                          |
-| Child terminal concurrently with abort                    | Preserve the one winning child Settlement and join that exact outcome                                                                                                                                                                                                                              |
+| Parent/child evidence                                     | Recovery action                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No reservation and no `SubagentRequested`                 | No child obligation exists; normal Tool preparation rules apply                                                                                                                                                                                                                                         |
+| Reservation exists, request absent                        | Under the parent fence, append the fixed request or release the unused reservation                                                                                                                                                                                                                      |
+| Requested, direct admission result `notAdmitted`          | Idempotently admit the intended child                                                                                                                                                                                                                                                                   |
+| Requested, direct admission result `indeterminate`        | Wait/retry direct resolution; never infer absence from a projection                                                                                                                                                                                                                                     |
+| Child admitted, its Conversation lacks the lineage record | The child lane defers its own materialization/readiness repair through `AwaitParentEstablishment`, and the worker claim path releases the admitted head. The parent's idempotent establishment completes lineage before readiness, so a child never runs a Turn before its lineage record is canonical. |
+| Child admitted, parent start record missing               | Resolve by idempotency key and append the exact `SubagentStarted` link                                                                                                                                                                                                                                  |
+| Started, child nonterminal                                | Enter/restore `waitingForChild`; never spawn a replacement invocation                                                                                                                                                                                                                                   |
+| Child lost Attempt ownership before unsafe work           | Child recovery proceeds under its own higher ownership token and epoch                                                                                                                                                                                                                                  |
+| Child has unresolved ordinary Tool outcome                | Child enters operator-resolution state; parent waits and no result is fabricated                                                                                                                                                                                                                        |
+| Child terminal, parent join missing                       | Verify the child Settlement and append the parent join/result batch                                                                                                                                                                                                                                     |
+| Parent join canonical, budget release incomplete          | Apply the canonical accounting decision idempotently, then mark the reservation released                                                                                                                                                                                                                |
+| Parent Attempt ownership lost while child continues       | Fence stale parent; replacement observes the same child without holding a worker permit                                                                                                                                                                                                                 |
+| Required child Binding digest unavailable                 | Write framework `ChildCompatibilityFailure`; never run different code                                                                                                                                                                                                                                   |
+| Required parent declaration/projection digest unavailable | Record framework `SubagentExecutionFailure`; never invent an application result                                                                                                                                                                                                                         |
+| Parent abort canonical, child abort absent                | Idempotently append the child abort command and wait                                                                                                                                                                                                                                                    |
+| Child abort canonical, parent propagation marker absent   | Repair the parent marker; do not issue a distinct command                                                                                                                                                                                                                                               |
+| Child terminal concurrently with abort                    | Preserve the one winning child Settlement and join that exact outcome                                                                                                                                                                                                                                   |
 
 An attached durable parent does not settle while its child join obligation is unresolved.
 An unresolved external outcome stops active child running time and transitions to an explicit
@@ -799,7 +799,7 @@ consequence, and durable Settlement mapping in the executable state-machine fixt
 Subagents were introduced in two proof slices rather than mixing unproven cross-Conversation
 recovery into the base durable runtime.
 
-### S1 — Attached ephemeral Subagents
+### S1: attached ephemeral Subagents
 
 Delivers:
 
@@ -819,7 +819,7 @@ Delivers:
 Allowed claim: `E` Subagents, plus persisted child history under deployment class `P` when a
 Conversation Store is supplied. Process loss still ends the work; no durable accepted-child claim.
 
-### S2 — Durable attached Subagents
+### S2: durable attached Subagents
 
 S2 builds on base admission, ordinary Tool uncertainty, durable Steps, approval suspension, and
 joined input. An epoch-bearing Conversation Store alone is insufficient: S2 also requires the
@@ -920,14 +920,14 @@ Require separate proposals:
   `notAdmitted`, `admitted`, and `indeterminate` results; projection absence never proves absence.
 - **SUB-032**: Child-binding and parent-declaration compatibility failures have distinct,
   framework-owned Schema records and never substitute newer code.
-- **SUB-033**: Under `failureMode: "return"` every expected delegation failure — the declared
-  child failure and the framework failure family — is contained as model-visible result data
-  instead of failing the parent Tool batch; the engine-owned waiting signal and durability error
-  always stay in the error channel, durable suspension semantics are preserved unchanged, and the
+- **SUB-033**: Under `failureMode: "return"`, every expected delegation failure becomes
+  model-visible result data instead of failing the parent Tool batch. This includes the declared
+  child failure and framework failure family. The engine-owned waiting signal and durability error
+  always stay in the error channel. Durable suspension semantics remain unchanged, and the
   durable settlement join records the same non-failure polarity the live batch continues with.
 - **SUB-034**: A per-invocation Tool Call allowance is tightening-only and clamped fail-closed to
   the delegation's per-invocation reservation slice and the child Definition's policy;
-  `projectResult` receives the framework's honest exhaustion marker (from the child result on the
+  `projectResult` receives the framework's exhaustion marker (from the child result on the
   ephemeral path and the child Settlement on the durable path), and a budget extension is a fresh
-  re-delegation with a raised allowance — never a mid-flight reservation top-up or child
+  re-delegation with a raised allowance, never a mid-flight reservation top-up or child
   Conversation reuse.

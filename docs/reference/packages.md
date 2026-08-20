@@ -13,8 +13,8 @@ Layers.
 
 ### `effect-agent` (umbrella)
 
-Re-exports the framework's complete pure surface — schema-first authoring (core), the bounded
-interpreter (engine), and operational capabilities — as one dependency-clean root package,
+Re-exports schema-first authoring from core, the bounded interpreter from engine, and operational
+capabilities as one platform-neutral root package,
 mirroring how `effect` fronts the `@effect/*` satellites. Platform adapters stay scoped, and the
 umbrella is version-fixed to its three constituents.
 
@@ -23,21 +23,21 @@ umbrella is version-fixed to its three constituents.
 Owns Agent Definitions and Bindings, branded identity Schemas, finite policy, expected framework
 errors, semantic Run Events, and the `IdGenerator` port. It depends only on Effect and Effect AI.
 
-Key exports: `Agent`, `AgentPolicy`, identifiers, errors, `RunEvent`, `IdGenerator`.
+Exports include `Agent`, `AgentPolicy`, identifiers, errors, `RunEvent`, and `IdGenerator`.
 
 ### `@effect-agent/engine`
 
 Owns the one ephemeral interpreter, Turn loop, Effect AI Response reduction, Tool scheduling,
 policy enforcement, semantic events, and narrow `RunOptions` seams.
 
-Key exports: `AgentRuntime`, `DetachedRun`, `RunOptions`, operational hook interfaces.
+Exports include `AgentRuntime`, `DetachedRun`, `RunOptions`, and the operational hook interfaces.
 
 ### `@effect-agent/capabilities`
 
 Adapts richer optional services to the engine: process-local Conversations, command queues,
-approval and audit, budgets, context/compaction, scheduling, MCP, structural redaction, and the
-Subagent authoring surface (`Subagent.define`, `SubagentPolicy`/`SubagentGrant`, and
-`SubagentRuntime.layer` with its ephemeral and durable delegation branches).
+approval and audit, budgets, context/compaction, scheduling, MCP, structural redaction, and
+Subagent authoring through `Subagent.define`, `SubagentPolicy`, `SubagentGrant`, and
+`SubagentRuntime.layer`.
 
 It depends outward from engine; the engine does not import it.
 
@@ -95,7 +95,7 @@ durable Submission Ledger against one Conversation Object's private SQLite datab
 table mirror plus the `effect_agent_meta` exact-or-fresh version gate and the durable
 `effect_agent_child_settlements` cross-store notification marker), storage-backed transactions,
 typed compatibility/corruption/bound errors, the same failpoint-location names as the Node
-adapter, and the cross-Object seam — Schema port-call envelopes and routed decorator Layers over
+adapter. Its cross-Object boundary uses Schema port-call envelopes and routed decorator Layers over
 a closed route-capable subset with adapter-minted routable Submission identities. It never
 imports the `cloudflare:workers` runtime module; Durable Object handles are injected as Layer
 construction values.
@@ -123,7 +123,7 @@ The packaged GitHub pull-request reviewer: schema-first review contracts, the
 validation and publication planning, a fail-open sticky progress comment
 (`ReviewProgressReporter`), flat and fan-out reviewer shapes, and the `PrReview`
 configuration factory. Fan-out is scheduled entirely by host code from the deterministic
-unit plan — no coordinator model, no delegation tool: independent general and specialist
+unit plan. There is no coordinator model or delegation Tool. Independent general and specialist
 discovery plus fresh candidate verification run as bounded child passes with one retry each,
 and only exactly confirmed candidates publish. Its public result separates path/input
 coverage from pass settlement; neither claim means exhaustive defect detection. Every
@@ -131,12 +131,10 @@ completed run that can be signed advances the authenticated incremental baseline
 that stays failed carries its paths forward as retryable scope inside the state instead of
 freezing the baseline, and only a fully settled state authorizes skip-unchanged. A rewritten
 head that is no longer a git ancestor stays incremental when a two-dot tree comparison can
-name the current PR paths whose contents changed; unchanged leftovers retry only the failed
-pass and keep their stored findings. Subpath
-entries: `./testing`
-(fixture source, collecting publisher,
-prompt-keyed scripted models), `./action` and `./cli` (platform-node host entrypoints). Consumes
-the `effect-agent` umbrella — the first package-level consumer of that edge. Deployment class E
+name the current PR paths whose contents changed. Unchanged leftovers retry only the failed
+pass and keep their stored findings. The package exports `./testing` for fixture sources, a collecting
+publisher, and prompt-keyed scripted models. It exports `./action` and `./cli` as platform-node host
+entrypoints. It consumes the `effect-agent` umbrella as the first package-level consumer. Deployment class E
 only; review posting is never claimed exactly-once.
 
 ### `@effect-agent/testing`
@@ -176,4 +174,4 @@ core + engine + capabilities ← effect-agent (umbrella) ← pr-review
 ```
 
 An inward package cannot import an outward package. If a feature appears to require that, the
-solution is an inward port and outward adapter—not a dependency reversal.
+solution is an inward port with an outward adapter, not a dependency reversal.

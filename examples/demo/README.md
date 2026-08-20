@@ -20,7 +20,7 @@ exposing it to the client bundle.
 Use the chat directly to exercise the runtime:
 
 - Ask it to plan the fixed London trip to see the live model call fixture supplier Tools through
-  the bounded framework scheduler. The trace reflects the Tools the model actually chose; it is
+  the bounded framework scheduler. The trace records the Tools the model actually chose; it is
   not a canned transcript.
 - While a travel Run is active, send another message. The first admitted update is steering and is
   delivered after the current Tool batch; a later update is a queued follow-up delivered at the

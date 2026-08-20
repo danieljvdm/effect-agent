@@ -1,11 +1,9 @@
 # Context management
 
-Every model request re-sends the conversation so far. Without bounds, an agent on a
-grep-and-read cadence grows its prompt with every Tool result, pays for that growth again on
-every later call, and eventually dies mid-task — over budget or over the model's context
-window — having delivered nothing. Context management is the engine machinery that keeps the
-prompt bounded, keeps the model and the host informed, and turns exhaustion into a delivered
-answer instead of a silent failure.
+Every model request sends the conversation again. A grep-and-read agent adds another Tool result
+to each request, pays for the larger prompt on every later call, and may exceed its budget or the
+model's context window before it answers. Context management bounds the prompt, reports remaining
+capacity, and gives the model one constrained chance to answer when a limit is exhausted.
 
 Everything on this page is policy-driven and on by default. The knobs live on `AgentPolicy`:
 
@@ -16,9 +14,9 @@ AgentPolicy.make({
   maxDuration: "5 minutes",
   toolConcurrency: 4,
 
-  tokenBudget: 200_000, // cumulative input+output across the Run — the runaway stop
+  tokenBudget: 200_000, // cumulative input+output across the Run
   costBudgetMicrousd: 2_000_000, // spend, measured by your cost estimator
-  contextTokenLimit: 150_000, // one model call's live context — the compaction trigger
+  contextTokenLimit: 150_000, // compact before one call exceeds this size
 
   toolResultBounds: ToolResultBounds.make({ maxBytes: 50 * 1024 }), // the default
   runStatus: "appended", // the default
@@ -27,16 +25,15 @@ AgentPolicy.make({
 });
 ```
 
-Three token quantities are deliberately distinct, because conflating them is how agents die
-confusingly. `tokenBudget` is cumulative: it charges the full prompt of every call, so it grows
-quadratically with history and exists to stop runaways, not to measure work. `costBudgetMicrousd`
-measures spend through your estimator, which receives cache-split usage. `contextTokenLimit`
-bounds one call's live context — set it from your model's window, and compaction keeps the Run
-under it.
+The three token quantities measure different things. `tokenBudget` is cumulative and charges the
+full prompt of every call. It grows quadratically with history and stops runaway Runs rather than
+measuring completed work. `costBudgetMicrousd` measures spend through an estimator that receives
+cache-split usage. `contextTokenLimit` bounds one call's context. Set it from the model's context
+window, and the engine compacts before the next request exceeds it.
 
 ## Tool results are bounded at the source
 
-Every application Tool result — MCP included — passes through `toolResultBounds` exactly once,
+Every application Tool result, including MCP results, passes through `toolResultBounds` exactly once
 at the settle seam, before it enters history or durable records. A result within the bound passes
 through byte-identical. An oversized one becomes the canonical envelope:
 
@@ -51,15 +48,15 @@ through byte-identical. An oversized one becomes the canonical envelope:
 
 The model sees the envelope, the journal records the same envelope, and replay stays consistent.
 The default is 50 KiB per result; raise it deliberately for agents whose single results must be
-large. Provider-executed Tool results are exempt — the provider already materialized them into
-the response.
+large. Provider-executed Tool results are exempt because the provider has already materialized
+them into the response.
 
 One oversized `git diff` no longer costs its full size on every subsequent call for the rest of
 the conversation. Bound first; everything else on this page is cheaper because of it.
 
 ## The run-status message
 
-The model cannot see policy counters, so every bound is an invisible cliff. With
+The model cannot see policy counters unless the runtime includes them in the prompt. With
 `runStatus: "appended"` (the default), each outgoing request ends with one derived line:
 
 ```text
@@ -73,8 +70,8 @@ persisted: canonical history stays append-only, and replays are unaffected. Set
 
 ## Warnings and the token soft landing
 
-Crossing 80% of a configured budget emits a `BudgetWarning` Run Event once per dimension —
-observe it like any other event to alert before a Run is in trouble.
+Crossing 80% of a configured budget emits one `BudgetWarning` Run Event per dimension. Observe it
+like any other event to alert before the Run reaches the limit.
 
 Exhaustion itself resolves through `onExhaustion`. Turn and Tool Call exhaustion soft-land as
 described in [Agent definitions](/guide/agents): the over-budget batch settles synthetically,
@@ -91,15 +88,15 @@ RunCompleted {
 }
 ```
 
-`exhausted` names the dimension that bound. A delegated child that soft-lands settles as
-success — its grace-Turn output flows through `projectResult` like any other child output, and
+`exhausted` names the exhausted dimension. A delegated child that produces a final answer settles
+as success. Its grace-Turn output flows through `projectResult` like any other child output, and
 `SubagentCompleted.exhausted` makes the degradation observable to the parent. This is the marker
 the budget-extension grant flow consumes when an orchestrator decides to re-delegate with a
 larger allowance.
 
 `onExhaustion: "fail"` keeps every dimension fail-fast for pipelines that must never accept a
-truncated answer. Duration and cost breaches always fail typed — a grace call would extend the
-wall-clock contract or the bill.
+truncated answer. Duration and cost breaches always fail typed because a grace call would extend
+the wall-clock limit or increase the bill.
 
 ## Compaction
 
@@ -111,23 +108,22 @@ Crossing the limit triggers compaction, synchronously, per `CompactionPolicy`:
    with `"[tool result cleared by compaction]"`. Message structure and call/result pairing are
    preserved; no model call is spent.
 2. **Summarize** runs only if pruning was not enough (mode `"prune-then-summarize"`, the
-   default): one metered call on the Run's own model produces a structured summary — goal,
-   constraints, progress, decisions, next steps, critical context — and the model-visible view
+   default). One metered call on the Run's model summarizes the goal, constraints, progress,
+   decisions, next steps, and context. The model-visible view
    becomes instruction prefix + summary + the kept recent tail. The summarization call's usage
    is charged like any other.
 
 Compaction is a view, never a rewrite. Official history and the canonical Conversation Log are
 untouched; a `CompactionPerformed` event reports each reduction. In the durable assemblies (DN
 and DC) each compaction also appends a canonical `CompactionCreated` record, and the journal
-projection folds
-it — covered records render as the summary (or with cleared Tool results) on every later Attempt
-and every later Run of the same Conversation. That last part is the point for long-lived
+projection folds it. Covered records render as the summary or with cleared Tool results on every
+later Attempt and every later Run of the same Conversation. This matters for long-lived
 Conversations: without it, every prior Run's raw Tool output replays into every new Run's
 opening prompt forever.
 
 If a provider still rejects a prompt as too long, the engine classifies the rejection, compacts,
-and issues at most one framework-level retry (transport ambiguity can still duplicate the
-external call); a second rejection — or overflow with no `contextTokenLimit` configured — fails
+and issues at most one framework-level retry. Transport ambiguity can still duplicate the
+external call. A second rejection, or overflow with no `contextTokenLimit` configured, fails
 typed with `ContextOverflowError` instead of an opaque provider error.
 
 ### Supplying a Cloudflare compactor
@@ -164,25 +160,25 @@ The budget hook's snapshot is cache-aware and context-aware:
 const report = Effect.gen(function* () {
   const usage = yield* budget.snapshot;
   usage.inputTokens; // cumulative input (total, including cached)
-  usage.cacheReadInputTokens; // served from provider cache — cheap
+  usage.cacheReadInputTokens; // served from provider cache
   usage.cacheWriteInputTokens;
   usage.lastInputTokens; // ≈ the live context of the most recent call
   usage.lastOutputTokens;
 });
 ```
 
-`lastInputTokens` is the number to watch: it is the Run's actual context size, the quantity
+`lastInputTokens` is the number to watch. It is the Run's actual context size, the quantity
 `contextTokenLimit` bounds. Cumulative `inputTokens` will be many multiples of it on any
-long Run — that is normal, and with prompt caching most of those tokens are cheap re-reads.
-See [Run & stream](/guide/run-agents) for wiring the hook.
+long Run. Prompt caching may reduce the cost of those repeated input tokens. See
+[Run and stream](/guide/run-agents) for wiring the hook.
 
 ## Sizing guidance
 
-- Set `contextTokenLimit` from the model's window minus headroom for output and the summary —
-  for a 200k-window model, 150–170k is a reasonable ceiling.
+- Set `contextTokenLimit` below the model's window to leave room for output and the summary. For a
+  200k-token window, start between 150k and 170k.
 - `keepRecentTokens` (default 20k) is the verbatim tail that survives a compaction. Raise it for
   agents whose recent Tool results are load-bearing; lower it for chatty ones.
-- Size `tokenBudget` as a runaway stop, not a work meter — several multiples of
+- Size `tokenBudget` as a runaway stop, not a work meter. Use several multiples of
   `contextTokenLimit`, or omit it and bound spend with `costBudgetMicrousd` instead.
 - Research-shaped work is cheaper delegated: a scout child reads the files and returns a bounded
   report, so the noise never enters the parent's context; Code Mode collapses many Tool

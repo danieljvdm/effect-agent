@@ -101,7 +101,7 @@ const result = AgentRuntime.run(Triage, { repo: "acme/api", issueNumber: 123 }).
       <a class="ea-path" href="/concepts/durability">
         <span class="ea-path__index">RECOVER</span>
         <h3>Survive interruption</h3>
-        <p>Durable admission, crash recovery, and one honest terminal Settlement — on Node/SQLite and Cloudflare.</p>
+        <p>Durable admission and crash recovery on Node/SQLite and Cloudflare, with one terminal Settlement.</p>
         <span class="ea-path__arrow">Persistence &amp; durability →</span>
       </a>
       <a class="ea-path" href="/guide/testing">
@@ -114,7 +114,7 @@ const result = AgentRuntime.run(Triage, { repo: "acme/api", issueNumber: 123 }).
   </section>
 
   <footer class="ea-home__footer">
-    <strong>Pre-1.0. Every documented surface is implemented and tested.</strong>
+    <strong>Pre-1.0. Tests cover every documented API and runtime contract.</strong>
     <a class="ea-button" href="/guide/getting-started">Build an agent →</a>
   </footer>
 </main>

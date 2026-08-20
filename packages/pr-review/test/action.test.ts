@@ -32,7 +32,6 @@ import {
   planPublication,
   PublishedReview,
   PullRequestMetadata,
-  ReviewCoverage,
   ReviewAssurance,
   ReviewExecutionContext,
   ReviewFinding,
@@ -198,17 +197,6 @@ const fakeOutcome = (
     review,
     activeFindings: findings,
     activeConcerns: review.concerns ?? [],
-    coverage: ReviewCoverage.make({
-      status: options.incomplete || options.assuranceIncomplete ? "incomplete" : "complete",
-      requiredPaths: [],
-      reviewedPaths: [],
-      unreviewedPaths: [],
-      failedUnits: [],
-      reasons:
-        options.incomplete || options.assuranceIncomplete
-          ? ["configured review work did not settle"]
-          : [],
-    }),
     inputCoverage: ReviewInputCoverage.make({
       status: options.incomplete ? "incomplete" : "complete",
       requiredPaths: [],
@@ -352,7 +340,6 @@ describe("runReviewAction", () => {
       expect(outputs).toContain("conclusion=success");
       expect(outputs).toContain("input-coverage=complete");
       expect(outputs).toContain("review-assurance=settled");
-      expect(outputs).toContain("coverage=complete");
     }),
   );
 
@@ -367,7 +354,7 @@ describe("runReviewAction", () => {
           }),
         );
         const state = ReviewState.make({
-          version: 2,
+          version: 1,
           repository: "acme/widgets",
           pullRequestNumber: 5,
           baseRef: "main",
@@ -375,11 +362,12 @@ describe("runReviewAction", () => {
           headRef: "fix/review",
           reviewedHeadSha: "2".repeat(40),
           profileFingerprint: "a".repeat(64),
-          acceptedScopeFingerprint: "b".repeat(64),
+          settledScopeFingerprint: "b".repeat(64),
           reviewedPathCount: 0,
           unresolvedFindings: [],
           unresolvedConcerns: [],
           unreviewedPaths: [],
+          unreviewedPasses: [],
           settled: true,
           lastReviewMode: "full",
         });
@@ -554,7 +542,6 @@ describe("runReviewAction", () => {
       const outputs = yield* Ref.get(harness.written);
       expect(outputs).toContain("verdict=approve");
       expect(outputs).toContain("conclusion=incomplete");
-      expect(outputs).toContain("coverage=incomplete");
     }),
   );
 
@@ -589,35 +576,6 @@ describe("runReviewAction", () => {
     }),
   );
 
-  it.effect("reruns a fingerprint-only harness instead of claiming unauthenticated assurance", () =>
-    Effect.gen(function* () {
-      const harness = yield* actionHarness(
-        JSON.stringify({
-          pull_request: { number: 5 },
-          repository: { full_name: "acme/widgets" },
-        }),
-      );
-      const fingerprint = "f".repeat(64);
-      const invoked = yield* Ref.make(0);
-      const result = yield* runReviewAction(
-        {
-          run: () =>
-            Ref.update(invoked, (count) => count + 1).pipe(
-              Effect.map(() => fakeOutcome("comment")),
-            ),
-          fingerprint: Effect.succeed(fingerprint),
-        },
-        {
-          post: false,
-          priorReviews: staticPriorReviews(Option.some(fingerprint)),
-        },
-      ).pipe(Effect.provide(harness.layer));
-      expect(result._tag).toBe("Completed");
-      expect(yield* Ref.get(invoked)).toBe(1);
-      expect(yield* Ref.get(harness.written)).not.toContain("skipped=true");
-    }),
-  );
-
   it.effect("preserves a blocking conclusion when the reviewed head is unchanged", () =>
     Effect.gen(function* () {
       const harness = yield* actionHarness(
@@ -641,7 +599,7 @@ describe("runReviewAction", () => {
         totalChangedFiles: 0,
       });
       const state = ReviewState.make({
-        version: 2,
+        version: 1,
         repository: metadata.repository,
         pullRequestNumber: metadata.number,
         baseRef: metadata.baseRef,
@@ -649,7 +607,7 @@ describe("runReviewAction", () => {
         headRef: metadata.headRef,
         reviewedHeadSha: headSha,
         profileFingerprint,
-        acceptedScopeFingerprint: "b".repeat(64),
+        settledScopeFingerprint: "b".repeat(64),
         reviewedPathCount: 0,
         unresolvedFindings: [
           StoredReviewFinding.make({
@@ -663,6 +621,7 @@ describe("runReviewAction", () => {
         ],
         unresolvedConcerns: [],
         unreviewedPaths: [],
+        unreviewedPasses: [],
         settled: true,
         lastReviewMode: "full",
       });
@@ -673,6 +632,7 @@ describe("runReviewAction", () => {
             Ref.update(invoked, (count) => count + 1).pipe(
               Effect.map(() => fakeOutcome("comment")),
             ),
+          fingerprint: Effect.succeed("b".repeat(64)),
           profileFingerprint: Effect.succeed(profileFingerprint),
           snapshot: Effect.succeed({ metadata, files: [] }),
         },
@@ -721,7 +681,7 @@ describe("runReviewAction", () => {
         patch: "@@ -8 +8 @@\n-before\n+after",
       });
       const state = ReviewState.make({
-        version: 2,
+        version: 1,
         repository: metadata.repository,
         pullRequestNumber: metadata.number,
         baseRef: metadata.baseRef,
@@ -729,11 +689,12 @@ describe("runReviewAction", () => {
         headRef: metadata.headRef,
         reviewedHeadSha,
         profileFingerprint,
-        acceptedScopeFingerprint: patchFingerprint,
+        settledScopeFingerprint: patchFingerprint,
         reviewedPathCount: 1,
         unresolvedFindings: [],
         unresolvedConcerns: [],
         unreviewedPaths: [],
+        unreviewedPasses: [],
         settled: true,
         lastReviewMode: "full",
       });
@@ -791,7 +752,7 @@ describe("runReviewAction", () => {
         patch: "@@ -8 +8 @@\n-before\n+after",
       });
       const state = ReviewState.make({
-        version: 2,
+        version: 1,
         repository: metadata.repository,
         pullRequestNumber: metadata.number,
         baseRef: metadata.baseRef,
@@ -799,12 +760,13 @@ describe("runReviewAction", () => {
         headRef: metadata.headRef,
         reviewedHeadSha: metadata.headSha,
         profileFingerprint,
-        acceptedScopeFingerprint: patchFingerprint,
+        settledScopeFingerprint: patchFingerprint,
         reviewedPathCount: 1,
         unresolvedFindings: [],
         unresolvedConcerns: [],
         // A prior pass failed on src/a.ts; skipping would abandon the retry.
         unreviewedPaths: ["src/a.ts"],
+        unreviewedPasses: [],
         settled: false,
         lastReviewMode: "incremental",
       });
@@ -878,7 +840,7 @@ describe("runReviewAction", () => {
         patch: "@@ -1 +1 @@\n-old\n+kept",
       });
       const state = ReviewState.make({
-        version: 2,
+        version: 1,
         repository: metadata.repository,
         pullRequestNumber: metadata.number,
         baseRef: metadata.baseRef,
@@ -886,7 +848,7 @@ describe("runReviewAction", () => {
         headRef: metadata.headRef,
         reviewedHeadSha,
         profileFingerprint,
-        acceptedScopeFingerprint: "b".repeat(64),
+        settledScopeFingerprint: "b".repeat(64),
         reviewedPathCount: 2,
         unresolvedFindings: [],
         unresolvedConcerns: [],
@@ -963,7 +925,7 @@ describe("runReviewAction", () => {
         totalChangedFiles: 0,
       });
       const state = ReviewState.make({
-        version: 2,
+        version: 1,
         repository: metadata.repository,
         pullRequestNumber: metadata.number,
         baseRef: metadata.baseRef,
@@ -971,11 +933,12 @@ describe("runReviewAction", () => {
         headRef: metadata.headRef,
         reviewedHeadSha: "1".repeat(40),
         profileFingerprint,
-        acceptedScopeFingerprint: "b".repeat(64),
+        settledScopeFingerprint: "b".repeat(64),
         reviewedPathCount: 0,
         unresolvedFindings: [],
         unresolvedConcerns: [],
         unreviewedPaths: [],
+        unreviewedPasses: [],
         settled: true,
         lastReviewMode: "full",
       });

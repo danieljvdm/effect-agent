@@ -1,10 +1,10 @@
-# Capability Specification
+# Capability specification
 
 Status: Draft
 
 This document specifies the capabilities surrounding the core agent interpreter. A
 capability is an Effect service with an explicit contract, error channel, resource
-lifetime, and event surface. Capabilities may be omitted from a runtime. The engine
+lifetime, and events. Capabilities may be omitted from a runtime. The engine
 must detect absence explicitly; it must not silently substitute weaker behavior.
 
 ## 1. Capability matrix
@@ -24,7 +24,7 @@ must detect absence explicitly; it must not silently substitute weaker behavior.
 | Persistent agent state     | Implemented |                          No |                              No |
 | Durable steps              | Implemented |                          No |                              No |
 
-“Required for DN/DC assembly” means the DN or DC host assembly must supply the
+"Required for DN/DC assembly" means the DN or DC host assembly must supply the
 service when the related behavior is enabled. It does not mean every deployment
 enables every capability.
 
@@ -130,7 +130,7 @@ configured policy explicitly says otherwise.
 
 On the durable runtime, an unresolved approval is a **durable suspension**: the
 canonical approval request record is the safe boundary (durability §8), ownership ends, and the
-lane consumes no worker permit — durable suspension itself has no implicit timeout. Suspension
+lane consumes no worker permit. Durable suspension itself has no implicit timeout. Suspension
 is operational ledger state with no canonical "suspended" record; the resuming
 Attempt appends the canonical decision before honoring it and replays the declared Tool batch
 without re-invoking the model. An immediate policy decision commits atomically with its request.
@@ -284,7 +284,7 @@ the declaration deriver cannot render. The outer Tool is annotated `readonly`; u
 separately adds them to the model-facing Toolkit, the model sees only the Code Mode Tool.
 
 Model-facing TypeScript declarations are documentation derived from the encoded side of the
-selected Tools' Effect Schemas — the JSON that actually crosses the sandbox boundary. Runtime
+selected Tools' Effect Schemas, which define the JSON that crosses the sandbox boundary. Runtime
 validation always uses the original Schemas, before the original handler starts and again when
 its result crosses back. A failed inner call rejects inside the program with a Schema-encoded
 envelope carrying the existing framework error tags; raw Effects, Layers, services, database
@@ -310,9 +310,9 @@ plus per-call argument and result byte bounds). Implementations reuse the
 enforce; an `unisolated` executor is never a security boundary. Interruption closes the workload
 and every transport or resource owned by the pass.
 
-The final result, captured logs, and thrown values form one model-visible egress surface under a
+The final result, captured logs, and thrown values share one model-visible output boundary with a
 single aggregate byte budget and redaction policy. Intermediate Tool results never leave the
-pass implicitly — not through telemetry, canonical records, or declarations. In deployment class
+pass implicitly. They do not pass through telemetry, canonical records, or declarations. In deployment class
 `E`, inner calls produce no Canonical Records: the Conversation Log carries only the outer Tool
 Call and its bounded final result, with inner-call evidence in telemetry counts and host-Tool
 audit metadata. Code Mode claims deployment class `E` only; the `DN` and `DC` assemblies make
@@ -341,7 +341,7 @@ State writes may be:
 - external and compensatable;
 - external and uncertain.
 
-The API must force the caller to select the write class. “Memory” is not a single
+The API must force the caller to select the write class. "Memory" is not a single
 untyped key-value bag.
 
 ## 12. Observability integration
@@ -384,8 +384,8 @@ default and are excluded from ordinary span attributes.
 - **CAP-015**: The `CodeExecutor` port is Schema-first and scoped: adapters report their
   isolation posture honestly, reject limits they cannot enforce, and release every pass-owned
   resource on success, failure, timeout, and interruption.
-- **CAP-016**: Code Mode's model-visible egress — the final result, captured logs, and thrown
-  values — passes one aggregate byte budget and redaction policy; intermediate results never
+- **CAP-016**: Code Mode applies one byte budget and redaction policy to all model-visible output,
+  including the final result, captured logs, and thrown values. Intermediate results never
   leave a pass implicitly.
 - **CAP-017**: Budget snapshots are cache-aware and context-aware: `UsageTotals` and
   `UsageDelta` carry cache-read and cache-write input tokens distinctly (with `inputTokens`

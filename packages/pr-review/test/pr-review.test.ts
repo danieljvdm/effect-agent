@@ -66,7 +66,7 @@ describe("OpenAI tool schema compatibility", () => {
 });
 
 describe("host coverage diagnostics", () => {
-  it("bounds externally sourced path lists before constructing ReviewCoverage", () => {
+  it("bounds externally sourced path lists in input coverage diagnostics", () => {
     const longFiles = Array.from({ length: 3 }, (_, index) =>
       ChangedFile.make({
         path: `src/${String(index)}-${"a".repeat(480)}.ts`,
@@ -1171,7 +1171,7 @@ describe("offline review run", () => {
         body: "A new delta touching this path invalidates the carried finding.",
       });
       const priorState = ReviewState.make({
-        version: 2,
+        version: 1,
         repository: metadata.repository,
         pullRequestNumber: metadata.number,
         baseRef: metadata.baseRef,
@@ -1179,11 +1179,12 @@ describe("offline review run", () => {
         headRef: metadata.headRef,
         reviewedHeadSha,
         profileFingerprint,
-        acceptedScopeFingerprint: "b".repeat(64),
+        settledScopeFingerprint: "b".repeat(64),
         reviewedPathCount: 2,
         unresolvedFindings: [priorFinding, affectedPriorFinding],
         unresolvedConcerns: [],
         unreviewedPaths: [],
+        unreviewedPasses: [],
         settled: true,
         lastReviewMode: "full",
       });
@@ -1243,7 +1244,6 @@ describe("offline review run", () => {
       );
 
       expect(selection.files.map((file) => file.path)).toEqual(["src/corrective.ts"]);
-      expect(outcome.coverage.status).toBe("complete");
       expect(outcome.activeFindings.map((finding) => finding.title)).toEqual([priorFinding.title]);
       expect(outcome.activeFindings.map((finding) => finding.title)).not.toContain(
         affectedPriorFinding.title,

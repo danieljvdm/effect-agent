@@ -11,10 +11,8 @@ import { type Tool } from "effect/unstable/ai";
 
 import {
   assessFlatReview,
-  compatibilityCoverage,
   fanOutInputCoverage,
   ReviewAssurance,
-  ReviewCoverage,
   ReviewInputCoverage,
 } from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
@@ -91,8 +89,6 @@ export class ReviewRunOutcome extends Schema.Class<ReviewRunOutcome>(
   activeFindings: Schema.Array(ReviewFinding).check(Schema.isMaxLength(20)),
   /** All currently unresolved concerns, including concerns carried to final audit. */
   activeConcerns: Schema.Array(ReviewConcern).check(Schema.isMaxLength(10)),
-  /** Host-owned structural coverage used by the Actions check conclusion. */
-  coverage: ReviewCoverage,
   /** Exact path/evidence assignment, distinct from semantic review work. */
   inputCoverage: ReviewInputCoverage,
   /** Settlement of scheduled discovery, specialist, and verification work. */
@@ -261,7 +257,7 @@ const settleReviewRun = (
       carriedScopeFits &&
       executionContext.stateAuthenticator?.status === "available"
         ? ReviewState.make({
-            version: 2,
+            version: 1,
             repository: metadata.repository,
             pullRequestNumber: metadata.number,
             baseRef: metadata.baseRef,
@@ -269,7 +265,7 @@ const settleReviewRun = (
             headRef: metadata.headRef,
             reviewedHeadSha: metadata.headSha,
             profileFingerprint: executionContext.profileFingerprint,
-            acceptedScopeFingerprint: fingerprint,
+            settledScopeFingerprint: fingerprint,
             reviewedPathCount: anchorFiles.length,
             unresolvedFindings: activeFindings.map(toStoredFinding),
             unresolvedConcerns: activeConcerns.map(toStoredConcern),
@@ -332,7 +328,6 @@ const settleReviewRun = (
       review,
       activeFindings,
       activeConcerns,
-      coverage: compatibilityCoverage(inputCoverage, assurance),
       inputCoverage,
       assurance,
       unreviewedPaths,

@@ -42269,22 +42269,6 @@ var PullRequestReviewer = Agent.define("pr-reviewer", {
 });
 
 // packages/pr-review/src/internal/coverage.ts
-class FailedReviewUnit extends exports_Schema.Class("@effect-agent/pr-review/FailedReviewUnit")({
-  unitId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(32)),
-  errorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256))
-}) {
-}
-
-class ReviewCoverage extends exports_Schema.Class("@effect-agent/pr-review/ReviewCoverage")({
-  status: exports_Schema.Literals(["complete", "incomplete"]),
-  requiredPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  reviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  unreviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  failedUnits: exports_Schema.Array(FailedReviewUnit).check(exports_Schema.isMaxLength(8)),
-  reasons: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000))).check(exports_Schema.isMaxLength(32))
-}) {
-}
-
 class ReviewInputCoverage extends exports_Schema.Class("@effect-agent/pr-review/ReviewInputCoverage")({
   status: exports_Schema.Literals(["complete", "incomplete"]),
   requiredPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
@@ -42462,27 +42446,6 @@ var fanOutInputCoverage = (input) => {
     undiffablePaths: sortedUnique(plan.undiffablePaths),
     reasons
   }), input.anchorFiles, input.totalAnchorFiles);
-};
-var compatibilityCoverage = (inputCoverage, assurance) => {
-  const assuranceIncomplete = assurance.status === "incomplete";
-  const failedUnits = new Map;
-  for (const pass of assurance.failedPasses) {
-    const unitId = pass.workId.slice(0, "unit-000".length);
-    if (!failedUnits.has(unitId)) {
-      failedUnits.set(unitId, FailedReviewUnit.make({ unitId, errorTag: `${pass.stage}:${pass.errorTag}` }));
-    }
-  }
-  return ReviewCoverage.make({
-    status: inputCoverage.status === "complete" && !assuranceIncomplete ? "complete" : "incomplete",
-    requiredPaths: inputCoverage.requiredPaths,
-    reviewedPaths: inputCoverage.assignedPaths,
-    unreviewedPaths: sortedUnique([
-      ...inputCoverage.partialPaths,
-      ...inputCoverage.unassignedPaths
-    ]),
-    failedUnits: [...failedUnits.values()].slice(0, 8),
-    reasons: [...inputCoverage.reasons, ...assuranceIncomplete ? assurance.reasons : []]
-  });
 };
 
 // packages/pr-review/src/internal/review-units.ts
@@ -43425,7 +43388,7 @@ class StoredUnreviewedPass extends exports_Schema.Class("@effect-agent/pr-review
 }
 
 class ReviewState extends exports_Schema.Class("@effect-agent/pr-review/ReviewState")({
-  version: exports_Schema.Literal(2),
+  version: exports_Schema.Literal(1),
   repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
   pullRequestNumber: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
   baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
@@ -43433,12 +43396,12 @@ class ReviewState extends exports_Schema.Class("@effect-agent/pr-review/ReviewSt
   headRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
   reviewedHeadSha: GitCommitSha,
   profileFingerprint: Fingerprint,
-  acceptedScopeFingerprint: Fingerprint,
+  settledScopeFingerprint: Fingerprint,
   reviewedPathCount: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 0, maximum: 300 })),
   unresolvedFindings: exports_Schema.Array(StoredReviewFinding).check(exports_Schema.isMaxLength(20)),
   unresolvedConcerns: exports_Schema.Array(StoredReviewConcern).check(exports_Schema.isMaxLength(10)),
   unreviewedPaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(MAX_STORED_UNREVIEWED_PATHS)),
-  unreviewedPasses: exports_Schema.optionalKey(exports_Schema.Array(StoredUnreviewedPass).check(exports_Schema.isMaxLength(MAX_STORED_UNREVIEWED_PASSES))),
+  unreviewedPasses: exports_Schema.Array(StoredUnreviewedPass).check(exports_Schema.isMaxLength(MAX_STORED_UNREVIEWED_PASSES)),
   settled: exports_Schema.Boolean,
   lastReviewMode: ReviewScopeMode
 }) {
@@ -43465,12 +43428,12 @@ var toStoredConcern = (concern) => StoredReviewConcern.make({
   body: concern.body.slice(0, 800)
 });
 var fromStoredConcern = (concern) => ReviewConcern.make({ severity: concern.severity, title: concern.title, body: concern.body });
-var STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v2:";
+var STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
 var STATE_MARKER_SUFFIX = " -->";
-var STATE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-pr-review state-v2:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
-var STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v2\x00";
+var STATE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
+var STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\x00";
 var MAX_REVIEW_STATE_MARKER_CHARS = 24000;
-var ReviewStateMarker = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS), exports_Schema.isPattern(/^<!-- effect-agent-pr-review state-v2:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/)).pipe(exports_Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
+var ReviewStateMarker = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS), exports_Schema.isPattern(/^<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/)).pipe(exports_Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
 
 class ReviewStateAuthenticationFailure extends exports_Schema.TaggedError()("ReviewStateAuthenticationFailure", {
   operation: exports_Schema.Literals(["sign", "verify"]),
@@ -43617,27 +43580,22 @@ var incrementalFromDelta = (input) => {
     }
   }
   const carriedPaths = input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path));
-  const surgical = input.priorState.unreviewedPasses !== undefined;
   const retryOnly = new Set;
   const retryStages = new Set;
   for (const path of carriedPaths) {
     if (affectedPaths.has(path))
       continue;
     retryOnly.add(path);
-    if (surgical) {
-      for (const pass of input.priorState.unreviewedPasses ?? []) {
-        if (pass.paths.includes(path))
-          retryStages.add(pass.stage);
-      }
-    } else {
-      affectedPaths.add(path);
+    for (const pass of input.priorState.unreviewedPasses) {
+      if (pass.paths.includes(path))
+        retryStages.add(pass.stage);
     }
   }
-  if (surgical && retryStages.has("verification") && !retryStages.has("discovery") && !retryStages.has("specialist")) {
+  if (retryStages.has("verification") && !retryStages.has("discovery") && !retryStages.has("specialist")) {
     retryStages.add("discovery");
     retryStages.add("specialist");
   }
-  if (surgical && retryOnly.size > 0 && retryStages.size === 0) {
+  if (retryOnly.size > 0 && retryStages.size === 0) {
     for (const path of retryOnly)
       affectedPaths.add(path);
     retryStages.add("discovery");
@@ -43653,7 +43611,7 @@ var incrementalFromDelta = (input) => {
   }
   const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
   const leftoverCount = [...retryOnly].filter((path) => !affectedPaths.has(path)).length;
-  const carriedReason = leftoverCount > 0 && surgical ? `; retrying ${leftoverCount} unchanged leftover path(s) without rediscovery` : carriedPaths.length > 0 ? `; retrying ${carriedPaths.length} carried unreviewed path(s)` : "";
+  const carriedReason = leftoverCount > 0 ? `; retrying ${leftoverCount} unchanged leftover path(s) without rediscovery` : carriedPaths.length > 0 ? `; retrying ${carriedPaths.length} carried unreviewed path(s)` : "";
   return {
     mode: "incremental",
     reason: `${input.reason}${carriedReason}`,
@@ -43809,11 +43767,11 @@ class ReviewRetirementReport extends exports_Schema.Class("@effect-agent/pr-revi
 var findingIdentity = (finding) => `${finding.path}\x00${finding.startLine}\x00${finding.endLine}\x00${finding.title}`;
 var REVIEW_METADATA_PATTERN = /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->/g;
 var FINGERPRINT_PATTERN = /<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->/g;
-var STATE_PATTERN = /<!-- effect-agent-pr-review state-v\d+:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g;
+var STATE_PATTERN = /<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g;
 var RETIRED_ORIGINAL_PATTERN = /<!-- effect-agent-pr-review retired-original:start -->\n([\s\S]*?)\n<!-- effect-agent-pr-review retired-original:end -->/;
 var MACHINE_COMMENT_PATTERN = new RegExp(`${REVIEW_METADATA_PATTERN.source}|${FINGERPRINT_PATTERN.source}|${STATE_PATTERN.source}`, "g");
 var VERDICT_CALLOUT_PATTERN = /^(?:> \[!(?:CAUTION|IMPORTANT)\]\n> [^\n]*(?:\n> [^\n]*)*|> (?:ℹ️|✅)[^\n]*)\n*/;
-var INLINE_FINDING_TITLE_PATTERN = /^\*\*\[(?:🛑 blocking|⚠️ important|💅 nit)(?: · [a-z-]+)?\] ([^\n]+)\*\*$/;
+var INLINE_FINDING_TITLE_PATTERN = /^\*\*\[(?:🛑 blocking|⚠️ important|💅 nit) · [a-z-]+\] ([^\n]+)\*\*$/;
 var MAX_REVIEW_BODY_CHARS = 60000;
 var hasReviewMetadataMarker = (body) => /<!-- effect-agent-pr-review metadata\n/.test(body);
 var machineComments = (body) => Array.from(body.matchAll(MACHINE_COMMENT_PATTERN), (match9) => match9[0]);
@@ -44748,7 +44706,6 @@ class ReviewRunOutcome extends exports_Schema.Class("@effect-agent/pr-review/Rev
   review: CodeReview,
   activeFindings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(20)),
   activeConcerns: exports_Schema.Array(ReviewConcern).check(exports_Schema.isMaxLength(10)),
-  coverage: ReviewCoverage,
   inputCoverage: ReviewInputCoverage,
   assurance: ReviewAssurance,
   unreviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
@@ -44807,7 +44764,7 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
   const skipFingerprint = settled ? fingerprint : undefined;
   const carriedScopeFits = unreviewedPaths.length <= MAX_STORED_UNREVIEWED_PATHS;
   const stateCandidate = executionContext !== undefined && fingerprint !== undefined && metadata.baseSha !== undefined && anchorFiles.length >= metadata.totalChangedFiles && carriedScopeFits && executionContext.stateAuthenticator?.status === "available" ? ReviewState.make({
-    version: 2,
+    version: 1,
     repository: metadata.repository,
     pullRequestNumber: metadata.number,
     baseRef: metadata.baseRef,
@@ -44815,7 +44772,7 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
     headRef: metadata.headRef,
     reviewedHeadSha: metadata.headSha,
     profileFingerprint: executionContext.profileFingerprint,
-    acceptedScopeFingerprint: fingerprint,
+    settledScopeFingerprint: fingerprint,
     reviewedPathCount: anchorFiles.length,
     unresolvedFindings: activeFindings.map(toStoredFinding),
     unresolvedConcerns: activeConcerns.map(toStoredConcern),
@@ -44863,7 +44820,6 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
     review,
     activeFindings,
     activeConcerns,
-    coverage: compatibilityCoverage(inputCoverage, assurance),
     inputCoverage,
     assurance,
     unreviewedPaths,
@@ -56162,7 +56118,6 @@ var outcomeOutputs = (outcome, conclusion) => [
   ["verdict", outcome.review.verdict],
   ["input-coverage", outcome.inputCoverage.status],
   ["review-assurance", outcome.assurance.status],
-  ["coverage", outcome.coverage.status],
   ["review-mode", outcome.reviewMode ?? "full"],
   ["review-reason", outcome.reviewReason ?? "direct full review"],
   ["inline-comments", String(outcome.plan.comments.length)],
@@ -56245,11 +56200,9 @@ var skipCoveredReview = exports_Effect.fn("skipCoveredReview")(function* (input)
   yield* writeActionOutputs([
     ["skipped", "true"],
     ["skip-reason", input.reason],
-    ...input.fingerprint === undefined ? [] : [["fingerprint", input.fingerprint]],
     ["conclusion", result4.conclusion],
     ["input-coverage", "complete"],
     ["review-assurance", "settled"],
-    ["coverage", "complete"],
     ["review-mode", "incremental"]
   ]);
   yield* writeStepSummary([
@@ -56279,11 +56232,10 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
   return yield* exports_Effect.gen(function* () {
     let selection;
     if (reviewer.profileFingerprint !== undefined) {
-      const source = yield* PullRequestSource;
       const [snapshot3, profileFingerprint, currentFingerprint] = yield* exports_Effect.all([
-        reviewer.snapshot ?? exports_Effect.all({ metadata: source.metadata, files: source.anchorFiles }),
+        reviewer.snapshot,
         reviewer.profileFingerprint,
-        reviewer.fingerprint === undefined ? exports_Effect.succeed(undefined) : reviewer.fingerprint.pipe(exports_Effect.map((fingerprint) => fingerprint), exports_Effect.orElseSucceed(() => {
+        reviewer.fingerprint.pipe(exports_Effect.map((fingerprint) => fingerprint), exports_Effect.orElseSucceed(() => {
           return;
         }))
       ]);
@@ -56300,14 +56252,13 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
           failure: undefined
         })
       }));
-      const equivalentPatchState = (options3.reviewMode ?? "incremental") === "incremental" && options3.skipUnchanged !== false && recovered.state !== undefined && recovered.state.settled && currentFingerprint !== undefined && validateReviewState(recovered.state, metadata, profileFingerprint) === undefined && recovered.state.acceptedScopeFingerprint === currentFingerprint ? recovered.state : undefined;
+      const equivalentPatchState = (options3.reviewMode ?? "incremental") === "incremental" && options3.skipUnchanged !== false && recovered.state !== undefined && recovered.state.settled && currentFingerprint !== undefined && validateReviewState(recovered.state, metadata, profileFingerprint) === undefined && recovered.state.settledScopeFingerprint === currentFingerprint ? recovered.state : undefined;
       if (equivalentPatchState !== undefined) {
         return yield* skipCoveredReview({
           repository: target.repository,
           pullRequestNumber: target.number,
           reason: equivalentPatchState.reviewedHeadSha === metadata.headSha ? "the current head already has settled stored review assurance" : "the effective pull-request patch is unchanged since the last settled review",
-          state: equivalentPatchState,
-          fingerprint: currentFingerprint
+          state: equivalentPatchState
         });
       }
       let comparison;

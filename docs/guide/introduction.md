@@ -1,14 +1,14 @@
 ---
 title: What is Effect Agent?
-description: An interpreter for autonomous agents inside Effect applications — what it adds, what it deliberately leaves to Effect AI, and where the current boundary sits.
+description: An interpreter for autonomous agents inside Effect applications, including what it adds and what remains in Effect AI.
 ---
 
 # What is Effect Agent?
 
 **Effect Agent** is an interpreter for autonomous agents inside Effect applications. An Agent is
 an immutable, Schema-defined value; pair it with an Effect AI Model and the runtime interprets it
-as an `Effect` result or a semantic `Stream` — with failures typed in `E`, dependencies visible
-in `R`, and every resource owned by a Scope. This page shows one complete Agent, explains what
+as an `Effect` result or a semantic `Stream`. Failures remain typed in `E`, dependencies remain
+visible in `R`, and every resource remains owned by a Scope. This page shows one complete Agent, explains what
 the framework adds on top of Effect AI, and names the three persistence levels it supports.
 
 ## One Agent, end to end
@@ -135,7 +135,7 @@ work.
 returns a Receipt. Attempts may be replaced after a crash, but exactly one terminal Settlement is
 eventually recorded. Unresolved external Tool effects stop at an explicit Unknown Outcome instead
 of replaying, and the same contract runs on Node/SQLite and on Cloudflare Durable Objects. No
-level claims exactly-once external side effects — see
+level claims exactly-once external side effects. See
 [Persistence & durability](../concepts/durability).
 
 ## What the framework optimizes for
@@ -155,5 +155,6 @@ to a beta release, and there is no compatibility window yet.
 
 ## Next steps
 
-- [Getting started](./getting-started) — build the Definition and Binding yourself.
-- [Effect-native by construction](../concepts/effect-native) — why the architecture holds these properties structurally.
+- [Getting started](./getting-started) shows how to build a Definition and Binding.
+- [Effect-native by construction](../concepts/effect-native) explains how the architecture keeps
+  these properties.

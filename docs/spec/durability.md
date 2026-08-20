@@ -1,4 +1,4 @@
-# Durability Specification
+# Durability specification
 
 Status: Draft
 
@@ -11,7 +11,7 @@ not achieved by serializing an in-memory agent object.
 The durable runtime makes this promise:
 
 > Once a submission is durably accepted, the system will eventually record exactly
-> one durable terminal outcome—`completed`, `failed`, or `aborted`—unless the
+> one durable terminal outcome, `completed`, `failed`, or `aborted`, unless the
 > configured durability or required outcome-resolution dependencies remain unavailable.
 
 This is an exactly-once **recording** guarantee, not an exactly-once execution
@@ -182,8 +182,8 @@ The scheduler may safely resume automatically at these boundaries:
 - after every requested tool has a canonical result;
 - after a committed `CompactionCreated` record (RUN-026) or compaction artifact;
 - after a committed durable step result;
-- after a committed model response whose declared tool batch has no prepared records yet — the
-  batch resumes from the canonical declaration without re-invoking the model;
+- after a committed model response whose declared Tool batch has no prepared records yet. The
+  batch resumes from the canonical declaration without invoking the model again;
 - while waiting for explicit approval, if the approval request is canonical.
 
 The canonical approval request record is the suspension's entire canonical footprint: suspension
@@ -266,8 +266,8 @@ Only **success** is ever recorded. A failing step body fails the call into the h
 channel and re-entry re-executes it; recording failures would replay a transient failure forever.
 Steps carry no prepared records: under an at-least-once body contract, "may have executed" is the
 normal case and a prepared marker adds no recovery information. Step results persist
-as canonical records in the Conversation Log under stable step identity — the Step Store of
-persistence §2.5 is a logical record family, not a separate physical store.
+as canonical records in the Conversation Log under stable step identity. The Step Store in
+persistence section 2.5 is a logical record family, not a separate physical store.
 
 Durable steps do not make a non-idempotent external API exactly once. The step
 implementation must use the external system's idempotency key, reconciliation API,
@@ -299,12 +299,12 @@ a `completed` soft landing persists `finishReason: "budget-exhausted"` with the
 `{errorTag, message}` failure projection in `result`. Because the metadata rides the
 exact reserved record, it survives reservation replay, canonical append, recovery,
 and every later read unchanged. Decode is family-bound fail-closed: metadata on the
-wrong settlement family — or a `policyLimit` whose `result` does not carry the
-`AgentPolicyError` projection — rejects rather than becoming trusted audit history,
+wrong settlement family rejects. A `policyLimit` whose `result` does not carry the
+`AgentPolicyError` projection also rejects instead of becoming trusted audit history,
 and records persisted before the metadata existed decode with it absent (additive,
 schemaVersion 1).
 
-An ordinary completed Run may additionally carry the application-defined, Schema-encoded
+An ordinary completed Run may also carry the application-defined, Schema-encoded
 `runDisposition` from `RunCompleted` (RUN-029). It is part of the same exact reserved settlement
 record, so reservation replay, canonical append, ledger-finalization recovery, record reads, and
 projection rebuilds preserve it byte-for-byte. The public `Settlement` returned by
@@ -326,18 +326,18 @@ finalization and every idempotent replay.
 
 Result-less cases are explicit by settlement family. A joined `completed` Submission has no
 independent output and may omit `result`; an `aborted` Submission always omits it because abort
-records intent rather than inventing a failure. A `failed` record without its exact diagnostic —
-including a schema-version-1 record written by an earlier private-development build — is malformed
-and fails Schema decode during replay or recovery. The private-development compatibility policy
-does not migrate that record into apparently trustworthy history.
+records intent rather than inventing a failure. A `failed` record without its exact diagnostic is
+malformed. This includes a schema-version-1 record written by an earlier private-development
+build. The record fails Schema decode during replay or recovery. The private-development
+compatibility policy does not migrate that record into apparently trustworthy history.
 
 ## 13. Abort
 
 Abort is a durable command with identity, author, reason, and target.
 
 - If the submission is accepted but inactive, it may settle as aborted without an
-  execution attempt. An aborted, never-claimed queued submission settles immediately —
-  without waiting to head its lane — because settlement order of never-run work is not
+  execution attempt. An aborted, never-claimed queued submission settles immediately without
+  waiting to head its lane. Settlement order of never-run work is not
   execution order (DUR-004 bounds execution order). Its durable abort intent authorizes
   exactly its aborted settlement reservation, and the aborted-settled row is a closed
   obligation that does not gap the contiguous joining prefix.
@@ -402,8 +402,8 @@ authoritative for every repair and later pass.
 | After canonical settlement append, before ledger finalization | Canonical terminal outcome                                        | Rebuild/finalize ledger from history              |
 | After ledger finalization, before client notification         | Terminal                                                          | Return recorded settlement                        |
 
-Every row of this matrix — including the tool preparation, invocation, and
-result-commit rows — is realized by executable evidence: each row exists as a pure
+Executable evidence covers every row of this matrix, including Tool preparation, invocation, and
+result commit. Each row exists as a pure
 recovery-classifier case and as a deterministic failpoint or real process-kill test
 (see the durable-runtime and crash-matrix suites).
 

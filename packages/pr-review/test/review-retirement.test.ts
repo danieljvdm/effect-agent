@@ -47,7 +47,7 @@ const makeState = (
   unresolvedFindings: ReadonlyArray<StoredReviewFinding>,
 ) =>
   ReviewState.make({
-    version: 2,
+    version: 1,
     repository: "acme/widgets",
     pullRequestNumber: 42,
     baseRef: "main",
@@ -55,11 +55,12 @@ const makeState = (
     headRef: "fix/resources",
     reviewedHeadSha,
     profileFingerprint: PROFILE_FINGERPRINT,
-    acceptedScopeFingerprint: SCOPE_FINGERPRINT,
+    settledScopeFingerprint: SCOPE_FINGERPRINT,
     reviewedPathCount: 2,
     unresolvedFindings,
     unresolvedConcerns: [],
     unreviewedPaths: [],
+    unreviewedPasses: [],
     settled: true,
     lastReviewMode: "incremental",
   });
@@ -98,7 +99,7 @@ const renderPriorBody = Effect.gen(function* () {
 const machineComments = (body: string): ReadonlyArray<string> =>
   Array.from(
     body.matchAll(
-      /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->|<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->|<!-- effect-agent-pr-review state-v\d+:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g,
+      /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->|<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->|<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g,
     ),
     (match) => match[0],
   );
@@ -110,15 +111,6 @@ const resolvedComment = RetirableReviewComment.make({
   endLine: resolvedFinding.endLine,
   // The current first-line format, carrying a category chip.
   body: `**[🛑 blocking · resources] ${resolvedFinding.title}**\n\n${resolvedFinding.body}`,
-});
-
-const legacyResolvedComment = RetirableReviewComment.make({
-  nodeId: "PRRC_resolved_legacy",
-  path: resolvedFinding.path,
-  startLine: resolvedFinding.startLine,
-  endLine: resolvedFinding.endLine,
-  // The pre-category first line posted by older package versions.
-  body: `**[🛑 blocking] ${resolvedFinding.title}**\n\n${resolvedFinding.body}`,
 });
 
 const unresolvedComment = RetirableReviewComment.make({
@@ -220,8 +212,7 @@ describe("review retirement", () => {
               submittedAt: DateTime.makeUnsafe("2026-08-15T20:11:00Z"),
             }),
           ]),
-          listComments: () =>
-            Effect.succeed([resolvedComment, legacyResolvedComment, unresolvedComment]),
+          listComments: () => Effect.succeed([resolvedComment, unresolvedComment]),
           updateBody: (reviewId, body) =>
             Ref.update(updates, (entries) => [...entries, [reviewId, body] as const]),
           minimizeComment: (nodeId) => Ref.update(minimized, (nodeIds) => [...nodeIds, nodeId]),
@@ -238,16 +229,11 @@ describe("review retirement", () => {
         expect(report).toMatchObject({
           reviewsRetired: 1,
           findingsResolved: 1,
-          commentsMinimized: 2,
+          commentsMinimized: 1,
           failures: 0,
         });
         expect((yield* Ref.get(updates)).map(([reviewId]) => reviewId)).toEqual([1]);
-        // Both first-line formats matched: the categorized current format and
-        // the pre-category one posted by older package versions.
-        expect(yield* Ref.get(minimized)).toEqual([
-          resolvedComment.nodeId,
-          legacyResolvedComment.nodeId,
-        ]);
+        expect(yield* Ref.get(minimized)).toEqual([resolvedComment.nodeId]);
       }).pipe(Effect.provide(webCryptoReviewStateAuthenticatorLayer(STATE_SECRET))),
   );
 

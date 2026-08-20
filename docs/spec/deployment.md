@@ -1,4 +1,4 @@
-# Deployment Specification
+# Deployment specification
 
 Status: Draft
 
@@ -7,7 +7,7 @@ deployment may claim ephemeral, persistent, or durable behavior.
 
 ## 1. Deployment classes
 
-### Class E — Ephemeral
+### Class E: ephemeral
 
 - one process;
 - in-memory queue and state;
@@ -24,13 +24,13 @@ five-job GitHub flow with an authenticated repository admission journal,
 networkless check container, independent network publisher, and bounded thread
 presentation. See [work-order ingress](pr-work-order-ingress.md).
 
-### Class P — Persistent
+### Class P: persistent
 
 - canonical conversation and session data survives process restart;
 - no accepted-work settlement guarantee;
 - suitable for interactive applications that can ask a client to retry.
 
-### Class DN — Node/SQLite durable
+### Class DN: Node/SQLite durable
 
 - durable admission and settlement;
 - process restart recovery;
@@ -38,7 +38,7 @@ presentation. See [work-order ingress](pr-work-order-ingress.md).
 - local SQLite storage;
 - host loss outside storage recovery objectives may still lose availability.
 
-### Class DC — Cloudflare durable
+### Class DC: Cloudflare durable
 
 - one SQLite-backed Durable Object per Conversation;
 - Cloudflare Workers provide stateless ingress;
@@ -46,7 +46,7 @@ presentation. See [work-order ingress](pr-work-order-ingress.md).
 - alarms wake dirty or autonomously actionable work while stable external waits may quiesce;
 - no PostgreSQL dependency.
 
-No package or example may use “durable” without naming DN or DC and the tested adapter.
+No package or example may use "durable" without naming DN or DC and the tested adapter.
 
 ## 2. Node.js host
 
@@ -260,12 +260,12 @@ Cloudflare platform APIs are wrapped as Effect services and supplied through Lay
 Conversation runtime requires storage, scheduling/alarm, clock, attachment, and observability
 services rather than importing bindings in the engine.
 
-`CloudflareDurableRuntimeOptions.bindings` accepts a resolved array, a closed Effect, or a
-per-incarnation callback. The callback runs after the Object's Conversation and producer
-identities are derived and receives the live `DurableObjectState`, raw Worker environment,
-`conversationId`, and `producerId`. This is the host boundary for capturing environment-backed
-resources such as Worker service bindings; database clients and other request-scoped resources
-remain outside the cached Durable Object runtime.
+`CloudflareDurableRuntimeOptions.bindings` accepts a per-incarnation callback returning a closed
+Effect. The callback runs after the Object's Conversation and producer identities are derived and
+receives the live `DurableObjectState`, raw Worker environment, `conversationId`, and `producerId`.
+This is the host boundary for capturing environment-backed resources such as Worker service
+bindings; database clients and other request-scoped resources remain outside the cached Durable
+Object runtime.
 
 `CloudflareDurableRuntimeOptions.runContext` is the generic host Run-context boundary. It
 accepts either a closed `CloudflareRunContextLayer` or a per-incarnation factory receiving the same
@@ -335,8 +335,8 @@ remains disposable coordination state; canonical records alone establish durable
 Host-supplied `CloudflareDurableRuntimeOptions.operationAuthorizer` decisions cross observation,
 progress, approval, and unknown-resolution RPCs as the typed `OperationDenied`.
 
-The target is no longer experimental: the generic durability conformance suite —
-the same adapter-neutral case arrays the Node adapters run — passes inside workerd, and the
+The target is no longer experimental. The generic durability conformance suite passes inside
+workerd with the same adapter-neutral case arrays as the Node adapters. The
 eviction (per-failpoint `ctx.abort()` with alarm-only convergence), alarm-retry (double-fire
 and throw-retry), runtime-restart (Miniflare dispose/reopen over persisted storage), and
 fault-injection (failpoints on every durable mutation plus routed-transport faults) scenarios
@@ -359,12 +359,12 @@ inherit the `execute` Context and die with the pass Scope, while remaining a sib
 guest RPC waiter so the return RPC is not coupled to the still-open `entrypoint.run()`; pass
 teardown closes callback admission, interrupts and awaits active work, and settles queued
 calls. One absolute monotonic deadline applies to the worker RPC and every host callback. A synchronous runaway program is stopped by
-platform CPU limits, not only by a JavaScript timer.
+platform CPU limits rather than relying on a JavaScript timer alone.
 
 The adapter records no persistent state and adds no deployment-class claim beyond `E`: the `DN`
 and `DC` assemblies make no Code Mode claim until this specification says otherwise. The tested harness is
 workerd/Miniflare; hosted-platform evidence remains unclaimed. No cost or performance claim is
-made before measurement — current Dynamic Workers billing counts no-ID `load()` use as a new
+made before measurement. Current Dynamic Workers billing counts no-ID `load()` use as a new
 Dynamic Worker per invocation, and any future stable-ID Worker caching must include tenant and
 binding context in cache identity.
 

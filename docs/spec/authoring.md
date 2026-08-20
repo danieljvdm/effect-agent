@@ -58,7 +58,7 @@ renaming it creates a new identity; no stored-data migration is promised.
 - Effect AI Toolkit;
 - finite Agent Policy.
 
-An Agent Binding additionally requires one Effect AI Model. An unbound Definition is not runnable.
+An Agent Binding also requires one Effect AI Model. An unbound Definition is not runnable.
 
 ### Optional fields
 
@@ -269,8 +269,8 @@ const codeMode = CodeMode.make("run_javascript", {
   tools: { warehouse: { query: warehouseQuery } },
   limits: codeModeLimits,
 });
-// codeMode.tool     — an ordinary Effect AI Tool, annotated readonly
-// codeMode.handlers — a handler Layer requiring the CodeExecutor and the selected handlers
+// codeMode.tool: an ordinary Effect AI Tool, annotated readonly
+// codeMode.handlers: a handler Layer requiring CodeExecutor and the selected handlers
 ```
 
 The selected handlers' requirements and typed failures remain visible in the composed `R` and
@@ -316,7 +316,7 @@ rails regardless: their exhaustion is always the typed non-success failure.
 
 Subagent policy, hierarchical reservation, and ancestor accounting are specified as a proposal in
 [the Subagent specification](./subagents.md); they are not yet an
-implemented Agent Policy surface.
+implemented Agent Policy fields.
 
 ## 10. Turn Plans
 

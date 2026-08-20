@@ -71,12 +71,11 @@ export class StoredUnreviewedPass extends Schema.Class<StoredUnreviewedPass>(
  * carries retryable review gaps (failed passes) forward so the next
  * incremental run re-reviews exactly them plus the new delta — the baseline
  * advances monotonically instead of freezing on one flaky pass and reopening
- * the whole post-baseline scope. The `acceptedScopeFingerprint` name is
- * retained for wire compatibility. Storing hundreds of path strings
- * separately would not fit GitHub's bounded review body in the worst case.
+ * the whole post-baseline scope. Storing hundreds of path strings separately
+ * would not fit GitHub's bounded review body in the worst case.
  */
 export class ReviewState extends Schema.Class<ReviewState>("@effect-agent/pr-review/ReviewState")({
-  version: Schema.Literal(2),
+  version: Schema.Literal(1),
   repository: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   pullRequestNumber: Schema.Int.check(Schema.isGreaterThan(0)),
   baseRef: Schema.NonEmptyString.check(Schema.isMaxLength(300)),
@@ -84,19 +83,15 @@ export class ReviewState extends Schema.Class<ReviewState>("@effect-agent/pr-rev
   headRef: Schema.NonEmptyString.check(Schema.isMaxLength(300)),
   reviewedHeadSha: GitCommitSha,
   profileFingerprint: Fingerprint,
-  acceptedScopeFingerprint: Fingerprint,
+  settledScopeFingerprint: Fingerprint,
   reviewedPathCount: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 300 })),
   unresolvedFindings: Schema.Array(StoredReviewFinding).check(Schema.isMaxLength(20)),
   unresolvedConcerns: Schema.Array(StoredReviewConcern).check(Schema.isMaxLength(10)),
   /** Retryable review gaps carried into the next incremental run's scope. */
   unreviewedPaths: Schema.Array(ChangedPath).check(Schema.isMaxLength(MAX_STORED_UNREVIEWED_PATHS)),
-  /**
-   * Which failed pass produced those leftovers. Absent on state-v2 markers
-   * written before this field existed; those leftovers still re-enter scope
-   * but cannot skip rediscovery. Present (including empty) on new markers.
-   */
-  unreviewedPasses: Schema.optionalKey(
-    Schema.Array(StoredUnreviewedPass).check(Schema.isMaxLength(MAX_STORED_UNREVIEWED_PASSES)),
+  /** Which failed pass produced those leftovers. */
+  unreviewedPasses: Schema.Array(StoredUnreviewedPass).check(
+    Schema.isMaxLength(MAX_STORED_UNREVIEWED_PASSES),
   ),
   /**
    * True only when the producing run had complete input coverage, no
@@ -137,15 +132,15 @@ export const toStoredConcern = (concern: ReviewConcern): StoredReviewConcern =>
 export const fromStoredConcern = (concern: StoredReviewConcern): ReviewConcern =>
   ReviewConcern.make({ severity: concern.severity, title: concern.title, body: concern.body });
 
-const STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v2:";
+const STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
 const STATE_MARKER_SUFFIX = " -->";
 const STATE_MARKER_PATTERN =
-  /(?:^|\n)<!-- effect-agent-pr-review state-v2:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
-const STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v2\u0000";
+  /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
+const STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\u0000";
 export const MAX_REVIEW_STATE_MARKER_CHARS = 24_000;
 export const ReviewStateMarker = Schema.NonEmptyString.check(
   Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS),
-  Schema.isPattern(/^<!-- effect-agent-pr-review state-v2:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/),
+  Schema.isPattern(/^<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/),
 ).pipe(Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
 export type ReviewStateMarker = typeof ReviewStateMarker.Type;
 
@@ -410,22 +405,16 @@ const incrementalFromDelta = (input: {
     }
   }
   const carriedPaths = input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path));
-  const surgical = input.priorState.unreviewedPasses !== undefined;
   const retryOnly = new Set<string>();
   const retryStages = new Set<UnreviewedStage>();
   for (const path of carriedPaths) {
     if (affectedPaths.has(path)) continue;
     retryOnly.add(path);
-    if (surgical) {
-      for (const pass of input.priorState.unreviewedPasses ?? []) {
-        if (pass.paths.includes(path)) retryStages.add(pass.stage);
-      }
-    } else {
-      affectedPaths.add(path);
+    for (const pass of input.priorState.unreviewedPasses) {
+      if (pass.paths.includes(path)) retryStages.add(pass.stage);
     }
   }
   if (
-    surgical &&
     retryStages.has("verification") &&
     !retryStages.has("discovery") &&
     !retryStages.has("specialist")
@@ -433,7 +422,7 @@ const incrementalFromDelta = (input: {
     retryStages.add("discovery");
     retryStages.add("specialist");
   }
-  if (surgical && retryOnly.size > 0 && retryStages.size === 0) {
+  if (retryOnly.size > 0 && retryStages.size === 0) {
     for (const path of retryOnly) affectedPaths.add(path);
     retryStages.add("discovery");
     retryStages.add("specialist");
@@ -454,7 +443,7 @@ const incrementalFromDelta = (input: {
   );
   const leftoverCount = [...retryOnly].filter((path) => !affectedPaths.has(path)).length;
   const carriedReason =
-    leftoverCount > 0 && surgical
+    leftoverCount > 0
       ? `; retrying ${leftoverCount} unchanged leftover path(s) without rediscovery`
       : carriedPaths.length > 0
         ? `; retrying ${carriedPaths.length} carried unreviewed path(s)`

@@ -5,10 +5,6 @@ import { PRODUCER_PREFIX } from "./fixtures.ts";
 
 const dynamicStub = (conversation: string) =>
   env.DYNAMIC_BINDINGS.get(env.DYNAMIC_BINDINGS.idFromName(conversation));
-const arrayStub = (conversation: string) =>
-  env.ARRAY_BINDINGS.get(env.ARRAY_BINDINGS.idFromName(conversation));
-const effectStub = (conversation: string) =>
-  env.EFFECT_BINDINGS.get(env.EFFECT_BINDINGS.idFromName(conversation));
 
 describe("Cloudflare Binding sources", () => {
   it("evaluates the callback once with each incarnation's live host context and identities", async () => {
@@ -36,11 +32,5 @@ describe("Cloudflare Binding sources", () => {
       stateMatches: true,
     });
     expect(secondProbe.incarnation).not.toBe(firstProbe.incarnation);
-  });
-
-  it("keeps the legacy array and Effect source forms", async () => {
-    const conversation = `binding-source-legacy-${crypto.randomUUID()}`;
-    expect(await arrayStub(conversation).bindingSourceKind()).toBe("array");
-    expect(await effectStub(conversation).bindingSourceKind()).toBe("effect");
   });
 });

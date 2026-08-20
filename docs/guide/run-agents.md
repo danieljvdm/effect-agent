@@ -6,7 +6,7 @@ description: Interpret one Agent Binding as a result, semantic event stream, or 
 # Run and stream
 
 The runtime exposes one semantic loop through three views. Choose based on how the caller needs to
-observe work—not to change execution behavior.
+observe work. The choice does not change execution behavior.
 
 ## Await one result
 
@@ -70,9 +70,9 @@ const completeTrace = yield * detached.events;
 const live = detached.observe;
 ```
 
-`start` is still scoped. `observe` is a live multicast subscription: each subscription replays the
+`start` is still scoped. `observe` is a live multicast subscription. Each subscription replays the
 events already emitted, follows the Run as it progresses, and ends once the Run settles. `events`
-is the complete replay, available after settlement. “Detached” means observers cannot backpressure
+is the complete replay, available after settlement. "Detached" means observers cannot backpressure
 completion; it does not create a daemon fiber or survive process loss.
 
 ## Turn boundaries

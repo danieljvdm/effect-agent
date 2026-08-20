@@ -2,8 +2,8 @@
 
 Status: Draft
 
-The framework's central claims—typed behavior, structured concurrency,
-deterministic commits, and durability—must be executable properties. Example tests
+The framework's claims about typed behavior, structured concurrency, deterministic commits, and
+durability must be executable properties. Example tests
 alone are insufficient.
 
 ## 1. Test layers
@@ -34,10 +34,10 @@ Pure transition and policy functions are tested without providers or stores:
 ### 1.3 Service tests
 
 Each Effect service is tested with deterministic TestClock, test providers, and
-scoped resources. Tests assert typed failures and interruption cleanup, not only
+scoped resources. Tests assert typed failures and interruption cleanup as well as
 returned values.
 
-Durable progress waits additionally force both lost-wakeup interleavings (notify after subscribe
+Durable progress waits also force both lost-wakeup interleavings (notify after subscribe
 but before the canonical check, and notify after the check but before park), count canonical reads
 over an advanced TestClock, broadcast to concurrent same-conversation waiters, isolate unrelated
 lanes, and verify cancellation cleanup. The Cloudflare suite repeats the public client/Object
@@ -75,9 +75,9 @@ The repository provides a scripted Layer implementing Effect AI `LanguageModel` 
 This Layer is the default for engine tests. Real providers are not required for
 most correctness coverage.
 
-A scripted Layer cannot catch model-visible information that is missing from the request — it
+A scripted Layer cannot catch model-visible information that is missing from the request. It
 plays back its script regardless of what the request said. The engine's final-output path is
-therefore additionally exercised against a live-shaped LanguageModel substitute that derives its
+therefore also runs against a live-shaped LanguageModel substitute that derives its
 responses only from the model-visible request (TEST-016).
 
 ## 3. Runtime state-machine tests
@@ -132,7 +132,8 @@ Every durable boundary supports injected failure:
 - during adapter shutdown.
 
 The suite kills actual worker processes for Node/SQLite tests and forces Durable
-Object eviction/alarm retries in Cloudflare tests, not only Fiber interruption.
+Object eviction/alarm retries in Cloudflare tests instead of limiting coverage to
+Fiber interruption.
 After recovery it asserts:
 
 - no accepted submission disappears;
@@ -221,8 +222,8 @@ Tool helpers and remote adapters are tested for:
 
 ## 8.1 Code Mode conformance
 
-Every `CodeExecutor` adapter — the deterministic `unisolated` substitute and each isolated
-adapter — runs the shared contract cases:
+Every `CodeExecutor` adapter runs the shared contract cases. This includes the deterministic
+`unisolated` substitute and each isolated adapter.
 
 - successful bounded JSON computation;
 - invalid and oversized source;
@@ -397,7 +398,7 @@ subpaths such as `@effect-agent/pr-review/action` and `@effect-agent/pr-review/c
 purity is enforced as an import-graph boundary; explicitly named testing and executable subpaths
 retain their declared behavior.
 
-Adapter changes additionally run the relevant conformance suite. Release candidates
+Adapter changes also run the relevant conformance suite. Release candidates
 run databases, process-kill crash tests, security tests, examples, package install
 tests, and live provider smoke tests.
 
@@ -422,13 +423,13 @@ No durability milestone is complete while its crash tests are skipped.
 - **TEST-013**: CI rejects lockfile drift, multiple workspace Effect versions, and an Effect source
   tag that disagrees with the root catalog.
 - **TEST-014**: The Travel Planner Reference Application remains a cumulative compiling and
-  executable fixture for the full framework surface; its ordinary suite is deterministic and
+  executable fixture for the full framework API; its ordinary suite is deterministic and
   offline, while live provider profiles are opt-in.
 - **TEST-015**: Every `CodeExecutor` adapter passes the shared executor conformance suite, and
   direct versus programmatic invocation of the same Tool is observably equivalent.
 - **TEST-016**: The engine's final-output path is exercised against a live-shaped LanguageModel
   substitute that derives its responses only from the model-visible request (prompt text,
-  advertised schemas, tools) — never from test-known expected values — so offline suites catch
+  advertised Schemas and Tools), never from test-known expected values. This lets offline suites catch
   model-visible contract information missing from the request that a scripted model would
   fabricate away.
 - **TEST-017**: The trusted-local work-order proof covers success, non-publication

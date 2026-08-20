@@ -124,7 +124,7 @@ AgentPolicy.make({
 Turns, Tool Calls, duration, and concurrency are positive finite bounds. Token and cost budgets are
 optional because not every Model reports enough usage data to enforce them honestly.
 
-`onExhaustion` selects how Turn, Tool Call, and token exhaustion resolve — the default
+`onExhaustion` selects how Turn, Tool Call, and token exhaustion resolve. The default
 `"final-answer"` soft-lands the Run with one constrained final answer and the honest
 `finishReason: "budget-exhausted"`. Every bound, the exhaustion resolutions, and sizing guidance
 are covered in [Budgets & bounded autonomy](/concepts/budgets); bounded Tool results, the

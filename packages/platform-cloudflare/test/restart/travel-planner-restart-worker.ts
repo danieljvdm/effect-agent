@@ -60,7 +60,7 @@ const baseClass = makeConversationObjectClass({
   alarmBackoffBase: 10,
   alarmBackoffCap: 100,
   observationPollInterval: 10,
-  bindings: makePhase6TravelPlannerBindings,
+  bindings: () => makePhase6TravelPlannerBindings,
   toolReconciler: phase6SupplierReconcilerLayer,
   storageFailpoint: storageEvictionFailpoint,
   runtimeFailpoint: runtimeEvictionFailpoint,

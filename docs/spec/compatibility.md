@@ -30,7 +30,7 @@ outcomes.
 
 ## 2. Native compatibility boundary
 
-Effect Agent's public contract is its own Effect-native package and record surface. Compatibility
+Effect Agent's public contract consists of its Effect-native packages and record Schemas. Compatibility
 means:
 
 - one documented Effect version per framework release;

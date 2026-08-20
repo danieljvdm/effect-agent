@@ -84,8 +84,8 @@ the Definition's ceiling, and the `onExhaustion` resolution keys off the effecti
 the budget-extension seam: an orchestrator grants a delegated child more budget by re-invoking the
 delegation with a larger allowance below the child Definition's policy.
 
-Duration, cost, and hierarchical budget-hook bounds are hard rails regardless of
-`onExhaustion`. The token dimension originally shipped as a hard rail and now participates in
+Duration, cost, and hierarchical budget-hook bounds are hard limits regardless of
+`onExhaustion`. The token dimension originally shipped as a hard limit and now participates in
 the `onExhaustion` resolution with a one-shot bound (RUN-025; at most one grace call).
 Repeated-failure enforcement is Run-level: each completed Turn's terminal Tool
 Call outcomes fold into one consecutive-failure counter in declaration order, any terminal Tool
@@ -199,7 +199,7 @@ When a declared Tool Call settles, its call-level terminal classification is:
 - denied;
 - interrupted.
 
-The DN and DC assemblies add unknown outcome. Approval suspension and unresolved Tool Calls are
+The DN and DC assemblies add Unknown Outcome. Approval suspension and unresolved Tool Calls are
 nonterminal and may remain unresolved indefinitely; the runtime does not replay an ordinary
 unresolved call merely to force settlement. Denial happens during preflight, before any application
 Handler starts. Provider-executed calls likewise have no application-handler attempt.
@@ -207,11 +207,11 @@ Handler starts. Provider-executed calls likewise have no application-handler att
 An in-memory application-handler attempt therefore starts only for a native call that passed
 preflight. Its complete lifecycle classification set is:
 
-- success — terminal;
-- failure — terminal, including returned failures, typed or infrastructure Causes, and
-  post-terminal anomalies;
-- interruption — terminal for that in-memory attempt and preserved as interruption;
-- waiting — nonterminal and potentially indefinite.
+- A successful attempt is terminal.
+- A failed attempt is terminal. Failures include returned failures, typed or infrastructure
+  Causes, and post-terminal anomalies.
+- An interrupted attempt is terminal and remains classified as interrupted.
+- A waiting attempt is nonterminal and may last indefinitely.
 
 Only success and failure receive a bounded terminal telemetry outcome. Interruption produces no
 terminal outcome log. Denied and provider-executed calls remain solely call-level classifications:
@@ -321,7 +321,7 @@ belongs to `costBudgetMicrousd`.
 
 ### Tool result bounds
 
-Every application Tool result — MCP included — is bounded once at the settle seam by
+Every application Tool result, including MCP results, is bounded once at the settle boundary by
 `AgentPolicy.toolResultBounds` (default 50 KiB) before it enters records or prompts, so both
 carry the same value. An oversized encoded result becomes the canonical `TruncatedToolResult`
 envelope preserving head, tail, and original byte size. Provider-executed results are exempt.
@@ -329,7 +329,7 @@ envelope preserving head, tail, and original byte size. Provider-executed result
 ### Run-status message
 
 With `AgentPolicy.runStatus: "appended"` (the default), each outgoing model request ends with a
-derived run-status message reflecting turns, Tool calls, tokens against budget, last-call
+derived run-status message showing Turns, Tool Calls, tokens against budget, last-call
 context, and elapsed time, with a wrap-up warning once any tracked dimension reaches 80%. The
 message is derived at prompt-assembly time and is never persisted as canonical history.
 
@@ -341,19 +341,19 @@ Step 5 runs at the pre-Turn seam, synchronously, when the estimated next context
 1. **Prune** (`clear-tool-results`): application Tool results older than the protected
    `keepRecentTokens` tail are replaced with `"[tool result cleared by compaction]"`, preserving
    message structure and call/result pairing.
-2. **Summarize**, if still over and the mode allows: one metered model call on the Run's bound
-   model (its usage is consumed like any other call) produces a structured summary — goal,
-   constraints, progress, decisions, next steps, critical context. The rebuilt prompt is the
+2. **Summarize**, if still over and the mode allows. One metered model call on the Run's bound
+   model summarizes the goal, constraints, progress, decisions, next steps, and critical context.
+   The call's usage counts like any other. The rebuilt prompt is the
    instruction prefix, the summary message, and the kept tail.
 
 Cut points never split an assistant Tool call from its result, and prepared-unsettled Tool
 records are always in the kept tail. In the DN and DC assemblies each compaction appends a
 canonical `CompactionCreated` record (`kind`, `coversThrough`, optional `summary`) inside the
-epoch-fenced log it covers; the run-journal projection folds it — covered records render as the
-summary or with cleared Tool results — and an invalid range is ignored fail-safe with the full
-history staying authoritative. The session selects `coversThrough` itself, walking its own
-records with the shared estimator, and clamps coverage to records of PRIOR Runs only — the owner
-Run's records are never covered, because its first response record carries the evaluated
+epoch-fenced log it covers. The run-journal projection folds it, and covered records render as the
+summary or with cleared Tool results. The projection ignores an invalid range and keeps the full
+history authoritative. The session selects `coversThrough` itself, walks its own records with the
+shared estimator, and limits coverage to prior Runs. The owning Run's records are never covered,
+because its first response record carries the evaluated
 instructions and input. The engine's in-memory rebuild is therefore a view that may cover more
 than the record; the record is canonical. A threshold compaction with no prior-Run records to
 cover commits no record and applies only in-view. Compaction appends or emits a summary representation and
@@ -367,16 +367,16 @@ and is recomputed after restart from the canonical source.
 
 Crossing 80% of a configured budget dimension emits a `BudgetWarning` Run Event once per
 dimension (RUN-025). Turn and Tool Call exhaustion resolve through the Stop Policy's
-`onExhaustion` machinery (§3, RUN-018–RUN-020). Token exhaustion — a post-response check —
-joins the same resolution: under the default `"final-answer"`, a breaching response that
+`onExhaustion` machinery in section 3 and RUN-018 through RUN-020. Token exhaustion is a
+post-response check and joins the same resolution. Under the default `"final-answer"`, a breaching response that
 already carries a decodable final answer at a stop completes the Run directly with that answer
 and no extra call, and otherwise the Run takes at most one constrained grace Turn
 (`toolChoice: "none"`; its usage is consumed once and exempt from re-triggering breach). Either
 way the Run settles as `RunCompleted` with `finishReason: "budget-exhausted"` and
 `exhausted: "tokens"`. A grace-Turn response that declares Tool calls fails typed
 (`ModelProtocolError`, RUN-020); under `onExhaustion: "fail"` token breach keeps the fail-fast
-contract (`AgentPolicyError`). `maxDuration` breach always fails — a grace call would extend
-wall clock past the contract.
+contract with `AgentPolicyError`. A `maxDuration` breach always fails because a grace call would
+extend wall clock past the contract.
 
 After these steps the engine appends the model-visible final-output contract to the produced
 Model Input (RUN-028): one framework-owned system message carrying the JSON Schema derived from
@@ -384,7 +384,7 @@ the Agent's output Schema, inserted immediately after the request's last system 
 entered into official history. Context transforms receive the exact contract text
 (`RunContextRequest.outputContract`) so a limit-targeting adapter can reserve its overhead, and
 no transform can remove or alter it. A Definition whose output Schema cannot render to JSON
-Schema produces no contract — the field is absent and the request is unchanged, with one Turn-1
+Schema produces no contract. The field is absent and the request is unchanged, with one Turn-1
 diagnostic per Attempt.
 
 ## 10. Event interface
@@ -431,11 +431,11 @@ event stream with its full Cause and is never converted into a typed failure or 
 stream end. Host boundaries that forward Run Events to a UI or transport may opt in to the
 exported `withTerminalDefectEvent` combinator, whose contract is:
 
-- typed failures and interruptions pass through untouched (their terminal event was already
-  emitted — nothing is duplicated);
+- typed failures and interruptions pass through untouched because their terminal event was
+  already emitted;
 - a cause carrying a defect first appends one bounded terminal
-  `RunFailed { errorTag: "Defect" }` — a bounded string rendering, never the raw defect value —
-  then rethrows the original cause unchanged;
+  `RunFailed { errorTag: "Defect" }` with a bounded string rendering rather than the raw defect
+  value, then rethrows the original cause unchanged;
 - identity fields come from the last event already streamed; a defect before the first event is
   rethrown without an event, because the helper never fabricates Run identities.
 
@@ -453,7 +453,7 @@ Durable transports observe from the journal/projection and do not own execution 
 
 ## 12. S1 Subagent execution seam
 
-This section documents the S1 surface added for attached ephemeral Subagents
+This section documents the S1 APIs for attached ephemeral Subagents
 ([Subagent specification §4.3, §10.1](./subagents.md)). The engine owns the one
 interpreter and exposes delegation through execution options and two
 engine-provided services; it implements no second child loop and no
@@ -481,10 +481,10 @@ core event minus `eventVersion`, `runId`, `conversationId`, `agentId`,
 the same `eventBase` path as every other event, so the base identity and the
 emitting batch's Turn are authoritative and the Run sequence stays monotonic.
 Each Tool batch owns one sink backed by an unbounded queue drained by the
-Run's own stream — consistent with the Run's existing buffering, the Run
+Run's own stream. Consistent with the Run's existing buffering, the Run
 stream is the only consumer, so no external observer can backpressure the
-batch. Sink events surface inside the batch, and the batch settles (including
-by failure) only after already-emitted events have surfaced. Emission after
+batch. Sink events appear inside the batch, and the batch settles, including on failure, only
+after already-emitted events have surfaced in the Run stream. Emission after
 the batch settled, or outside any Tool batch, fails closed with the typed
 `RunEventSinkClosedError`.
 
@@ -500,7 +500,7 @@ fresh child `ConversationId`/`RunId` through `IdGenerator` (no Conversation
 reuse), constructs the immutable Parent Link at `depth + 1`, and starts the
 child eagerly inside the caller-provided `Scope`, so parent interruption
 reaches the child and its finalizers (SUB-011). It returns the child identity
-and Parent Link plus the `DetachedRun` observation surface (`await`,
+and Parent Link plus the `DetachedRun` observation API (`await`,
 `events`, `observe`) with the child's full `E`/`R` visible. Depth exposure is
 the seam the delegation preflight uses to reject nested delegation (SUB-029);
 the engine itself enforces no delegation policy.
@@ -510,24 +510,24 @@ interpreter supplies them itself; an application Layer must not provide them.
 
 ## 12.1 Code Mode programmatic invocation seam
 
-This section documents the engine surface for Code Mode programmatic Tool invocation
+This section documents the engine API for Code Mode programmatic Tool invocation
 ([capability specification §9.1](./capabilities.md)). The engine owns a broker seam in
 the same pattern as `AgentSpawner` and `DurableStep`: provided locally by the interpreter, bound
 per outer Tool Call, and excluded from `AgentRuntimeRequirements`. The live native Toolkit
 handlers, engine policy context, and parent Tool Call identity are capabilities bound when the
-per-outer-call broker service is constructed; per-call input from generated code is data only —
-namespace, method, and encoded arguments. The broker allocates each call's sequence index from
+per-outer-call broker service is constructed. Per-call input from generated code contains only
+the namespace, method, and encoded arguments. The broker allocates each call's sequence index from
 its own monotonic per-pass state: generated code never supplies the authoritative index, and a
 transport-carried index is validated against the broker's state, failing typed on mismatch. A
 caller inside business execution can never substitute handlers or policy.
 
-A programmatic call shares the existing per-call execution path — Tool lookup, parameter
+A programmatic call shares the existing per-call execution path for Tool lookup, parameter
 handling, approval preflight, scoped handler execution, typed failure handling, success and
 failure encoding, and per-call telemetry. It executes under the parent Tool Call's already-held
 scheduling permit and never acquires Tool Batch permits of its own: the batch semaphore is
 created per batch, so re-entrant acquisition would deadlock at `toolConcurrency: 1`, and a
 second batch path would let inner calls escape the declared concurrency bound. Calls are
-strictly sequential — a host call issued while another call from the same pass is unsettled
+strictly sequential. A host call issued while another call from the same pass is unsettled
 fails with a typed concurrency error. Each call's identity derives from the outer `ToolCallId`
 plus the broker-owned zero-based sequence index; neither the model nor generated code can choose
 or forge it.
@@ -554,9 +554,9 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
 - **RUN-009:** Concurrency is bounded.
 - **RUN-010:** Slow detached observers cannot determine durable liveness.
 - **RUN-011:** Budget exhaustion cannot masquerade as success, and its dimension survives
-  durably typed. A Run that settles through the final-answer resolution — Turn, Tool Call, or
-  token exhaustion — carries `finishReason: "budget-exhausted"` and the `exhausted` dimension
-  marker — never `"model-stop"` — on the live terminal event and on the durable
+  durably typed. A Run that settles through final-answer resolution after Turn, Tool Call, or
+  token exhaustion carries `finishReason: "budget-exhausted"` and the `exhausted` dimension
+  marker, never `"model-stop"`, on the live terminal event and on the durable
   `SubmissionSettled` record; `onExhaustion: "fail"` fails typed before any successful stop,
   and a Run failed by `AgentPolicyError` settles with the typed `limit` preserved as the
   durable record's `policyLimit`. Consumers never reconstruct either dimension from message
@@ -591,7 +591,7 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
 - **RUN-021:** Per-Run allowances are tightening-only: the effective Turn/Tool-Call limit is the
   minimum of the Agent Policy bound and the normalized allowance, never more, and the
   `onExhaustion` resolution applies at the effective limit.
-- **RUN-022:** Every application Tool result — MCP included — is bounded by policy
+- **RUN-022:** Every application Tool result, including MCP results, is bounded by policy
   `toolResultBounds` once at the settle seam before entering records or prompts; an oversized
   result becomes the canonical `TruncatedToolResult` envelope preserving head, tail, and
   original byte size, and provider-executed results are exempt.
@@ -599,7 +599,7 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   uncached input and tracks the most recent call's input/output tokens as the live-context
   estimate, both visible through the budget hook.
 - **RUN-024:** With policy `runStatus: "appended"`, every outgoing model request carries a
-  derived run-status message reflecting turns, Tool calls, tokens, and elapsed time; the
+  derived run-status message showing Turns, Tool Calls, tokens, and elapsed time; the
   message is never persisted as canonical history.
 - **RUN-025:** Crossing 80% of a configured budget emits `BudgetWarning` once per dimension.
   The token dimension participates in the `onExhaustion` resolution: under `"final-answer"`, a
@@ -607,13 +607,13 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   final output settles directly, and otherwise the Run takes at most one constrained grace Turn
   (`toolChoice: "none"`, its usage consumed once and exempt from re-triggering breach),
   completing with `finishReason: "budget-exhausted"` and `exhausted: "tokens"`; under `"fail"`
-  token breach stays fatal. Duration and cost remain hard rails in both modes.
-- **RUN-026:** When the estimated next model-call context exceeds policy `contextTokenLimit` —
+  token breach stays fatal. Duration and cost remain hard limits in both modes.
+- **RUN-026:** When the estimated next model-call context exceeds policy `contextTokenLimit`,
   including the reserved size of the model-visible output contract the engine appends after
-  preparation (RUN-028) — the engine compacts at the pre-Turn seam — pruning old Tool results,
-  then summarizing through one metered model call — never splitting an assistant Tool call from
-  its result and always keeping prepared-unsettled Tool records; in the DN and DC assemblies
-  compaction appends a canonical `CompactionCreated` record that projections fold, and source
+  preparation under RUN-028, the engine compacts at the pre-Turn boundary. It prunes old Tool
+  results and then summarizes through one metered model call. Compaction never splits an assistant
+  Tool call from its result and always keeps prepared-unsettled Tool records. In the DN and DC
+  assemblies, compaction appends a canonical `CompactionCreated` record that projections fold, and source
   history is never erased.
 - **RUN-027:** A provider context-length rejection is classified typed; with compaction
   configured the engine compacts and issues at most one framework-level retry (transport
@@ -640,5 +640,5 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   still-executable application batch before durable preparation or any Handler. Fresh and
   durable-resumed calls present the same canonical Run/Turn/input authority and stable call
   descriptor; denial fails typed and settles accepted work terminally without the denied Attempt
-  starting a Handler or creating a new side effect — fresh denial writes no prepared record,
+  starting a Handler or creating a new side effect. Fresh denial writes no prepared record, and
   resumed denial writes no new preparation.

@@ -15,8 +15,6 @@ export const phase1Trip = Schema.decodeSync(TripRequest)({
   budgetCents: 350_000,
   currency: "USD",
 });
-/** Backward-compatible fixture alias while consumers transition to the P1 name. */
-export const phase0Trip = phase1Trip;
 export const expectedTravelPlan: TravelPlanValue = Schema.decodeSync(TravelPlan)({
   itineraries: [
     {
@@ -82,4 +80,3 @@ export const phase1HappyPathTurns = [
     termination: { _tag: "Complete" },
   },
 ] satisfies readonly [ScriptedTurnInput, ScriptedTurnInput];
-export const phase0HappyPathTurns = phase1HappyPathTurns;

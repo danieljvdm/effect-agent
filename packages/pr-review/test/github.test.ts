@@ -20,7 +20,7 @@ const REVIEWED_HEAD_SHA = "2".repeat(40);
 const FINGERPRINT = "a".repeat(64);
 
 const reviewState = ReviewState.make({
-  version: 2,
+  version: 1,
   repository: "acme/widgets",
   pullRequestNumber: 30,
   baseRef: "main",
@@ -28,11 +28,12 @@ const reviewState = ReviewState.make({
   headRef: "fix/review",
   reviewedHeadSha: REVIEWED_HEAD_SHA,
   profileFingerprint: "b".repeat(64),
-  acceptedScopeFingerprint: "c".repeat(64),
+  settledScopeFingerprint: "c".repeat(64),
   reviewedPathCount: 1,
   unresolvedFindings: [],
   unresolvedConcerns: [],
   unreviewedPaths: [],
+  unreviewedPasses: [],
   settled: true,
   lastReviewMode: "full",
 });
