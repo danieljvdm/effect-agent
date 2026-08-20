@@ -11,71 +11,31 @@ The working product thesis is:
 > produces a `Stream`; its expected failures remain in `E`; its dependencies remain in `R`; every
 > resource belongs to a `Scope`.
 
-The implementation covers the original roadmap through Phase 7. That includes the ephemeral
-interpreter, persistent Conversations, the durable Node/SQLite and Cloudflare runtimes, durable
-Tools, joined input, attached Subagents, adapter certification, TLA+ models, administrative
-operations, security review, and crash and soak tests.
-
-The same `DurableAgentRuntime` coordinator runs on Node and Cloudflare. The Node host uses SQLite.
-The Cloudflare host runs one SQLite-backed Durable Object per Conversation and recovers through
-alarms. Both implement prepared and settled ordinary Tool records, Unknown Outcomes, Durable
-Steps, approval suspension, joined queued input, and attached Subagent delegation. The repository
-also contains deterministic model Layers, the Travel Planner reference implementation, provider
-binding examples, a browser test bench, and a private head-bound work-order implementer.
-
 ## Status
 
-- Specification status: **Draft**
-- Distribution status: **Private internal project**
-- Target Effect line: **Effect v4**, pinned exactly during pre-1.0 development
-- Working package scope: `@effect-agent/*`
-- Repository shape: **Vite+ monorepo** with framework packages in `packages/*`, leaf consumer
-  benches in `examples/*`, and no `apps/`
-- Current packages: `effect-agent` (umbrella over the platform-neutral packages), `core`, `engine`, `capabilities`, `sandbox`, `sandbox-local`, `session`,
-  `storage-memory`, `storage-sqlite`, `storage-cloudflare`, `platform-node`,
-  `platform-cloudflare`, `pr-review` (packaged pull-request reviewer with a prebuilt GitHub
-  Action at `action/`), and `testing`
-- Current implementation milestone: the planned build-out is complete. Named test suites cover
-  the ephemeral interpreter, durable Node/SQLite runtime (`DN`), durable Tools and joined input,
-  Cloudflare Durable Object runtime (`DC`), adapter certification, formal models, fault injection,
-  and both Subagent slices
-- PR work-order evidence: `examples/pr-work-orders` admits one explicit head-bound
-  work order, grants a separate implementation Agent only jailed file/patch/named-check
-  tools, and leaves admission, checks, and atomic publication to host Effect code.
-  `examples/pr-work-order-ingress`, the prebuilt `work-order-action/`, and the enabled
-  multi-job workflow provide exact GitHub dispatch, an authenticated GitHub-retained admission journal,
-  credential-separated model/check/publisher jobs, atomic publication, and bounded thread
-  presentation. The work-order Action remains separate from the read-only reviewer.
-- Completion is an engineering claim, not a stability claim. The `DC` evidence comes from the
-  workerd/Miniflare harness, not hosted Cloudflare. The opt-in live-model suites exist but the
-  default gate skips them. Open-source preparation is still pending
-- Subagents: declared attached delegation Tools are implemented for both slices. Ephemeral
-  (`E`) delegation with the engine spawner seam and in-memory budget reservations, and durable
-  (`DN`) attached children as separately admitted Submissions with requested/started/joined
-  canonical records, parent-owned budget reservations, `waitingForChild` suspension and durable
-  wakeup, verified Settlement joins, independent parent/child fencing, durable abort
-  propagation, and exact-digest Binding resolution under real process-kill tests. `DC` Subagents
-  run the same matrix across two Durable Objects under eviction. Neither runtime claims
-  exactly-once child external effects
-- Target platforms: Node.js/SQLite and Cloudflare Workers/Durable Objects
-- First runtime: bounded, ephemeral multi-Run Conversations with safe-seam input, approval,
-  context, budget, MCP, and sandbox capabilities
-- Persistent foundation: versioned canonical records, pure replay/checkpoints, definition digests,
-  opaque resumable offsets, export, and memory/SQLite Conversation Store Layers
-- Durable runtime: class `DN` on the tested Node/SQLite assembly. It provides durable admission
-  and Receipt,
-  FIFO Conversation lanes, fenced Attempts with liveness leases, pure recovery classification,
-  and exactly one Settlement per accepted Submission; consequential external mutation runs under
-  the Phase 5 uncertainty protocol (prepared/settled ordinary Tool records, Unknown Outcomes with
-  an audited resolution path, Durable Steps, durable approval suspension, and joined queued
-  input). Execution is at least once. Recovery may invoke the model again and never claims
-  exactly-once external side effects
-- Cloudflare runtime: class `DC` on the tested workerd/Miniflare assembly. It runs the same coordinator
-  and ports inside one SQLite-backed Durable Object per Conversation, a single multiplexed
-  pre-armed alarm so eviction at every failpoint recovers without an incoming request,
-  admission limits checked before any ledger row, cross-Object Subagent delegation over a typed
-  routed port subset, and Travel Planner canonical outcomes byte-equal to `DN` after the
-  documented cross-platform normalization
+| Item          | Current state                                                             |
+| ------------- | ------------------------------------------------------------------------- |
+| Specification | Draft                                                                     |
+| Distribution  | Private internal project                                                  |
+| Effect        | Effect v4, pinned exactly during pre-1.0 development                      |
+| Packages      | `@effect-agent/*`                                                         |
+| Workspace     | Vite+ monorepo with packages in `packages/*` and examples in `examples/*` |
+| Platforms     | Node.js with SQLite and Cloudflare Workers with Durable Objects           |
+
+The planned build through Phase 7 is implemented. Tests cover the ephemeral interpreter, durable
+Node runtime (`DN`), Cloudflare runtime (`DC`), Tool uncertainty, joined input, attached Subagents,
+adapter certification, formal models, failpoints, and soak behavior.
+
+`DN` and `DC` use the same coordinator. They provide durable admission, fenced Attempts, one
+Settlement per accepted Submission, approval suspension, joined input, and attached child
+delegation. Execution is at least once. Neither runtime claims exactly-once external effects.
+
+The work-order examples and `work-order-action/` provide head-bound GitHub dispatch, separate
+model/check/publisher jobs, and atomic publication. They remain separate from the read-only PR
+reviewer.
+
+Completion is an engineering claim, not a stability claim. Cloudflare evidence comes from
+workerd/Miniflare, live-model suites are opt-in, and open-source preparation remains pending.
 
 Normative words such as **MUST**, **SHOULD**, and **MAY** are used in their usual RFC sense.
 
