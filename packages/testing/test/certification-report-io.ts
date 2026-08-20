@@ -1,4 +1,4 @@
-import { CertificationReport } from "@effect-agent/session";
+import { CertificationReport } from "@effect-agent/session/testing";
 import { NodeFileSystem } from "@effect/platform-node";
 import { Effect, FileSystem, Schema } from "effect";
 

@@ -1,6 +1,6 @@
 import { ConversationId, RunId, SubmissionId } from "@effect-agent/core";
+import type { AppendResult } from "@effect-agent/session";
 import {
-  AppendResult,
   CanonicalBatch,
   CanonicalRecord,
   CanonicalSequence,
@@ -13,7 +13,6 @@ import {
   ConversationRead,
   ConversationStore,
   ConversationStoreError,
-  conversationStoreConformanceCases,
   EMPTY_TAIL_DIGEST,
   FencedAppendRequest,
   LoadCheckpointRequest,
@@ -27,6 +26,7 @@ import {
   UserInputRecorded,
   type CanonicalRecordPayload,
 } from "@effect-agent/session";
+import { conversationStoreConformanceCases } from "@effect-agent/session/testing";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, describe, it } from "@effect/vitest";
 import {

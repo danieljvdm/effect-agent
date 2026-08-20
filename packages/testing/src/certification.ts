@@ -19,11 +19,6 @@ import { DurableStep, DurableStepError } from "@effect-agent/engine";
 import {
   AgentBindingResolver,
   ApprovalDecisionCommand,
-  CertificationCaseResult,
-  CertificationReport,
-  CertificationSweepResult,
-  CertificationTierThreeReport,
-  CertifiedAdapterIdentity,
   ConversationExportRequest,
   ConversationStore,
   DefinitionDigests,
@@ -47,21 +42,28 @@ import {
   UnknownResolutionCommand,
   WakeScheduler,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
-  certifyPorts,
   childConversationIdFor,
   verifyConversationInvariants,
   type BatchId,
-  type CertificationScenario,
   type DurableSubmitFailure,
   type DurableSubmitOptions,
   type Receipt,
   type ResolvedBinding,
   type SubmissionSnapshot,
 } from "@effect-agent/session";
+import type { CertificationCaseResult } from "@effect-agent/session/testing";
+import {
+  CertificationReport,
+  CertificationSweepResult,
+  CertificationTierThreeReport,
+  CertifiedAdapterIdentity,
+  certifyPorts,
+  type CertificationScenario,
+} from "@effect-agent/session/testing";
+import type { Crypto } from "effect";
 import {
   Cause,
   Clock,
-  Crypto,
   DateTime,
   Duration,
   Effect,

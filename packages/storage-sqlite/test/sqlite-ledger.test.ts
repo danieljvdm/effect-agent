@@ -54,7 +54,6 @@ import {
   WaitingChild,
   WaitingForChildSuspension,
   submissionInputRecordId,
-  submissionLedgerConformanceCases,
   submissionSettlementId,
   submissionSettlementRecordId,
   UserInputRecorded,
@@ -64,19 +63,19 @@ import {
   type PersistedJson,
   type SettlementOutcome,
 } from "@effect-agent/session";
+import { submissionLedgerConformanceCases } from "@effect-agent/session/testing";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
+import type { Crypto, PlatformError } from "effect";
 import {
   Cause,
-  Crypto,
   DateTime,
   Effect,
   Exit,
   FileSystem,
   Layer,
   Option,
-  PlatformError,
   Ref,
   Schema,
   Stream,
@@ -84,12 +83,12 @@ import {
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
+import type { SqliteStorageConfig } from "../src/index.ts";
 import {
   conversationStoreLayer,
   ledgerLayer,
   storageConfigLayer,
   SqliteStorageCompatibilityError,
-  SqliteStorageConfig,
   SqliteStorageFailpoint,
   SqliteStorageFailpointError,
   SqliteWriteContention,

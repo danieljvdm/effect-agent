@@ -36,9 +36,9 @@ import {
   WaitingChild,
   WaitingForChildSuspension,
   submissionInputRecordId,
-  submissionLedgerConformanceCases,
   submissionSettlementId,
 } from "@effect-agent/session";
+import { submissionLedgerConformanceCases } from "@effect-agent/session/testing";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Option, Ref, Schema, Stream } from "effect";

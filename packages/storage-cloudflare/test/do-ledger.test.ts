@@ -2,18 +2,19 @@ import {
   LedgerError,
   SubmissionLedger,
   SubmissionLookupByKey,
-  submissionLedgerConformanceCases,
   IdempotencyKey,
 } from "@effect-agent/session";
+import { submissionLedgerConformanceCases } from "@effect-agent/session/testing";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runInDurableObject } from "cloudflare:test";
-import { Cause, Crypto, Effect, Exit, Layer, Option, Stream } from "effect";
+import type { Crypto } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Stream } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
+import type { DoStorageConfig } from "../src/index.ts";
 import {
-  DoStorageConfig,
   DoStorageFailpoint,
   DoValueBoundExceeded,
   evictionFailpointHandler,

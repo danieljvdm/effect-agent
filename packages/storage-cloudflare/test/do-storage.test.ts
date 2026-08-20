@@ -4,20 +4,21 @@ import {
   ConversationMaterialization,
   ConversationStore,
   ConversationStoreError,
-  conversationStoreConformanceCases,
   EMPTY_TAIL_DIGEST,
   FencedAppendRequest,
   UserInputRecorded,
 } from "@effect-agent/session";
+import { conversationStoreConformanceCases } from "@effect-agent/session/testing";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Cause, Crypto, Effect, Exit, Layer, Schema } from "effect";
+import type { Crypto } from "effect";
+import { Cause, Effect, Exit, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
+import type { DoStorageConfig } from "../src/index.ts";
 import {
   conversationStoreLayer,
-  DoStorageConfig,
   DoStorageFailpoint,
   DoValueBoundExceeded,
   layer,

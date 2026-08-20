@@ -2,7 +2,7 @@ import {
   CertificationReport,
   conversationStoreConformanceCases,
   submissionLedgerConformanceCases,
-} from "@effect-agent/session";
+} from "@effect-agent/session/testing";
 import {
   SqliteStorageFailpoint,
   conversationStoreLayer,

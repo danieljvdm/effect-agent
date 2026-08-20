@@ -59,8 +59,8 @@ import {
 } from "effect";
 import { Prompt, type Tool } from "effect/unstable/ai";
 
-import type { RetryCommand } from "./admin.ts";
 import {
+  type RetryCommand,
   ExplainedEvidence,
   ExplainedSubmission,
   ExplainedUnknownCall,
@@ -86,24 +86,22 @@ import {
   type ResolvedAttemptDriver,
   type ResolvedBinding,
 } from "./binding-resolver.ts";
-import { verifyConversationInvariants } from "./certification.ts";
 import { digestJson, type DigestError } from "./digest.ts";
 import {
   DurableRuntimeFailpoint,
   type DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
 } from "./durable-failpoint.ts";
-import type {
-  AbortIntent,
-  AdmissionConflict,
-  Claim,
-  JoinedToHost,
-  OwnershipLost,
-  RecoverySnapshot,
-  SettlementConflict,
-  SubmissionSnapshot,
-} from "./ledger.ts";
+import { verifyConversationInvariants } from "./invariants.ts";
 import {
+  type AbortIntent,
+  type AdmissionConflict,
+  type Claim,
+  type JoinedToHost,
+  type OwnershipLost,
+  type RecoverySnapshot,
+  type SettlementConflict,
+  type SubmissionSnapshot,
   AbortCommand,
   AdmissionRequest,
   ApprovalDecisionCommand,
@@ -161,8 +159,11 @@ import {
   type OperationDenied,
 } from "./operation-authorizer.ts";
 import { PreparedToolCallEvidence, ToolReconciler } from "./reconciler.ts";
-import type { CanonicalRecordEnvelope, DeploymentId, Digest, ProducerId } from "./records.ts";
 import {
+  type CanonicalRecordEnvelope,
+  type DeploymentId,
+  type Digest,
+  type ProducerId,
   AbortRequested,
   BatchId,
   CanonicalBatch,
@@ -246,8 +247,10 @@ import {
   turnResponseBatch,
   turnResultsBatch,
 } from "./run-journal.ts";
-import type { AppendConflict, ConversationNotMaterialized, FenceRejected } from "./store.ts";
 import {
+  type AppendConflict,
+  type ConversationNotMaterialized,
+  type FenceRejected,
   ConversationExportRequest,
   ConversationMaterialization,
   ConversationObservation,
@@ -6229,7 +6232,7 @@ const make = Effect.gen(function* () {
   // SAME two ports the coordinator already owns, so they behave identically on DN and DC.
   // -------------------------------------------------------------------------
 
-  /** Whole non-negative seconds between a recorded instant and Clock-now (TestClock-driven). */
+  /** Whole non-negative seconds between a recorded instant and Effect Clock-now. */
   const ageSecondsSince = (instant: DateTime.Utc, nowMillis: number): number =>
     Math.max(0, Math.floor((nowMillis - DateTime.toEpochMillis(instant)) / 1_000));
 

@@ -31,7 +31,7 @@ import {
 
 const BoundedDetail = Schema.String.check(Schema.isMaxLength(4_096));
 
-/** Non-negative whole seconds derived from Clock time; deterministic under TestClock. */
+/** Non-negative whole seconds derived from the Effect Clock. */
 const AgeSeconds = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 // ---------------------------------------------------------------------------

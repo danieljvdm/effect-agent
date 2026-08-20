@@ -386,7 +386,16 @@ Every pull request:
 - unit and deterministic integration tests;
 - in-memory conformance;
 - package boundary and duplicate-Effect-AI-primitive check;
+- a production-entrypoint bundle/metafile check that follows workspace imports and rejects
+  test-only packages, runners, fixtures, conformance modules, and certification modules with the
+  dependency path that reached them;
 - docs link and requirement-ID validation.
+
+A workspace-wide `sideEffects: false` declaration is intentionally absent. Published executable
+subpaths such as `@effect-agent/pr-review/action` and `@effect-agent/pr-review/cli` start their
+`NodeRuntime` programs at module scope, so a blanket metadata assertion would be false. Production
+purity is enforced as an import-graph boundary; explicitly named testing and executable subpaths
+retain their declared behavior.
 
 Adapter changes additionally run the relevant conformance suite. Release candidates
 run databases, process-kill crash tests, security tests, examples, package install
@@ -429,3 +438,5 @@ No durability milestone is complete while its crash tests are skipped.
   state, exact dispatch and provenance, complete patch paths, check-container isolation,
   independent publisher verification, atomic publication uncertainty, thread presentation, and
   enabled workflow credential shape.
+- **TEST-019**: Every published production export entrypoint stays transitively free of test-only
+  dependencies and harness modules; adapter-development surfaces are explicit testing subpaths.
