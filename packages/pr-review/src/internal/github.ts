@@ -130,8 +130,9 @@ const GitHubReviewCommentWire = Schema.Struct({
   node_id: Schema.String,
   path: Schema.String,
   body: Schema.String,
-  line: Schema.NullOr(Schema.Int),
-  original_line: Schema.NullOr(Schema.Int),
+  // Outdated comments omit `line` entirely instead of sending null.
+  line: Schema.optionalKey(Schema.NullOr(Schema.Int)),
+  original_line: Schema.optionalKey(Schema.NullOr(Schema.Int)),
   start_line: Schema.optionalKey(Schema.NullOr(Schema.Int)),
   original_start_line: Schema.optionalKey(Schema.NullOr(Schema.Int)),
 });
@@ -578,8 +579,11 @@ export const gitHubReviewRetirementHostLayer: Layer.Layer<
         }).pipe(
           Effect.map((comments) =>
             comments.map((comment) => {
-              const endLine = comment.line ?? comment.original_line;
-              const startLine = comment.start_line ?? comment.original_start_line ?? endLine;
+              const positiveLine = (value: number | null | undefined): number | null =>
+                value !== undefined && value !== null && value > 0 ? value : null;
+              const endLine = positiveLine(comment.line ?? comment.original_line);
+              const startLine =
+                positiveLine(comment.start_line ?? comment.original_start_line) ?? endLine;
               return RetirableReviewComment.make({
                 nodeId: comment.node_id,
                 path: comment.path,
@@ -669,6 +673,15 @@ export class PriorReviews extends Context.Service<
     >;
     /** Compare a previously reviewed head to the live current head. */
     readonly compareHeads: (
+      baseSha: string,
+      headSha: string,
+    ) => Effect.Effect<ReviewHeadComparison, PriorReviewLookupFailure>;
+    /**
+     * Two-dot tree comparison (`base..head`). Used when the reviewed head is
+     * not a git ancestor so a rebase or amend can still name the paths whose
+     * blob contents actually changed.
+     */
+    readonly compareTrees: (
       baseSha: string,
       headSha: string,
     ) => Effect.Effect<ReviewHeadComparison, PriorReviewLookupFailure>;
@@ -775,12 +788,12 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
         }
         return { latestFingerprint: latest, latestState };
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
-    const compareHeads = (baseSha: string, headSha: string) =>
+    const compareCommits = (baseSha: string, headSha: string, separator: "..." | "..") =>
       Effect.gen(function* () {
         const response = yield* HttpClient.execute(
           withCommonHeaders(
             HttpClientRequest.get(
-              `${target.apiUrl}/repos/${target.repository}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}`,
+              `${target.apiUrl}/repos/${target.repository}/compare/${encodeURIComponent(baseSha)}${separator}${encodeURIComponent(headSha)}`,
             ).pipe(HttpClientRequest.acceptJson),
             target.token,
           ),
@@ -803,6 +816,21 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
           truncated: files.length >= MAX_CHANGED_FILES,
         });
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+    const compareTrees = (baseSha: string, headSha: string) =>
+      compareCommits(baseSha, headSha, "..").pipe(
+        Effect.map((comparison) =>
+          ReviewHeadComparison.make({
+            // This is a content snapshot, not a lineage claim. Selection
+            // intersects these files with the current PR path set.
+            status: comparison.status === "identical" ? "identical" : "ahead",
+            baseSha,
+            headSha,
+            mergeBaseSha: baseSha,
+            files: comparison.files,
+            truncated: comparison.truncated,
+          }),
+        ),
+      );
     return PriorReviews.of({
       latestFingerprint: readMarkers(Option.none()).pipe(
         Effect.map((markers) => markers.latestFingerprint),
@@ -813,7 +841,8 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
           Effect.map((markers) => markers.latestState),
         );
       }),
-      compareHeads,
+      compareHeads: (baseSha, headSha) => compareCommits(baseSha, headSha, "..."),
+      compareTrees,
     });
   }),
 );

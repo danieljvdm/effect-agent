@@ -6,9 +6,11 @@ import {
   GitHubReviewTarget,
   gitHubPullRequestSourceLayer,
   gitHubPriorReviewsLayer,
+  gitHubReviewRetirementHostLayer,
   PriorReviews,
   PullRequestSource,
   renderFingerprintMarker,
+  ReviewRetirementHost,
   ReviewState,
   ReviewStateAuthenticator,
   webCryptoReviewStateAuthenticatorLayer,
@@ -99,6 +101,131 @@ describe("GitHub prior reviews", () => {
 
       expect(Option.getOrUndefined(result.fingerprint)).toBe(FINGERPRINT);
       expect(Option.getOrUndefined(result.state)).toEqual(reviewState);
+    }),
+  );
+
+  it.effect("compares rewritten heads with a two-dot tree request", () =>
+    Effect.gen(function* () {
+      const requested: Array<string> = [];
+      const client = HttpClient.make((request, url) => {
+        requested.push(url.pathname);
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(
+              JSON.stringify({
+                status: "diverged",
+                base_commit: { sha: REVIEWED_HEAD_SHA },
+                merge_base_commit: { sha: "1".repeat(40) },
+                files: [
+                  {
+                    filename: "src/fix.ts",
+                    status: "modified",
+                    additions: 1,
+                    deletions: 1,
+                    patch: "@@ -1 +1 @@\n-before\n+after",
+                  },
+                ],
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          ),
+        );
+      });
+      const comparison = yield* Effect.gen(function* () {
+        const priorReviews = yield* PriorReviews;
+        return yield* priorReviews.compareTrees(REVIEWED_HEAD_SHA, "3".repeat(40));
+      }).pipe(
+        Effect.provide(
+          gitHubPriorReviewsLayer.pipe(
+            Layer.provide(
+              Layer.merge(
+                GitHubReviewTarget.layer({
+                  apiUrl: "https://api.github.test",
+                  repository: "acme/widgets",
+                  number: 30,
+                  token: Option.some(Redacted.make("github-app-token")),
+                }),
+                Layer.succeed(HttpClient.HttpClient)(client),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(requested).toEqual([
+        `/repos/acme/widgets/compare/${REVIEWED_HEAD_SHA}..${"3".repeat(40)}`,
+      ]);
+      expect(comparison.status).toBe("ahead");
+      expect(comparison.mergeBaseSha).toBe(REVIEWED_HEAD_SHA);
+      expect(comparison.files.map((file) => file.path)).toEqual(["src/fix.ts"]);
+    }),
+  );
+});
+
+describe("GitHub review retirement comments", () => {
+  it.effect("decodes outdated inline comments that omit the current line", () =>
+    Effect.gen(function* () {
+      const client = HttpClient.make((request, url) => {
+        if (url.pathname === "/repos/acme/widgets/pulls/30/reviews") {
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify([]), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              }),
+            ),
+          );
+        }
+        expect(url.pathname).toBe("/repos/acme/widgets/pulls/30/reviews/9/comments");
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(
+              JSON.stringify([
+                {
+                  node_id: "PRRC_outdated",
+                  path: "src/a.ts",
+                  body: "**[🛑 blocking] Gone stale**\n\nThe line moved.",
+                  original_line: 12,
+                },
+              ]),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          ),
+        );
+      });
+      const comments = yield* Effect.gen(function* () {
+        const host = yield* ReviewRetirementHost;
+        return yield* host.listComments(9);
+      }).pipe(
+        Effect.provide(
+          gitHubReviewRetirementHostLayer.pipe(
+            Layer.provide(
+              Layer.merge(
+                GitHubReviewTarget.layer({
+                  apiUrl: "https://api.github.test",
+                  repository: "acme/widgets",
+                  number: 30,
+                  token: Option.some(Redacted.make("github-app-token")),
+                }),
+                Layer.succeed(HttpClient.HttpClient)(client),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(comments).toEqual([
+        {
+          nodeId: "PRRC_outdated",
+          path: "src/a.ts",
+          startLine: 12,
+          endLine: 12,
+          body: "**[🛑 blocking] Gone stale**\n\nThe line moved.",
+        },
+      ]);
     }),
   );
 });

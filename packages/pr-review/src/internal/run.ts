@@ -32,9 +32,11 @@ import {
 import {
   fromStoredConcern,
   fromStoredFinding,
+  MAX_STORED_UNREVIEWED_PASSES,
   MAX_STORED_UNREVIEWED_PATHS,
   ReviewExecutionContext,
   ReviewState,
+  StoredUnreviewedPass,
   toStoredConcern,
   toStoredFinding,
 } from "./review-state.ts";
@@ -171,6 +173,7 @@ interface ReviewCore {
   readonly inputCoverage: ReviewInputCoverage;
   readonly assurance: ReviewAssurance;
   readonly unreviewedPaths: ReadonlyArray<string>;
+  readonly unreviewedPasses?: ReadonlyArray<StoredUnreviewedPass> | undefined;
   readonly turns: number;
 }
 
@@ -271,6 +274,7 @@ const settleReviewRun = (
             unresolvedFindings: activeFindings.map(toStoredFinding),
             unresolvedConcerns: activeConcerns.map(toStoredConcern),
             unreviewedPaths,
+            unreviewedPasses: (core.unreviewedPasses ?? []).slice(0, MAX_STORED_UNREVIEWED_PASSES),
             settled,
             lastReviewMode: executionContext.mode,
           })
@@ -449,6 +453,14 @@ export const executeFanOutReview = <Provider, ModelProvides, ModelRequires>(
       totalChangedFiles: totalFiles,
       maxFindings: options.maxFindings,
       budget: toRunBudgetHook(budget),
+      ...(executionContext !== undefined && executionContext.retryPaths.length > 0
+        ? {
+            retry: {
+              paths: executionContext.retryPaths,
+              stages: executionContext.retryStages,
+            },
+          }
+        : {}),
     });
     const inputCoverage = fanOutInputCoverage({
       plan: pipeline.plan,
@@ -464,6 +476,14 @@ export const executeFanOutReview = <Provider, ModelProvides, ModelRequires>(
         inputCoverage,
         assurance: pipeline.assurance,
         unreviewedPaths: pipeline.unreviewedPaths,
+        unreviewedPasses: pipeline.unreviewedPasses
+          .slice(0, MAX_STORED_UNREVIEWED_PASSES)
+          .map((pass) =>
+            StoredUnreviewedPass.make({
+              stage: pass.stage,
+              paths: pass.paths.slice(0, 12),
+            }),
+          ),
         turns: pipeline.turns,
       },
       { metadata, files, anchorFiles, fingerprint, usage },

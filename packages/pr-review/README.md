@@ -190,9 +190,14 @@ own scope forward instead of freezing the baseline and reopening everything
 reviewed since (the non-converging loop of issue #131). A later Action run
 validates the state and reviews the GitHub comparison from that reviewed head
 to the current head plus the carried unreviewed paths, not the complete
-base...HEAD diff. Unchanged settled scope is not sent back to the model;
-unchanged unresolved findings remain active; changed or reverted paths
-invalidate their prior findings and receive fresh discovery and verification.
+base...HEAD diff. When that head is not a git ancestor — a rebase, amend, or
+force-push — the host falls back to a two-dot tree comparison and reviews only
+the current PR paths whose contents actually changed, plus leftovers. Unchanged
+settled scope is not sent back to the model; unchanged unresolved findings
+remain active; changed or reverted paths invalidate their prior findings and
+receive fresh discovery and verification. An unchanged leftover from a failed
+pass retries only that failed stage and keeps its stored findings — it does
+not run a second general discovery.
 Whole overflow files are reviewed in bounded installments across pushes
 through the same carry; a single file beyond total plan capacity and
 undiffable paths stay explicitly incomplete instead — an unreviewable tail
@@ -207,9 +212,11 @@ pinned to the reviewed commit. The expected author defaults to
 App token. State lookup, authentication, schema, identity, ancestry, profile,
 and comparison checks are fail-closed for scope selection: missing, stale,
 incompatible, or truncated state/comparisons produce a visible full-diff
-fallback. An ancestor base advance remains incremental and adds overlapping
+fallback unless a two-dot content comparison can still name the changed PR
+paths. An ancestor base advance remains incremental and adds overlapping
 PR paths as affected context; a materially changed base lineage falls back to
-full unless the authenticated settled-scope fingerprint still matches. The
+full unless the authenticated settled-scope fingerprint still matches or the
+content comparison intersects the current PR path set. The
 schema field retains the compatibility name `acceptedScopeFingerprint`. That
 fingerprint hashes the ignore-filtered effective diff, patchless base/head
 evidence, PR framing, and review-shaping profile while excluding commit IDs,
