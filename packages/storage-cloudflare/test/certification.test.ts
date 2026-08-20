@@ -2,7 +2,7 @@ import {
   CertificationReport,
   conversationStoreConformanceCases,
   submissionLedgerConformanceCases,
-} from "@effect-agent/session";
+} from "@effect-agent/session/testing";
 import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,

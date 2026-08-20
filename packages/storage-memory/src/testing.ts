@@ -7,4 +7,4 @@ export {
   type ConversationStoreConformanceFailure,
   type SubmissionLedgerConformanceCase,
   type SubmissionLedgerConformanceFailure,
-} from "@effect-agent/session";
+} from "@effect-agent/session/testing";

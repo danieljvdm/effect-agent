@@ -9,7 +9,6 @@ import {
   ConversationRead,
   ConversationStore,
   ConversationStoreError,
-  conversationStoreConformanceCases,
   EMPTY_TAIL_DIGEST,
   FencedAppendRequest,
   LoadCheckpointRequest,
@@ -21,13 +20,14 @@ import {
   type AppendResult,
   type CanonicalRecordPayload,
 } from "@effect-agent/session";
+import { conversationStoreConformanceCases } from "@effect-agent/session/testing";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, describe, it } from "@effect/vitest";
+import type { Crypto, PlatformError } from "effect";
 import {
   DateTime,
   Cause,
-  Crypto,
   Deferred,
   Effect,
   Exit,
@@ -35,7 +35,6 @@ import {
   Fiber,
   Layer,
   Option,
-  PlatformError,
   Ref,
   Schema,
   Stream,

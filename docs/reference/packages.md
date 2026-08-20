@@ -62,6 +62,9 @@ depends on `@effect-agent/engine` to drive the interpreter through its public se
 It also owns the durable Subagent protocol: the requested/started/joined/lineage record
 Schemas, the child budget reservation and `waitingForChild` ledger operations, and the
 host-supplied `AgentBindingResolver` port for exact-digest Binding resolution.
+Adapter certification reports, port runners, and the TestClock-dependent conformance case arrays
+are available only from `@effect-agent/session/testing`; the package root has no transitive
+test-runtime dependency.
 
 ### `@effect-agent/storage-memory`
 

@@ -8,11 +8,11 @@ import {
   CanonicalSequence,
   ConversationTail,
   ConversationTailRequest,
-  conversationStoreConformanceCases,
   Digest,
   EMPTY_TAIL_DIGEST,
   ProducerEpoch,
 } from "../src/index.ts";
+import { conversationStoreConformanceCases } from "../src/testing.ts";
 
 const conversationId = Schema.decodeSync(ConversationId)("conversation-port-1");
 const batchId = Schema.decodeSync(BatchId)("batch-port-1");

@@ -44,7 +44,7 @@ Requirements on the calling environment:
   "same file" rule): pass the SAME combined Layer instance for both fields — Layer
   memoization builds it once. All three shipped runners do this for their SQL adapters.
 
-The result is a `CertificationReport` (defined in `@effect-agent/session`): adapter identity
+The result is a `CertificationReport` (defined in `@effect-agent/session/testing`): adapter identity
 with the ledger's own `durability` claim, per-case Tier-1 results, per-cell Tier-2 sweep rows,
 and the Tier-3 record. `ok` is true exactly when every **executed** check passed; honest scope
 statements (`not-triggered`, `recorded-evidence`, `not-exercised`, `not-applicable`) are never
@@ -96,3 +96,7 @@ The repository runs the same certification suite against its memory, SQLite, and
 adapters. Set `EFFECT_AGENT_CERTIFICATION_OUT` when running a Node certification test to write a
 Schema-encoded report locally. The Cloudflare runner can print its report from workerd by enabling
 `PRINT_REPORT` in its test file.
+
+Import `CertificationReport`, `certifyPorts`, and the shared conformance case arrays from
+`@effect-agent/session/testing`. The `@effect-agent/session` root contains only production
+schemas, ports, invariant verification, replay, and runtime APIs.
