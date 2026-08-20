@@ -143,6 +143,43 @@ export class CompactionPerformed extends Schema.TaggedClass<CompactionPerformed>
 export const ExhaustedLimit = Schema.Literals(["tokens", "tool-calls", "turns"]);
 export type ExhaustedLimit = typeof ExhaustedLimit.Type;
 
+const CompletionFinishReason = Schema.Literals(["completed", "model-stop", "budget-exhausted"]);
+
+type CompletionMetadata = Readonly<{
+  finishReason: typeof CompletionFinishReason.Type;
+  exhausted?: ExhaustedLimit | undefined;
+}>;
+
+const validateCompletionMetadata = ({
+  exhausted,
+  finishReason,
+}: CompletionMetadata): string | undefined => {
+  const isBudgetExhausted = finishReason === "budget-exhausted";
+  return isBudgetExhausted === (exhausted !== undefined)
+    ? undefined
+    : '`exhausted` must be present exactly when `finishReason` is "budget-exhausted"';
+};
+
+const RunCompletedFields = Schema.Struct({
+  ...RunEventBase,
+  output: Schema.Json,
+  /** Schema-encoded application disposition, present only for an ordinary completed Run. */
+  runDisposition: Schema.optionalKey(Schema.Json),
+  turns: Schema.Int.check(Schema.isGreaterThan(0)),
+  finishReason: CompletionFinishReason,
+  exhausted: Schema.optionalKey(ExhaustedLimit),
+}).check(
+  Schema.makeFilter((event) => validateCompletionMetadata(event)),
+  Schema.makeFilter((event) =>
+    event.finishReason === "budget-exhausted" && event.runDisposition !== undefined
+      ? {
+          path: ["runDisposition"],
+          issue: '`runDisposition` is not allowed when `finishReason` is "budget-exhausted"',
+        }
+      : undefined,
+  ),
+);
+
 /**
  * Successful terminal event carrying Schema-compatible output and the completed turn count.
  * `"budget-exhausted"` marks a Run that settled through the policy's final-answer resolution
@@ -151,21 +188,14 @@ export type ExhaustedLimit = typeof ExhaustedLimit.Type;
  * dimension that bound.
  *
  * Invariant: `exhausted` is present exactly when `finishReason` is
- * `"budget-exhausted"`. A Schema-level discriminated union would break union
- * member identity (the same constraint recorded for `CompactionCreated`'s
- * summary-iff-summarize rule), so the pairing is enforced at every engine
- * construction site and pinned by engine tests; consumers treat a divergent
- * pair fail-safe as not exhausted.
+ * `"budget-exhausted"`, and a budget-exhausted completion has no application
+ * run disposition. The checked Struct enforces both rules during construction,
+ * decoding, and encoding without replacing the class in `RunEvent`.
  */
-export class RunCompleted extends Schema.TaggedClass<RunCompleted>()("RunCompleted", {
-  ...RunEventBase,
-  output: Schema.Json,
-  /** Schema-encoded application disposition, present only for an ordinary completed Run. */
-  runDisposition: Schema.optionalKey(Schema.Json),
-  turns: Schema.Int.check(Schema.isGreaterThan(0)),
-  finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
-  exhausted: Schema.optionalKey(ExhaustedLimit),
-}) {}
+export class RunCompleted extends Schema.TaggedClass<RunCompleted>()(
+  "RunCompleted",
+  RunCompletedFields,
+) {}
 
 /** Terminal event for a run that failed with an expected error. */
 export class RunFailed extends Schema.TaggedClass<RunFailed>()("RunFailed", {
@@ -225,12 +255,12 @@ export class SubagentProgress extends Schema.TaggedClass<SubagentProgress>()("Su
  */
 export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
   "SubagentCompleted",
-  {
+  Schema.Struct({
     ...SubagentEventBase,
     turns: Schema.Int.check(Schema.isGreaterThan(0)),
-    finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
+    finishReason: CompletionFinishReason,
     exhausted: Schema.optionalKey(ExhaustedLimit),
-  },
+  }).check(Schema.makeFilter((event) => validateCompletionMetadata(event))),
 ) {}
 
 /** Records the child run's expected terminal failure using safe, serializable diagnostics. */

@@ -43,11 +43,23 @@ export class AgentPolicyError extends Schema.TaggedError<AgentPolicyError>()("Ag
 export class AgentApprovalDenied extends Schema.TaggedError<AgentApprovalDenied>()(
   "AgentApprovalDenied",
   {
-    toolCallId: Schema.NonEmptyString,
+    toolCallId: ToolCallId,
     toolName: Schema.NonEmptyString,
     message: Schema.String,
   },
-) {}
+) {
+  /** Decode the native Effect AI Tool Call ID at the core error boundary. */
+  static override make(input: {
+    readonly toolCallId: string;
+    readonly toolName: string;
+    readonly message: string;
+  }): AgentApprovalDenied {
+    return super.make({
+      ...input,
+      toolCallId: Schema.decodeSync(ToolCallId)(input.toolCallId),
+    });
+  }
+}
 
 /** A host denied current execution authority for a Tool Call before its Handler started. */
 export class AgentToolAuthorizationDenied extends Schema.TaggedError<AgentToolAuthorizationDenied>()(
@@ -64,11 +76,24 @@ export class AgentApprovalPending extends Schema.TaggedError<AgentApprovalPendin
   "AgentApprovalPending",
   {
     approvalId: Schema.NonEmptyString,
-    toolCallId: Schema.NonEmptyString,
+    toolCallId: ToolCallId,
     toolName: Schema.NonEmptyString,
     message: Schema.String,
   },
-) {}
+) {
+  /** Decode the native Effect AI Tool Call ID at the core error boundary. */
+  static override make(input: {
+    readonly approvalId: string;
+    readonly toolCallId: string;
+    readonly toolName: string;
+    readonly message: string;
+  }): AgentApprovalPending {
+    return super.make({
+      ...input,
+      toolCallId: Schema.decodeSync(ToolCallId)(input.toolCallId),
+    });
+  }
+}
 
 /** A model response sequence violated an agent-loop protocol invariant. */
 export class ModelProtocolError extends Schema.TaggedError<ModelProtocolError>()(
