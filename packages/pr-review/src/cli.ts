@@ -19,6 +19,7 @@ import {
   type ReviewProvider,
 } from "./internal/providers.ts";
 import { ReviewPublicationPlan } from "./internal/render.ts";
+import { fullReviewExecutionContextLayer } from "./internal/review-state.ts";
 import type { ReviewRunOutcome } from "./internal/run.ts";
 
 // ---------------------------------------------------------------------------
@@ -158,7 +159,11 @@ const command = CliCommand.make(
               return Option.none<ReviewRunOutcome>();
             }
           }
-          return Option.some(yield* reviewer.run({ post: flags.post }));
+          return Option.some(
+            yield* reviewer
+              .run({ post: flags.post })
+              .pipe(Effect.provide(fullReviewExecutionContextLayer("explicit CLI full review"))),
+          );
         });
 
       let result: Option.Option<ReviewRunOutcome>;

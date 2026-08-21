@@ -42965,13 +42965,14 @@ var StoredAdjudicationFields = exports_Schema.Struct({
 
 class StoredAdjudication extends exports_Schema.Class("@effect-agent/pr-review/StoredAdjudication")(StoredAdjudicationFields) {
 }
-var findingIdentity = (finding) => `${finding.path}\x00${finding.startLine}\x00${finding.endLine}\x00${finding.title}`;
+var findingIdentity = (finding) => JSON.stringify(["finding", finding.path, finding.startLine, finding.endLine, finding.title]);
+var concernIdentity = (concern) => JSON.stringify(["concern", concern.title]);
 var adjudicationIdentity = (adjudication) => adjudication.path !== undefined && adjudication.startLine !== undefined && adjudication.endLine !== undefined ? findingIdentity({
   path: adjudication.path,
   startLine: adjudication.startLine,
   endLine: adjudication.endLine,
   title: adjudication.title
-}) : adjudication.title;
+}) : concernIdentity(adjudication);
 var MAX_STORED_UNREVIEWED_PATHS = 100;
 var MAX_STORED_UNREVIEWED_PASSES = 24;
 var UnreviewedStage = exports_Schema.Literals(["discovery", "specialist", "verification"]);
@@ -43140,7 +43141,7 @@ class ReviewHeadComparison extends exports_Schema.Class("@effect-agent/pr-review
   truncated: exports_Schema.Boolean
 }) {
 }
-var fullSelection = (input) => ({
+var fullReviewSelection = (input) => ({
   mode: "full",
   reason: input.reason,
   files: input.files,
@@ -43247,7 +43248,7 @@ var incrementalFromDelta = (input) => {
   };
 };
 var selectReviewRange = (input) => {
-  const full = (reason) => fullSelection({
+  const full = (reason) => fullReviewSelection({
     reason,
     files: input.fullFiles,
     totalFiles: input.current.totalChangedFiles,
@@ -43548,7 +43549,8 @@ class AdjudicationComment extends exports_Schema.Class("@effect-agent/pr-review/
   body: exports_Schema.String.check(exports_Schema.isMaxLength(65536)),
   authorAssociation: exports_Schema.String.check(exports_Schema.isMaxLength(40)),
   authorLogin: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(100)),
-  createdAt: exports_Schema.NullOr(exports_Schema.DateTimeUtc)
+  createdAt: exports_Schema.NullOr(exports_Schema.DateTimeUtc),
+  sourceOrder: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
 }) {
 }
 
@@ -43632,7 +43634,6 @@ var threadFindingTarget = (thread) => {
 var deriveAdjudications = (input) => {
   const candidates = [];
   const ignored = [];
-  let sequence = 0;
   const admit = (comment, command, target) => {
     candidates.push({
       adjudication: StoredAdjudication.make({
@@ -43645,7 +43646,7 @@ var deriveAdjudications = (input) => {
         actor: comment.authorLogin
       }),
       epochMillis: comment.createdAt === null ? -1 : exports_DateTime.toEpochMillis(comment.createdAt),
-      sequence
+      sourceOrder: comment.sourceOrder
     });
   };
   const authorized = (comment, surface) => {
@@ -43657,7 +43658,6 @@ var deriveAdjudications = (input) => {
   for (const thread of input.threads) {
     const target = threadFindingTarget(thread);
     for (const reply of thread.replies) {
-      sequence += 1;
       const command = parseThreadAdjudication(reply.body);
       if (command === undefined)
         continue;
@@ -43676,7 +43676,6 @@ var deriveAdjudications = (input) => {
     }
   }
   for (const comment of input.issueComments) {
-    sequence += 1;
     const command = parseIssueAdjudication(comment.body);
     if (command === undefined)
       continue;
@@ -43694,7 +43693,7 @@ var deriveAdjudications = (input) => {
     admit(comment, command, { title: command.title });
   }
   const byIdentity = new Map;
-  const ordered = [...candidates].sort((left, right) => left.epochMillis - right.epochMillis || left.sequence - right.sequence);
+  const ordered = [...candidates].sort((left, right) => left.epochMillis - right.epochMillis || left.sourceOrder - right.sourceOrder);
   for (const candidate of ordered) {
     const identity3 = adjudicationIdentity(candidate.adjudication);
     byIdentity.delete(identity3);
@@ -45285,7 +45284,7 @@ var GitHubIssueCommentWire = exports_Schema.Struct({
   created_at: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.String))
 });
 var GitHubIssueCommentsPageWire = exports_Schema.Array(GitHubIssueCommentWire);
-var toAdjudicationComment = (wire) => {
+var toAdjudicationComment = (wire, sourceOrder) => {
   const login = wire.user?.login;
   if (login === undefined || login.length === 0)
     return;
@@ -45293,7 +45292,8 @@ var toAdjudicationComment = (wire) => {
     body: (wire.body ?? "").slice(0, 65536),
     authorAssociation: (wire.author_association ?? "NONE").slice(0, 40),
     authorLogin: login.slice(0, 100),
-    createdAt: parseGitHubSubmittedAt(wire.created_at ?? null)
+    createdAt: parseGitHubSubmittedAt(wire.created_at ?? null),
+    sourceOrder
   });
 };
 var gitHubReviewAdjudicationHostLayer = exports_Layer.effect(ReviewAdjudicationHost)(exports_Effect.gen(function* () {
@@ -45343,13 +45343,13 @@ var gitHubReviewAdjudicationHostLayer = exports_Layer.effect(ReviewAdjudicationH
         continue;
       threads.set(wire.id, { root: wire, replies: [] });
     }
-    for (const wire of wires) {
+    for (const [sourceOrder, wire] of wires.entries()) {
       if (wire.in_reply_to_id === undefined || wire.in_reply_to_id === null)
         continue;
       const thread = threads.get(wire.in_reply_to_id);
       if (thread === undefined)
         continue;
-      const reply = toAdjudicationComment(wire);
+      const reply = toAdjudicationComment(wire, sourceOrder);
       if (reply === undefined)
         continue;
       const command = parseThreadAdjudication(reply.body);
@@ -45385,8 +45385,8 @@ var gitHubReviewAdjudicationHostLayer = exports_Layer.effect(ReviewAdjudicationH
       url: `${target.apiUrl}/repos/${target.repository}/issues/${target.number}/comments`,
       decode: decodeAdjudication(GitHubIssueCommentsPageWire, "listIssueCommentsForAdjudication")
     });
-    return wires.flatMap((wire) => {
-      const comment = toAdjudicationComment(wire);
+    return wires.flatMap((wire, sourceOrder) => {
+      const comment = toAdjudicationComment(wire, sourceOrder);
       return comment === undefined ? [] : [comment];
     });
   });
@@ -45930,20 +45930,20 @@ var enforceFindingsBound = (review, maxFindings) => review.findings.length <= ma
 });
 var findingKey = (finding) => `${finding.path}\x00${finding.startLine}\x00${finding.endLine}\x00${finding.severity}\x00${finding.title}`;
 var resolveReviewContinuityContext = exports_Effect.fn("resolveReviewContinuityContext")(function* () {
-  const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
-  const priorState = executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
+  const executionContext = yield* ReviewExecutionContext;
+  const priorState = executionContext.mode === "incremental" ? executionContext.priorState : undefined;
   const adjudications = yield* collectReviewAdjudications(priorState?.adjudications ?? []);
-  const affectedPaths = new Set(executionContext?.affectedPaths ?? []);
+  const affectedPaths = new Set(executionContext.affectedPaths);
   const priorFindingsOnScope = priorState?.unresolvedFindings.filter((finding) => affectedPaths.has(finding.path)) ?? [];
   return { adjudications, priorFindingsOnScope };
 });
 var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function* () {
   const { metadata, files, anchorFiles, fingerprint, usage } = context4;
-  const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
+  const executionContext = yield* ReviewExecutionContext;
   const adjudications = context4.adjudications ?? [];
   const adjudicatedIdentities = new Set(adjudications.map(adjudicationIdentity));
   const isAdjudicatedFinding = (finding) => adjudicatedIdentities.has(findingIdentity(finding));
-  const isAdjudicatedConcern = (concern) => adjudicatedIdentities.has(concern.title);
+  const isAdjudicatedConcern = (concern) => adjudicatedIdentities.has(concernIdentity(concern));
   const filteredReview = adjudicatedIdentities.size === 0 ? core2.review : CodeReview.make({
     summary: core2.review.summary,
     verdict: core2.review.verdict,
@@ -45973,9 +45973,9 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
   const review = enforceFindingsBound(normalizedReview, clampMaxFindings(options3.maxFindings));
   const { inputCoverage, assurance } = core2;
   const unreviewedPaths = [...new Set(core2.unreviewedPaths)].sort();
-  const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
-  const affectedPaths = new Set(executionContext?.affectedPaths ?? files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]));
-  const priorState = executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
+  const reviewTotalFiles = executionContext.totalFiles;
+  const affectedPaths = new Set(executionContext.affectedPaths);
+  const priorState = executionContext.mode === "incremental" ? executionContext.priorState : undefined;
   const carriedCandidates = priorState?.unresolvedFindings.filter((finding) => !affectedPaths.has(finding.path)).map(fromStoredFinding) ?? [];
   const eligibleCarriedCandidates = carriedCandidates.filter((finding) => !isAdjudicatedFinding(finding));
   const activeFindings = rankAndDedupeFindings([
@@ -46001,7 +46001,7 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
   const concernsHaveEvidencePaths = activeConcerns.every((concern) => concern.evidencePaths !== undefined);
   const skipFingerprint = settled && concernsHaveEvidencePaths ? fingerprint : undefined;
   const carriedScopeFits = unreviewedPaths.length <= MAX_STORED_UNREVIEWED_PATHS;
-  const stateCandidate = executionContext !== undefined && fingerprint !== undefined && metadata.baseSha !== undefined && anchorFiles.length >= metadata.totalChangedFiles && carriedScopeFits && concernsHaveEvidencePaths && executionContext.stateAuthenticator?.status === "available" ? ReviewState.make({
+  const stateCandidate = fingerprint !== undefined && executionContext.profileFingerprint !== undefined && metadata.baseSha !== undefined && anchorFiles.length >= metadata.totalChangedFiles && carriedScopeFits && concernsHaveEvidencePaths && executionContext.stateAuthenticator?.status === "available" ? ReviewState.make({
     version: 1,
     repository: metadata.repository,
     pullRequestNumber: metadata.number,
@@ -46020,10 +46020,10 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
     lastReviewMode: executionContext.mode,
     ...adjudications.length === 0 ? {} : { adjudications }
   }) : undefined;
-  const continuity = stateCandidate === undefined || executionContext?.stateAuthenticator === undefined ? {
+  const continuity = stateCandidate === undefined || executionContext.stateAuthenticator === undefined ? {
     state: undefined,
     marker: undefined,
-    notice: executionContext !== undefined && !carriedScopeFits ? `carried unreviewed scope (${unreviewedPaths.length} paths) exceeded the ${MAX_STORED_UNREVIEWED_PATHS}-path continuity bound` : executionContext !== undefined && !concernsHaveEvidencePaths ? "one or more review concerns lacked host-validated affected paths" : executionContext?.stateAuthenticator?.status === "unavailable" ? executionContext.stateAuthenticator.unavailableReason ?? "authenticated continuity state is unavailable" : undefined
+    notice: !carriedScopeFits ? `carried unreviewed scope (${unreviewedPaths.length} paths) exceeded the ${MAX_STORED_UNREVIEWED_PATHS}-path continuity bound` : !concernsHaveEvidencePaths ? "one or more review concerns lacked host-validated affected paths" : executionContext.stateAuthenticator?.status === "unavailable" ? executionContext.stateAuthenticator.unavailableReason ?? "authenticated continuity state is unavailable" : undefined
   } : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(exports_Effect.match({
     onFailure: (error2) => ({
       state: undefined,
@@ -46047,9 +46047,9 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
     unreviewedPaths,
     carriedFindings,
     carriedConcerns,
-    reviewMode: executionContext?.mode,
-    reviewReason: executionContext?.reason,
-    baselineSha: executionContext?.baselineSha,
+    reviewMode: executionContext.mode,
+    reviewReason: executionContext.reason,
+    baselineSha: executionContext.baselineSha,
     reviewFilesVisible: files.length,
     reviewTotalFiles,
     stateMarker: continuity.marker,
@@ -46066,7 +46066,8 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
     plan,
     turns: core2.turns,
     ...usage === undefined ? {} : { usage },
-    ...executionContext === undefined ? {} : { reviewMode: executionContext.mode, reviewReason: executionContext.reason },
+    reviewMode: executionContext.mode,
+    reviewReason: executionContext.reason,
     ...continuity.state === undefined ? {} : { state: continuity.state },
     ...adjudications.length === 0 ? {} : { adjudications }
   };
@@ -46081,7 +46082,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   const metadata = yield* source.metadata;
   const files = yield* source.changedFiles;
   const anchorFiles = yield* source.anchorFiles;
-  const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
+  const executionContext = yield* ReviewExecutionContext;
   const continuity = yield* resolveReviewContinuityContext();
   const mission = buildReviewMission(metadata, files, {
     adjudicated: continuity.adjudications.map(renderAdjudicationContextLine),
@@ -46099,7 +46100,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   const review = yield* exports_Schema.decodeUnknownEffect(CodeReview)(result4.output);
   const assessment = assessFlatReview({
     files,
-    totalFiles: executionContext?.totalFiles ?? metadata.totalChangedFiles,
+    totalFiles: executionContext.totalFiles,
     anchorFiles,
     totalAnchorFiles: metadata.totalChangedFiles,
     events: events2
@@ -46118,11 +46119,11 @@ var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* ()
   const metadata = yield* source.metadata;
   const files = yield* source.changedFiles;
   const anchorFiles = yield* source.anchorFiles;
-  const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
+  const executionContext = yield* ReviewExecutionContext;
   const fullMission = buildReviewMission(metadata, anchorFiles);
   const fingerprint = options3.signature === undefined ? undefined : yield* computeChangesetFingerprint(anchorFiles, options3.signature(fullMission));
   const budget2 = yield* makeUsageBudget(options3.limits ?? fanOutReviewBudgetLimits);
-  const totalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
+  const totalFiles = executionContext.totalFiles;
   const continuity = yield* resolveReviewContinuityContext();
   const pipeline = yield* runFanOutReview(binding, {
     files,
@@ -46130,7 +46131,7 @@ var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* ()
     totalChangedFiles: totalFiles,
     maxFindings: options3.maxFindings,
     budget: toRunBudgetHook(budget2),
-    ...executionContext !== undefined && executionContext.retryPaths.length > 0 ? {
+    ...executionContext.retryPaths.length > 0 ? {
       retry: {
         paths: executionContext.retryPaths,
         stages: executionContext.retryStages
@@ -57451,7 +57452,7 @@ var concludeReviewOutcome = (outcome) => {
 var concludeReviewState = (state, adjudicated) => {
   const reasons = blockingReasons({
     findings: state.unresolvedFindings.filter((finding) => !adjudicated.has(findingIdentity(finding))),
-    concerns: state.unresolvedConcerns.filter((concern) => !adjudicated.has(concern.title))
+    concerns: state.unresolvedConcerns.filter((concern) => !adjudicated.has(concernIdentity(concern)))
   });
   return reasons.length > 0 ? { conclusion: "blocking", reasons } : { conclusion: "success", reasons: [] };
 };
@@ -57594,6 +57595,11 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
         });
       }
     }
+    const executionContext = selection ?? fullReviewSelection({
+      reason: "explicit custom-reviewer full review without continuity selection",
+      files: [],
+      totalFiles: 0
+    });
     yield* exports_Console.log(`Reviewing ${target.repository}#${target.number} (${options3.post === false ? "dry run" : "posting"})...`);
     const runUrl = yield* resolveRunUrl();
     const progress = options3.progressComment === true && options3.post !== false ? exports_Option.some(yield* ReviewProgressReporter) : exports_Option.none();
@@ -57604,9 +57610,9 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       }));
       yield* progress.value.begin({
         headSha: headMetadata?.headSha,
-        reviewMode: selection?.mode,
-        reviewReason: selection?.reason,
-        filesInScope: selection?.files.length,
+        reviewMode: executionContext.mode,
+        reviewReason: executionContext.reason,
+        filesInScope: executionContext.files.length,
         modelLabel: options3.modelLabel,
         runUrl
       });
@@ -57617,7 +57623,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       runUrl,
       modelLabel: options3.modelLabel
     }))) : runReview;
-    const outcome = yield* selection === undefined ? reviewEffect : reviewEffect.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(selection)), exports_Effect.provideService(ReviewExecutionContext, selection));
+    const outcome = yield* reviewEffect.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(executionContext)), exports_Effect.provideService(ReviewExecutionContext, executionContext));
     yield* exports_Console.log(`Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` + `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`);
     if (outcome.published !== undefined) {
       yield* exports_Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);

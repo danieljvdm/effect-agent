@@ -24,7 +24,9 @@ import {
 import { retireStaleReviews } from "./internal/retirement.ts";
 import {
   adjudicationIdentity,
+  concernIdentity,
   findingIdentity,
+  fullReviewSelection,
   ReviewExecutionContext,
   ReviewHeadComparison,
   ReviewStateAuthenticator,
@@ -346,7 +348,10 @@ const resolveRunUrl = Effect.fn("resolveRunUrl")(function* () {
  * state bind it to settled assurance.
  */
 interface HarnessedReviewerBase<E, R> {
-  readonly run: (runOptions?: RunReviewOptions) => Effect.Effect<ReviewRunOutcome, E, R>;
+  /** The action composition root always supplies the selected run context. */
+  readonly run: (
+    runOptions?: RunReviewOptions,
+  ) => Effect.Effect<ReviewRunOutcome, E, R | ReviewExecutionContext>;
 }
 
 export type HarnessedReviewer<E, R, FingerprintE, FingerprintR> = HarnessedReviewerBase<E, R> &
@@ -443,7 +448,9 @@ const concludeReviewState = (state: ReviewState, adjudicated: ReadonlySet<string
     findings: state.unresolvedFindings.filter(
       (finding) => !adjudicated.has(findingIdentity(finding)),
     ),
-    concerns: state.unresolvedConcerns.filter((concern) => !adjudicated.has(concern.title)),
+    concerns: state.unresolvedConcerns.filter(
+      (concern) => !adjudicated.has(concernIdentity(concern)),
+    ),
   });
   return reasons.length > 0
     ? ({ conclusion: "blocking", reasons } as const)
@@ -669,6 +676,16 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
           });
         }
       }
+      const executionContext =
+        selection ??
+        fullReviewSelection({
+          reason: "explicit custom-reviewer full review without continuity selection",
+          // The legacy harness shape owns its review scope and exposes no
+          // snapshot. Standard PrReview factories take the profiled branch
+          // above, where the exact filtered files and total stay visible.
+          files: [],
+          totalFiles: 0,
+        });
       yield* Console.log(
         `Reviewing ${target.repository}#${target.number} (${options.post === false ? "dry run" : "posting"})...`,
       );
@@ -685,9 +702,9 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         const headMetadata = yield* source.metadata.pipe(Effect.orElseSucceed(() => undefined));
         yield* progress.value.begin({
           headSha: headMetadata?.headSha,
-          reviewMode: selection?.mode,
-          reviewReason: selection?.reason,
-          filesInScope: selection?.files.length,
+          reviewMode: executionContext.mode,
+          reviewReason: executionContext.reason,
+          filesInScope: executionContext.files.length,
           modelLabel: options.modelLabel,
           runUrl,
         });
@@ -704,12 +721,10 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             ),
           )
         : runReview;
-      const outcome = yield* selection === undefined
-        ? reviewEffect
-        : reviewEffect.pipe(
-            Effect.provide(selectedPullRequestSourceLayer(selection)),
-            Effect.provideService(ReviewExecutionContext, selection),
-          );
+      const outcome = yield* reviewEffect.pipe(
+        Effect.provide(selectedPullRequestSourceLayer(executionContext)),
+        Effect.provideService(ReviewExecutionContext, executionContext),
+      );
       yield* Console.log(
         `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
           `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`,

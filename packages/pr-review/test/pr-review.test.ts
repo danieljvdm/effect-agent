@@ -15,6 +15,7 @@ import {
   CodeReview,
   estimateReviewEffort,
   executeReview,
+  fullReviewExecutionContextLayer,
   liveProfileEnabled,
   ListChangedFiles,
   makeOpenAiReviewModel,
@@ -1075,6 +1076,7 @@ describe("offline review run", () => {
 
       const program = executeReview(binding, { post: true, applyVerdict: false }).pipe(
         Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
+        Effect.provide(fullReviewExecutionContextLayer("offline flat full review")),
         Effect.provide(
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
@@ -1138,6 +1140,7 @@ describe("offline review run", () => {
       const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
       const outcome = yield* executeReview(binding, { post: false, applyVerdict: false }).pipe(
         Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
+        Effect.provide(fullReviewExecutionContextLayer("offline dry-run full review")),
         Effect.provide(
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
@@ -1191,6 +1194,7 @@ describe("offline review run", () => {
       const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
       const outcome = yield* executeReview(binding, { post: false, applyVerdict: false }).pipe(
         Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
+        Effect.provide(fullReviewExecutionContextLayer("offline probe full review")),
         Effect.provide(
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
@@ -1426,6 +1430,7 @@ describe("offline review run", () => {
                 authorAssociation: "OWNER",
                 authorLogin: "dan",
                 createdAt: DateTime.makeUnsafe("2026-08-15T09:00:00Z"),
+                sourceOrder: 0,
               }),
             ],
           }),
@@ -1436,6 +1441,7 @@ describe("offline review run", () => {
             authorAssociation: "MEMBER",
             authorLogin: "maude",
             createdAt: DateTime.makeUnsafe("2026-08-15T09:05:00Z"),
+            sourceOrder: 0,
           }),
         ]),
       });
@@ -1451,6 +1457,7 @@ describe("offline review run", () => {
         applyVerdict: true,
         maxFindings: 1,
       }).pipe(
+        Effect.provide(fullReviewExecutionContextLayer("offline adjudication full review")),
         Effect.provide(
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
@@ -1608,6 +1615,7 @@ describe("offline review run", () => {
                 authorAssociation: "OWNER",
                 authorLogin: "dan",
                 createdAt: DateTime.makeUnsafe("2026-08-15T10:00:00Z"),
+                sourceOrder: 0,
               }),
             ],
           }),
@@ -1618,6 +1626,7 @@ describe("offline review run", () => {
             authorAssociation: "MEMBER",
             authorLogin: "dan",
             createdAt: DateTime.makeUnsafe("2026-08-15T10:01:00Z"),
+            sourceOrder: 0,
           }),
         ]),
       });
@@ -1719,6 +1728,7 @@ describe.skipIf(!liveEnabled)("pr-review live profile (opt-in)", () => {
           applyVerdict: false,
         }).pipe(
           Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
+          Effect.provide(fullReviewExecutionContextLayer("live explicit full review")),
           Effect.provide(
             Layer.mergeAll(
               ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),

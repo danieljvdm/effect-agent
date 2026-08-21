@@ -3,6 +3,7 @@ import { Effect, Layer, Option, Redacted } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import {
+  deriveAdjudications,
   GitHubReviewTarget,
   gitHubPullRequestSourceLayer,
   gitHubPriorReviewsLayer,
@@ -315,6 +316,35 @@ describe("GitHub review adjudication comments", () => {
 
       expect(failure?.operation).toBe("listReviewCommentsForAdjudication");
       expect(failure?.reason).toContain("exceeds the bounded 100-command");
+    }),
+  );
+
+  it.effect("preserves global creation order before grouping duplicate finding threads", () =>
+    Effect.gen(function* () {
+      const duplicateRoot = { ...root, id: 2 };
+      const tiedAt = "2026-08-01T00:10:00Z";
+      const globallyEarlier = {
+        ...reply(3, "OWNER", "/adjudicate accepted-risk: globally earlier"),
+        in_reply_to_id: duplicateRoot.id,
+        created_at: tiedAt,
+      };
+      const globallyLater = {
+        ...reply(4, "OWNER", "/adjudicate refuted: globally later"),
+        in_reply_to_id: root.id,
+        created_at: tiedAt,
+      };
+      const threads = yield* Effect.gen(function* () {
+        const host = yield* ReviewAdjudicationHost;
+        return yield* host.listFindingThreads;
+      }).pipe(Effect.provide(layerFor([root, duplicateRoot, globallyEarlier, globallyLater])));
+
+      // Thread grouping visits root 1 first even though its reply was globally
+      // later. The wire listing order remains available as the tie-breaker.
+      expect(threads.map((thread) => thread.replies[0]?.sourceOrder)).toEqual([3, 2]);
+      const derived = deriveAdjudications({ threads, issueComments: [] });
+      expect(derived.adjudications).toHaveLength(1);
+      expect(derived.adjudications[0]?.disposition).toBe("refuted");
+      expect(derived.adjudications[0]?.reason).toBe("globally later");
     }),
   );
 });

@@ -6,6 +6,7 @@ import {
   AdjudicationComment,
   adjudicationIdentity,
   collectReviewAdjudications,
+  concernIdentity,
   deriveAdjudications,
   mergeAdjudications,
   noReviewAdjudicationHost,
@@ -33,6 +34,7 @@ const comment = (
     readonly authorAssociation: string;
     readonly authorLogin: string;
     readonly createdAt: DateTime.Utc | null;
+    readonly sourceOrder: number;
   }> = {},
 ) =>
   AdjudicationComment.make({
@@ -40,6 +42,7 @@ const comment = (
     authorAssociation: overrides.authorAssociation ?? "MEMBER",
     authorLogin: overrides.authorLogin ?? "dan",
     createdAt: overrides.createdAt === undefined ? at("2026-08-01T10:00:00Z") : overrides.createdAt,
+    sourceOrder: overrides.sourceOrder ?? 0,
   });
 
 const findingThread = (
@@ -181,6 +184,32 @@ describe("adjudication derivation", () => {
     expect(reordered.adjudications[0]?.disposition).toBe("refuted");
   });
 
+  it("uses source listing order to break timestamp ties across grouped threads", () => {
+    const tiedAt = at("2026-08-01T10:00:00Z");
+    const derived = deriveAdjudications({
+      // Thread traversal sees the later command first. Only the preserved
+      // global listing order can establish the correct winner after grouping.
+      threads: [
+        findingThread([
+          comment("/adjudicate refuted: globally later", {
+            createdAt: tiedAt,
+            sourceOrder: 8,
+          }),
+        ]),
+        findingThread([
+          comment("/adjudicate accepted-risk: globally earlier", {
+            createdAt: tiedAt,
+            sourceOrder: 3,
+          }),
+        ]),
+      ],
+      issueComments: [],
+    });
+    expect(derived.adjudications).toHaveLength(1);
+    expect(derived.adjudications[0]?.disposition).toBe("refuted");
+    expect(derived.adjudications[0]?.reason).toBe("globally later");
+  });
+
   it("caps stored adjudications at the schema bound dropping the oldest", () => {
     const derived = deriveAdjudications({
       threads: [],
@@ -228,7 +257,9 @@ describe("adjudication collection", () => {
       const refreshed = byIdentity.get(adjudicationIdentity(priorAdjudication));
       expect(refreshed?.disposition).toBe("refuted");
       expect(refreshed?.actor).toBe("maude");
-      expect(byIdentity.get("Open question")?.disposition).toBe("obsolete");
+      expect(byIdentity.get(concernIdentity({ title: "Open question" }))?.disposition).toBe(
+        "obsolete",
+      );
     }),
   );
 

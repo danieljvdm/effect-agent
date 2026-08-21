@@ -2,7 +2,10 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Option, Redacted, Schema } from "effect";
 
 import {
+  adjudicationIdentity,
   ChangedFile,
+  concernIdentity,
+  findingIdentity,
   PullRequestMetadata,
   planReviewUnits,
   ReviewHeadComparison,
@@ -99,6 +102,30 @@ const select = (overrides: Partial<Parameters<typeof selectReviewRange>[0]> = {}
   });
 
 describe("review state", () => {
+  it("keeps anchored findings and unanchored concerns in disjoint identity namespaces", () => {
+    const finding = {
+      path: "src/a.ts",
+      startLine: 1,
+      endLine: 1,
+      title: "Blocker",
+    };
+    const delimiterMimic = `${finding.path}\u0000${finding.startLine}\u0000${finding.endLine}\u0000${finding.title}`;
+    const unanchored = StoredAdjudication.make({
+      title: delimiterMimic,
+      disposition: "refuted",
+      actor: "dan",
+    });
+    const anchored = StoredAdjudication.make({
+      ...finding,
+      disposition: "refuted",
+      actor: "dan",
+    });
+
+    expect(adjudicationIdentity(anchored)).toBe(findingIdentity(finding));
+    expect(adjudicationIdentity(unanchored)).toBe(concernIdentity(unanchored));
+    expect(adjudicationIdentity(unanchored)).not.toBe(findingIdentity(finding));
+  });
+
   it("rejects adjudications with partial locations at the persisted-state boundary", () => {
     const common = {
       title: "Still requires attention",

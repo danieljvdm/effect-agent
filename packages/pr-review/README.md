@@ -15,6 +15,7 @@ truncated run posts nothing.
 import { Effect, Layer } from "effect";
 import {
   PrReview,
+  fullReviewExecutionContextLayer,
   gitHubReviewLayers,
   resolveReviewTarget,
   makeOpenAiReviewModel,
@@ -27,13 +28,19 @@ const program = Effect.gen(function* () {
   const target = yield* resolveReviewTarget({ repository: "acme/api", number: 123 });
   return yield* reviewer
     .run({ post: true })
-    .pipe(Effect.provide(Layer.merge(gitHubReviewLayers(target), openAiClientLayer)));
+    .pipe(
+      Effect.provide(fullReviewExecutionContextLayer("explicit direct full review")),
+      Effect.provide(Layer.merge(gitHubReviewLayers(target), openAiClientLayer)),
+    );
 });
 ```
 
 The run's requirement channel keeps every real dependency visible: the
-`PullRequestSource` and `ReviewPublisher` ports, the provider client, and the
-handler Layer of any extra tool you add. Anthropic is equally supported
+`PullRequestSource`, `ReviewPublisher`, `ReviewAdjudicationHost`, and
+`ReviewExecutionContext` ports, the provider client, and the handler Layer of
+any extra tool you add. Direct callers provide an explicit full-review context
+as above; the packaged action supplies its selected incremental or full range.
+Anthropic is equally supported
 (`makeAnthropicReviewModel`, `anthropicClientLayer`), and the factory accepts
 any Effect AI Model.
 

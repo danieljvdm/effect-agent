@@ -678,12 +678,15 @@ const GitHubIssueCommentWire = Schema.Struct({
 });
 const GitHubIssueCommentsPageWire = Schema.Array(GitHubIssueCommentWire);
 
-const toAdjudicationComment = (wire: {
-  readonly body?: string | null | undefined;
-  readonly author_association?: string | null | undefined;
-  readonly user: { readonly login: string } | null;
-  readonly created_at?: string | null | undefined;
-}): AdjudicationComment | undefined => {
+const toAdjudicationComment = (
+  wire: {
+    readonly body?: string | null | undefined;
+    readonly author_association?: string | null | undefined;
+    readonly user: { readonly login: string } | null;
+    readonly created_at?: string | null | undefined;
+  },
+  sourceOrder: number,
+): AdjudicationComment | undefined => {
   // A comment without an attributable author cannot authorize anything —
   // skip it fail-closed rather than inventing an actor.
   const login = wire.user?.login;
@@ -693,6 +696,7 @@ const toAdjudicationComment = (wire: {
     authorAssociation: (wire.author_association ?? "NONE").slice(0, 40),
     authorLogin: login.slice(0, 100),
     createdAt: parseGitHubSubmittedAt(wire.created_at ?? null),
+    sourceOrder,
   });
 };
 
@@ -789,11 +793,11 @@ export const gitHubReviewAdjudicationHostLayer: Layer.Layer<
         if (wire.user?.login.toLowerCase() !== reviewAuthorLogin) continue;
         threads.set(wire.id, { root: wire, replies: [] });
       }
-      for (const wire of wires) {
+      for (const [sourceOrder, wire] of wires.entries()) {
         if (wire.in_reply_to_id === undefined || wire.in_reply_to_id === null) continue;
         const thread = threads.get(wire.in_reply_to_id);
         if (thread === undefined) continue;
-        const reply = toAdjudicationComment(wire);
+        const reply = toAdjudicationComment(wire, sourceOrder);
         if (reply === undefined) continue;
         const command = parseThreadAdjudication(reply.body);
         if (command === undefined) continue;
@@ -832,8 +836,8 @@ export const gitHubReviewAdjudicationHostLayer: Layer.Layer<
         url: `${target.apiUrl}/repos/${target.repository}/issues/${target.number}/comments`,
         decode: decodeAdjudication(GitHubIssueCommentsPageWire, "listIssueCommentsForAdjudication"),
       });
-      return wires.flatMap((wire) => {
-        const comment = toAdjudicationComment(wire);
+      return wires.flatMap((wire, sourceOrder) => {
+        const comment = toAdjudicationComment(wire, sourceOrder);
         return comment === undefined ? [] : [comment];
       });
     });

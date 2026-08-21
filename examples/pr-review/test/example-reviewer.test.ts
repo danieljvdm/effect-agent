@@ -2,6 +2,7 @@ import type { ReviewPublicationPlan } from "@effect-agent/pr-review";
 import {
   ChangedFile,
   CodeReview,
+  fullReviewExecutionContextLayer,
   noReviewAdjudicationHost,
   PullRequestMetadata,
   ReviewAdjudicationHost,
@@ -132,6 +133,7 @@ describe("example reviewer", () => {
         .run({ post: true })
         .pipe(
           Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
+          Effect.provide(fullReviewExecutionContextLayer("offline example full review")),
           Effect.provide(
             Layer.mergeAll(
               fixturePullRequestSourceLayer(fixture),

@@ -93,9 +93,9 @@ export class StoredAdjudication extends Schema.Class<StoredAdjudication>(
 
 /**
  * The one finding-identity composition shared by retirement, adjudication,
- * and settlement: path, startLine, endLine, and title joined with NUL. An
- * adjudication suppresses exactly this identity — a materially different
- * finding (different title or anchor) at the same location is untouched.
+ * and settlement. A tagged JSON tuple keeps anchored findings in a namespace
+ * disjoint from title-only concerns and remains unambiguous even when
+ * untrusted path or title text contains delimiter characters.
  */
 export const findingIdentity = (finding: {
   readonly path: string;
@@ -103,11 +103,15 @@ export const findingIdentity = (finding: {
   readonly endLine: number;
   readonly title: string;
 }): string =>
-  `${finding.path}\u0000${finding.startLine}\u0000${finding.endLine}\u0000${finding.title}`;
+  JSON.stringify(["finding", finding.path, finding.startLine, finding.endLine, finding.title]);
+
+/** The disjoint title-only identity namespace for unanchored concerns. */
+export const concernIdentity = (concern: { readonly title: string }): string =>
+  JSON.stringify(["concern", concern.title]);
 
 /**
  * An adjudication's identity: the shared finding identity when anchored, the
- * title alone for an unanchored concern.
+ * disjoint concern identity when unanchored.
  */
 export const adjudicationIdentity = (adjudication: StoredAdjudication): string =>
   adjudication.path !== undefined &&
@@ -119,7 +123,7 @@ export const adjudicationIdentity = (adjudication: StoredAdjudication): string =
         endLine: adjudication.endLine,
         title: adjudication.title,
       })
-    : adjudication.title;
+    : concernIdentity(adjudication);
 
 /** The carried-scope bound; a run that cannot fit its leftovers publishes no state. */
 export const MAX_STORED_UNREVIEWED_PATHS = 100;
@@ -407,16 +411,17 @@ export interface ReviewSelection {
   readonly totalFiles: number;
   readonly baselineSha: string | undefined;
   readonly priorState: ReviewState | undefined;
-  readonly profileFingerprint: string;
+  /** Absent only for an explicit full review with no continuity profile. */
+  readonly profileFingerprint: string | undefined;
   /** Action-owned authentication capability, constructed at the composition root. */
   readonly stateAuthenticator?: ReviewStateAuthenticator["Service"] | undefined;
 }
 
-const fullSelection = (input: {
+export const fullReviewSelection = (input: {
   readonly reason: string;
   readonly files: ReadonlyArray<ChangedFile>;
   readonly totalFiles: number;
-  readonly profileFingerprint: string;
+  readonly profileFingerprint?: string | undefined;
 }): ReviewSelection => ({
   mode: "full",
   reason: input.reason,
@@ -591,7 +596,7 @@ export const selectReviewRange = (input: {
   readonly lookupFailure?: string | undefined;
 }): ReviewSelection => {
   const full = (reason: string) =>
-    fullSelection({
+    fullReviewSelection({
       reason,
       files: input.fullFiles,
       totalFiles: input.current.totalChangedFiles,
@@ -659,6 +664,20 @@ export class ReviewExecutionContext extends Context.Service<
   ReviewExecutionContext,
   ReviewSelection
 >()("@effect-agent/pr-review/ReviewExecutionContext") {}
+
+/**
+ * Explicit direct-run adapter for callers that intentionally review the full
+ * source without authenticated incremental continuity.
+ */
+export const fullReviewExecutionContextLayer = (reason: string) =>
+  Layer.effect(
+    ReviewExecutionContext,
+    Effect.gen(function* () {
+      const source = yield* PullRequestSource;
+      const [metadata, files] = yield* Effect.all([source.metadata, source.changedFiles]);
+      return fullReviewSelection({ reason, files, totalFiles: metadata.totalChangedFiles });
+    }),
+  );
 
 /**
  * Decorate the full source with the selected review range. Full anchor files

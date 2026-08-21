@@ -34,6 +34,8 @@ export class AdjudicationComment extends Schema.Class<AdjudicationComment>(
   authorLogin: Schema.NonEmptyString.check(Schema.isMaxLength(100)),
   /** Creation time; a comment without one loses every later-wins tie. */
   createdAt: Schema.NullOr(Schema.DateTimeUtc),
+  /** Stable zero-based order in the source listing, before thread grouping. */
+  sourceOrder: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 }) {}
 
 /** One of the action's own inline finding threads, replies in creation order. */
@@ -201,7 +203,7 @@ export const threadFindingTarget = (
 interface AdjudicationCandidate {
   readonly adjudication: StoredAdjudication;
   readonly epochMillis: number;
-  readonly sequence: number;
+  readonly sourceOrder: number;
 }
 
 export interface DerivedAdjudications {
@@ -224,7 +226,6 @@ export const deriveAdjudications = (input: {
 }): DerivedAdjudications => {
   const candidates: Array<AdjudicationCandidate> = [];
   const ignored: Array<string> = [];
-  let sequence = 0;
   const admit = (
     comment: AdjudicationComment,
     command: ParsedAdjudicationCommand,
@@ -246,7 +247,7 @@ export const deriveAdjudications = (input: {
         actor: comment.authorLogin,
       }),
       epochMillis: comment.createdAt === null ? -1 : DateTime.toEpochMillis(comment.createdAt),
-      sequence,
+      sourceOrder: comment.sourceOrder,
     });
   };
   const authorized = (comment: AdjudicationComment, surface: string): boolean => {
@@ -260,7 +261,6 @@ export const deriveAdjudications = (input: {
   for (const thread of input.threads) {
     const target = threadFindingTarget(thread);
     for (const reply of thread.replies) {
-      sequence += 1;
       const command = parseThreadAdjudication(reply.body);
       if (command === undefined) continue;
       const surface = `inline thread ${thread.path}`;
@@ -277,7 +277,6 @@ export const deriveAdjudications = (input: {
     }
   }
   for (const comment of input.issueComments) {
-    sequence += 1;
     const command = parseIssueAdjudication(comment.body);
     if (command === undefined) continue;
     const surface = "pull-request conversation";
@@ -295,7 +294,7 @@ export const deriveAdjudications = (input: {
 
   const byIdentity = new Map<string, AdjudicationCandidate>();
   const ordered = [...candidates].sort(
-    (left, right) => left.epochMillis - right.epochMillis || left.sequence - right.sequence,
+    (left, right) => left.epochMillis - right.epochMillis || left.sourceOrder - right.sourceOrder,
   );
   for (const candidate of ordered) {
     const identity = adjudicationIdentity(candidate.adjudication);
