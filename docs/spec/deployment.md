@@ -388,8 +388,8 @@ credential-free HTTP(S) link Schema; malformed entries, unsupported schemes, emb
 and over-limit collections fail typed instead of being discarded.
 HTTP 429 becomes a typed rate/quota failure; `Retry-After` is included only when conversion to
 milliseconds remains a safe integer. Foreign browser RPC and response-stream failures retain
-their original cause inside the typed protocol error without exposing that cause to model-visible
-failure envelopes.
+their original cause inside the typed protocol error; model-visible messages and cleanup logs use
+fixed operation descriptions and never expose foreign diagnostic text.
 
 The `json` Quick Action uses Cloudflare's separately billed Workers AI provider. It fails closed
 unless the host selects `browserQuickActionWorkersAiCaptureLayer` and supplies its visible

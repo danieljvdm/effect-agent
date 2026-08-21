@@ -407,7 +407,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
   });
 
   it("rejects kitesurf typed without calling the binding and types binding rejections", async () => {
-    const foreignCause = new Error("binding exploded");
+    const foreignCause = new Error("binding exploded; token=host-only-secret");
     const { binding, calls } = makeBinding([foreignCause]);
     const unsupported = await captureError(
       binding,
@@ -419,13 +419,14 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     const failure = await captureError(binding, request(CapturePageMarkdown.make({})));
     expect(failure).toMatchObject({
       _tag: "PageCaptureProtocolError",
-      message: expect.stringContaining("binding exploded"),
+      message: "The browser binding rejected the Quick Action",
     });
+    expect(failure.message).not.toContain("host-only-secret");
     expect(failure._tag === "PageCaptureProtocolError" && failure.cause).toBe(foreignCause);
   });
 
   it("preserves foreign stream-read failures inside the typed protocol error", async () => {
-    const foreignCause = new Error("response stream exploded");
+    const foreignCause = new Error("response stream exploded; token=host-only-secret");
     const response = new Response(
       new ReadableStream<Uint8Array>({
         pull() {
@@ -438,8 +439,9 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     const failure = await captureError(binding, request(CapturePageMarkdown.make({})));
     expect(failure).toMatchObject({
       _tag: "PageCaptureProtocolError",
-      message: expect.stringContaining("response stream exploded"),
+      message: "Reading the Quick Action response failed",
     });
+    expect(failure.message).not.toContain("host-only-secret");
     expect(failure._tag === "PageCaptureProtocolError" && failure.cause).toBe(foreignCause);
   });
 });

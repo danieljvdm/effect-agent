@@ -21,8 +21,6 @@ import {
 } from "@effect-agent/sandbox";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 
-import { safeCauseMessage } from "./boundary.ts";
-
 /**
  * The Cloudflare Browser Run Quick Action `PageCapture` adapter (capability
  * spec §9.2). Each capture is one stateless `quickAction()` RPC on the
@@ -207,21 +205,13 @@ const releaseResponseReader = (
 ): Effect.Effect<void> =>
   Effect.tryPromise({
     try: () => reader.cancel(),
-    catch: (cause) =>
-      protocolError(
-        `Canceling the Quick Action response failed: ${safeCauseMessage(cause, "no diagnostic")}`,
-        cause,
-      ),
+    catch: (cause) => protocolError("Canceling the Quick Action response failed", cause),
   }).pipe(
     Effect.catch((error) => Effect.logWarning(error.message)),
     Effect.ensuring(
       Effect.try({
         try: () => reader.releaseLock(),
-        catch: (cause) =>
-          protocolError(
-            `Releasing the Quick Action response failed: ${safeCauseMessage(cause, "no diagnostic")}`,
-            cause,
-          ),
+        catch: (cause) => protocolError("Releasing the Quick Action response failed", cause),
       }).pipe(Effect.catch((error) => Effect.logWarning(error.message))),
     ),
   );
@@ -236,11 +226,7 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
   const reader = yield* Effect.acquireRelease(
     Effect.try({
       try: () => body.getReader(),
-      catch: (cause) =>
-        protocolError(
-          `Opening the Quick Action response failed: ${safeCauseMessage(cause, "no diagnostic")}`,
-          cause,
-        ),
+      catch: (cause) => protocolError("Opening the Quick Action response failed", cause),
     }),
     releaseResponseReader,
   );
@@ -251,11 +237,7 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
   while (true) {
     const chunk = yield* Effect.tryPromise({
       try: () => reader.read(),
-      catch: (cause) =>
-        protocolError(
-          `Reading the Quick Action response failed: ${safeCauseMessage(cause, "no diagnostic")}`,
-          cause,
-        ),
+      catch: (cause) => protocolError("Reading the Quick Action response failed", cause),
     });
     if (chunk.done) break;
 
@@ -270,11 +252,7 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
 
     bodyText += yield* Effect.try({
       try: () => decoder.decode(chunk.value, { stream: true }),
-      catch: (cause) =>
-        protocolError(
-          `Decoding the Quick Action response failed: ${safeCauseMessage(cause, "no diagnostic")}`,
-          cause,
-        ),
+      catch: (cause) => protocolError("Decoding the Quick Action response failed", cause),
     });
   }
 
@@ -282,11 +260,7 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
     bodyText +
     (yield* Effect.try({
       try: () => decoder.decode(),
-      catch: (cause) =>
-        protocolError(
-          `Decoding the Quick Action response failed: ${safeCauseMessage(cause, "no diagnostic")}`,
-          cause,
-        ),
+      catch: (cause) => protocolError("Decoding the Quick Action response failed", cause),
     }))
   );
 }, Effect.scoped);
@@ -420,11 +394,7 @@ const makeCapture = (
 
     const response = yield* Effect.tryPromise({
       try: () => browser.quickAction(quickActionName(request.action), quickActionOptions(request)),
-      catch: (cause) =>
-        protocolError(
-          `The browser binding rejected the Quick Action: ${safeCauseMessage(cause, "no diagnostic")}`,
-          cause,
-        ),
+      catch: (cause) => protocolError("The browser binding rejected the Quick Action", cause),
     });
     const bodyText = yield* readBoundedResponse(response, request);
     if (response.status === 429) {
