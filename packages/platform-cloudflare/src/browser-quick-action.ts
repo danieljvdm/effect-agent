@@ -194,11 +194,16 @@ const protocolError = (message: string, cause?: unknown): PageCaptureProtocolErr
     ...(cause === undefined ? {} : { cause }),
   });
 
-const navigationError = (message: string): PageCaptureNavigationError =>
+const navigationError = (message: string, cause?: unknown): PageCaptureNavigationError =>
   PageCaptureNavigationError.make({
     implementation: browserQuickActionImplementation,
     message: boundedDiagnostic(message),
+    ...(cause === undefined ? {} : { cause }),
   });
+
+/** Preserve bounded remote diagnostics for the host without exposing their text to a model. */
+const privateResponseCause = (bodyText: string): Error | undefined =>
+  bodyText.length === 0 ? undefined : new Error(boundedDiagnostic(bodyText));
 
 const releaseResponseReader = (
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -265,15 +270,6 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
   );
 }, Effect.scoped);
 
-const renderErrors = (envelope: typeof QuickActionEnvelope.Type): string => {
-  try {
-    const encoded = JSON.stringify(envelope.errors ?? envelope);
-    return encoded === undefined ? "The Quick Action reported failure" : encoded;
-  } catch {
-    return "The Quick Action reported failure";
-  }
-};
-
 /**
  * Retry-After arrives in whole seconds; a non-integer form (an HTTP date) is
  * dropped rather than guessed at.
@@ -310,10 +306,16 @@ const parseOutput = (
   const expectsEnvelope = isJsonResponse(response);
   const envelope = expectsEnvelope ? decodeEnvelope(bodyText) : Option.none();
   if (expectsEnvelope && Option.isNone(envelope)) {
-    return protocolError("The JSON Quick Action response did not carry a valid response envelope");
+    return protocolError(
+      "The JSON Quick Action response did not carry a valid response envelope",
+      privateResponseCause(bodyText),
+    );
   }
   if (Option.isSome(envelope) && !envelope.value.success) {
-    return navigationError(renderErrors(envelope.value));
+    return navigationError(
+      "The Quick Action reported a navigation failure",
+      privateResponseCause(bodyText),
+    );
   }
   switch (action._tag) {
     case "CapturePageContent":
@@ -399,19 +401,26 @@ const makeCapture = (
     const bodyText = yield* readBoundedResponse(response, request);
     if (response.status === 429) {
       const retryAfter = retryAfterMillis(response);
+      const reason = isQuotaMessage(bodyText) ? "quota" : "rate";
+      const cause = privateResponseCause(bodyText);
       return yield* PageCaptureRateLimitedError.make({
         implementation: browserQuickActionImplementation,
-        reason: isQuotaMessage(bodyText) ? "quota" : "rate",
+        reason,
         ...(retryAfter === undefined ? {} : { retryAfterMillis: retryAfter }),
-        message: boundedDiagnostic(bodyText),
+        ...(cause === undefined ? {} : { cause }),
+        message:
+          reason === "quota"
+            ? "The Quick Action exceeded its browser quota"
+            : "The Quick Action was rate limited",
       });
     }
     if (!response.ok) {
-      const message = `The Quick Action answered ${response.status}: ${bodyText}`;
+      const message = `The Quick Action answered HTTP ${response.status}`;
+      const cause = privateResponseCause(bodyText);
       if (response.status >= 500) {
-        return yield* protocolError(message);
+        return yield* protocolError(message, cause);
       }
-      return yield* navigationError(message);
+      return yield* navigationError(message, cause);
     }
     const output = parseOutput(request.action, bodyText, response);
     if (

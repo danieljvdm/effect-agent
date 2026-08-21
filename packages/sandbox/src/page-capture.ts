@@ -533,6 +533,7 @@ export class PageCaptureRateLimitedError extends Schema.TaggedError<PageCaptureR
     reason: Schema.Literals(["rate", "quota"]),
     retryAfterMillis: Schema.optionalKey(Schema.Natural),
     message: BoundedMessage,
+    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
 
@@ -542,6 +543,7 @@ export class PageCaptureNavigationError extends Schema.TaggedError<PageCaptureNa
   {
     implementation: SandboxImplementation,
     message: BoundedMessage,
+    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
 

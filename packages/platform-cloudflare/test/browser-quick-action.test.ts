@@ -282,18 +282,35 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
   });
 
   it("maps 429 responses to typed rate/quota failures with the backoff hint", async () => {
+    const privateDiagnostic = "token=host-only-secret";
     const { binding } = makeBinding([
-      new Response("Too many requests", { status: 429, headers: { "Retry-After": "12" } }),
-      new Response("Browser time limit exceeded for today", { status: 429 }),
+      new Response(`Too many requests; ${privateDiagnostic}`, {
+        status: 429,
+        headers: { "Retry-After": "12" },
+      }),
+      new Response(`Browser time limit exceeded for today; ${privateDiagnostic}`, { status: 429 }),
     ]);
     const rate = await captureError(binding, request(CapturePageMarkdown.make({})));
     expect(rate).toMatchObject({
       _tag: "PageCaptureRateLimitedError",
       reason: "rate",
       retryAfterMillis: 12_000,
+      message: "The Quick Action was rate limited",
+    });
+    expect(rate.message).not.toContain(privateDiagnostic);
+    expect(rate._tag === "PageCaptureRateLimitedError" && rate.cause).toMatchObject({
+      message: expect.stringContaining(privateDiagnostic),
     });
     const quota = await captureError(binding, request(CapturePageMarkdown.make({})));
-    expect(quota).toMatchObject({ _tag: "PageCaptureRateLimitedError", reason: "quota" });
+    expect(quota).toMatchObject({
+      _tag: "PageCaptureRateLimitedError",
+      reason: "quota",
+      message: "The Quick Action exceeded its browser quota",
+    });
+    expect(quota.message).not.toContain(privateDiagnostic);
+    expect(quota._tag === "PageCaptureRateLimitedError" && quota.cause).toMatchObject({
+      message: expect.stringContaining(privateDiagnostic),
+    });
   });
 
   it("drops overflowing Retry-After values without defecting the typed rate-limit failure", async () => {
@@ -310,21 +327,44 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
   });
 
   it("keeps remote failures typed: 4xx, 5xx, and reported envelope errors", async () => {
+    const privateDiagnostic = "token=host-only-secret";
     const { binding } = makeBinding([
-      new Response("bad request", { status: 400 }),
-      new Response("internal", { status: 500 }),
-      jsonResponse({ success: false, errors: [{ code: 1, message: "navigation failed" }] }),
+      new Response(`bad request; ${privateDiagnostic}`, { status: 400 }),
+      new Response(`internal; ${privateDiagnostic}`, { status: 500 }),
+      jsonResponse({
+        success: false,
+        errors: [{ code: 1, message: `navigation failed; ${privateDiagnostic}` }],
+      }),
       jsonResponse({ result: "missing success discriminator" }),
     ]);
-    expect(await captureError(binding, request(CapturePageMarkdown.make({})))).toMatchObject({
+    const navigation = await captureError(binding, request(CapturePageMarkdown.make({})));
+    expect(navigation).toMatchObject({
       _tag: "PageCaptureNavigationError",
+      message: "The Quick Action answered HTTP 400",
     });
-    expect(await captureError(binding, request(CapturePageMarkdown.make({})))).toMatchObject({
+    expect(navigation.message).not.toContain(privateDiagnostic);
+    expect(navigation._tag === "PageCaptureNavigationError" && navigation.cause).toMatchObject({
+      message: expect.stringContaining(privateDiagnostic),
+    });
+
+    const protocol = await captureError(binding, request(CapturePageMarkdown.make({})));
+    expect(protocol).toMatchObject({
       _tag: "PageCaptureProtocolError",
+      message: "The Quick Action answered HTTP 500",
     });
-    expect(await captureError(binding, request(CapturePageMarkdown.make({})))).toMatchObject({
+    expect(protocol.message).not.toContain(privateDiagnostic);
+    expect(protocol._tag === "PageCaptureProtocolError" && protocol.cause).toMatchObject({
+      message: expect.stringContaining(privateDiagnostic),
+    });
+
+    const envelope = await captureError(binding, request(CapturePageMarkdown.make({})));
+    expect(envelope).toMatchObject({
       _tag: "PageCaptureNavigationError",
-      message: expect.stringContaining("navigation failed"),
+      message: "The Quick Action reported a navigation failure",
+    });
+    expect(envelope.message).not.toContain(privateDiagnostic);
+    expect(envelope._tag === "PageCaptureNavigationError" && envelope.cause).toMatchObject({
+      message: expect.stringContaining(privateDiagnostic),
     });
     expect(await captureError(binding, request(CapturePageMarkdown.make({})))).toMatchObject({
       _tag: "PageCaptureProtocolError",

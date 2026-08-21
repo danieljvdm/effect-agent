@@ -186,7 +186,8 @@ authority is an explicit host-owned service. Extraction additionally requires an
 host authorization and accounting service for any platform-selected model provider, and results
 are decoded through the caller's service-aware Effect Schema before use. Foreign provider failure
 causes remain host-only diagnostics; model-visible failures and cleanup logs carry only bounded,
-fixed operation descriptions and never interpolate foreign exception text.
+fixed operation or HTTP-status descriptions and never interpolate foreign exception text,
+rate-limit bodies, provider envelopes, or other remote error bodies.
 A page that instructs the model is data, never authority.
 
 The read-only SQL reference Tool's guarantee is database authority, not SQL text inspection: a

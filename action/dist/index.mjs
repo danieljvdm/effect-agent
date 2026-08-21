@@ -38565,13 +38565,15 @@ class PageCaptureRateLimitedError extends exports_Schema.TaggedError()("PageCapt
   implementation: SandboxImplementation,
   reason: exports_Schema.Literals(["rate", "quota"]),
   retryAfterMillis: exports_Schema.optionalKey(exports_Schema.Natural),
-  message: BoundedMessage2
+  message: BoundedMessage2,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
 
 class PageCaptureNavigationError extends exports_Schema.TaggedError()("PageCaptureNavigationError", {
   implementation: SandboxImplementation,
-  message: BoundedMessage2
+  message: BoundedMessage2,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
 

@@ -351,9 +351,10 @@ Schema boundary.
 Adapters reuse the `SandboxImplementation` posture idiom (CAP-010), reject any feature or engine
 they cannot honor, and surface platform rate and quota refusals as one typed failure carrying
 the platform's own backoff hint. Foreign browser or transport failures retain their original live
-cause inside the concrete typed protocol error; model-visible failure envelopes and logs receive
-only a bounded, fixed operation description, never foreign exception text. Capture resource use
-records browser time and, when an adapter
+cause; remote error bodies and provider envelopes retain only a bounded host-only cause. Public
+failure messages and cleanup logs use fixed operation or status descriptions and never include
+foreign exception text, response bodies, or provider diagnostics. Capture resource use records
+browser time and, when an adapter
 performs separately authorized model inference, its provider and model-call count. Everything a
 capture returns is untrusted, attacker-influenced content
 ([security §9](./security-operations.md)).
