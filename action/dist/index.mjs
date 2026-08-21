@@ -45312,7 +45312,7 @@ var gitHubReviewAdjudicationHostLayer = exports_Layer.effect(ReviewAdjudicationH
     const values3 = [];
     const perPage = 100;
     for (let page = 1;page <= MAX_ADJUDICATION_PAGES; page += 1) {
-      const response = yield* exports_HttpClient.execute(withCommonHeaders(exports_HttpClientRequest.get(input.url).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.setUrlParams({
+      const response = yield* client.execute(withCommonHeaders(exports_HttpClientRequest.get(input.url).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.setUrlParams({
         per_page: String(perPage),
         page: String(page),
         sort: "created",
@@ -45327,7 +45327,7 @@ var gitHubReviewAdjudicationHostLayer = exports_Layer.effect(ReviewAdjudicationH
       operation: input.operation,
       reason: `history exceeds the bounded ${MAX_ADJUDICATION_PAGES * 100}-item lookup`
     });
-  }).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
+  });
   const listFindingThreads = exports_Effect.gen(function* () {
     const wires = yield* listPaged({
       operation: "listReviewCommentsForAdjudication",

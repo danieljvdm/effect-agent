@@ -746,23 +746,25 @@ export const gitHubReviewAdjudicationHostLayer: Layer.Layer<
         const values: Array<A> = [];
         const perPage = 100;
         for (let page = 1; page <= MAX_ADJUDICATION_PAGES; page += 1) {
-          const response = yield* HttpClient.execute(
-            withCommonHeaders(
-              HttpClientRequest.get(input.url).pipe(
-                HttpClientRequest.acceptJson,
-                HttpClientRequest.setUrlParams({
-                  per_page: String(perPage),
-                  page: String(page),
-                  sort: "created",
-                  direction: "asc",
-                }),
+          const response = yield* client
+            .execute(
+              withCommonHeaders(
+                HttpClientRequest.get(input.url).pipe(
+                  HttpClientRequest.acceptJson,
+                  HttpClientRequest.setUrlParams({
+                    per_page: String(perPage),
+                    page: String(page),
+                    sort: "created",
+                    direction: "asc",
+                  }),
+                ),
+                target.token,
               ),
-              target.token,
-            ),
-          ).pipe(
-            Effect.flatMap(HttpClientResponse.filterStatusOk),
-            Effect.mapError(asAdjudicationFailure(input.operation)),
-          );
+            )
+            .pipe(
+              Effect.flatMap(HttpClientResponse.filterStatusOk),
+              Effect.mapError(asAdjudicationFailure(input.operation)),
+            );
           const pageValues = yield* input.decode(response);
           values.push(...pageValues);
           if (pageValues.length < perPage) return values;
@@ -771,7 +773,7 @@ export const gitHubReviewAdjudicationHostLayer: Layer.Layer<
           operation: input.operation,
           reason: `history exceeds the bounded ${MAX_ADJUDICATION_PAGES * 100}-item lookup`,
         });
-      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+      });
 
     const listFindingThreads = Effect.gen(function* () {
       const wires = yield* listPaged({
