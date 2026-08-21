@@ -12,15 +12,6 @@
   // The Worker Loader binding the Dynamic Worker Code Mode executor loads
   // generated programs through (currently beta).
   "worker_loaders": [{ "binding": "LOADER" }],
-  // The host RPC entrypoint the isolated program calls back into, bound to
-  // this same Worker (the production seam is ctx.exports.CodeModeHostEntrypoint()).
-  "services": [
-    {
-      "binding": "CODE_MODE_HOST",
-      "service": "code-mode-cloudflare",
-      "entrypoint": "CodeModeHostEntrypoint",
-    },
-  ],
   // OPENAI_API_KEY is an optional secret (`wrangler secret put OPENAI_API_KEY`);
   // without it the Worker runs the deterministic scripted profile.
 }

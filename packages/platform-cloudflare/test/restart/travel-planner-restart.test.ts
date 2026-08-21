@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { build } from "esbuild";
-import { Miniflare } from "miniflare";
+import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
 /**
@@ -26,16 +26,18 @@ const workerEntry = join(import.meta.dirname, "travel-planner-restart-worker.ts"
 let workerScript = "";
 
 const openRuntime = (persistDirectory: string): Miniflare =>
-  new Miniflare({
-    modules: true,
-    script: workerScript,
-    compatibilityDate: "2025-05-01",
-    compatibilityFlags: ["nodejs_compat"],
-    durableObjects: {
-      CONVERSATIONS: { className: "TravelPlannerRestartObject", useSQLite: true },
-    },
-    durableObjectsPersist: persistDirectory,
-  });
+  new Miniflare(
+    convertV4MiniflareOptions({
+      modules: true,
+      script: workerScript,
+      compatibilityDate: "2025-05-01",
+      compatibilityFlags: ["nodejs_compat"],
+      durableObjects: {
+        CONVERSATIONS: { className: "TravelPlannerRestartObject", useSQLite: true },
+      },
+      resourcePersistencePath: persistDirectory,
+    }),
+  );
 
 const call = async <A>(runtime: Miniflare, path: string, body?: unknown): Promise<A> => {
   const response = await runtime.dispatchFetch(`http://placeholder${path}`, {

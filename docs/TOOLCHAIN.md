@@ -16,27 +16,27 @@ and the Worker entries in the repository are test fixtures.
 
 The root `package.json` is the only version source for shared dependencies.
 
-| Tool                              |        Current pin | Purpose                                                                           |
-| --------------------------------- | -----------------: | --------------------------------------------------------------------------------- |
-| Bun                               |           `1.3.14` | Package manager, workspace resolver, and lockfile                                 |
-| Vite+                             |            `0.2.6` | Formatting, linting, tests, library builds, staged checks, and task orchestration |
-| Vitest                            |           `4.1.10` | Vite+ test runtime, pinned through an override so integrations share one instance |
-| Effect                            |   `4.0.0-beta.107` | Runtime, Schema, services, and Effect AI                                          |
-| `@effect/platform-node`           |   `4.0.0-beta.107` | Node services used by repository scripts                                          |
-| `@effect/platform-browser`        |   `4.0.0-beta.107` | `BrowserCrypto` for the workerd runtime (Cloudflare packages)                     |
-| `@effect/sql-sqlite-do`           |   `4.0.0-beta.107` | Durable Object SQLite `SqlClient` and Migrator (Cloudflare packages)              |
-| `@effect/vitest`                  |   `4.0.0-beta.107` | Effect-aware test execution and scoped Layer composition                          |
-| `effect-cf`                       |           `0.27.0` | Effect-native Cloudflare runtime boundary used by `platform-cloudflare`           |
-| `@cloudflare/vitest-pool-workers` |           `0.21.3` | In-workerd Vitest pool for the Cloudflare package suites (vendors wrangler)       |
-| `@cloudflare/workers-types`       |     `5.20260813.1` | Cloudflare runtime types (types-only devDependency)                               |
-| Miniflare                         |     `4.20260730.0` | Programmatic workerd runtimes for the restart-persistence test lane               |
-| esbuild                           |           `0.28.1` | Bundles the Miniflare-lane worker entry (Miniflare no longer bundles)             |
-| Node.js                           | `22.18+ or 24.11+` | Runtime range compatible with Vite+                                               |
-| TypeScript                        |            `7.0.2` | Type checker used with the Effect compiler patch                                  |
-| `@effect/tsgo`                    |           `0.33.0` | Effect-aware TypeScript diagnostics                                               |
-| `@types/node`                     |           `26.1.2` | Node types for repository scripts                                                 |
-| VitePress                         |   `2.0.0-alpha.18` | Markdown-driven documentation site                                                |
-| Vue                               |           `3.5.40` | VitePress theme components                                                        |
+| Tool                              |          Current pin | Purpose                                                                           |
+| --------------------------------- | -------------------: | --------------------------------------------------------------------------------- |
+| Bun                               |             `1.3.14` | Package manager, workspace resolver, and lockfile                                 |
+| Vite+                             |              `0.2.6` | Formatting, linting, tests, library builds, staged checks, and task orchestration |
+| Vitest                            |             `4.1.10` | Vite+ test runtime, pinned through an override so integrations share one instance |
+| Effect                            |     `4.0.0-beta.107` | Runtime, Schema, services, and Effect AI                                          |
+| `@effect/platform-node`           |     `4.0.0-beta.107` | Node services used by repository scripts                                          |
+| `@effect/platform-browser`        |     `4.0.0-beta.107` | `BrowserCrypto` for the workerd runtime (Cloudflare packages)                     |
+| `@effect/sql-sqlite-do`           |     `4.0.0-beta.107` | Durable Object SQLite `SqlClient` and Migrator (Cloudflare packages)              |
+| `@effect/vitest`                  |     `4.0.0-beta.107` | Effect-aware test execution and scoped Layer composition                          |
+| `effect-cf`                       |             `0.27.0` | Effect-native Cloudflare runtime boundary used by `platform-cloudflare`           |
+| `@cloudflare/vitest-pool-workers` |             `0.21.3` | In-workerd Vitest pool for the Cloudflare package suites (vendors wrangler)       |
+| `@cloudflare/workers-types`       |       `5.20260813.1` | Cloudflare runtime types (types-only devDependency)                               |
+| Miniflare                         | `5.20260811.1-alpha` | Programmatic workerd runtimes for Code Mode and restart-persistence test lanes    |
+| esbuild                           |             `0.28.1` | Bundles the Miniflare-lane worker entry (Miniflare no longer bundles)             |
+| Node.js                           |   `22.18+ or 24.11+` | Runtime range compatible with Vite+                                               |
+| TypeScript                        |              `7.0.2` | Type checker used with the Effect compiler patch                                  |
+| `@effect/tsgo`                    |             `0.33.0` | Effect-aware TypeScript diagnostics                                               |
+| `@types/node`                     |             `26.1.2` | Node types for repository scripts                                                 |
+| VitePress                         |     `2.0.0-alpha.18` | Markdown-driven documentation site                                                |
+| Vue                               |             `3.5.40` | VitePress theme components                                                        |
 
 Workspace packages refer to shared versions with `catalog:`. They must not introduce a second
 Effect version. The Bun lockfile is committed and CI installs it with `--frozen-lockfile`.

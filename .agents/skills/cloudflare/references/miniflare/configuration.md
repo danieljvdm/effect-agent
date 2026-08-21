@@ -70,7 +70,7 @@ new Miniflare({
     COUNTER: "Counter", // className
     API_OBJECT: { className: "ApiObject", scriptName: "api-worker" },
   },
-  durableObjectsPersist: "./do-data",
+  resourcePersistencePath: "./worker-data",
   
   // D1
   d1Databases: ["DB"],

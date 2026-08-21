@@ -1,23 +1,16 @@
 import { join } from "node:path";
 
 import { build } from "esbuild";
-import { Miniflare, kCurrentWorker } from "miniflare";
+import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
 /**
  * The Cloudflare Dynamic Worker `CodeExecutor` lane (C4 of ADR-0017,
  * DEPLOY-011). The real adapter runs inside a bundled worker under
  * programmatic Miniflare — a genuine workerd runtime with a real
- * `worker_loaders` binding. The worker exports `CodeModeHostEntrypoint` and
- * self-binds it via `kCurrentWorker` (the production seam is
- * `ctx.exports.CodeModeHostEntrypoint()`), then runs the shared executor
- * conformance suite plus the isolated-only enforcement cases (ambient network
- * denial, synchronous CPU runaway) in-worker and reports failures.
- *
- * Pool-workers cannot host this: it wraps the user worker, so a
- * `kCurrentWorker` self-binding to a named entrypoint is unreachable. The
- * programmatic runtime, where the bundled worker IS the top-level worker,
- * makes the self-binding resolve — the same approach as the restart lane.
+ * `worker_loaders` binding, then runs the shared executor conformance suite
+ * plus the isolated-only enforcement cases (ambient network denial,
+ * synchronous CPU runaway) in-worker and reports failures.
  */
 
 const workerEntry = join(import.meta.dirname, "conformance-worker.ts");
@@ -25,21 +18,27 @@ const workerEntry = join(import.meta.dirname, "conformance-worker.ts");
 let workerScript = "";
 
 const openRuntime = (): Miniflare =>
-  new Miniflare({
-    modules: true,
-    script: workerScript,
-    modulesRoot: "/",
-    compatibilityDate: "2025-05-01",
-    // Deployed consumers cannot set the `experimental` compatibility flag, so
-    // the conformance runtime must not either: with it present, a load payload
-    // that requires experimental features (e.g. `allowExperimental: true`)
-    // passes here while rejecting every pass in production.
-    compatibilityFlags: ["nodejs_compat"],
-    workerLoaders: { LOADER: {} },
-    serviceBindings: {
-      CODE_MODE_HOST: { name: kCurrentWorker, entrypoint: "CodeModeHostEntrypoint" },
-    },
-  });
+  new Miniflare(
+    convertV4MiniflareOptions({
+      modules: true,
+      script: workerScript,
+      modulesRoot: "/",
+      compatibilityDate: "2025-05-01",
+      // Deployed consumers cannot set the `experimental` compatibility flag, so
+      // the conformance runtime must not either: with it present, a load payload
+      // that requires experimental features (e.g. `allowExperimental: true`)
+      // passes here while rejecting every pass in production.
+      compatibilityFlags: [
+        "nodejs_compat",
+        "enable_ctx_exports",
+        "no_handle_cross_request_promise_resolution",
+      ],
+      workerLoaders: { LOADER: {} },
+      durableObjects: {
+        CODE_MODE_EXECUTORS: { className: "CodeModeExecutorObject" },
+      },
+    }),
+  );
 
 describe("DEPLOY-011 Cloudflare Dynamic Worker CodeExecutor", () => {
   const cleanups: Array<() => Promise<void>> = [];
@@ -85,6 +84,20 @@ describe("DEPLOY-011 Cloudflare Dynamic Worker CodeExecutor", () => {
     expect(await response.json()).toMatchObject({
       tag: "success",
       detail: { value: "executor" },
+    });
+  }, 30_000);
+
+  // Regression evidence:
+  // https://github.com/reve-ai/kommunikasie/actions/runs/32474947060
+  // https://github.com/reve-ai/kommunikasie/actions/runs/32483559567
+  it("keeps host-call settlement inside each owning Durable Object context", async () => {
+    const response = await runtime.dispatchFetch("http://placeholder/durable-object-host-call");
+    expect(response.ok).toBe(true);
+    expect(await response.json()).toMatchObject({
+      outcomes: [
+        { tag: "success", value: "executor" },
+        { tag: "success", value: "executor" },
+      ],
     });
   }, 30_000);
 

@@ -243,6 +243,8 @@ Every `CodeExecutor` adapter runs the shared contract cases. This includes the d
 - interruption running every pass finalizer;
 - honest `isolated` versus `unisolated` posture reporting;
 - typed rejection of every limit or network policy the adapter cannot enforce.
+- host-call settlement when a Durable Object reuses one managed runtime across later event
+  contexts, without moving request-owned Promise state between those contexts.
 
 Enforcement cases run only against `isolated` adapters, because the `unisolated` substitute
 cannot honestly prove them and must not pass them by simulation:
