@@ -1151,6 +1151,39 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         expect(failure).toBeInstanceOf(ModelProtocolError);
       }
 
+      let accessorReads = 0;
+      const accessorUsage = {
+        modelCalls: 1,
+        inputTokens: 1,
+        outputTokens: 0,
+        lastInputTokens: 1,
+        lastOutputTokens: 0,
+        costMicrousd: 0,
+      };
+      Object.defineProperty(accessorUsage, "inputTokens", {
+        enumerable: true,
+        get: () => {
+          accessorReads += 1;
+          throw new Error("resume usage accessor must not run");
+        },
+      });
+      const accessorExit = yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "q" },
+        {
+          input: {
+            start: () =>
+              Effect.sync(() => {
+                inputStarts += 1;
+              }),
+            drain: () => Effect.succeed([]),
+          },
+          resumeUsage: accessorUsage,
+        },
+      ).pipe(Effect.exit);
+      expect(failureFrom(accessorExit)).toBeInstanceOf(ModelProtocolError);
+      expect(accessorReads).toBe(0);
+
       expect(inputStarts).toBe(0);
       expect(requests).toHaveLength(0);
     }),

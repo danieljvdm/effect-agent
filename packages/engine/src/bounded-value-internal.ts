@@ -26,6 +26,7 @@ const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
 )?.get;
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object;
 const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer")?.get;
+const typedArrayLengthGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, "length")?.get;
 const dataViewBufferGetter = Object.getOwnPropertyDescriptor(DataView.prototype, "buffer")?.get;
 const urlConstructor = Reflect.get(globalThis, "URL");
 const urlPrototypeDescriptor =
@@ -71,6 +72,16 @@ const intrinsicViewBackingByteLength = (value: object): number | undefined => {
     }
   }
   return undefined;
+};
+
+const intrinsicTypedArrayLength = (value: object): number | undefined => {
+  if (typedArrayLengthGetter === undefined) return undefined;
+  try {
+    const length = Reflect.apply(typedArrayLengthGetter, value, []);
+    return Number.isSafeInteger(length) && length >= 0 ? length : undefined;
+  } catch {
+    return undefined;
+  }
 };
 
 const intrinsicUrlByteLength = (value: object): number | undefined => {
@@ -146,6 +157,13 @@ export const boundedValueFootprint = (
     total += bytes;
     return true;
   };
+  const canMaterializeIndexedKeys = (count: number): boolean => {
+    if (!Number.isSafeInteger(count) || count < 0) return false;
+    if (count === 0) return true;
+    const largestKeyBytes = utf8ByteLength(String(count - 1));
+    const temporaryBytesPerKey = PROPERTY_OVERHEAD_BYTES + largestKeyBytes;
+    return count <= Math.floor((maxBytes - total) / temporaryBytesPerKey);
+  };
 
   const visit = (value: unknown, depth: number): boolean => {
     if (depth > maxDepth) return false;
@@ -168,11 +186,17 @@ export const boundedValueFootprint = (
         if (ancestors.has(value) || !add(OBJECT_OVERHEAD_BYTES)) return false;
         const prototype = Object.getPrototypeOf(value);
         let skipIndexedProperties = false;
+        let indexedPropertyCount = 0;
         let supportedSpecialObject = false;
         if (ArrayBuffer.isView(value)) {
           if (!intrinsicViewPrototypes.has(prototype)) return false;
           const byteLength = intrinsicViewBackingByteLength(value);
           if (byteLength === undefined || !add(byteLength)) return false;
+          if (prototype !== DataView.prototype) {
+            const length = intrinsicTypedArrayLength(value);
+            if (length === undefined) return false;
+            indexedPropertyCount = length;
+          }
           skipIndexedProperties = true;
           supportedSpecialObject = true;
         }
@@ -227,7 +251,13 @@ export const boundedValueFootprint = (
           ) {
             return false;
           }
+          indexedPropertyCount = lengthDescriptor.value;
         }
+
+        // `Reflect.ownKeys` eagerly allocates one string per dense array or typed-array index.
+        // Reject before that allocation when even the conservative temporary key list cannot fit
+        // inside the caller's allowance. Sparse arrays deliberately use their worst-case length.
+        if (!canMaterializeIndexedKeys(indexedPropertyCount)) return false;
 
         ancestors.add(value);
         try {

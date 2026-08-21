@@ -178,11 +178,13 @@ import {
   type RunStepHook,
   type RunStepKey,
 } from "./durable-step.ts";
+import { errorMessage, errorTag } from "./error-diagnostic-internal.ts";
 import {
   type ChildEstablishStatus,
   type CommandDrainPolicy,
   type RunApprovalDecision,
   type RunBufferLimits,
+  type RunResumeUsage,
   RunResumeUsageSchema,
   type RunOptions,
   type RunSchedulingHook,
@@ -373,12 +375,10 @@ const toolCounter = Metric.counter("effect_agent_tool_calls_total", {
 });
 
 /**
- * Tool Call parameters live in two intentionally divergent forms on the
- * trace: `parts` carries the prompt/canonical form (parameters encoded back
- * through the owning Schema — the wire form official history and canonical
- * records persist), while `applicationToolCalls` keeps the handler form
- * (Schema-decoded parameters, because the pinned `Toolkit.handle` expects the
- * value `prepareToolCall` re-encodes for it).
+ * Tool Call parameters remain in their prompt/canonical form everywhere on
+ * the trace. `prepareToolCall` decodes that bounded plain data for policy and
+ * authorization, while the pinned `Toolkit.handle` receives the same encoded
+ * value and performs its own decode before invoking the handler.
  */
 interface TurnTrace {
   /** Number of decoded provider parts retained or inspected during this model call. */
@@ -513,28 +513,71 @@ interface ModelResponseBufferUsage {
 const structuredCloneFunction = Reflect.get(globalThis, "structuredClone");
 const knownSafeModelResponsePrototypes = new Set<object>([Response.Usage.prototype]);
 
-const modelResponseInputPrototypes = <Tools extends Record<string, Tool.Any>>(
+const schemaClassPrototype = (schema: Schema.Top): object | undefined => {
+  if (typeof schema !== "function" || !Schema.isSchema(schema)) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(schema, "prototype");
+  return descriptor !== undefined &&
+    "value" in descriptor &&
+    descriptor.value !== null &&
+    typeof descriptor.value === "object"
+    ? descriptor.value
+    : undefined;
+};
+
+/**
+ * Build the bounded preflight view for a decoded Tool payload whose root is an
+ * application-selected Schema class. The class instance is deliberately omitted:
+ * its complete canonical encoding is measured before cloning, and it is never
+ * retained in the Turn trace. Every other response field remains in the preflight.
+ */
+const schemaClassToolPartPreflight = <Tools extends Record<string, Tool.Any>>(
+  part: unknown,
   toolkit: Toolkit.Toolkit<Tools>,
-): ReadonlySet<object> => {
-  const prototypes = new Set(knownSafeModelResponsePrototypes);
-  for (const tool of Object.values(toolkit.tools)) {
-    for (const schema of [tool.parametersSchema, tool.successSchema, tool.failureSchema]) {
-      if (typeof schema !== "function" || !Schema.isSchema(schema)) continue;
-      const descriptor = Object.getOwnPropertyDescriptor(schema, "prototype");
-      if (
-        descriptor !== undefined &&
-        "value" in descriptor &&
-        descriptor.value !== null &&
-        typeof descriptor.value === "object"
-      ) {
-        // These exact prototypes belong to application-selected Tool codecs. Their hidden state,
-        // if any, is toolkit-owned rather than provider-controlled; the canonical encoded output
-        // is measured again using only intrinsic and plain-data prototypes before decoding.
-        prototypes.add(descriptor.value);
+): object | undefined => {
+  try {
+    if (part === null || typeof part !== "object") return undefined;
+    const read = (key: string): unknown => {
+      const descriptor = Object.getOwnPropertyDescriptor(part, key);
+      if (descriptor === undefined || !("value" in descriptor)) {
+        throw new TypeError(`response part ${key} must be an own data property`);
       }
+      return descriptor.value;
+    };
+    const type = read("type");
+    if (type !== "tool-call" && type !== "tool-result") return undefined;
+    const name = read("name");
+    if (typeof name !== "string" || !hasTool(toolkit.tools, name)) return undefined;
+    const tool = toolkit.tools[name];
+    const payload = read(type === "tool-call" ? "params" : "result");
+    if (payload === null || typeof payload !== "object") return undefined;
+    const payloadPrototype = Object.getPrototypeOf(payload);
+    const schemas =
+      type === "tool-call" ? [tool.parametersSchema] : [tool.successSchema, tool.failureSchema];
+    if (!schemas.some((schema) => schemaClassPrototype(schema) === payloadPrototype)) {
+      return undefined;
     }
+
+    const preflight: Record<string, unknown> = {};
+    const retainedKeys =
+      type === "tool-call"
+        ? ["type", "id", "name", "providerExecuted", "metadata"]
+        : [
+            "type",
+            "id",
+            "name",
+            "isFailure",
+            "providerExecuted",
+            "preliminary",
+            "metadata",
+            "encodedResult",
+          ];
+    for (const key of retainedKeys) {
+      preflight[key] = read(key);
+    }
+    return preflight;
+  } catch {
+    return undefined;
   }
-  return prototypes;
 };
 
 const inspectModelResponsePartCapacity = (
@@ -574,14 +617,20 @@ const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(func
   limits: EffectiveRunBufferLimits,
 ) {
   // Reject an oversized provider graph before schema encoding, structured cloning, or decoding
-  // can allocate additional full copies. The canonical encoded value is measured again before
-  // cloning because application-selected Schema transformations may change its representation.
-  yield* inspectModelResponsePartCapacity(
-    usage,
+  // can allocate additional full copies. A decoded application Schema class is the sole exception:
+  // preflight its enclosing response fields, then measure its complete canonical plain encoding
+  // before cloning. The class instance never enters retained Turn state.
+  const directInputBytes = boundedValueFootprint(
     part,
-    limits,
-    modelResponseInputPrototypes(toolkit),
+    limits.maxModelResponseBytes - usage.responsePartBytes,
+    knownSafeModelResponsePrototypes,
   );
+  if (directInputBytes === undefined) {
+    const preflight = schemaClassToolPartPreflight(part, toolkit);
+    yield* inspectModelResponsePartCapacity(usage, preflight ?? part, limits);
+  } else {
+    yield* inspectModelResponsePartCapacity(usage, part, limits);
+  }
   const codec = Schema.toCodecJson(Response.StreamPart(toolkit));
   const encodingFailure = ModelProtocolError.make({
     message: "Model response part failed canonical encoding",
@@ -752,9 +801,40 @@ const encodeToolCallParameters = <Tools extends Record<string, Tool.Any>>(
 };
 
 /**
- * The pinned `Toolkit.handle` implementation decodes once more internally,
- * despite its decoded-parameter signature, so handler parameters are the
- * encoded form produced by `encodeToolCallParameters`.
+ * Decode canonically recorded Tool parameters for policy and authorization.
+ * The private assertion restores the correlation lost by dynamic record
+ * lookup only around a successful Schema decode.
+ */
+const decodeToolCallParameters = <Tools extends Record<string, Tool.Any>>(
+  tool: ToolUnion<Tools>,
+  toolName: string,
+  encodedParams: unknown,
+  boundary: "execution" | "resume" = "execution",
+): Effect.Effect<
+  Tool.Parameters<ToolUnion<Tools>>,
+  ModelProtocolError,
+  Tool.HandlerServices<ToolUnion<Tools>>
+> => {
+  const decodeParameters = Schema.decodeUnknownEffect(tool.parametersSchema) as (
+    input: unknown,
+  ) => Effect.Effect<
+    Tool.Parameters<ToolUnion<Tools>>,
+    Schema.SchemaError,
+    Tool.HandlerServices<ToolUnion<Tools>>
+  >;
+  return decodeParameters(encodedParams).pipe(
+    Effect.mapError((cause) =>
+      ModelProtocolError.make({
+        message: `Recorded parameters for Tool ${toolName} failed validation${boundary === "resume" ? " on resume" : ""}: ${cause.message}`,
+      }),
+    ),
+  );
+};
+
+/**
+ * The pinned `Toolkit.handle` implementation decodes internally despite its
+ * decoded-parameter signature, so the native handler boundary receives the
+ * canonical encoded parameters retained by the Turn trace.
  */
 const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
@@ -772,16 +852,15 @@ const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
     );
   }
   const tool = toolkit.tools[name] as ToolUnion<Tools>;
-  const decodedParams = call.params as Tool.Parameters<ToolUnion<Tools>>;
   return decodeToolCallId(call.id).pipe(
     Effect.flatMap((toolCallId) =>
-      encodeToolCallParameters<Tools>(tool, call.name, decodedParams).pipe(
-        Effect.map((encodedParams) => ({
+      decodeToolCallParameters<Tools>(tool, call.name, call.params).pipe(
+        Effect.map((decodedParams) => ({
           call,
           name,
           toolCallId,
           decodedParams,
-          nativeHandlerParams: encodedParams as Tool.Parameters<ToolUnion<Tools>>,
+          nativeHandlerParams: call.params as Tool.Parameters<ToolUnion<Tools>>,
           tool,
           declarationIndex,
         })),
@@ -826,31 +905,6 @@ const effectiveRunBounds = (
   maxTurns: boundedAllowance(policy.maxTurns, options.turnAllowance),
   maxToolCalls: boundedAllowance(policy.maxToolCalls, options.toolCallAllowance),
 });
-
-const decodeResumedToolCallParameters = <Tools extends Record<string, Tool.Any>>(
-  tool: ToolUnion<Tools>,
-  toolName: string,
-  encodedParams: unknown,
-): Effect.Effect<
-  Tool.Parameters<ToolUnion<Tools>>,
-  ModelProtocolError,
-  Tool.HandlerServices<ToolUnion<Tools>>
-> => {
-  const decodeParameters = Schema.decodeUnknownEffect(tool.parametersSchema) as (
-    input: unknown,
-  ) => Effect.Effect<
-    Tool.Parameters<ToolUnion<Tools>>,
-    Schema.SchemaError,
-    Tool.HandlerServices<ToolUnion<Tools>>
-  >;
-  return decodeParameters(encodedParams).pipe(
-    Effect.mapError((cause) =>
-      ModelProtocolError.make({
-        message: `Recorded parameters for Tool ${toolName} failed validation on resume: ${cause.message}`,
-      }),
-    ),
-  );
-};
 
 const decodeResumedSettledCall = Effect.fn("AgentRuntime.decodeResumedSettledCall")(
   (input: unknown, maxResultBytes: number) =>
@@ -940,14 +994,43 @@ const snapshotResumedSettledCalls = Effect.fn("AgentRuntime.snapshotResumedSettl
 );
 
 const decodeResumeUsage = Effect.fn("AgentRuntime.decodeResumeUsage")((input: unknown) =>
-  Schema.decodeUnknownEffect(RunResumeUsageSchema)(input).pipe(
-    Effect.mapError(() =>
-      ModelProtocolError.make({
-        message:
-          "Run resume usage requires non-negative safe-integer totals and last-call tokens no greater than their cumulative totals",
-      }),
-    ),
-  ),
+  Effect.gen(function* () {
+    const snapshot = yield* Effect.try({
+      try: () => {
+        if (input === null || typeof input !== "object") {
+          throw new TypeError("Run resume usage must be an object");
+        }
+        const read = (key: keyof RunResumeUsage): unknown => {
+          const descriptor = Object.getOwnPropertyDescriptor(input, key);
+          if (descriptor === undefined || !("value" in descriptor)) {
+            throw new TypeError(`Run resume usage ${key} must be an own data property`);
+          }
+          return descriptor.value;
+        };
+        return {
+          modelCalls: read("modelCalls"),
+          inputTokens: read("inputTokens"),
+          outputTokens: read("outputTokens"),
+          lastInputTokens: read("lastInputTokens"),
+          lastOutputTokens: read("lastOutputTokens"),
+          costMicrousd: read("costMicrousd"),
+        };
+      },
+      catch: () =>
+        ModelProtocolError.make({
+          message:
+            "Run resume usage requires own data properties with non-negative safe-integer totals and last-call tokens no greater than their cumulative totals",
+        }),
+    });
+    return yield* Schema.decodeUnknownEffect(RunResumeUsageSchema)(snapshot).pipe(
+      Effect.mapError(() =>
+        ModelProtocolError.make({
+          message:
+            "Run resume usage requires own data properties with non-negative safe-integer totals and last-call tokens no greater than their cumulative totals",
+        }),
+      ),
+    );
+  }),
 );
 
 const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (
@@ -1966,41 +2049,6 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       );
     }),
   );
-
-const ErrorMessage = Schema.Struct({ message: Schema.String });
-const ErrorTag = Schema.Struct({ _tag: Schema.NonEmptyString });
-const DIAGNOSTIC_MESSAGE_LIMIT = 4_096;
-const DIAGNOSTIC_TAG_LIMIT = 128;
-
-const boundedDiagnostic = (value: string, maxCharacters: number): string =>
-  value.length <= maxCharacters ? value : value.slice(0, maxCharacters);
-
-/** Total, bounded projection for opaque failures. It never invokes arbitrary coercion hooks. */
-const errorMessage = (error: unknown): string => {
-  try {
-    const decoded = Schema.decodeUnknownOption(ErrorMessage)(error);
-    if (Option.isSome(decoded)) {
-      return boundedDiagnostic(decoded.value.message, DIAGNOSTIC_MESSAGE_LIMIT);
-    }
-  } catch {
-    // Hostile getters and proxy traps are opaque diagnostic values.
-  }
-  return typeof error === "string"
-    ? boundedDiagnostic(error, DIAGNOSTIC_MESSAGE_LIMIT)
-    : "Unknown error";
-};
-
-const errorTag = (error: unknown): string => {
-  try {
-    const decoded = Schema.decodeUnknownOption(ErrorTag)(error);
-    if (Option.isSome(decoded)) {
-      return boundedDiagnostic(decoded.value._tag, DIAGNOSTIC_TAG_LIMIT);
-    }
-  } catch {
-    // Hostile getters and proxy traps are opaque diagnostic values.
-  }
-  return "UnknownError";
-};
 
 const schedulingConcurrency = (
   configured: number,
@@ -3047,25 +3095,20 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
         part.params as Tool.Parameters<ToolUnion<Tools>>,
       );
       const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
-      // Official history carries the wire form: rebuild the trace
-      // part with the Schema-encoded parameters (the provider re-serializes
-      // them on the next request regardless), while `applicationToolCalls`
-      // below keeps the decoded part for the handler path — see TurnTrace.
-      trace.parts.push(
-        Response.makePart("tool-call", {
-          id: part.id,
-          name: part.name,
-          params: parameters,
-          providerExecuted: part.providerExecuted,
-          metadata: part.metadata,
-        }),
-      );
+      const canonicalCall = Response.makePart("tool-call", {
+        id: part.id,
+        name: part.name,
+        params: parameters,
+        providerExecuted: part.providerExecuted,
+        metadata: part.metadata,
+      });
+      trace.parts.push(canonicalCall);
       trace.toolCalls.set(part.id, {
         name: part.name,
         providerExecuted: part.providerExecuted,
       });
       if (!part.providerExecuted) {
-        trace.applicationToolCalls.push(part);
+        trace.applicationToolCalls.push(canonicalCall);
         trace.applicationCallDescriptors.push({
           toolCallId,
           toolName: part.name,
@@ -4316,11 +4359,7 @@ const makeResumeTurn = <
         }
         const tool = tools[call.name] as ToolUnion<Tools>;
         const toolCallId = yield* decodeToolCallId(call.id);
-        const decodedParams = yield* decodeResumedToolCallParameters<Tools>(
-          tool,
-          call.name,
-          call.params,
-        );
+        yield* decodeToolCallParameters<Tools>(tool, call.name, call.params, "resume");
         const parameters = yield* decodeEventJson(call.params, "Tool parameters");
         declarationByCallId.set(call.id, {
           index: trace.applicationToolCalls.length,
@@ -4339,7 +4378,7 @@ const makeResumeTurn = <
           Response.makePart("tool-call", {
             id: call.id,
             name: call.name,
-            params: decodedParams,
+            params: parameters,
             providerExecuted: false,
           }),
         );

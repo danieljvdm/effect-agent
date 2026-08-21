@@ -35749,6 +35749,7 @@ var intrinsicViewPrototypes = new Set([
 var arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")?.get;
 var typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 var typedArrayBufferGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer")?.get;
+var typedArrayLengthGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, "length")?.get;
 var dataViewBufferGetter = Object.getOwnPropertyDescriptor(DataView.prototype, "buffer")?.get;
 var urlConstructor = Reflect.get(globalThis, "URL");
 var urlPrototypeDescriptor = typeof urlConstructor === "function" ? Object.getOwnPropertyDescriptor(urlConstructor, "prototype") : undefined;
@@ -35777,6 +35778,16 @@ var intrinsicViewBackingByteLength = (value4) => {
     } catch {}
   }
   return;
+};
+var intrinsicTypedArrayLength = (value4) => {
+  if (typedArrayLengthGetter === undefined)
+    return;
+  try {
+    const length = Reflect.apply(typedArrayLengthGetter, value4, []);
+    return Number.isSafeInteger(length) && length >= 0 ? length : undefined;
+  } catch {
+    return;
+  }
 };
 var intrinsicUrlByteLength = (value4) => {
   if (urlHrefGetter === undefined)
@@ -35820,6 +35831,15 @@ var boundedValueFootprint = (root, maxBytes, knownSafePrototypes = new Set, maxD
     total += bytes;
     return true;
   };
+  const canMaterializeIndexedKeys = (count2) => {
+    if (!Number.isSafeInteger(count2) || count2 < 0)
+      return false;
+    if (count2 === 0)
+      return true;
+    const largestKeyBytes = utf8ByteLength2(String(count2 - 1));
+    const temporaryBytesPerKey = PROPERTY_OVERHEAD_BYTES + largestKeyBytes;
+    return count2 <= Math.floor((maxBytes - total) / temporaryBytesPerKey);
+  };
   const visit = (value4, depth) => {
     if (depth > maxDepth)
       return false;
@@ -35844,6 +35864,7 @@ var boundedValueFootprint = (root, maxBytes, knownSafePrototypes = new Set, maxD
           return false;
         const prototype = Object.getPrototypeOf(value4);
         let skipIndexedProperties = false;
+        let indexedPropertyCount = 0;
         let supportedSpecialObject = false;
         if (ArrayBuffer.isView(value4)) {
           if (!intrinsicViewPrototypes.has(prototype))
@@ -35851,6 +35872,12 @@ var boundedValueFootprint = (root, maxBytes, knownSafePrototypes = new Set, maxD
           const byteLength = intrinsicViewBackingByteLength(value4);
           if (byteLength === undefined || !add5(byteLength))
             return false;
+          if (prototype !== DataView.prototype) {
+            const length = intrinsicTypedArrayLength(value4);
+            if (length === undefined)
+              return false;
+            indexedPropertyCount = length;
+          }
           skipIndexedProperties = true;
           supportedSpecialObject = true;
         }
@@ -35896,7 +35923,10 @@ var boundedValueFootprint = (root, maxBytes, knownSafePrototypes = new Set, maxD
           if (lengthDescriptor === undefined || !("value" in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 || !add5(lengthDescriptor.value)) {
             return false;
           }
+          indexedPropertyCount = lengthDescriptor.value;
         }
+        if (!canMaterializeIndexedKeys(indexedPropertyCount))
+          return false;
         ancestors.add(value4);
         try {
           if (isRedacted2 && !visit(redactedValue, depth + 1))
@@ -36725,6 +36755,29 @@ class DurableStepError extends exports_Schema.TaggedError()("DurableStepError", 
 class DurableStep extends exports_Context.Service()("@effect-agent/engine/DurableStep") {
 }
 
+// packages/engine/src/error-diagnostic-internal.ts
+var DIAGNOSTIC_MESSAGE_LIMIT = 4096;
+var DIAGNOSTIC_TAG_LIMIT = 128;
+var boundedDiagnostic = (value4, maxCharacters) => value4.length <= maxCharacters ? value4 : value4.slice(0, maxCharacters);
+var ownStringDiagnostic = (input, key, maxCharacters) => {
+  if (input === null || typeof input !== "object" && typeof input !== "function") {
+    return;
+  }
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    return descriptor !== undefined && "value" in descriptor && typeof descriptor.value === "string" ? boundedDiagnostic(descriptor.value, maxCharacters) : undefined;
+  } catch {
+    return;
+  }
+};
+var errorMessage = (error2) => {
+  const message = ownStringDiagnostic(error2, "message", DIAGNOSTIC_MESSAGE_LIMIT);
+  if (message !== undefined)
+    return message;
+  return typeof error2 === "string" ? boundedDiagnostic(error2, DIAGNOSTIC_MESSAGE_LIMIT) : "Unknown error";
+};
+var errorTag = (error2) => ownStringDiagnostic(error2, "_tag", DIAGNOSTIC_TAG_LIMIT) ?? "UnknownError";
+
 // packages/engine/src/run-options.ts
 class RunContextPreparationError extends exports_Schema.TaggedError()("RunContextPreparationError", {
   preparerId: exports_Schema.NonEmptyString,
@@ -36799,19 +36852,56 @@ var effectiveRunBufferLimits = (configured) => ({
 });
 var structuredCloneFunction = Reflect.get(globalThis, "structuredClone");
 var knownSafeModelResponsePrototypes = new Set([exports_Response.Usage.prototype]);
-var modelResponseInputPrototypes = (toolkit) => {
-  const prototypes = new Set(knownSafeModelResponsePrototypes);
-  for (const tool of Object.values(toolkit.tools)) {
-    for (const schema2 of [tool.parametersSchema, tool.successSchema, tool.failureSchema]) {
-      if (typeof schema2 !== "function" || !exports_Schema.isSchema(schema2))
-        continue;
-      const descriptor = Object.getOwnPropertyDescriptor(schema2, "prototype");
-      if (descriptor !== undefined && "value" in descriptor && descriptor.value !== null && typeof descriptor.value === "object") {
-        prototypes.add(descriptor.value);
+var schemaClassPrototype = (schema2) => {
+  if (typeof schema2 !== "function" || !exports_Schema.isSchema(schema2))
+    return;
+  const descriptor = Object.getOwnPropertyDescriptor(schema2, "prototype");
+  return descriptor !== undefined && "value" in descriptor && descriptor.value !== null && typeof descriptor.value === "object" ? descriptor.value : undefined;
+};
+var schemaClassToolPartPreflight = (part, toolkit) => {
+  try {
+    if (part === null || typeof part !== "object")
+      return;
+    const read2 = (key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(part, key);
+      if (descriptor === undefined || !("value" in descriptor)) {
+        throw new TypeError(`response part ${key} must be an own data property`);
       }
+      return descriptor.value;
+    };
+    const type = read2("type");
+    if (type !== "tool-call" && type !== "tool-result")
+      return;
+    const name = read2("name");
+    if (typeof name !== "string" || !hasTool(toolkit.tools, name))
+      return;
+    const tool = toolkit.tools[name];
+    const payload = read2(type === "tool-call" ? "params" : "result");
+    if (payload === null || typeof payload !== "object")
+      return;
+    const payloadPrototype = Object.getPrototypeOf(payload);
+    const schemas = type === "tool-call" ? [tool.parametersSchema] : [tool.successSchema, tool.failureSchema];
+    if (!schemas.some((schema2) => schemaClassPrototype(schema2) === payloadPrototype)) {
+      return;
     }
+    const preflight = {};
+    const retainedKeys = type === "tool-call" ? ["type", "id", "name", "providerExecuted", "metadata"] : [
+      "type",
+      "id",
+      "name",
+      "isFailure",
+      "providerExecuted",
+      "preliminary",
+      "metadata",
+      "encodedResult"
+    ];
+    for (const key of retainedKeys) {
+      preflight[key] = read2(key);
+    }
+    return preflight;
+  } catch {
+    return;
   }
-  return prototypes;
 };
 var inspectModelResponsePartCapacity = (usage, part, limits, knownSafePrototypes = knownSafeModelResponsePrototypes) => exports_Effect.suspend(() => {
   if (usage.responsePartCount >= limits.maxModelResponseParts) {
@@ -36825,7 +36915,13 @@ var inspectModelResponsePartCapacity = (usage, part, limits, knownSafePrototypes
   })) : exports_Effect.succeed(bytes);
 });
 var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart")(function* (part, toolkit, usage, limits) {
-  yield* inspectModelResponsePartCapacity(usage, part, limits, modelResponseInputPrototypes(toolkit));
+  const directInputBytes = boundedValueFootprint(part, limits.maxModelResponseBytes - usage.responsePartBytes, knownSafeModelResponsePrototypes);
+  if (directInputBytes === undefined) {
+    const preflight = schemaClassToolPartPreflight(part, toolkit);
+    yield* inspectModelResponsePartCapacity(usage, preflight ?? part, limits);
+  } else {
+    yield* inspectModelResponsePartCapacity(usage, part, limits);
+  }
   const codec = exports_Schema.toCodecJson(exports_Response.StreamPart(toolkit));
   const encodingFailure = ModelProtocolError.make({
     message: "Model response part failed canonical encoding"
@@ -36900,19 +36996,24 @@ var encodeToolCallParameters = (tool, toolName, decodedParams) => {
     message: `Invalid parameters for Tool ${toolName}: ${cause.message}`
   })));
 };
+var decodeToolCallParameters = (tool, toolName, encodedParams, boundary = "execution") => {
+  const decodeParameters = exports_Schema.decodeUnknownEffect(tool.parametersSchema);
+  return decodeParameters(encodedParams).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
+    message: `Recorded parameters for Tool ${toolName} failed validation${boundary === "resume" ? " on resume" : ""}: ${cause.message}`
+  })));
+};
 var prepareToolCall = (toolkit, call, declarationIndex) => {
   const name = call.name;
   if (!hasTool(toolkit.tools, name)) {
     return exports_Effect.fail(ModelProtocolError.make({ message: `Model requested unknown Tool ${call.name}` }));
   }
   const tool = toolkit.tools[name];
-  const decodedParams = call.params;
-  return decodeToolCallId(call.id).pipe(exports_Effect.flatMap((toolCallId) => encodeToolCallParameters(tool, call.name, decodedParams).pipe(exports_Effect.map((encodedParams) => ({
+  return decodeToolCallId(call.id).pipe(exports_Effect.flatMap((toolCallId) => decodeToolCallParameters(tool, call.name, call.params).pipe(exports_Effect.map((decodedParams) => ({
     call,
     name,
     toolCallId,
     decodedParams,
-    nativeHandlerParams: encodedParams,
+    nativeHandlerParams: call.params,
     tool,
     declarationIndex
   })))));
@@ -36922,12 +37023,6 @@ var effectiveRunBounds = (policy2, options3) => ({
   maxTurns: boundedAllowance(policy2.maxTurns, options3.turnAllowance),
   maxToolCalls: boundedAllowance(policy2.maxToolCalls, options3.toolCallAllowance)
 });
-var decodeResumedToolCallParameters = (tool, toolName, encodedParams) => {
-  const decodeParameters = exports_Schema.decodeUnknownEffect(tool.parametersSchema);
-  return decodeParameters(encodedParams).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
-    message: `Recorded parameters for Tool ${toolName} failed validation on resume: ${cause.message}`
-  })));
-};
 var decodeResumedSettledCall = exports_Effect.fn("AgentRuntime.decodeResumedSettledCall")((input, maxResultBytes) => exports_Effect.gen(function* () {
   const raw2 = yield* exports_Effect.try({
     try: () => {
@@ -36995,9 +37090,36 @@ var snapshotResumedSettledCalls = exports_Effect.fn("AgentRuntime.snapshotResume
     message: "Turn resume contains an invalid settled Tool Call collection"
   })
 }));
-var decodeResumeUsage = exports_Effect.fn("AgentRuntime.decodeResumeUsage")((input) => exports_Schema.decodeUnknownEffect(RunResumeUsageSchema)(input).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
-  message: "Run resume usage requires non-negative safe-integer totals and last-call tokens no greater than their cumulative totals"
-}))));
+var decodeResumeUsage = exports_Effect.fn("AgentRuntime.decodeResumeUsage")((input) => exports_Effect.gen(function* () {
+  const snapshot3 = yield* exports_Effect.try({
+    try: () => {
+      if (input === null || typeof input !== "object") {
+        throw new TypeError("Run resume usage must be an object");
+      }
+      const read2 = (key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(input, key);
+        if (descriptor === undefined || !("value" in descriptor)) {
+          throw new TypeError(`Run resume usage ${key} must be an own data property`);
+        }
+        return descriptor.value;
+      };
+      return {
+        modelCalls: read2("modelCalls"),
+        inputTokens: read2("inputTokens"),
+        outputTokens: read2("outputTokens"),
+        lastInputTokens: read2("lastInputTokens"),
+        lastOutputTokens: read2("lastOutputTokens"),
+        costMicrousd: read2("costMicrousd")
+      };
+    },
+    catch: () => ModelProtocolError.make({
+      message: "Run resume usage requires own data properties with non-negative safe-integer totals and last-call tokens no greater than their cumulative totals"
+    })
+  });
+  return yield* exports_Schema.decodeUnknownEffect(RunResumeUsageSchema)(snapshot3).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+    message: "Run resume usage requires own data properties with non-negative safe-integer totals and last-call tokens no greater than their cumulative totals"
+  })));
+}));
 var makeToolFailedEvent = exports_Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (context3, turnId, call, error2) {
   const toolCallId = yield* decodeToolCallId(call.id);
   return ToolCallFailed.make({
@@ -37475,29 +37597,6 @@ var executeToolBatch = (context3, turnId, turn, toolkit, calls, trace3, concurre
   })).pipe(exports_Stream.drain)));
   return approvalPreflight.pipe(exports_Stream.concat(authorizationPreflight), exports_Stream.concat(preparation), exports_Stream.concat(settled));
 }));
-var ErrorMessage = exports_Schema.Struct({ message: exports_Schema.String });
-var ErrorTag = exports_Schema.Struct({ _tag: exports_Schema.NonEmptyString });
-var DIAGNOSTIC_MESSAGE_LIMIT = 4096;
-var DIAGNOSTIC_TAG_LIMIT = 128;
-var boundedDiagnostic = (value4, maxCharacters) => value4.length <= maxCharacters ? value4 : value4.slice(0, maxCharacters);
-var errorMessage = (error2) => {
-  try {
-    const decoded = exports_Schema.decodeUnknownOption(ErrorMessage)(error2);
-    if (exports_Option.isSome(decoded)) {
-      return boundedDiagnostic(decoded.value.message, DIAGNOSTIC_MESSAGE_LIMIT);
-    }
-  } catch {}
-  return typeof error2 === "string" ? boundedDiagnostic(error2, DIAGNOSTIC_MESSAGE_LIMIT) : "Unknown error";
-};
-var errorTag = (error2) => {
-  try {
-    const decoded = exports_Schema.decodeUnknownOption(ErrorTag)(error2);
-    if (exports_Option.isSome(decoded)) {
-      return boundedDiagnostic(decoded.value._tag, DIAGNOSTIC_TAG_LIMIT);
-    }
-  } catch {}
-  return "UnknownError";
-};
 var schedulingConcurrency = (configured, scheduling) => {
   const override = scheduling?.runOverride;
   if (override === undefined) {
@@ -38132,19 +38231,20 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
       const tool = tools[part.name];
       const encodedParameters = yield* encodeToolCallParameters(tool, part.name, part.params);
       const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
-      trace3.parts.push(exports_Response.makePart("tool-call", {
+      const canonicalCall = exports_Response.makePart("tool-call", {
         id: part.id,
         name: part.name,
         params: parameters,
         providerExecuted: part.providerExecuted,
         metadata: part.metadata
-      }));
+      });
+      trace3.parts.push(canonicalCall);
       trace3.toolCalls.set(part.id, {
         name: part.name,
         providerExecuted: part.providerExecuted
       });
       if (!part.providerExecuted) {
-        trace3.applicationToolCalls.push(part);
+        trace3.applicationToolCalls.push(canonicalCall);
         trace3.applicationCallDescriptors.push({
           toolCallId,
           toolName: part.name,
@@ -38724,7 +38824,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
     }
     const tool = tools[call.name];
     const toolCallId = yield* decodeToolCallId(call.id);
-    const decodedParams = yield* decodeResumedToolCallParameters(tool, call.name, call.params);
+    yield* decodeToolCallParameters(tool, call.name, call.params, "resume");
     const parameters = yield* decodeEventJson(call.params, "Tool parameters");
     declarationByCallId.set(call.id, {
       index: trace3.applicationToolCalls.length,
@@ -38740,7 +38840,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
     trace3.applicationToolCalls.push(exports_Response.makePart("tool-call", {
       id: call.id,
       name: call.name,
-      params: decodedParams,
+      params: parameters,
       providerExecuted: false
     }));
     trace3.applicationCallDescriptors.push({
@@ -42155,8 +42255,8 @@ class SubagentDurableAccounting extends exports_Schema.Class("@effect-agent/capa
 }) {
 }
 var maxEventTextLength = 4 * 1024;
-var ErrorMessage2 = exports_Schema.Struct({ message: exports_Schema.String });
-var ErrorTag2 = exports_Schema.Struct({ _tag: exports_Schema.NonEmptyString });
+var ErrorMessage = exports_Schema.Struct({ message: exports_Schema.String });
+var ErrorTag = exports_Schema.Struct({ _tag: exports_Schema.NonEmptyString });
 var ChildFailureProjection = exports_Schema.Struct({
   errorTag: exports_Schema.NonEmptyString,
   message: exports_Schema.String

@@ -47,6 +47,7 @@ import {
 } from "effect/unstable/ai";
 
 import { boundedValueFootprint } from "../src/bounded-value-internal.ts";
+import { errorMessage, errorTag } from "../src/error-diagnostic-internal.ts";
 import {
   AgentResultSchema,
   AgentRuntime,
@@ -3640,6 +3641,23 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       });
       expect(hostileReads).toBe(0);
 
+      const diagnosticFailure = Object.create(null) as Record<PropertyKey, unknown>;
+      Object.defineProperty(diagnosticFailure, "message", {
+        get: () => {
+          hostileReads += 1;
+          throw new Error("diagnostic message getter must not run");
+        },
+      });
+      Object.defineProperty(diagnosticFailure, "_tag", {
+        get: () => {
+          hostileReads += 1;
+          throw new Error("diagnostic tag getter must not run");
+        },
+      });
+      expect(errorMessage(diagnosticFailure)).toBe("Unknown error");
+      expect(errorTag(diagnosticFailure)).toBe("UnknownError");
+      expect(hostileReads).toBe(0);
+
       const oversizedEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       const oversizedExit = yield* AgentRuntime.stream(
         makeAgent([{ type: "error", error: { message: "x".repeat(8_192) } }]),
@@ -3796,6 +3814,14 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     expect(boundedValueFootprint(backing, 8_192)).toBeUndefined();
     expect(boundedValueFootprint(cleanView, 8_192)).toBe(4_128);
     expect(boundedValueFootprint(cleanBacking, 8_192)).toBe(4_128);
+    // The backing bytes fit, but materializing thousands of indexed keys does not.
+    expect(boundedValueFootprint(new Uint8Array(4_096), 8_192)).toBeUndefined();
+    expect(
+      boundedValueFootprint(
+        Array.from({ length: 4_096 }, () => 0),
+        8_192,
+      ),
+    ).toBeUndefined();
     expect(binaryAccessorReads).toBe(0);
     const expandedView = new Uint8Array(1);
     Object.defineProperty(expandedView, "payload", { value: "x".repeat(2_048) });
