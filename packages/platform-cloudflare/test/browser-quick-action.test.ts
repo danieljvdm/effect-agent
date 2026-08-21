@@ -11,12 +11,14 @@ import {
   type PageCaptureError,
   type PageCaptureResult,
 } from "@effect-agent/sandbox";
-import { Deferred, Effect, Fiber } from "effect";
+import { Deferred, Effect, Fiber, Layer } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  BrowserQuickActionWorkersAi,
   browserQuickActionImplementation,
   browserQuickActionCaptureLayer,
+  browserQuickActionWorkersAiCaptureLayer,
   type BrowserQuickActionBinding,
   type BrowserQuickActionWorkersAiPolicy,
 } from "../src/browser-quick-action.ts";
@@ -75,14 +77,7 @@ const capture = (
     Effect.gen(function* () {
       const port = yield* PageCapture;
       return yield* port.capture(input);
-    }).pipe(
-      Effect.provide(
-        browserQuickActionCaptureLayer({
-          browser: binding,
-          ...(workersAi === undefined ? {} : { workersAi }),
-        }),
-      ),
-    ),
+    }).pipe(Effect.provide(captureLayer(binding, workersAi))),
   );
 
 const captureError = (
@@ -94,15 +89,18 @@ const captureError = (
     Effect.gen(function* () {
       const port = yield* PageCapture;
       return yield* port.capture(input).pipe(Effect.flip);
-    }).pipe(
-      Effect.provide(
-        browserQuickActionCaptureLayer({
-          browser: binding,
-          ...(workersAi === undefined ? {} : { workersAi }),
-        }),
-      ),
-    ),
+    }).pipe(Effect.provide(captureLayer(binding, workersAi))),
   );
+
+const captureLayer = (
+  binding: BrowserQuickActionBinding,
+  workersAi?: BrowserQuickActionWorkersAiPolicy,
+): Layer.Layer<PageCapture> =>
+  workersAi === undefined
+    ? browserQuickActionCaptureLayer({ browser: binding })
+    : browserQuickActionWorkersAiCaptureLayer({ browser: binding }).pipe(
+        Layer.provide(BrowserQuickActionWorkersAi.layer(workersAi)),
+      );
 
 const jsonResponse = (body: unknown, init?: ResponseInit): Response =>
   new Response(JSON.stringify(body), {
@@ -110,7 +108,23 @@ const jsonResponse = (body: unknown, init?: ResponseInit): Response =>
     ...init,
   });
 
+type Equal<Left, Right> =
+  (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
+    ? true
+    : false;
+type LayerRequirements<Value> =
+  Value extends Layer.Layer<infer _Output, infer _Error, infer Requirements> ? Requirements : never;
+type WorkersAiAuthorityIsVisible = Equal<
+  LayerRequirements<ReturnType<typeof browserQuickActionWorkersAiCaptureLayer>>,
+  BrowserQuickActionWorkersAi
+>;
+
 describe("Browser Run Quick Action PageCapture adapter", () => {
+  it("keeps separately billed Workers AI authority visible in the adapter Layer", () => {
+    const proof: WorkersAiAuthorityIsVisible = true;
+    expect(proof).toBe(true);
+  });
+
   it("projects the request onto the wire options and unwraps the envelope", async () => {
     const { binding, calls } = makeBinding([
       jsonResponse(
@@ -154,7 +168,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       new Response(rawHtml, { headers: { "Content-Type": "text/html" } }),
       jsonResponse({
         success: true,
-        result: ["https://docs.example.com/a", 7, "", "https://docs.example.com/b"],
+        result: ["https://docs.example.com/a", "https://docs.example.com/b"],
       }),
       jsonResponse({ success: true, result: { plans: [{ name: "Pro" }] } }),
     ]);
@@ -187,6 +201,43 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     expect(structured.resourceUse.inference).toEqual({
       provider: "cloudflare-workers-ai",
       modelCalls: 1,
+    });
+  });
+
+  it("rejects malformed and oversized link arrays instead of silently filtering their values", async () => {
+    const hostilePayloads: ReadonlyArray<ReadonlyArray<unknown>> = [
+      ["https://docs.example.com/a", 7],
+      ["https://docs.example.com/a", ""],
+      ["https://docs.example.com/a", "x".repeat(8 * 1024 + 1)],
+      Array.from({ length: 4_097 }, () => "https://a"),
+    ];
+    const { binding } = makeBinding(
+      hostilePayloads.map((result) => jsonResponse({ success: true, result })),
+    );
+
+    for (const _payload of hostilePayloads) {
+      expect(await captureError(binding, request(CapturePageLinks.make({})))).toMatchObject({
+        _tag: "PageCaptureProtocolError",
+        message: expect.stringContaining("bounded array of valid URLs"),
+      });
+    }
+  });
+
+  it("preserves JSON-shaped page text when response metadata identifies a raw payload", async () => {
+    const rawFailure = JSON.stringify({ success: false, errors: "page content" });
+    const rawSuccess = JSON.stringify({ success: true, result: "page content" });
+    const { binding } = makeBinding([
+      new Response(rawFailure, { headers: { "Content-Type": "text/markdown; charset=utf-8" } }),
+      new Response(rawSuccess, { headers: { "Content-Type": "text/plain" } }),
+    ]);
+
+    expect((await capture(binding, request(CapturePageMarkdown.make({})))).output).toMatchObject({
+      _tag: "PageMarkdownCaptured",
+      markdown: rawFailure,
+    });
+    expect((await capture(binding, request(CapturePageContent.make({})))).output).toMatchObject({
+      _tag: "PageContentCaptured",
+      html: rawSuccess,
     });
   });
 
@@ -246,6 +297,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       new Response("bad request", { status: 400 }),
       new Response("internal", { status: 500 }),
       jsonResponse({ success: false, errors: [{ code: 1, message: "navigation failed" }] }),
+      jsonResponse({ result: "missing success discriminator" }),
     ]);
     expect(await captureError(binding, request(CapturePageMarkdown.make({})))).toMatchObject({
       _tag: "PageCaptureNavigationError",
@@ -256,6 +308,10 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     expect(await captureError(binding, request(CapturePageMarkdown.make({})))).toMatchObject({
       _tag: "PageCaptureNavigationError",
       message: expect.stringContaining("navigation failed"),
+    });
+    expect(await captureError(binding, request(CapturePageMarkdown.make({})))).toMatchObject({
+      _tag: "PageCaptureProtocolError",
+      message: expect.stringContaining("valid response envelope"),
     });
   });
 

@@ -1,4 +1,4 @@
-import { Context, Schema, type Effect } from "effect";
+import { Context, Encoding, Predicate, Schema, type Effect } from "effect";
 
 import { SANDBOX_DIAGNOSTIC_MAX_LENGTH, SandboxImplementation } from "./sandbox.ts";
 
@@ -19,6 +19,10 @@ import { SANDBOX_DIAGNOSTIC_MAX_LENGTH, SandboxImplementation } from "./sandbox.
 
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const MAX_LINKS = 4_096;
+const MAX_RESPONSE_FORMAT_BYTES = 64 * 1024;
+const MAX_RESPONSE_FORMAT_DEPTH = 32;
+const MAX_RESPONSE_FORMAT_NODES = 4_096;
+const MAX_RESPONSE_FORMAT_COLLECTION_LENGTH = 256;
 // Schema `isMaxLength` counts UTF-16 elements: these are transport sanity
 // bounds. The authoritative byte budget is `PageCaptureLimits.maxOutputBytes`,
 // which adapters enforce on the UTF-8 encoded response.
@@ -29,9 +33,179 @@ const BoundedPrompt = Schema.NonEmptyString.check(Schema.isMaxLength(8 * 1024));
 const BoundedSelector = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 const BoundedPattern = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 const BoundedMessage = Schema.String.check(Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
+const BoundedSchemaProperty = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 /** Bounded by the platform's 60-second browser inactivity ceiling. */
 const BoundedTimeoutMillis = PositiveInt.check(Schema.isLessThanOrEqualTo(60_000));
+
+const ResponseFormatPrimitive = Schema.Literals([
+  "string",
+  "number",
+  "boolean",
+  "array",
+  "object",
+  "null",
+  "integer",
+]);
+const ResponseFormatPrimitiveList = Schema.Array(ResponseFormatPrimitive).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(7),
+  Schema.isUnique(),
+);
+
+type ResponseFormatNode = Schema.JsonObject & {
+  readonly type?:
+    | typeof ResponseFormatPrimitive.Type
+    | typeof ResponseFormatPrimitiveList.Type
+    | undefined;
+  readonly properties?: Readonly<Record<string, ResponseFormatNode>> | undefined;
+  readonly required?: ReadonlyArray<string> | undefined;
+  readonly items?: ResponseFormatNode | boolean | undefined;
+  readonly additionalProperties?: ResponseFormatNode | boolean | undefined;
+  readonly anyOf?: ReadonlyArray<ResponseFormatNode> | undefined;
+  readonly oneOf?: ReadonlyArray<ResponseFormatNode> | undefined;
+  readonly allOf?: ReadonlyArray<ResponseFormatNode> | undefined;
+  readonly $defs?: Readonly<Record<string, ResponseFormatNode>> | undefined;
+};
+
+const ResponseFormatNode: Schema.Codec<ResponseFormatNode> = Schema.suspend(
+  (): Schema.Codec<ResponseFormatNode> =>
+    Schema.StructWithRest(
+      Schema.Struct({
+        type: Schema.optionalKey(
+          Schema.Union([ResponseFormatPrimitive, ResponseFormatPrimitiveList]),
+        ),
+        properties: Schema.optionalKey(
+          Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(
+            Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
+          ),
+        ),
+        required: Schema.optionalKey(
+          Schema.Array(BoundedSchemaProperty).check(
+            Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
+            Schema.isUnique(),
+          ),
+        ),
+        items: Schema.optionalKey(Schema.Union([Schema.Boolean, ResponseFormatNode])),
+        additionalProperties: Schema.optionalKey(
+          Schema.Union([Schema.Boolean, ResponseFormatNode]),
+        ),
+        anyOf: Schema.optionalKey(
+          Schema.Array(ResponseFormatNode).check(
+            Schema.isMinLength(1),
+            Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
+          ),
+        ),
+        oneOf: Schema.optionalKey(
+          Schema.Array(ResponseFormatNode).check(
+            Schema.isMinLength(1),
+            Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
+          ),
+        ),
+        allOf: Schema.optionalKey(
+          Schema.Array(ResponseFormatNode).check(
+            Schema.isMinLength(1),
+            Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
+          ),
+        ),
+        $defs: Schema.optionalKey(
+          Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(
+            Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
+          ),
+        ),
+      }),
+      [Schema.Record(Schema.String, Schema.Json)],
+    ),
+);
+
+const ResponseFormatDocument = Schema.StructWithRest(
+  Schema.Struct({
+    type: Schema.Literal("object"),
+    properties: Schema.optionalKey(
+      Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(
+        Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
+      ),
+    ),
+    required: Schema.optionalKey(
+      Schema.Array(BoundedSchemaProperty).check(
+        Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
+        Schema.isUnique(),
+      ),
+    ),
+    additionalProperties: Schema.optionalKey(Schema.Union([Schema.Boolean, ResponseFormatNode])),
+    $defs: Schema.optionalKey(
+      Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(
+        Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
+      ),
+    ),
+  }),
+  [Schema.Record(Schema.String, Schema.Json)],
+);
+
+const isResponseFormatDocument = Schema.is(ResponseFormatDocument);
+
+/** Preflight graph bounds before recursively decoding an untrusted JSON Schema. */
+const isBoundedResponseFormat = (input: unknown): input is typeof ResponseFormatDocument.Type => {
+  if (!Predicate.isObject(input)) return false;
+
+  const pending: Array<{ readonly value: unknown; readonly depth: number }> = [
+    { value: input, depth: 0 },
+  ];
+  const visited = new WeakSet<object>();
+  let nodes = 0;
+  let textUnits = 0;
+
+  try {
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (
+        current === undefined ||
+        current.depth > MAX_RESPONSE_FORMAT_DEPTH ||
+        ++nodes > MAX_RESPONSE_FORMAT_NODES
+      ) {
+        return false;
+      }
+
+      const value = current.value;
+      if (value === null || typeof value === "boolean") continue;
+      if (typeof value === "number") {
+        if (!Number.isFinite(value)) return false;
+        continue;
+      }
+      if (typeof value === "string") {
+        textUnits += value.length;
+        if (textUnits > MAX_RESPONSE_FORMAT_BYTES) return false;
+        continue;
+      }
+      if (!Predicate.isObjectOrArray(value) || visited.has(value)) return false;
+      visited.add(value);
+
+      const entries = Array.isArray(value)
+        ? value.map((entry, index) => [index, entry] as const)
+        : Object.entries(value);
+      if (entries.length > MAX_RESPONSE_FORMAT_COLLECTION_LENGTH) return false;
+
+      for (const [key, entry] of entries) {
+        textUnits += typeof key === "string" ? key.length : 0;
+        if (textUnits > MAX_RESPONSE_FORMAT_BYTES) return false;
+        pending.push({ value: entry, depth: current.depth + 1 });
+      }
+    }
+
+    if (!isResponseFormatDocument(input)) return false;
+    const encoded = JSON.stringify(input);
+    return Encoding.encodeHex(encoded).length / 2 <= MAX_RESPONSE_FORMAT_BYTES;
+  } catch {
+    return false;
+  }
+};
+
+/** A platform-supported object JSON Schema with bounded depth, entries, nodes, and UTF-8 bytes. */
+export const PageCaptureResponseFormat = Schema.declare(isBoundedResponseFormat, {
+  identifier: "@effect-agent/sandbox/PageCaptureResponseFormat",
+  description: "An object JSON Schema bounded to 64 KiB, depth 32, and 4096 nodes",
+});
+export type PageCaptureResponseFormat = typeof PageCaptureResponseFormat.Type;
 
 /** Capture a URL after a full render, the common case. */
 export class PageUrlTarget extends Schema.TaggedClass<PageUrlTarget>()("PageUrlTarget", {
@@ -74,15 +248,15 @@ export class CapturePageLinks extends Schema.TaggedClass<CapturePageLinks>()("Ca
 }) {}
 
 /**
- * Extract structured data from the rendered page. `responseFormat` is a JSON
- * Schema document (typically derived from an Effect Schema) that shapes the
- * extraction; the untrusted result must still be decoded by the caller
+ * Extract structured data from the rendered page. `responseFormat` is a
+ * bounded, object-shaped JSON Schema document, typically derived from an
+ * Effect Schema. The untrusted result must still be decoded by the caller
  * through the original Effect Schema.
  */
 export class CapturePageStructured extends Schema.TaggedClass<CapturePageStructured>()(
   "CapturePageStructured",
   {
-    responseFormat: Schema.Json,
+    responseFormat: PageCaptureResponseFormat,
     prompt: Schema.optionalKey(BoundedPrompt),
   },
 ) {}

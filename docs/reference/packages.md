@@ -39,7 +39,7 @@ approval and audit, budgets, context/compaction, scheduling, MCP, structural red
 capture through `WebCapture.make` and `WebCapture.makeExtract` over the `PageCapture` port, and
 Subagent authoring through `Subagent.define`, `SubagentPolicy`, `SubagentGrant`, and
 `SubagentRuntime.layer`. Capture Tools have uncertain execution class; extraction handler Layers
-retain their Effect Schema's decoding-service requirements.
+and Tool invocations retain their Effect Schema's decoding-service requirements.
 
 It depends outward from engine; the engine does not import it.
 
@@ -117,10 +117,11 @@ so its composition root owns collision-resistant cancellation identity generatio
 client reading ambient time or randomness. `CloudflareBindingSource` may capture registered worker
 Bindings from `CloudflareBindingSourceContext` once per Object incarnation, after identity
 derivation. `browserQuickActionCaptureLayer` adapts the Wrangler `browser` binding's
-`quickAction()` to the `PageCapture` port; structured extraction additionally requires explicit
-`workersAi.authorizeAndAccount` host policy. The `./browser-quick-action` export provides that
-adapter without loading Durable Object runtime modules. It is a Layer-assembly library, not an
-application entrypoint.
+`quickAction()` to the `PageCapture` port without granting Workers AI authority.
+`browserQuickActionWorkersAiCaptureLayer` additionally requires the explicit
+`BrowserQuickActionWorkersAi` authorization and accounting service before permitting structured
+extraction. The `./browser-quick-action` export provides these adapters without loading Durable
+Object runtime modules. It is a Layer-assembly library, not an application entrypoint.
 
 ### `@effect-agent/pr-review`
 

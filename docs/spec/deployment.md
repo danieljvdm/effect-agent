@@ -380,14 +380,21 @@ resolved constructor option (DEPLOY-010) and never read ambiently. Construction-
 patterns reach the binding as `allowRequestPattern`, restricting navigation, redirects, and
 subrequests alike. A capture-owned Scope reads response bytes incrementally, stops at the first
 chunk exceeding the request budget, and cancels and unlocks its reader on success, failure, or
-interruption. HTTP 429 becomes a typed rate/quota failure; `Retry-After` is included only when
-conversion to milliseconds remains a safe integer.
+interruption. Response `Content-Type`, not attacker-controlled page text, identifies the
+Cloudflare JSON response envelope. Every returned link must satisfy the canonical bounded-link
+Schema; malformed entries and over-limit collections fail typed instead of being discarded.
+HTTP 429 becomes a typed rate/quota failure; `Retry-After` is included only when conversion to
+milliseconds remains a safe integer.
 
 The `json` Quick Action uses Cloudflare's separately billed Workers AI provider. It fails closed
-unless the host supplies `workersAi.authorizeAndAccount`; that Effect runs before the browser
-RPC, and successful results report `cloudflare-workers-ai` plus one model call alongside any
-`X-Browser-Ms-Used` observation. The adapter rejects typed the `kitesurf` engine the binding
-cannot select (the REST and CDP surfaces can; a REST adapter is a possible later slice).
+unless the host selects `browserQuickActionWorkersAiCaptureLayer` and supplies its visible
+`BrowserQuickActionWorkersAi` service. That service's `authorizeAndAccount` Effect runs before
+the browser RPC, and successful results report `cloudflare-workers-ai` plus one model call
+alongside any `X-Browser-Ms-Used` observation. The ordinary
+`browserQuickActionCaptureLayer` has no Workers AI authority. Both Layers receive the browser
+binding as the explicit resolved constructor value required by DEPLOY-014. The adapter rejects
+typed the `kitesurf` engine the binding cannot select (the REST and CDP surfaces can; a REST
+adapter is a possible later slice).
 `quickAction()` requires a Worker compatibility date of `2026-03-24` or later and has no local
 implementation: local `wrangler dev` needs remote mode. Ordinary tests use a scripted binding
 inside workerd. An opt-in live smoke in the provider-owning `examples/providers` leaf additionally
@@ -459,6 +466,7 @@ Current platform references:
   and is reconstructible without process-global state.
 - **DEPLOY-014**: The Browser Run Quick Action page-capture adapter receives its binding as a
   resolved option, applies the fixed browser-request allowlist, incrementally enforces the
-  response byte budget with scoped reader cleanup, keeps platform refusals and safe backoff
-  hints typed, denies Workers AI without explicit host authorization and accounting, and claims
-  deployment class `E` only.
+  response byte budget with scoped reader cleanup, distinguishes response envelopes by trusted
+  metadata, rejects malformed link payloads, keeps platform refusals and safe backoff hints
+  typed, denies Workers AI without its explicit host authorization and accounting service, and
+  claims deployment class `E` only.

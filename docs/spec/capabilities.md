@@ -341,6 +341,9 @@ interface PageCapture {
 Requests, results, limits, and expected errors are Effect Schemas. The request selects the
 engine (`chromium`, or the lightweight `kitesurf` where an adapter supports it), bounds the
 response in UTF-8 bytes, and may constrain navigation readiness, viewport, and request egress.
+Structured requests accept only object-shaped JSON Schema documents with valid nested schema
+nodes, at most 64 KiB of encoded data, depth 32, 4,096 total nodes, and 256 entries per
+collection. Malformed, cyclic, or over-budget documents fail at the request Schema boundary.
 Adapters reuse the `SandboxImplementation` posture idiom (CAP-010), reject any feature or engine
 they cannot honor, and surface platform rate and quota refusals as one typed failure carrying
 the platform's own backoff hint. Capture resource use records browser time and, when an adapter
@@ -355,7 +358,8 @@ The same allowlist is projected into the browser's request policy, covering init
 redirect destinations, and every rendered-page subrequest. `WebCapture.makeExtract` derives the
 platform-side JSON response format from one Effect Schema and decodes the untrusted result
 through that exact Schema; its handler Layer visibly requires both `PageCapture` and the
-Schema's decoding services.
+Schema's decoding services, and the Tool invocation keeps those decoding services visible in
+its own requirement channel.
 
 Both builders return ordinary Tools with `failureMode: "return"` and execution class
 `uncertain`: page JavaScript can mutate remote state, so captures are neither safely replayable
@@ -442,5 +446,7 @@ default and are excluded from ordinary span attributes.
   live-context estimate.
 - **CAP-018**: Page capture is deny-by-default: its immutable target-host allowlist governs
   navigation, redirects, and subrequests; its action set, engine, and byte budget are fixed at
-  capability construction; browser execution remains `uncertain`; model inference requires
-  explicit host authorization and accounting; and every result is treated as untrusted input.
+  capability construction; structured extraction accepts only a bounded object JSON Schema and
+  exposes its decoder requirements; browser execution remains `uncertain`; model inference
+  requires explicit host authorization and accounting; and every result is treated as untrusted
+  input.

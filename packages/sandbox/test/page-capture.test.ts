@@ -72,6 +72,47 @@ describe("PageCapture schemas", () => {
     ).toEqual(failure);
   });
 
+  it("accepts only bounded object JSON Schema documents for structured capture", () => {
+    const invalidDocuments: ReadonlyArray<unknown> = [
+      null,
+      "object",
+      [],
+      {},
+      { type: "string" },
+      { type: "object", properties: [] },
+      { type: "object", properties: { price: 7 } },
+      { type: "object", properties: { price: { type: "unsupported" } } },
+      { type: "object", required: ["price", "price"] },
+      { type: "object", description: "x".repeat(64 * 1024 + 1) },
+      {
+        type: "object",
+        properties: Object.fromEntries(
+          Array.from({ length: 257 }, (_, index) => [`field${String(index)}`, { type: "string" }]),
+        ),
+      },
+    ];
+
+    let tooDeep: unknown = { type: "string" };
+    for (let depth = 0; depth < 40; depth++) {
+      tooDeep = { type: "object", properties: { nested: tooDeep } };
+    }
+
+    const cyclic: { readonly type: "object"; readonly properties: Record<string, unknown> } = {
+      type: "object",
+      properties: {},
+    };
+    cyclic.properties.self = cyclic;
+
+    for (const responseFormat of [...invalidDocuments, tooDeep, cyclic]) {
+      expect(
+        Schema.decodeUnknownExit(CapturePageStructured)({
+          _tag: "CapturePageStructured",
+          responseFormat,
+        })._tag,
+      ).toBe("Failure");
+    }
+  });
+
   it("rejects out-of-bounds untrusted values at the Schema boundary", () => {
     expect(() =>
       PageCaptureRequest.make({

@@ -61,8 +61,9 @@ still consume the Agent's Tool Call budget and may require another Turn before f
 
 Platform capabilities that invoke a different provider remain explicit too. Browser-side
 structured extraction must not silently select Workers AI or bypass the host's provider policy:
-the adapter requires host-owned authorization and accounting before inference and records the
-provider and model-call count in its capture result.
+the opt-in extraction adapter requires the visible `BrowserQuickActionWorkersAi` service for
+host-owned authorization and accounting before inference, and records the provider and
+model-call count in its capture result.
 
 ## 3. Prompt and Response
 

@@ -38253,6 +38253,10 @@ class CodeExecutor extends exports_Context.Service()("@effect-agent/sandbox/Code
 // packages/sandbox/src/page-capture.ts
 var MAX_OUTPUT_BYTES2 = 8 * 1024 * 1024;
 var MAX_LINKS = 4096;
+var MAX_RESPONSE_FORMAT_BYTES = 64 * 1024;
+var MAX_RESPONSE_FORMAT_DEPTH = 32;
+var MAX_RESPONSE_FORMAT_NODES = 4096;
+var MAX_RESPONSE_FORMAT_COLLECTION_LENGTH = 256;
 var BoundedOutputText2 = exports_Schema.String.check(exports_Schema.isMaxLength(MAX_OUTPUT_BYTES2));
 var BoundedUrl = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
 var BoundedHtml = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2 * 1024 * 1024));
@@ -38260,8 +38264,92 @@ var BoundedPrompt = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLeng
 var BoundedSelector = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
 var BoundedPattern = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
 var BoundedMessage2 = exports_Schema.String.check(exports_Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
+var BoundedSchemaProperty = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
 var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var BoundedTimeoutMillis = PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(60000));
+var ResponseFormatPrimitive = exports_Schema.Literals([
+  "string",
+  "number",
+  "boolean",
+  "array",
+  "object",
+  "null",
+  "integer"
+]);
+var ResponseFormatPrimitiveList = exports_Schema.Array(ResponseFormatPrimitive).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(7), exports_Schema.isUnique());
+var ResponseFormatNode = exports_Schema.suspend(() => exports_Schema.StructWithRest(exports_Schema.Struct({
+  type: exports_Schema.optionalKey(exports_Schema.Union([ResponseFormatPrimitive, ResponseFormatPrimitiveList])),
+  properties: exports_Schema.optionalKey(exports_Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(exports_Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
+  required: exports_Schema.optionalKey(exports_Schema.Array(BoundedSchemaProperty).check(exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH), exports_Schema.isUnique())),
+  items: exports_Schema.optionalKey(exports_Schema.Union([exports_Schema.Boolean, ResponseFormatNode])),
+  additionalProperties: exports_Schema.optionalKey(exports_Schema.Union([exports_Schema.Boolean, ResponseFormatNode])),
+  anyOf: exports_Schema.optionalKey(exports_Schema.Array(ResponseFormatNode).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
+  oneOf: exports_Schema.optionalKey(exports_Schema.Array(ResponseFormatNode).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
+  allOf: exports_Schema.optionalKey(exports_Schema.Array(ResponseFormatNode).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
+  $defs: exports_Schema.optionalKey(exports_Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(exports_Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH)))
+}), [exports_Schema.Record(exports_Schema.String, exports_Schema.Json)]));
+var ResponseFormatDocument = exports_Schema.StructWithRest(exports_Schema.Struct({
+  type: exports_Schema.Literal("object"),
+  properties: exports_Schema.optionalKey(exports_Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(exports_Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
+  required: exports_Schema.optionalKey(exports_Schema.Array(BoundedSchemaProperty).check(exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH), exports_Schema.isUnique())),
+  additionalProperties: exports_Schema.optionalKey(exports_Schema.Union([exports_Schema.Boolean, ResponseFormatNode])),
+  $defs: exports_Schema.optionalKey(exports_Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(exports_Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH)))
+}), [exports_Schema.Record(exports_Schema.String, exports_Schema.Json)]);
+var isResponseFormatDocument = exports_Schema.is(ResponseFormatDocument);
+var isBoundedResponseFormat = (input) => {
+  if (!exports_Predicate.isObject(input))
+    return false;
+  const pending = [
+    { value: input, depth: 0 }
+  ];
+  const visited = new WeakSet;
+  let nodes = 0;
+  let textUnits = 0;
+  try {
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (current === undefined || current.depth > MAX_RESPONSE_FORMAT_DEPTH || ++nodes > MAX_RESPONSE_FORMAT_NODES) {
+        return false;
+      }
+      const value4 = current.value;
+      if (value4 === null || typeof value4 === "boolean")
+        continue;
+      if (typeof value4 === "number") {
+        if (!Number.isFinite(value4))
+          return false;
+        continue;
+      }
+      if (typeof value4 === "string") {
+        textUnits += value4.length;
+        if (textUnits > MAX_RESPONSE_FORMAT_BYTES)
+          return false;
+        continue;
+      }
+      if (!exports_Predicate.isObjectOrArray(value4) || visited.has(value4))
+        return false;
+      visited.add(value4);
+      const entries3 = Array.isArray(value4) ? value4.map((entry, index2) => [index2, entry]) : Object.entries(value4);
+      if (entries3.length > MAX_RESPONSE_FORMAT_COLLECTION_LENGTH)
+        return false;
+      for (const [key, entry] of entries3) {
+        textUnits += typeof key === "string" ? key.length : 0;
+        if (textUnits > MAX_RESPONSE_FORMAT_BYTES)
+          return false;
+        pending.push({ value: entry, depth: current.depth + 1 });
+      }
+    }
+    if (!isResponseFormatDocument(input))
+      return false;
+    const encoded = JSON.stringify(input);
+    return exports_Encoding.encodeHex(encoded).length / 2 <= MAX_RESPONSE_FORMAT_BYTES;
+  } catch {
+    return false;
+  }
+};
+var PageCaptureResponseFormat = exports_Schema.declare(isBoundedResponseFormat, {
+  identifier: "@effect-agent/sandbox/PageCaptureResponseFormat",
+  description: "An object JSON Schema bounded to 64 KiB, depth 32, and 4096 nodes"
+});
 
 class PageUrlTarget extends exports_Schema.TaggedClass()("PageUrlTarget", {
   url: BoundedUrl
@@ -38287,7 +38375,7 @@ class CapturePageLinks extends exports_Schema.TaggedClass()("CapturePageLinks", 
 }
 
 class CapturePageStructured extends exports_Schema.TaggedClass()("CapturePageStructured", {
-  responseFormat: exports_Schema.Json,
+  responseFormat: PageCaptureResponseFormat,
   prompt: exports_Schema.optionalKey(BoundedPrompt)
 }) {
 }

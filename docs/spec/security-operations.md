@@ -177,10 +177,12 @@ The capture capability is deny-by-default: an immutable construction-time https 
 governs navigation, redirects, and every browser subrequest; credentials never ride in capture
 requests; and responses are byte-bounded before buffering. Rendered JavaScript may mutate
 remote state, so capture Tools remain `uncertain`, are not automatically replayed, and cannot
-enter readonly-only Code Mode. Structured extractions require explicit host authorization and
-accounting for any platform-selected model provider and are decoded through the caller's
-service-aware Effect Schema before use. A page that instructs the model is data, never
-authority.
+enter readonly-only Code Mode. Structured extraction accepts only a bounded object JSON Schema;
+the request rejects malformed nested schema nodes, excessive encoded bytes, excessive depth,
+oversized collections, and cycles before any provider can run. Extraction requires an explicit
+host authorization and accounting service for any platform-selected model provider, and results
+are decoded through the caller's service-aware Effect Schema before use. A page that instructs
+the model is data, never authority.
 
 The read-only SQL reference Tool's guarantee is database authority, not SQL text inspection: a
 database identity without mutation, DDL, administrative, or extension privileges; denial of

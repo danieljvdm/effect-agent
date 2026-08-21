@@ -114,6 +114,16 @@ describe("WebCapture construction", () => {
     expect(Context.get(definition.tool.annotations, ToolExecutionClass)).toBe("uncertain");
     expect(Object.isFrozen(definition.urlPatterns)).toBe(true);
   });
+
+  it("rejects extraction schemas that cannot produce a bounded object response format", () => {
+    expect(() =>
+      WebCapture.makeExtract("extract_text", {
+        description: "Extract text.",
+        urls: ["docs.example.com"],
+        schema: Schema.String,
+      }),
+    ).toThrow(/bounded object JSON response format/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -541,7 +551,7 @@ layer(identifiers)("WebCapture handlers through a scripted port", (it) => {
         {},
       ).pipe(
         Effect.provide(
-          definition.handlers.pipe(Layer.provide(Layer.merge(scripted.port, decoderLayer))),
+          definition.handlers.pipe(Layer.provideMerge(Layer.merge(scripted.port, decoderLayer))),
         ),
         Effect.scoped,
       );
@@ -601,6 +611,10 @@ type ServiceExtractKeepsDecoderRequirement = Equal<
   ServiceExtractLayerRequirements,
   PageCapture | ExtractionDecoderService
 >;
+type ServiceExtractToolKeepsDecoderRequirement = Equal<
+  Tool.HandlerServices<typeof typedServiceExtract.tool>,
+  ExtractionDecoderService
+>;
 
 describe("WebCapture type proofs", () => {
   it("pins the PageCapture requirement, envelope failure, and decoded success", () => {
@@ -610,13 +624,15 @@ describe("WebCapture type proofs", () => {
     const extractRequirementProof: ExtractRequiresPageCapture = true;
     const extractSuccessProof: ExtractSuccessIsDecoded = true;
     const decoderRequirementProof: ServiceExtractKeepsDecoderRequirement = true;
+    const decoderInvocationProof: ServiceExtractToolKeepsDecoderRequirement = true;
     expect(
       requirementProof &&
         failureProof &&
         successProof &&
         extractRequirementProof &&
         extractSuccessProof &&
-        decoderRequirementProof,
+        decoderRequirementProof &&
+        decoderInvocationProof,
     ).toBe(true);
   });
 });

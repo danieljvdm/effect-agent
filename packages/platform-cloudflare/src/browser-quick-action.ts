@@ -19,7 +19,7 @@ import {
   type PageCaptureOutput,
   type PageCaptureRequest,
 } from "@effect-agent/sandbox";
-import { Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 
 import { safeCauseMessage } from "./boundary.ts";
 
@@ -52,14 +52,8 @@ export interface BrowserQuickActionBinding {
 }
 
 export interface BrowserQuickActionCaptureOptions {
-  /** The resolved Wrangler `browser` binding (DEPLOY-010: supplied, never ambient). */
+  /** The resolved Wrangler `browser` binding (DEPLOY-014: supplied, never ambient). */
   readonly browser: BrowserQuickActionBinding;
-  /**
-   * Explicit authority for Cloudflare's separately billed Workers AI model.
-   * Structured capture is denied unless this policy authorizes and accounts
-   * for its model call before the browser binding is invoked.
-   */
-  readonly workersAi?: BrowserQuickActionWorkersAiPolicy | undefined;
 }
 
 /** Host-owned authorization and accounting for one Workers AI extraction. */
@@ -67,6 +61,18 @@ export interface BrowserQuickActionWorkersAiPolicy {
   readonly authorizeAndAccount: (
     request: PageCaptureRequest,
   ) => Effect.Effect<void, PageCaptureError>;
+}
+
+/** Explicit host-owned authority and accounting for separately billed Workers AI extraction. */
+export class BrowserQuickActionWorkersAi extends Context.Service<
+  BrowserQuickActionWorkersAi,
+  BrowserQuickActionWorkersAiPolicy
+>()("@effect-agent/platform-cloudflare/BrowserQuickActionWorkersAi") {
+  static layer(
+    policy: BrowserQuickActionWorkersAiPolicy,
+  ): Layer.Layer<BrowserQuickActionWorkersAi> {
+    return Layer.succeed(BrowserQuickActionWorkersAi)(policy);
+  }
 }
 
 const MAX_DIAGNOSTIC_LENGTH = 8_000;
@@ -295,18 +301,24 @@ const browserMillis = (response: Response): number | undefined => {
   return Number.isSafeInteger(millis) && millis >= 0 ? millis : undefined;
 };
 
-/** Bound and validate a links payload instead of letting `.make` throw on hostile values. */
-const boundedLinks = (values: ReadonlyArray<Schema.Json>): ReadonlyArray<string> =>
-  values
-    .filter((value): value is string => typeof value === "string")
-    .filter((value) => value.length > 0 && value.length <= 8 * 1024)
-    .slice(0, 4_096);
+/** Only trusted response metadata chooses transport framing; page text never does. */
+const isJsonResponse = (response: Response): boolean => {
+  const contentType = response.headers.get("Content-Type");
+  if (contentType === null) return false;
+  const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType === "application/json" || mediaType?.endsWith("+json") === true;
+};
 
 const parseOutput = (
   action: PageCaptureAction,
   bodyText: string,
+  response: Response,
 ): PageCaptureOutput | PageCaptureNavigationError | PageCaptureProtocolError => {
-  const envelope = decodeEnvelope(bodyText);
+  const expectsEnvelope = isJsonResponse(response);
+  const envelope = expectsEnvelope ? decodeEnvelope(bodyText) : Option.none();
+  if (expectsEnvelope && Option.isNone(envelope)) {
+    return protocolError("The JSON Quick Action response did not carry a valid response envelope");
+  }
   if (Option.isSome(envelope) && !envelope.value.success) {
     return navigationError(renderErrors(envelope.value));
   }
@@ -331,10 +343,14 @@ const parseOutput = (
       const values = Option.isSome(envelope)
         ? envelope.value.result
         : Option.getOrUndefined(decodeJson(bodyText));
-      if (!Array.isArray(values)) {
-        return protocolError("The links Quick Action did not return an array of URLs");
+      const decoded = Schema.decodeUnknownOption(PageLinksCaptured)({
+        _tag: "PageLinksCaptured",
+        links: values,
+      });
+      if (Option.isNone(decoded)) {
+        return protocolError("The links Quick Action did not return a bounded array of valid URLs");
       }
-      return PageLinksCaptured.make({ links: boundedLinks(values) });
+      return decoded.value;
     }
     case "CapturePageStructured": {
       if (Option.isSome(envelope)) {
@@ -354,7 +370,10 @@ const parseOutput = (
 
 const isQuotaMessage = (text: string): boolean => /time limit|daily|quota/i.test(text);
 
-const makeCapture = (options: BrowserQuickActionCaptureOptions): PageCaptureCapture =>
+const makeCapture = (
+  browser: BrowserQuickActionBinding,
+  workersAi?: BrowserQuickActionWorkersAiPolicy,
+): PageCaptureCapture =>
   Effect.fn("BrowserQuickActionCapture.capture")(function* (
     request: PageCaptureRequest,
   ): Effect.fn.Return<PageCaptureResult, PageCaptureError> {
@@ -369,7 +388,6 @@ const makeCapture = (options: BrowserQuickActionCaptureOptions): PageCaptureCapt
 
     const usesWorkersAi = request.action._tag === "CapturePageStructured";
     if (usesWorkersAi) {
-      const workersAi = options.workersAi;
       if (workersAi === undefined) {
         return yield* PageCaptureUnsupportedError.make({
           implementation: browserQuickActionImplementation,
@@ -382,8 +400,7 @@ const makeCapture = (options: BrowserQuickActionCaptureOptions): PageCaptureCapt
     }
 
     const response = yield* Effect.tryPromise({
-      try: () =>
-        options.browser.quickAction(quickActionName(request.action), quickActionOptions(request)),
+      try: () => browser.quickAction(quickActionName(request.action), quickActionOptions(request)),
       catch: (cause) =>
         protocolError(
           `The browser binding rejected the Quick Action: ${safeCauseMessage(cause, "no diagnostic")}`,
@@ -406,7 +423,7 @@ const makeCapture = (options: BrowserQuickActionCaptureOptions): PageCaptureCapt
       }
       return yield* navigationError(message);
     }
-    const output = parseOutput(request.action, bodyText);
+    const output = parseOutput(request.action, bodyText, response);
     if (
       output._tag === "PageCaptureNavigationError" ||
       output._tag === "PageCaptureProtocolError"
@@ -431,8 +448,22 @@ const makeCapture = (options: BrowserQuickActionCaptureOptions): PageCaptureCapt
     });
   });
 
-/** Layer building the Browser Run Quick Action `PageCapture` from the resolved binding. */
+/**
+ * Ordinary Quick Actions from the resolved browser binding. Workers AI stays
+ * unavailable unless the host deliberately selects its separate Layer.
+ */
 export const browserQuickActionCaptureLayer = (
   options: BrowserQuickActionCaptureOptions,
 ): Layer.Layer<PageCapture> =>
-  Layer.succeed(PageCapture)(PageCapture.of({ capture: makeCapture(options) }));
+  Layer.succeed(PageCapture)(PageCapture.of({ capture: makeCapture(options.browser) }));
+
+/** Structured Quick Actions additionally require visible host-owned Workers AI authority. */
+export const browserQuickActionWorkersAiCaptureLayer = (
+  options: BrowserQuickActionCaptureOptions,
+): Layer.Layer<PageCapture, never, BrowserQuickActionWorkersAi> =>
+  Layer.effect(
+    PageCapture,
+    Effect.map(BrowserQuickActionWorkersAi, (workersAi) =>
+      PageCapture.of({ capture: makeCapture(options.browser, workersAi) }),
+    ),
+  );

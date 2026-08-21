@@ -7,6 +7,7 @@ import {
   PageCapture,
   PageCaptureLimits,
   PageCaptureRequest,
+  PageCaptureResponseFormat,
   PageResourcePolicy,
   PageUrlTarget,
   type PageCaptureAction,
@@ -99,7 +100,8 @@ export type WebCaptureExtractTool<Name extends string, S extends Schema.Top> = T
     readonly success: S;
     readonly failure: typeof WebCaptureFailure;
     readonly failureMode: "return";
-  }
+  },
+  S["DecodingServices"]
 >;
 
 /** Singleton Tool record provided by one web-capture handler Layer. */
@@ -181,7 +183,7 @@ export interface WebCaptureExtractDefinition<Name extends string, S extends Sche
   readonly engine: PageCaptureEngine;
   readonly maxResponseBytes: number;
   /** The JSON Schema document derived from the extraction Schema. */
-  readonly responseFormat: Schema.Json;
+  readonly responseFormat: PageCaptureResponseFormat;
   readonly tool: WebCaptureExtractTool<Name, S>;
   readonly handlers: Layer.Layer<
     Tool.HandlersFor<WebCaptureExtractTools<Name, S>>,
@@ -490,12 +492,12 @@ const makeExtract = <const Name extends string, S extends Schema.Top>(
   // The derived JSON Schema is BOTH the platform-side response format and
   // documentation that the deriver can express the Schema at all; anything it
   // cannot derive fails construction closed rather than degrading at runtime.
-  const derived = ((): Schema.Json => {
+  const derived = ((): PageCaptureResponseFormat => {
     const jsonSchema = Tool.getJsonSchemaFromSchema(options.schema);
-    const decoded = Schema.decodeUnknownOption(Schema.Json)(jsonSchema);
+    const decoded = Schema.decodeUnknownOption(PageCaptureResponseFormat)(jsonSchema);
     if (Option.isNone(decoded)) {
       throw new Error(
-        `Web capture cannot derive a JSON response format from the extraction Schema for ${name}`,
+        `Web capture cannot derive a bounded object JSON response format from the extraction Schema for ${name}`,
       );
     }
     return decoded.value;
@@ -522,7 +524,6 @@ const makeExtract = <const Name extends string, S extends Schema.Top>(
 
   const build = Effect.gen(function* () {
     const pageCapture = yield* PageCapture;
-    const schemaServices = yield* Effect.context<S["DecodingServices"]>();
 
     const invoke = Effect.fn(`WebCapture.${name}`)(function* (parameters: {
       readonly url: string;
@@ -554,7 +555,6 @@ const makeExtract = <const Name extends string, S extends Schema.Top>(
       // The platform's extraction is untrusted; only the original Effect
       // Schema decides whether the value is the promised shape.
       return yield* decodeExtracted(result.output.value).pipe(
-        Effect.provideContext(schemaServices),
         Effect.catch((error) =>
           Effect.fail(
             failure(
