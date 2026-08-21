@@ -1,12 +1,13 @@
+import type { ToolCallId } from "@effect-agent/core";
 import {
   AttemptId,
   ReceiptId,
   SubmissionId,
-  ToolCallId,
   type AgentId,
   type ConversationId,
   type SettlementId,
 } from "@effect-agent/core";
+import type { ParentLinkage } from "@effect-agent/session";
 import {
   AbortCommand,
   AdmissionAdmitted,
@@ -43,7 +44,7 @@ import {
   OwnershipRenewal,
   OwnershipSnapshot,
   OwnershipToken,
-  ParentLinkage,
+  PersistedJson,
   ProducerEpoch,
   QueueSequence,
   RecoverySnapshot,
@@ -78,7 +79,6 @@ import {
   type DeploymentId,
   type Digest,
   type IdempotencyKey,
-  type PersistedJson,
   type Principal,
   type ProducerId,
   type RecordEnvelope,
@@ -157,8 +157,6 @@ interface StoredUnknownMark {
 
 interface StoredUnknownResolution {
   readonly intent: UnknownResolutionIntent;
-  /** Canonical JSON of the Schema-encoded resolution, for divergent re-resolution detection. */
-  readonly resolutionJson: string;
 }
 
 interface StoredSubmission {
@@ -199,12 +197,8 @@ interface StoredChildReservation {
   readonly childSubmissionId: SubmissionId | undefined;
   readonly status: ChildReservationStatus;
   readonly allocation: PersistedJson;
-  /** Canonical JSON of the allocation, for divergent-replay detection. */
-  readonly allocationJson: string;
   readonly allocationDigest: Digest;
   readonly accounting: PersistedJson | undefined;
-  /** Canonical JSON of the frozen accounting decision, for divergent-freeze detection. */
-  readonly accountingJson: string | undefined;
   readonly reservedAtMillis: number;
   readonly releaseBeganAtMillis: number | undefined;
   readonly releasedAtMillis: number | undefined;
@@ -248,6 +242,8 @@ const decodeAttemptId = Schema.decodeSync(AttemptId);
 const decodeOwnershipToken = Schema.decodeSync(OwnershipToken);
 const decodeQueueSequence = Schema.decodeSync(QueueSequence);
 const decodeProducerEpoch = Schema.decodeSync(ProducerEpoch);
+const equivalentPersistedJson = Schema.toEquivalence(PersistedJson);
+const equivalentUnknownResolution = Schema.toEquivalence(UnknownResolution);
 
 const utc = (millis: number): DateTime.Utc => DateTime.toUtc(DateTime.makeUnsafe(millis));
 
@@ -1535,14 +1531,6 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             unvalidated,
           );
           const nowMillis = yield* Clock.currentTimeMillis;
-          const encodedResolution = yield* Schema.encodeUnknownEffect(UnknownResolution)(
-            command.resolution,
-          ).pipe(
-            Effect.mapError((error) =>
-              ledgerError("recordUnknownResolution", "Invalid unknown-outcome resolution", error),
-            ),
-          );
-          const resolutionJson = JSON.stringify(encodedResolution);
           const decision = yield* Ref.modify(
             state,
             (
@@ -1589,7 +1577,10 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 ];
               }
               const existing = stored.unknownResolutions.get(command.toolCallId);
-              if (existing !== undefined && existing.resolutionJson !== resolutionJson) {
+              if (
+                existing !== undefined &&
+                !equivalentUnknownResolution(existing.intent.resolution, command.resolution)
+              ) {
                 return [
                   failure(
                     UnknownResolutionConflict.make({
@@ -1615,7 +1606,6 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   ? stored.unknownResolutions
                   : new Map(stored.unknownResolutions).set(command.toolCallId, {
                       intent,
-                      resolutionJson,
                     });
               // The lane reopens only when EVERY marked open call has a durable resolution
               // intent: unknown → input-applied (DUR-017). Replays re-run the coverage check so
@@ -1732,7 +1722,6 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           unvalidated,
         );
         const nowMillis = yield* Clock.currentTimeMillis;
-        const allocationJson = JSON.stringify(request.allocation);
         const decision = yield* Ref.modify(
           state,
           (
@@ -1749,7 +1738,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 existing.parentSubmissionId === request.parentSubmissionId &&
                 existing.parentToolCallId === request.parentToolCallId &&
                 existing.allocationDigest === request.allocationDigest &&
-                existing.allocationJson === allocationJson;
+                equivalentPersistedJson(existing.allocation, request.allocation);
               if (!identical) {
                 return [
                   failure(
@@ -1814,10 +1803,8 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               childSubmissionId: undefined,
               status: "reserved",
               allocation: request.allocation,
-              allocationJson,
               allocationDigest: request.allocationDigest,
               accounting: undefined,
-              accountingJson: undefined,
               reservedAtMillis: nowMillis,
               releaseBeganAtMillis: undefined,
               releasedAtMillis: undefined,
@@ -1949,7 +1936,6 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             unvalidated,
           );
           const nowMillis = yield* Clock.currentTimeMillis;
-          const accountingJson = JSON.stringify(request.accounting);
           const decision = yield* Ref.modify(
             state,
             (
@@ -1973,7 +1959,10 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               if (reservation.status !== "reserved") {
                 // The accounting decision was already frozen exactly once; an identical replay is
                 // a no-op and a divergent decision conflicts (spec §12 join step 6).
-                if (reservation.accountingJson === accountingJson) {
+                if (
+                  reservation.accounting !== undefined &&
+                  equivalentPersistedJson(reservation.accounting, request.accounting)
+                ) {
                   return [success(toReservationSnapshot(reservation)), current];
                 }
                 return [
@@ -1992,7 +1981,6 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 ...reservation,
                 status: "releasePending",
                 accounting: request.accounting,
-                accountingJson,
                 releaseBeganAtMillis: nowMillis,
               };
               return [

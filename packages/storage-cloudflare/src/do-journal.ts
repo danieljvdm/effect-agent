@@ -4,6 +4,7 @@ import { Effect, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlError } from "effect/unstable/sql/SqlError";
 
+import type { DoStorageFailpointError } from "./errors.ts";
 import {
   DoAppendConflict,
   DoCheckpointConflict,
@@ -11,7 +12,6 @@ import {
   DoStorageCompatibilityError,
   DoStorageCorruptionError,
   DoStorageError,
-  DoStorageFailpointError,
   DoValueBoundExceeded,
   type DoStorageFailpointLocation,
 } from "./errors.ts";
@@ -29,6 +29,7 @@ const MAX_RECORDS_PER_CONVERSATION = 65_536;
 const MAX_IDENTIFIER_LENGTH = 1_024;
 /** Durable Object SQL storage allows at most 100 bound parameters per statement. */
 const MAX_BOUND_PARAMETERS = 100;
+const isSqlError = Schema.is(SqlError);
 
 const storedTextBytes = (value: string): number => new TextEncoder().encode(value).byteLength;
 
@@ -378,9 +379,7 @@ const makeJournal = (
     (operation: string) =>
     <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | DoStorageError> =>
       sql.withTransaction(effect).pipe(
-        Effect.mapError((error) =>
-          error instanceof SqlError ? storageError(operation)(error) : error,
-        ),
+        Effect.mapError((error) => (isSqlError(error) ? storageError(operation)(error) : error)),
         Effect.withSpan("DoJournal.withWriteTransaction", { attributes: { operation } }),
       );
 

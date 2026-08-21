@@ -33,7 +33,7 @@ const sqlProbe = Effect.gen(function* () {
     .withTransaction(
       Effect.gen(function* () {
         yield* sql`INSERT INTO wp0_probe (id, label) VALUES (${3}, ${"rolled-back"})`;
-        return yield* new ProbeRollback();
+        return yield* ProbeRollback.make();
       }),
     )
     .pipe(Effect.flip);
