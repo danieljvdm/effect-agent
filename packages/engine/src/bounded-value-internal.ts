@@ -1,8 +1,9 @@
-import { Schema } from "effect";
+import { Redacted, Schema } from "effect";
 
 const DEFAULT_MAX_DEPTH = 128;
 const OBJECT_OVERHEAD_BYTES = 32;
 const PROPERTY_OVERHEAD_BYTES = 8;
+const redactedPrototype = Object.getPrototypeOf(Redacted.make(undefined)) as object;
 
 const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
   ArrayBuffer.prototype,
@@ -180,9 +181,24 @@ export const boundedValueFootprint = (
         const urlByteLength = intrinsicUrlByteLength(value);
         if (urlByteLength !== undefined) return add(urlByteLength);
 
-        const isArray = Array.isArray(value);
         const prototype = Object.getPrototypeOf(value);
-        const inspection = inspectPrototype(prototype, isArray, trustedSchemaProduct);
+        let redactedValue: unknown;
+        let isRedacted = false;
+        if (prototype === redactedPrototype) {
+          const labelDescriptor = Object.getOwnPropertyDescriptor(value, "label");
+          if (labelDescriptor !== undefined && !("value" in labelDescriptor)) return false;
+          try {
+            redactedValue = Redacted.value(value as Redacted.Redacted<unknown>);
+            isRedacted = true;
+          } catch {
+            return false;
+          }
+        }
+
+        const isArray = Array.isArray(value);
+        const inspection = isRedacted
+          ? { trustChildren: false }
+          : inspectPrototype(prototype, isArray, trustedSchemaProduct);
         if (inspection === undefined) {
           // Maps, Sets, arbitrary class instances, and other objects can retain storage that
           // own-key traversal cannot see. Plain data and known Effect Schema values are
@@ -204,6 +220,7 @@ export const boundedValueFootprint = (
 
         ancestors.add(value);
         try {
+          if (isRedacted && !visit(redactedValue, depth + 1)) return false;
           for (const key of Reflect.ownKeys(value)) {
             if (key === "length" && isArray) continue;
             if (!add(PROPERTY_OVERHEAD_BYTES)) return false;

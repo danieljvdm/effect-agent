@@ -28,6 +28,7 @@ import {
   Layer,
   Logger,
   Option,
+  Redacted,
   Ref,
   References,
   Schema,
@@ -3745,6 +3746,12 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     expect(boundedValueFootprint(view, 8_192)).toBe(4_128);
     expect(boundedValueFootprint(backing, 8_192)).toBe(4_128);
     expect(binaryAccessorReads).toBe(0);
+    expect(boundedValueFootprint(Redacted.make("secret"), 1_024)).toBe(40);
+    expect(
+      boundedValueFootprint(Redacted.make(new Map([["small", "value"]])), 1_024),
+    ).toBeUndefined();
+    const forgedRedacted = Object.create(Object.getPrototypeOf(Redacted.make("secret")));
+    expect(boundedValueFootprint(forgedRedacted, 1_024)).toBeUndefined();
     expect(boundedValueFootprint(new Map([["small", "value"]]), 1_024)).toBeUndefined();
     expect(boundedValueFootprint(new Set(["small"]), 1_024)).toBeUndefined();
     const forgedEffectValue = Object.create({ "~effect/forged": "~effect/forged" });

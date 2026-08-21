@@ -35730,6 +35730,7 @@ var makeUsageBudgetRoot = exports_Effect.fn("makeUsageBudgetRoot")(function* (co
 var DEFAULT_MAX_DEPTH = 128;
 var OBJECT_OVERHEAD_BYTES = 32;
 var PROPERTY_OVERHEAD_BYTES = 8;
+var redactedPrototype = Object.getPrototypeOf(exports_Redacted.make(undefined));
 var arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")?.get;
 var typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 var typedArrayBufferGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer")?.get;
@@ -35849,9 +35850,22 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
         const urlByteLength = intrinsicUrlByteLength(value4);
         if (urlByteLength !== undefined)
           return add5(urlByteLength);
-        const isArray2 = Array.isArray(value4);
         const prototype = Object.getPrototypeOf(value4);
-        const inspection = inspectPrototype(prototype, isArray2, trustedSchemaProduct);
+        let redactedValue;
+        let isRedacted2 = false;
+        if (prototype === redactedPrototype) {
+          const labelDescriptor = Object.getOwnPropertyDescriptor(value4, "label");
+          if (labelDescriptor !== undefined && !("value" in labelDescriptor))
+            return false;
+          try {
+            redactedValue = exports_Redacted.value(value4);
+            isRedacted2 = true;
+          } catch {
+            return false;
+          }
+        }
+        const isArray2 = Array.isArray(value4);
+        const inspection = isRedacted2 ? { trustChildren: false } : inspectPrototype(prototype, isArray2, trustedSchemaProduct);
         if (inspection === undefined) {
           return false;
         }
@@ -35863,6 +35877,8 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
         }
         ancestors.add(value4);
         try {
+          if (isRedacted2 && !visit(redactedValue, depth + 1))
+            return false;
           for (const key of Reflect.ownKeys(value4)) {
             if (key === "length" && isArray2)
               continue;
