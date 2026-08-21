@@ -136,6 +136,13 @@ Every durable boundary supports injected failure:
 The suite kills actual worker processes for Node/SQLite tests and forces Durable
 Object eviction/alarm retries in Cloudflare tests instead of limiting coverage to
 Fiber interruption.
+
+Seeded chaos runs accept `CHAOS_SEED` only when it decodes as a safe integer; malformed values
+select the documented default instead of being partially parsed. A plan derives lane drive order
+from seeded ranks with a stable lane-index tie break, so replay order does not depend on a
+runtime's handling of a random comparator. The runner retains concrete durable submit and worker
+failure unions internally while exposing convergence failures through its typed error channel.
+
 After recovery it asserts:
 
 - no accepted submission disappears;

@@ -11,9 +11,9 @@ import {
   AgentPolicy,
   ConversationId,
   RunId,
-  SubmissionId,
   ToolCallId,
   TurnId,
+  type SubmissionId,
 } from "@effect-agent/core";
 import type {
   RunApprovalDecision,
@@ -23,7 +23,6 @@ import type {
 import {
   AbortCommand,
   ApprovalDecisionCommand,
-  CanonicalRecordEnvelope,
   ConversationRead,
   ConversationStore,
   DefinitionDigests,
@@ -46,6 +45,7 @@ import {
   runIdForSubmission,
   type DurableRuntimeFailpointLocation,
   type DurableSubmitOptions,
+  type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
 import {
   MemoryConversationStoreLive,
@@ -54,7 +54,7 @@ import {
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, Response, Tool, Toolkit, type Prompt } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-approval");

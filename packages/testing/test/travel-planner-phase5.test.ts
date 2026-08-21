@@ -1,4 +1,4 @@
-import { Agent, ConversationId, SubmissionId, ToolCallId } from "@effect-agent/core";
+import { Agent, ConversationId, ToolCallId, type SubmissionId } from "@effect-agent/core";
 import type {
   RunApprovalDecision,
   RunApprovalHook,
@@ -7,7 +7,6 @@ import type {
 import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
 import {
   ApprovalDecisionCommand,
-  CanonicalRecordEnvelope,
   ConversationRead,
   ConversationStore,
   DurableAgentRuntime,
@@ -29,6 +28,7 @@ import {
   toolCallPreparedRecordId,
   toolStepSettledRecordId,
   type DurableRuntimeFailpointLocation,
+  type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
 import {
   MemoryConversationStoreLive,
@@ -36,6 +36,7 @@ import {
 } from "@effect-agent/storage-memory";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
+import type { PlatformError } from "effect";
 import {
   Cause,
   Context,
@@ -46,12 +47,11 @@ import {
   FileSystem,
   Layer,
   Option,
-  PlatformError,
   Ref,
   Schema,
   Stream,
 } from "effect";
-import { LanguageModel, Model, Prompt, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, type Prompt, type Response } from "effect/unstable/ai";
 
 import {
   assertSettledBookingsExistAtSupplier,

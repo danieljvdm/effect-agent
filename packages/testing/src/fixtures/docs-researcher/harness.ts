@@ -18,7 +18,8 @@ import {
   type IdempotencyKey,
   type ResolvedBinding,
 } from "@effect-agent/session";
-import { Crypto, Effect, Layer, Ref, Schema, Stream } from "effect";
+import type { Crypto } from "effect";
+import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response } from "effect/unstable/ai";
 
 import { DeterministicIdGeneratorLayer } from "../travel-planner/deterministic-layers.ts";

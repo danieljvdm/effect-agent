@@ -20,14 +20,16 @@ import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response, type Toolkit } from "effect/unstable/ai";
 
 import { DeterministicIdGeneratorLayer } from "./deterministic-layers.ts";
-import {
+import type {
   DestinationBrief,
+  DestinationReport,
+  DestinationResearcherToolkit,
+} from "./subagents.ts";
+import {
   DestinationFacts,
   DestinationGuide,
   DestinationRecommendation,
-  DestinationReport,
   DestinationResearcher,
-  DestinationResearcherToolkit,
   DestinationResearcherToolkitLayer,
   destinationLookup,
   destinationReportFor,

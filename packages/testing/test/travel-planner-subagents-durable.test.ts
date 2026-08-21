@@ -33,17 +33,8 @@ import {
 } from "@effect-agent/session";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  Cause,
-  Duration,
-  Effect,
-  Exit,
-  FileSystem,
-  Option,
-  PlatformError,
-  Schema,
-  Stream,
-} from "effect";
+import type { PlatformError } from "effect";
+import { Cause, Duration, Effect, Exit, FileSystem, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 import {

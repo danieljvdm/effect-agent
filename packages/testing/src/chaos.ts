@@ -10,9 +10,9 @@ import {
   ConversationId,
   IdGenerator,
   RunId,
-  SubmissionId,
   ToolCallId,
   TurnId,
+  type SubmissionId,
 } from "@effect-agent/core";
 import { DurableStep, DurableStepError, ToolExecutionClass } from "@effect-agent/engine";
 import {
@@ -42,6 +42,9 @@ import {
   verifyConversationInvariants,
   type CanonicalRecordEnvelope,
   type BatchId,
+  type DurableBindingFailure,
+  type DurableSubmitFailure,
+  type DurableWorkerFailure,
   type ProducerId,
   type Receipt,
   type ResolvedBinding,
@@ -51,7 +54,14 @@ import {
 } from "@effect-agent/session";
 import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { FastCheck } from "effect/testing";
-import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import {
+  LanguageModel,
+  Model,
+  Tool,
+  Toolkit,
+  type Prompt,
+  type Response,
+} from "effect/unstable/ai";
 
 /**
  * P7 WP4 chaos machinery (plan §5): a Schema-first `ChaosPlan`, a seeded generator over
@@ -176,12 +186,14 @@ export class ChaosConvergenceFailure extends Schema.TaggedError<ChaosConvergence
 /** Default root seed for chaos suites; override with the `CHAOS_SEED` environment variable. */
 export const DEFAULT_CHAOS_SEED = 20260813;
 
+const ChaosSeedFromEnvironment = Schema.FiniteFromString.check(Schema.isInt());
+const decodeChaosSeedFromEnvironment = Schema.decodeUnknownOption(ChaosSeedFromEnvironment);
+
 /** The root seed for this run: `CHAOS_SEED` when set to an integer, the default otherwise. */
 export const chaosSeedFromEnv = (env: Record<string, string | undefined>): number => {
   const raw = env["CHAOS_SEED"];
   if (raw === undefined || raw === "") return DEFAULT_CHAOS_SEED;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_CHAOS_SEED;
+  return Option.getOrElse(decodeChaosSeedFromEnvironment(raw), () => DEFAULT_CHAOS_SEED);
 };
 
 export interface ChaosGeneratorOptions {
@@ -458,11 +470,11 @@ const DELEGATE_CALL_ID = "chaos-delegate-1";
 const HEX = "0123456789abcdef";
 const decodeDigest = Schema.decodeSync(Digest);
 const laneDigests = (lane: number): DefinitionDigests => {
-  const digest = decodeDigest(HEX[lane % 8]!.repeat(64));
+  const digest = decodeDigest(HEX.charAt(lane % 8).repeat(64));
   return DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
 };
 const childDigestStrings = (lane: number) => {
-  const char = HEX[8 + (lane % 8)]!;
+  const char = HEX.charAt(8 + (lane % 8));
   return { agent: char.repeat(64), model: char.repeat(64), tools: char.repeat(64) } as const;
 };
 const childLaneDigests = (lane: number): DefinitionDigests => {
@@ -565,10 +577,12 @@ interface LaneFixture {
   readonly ref: string;
   readonly deskInPlay: boolean;
   readonly submissionIndexes: ReadonlyArray<number>;
-  readonly submitOne: (flatIndex: number) => Effect.Effect<Receipt, unknown>;
+  readonly submitOne: (flatIndex: number) => Effect.Effect<Receipt, DurableSubmitFailure>;
   readonly drives: (
     firstReceipt: Receipt | undefined,
-  ) => ReadonlyArray<Effect.Effect<ReadonlyArray<Settlement>, unknown>>;
+  ) => ReadonlyArray<
+    Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure>
+  >;
   readonly childConversationOf: (firstReceipt: Receipt) => ConversationId | undefined;
 }
 
@@ -636,8 +650,8 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
 
   const plainLaneFixture = (
     deskInPlay: boolean,
-    drive: Effect.Effect<ReadonlyArray<Settlement>, unknown>,
-    submitOne: (flatIndex: number) => Effect.Effect<Receipt, unknown>,
+    drive: Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure>,
+    submitOne: (flatIndex: number) => Effect.Effect<Receipt, DurableSubmitFailure>,
   ): LaneFixture => ({
     index: laneIndex,
     kind,
@@ -746,9 +760,9 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
             submitOptionsFor(flatIndex),
           ),
         drives: (firstReceipt) => {
-          const drives: Array<Effect.Effect<ReadonlyArray<Settlement>, unknown>> = [
-            driveResolved(conversationId),
-          ];
+          const drives: Array<
+            Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure>
+          > = [driveResolved(conversationId)];
           if (firstReceipt !== undefined) {
             drives.push(
               driveResolved(
@@ -838,9 +852,9 @@ const resolutionPass = Effect.fn("Chaos.resolutionPass")(function* (
         const kind =
           plan.resolutionInjections.length === 0
             ? "never-happened"
-            : plan.resolutionInjections[
-                injectionIndex(flatIndex, call.toolCallId, plan.resolutionInjections.length)
-              ]!;
+            : (plan.resolutionInjections.at(
+                injectionIndex(flatIndex, call.toolCallId, plan.resolutionInjections.length),
+              ) ?? "never-happened");
         yield* tolerateTyped(
           runtime.resolveUnknown(
             UnknownResolutionCommand.make({
@@ -858,9 +872,9 @@ const resolutionPass = Effect.fn("Chaos.resolutionPass")(function* (
         const decision =
           plan.approvalDecisions.length === 0
             ? "approved"
-            : plan.approvalDecisions[
-                injectionIndex(flatIndex, pending.toolCallId, plan.approvalDecisions.length)
-              ]!;
+            : (plan.approvalDecisions.at(
+                injectionIndex(flatIndex, pending.toolCallId, plan.approvalDecisions.length),
+              ) ?? "approved");
         yield* tolerateTyped(
           runtime.resolveApproval(
             ApprovalDecisionCommand.make({
@@ -975,11 +989,19 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
     lanes.push(yield* makeLaneFixture(plan, lane, kind, laneSubmissions.get(lane) ?? [], desk));
   }
 
-  const states: Array<SubmissionState> = plan.submissions.map((spec, flatIndex) => ({
-    flatIndex,
-    lane: lanes.find((fixture) => fixture.index === spec.lane % plan.lanes)!,
-    receipt: undefined,
-  }));
+  const lanesByIndex = new Map(lanes.map((lane) => [lane.index, lane]));
+  const states: Array<SubmissionState> = [];
+  for (const [flatIndex, spec] of plan.submissions.entries()) {
+    const laneIndex = spec.lane % plan.lanes;
+    const lane = lanesByIndex.get(laneIndex);
+    if (lane === undefined) {
+      return yield* ChaosConvergenceFailure.make({
+        seed: plan.seed,
+        message: `submission ${flatIndex} addresses missing lane ${laneIndex}`,
+      });
+    }
+    states.push({ flatIndex, lane, receipt: undefined });
+  }
   const appliedAborts = new Set<number>();
 
   type ArmEntry =
@@ -1022,7 +1044,10 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
     }
 
     // Drive every lane (and discovered child lanes) in seeded order under the active arm.
-    const order = [...lanes].sort(() => random() - 0.5);
+    const order = lanes
+      .map((lane) => ({ lane, rank: random() }))
+      .sort((left, right) => left.rank - right.rank || left.lane.index - right.lane.index)
+      .map(({ lane }) => lane);
     for (const lane of order) {
       const firstFlat = lane.submissionIndexes[0];
       const firstReceipt = firstFlat === undefined ? undefined : states[firstFlat]?.receipt;

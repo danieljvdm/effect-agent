@@ -3,15 +3,14 @@ import {
   AgentPolicy,
   CompactionPolicy,
   ConversationId,
-  IdGenerator,
   ReceiptId,
   SubmissionId,
   ToolCallId,
+  type IdGenerator,
 } from "@effect-agent/core";
 import { COMPACTION_SUMMARY_PREFIX, ToolExecutionClass } from "@effect-agent/engine";
 import {
   AbortCommand,
-  AdmissionConflict,
   ApprovalDecisionCommand,
   BatchId,
   CanonicalRecordEnvelope,
@@ -26,7 +25,6 @@ import {
   DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
   DurableRuntimeFailpointTestControl,
-  FenceRejected,
   IdempotencyKey,
   ObservationOffset,
   Principal,
@@ -35,7 +33,6 @@ import {
   Receipt,
   RecoverySnapshotRequest,
   Settlement,
-  SettlementConflict,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
@@ -55,6 +52,9 @@ import {
   turnIdForRun,
   type DurableRuntimeFailpointLocation,
   type DurableSubmitOptions,
+  type AdmissionConflict,
+  type FenceRejected,
+  type SettlementConflict,
 } from "@effect-agent/session";
 import {
   MemoryConversationStoreLive,
