@@ -39964,6 +39964,204 @@ var CodeExecutionError = exports_Schema.Union([
 
 class CodeExecutor extends exports_Context.Service()("@effect-agent/sandbox/CodeExecutor") {
 }
+// packages/sandbox/src/page-capture.ts
+var MAX_OUTPUT_BYTES2 = 8 * 1024 * 1024;
+var MAX_LINKS = 4096;
+var BoundedOutputText2 = exports_Schema.String.check(exports_Schema.isMaxLength(MAX_OUTPUT_BYTES2));
+var BoundedUrl = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
+var BoundedHtml = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2 * 1024 * 1024));
+var BoundedPrompt = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
+var BoundedSelector = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
+var BoundedPattern = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
+var BoundedMessage2 = exports_Schema.String.check(exports_Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
+var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var BoundedTimeoutMillis = PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(60000));
+
+class PageUrlTarget extends exports_Schema.TaggedClass()("PageUrlTarget", {
+  url: BoundedUrl
+}) {
+}
+
+class PageHtmlTarget extends exports_Schema.TaggedClass()("PageHtmlTarget", {
+  html: BoundedHtml
+}) {
+}
+var PageCaptureTarget = exports_Schema.Union([PageUrlTarget, PageHtmlTarget]);
+var PageCaptureEngine = exports_Schema.Literals(["chromium", "kitesurf"]);
+
+class CapturePageContent extends exports_Schema.TaggedClass()("CapturePageContent", {}) {
+}
+
+class CapturePageMarkdown extends exports_Schema.TaggedClass()("CapturePageMarkdown", {}) {
+}
+
+class CapturePageLinks extends exports_Schema.TaggedClass()("CapturePageLinks", {
+  visibleLinksOnly: exports_Schema.optionalKey(exports_Schema.Boolean)
+}) {
+}
+
+class CapturePageStructured extends exports_Schema.TaggedClass()("CapturePageStructured", {
+  responseFormat: exports_Schema.Json,
+  prompt: exports_Schema.optionalKey(BoundedPrompt)
+}) {
+}
+var PageCaptureAction = exports_Schema.Union([
+  CapturePageContent,
+  CapturePageMarkdown,
+  CapturePageLinks,
+  CapturePageStructured
+]);
+
+class PageSelectorWait extends exports_Schema.Class("PageSelectorWait")({
+  selector: BoundedSelector,
+  timeoutMillis: exports_Schema.optionalKey(BoundedTimeoutMillis)
+}) {
+}
+
+class PageNavigationOptions extends exports_Schema.Class("PageNavigationOptions")({
+  waitUntil: exports_Schema.optionalKey(exports_Schema.Literals(["load", "domcontentloaded", "networkidle0", "networkidle2"])),
+  timeoutMillis: exports_Schema.optionalKey(BoundedTimeoutMillis),
+  waitForSelector: exports_Schema.optionalKey(PageSelectorWait)
+}) {
+}
+
+class PageViewport extends exports_Schema.Class("PageViewport")({
+  width: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(7680)),
+  height: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(7680))
+}) {
+}
+
+class PageResourcePolicy extends exports_Schema.Class("PageResourcePolicy")({
+  rejectResourceTypes: exports_Schema.optionalKey(exports_Schema.Array(exports_Schema.Literals([
+    "document",
+    "stylesheet",
+    "image",
+    "media",
+    "font",
+    "script",
+    "texttrack",
+    "xhr",
+    "fetch",
+    "eventsource",
+    "websocket",
+    "manifest",
+    "other"
+  ])).check(exports_Schema.isMaxLength(16))),
+  allowRequestPatterns: exports_Schema.optionalKey(exports_Schema.Array(BoundedPattern).check(exports_Schema.isMaxLength(64)))
+}) {
+}
+
+class PageCaptureLimits extends exports_Schema.Class("PageCaptureLimits")({
+  maxOutputBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES2))
+}) {
+}
+
+class PageCaptureRequest extends exports_Schema.Class("PageCaptureRequest")({
+  target: PageCaptureTarget,
+  action: PageCaptureAction,
+  engine: PageCaptureEngine,
+  limits: PageCaptureLimits,
+  navigation: exports_Schema.optionalKey(PageNavigationOptions),
+  viewport: exports_Schema.optionalKey(PageViewport),
+  resourcePolicy: exports_Schema.optionalKey(PageResourcePolicy)
+}) {
+}
+
+class PageContentCaptured extends exports_Schema.TaggedClass()("PageContentCaptured", {
+  html: BoundedOutputText2
+}) {
+}
+
+class PageMarkdownCaptured extends exports_Schema.TaggedClass()("PageMarkdownCaptured", {
+  markdown: BoundedOutputText2
+}) {
+}
+
+class PageLinksCaptured extends exports_Schema.TaggedClass()("PageLinksCaptured", {
+  links: exports_Schema.Array(BoundedUrl).check(exports_Schema.isMaxLength(MAX_LINKS))
+}) {
+}
+
+class PageStructuredCaptured extends exports_Schema.TaggedClass()("PageStructuredCaptured", {
+  value: exports_Schema.Json
+}) {
+}
+var PageCaptureOutput = exports_Schema.Union([
+  PageContentCaptured,
+  PageMarkdownCaptured,
+  PageLinksCaptured,
+  PageStructuredCaptured
+]);
+
+class PageCaptureInferenceUse extends exports_Schema.Class("PageCaptureInferenceUse")({
+  provider: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256)),
+  modelCalls: PositiveInt4
+}) {
+}
+
+class PageCaptureResourceUse extends exports_Schema.Class("PageCaptureResourceUse")({
+  browserMillis: exports_Schema.optionalKey(exports_Schema.Natural),
+  inference: exports_Schema.optionalKey(PageCaptureInferenceUse)
+}) {
+}
+
+class PageCaptureResult extends exports_Schema.Class("PageCaptureResult")({
+  implementation: SandboxImplementation,
+  output: PageCaptureOutput,
+  resourceUse: PageCaptureResourceUse
+}) {
+}
+
+class PageCaptureRateLimitedError extends exports_Schema.TaggedError()("PageCaptureRateLimitedError", {
+  implementation: SandboxImplementation,
+  reason: exports_Schema.Literals(["rate", "quota"]),
+  retryAfterMillis: exports_Schema.optionalKey(exports_Schema.Natural),
+  message: BoundedMessage2
+}) {
+}
+
+class PageCaptureNavigationError extends exports_Schema.TaggedError()("PageCaptureNavigationError", {
+  implementation: SandboxImplementation,
+  message: BoundedMessage2
+}) {
+}
+
+class PageCaptureUnsupportedError extends exports_Schema.TaggedError()("PageCaptureUnsupportedError", {
+  implementation: SandboxImplementation,
+  feature: exports_Schema.Literals([
+    "engine",
+    "action",
+    "target",
+    "navigation",
+    "viewport",
+    "resource-policy"
+  ]),
+  message: BoundedMessage2
+}) {
+}
+
+class PageCaptureOutputLimitError extends exports_Schema.TaggedError()("PageCaptureOutputLimitError", {
+  implementation: SandboxImplementation,
+  limit: PositiveInt4,
+  observed: exports_Schema.Natural
+}) {
+}
+
+class PageCaptureProtocolError extends exports_Schema.TaggedError()("PageCaptureProtocolError", {
+  implementation: SandboxImplementation,
+  message: BoundedMessage2
+}) {
+}
+var PageCaptureError = exports_Schema.Union([
+  PageCaptureRateLimitedError,
+  PageCaptureNavigationError,
+  PageCaptureUnsupportedError,
+  PageCaptureOutputLimitError,
+  PageCaptureProtocolError
+]);
+
+class PageCapture extends exports_Context.Service()("@effect-agent/sandbox/PageCapture") {
+}
 // packages/capabilities/src/code-mode.ts
 var maxFailureTextLength = 4 * 1024;
 var BoundedFailureText = exports_Schema.String.check(exports_Schema.isMaxLength(maxFailureTextLength));
@@ -40256,7 +40454,7 @@ var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, ex
 }));
 
 // packages/capabilities/src/commands.ts
-var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 
 class SteeringCommand extends exports_Schema.TaggedClass()("SteeringCommand", {
   id: exports_Schema.NonEmptyString,
@@ -40280,7 +40478,7 @@ class FollowUpCommand extends exports_Schema.TaggedClass()("FollowUpCommand", {
 var RunCommand = exports_Schema.Union([SteeringCommand, FollowUpCommand]);
 var CommandDrainPolicy = exports_Schema.Literals(["one", "all"]);
 
-class RunCommandQueueConfig extends exports_Schema.Class("@effect-agent/capabilities/RunCommandQueueConfig")({ capacity: PositiveInt4 }) {
+class RunCommandQueueConfig extends exports_Schema.Class("@effect-agent/capabilities/RunCommandQueueConfig")({ capacity: PositiveInt5 }) {
 }
 
 class RunCommandQueueClosed extends exports_Schema.TaggedError()("RunCommandQueueClosed", { runId: RunId }) {
@@ -41469,7 +41667,7 @@ class ElicitationDeclined extends (/* @__PURE__ */ Error4("@effect/ai/McpSchema/
 // packages/capabilities/src/mcp.ts
 var MAX_MCP_TOOLS = 128;
 var MAX_MCP_DISCOVERY_BYTES = 1024 * 1024;
-var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt6 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var Sha256Digest = exports_Schema.String.check(exports_Schema.isPattern(/^sha256:[a-f0-9]{64}$/));
 var JsonArray2 = exports_Schema.Array(exports_Schema.Json);
 var isJsonArray2 = exports_Schema.is(JsonArray2);
@@ -41482,10 +41680,10 @@ class McpServerIdentity extends exports_Schema.Class("@effect-agent/capabilities
 
 class McpConnectionRequest extends exports_Schema.Class("@effect-agent/capabilities/McpConnectionRequest")({
   serverId: exports_Schema.NonEmptyString,
-  maxToolCount: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
-  maxToolDescriptionBytes: PositiveInt5,
-  maxDiscoveryBytes: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
-  connectTimeoutMillis: PositiveInt5
+  maxToolCount: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
+  maxToolDescriptionBytes: PositiveInt6,
+  maxDiscoveryBytes: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
+  connectTimeoutMillis: PositiveInt6
 }) {
 }
 
@@ -41687,9 +41885,9 @@ var connectMcp = exports_Effect.fn("connectMcp")(function* (request3) {
   };
 });
 // packages/capabilities/src/scheduling.ts
-var PositiveInt6 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt7 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var RunSchedulingOverride = exports_Schema.Union([
-  exports_Schema.Struct({ mode: exports_Schema.Literal("bounded"), concurrency: PositiveInt6 }),
+  exports_Schema.Struct({ mode: exports_Schema.Literal("bounded"), concurrency: PositiveInt7 }),
   exports_Schema.Struct({ mode: exports_Schema.Literal("sequential") })
 ]);
 // packages/capabilities/src/subagent-reservation.ts
@@ -42178,19 +42376,19 @@ var SubagentReservationsMemoryLive = exports_Layer.effect(SubagentReservations, 
 }));
 
 // packages/capabilities/src/subagent.ts
-var PositiveInt7 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt8 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var Natural4 = exports_Schema.Natural;
 var FinitePositiveDuration4 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
 var SubagentPolicyFields = exports_Schema.Struct({
-  maxChildren: PositiveInt7,
-  maxConcurrency: PositiveInt7,
-  maxTurns: PositiveInt7,
-  maxToolCalls: PositiveInt7,
+  maxChildren: PositiveInt8,
+  maxConcurrency: PositiveInt8,
+  maxTurns: PositiveInt8,
+  maxToolCalls: PositiveInt8,
   maxDuration: FinitePositiveDuration4,
-  maxInputTokens: exports_Schema.optionalKey(PositiveInt7),
-  maxOutputTokens: exports_Schema.optionalKey(PositiveInt7),
+  maxInputTokens: exports_Schema.optionalKey(PositiveInt8),
+  maxOutputTokens: exports_Schema.optionalKey(PositiveInt8),
   maxCostMicrousd: exports_Schema.optionalKey(Natural4),
-  maxResultBytes: exports_Schema.optionalKey(PositiveInt7)
+  maxResultBytes: exports_Schema.optionalKey(PositiveInt8)
 });
 
 class SubagentPolicy extends exports_Schema.Class("@effect-agent/capabilities/SubagentPolicy")(SubagentPolicyFields) {
@@ -42285,6 +42483,38 @@ var neverStartedUsage = SubagentObservedUsage.make({
   costMicrousd: 0,
   resultBytes: 0
 });
+// packages/capabilities/src/web-capture.ts
+var maxFailureTextLength2 = 4 * 1024;
+var BoundedFailureText3 = exports_Schema.String.check(exports_Schema.isMaxLength(maxFailureTextLength2));
+var BoundedErrorTag3 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
+var BoundedUrl2 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
+var BoundedContent = exports_Schema.String.check(exports_Schema.isMaxLength(1024 * 1024));
+var WebCaptureAction = exports_Schema.Literals(["markdown", "content", "links"]);
+var WebCaptureParameters = exports_Schema.Struct({
+  url: BoundedUrl2,
+  action: WebCaptureAction
+});
+var WebCaptureExtractParameters = exports_Schema.Struct({
+  url: BoundedUrl2
+});
+
+class WebCaptureSuccess extends exports_Schema.Class("@effect-agent/capabilities/WebCaptureSuccess")({
+  url: BoundedUrl2,
+  action: WebCaptureAction,
+  markdown: exports_Schema.optionalKey(BoundedContent),
+  html: exports_Schema.optionalKey(BoundedContent),
+  links: exports_Schema.optionalKey(exports_Schema.Array(BoundedUrl2).check(exports_Schema.isMaxLength(4096)))
+}) {
+}
+
+class WebCaptureFailure extends exports_Schema.TaggedError()("WebCaptureFailure", {
+  errorTag: BoundedErrorTag3,
+  message: BoundedFailureText3,
+  retryAfterMillis: exports_Schema.optionalKey(exports_Schema.Natural)
+}) {
+}
+var defaultMaxResponseBytes = 128 * 1024;
+var urlConstructor2 = Reflect.get(globalThis, "URL");
 // examples/pr-work-orders/src/workspace.ts
 class WorkspaceSearchHit extends exports_Schema.Class("@effect-agent/example-pr-work-orders/WorkspaceSearchHit")({
   path: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512)),
@@ -53762,7 +53992,7 @@ var readTerminalArtifactOption = exports_Effect.fn("readTerminalArtifactOption")
 });
 
 // examples/pr-work-order-ingress/src/action-checks.ts
-var MAX_OUTPUT_BYTES2 = 4000000;
+var MAX_OUTPUT_BYTES3 = 4000000;
 var TRUSTED_VITE_PLUS_BINARY = "/home/vp/.vite-plus/bin/vp";
 var TRUSTED_INSTALL_PATH = "/runtime/.vite-plus/bin:/home/vp/.vite-plus/bin:/usr/local/bin:/usr/bin:/bin";
 var CHECK_PATH = "/workspace/node_modules/.bin:/runtime/.vite-plus/bin:/home/vp/.vite-plus/bin:/usr/local/bin:/usr/bin:/bin";
@@ -53782,10 +54012,10 @@ var runProcess = exports_Effect.fn("workOrderAction.runProcess")(function* (inpu
     const [collected, exitCode] = yield* exports_Effect.all([
       exports_Stream.runFoldEffect(handle.all, () => ({ size: 0, chunks: [] }), (state, chunk) => {
         const size9 = state.size + chunk.length;
-        if (size9 > MAX_OUTPUT_BYTES2) {
+        if (size9 > MAX_OUTPUT_BYTES3) {
           return WorkspaceOperationFailure.make({
             operation: input.operation,
-            reason: `process output exceeds ${String(MAX_OUTPUT_BYTES2)} bytes`
+            reason: `process output exceeds ${String(MAX_OUTPUT_BYTES3)} bytes`
           });
         }
         return exports_Effect.succeed({ size: size9, chunks: [...state.chunks, chunk] });

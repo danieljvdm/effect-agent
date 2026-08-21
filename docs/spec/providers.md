@@ -59,6 +59,11 @@ provenance in declaration, progress, and terminal semantic events, but does not 
 `ToolCallStarted`: no application handler entered the framework scheduler. Provider-executed calls
 still consume the Agent's Tool Call budget and may require another Turn before final output.
 
+Platform capabilities that invoke a different provider remain explicit too. Browser-side
+structured extraction must not silently select Workers AI or bypass the host's provider policy:
+the adapter requires host-owned authorization and accounting before inference and records the
+provider and model-call count in its capture result.
+
 ## 3. Prompt and Response
 
 Effect AI `Prompt.Prompt` is the model-facing conversation representation.

@@ -20,6 +20,7 @@ must detect absence explicitly; it must not silently substitute weaker behavior.
 | MCP client                 | Implemented |                          No |                              No |
 | Sandbox                    | Implemented |                          No |     For untrusted commands/code |
 | Code Mode                  | Implemented |                          No |                              No |
+| Page capture               | Implemented |                          No |                              No |
 | Subagents                  | Implemented |                          No |                              No |
 | Persistent agent state     | Implemented |                          No |                              No |
 | Durable steps              | Implemented |                          No |                              No |
@@ -320,6 +321,52 @@ Call and its bounded final result, with inner-call evidence in telemetry counts 
 audit metadata. Code Mode claims deployment class `E` only; the `DN` and `DC` assemblies make
 no Code Mode claim until this specification says otherwise.
 
+## 9.2 Page capture and the PageCapture port
+
+Page capture renders one page — a navigated https URL or supplied HTML — in a managed headless
+browser and returns exactly one bounded output: rendered HTML, Markdown, discovered links, or
+schema-shaped structured data. The port is a stateless sibling of `Sandbox` and `CodeExecutor`
+in `@effect-agent/sandbox`: a browser is intrinsically an egress device, so it carries its own
+explicit capture contract instead of widening the sandbox network policy that every existing
+adapter rejects typed.
+
+```ts
+interface PageCapture {
+  readonly capture: (
+    request: PageCaptureRequest,
+  ) => Effect.Effect<PageCaptureResult, PageCaptureError>;
+}
+```
+
+Requests, results, limits, and expected errors are Effect Schemas. The request selects the
+engine (`chromium`, or the lightweight `kitesurf` where an adapter supports it), bounds the
+response in UTF-8 bytes, and may constrain navigation readiness, viewport, and request egress.
+Adapters reuse the `SandboxImplementation` posture idiom (CAP-010), reject any feature or engine
+they cannot honor, and surface platform rate and quota refusals as one typed failure carrying
+the platform's own backoff hint. Capture resource use records browser time and, when an adapter
+performs separately authorized model inference, its provider and model-call count. Everything a
+capture returns is untrusted, attacker-influenced content
+([security §9](./security-operations.md)).
+
+The model-facing builders live in `@effect-agent/capabilities` and follow the Delegation
+pattern: `WebCapture.make` exposes a fixed action set over an immutable construction-time https
+host allowlist (deny-by-default; a `*.example.com` wildcard matches the apex and its subdomains).
+The same allowlist is projected into the browser's request policy, covering initial navigation,
+redirect destinations, and every rendered-page subrequest. `WebCapture.makeExtract` derives the
+platform-side JSON response format from one Effect Schema and decodes the untrusted result
+through that exact Schema; its handler Layer visibly requires both `PageCapture` and the
+Schema's decoding services.
+
+Both builders return ordinary Tools with `failureMode: "return"` and execution class
+`uncertain`: page JavaScript can mutate remote state, so captures are neither safely replayable
+nor eligible for readonly-only Code Mode. Platform-side model inference is never implicit; the
+host must authorize and account for its provider before extraction starts. Construction fails
+closed on an empty or malformed host pattern, an invalid response byte budget, an empty action
+set, and an extraction Schema the deriver cannot express. Stateful browser sessions,
+screenshots, PDFs, snapshot bundles, crawling, and accessibility trees were considered and
+deliberately excluded from this first slice — each needs binary transport or session semantics
+this stateless contract does not promise. Page capture claims deployment class `E` only.
+
 ## 10. Subagents
 
 The proposed Subagent capability is specified in [subagents.md](./subagents.md). It uses declared
@@ -393,3 +440,7 @@ default and are excluded from ordinary span attributes.
   `UsageDelta` carry cache-read and cache-write input tokens distinctly (with `inputTokens`
   remaining the total), and totals expose the most recent call's input/output tokens as the
   live-context estimate.
+- **CAP-018**: Page capture is deny-by-default: its immutable target-host allowlist governs
+  navigation, redirects, and subrequests; its action set, engine, and byte budget are fixed at
+  capability construction; browser execution remains `uncertain`; model inference requires
+  explicit host authorization and accounting; and every result is treated as untrusted input.

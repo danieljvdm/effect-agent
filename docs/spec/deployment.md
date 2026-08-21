@@ -371,8 +371,44 @@ made before measurement. Current Dynamic Workers billing counts no-ID `load()` u
 Dynamic Worker per invocation, and any future stable-ID Worker caching must include tenant and
 binding context in cache identity.
 
+### Browser Run Quick Action page capture
+
+The first `PageCapture` adapter (capability spec §9.2) is the Cloudflare Browser Run Quick
+Action Layer in `@effect-agent/platform-cloudflare` (`browserQuickActionCaptureLayer`). Each
+capture is one stateless `quickAction()` RPC on the Wrangler `browser` binding, supplied as a
+resolved constructor option (DEPLOY-010) and never read ambiently. Construction-time host
+patterns reach the binding as `allowRequestPattern`, restricting navigation, redirects, and
+subrequests alike. A capture-owned Scope reads response bytes incrementally, stops at the first
+chunk exceeding the request budget, and cancels and unlocks its reader on success, failure, or
+interruption. HTTP 429 becomes a typed rate/quota failure; `Retry-After` is included only when
+conversion to milliseconds remains a safe integer.
+
+The `json` Quick Action uses Cloudflare's separately billed Workers AI provider. It fails closed
+unless the host supplies `workersAi.authorizeAndAccount`; that Effect runs before the browser
+RPC, and successful results report `cloudflare-workers-ai` plus one model call alongside any
+`X-Browser-Ms-Used` observation. The adapter rejects typed the `kitesurf` engine the binding
+cannot select (the REST and CDP surfaces can; a REST adapter is a possible later slice).
+`quickAction()` requires a Worker compatibility date of `2026-03-24` or later and has no local
+implementation: local `wrangler dev` needs remote mode. Ordinary tests use a scripted binding
+inside workerd. An opt-in live smoke in the provider-owning `examples/providers` leaf additionally
+runs one real OpenAI-backed Agent through the production capability and adapter against
+Cloudflare's real `markdown` Quick Action. It reads Linear's public pricing page, compares two
+actual subscription prices, and prints a bounded page excerpt with the Agent's schema-validated
+recommendation. Its test-only Effect HTTP transport maps the binding contract onto the documented
+Quick Action REST endpoint, so the smoke needs no deployed Worker and does not invoke separately
+billed Workers AI extraction. It requires `EFFECT_AGENT_LIVE=1`, `OPENAI_API_KEY`,
+`CLOUDFLARE_ACCOUNT_ID`, and `CLOUDFLARE_API_TOKEN`:
+
+```sh
+vp run --no-cache -F @effect-agent/example-providers test test/browser-live-smoke.test.ts --reporter=verbose
+```
+
+The adapter records no persistent state and claims deployment class `E` only.
+
 Current platform references:
 
+- [Browser Run Quick Actions](https://developers.cloudflare.com/browser-run/quick-actions/)
+- [Browser Run structured extraction and Workers AI](https://developers.cloudflare.com/browser-run/quick-actions/json-endpoint/)
 - [SQLite-backed Durable Object storage](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)
 - [Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)
 - [Durable Object alarms](https://developers.cloudflare.com/durable-objects/api/alarms/)
@@ -421,3 +457,8 @@ Current platform references:
 - **DEPLOY-013**: A Cloudflare host context-preparation Layer is acquired once per Object
   incarnation, runs only after canonical resume reconstruction, never replaces canonical history,
   and is reconstructible without process-global state.
+- **DEPLOY-014**: The Browser Run Quick Action page-capture adapter receives its binding as a
+  resolved option, applies the fixed browser-request allowlist, incrementally enforces the
+  response byte budget with scoped reader cleanup, keeps platform refusals and safe backoff
+  hints typed, denies Workers AI without explicit host authorization and accounting, and claims
+  deployment class `E` only.

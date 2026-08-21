@@ -23,3 +23,4 @@ export * from "./layers.ts";
 export * from "./conversation-object.ts";
 export * from "./client.ts";
 export * from "./code-mode-executor.ts";
+export * from "./browser-quick-action.ts";
