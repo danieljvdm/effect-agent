@@ -1,5 +1,16 @@
 # @effect-agent/platform-node
 
+## 0.1.0-beta.25
+
+### Patch Changes
+
+- [#142](https://github.com/danieljvdm/effect-agent/pull/142) [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Validate Node runtime configuration before opening SQLite. Keep Cloudflare RPC failures typed when foreign diagnostics are hostile, and close both Dynamic Worker RPC handles when a pass ends.
+
+- Updated dependencies [[`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d), [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d)]:
+  - @effect-agent/session@0.1.0-beta.25
+  - @effect-agent/storage-sqlite@0.1.0-beta.25
+  - @effect-agent/core@0.1.0-beta.25
+
 ## 0.1.0-beta.24
 
 ### Patch Changes

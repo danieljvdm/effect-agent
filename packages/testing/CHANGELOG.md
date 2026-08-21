@@ -1,5 +1,26 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.25
+
+### Minor Changes
+
+- [#140](https://github.com/danieljvdm/effect-agent/pull/140) [`eb9c5fd`](https://github.com/danieljvdm/effect-agent/commit/eb9c5fd4683a63807b131f8c8d94e9c1205bd36d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Remove deprecated pull-request review outputs and aliases, legacy review-state decoding, and unused
+  Travel Planner fixtures. Require Cloudflare worker bindings to use the per-incarnation callback.
+
+### Patch Changes
+
+- [#142](https://github.com/danieljvdm/effect-agent/pull/142) [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Harden deterministic chaos replay, MCP Schema decoding, and SQL fixture boundaries. Preserve concrete Effect failures inside chaos lanes and reject malformed seed configuration instead of partially parsing it.
+
+- Updated dependencies [[`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d), [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d), [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d), [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d), [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d), [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d)]:
+  - @effect-agent/platform-node@0.1.0-beta.25
+  - @effect-agent/engine@0.1.0-beta.25
+  - @effect-agent/sandbox@0.1.0-beta.25
+  - @effect-agent/session@0.1.0-beta.25
+  - @effect-agent/storage-memory@0.1.0-beta.25
+  - @effect-agent/storage-sqlite@0.1.0-beta.25
+  - @effect-agent/capabilities@0.1.0-beta.25
+  - @effect-agent/core@0.1.0-beta.25
+
 ## 0.1.0-beta.24
 
 ### Patch Changes

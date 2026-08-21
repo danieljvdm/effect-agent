@@ -1,5 +1,26 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.25
+
+### Minor Changes
+
+- [#144](https://github.com/danieljvdm/effect-agent/pull/144) [`2de44f5`](https://github.com/danieljvdm/effect-agent/commit/2de44f5f61d1eb932fce2ef00aef08b2c4b4be18) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Let maintainers adjudicate findings from the pull request itself — reply `/adjudicate accepted-risk|refuted|obsolete[: reason]` on a finding's inline thread, or comment `/adjudicate <disposition> "<exact title>"[: reason]` in the conversation for unanchored concerns — and the exact identity leaves active findings, verdict counts, and the check conclusion, renders in a collapsed "Adjudicated" section, and persists in the signed review state; only OWNER/MEMBER/COLLABORATOR comments count, everything else is ignored fail-closed. Inject prior-round findings on re-reviewed paths into incremental reviewer prompts; **BEHAVIOR CHANGE:** direct `PrReview.run` callers now provide `ReviewExecutionContext`, using `fullReviewExecutionContextLayer` for an explicit full review.
+
+- [#140](https://github.com/danieljvdm/effect-agent/pull/140) [`eb9c5fd`](https://github.com/danieljvdm/effect-agent/commit/eb9c5fd4683a63807b131f8c8d94e9c1205bd36d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Remove deprecated pull-request review outputs and aliases, legacy review-state decoding, and unused
+  Travel Planner fixtures. Require Cloudflare worker bindings to use the per-incarnation callback.
+
+### Patch Changes
+
+- [#145](https://github.com/danieljvdm/effect-agent/pull/145) [`84aef35`](https://github.com/danieljvdm/effect-agent/commit/84aef359e7551330204557c940d8c2c5db773bec) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Report undiffable files (binaries, oversized files) in gate reasons, the posted
+  review callout, and the step summary with the honest remedy — remove them from
+  the pull request or exclude them with ignore globs — instead of promising an
+  automatic retry that can never settle them.
+
+- [#143](https://github.com/danieljvdm/effect-agent/pull/143) [`a0ce59c`](https://github.com/danieljvdm/effect-agent/commit/a0ce59c8b172cb1a5cbfdd57086401fb1714157d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Bind review-body concerns to their changed evidence paths so incremental reviews recheck them when related files change or disappear. Distinguish current findings from carried concerns in posted review counts.
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.25
+
 ## 0.1.0-beta.24
 
 ### Patch Changes
