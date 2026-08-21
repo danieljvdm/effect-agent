@@ -30,6 +30,7 @@ import {
   WakeScheduler,
   type DurableSubmitAgent,
 } from "@effect-agent/session";
+import { decodePortRequest, type PortRequest } from "@effect-agent/storage-cloudflare";
 import type { DurableObject as CloudflareDurableObject } from "cloudflare:workers";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import {
@@ -120,22 +121,34 @@ type ConversationObjectInitializationError =
   | CloudflareBindingError
   | MaintenancePassFailure;
 
-/** Port envelope tags whose owner-side execution durably mutates this Object's lane. */
-const MUTATING_PORT_TAGS: ReadonlySet<string> = new Set([
-  "LedgerAdmit",
-  "LedgerMarkReady",
-  "LedgerRequestAbort",
-  "LedgerRecordChildSettled",
-  "StoreMaterialize",
-  "StoreAppend",
-]);
+/** Classify only a decoded port request so new protocol members cannot bypass pre-arming. */
+const isMutatingPortRequest = (request: PortRequest): boolean => {
+  switch (request._tag) {
+    case "LedgerAdmit":
+    case "LedgerMarkReady":
+    case "LedgerRequestAbort":
+    case "LedgerRecordChildSettled":
+    case "StoreMaterialize":
+    case "StoreAppend":
+      return true;
+    case "LedgerLookup":
+    case "LedgerResolveAdmission":
+    case "StoreReadPage":
+    case "StoreInspectTail":
+    case "StoreExport":
+      return false;
+  }
+  request satisfies never;
+  return false;
+};
 
-const isMutatingPortRequest = (encoded: unknown): boolean =>
-  typeof encoded === "object" &&
-  encoded !== null &&
-  "_tag" in encoded &&
-  typeof encoded._tag === "string" &&
-  MUTATING_PORT_TAGS.has(encoded._tag);
+const encodedPortRequestMutates = (encoded: unknown): Effect.Effect<boolean> =>
+  decodePortRequest(encoded).pipe(
+    Effect.match({
+      onFailure: () => false,
+      onSuccess: isMutatingPortRequest,
+    }),
+  );
 
 /** The literal encoded `PortFailed(PortProtocolError)` fallback (same shape as WP2's). */
 const encodedPortProtocolFailure = (message: string): unknown => ({
@@ -171,7 +184,7 @@ const encodeResponse = (response: HostResponse): Effect.Effect<unknown> =>
     ),
   );
 
-const utf8Bytes = (value: unknown): number =>
+const utf8Bytes = (value: PersistedJson): number =>
   new TextEncoder().encode(JSON.stringify(value)).length;
 
 /**
@@ -593,7 +606,7 @@ const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpo
     const ports = yield* ConversationObjectPorts;
     const maintenance = yield* ConversationMaintenance;
     const alarm = yield* DurableAlarmService;
-    const mutating = isMutatingPortRequest(encoded);
+    const mutating = yield* encodedPortRequestMutates(encoded);
     const handled = yield* (
       mutating ? maintenance.withMutation(ports.handle(encoded)) : ports.handle(encoded)
     ).pipe(Effect.exit);

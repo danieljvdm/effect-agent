@@ -21,6 +21,7 @@ import {
 } from "effect";
 
 import { ConversationObjectIdentity, DurableObjectContext } from "./bindings.ts";
+import { safeCauseMessage } from "./boundary.ts";
 import { CloudflareDurableRuntimeConfig } from "./config.ts";
 
 /**
@@ -50,7 +51,7 @@ const alarmFailure =
   (cause: unknown): DurableAlarmError =>
     DurableAlarmError.make({
       operation,
-      message: cause instanceof Error ? cause.message : String(cause),
+      message: safeCauseMessage(cause, "The Cloudflare alarm API failed without a diagnostic"),
       cause,
     });
 

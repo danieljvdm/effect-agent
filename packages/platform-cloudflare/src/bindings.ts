@@ -1,6 +1,6 @@
 import type { ConversationId } from "@effect-agent/core";
 import type { ProducerId } from "@effect-agent/session";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Predicate, Schema } from "effect";
 
 /**
  * Cloudflare platform bindings as Effect services (DEPLOY-010: "Cloudflare platform bindings
@@ -73,41 +73,42 @@ export class ConversationObjectNamespace extends Context.Service<
  * narrowest-boundary check (structural probe for the namespace surface the transport uses);
  * a missing or misshaped binding fails typed before any Layer is built.
  */
-export const conversationNamespaceFromEnv = (
+export const conversationNamespaceFromEnv = Effect.fn("conversationNamespaceFromEnv")(function* (
   env: unknown,
   binding: string,
-): Effect.Effect<DurableObjectNamespace<ConversationObjectRpc>, CloudflareBindingError> =>
-  Effect.suspend(() => {
-    if (typeof env !== "object" || env === null) {
-      return Effect.fail(
-        CloudflareBindingError.make({
-          binding,
-          message: "The Worker environment is not an object; no bindings are available.",
-        }),
-      );
-    }
-    const candidate: unknown = (env as Record<string, unknown>)[binding];
-    if (
-      typeof candidate === "object" &&
-      candidate !== null &&
-      "idFromName" in candidate &&
-      typeof candidate.idFromName === "function" &&
-      "get" in candidate &&
-      typeof candidate.get === "function"
-    ) {
-      // The structural probe above is the entire runtime contract this package relies on;
-      // the assertion records that `idFromName`/`get` name a DurableObjectNamespace.
-      return Effect.succeed(candidate as DurableObjectNamespace<ConversationObjectRpc>);
-    }
-    return Effect.fail(
+): Effect.fn.Return<DurableObjectNamespace<ConversationObjectRpc>, CloudflareBindingError> {
+  if (!Predicate.isObjectKeyword(env)) {
+    return yield* CloudflareBindingError.make({
+      binding,
+      message: "The Worker environment is not an object; no bindings are available.",
+    });
+  }
+  const candidate = yield* Effect.try({
+    try: () => {
+      const value: unknown = Reflect.get(env, binding);
+      if (!Predicate.isObjectKeyword(value)) return undefined;
+      const idFromName: unknown = Reflect.get(value, "idFromName");
+      const get: unknown = Reflect.get(value, "get");
+      return typeof idFromName === "function" && typeof get === "function" ? value : undefined;
+    },
+    catch: () =>
       CloudflareBindingError.make({
         binding,
-        message:
-          `env.${binding} is not a DurableObjectNamespace binding; declare the Conversation ` +
-          "Object class under this binding in the Worker configuration.",
+        message: `env.${binding} could not be inspected as a DurableObjectNamespace binding.`,
       }),
-    );
   });
+  if (candidate !== undefined) {
+    // The structural probe above is the entire runtime contract this package relies on;
+    // the assertion records that `idFromName`/`get` name a DurableObjectNamespace.
+    return candidate as unknown as DurableObjectNamespace<ConversationObjectRpc>;
+  }
+  return yield* CloudflareBindingError.make({
+    binding,
+    message:
+      `env.${binding} is not a DurableObjectNamespace binding; declare the Conversation ` +
+      "Object class under this binding in the Worker configuration.",
+  });
+});
 
 /** `ConversationObjectNamespace` built from the untyped Worker `env` (fails typed). */
 export const conversationNamespaceLayer = (

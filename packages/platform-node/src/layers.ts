@@ -1,7 +1,7 @@
 import type { SubmissionId } from "@effect-agent/core";
+import type { ConversationStore, WakeScheduler } from "@effect-agent/session";
 import {
   AgentBindingResolver,
-  ConversationStore,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   DeploymentId,
   DurableAgentRuntime,
@@ -11,7 +11,6 @@ import {
   ReleaseOwnershipRequest,
   SubmissionLedger,
   ToolReconciler,
-  WakeScheduler,
   type DurableRuntimeFailpointHandler,
   type OwnershipToken,
   type ResolvedBinding,
@@ -351,31 +350,41 @@ export class NodeDurableRuntime {
   static layer(
     options: NodeDurableRuntimeOptions,
   ): Layer.Layer<NodeDurableRuntimeServices, NodeDurableRuntimeInitializationError> {
-    const infrastructure = Layer.mergeAll(
-      sqliteStorageConfigLayer,
-      storageFailpointLayer({ filename: options.filename, failpoint: options.storageFailpoint }),
-      SqliteClient.layer({ filename: options.filename }),
-      NodeCrypto.layer,
-    );
-    const runtimeFailpointLayer =
-      options.runtimeFailpoint === undefined
-        ? DurableRuntimeFailpoint.layer
-        : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint });
-    const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
-    const bindingResolverLayer = AgentBindingResolver.layer(options.bindings ?? []);
-    const ports = Layer.mergeAll(
-      conversationStoreLayer,
-      nodeWakeSchedulerLayer.pipe(
-        Layer.provideMerge(ownershipDrainLayer.pipe(Layer.provide(submissionLedgerLayer))),
-      ),
-    );
-    return DurableAgentRuntime.layer.pipe(
-      Layer.provideMerge(Layer.mergeAll(ports, durableRuntimeConfigLayer, bindingResolverLayer)),
-      Layer.provide(
-        Layer.mergeAll(wakeSchedulerConfigLayer, runtimeFailpointLayer, reconcilerLayer),
-      ),
-      Layer.provideMerge(infrastructure),
-      Layer.provideMerge(NodeDurableRuntime.configLayer(options)),
+    return Layer.unwrap(
+      Effect.map(configFromOptions(options), (config) => {
+        const nodeConfigLayer = Layer.succeed(NodeDurableRuntimeConfig)(config);
+        const infrastructure = Layer.mergeAll(
+          sqliteStorageConfigLayer,
+          storageFailpointLayer({
+            filename: config.filename,
+            failpoint: options.storageFailpoint,
+          }),
+          SqliteClient.layer({ filename: config.filename }),
+          NodeCrypto.layer,
+        );
+        const runtimeFailpointLayer =
+          options.runtimeFailpoint === undefined
+            ? DurableRuntimeFailpoint.layer
+            : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint });
+        const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
+        const bindingResolverLayer = AgentBindingResolver.layer(options.bindings ?? []);
+        const ports = Layer.mergeAll(
+          conversationStoreLayer,
+          nodeWakeSchedulerLayer.pipe(
+            Layer.provideMerge(ownershipDrainLayer.pipe(Layer.provide(submissionLedgerLayer))),
+          ),
+        );
+        return DurableAgentRuntime.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(ports, durableRuntimeConfigLayer, bindingResolverLayer),
+          ),
+          Layer.provide(
+            Layer.mergeAll(wakeSchedulerConfigLayer, runtimeFailpointLayer, reconcilerLayer),
+          ),
+          Layer.provideMerge(infrastructure),
+          Layer.provideMerge(nodeConfigLayer),
+        );
+      }),
     );
   }
 }
