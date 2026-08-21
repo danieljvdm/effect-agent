@@ -6,15 +6,21 @@ import type { IdGenerator } from "effect-agent";
 import { ToolExecutionClass } from "effect-agent";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 
-import type { PullRequestSource, ReviewPublicationPlan, ReviewPublisher } from "../src/index.ts";
 import {
   ChangedFile,
   CodeReview,
   compileIgnoreGlobs,
   enforceFindingsBound,
+  fullReviewExecutionContextLayer,
+  noReviewAdjudicationHost,
   PrReview,
   PullRequestMetadata,
+  type PullRequestSource,
+  ReviewAdjudicationHost,
+  type ReviewExecutionContext,
   ReviewFinding,
+  type ReviewPublicationPlan,
+  type ReviewPublisher,
 } from "../src/index.ts";
 import {
   collectingReviewPublisherLayer,
@@ -160,10 +166,15 @@ const runFactoryReviewer = <E, R>(
   Effect.gen(function* () {
     const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
     const outcome = yield* run({ post: true }).pipe(
+      Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
       Effect.provide(
-        Layer.merge(
-          fixturePullRequestSourceLayer(fixture),
-          collectingReviewPublisherLayer(published),
+        fullReviewExecutionContextLayer("offline factory full review").pipe(
+          Layer.provideMerge(
+            Layer.merge(
+              fixturePullRequestSourceLayer(fixture),
+              collectingReviewPublisherLayer(published),
+            ),
+          ),
         ),
       ),
     );
@@ -318,11 +329,16 @@ layer(NodeCrypto.layer)("PrReview.make", (it) => {
       const outcome = yield* reviewer
         .run({ post: true })
         .pipe(
+          Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
           Effect.provide(
-            Layer.mergeAll(
-              fixturePullRequestSourceLayer(fixture),
-              collectingReviewPublisherLayer(published),
-              guidelinesLayer,
+            fullReviewExecutionContextLayer("offline extra-tool full review").pipe(
+              Layer.provideMerge(
+                Layer.mergeAll(
+                  fixturePullRequestSourceLayer(fixture),
+                  collectingReviewPublisherLayer(published),
+                  guidelinesLayer,
+                ),
+              ),
             ),
           ),
         );
@@ -370,13 +386,26 @@ type PlainServices = ServicesOf<typeof plainRun>;
 type ExtraServices = ServicesOf<typeof extraRun>;
 type FanOutServices = ServicesOf<typeof fanOutRun>;
 
-// The two ports and Crypto stay visible on every shape.
+// The source, publisher, adjudication host, execution context, and Crypto stay
+// visible on every shape.
 type PlainSourceProof = Assert<Equal<Extract<PlainServices, PullRequestSource>, PullRequestSource>>;
 type PlainPublisherProof = Assert<Equal<Extract<PlainServices, ReviewPublisher>, ReviewPublisher>>;
+type PlainAdjudicationHostProof = Assert<
+  Equal<Extract<PlainServices, ReviewAdjudicationHost>, ReviewAdjudicationHost>
+>;
+type PlainExecutionContextProof = Assert<
+  Equal<Extract<PlainServices, ReviewExecutionContext>, ReviewExecutionContext>
+>;
 type PlainCryptoProof = Assert<Equal<Extract<PlainServices, Crypto.Crypto>, Crypto.Crypto>>;
 type FanOutCryptoProof = Assert<Equal<Extract<FanOutServices, Crypto.Crypto>, Crypto.Crypto>>;
 type FanOutSourceProof = Assert<
   Equal<Extract<FanOutServices, PullRequestSource>, PullRequestSource>
+>;
+type FanOutAdjudicationHostProof = Assert<
+  Equal<Extract<FanOutServices, ReviewAdjudicationHost>, ReviewAdjudicationHost>
+>;
+type FanOutExecutionContextProof = Assert<
+  Equal<Extract<FanOutServices, ReviewExecutionContext>, ReviewExecutionContext>
 >;
 // Framework plumbing is satisfied internally.
 type PlainIdGeneratorExcludedProof = Assert<Equal<Extract<PlainServices, IdGenerator>, never>>;
@@ -397,9 +426,13 @@ describe("factory type proofs", () => {
   it("keeps ports and extra handlers visible while hiding framework plumbing", () => {
     const plainSourceProof: PlainSourceProof = true;
     const plainPublisherProof: PlainPublisherProof = true;
+    const plainAdjudicationHostProof: PlainAdjudicationHostProof = true;
+    const plainExecutionContextProof: PlainExecutionContextProof = true;
     const plainCryptoProof: PlainCryptoProof = true;
     const fanOutCryptoProof: FanOutCryptoProof = true;
     const fanOutSourceProof: FanOutSourceProof = true;
+    const fanOutAdjudicationHostProof: FanOutAdjudicationHostProof = true;
+    const fanOutExecutionContextProof: FanOutExecutionContextProof = true;
     const plainIdGeneratorExcludedProof: PlainIdGeneratorExcludedProof = true;
     const fanOutIdGeneratorExcludedProof: FanOutIdGeneratorExcludedProof = true;
     const extraHandlerProof: ExtraHandlerProof = true;
@@ -407,14 +440,18 @@ describe("factory type proofs", () => {
     expect([
       plainSourceProof,
       plainPublisherProof,
+      plainAdjudicationHostProof,
+      plainExecutionContextProof,
       plainCryptoProof,
       fanOutCryptoProof,
       fanOutSourceProof,
+      fanOutAdjudicationHostProof,
+      fanOutExecutionContextProof,
       plainIdGeneratorExcludedProof,
       fanOutIdGeneratorExcludedProof,
       extraHandlerProof,
       plainHandlerExcludedProof,
-    ]).toEqual([true, true, true, true, true, true, true, true, true]);
+    ]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true, true]);
   });
 });
 

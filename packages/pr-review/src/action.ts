@@ -3,6 +3,7 @@ import { Config, Console, Effect, FileSystem, Layer, Option, Redacted, Schema } 
 import { BudgetExceeded, UsageBudgetLimits } from "effect-agent";
 import { FetchHttpClient } from "effect/unstable/http";
 
+import { collectReviewAdjudications } from "./internal/adjudication.ts";
 import { splitCarriedScope } from "./internal/coverage.ts";
 import type { ChangedFile } from "./internal/diff.ts";
 import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./internal/effort.ts";
@@ -22,6 +23,10 @@ import {
 } from "./internal/providers.ts";
 import { retireStaleReviews } from "./internal/retirement.ts";
 import {
+  adjudicationIdentity,
+  concernIdentity,
+  findingIdentity,
+  fullReviewSelection,
   ReviewExecutionContext,
   ReviewHeadComparison,
   ReviewStateAuthenticator,
@@ -343,7 +348,10 @@ const resolveRunUrl = Effect.fn("resolveRunUrl")(function* () {
  * state bind it to settled assurance.
  */
 interface HarnessedReviewerBase<E, R> {
-  readonly run: (runOptions?: RunReviewOptions) => Effect.Effect<ReviewRunOutcome, E, R>;
+  /** The action composition root always supplies the selected run context. */
+  readonly run: (
+    runOptions?: RunReviewOptions,
+  ) => Effect.Effect<ReviewRunOutcome, E, R | ReviewExecutionContext>;
 }
 
 export type HarnessedReviewer<E, R, FingerprintE, FingerprintR> = HarnessedReviewerBase<E, R> &
@@ -435,10 +443,14 @@ export const concludeReviewOutcome = (
   return { conclusion: "success", reasons: [] };
 };
 
-const concludeReviewState = (state: ReviewState) => {
+const concludeReviewState = (state: ReviewState, adjudicated: ReadonlySet<string>) => {
   const reasons = blockingReasons({
-    findings: state.unresolvedFindings,
-    concerns: state.unresolvedConcerns,
+    findings: state.unresolvedFindings.filter(
+      (finding) => !adjudicated.has(findingIdentity(finding)),
+    ),
+    concerns: state.unresolvedConcerns.filter(
+      (concern) => !adjudicated.has(concernIdentity(concern)),
+    ),
   });
   return reasons.length > 0
     ? ({ conclusion: "blocking", reasons } as const)
@@ -451,7 +463,11 @@ const skipCoveredReview = Effect.fn("skipCoveredReview")(function* (input: {
   readonly reason: string;
   readonly state: ReviewState;
 }) {
-  const result = concludeReviewState(input.state);
+  // A maintainer adjudication must lift a preserved blocking conclusion
+  // without a code push, so the skip path re-reads adjudications (fail-open;
+  // stored ones survive a listing fault) before enforcing the stored state.
+  const adjudications = yield* collectReviewAdjudications(input.state.adjudications ?? []);
+  const result = concludeReviewState(input.state, new Set(adjudications.map(adjudicationIdentity)));
   yield* Console.log(
     `Skipping review of ${input.repository}#${input.pullRequestNumber}: ${input.reason}.`,
   );
@@ -660,6 +676,17 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
           });
         }
       }
+      const executionContext =
+        selection ??
+        (yield* Effect.gen(function* () {
+          const source = yield* PullRequestSource;
+          const [metadata, files] = yield* Effect.all([source.metadata, source.changedFiles]);
+          return fullReviewSelection({
+            reason: "explicit custom-reviewer full review without continuity selection",
+            files,
+            totalFiles: metadata.totalChangedFiles,
+          });
+        }));
       yield* Console.log(
         `Reviewing ${target.repository}#${target.number} (${options.post === false ? "dry run" : "posting"})...`,
       );
@@ -676,9 +703,9 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         const headMetadata = yield* source.metadata.pipe(Effect.orElseSucceed(() => undefined));
         yield* progress.value.begin({
           headSha: headMetadata?.headSha,
-          reviewMode: selection?.mode,
-          reviewReason: selection?.reason,
-          filesInScope: selection?.files.length,
+          reviewMode: executionContext.mode,
+          reviewReason: executionContext.reason,
+          filesInScope: executionContext.files.length,
           modelLabel: options.modelLabel,
           runUrl,
         });
@@ -695,12 +722,11 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             ),
           )
         : runReview;
-      const outcome = yield* selection === undefined
-        ? reviewEffect
-        : reviewEffect.pipe(
-            Effect.provide(selectedPullRequestSourceLayer(selection)),
-            Effect.provideService(ReviewExecutionContext, selection),
-          );
+      const executionLayer = Layer.merge(
+        Layer.succeed(ReviewExecutionContext)(executionContext),
+        selectedPullRequestSourceLayer(executionContext),
+      );
+      const outcome = yield* reviewEffect.pipe(Effect.provide(executionLayer));
       yield* Console.log(
         `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
           `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`,

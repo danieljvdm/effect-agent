@@ -1,4 +1,5 @@
 import {
+  fullReviewExecutionContextLayer,
   gitHubReviewLayers,
   makeOpenAiReviewModel,
   openAiClientLayer,
@@ -49,7 +50,15 @@ export const command = CliCommand.make(
       .run({ post: flags.post })
       .pipe(
         Effect.provide(
-          Layer.mergeAll(gitHubReviewLayers(target), openAiClientLayer, ReadReviewConventionsLayer),
+          fullReviewExecutionContextLayer("explicit example CLI full review").pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                gitHubReviewLayers(target),
+                openAiClientLayer,
+                ReadReviewConventionsLayer,
+              ),
+            ),
+          ),
         ),
       );
     yield* Console.log(

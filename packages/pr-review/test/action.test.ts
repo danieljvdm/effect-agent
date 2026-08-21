@@ -39,6 +39,7 @@ import {
   ReviewInputCoverage,
   ReviewRunOutcome,
   ReviewState,
+  PullRequestSource,
   StoredReviewFinding,
   webCryptoReviewStateAuthenticatorLayer,
   type ReviewVerdict,
@@ -259,8 +260,20 @@ const fakeOutcome = (
 };
 
 /** Environment harness: event payload + captured GITHUB_OUTPUT writes. */
-const actionHarness = (eventJson: string | undefined) =>
+const actionHarness = (
+  eventJson: string | undefined,
+  options: {
+    readonly changedFiles?: ReadonlyArray<{
+      readonly filename: string;
+      readonly status: string;
+      readonly additions: number;
+      readonly deletions: number;
+      readonly patch?: string | undefined;
+    }>;
+  } = {},
+) =>
   Effect.gen(function* () {
+    const changedFiles = options.changedFiles ?? [];
     const written = yield* Ref.make("");
     const requests = yield* Ref.make<ReadonlyArray<string>>([]);
     const fs = FileSystem.makeNoop({
@@ -283,7 +296,21 @@ const actionHarness = (eventJson: string | undefined) =>
         Effect.as(
           HttpClientResponse.fromWeb(
             request,
-            new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),
+            new Response(
+              url.pathname.endsWith("/files")
+                ? JSON.stringify(changedFiles)
+                : url.pathname === "/repos/acme/widgets/pulls/5"
+                  ? JSON.stringify({
+                      number: 5,
+                      title: "Review target",
+                      body: "",
+                      changed_files: changedFiles.length,
+                      base: { ref: "main", sha: "1".repeat(40) },
+                      head: { ref: "fix/review", sha: "2".repeat(40) },
+                    })
+                  : "[]",
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
           ),
         ),
       ),
@@ -353,6 +380,52 @@ describe("runReviewAction", () => {
     }),
   );
 
+  it.effect("preserves the full source for a custom reviewer without a selection profile", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+        {
+          changedFiles: [
+            {
+              filename: "src/full-source.ts",
+              status: "modified",
+              additions: 1,
+              deletions: 1,
+              patch: "@@ -1 +1 @@\n-before\n+after",
+            },
+          ],
+        },
+      );
+      const reviewedScope = yield* Ref.make({ paths: [] as ReadonlyArray<string>, totalFiles: 0 });
+
+      const result = yield* runReviewAction(
+        {
+          run: () =>
+            Effect.gen(function* () {
+              const source = yield* PullRequestSource;
+              const files = yield* source.changedFiles;
+              const context = yield* ReviewExecutionContext;
+              yield* Ref.set(reviewedScope, {
+                paths: files.map((file) => file.path),
+                totalFiles: context.totalFiles,
+              });
+              return fakeOutcome("comment");
+            }),
+        },
+        { post: false },
+      ).pipe(Effect.provide(harness.layer));
+
+      expect(result._tag).toBe("Completed");
+      expect(yield* Ref.get(reviewedScope)).toEqual({
+        paths: ["src/full-source.ts"],
+        totalFiles: 1,
+      });
+    }),
+  );
+
   it.effect(
     "starts retirement only for an enabled state-bearing post with a complete receipt",
     () =>
@@ -385,7 +458,9 @@ describe("runReviewAction", () => {
         yield* runReviewAction({
           run: () => Effect.succeed(fakeOutcome("comment", { state })),
         }).pipe(Effect.provide(harness.layer));
-        expect(yield* Ref.get(harness.requests)).toEqual([
+        expect(
+          (yield* Ref.get(harness.requests)).filter((request) => request.includes("/reviews")),
+        ).toEqual([
           "GET https://api.github.com/repos/acme/widgets/pulls/5/reviews?per_page=100&page=1",
         ]);
 
@@ -393,7 +468,9 @@ describe("runReviewAction", () => {
           { run: () => Effect.succeed(fakeOutcome("comment", { state })) },
           { retireStaleReviews: false },
         ).pipe(Effect.provide(harness.layer));
-        expect((yield* Ref.get(harness.requests)).length).toBe(1);
+        expect(
+          (yield* Ref.get(harness.requests)).filter((request) => request.includes("/reviews")),
+        ).toHaveLength(1);
 
         const incompleteReceipt = fakeOutcome("comment", { state });
         const completeReceipt = incompleteReceipt.published;
@@ -416,7 +493,9 @@ describe("runReviewAction", () => {
               }),
             ),
         }).pipe(Effect.provide(harness.layer));
-        expect((yield* Ref.get(harness.requests)).length).toBe(1);
+        expect(
+          (yield* Ref.get(harness.requests)).filter((request) => request.includes("/reviews")),
+        ).toHaveLength(1);
       }),
   );
 

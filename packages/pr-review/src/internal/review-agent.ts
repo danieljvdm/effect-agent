@@ -300,6 +300,11 @@ export const ReviewToolkitLayer = ReviewToolkit.toLayer({
 // Mission input and review output contracts.
 // ---------------------------------------------------------------------------
 
+/** Bounded prior-review context lines injected into reviewer instructions. */
+const ReviewContextLines = Schema.Array(Schema.String.check(Schema.isMaxLength(1_200))).check(
+  Schema.isMaxLength(20),
+);
+
 export class ReviewMission extends Schema.Class<ReviewMission>(
   "@effect-agent/pr-review/ReviewMission",
 )({
@@ -310,6 +315,18 @@ export class ReviewMission extends Schema.Class<ReviewMission>(
   baseRef: Schema.NonEmptyString.check(Schema.isMaxLength(300)),
   headRef: Schema.NonEmptyString.check(Schema.isMaxLength(300)),
   changedFileCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /**
+   * Maintainer-adjudicated identities rendered as bounded context lines; the
+   * reviewer must not re-raise them without materially new evidence. Absent
+   * from fingerprint missions so an adjudication never invalidates the
+   * skip-unchanged authority.
+   */
+  adjudicatedContext: Schema.optionalKey(ReviewContextLines),
+  /**
+   * Prior-round findings on re-reviewed scope, rendered as bounded context
+   * lines; each must be confirmed, declared fixed, or explicitly withdrawn.
+   */
+  priorFindingContext: Schema.optionalKey(ReviewContextLines),
 }) {}
 
 export const FindingSeverity = Schema.Literals(["blocking", "important", "nit"]);
@@ -454,6 +471,18 @@ export const makeReviewInstructions =
         ? `Author description:\n${mission.body}`
         : "The author provided no description.",
       ...resolveGuidance(options.guidance, mission),
+      ...(mission.adjudicatedContext === undefined || mission.adjudicatedContext.length === 0
+        ? []
+        : [
+            "A maintainer has adjudicated these previously raised review items (disposition, reason). Do not re-raise them unless you have materially new evidence, and if you do, say explicitly what changed since the adjudication:",
+            ...mission.adjudicatedContext.map((line) => `- ${line}`),
+          ]),
+      ...(mission.priorFindingContext === undefined || mission.priorFindingContext.length === 0
+        ? []
+        : [
+            "Your previous review raised these findings on the scope you are re-reviewing. For each, either confirm it still holds, state that it is fixed, or withdraw it; do not demand the opposite of your own prior guidance without explicitly acknowledging the reversal:",
+            ...mission.priorFindingContext.map((line) => `- ${line}`),
+          ]),
       "Work in this order:",
       "1. Call list_changed_files once to see the selected input scope. In incremental reviews it is deliberately a subset of the pull request's full diff (totalFiles counts the whole pull request); omitted paths belong to settled prior scope or explicit host exclusions, not to this run.",
       "2. Call read_file_diff for every listed file. A normal diff marks new-version anchors as R<number>; only those numbers are valid startLine/endLine values. When GitHub omitted a diff, the tool may return bounded base/head content marked B/H instead. Review that content, but report its defects as non-anchored concerns because B/H lines cannot anchor GitHub comments. Never anchor a finding to a removed (-), B, or H line.",

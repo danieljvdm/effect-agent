@@ -50,6 +50,81 @@ export class StoredReviewConcern extends Schema.Class<StoredReviewConcern>(
   body: StoredText,
 }) {}
 
+/** How a maintainer settled a previously raised finding or concern. */
+export const AdjudicationDisposition = Schema.Literals(["accepted-risk", "refuted", "obsolete"]);
+export type AdjudicationDisposition = typeof AdjudicationDisposition.Type;
+
+/** The adjudications bound carried by the ReviewState schema. */
+export const MAX_STORED_ADJUDICATIONS = 20;
+
+/**
+ * One maintainer adjudication of a finding or concern identity. Anchored
+ * findings carry their full location identity; unanchored concerns are
+ * identified by title alone, so the location fields stay absent.
+ */
+const StoredAdjudicationFields = Schema.Struct({
+  path: Schema.optionalKey(ChangedPath),
+  startLine: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  endLine: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  title: Schema.NonEmptyString.check(Schema.isMaxLength(120)),
+  disposition: AdjudicationDisposition,
+  reason: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(300))),
+  /** GitHub login of the maintainer whose comment adjudicated the identity. */
+  actor: Schema.NonEmptyString.check(Schema.isMaxLength(100)),
+}).check(
+  Schema.makeFilter(
+    (adjudication) => {
+      const locationParts = [
+        adjudication.path,
+        adjudication.startLine,
+        adjudication.endLine,
+      ].filter((part) => part !== undefined).length;
+      return locationParts === 0 || locationParts === 3
+        ? undefined
+        : "path, startLine, and endLine must be either all present or all absent";
+    },
+    { title: "adjudication locations are complete or unanchored" },
+  ),
+);
+
+export class StoredAdjudication extends Schema.Class<StoredAdjudication>(
+  "@effect-agent/pr-review/StoredAdjudication",
+)(StoredAdjudicationFields) {}
+
+/**
+ * The one finding-identity composition shared by retirement, adjudication,
+ * and settlement. A tagged JSON tuple keeps anchored findings in a namespace
+ * disjoint from title-only concerns and remains unambiguous even when
+ * untrusted path or title text contains delimiter characters.
+ */
+export const findingIdentity = (finding: {
+  readonly path: string;
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly title: string;
+}): string =>
+  JSON.stringify(["finding", finding.path, finding.startLine, finding.endLine, finding.title]);
+
+/** The disjoint title-only identity namespace for unanchored concerns. */
+export const concernIdentity = (concern: { readonly title: string }): string =>
+  JSON.stringify(["concern", concern.title]);
+
+/**
+ * An adjudication's identity: the shared finding identity when anchored, the
+ * disjoint concern identity when unanchored.
+ */
+export const adjudicationIdentity = (adjudication: StoredAdjudication): string =>
+  adjudication.path !== undefined &&
+  adjudication.startLine !== undefined &&
+  adjudication.endLine !== undefined
+    ? findingIdentity({
+        path: adjudication.path,
+        startLine: adjudication.startLine,
+        endLine: adjudication.endLine,
+        title: adjudication.title,
+      })
+    : concernIdentity(adjudication);
+
 /** The carried-scope bound; a run that cannot fit its leftovers publishes no state. */
 export const MAX_STORED_UNREVIEWED_PATHS = 100;
 
@@ -104,6 +179,13 @@ export class ReviewState extends Schema.Class<ReviewState>("@effect-agent/pr-rev
    */
   settled: Schema.Boolean,
   lastReviewMode: ReviewScopeMode,
+  /**
+   * Maintainer adjudications standing against this pull request. optionalKey
+   * so state markers signed before the field existed still decode.
+   */
+  adjudications: Schema.optionalKey(
+    Schema.Array(StoredAdjudication).check(Schema.isMaxLength(MAX_STORED_ADJUDICATIONS)),
+  ),
 }) {}
 
 export const toStoredFinding = (finding: ReviewFinding): StoredReviewFinding =>
@@ -329,16 +411,17 @@ export interface ReviewSelection {
   readonly totalFiles: number;
   readonly baselineSha: string | undefined;
   readonly priorState: ReviewState | undefined;
-  readonly profileFingerprint: string;
+  /** Absent only for an explicit full review with no continuity profile. */
+  readonly profileFingerprint: string | undefined;
   /** Action-owned authentication capability, constructed at the composition root. */
   readonly stateAuthenticator?: ReviewStateAuthenticator["Service"] | undefined;
 }
 
-const fullSelection = (input: {
+export const fullReviewSelection = (input: {
   readonly reason: string;
   readonly files: ReadonlyArray<ChangedFile>;
   readonly totalFiles: number;
-  readonly profileFingerprint: string;
+  readonly profileFingerprint?: string | undefined;
 }): ReviewSelection => ({
   mode: "full",
   reason: input.reason,
@@ -513,7 +596,7 @@ export const selectReviewRange = (input: {
   readonly lookupFailure?: string | undefined;
 }): ReviewSelection => {
   const full = (reason: string) =>
-    fullSelection({
+    fullReviewSelection({
       reason,
       files: input.fullFiles,
       totalFiles: input.current.totalChangedFiles,
@@ -581,6 +664,20 @@ export class ReviewExecutionContext extends Context.Service<
   ReviewExecutionContext,
   ReviewSelection
 >()("@effect-agent/pr-review/ReviewExecutionContext") {}
+
+/**
+ * Explicit direct-run adapter for callers that intentionally review the full
+ * source without authenticated incremental continuity.
+ */
+export const fullReviewExecutionContextLayer = (reason: string) =>
+  Layer.effect(
+    ReviewExecutionContext,
+    Effect.gen(function* () {
+      const source = yield* PullRequestSource;
+      const [metadata, files] = yield* Effect.all([source.metadata, source.changedFiles]);
+      return fullReviewSelection({ reason, files, totalFiles: metadata.totalChangedFiles });
+    }),
+  );
 
 /**
  * Decorate the full source with the selected review range. Full anchor files

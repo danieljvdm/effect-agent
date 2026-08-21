@@ -1,14 +1,18 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Option, Redacted } from "effect";
+import { Effect, Option, Redacted, Schema } from "effect";
 
 import {
+  adjudicationIdentity,
   ChangedFile,
+  concernIdentity,
+  findingIdentity,
   PullRequestMetadata,
   planReviewUnits,
   ReviewHeadComparison,
   ReviewState,
   ReviewStateAuthenticator,
   selectReviewRange,
+  StoredAdjudication,
   StoredReviewConcern,
   StoredReviewFinding,
   StoredUnreviewedPass,
@@ -98,6 +102,59 @@ const select = (overrides: Partial<Parameters<typeof selectReviewRange>[0]> = {}
   });
 
 describe("review state", () => {
+  it("keeps anchored findings and unanchored concerns in disjoint identity namespaces", () => {
+    const finding = {
+      path: "src/a.ts",
+      startLine: 1,
+      endLine: 1,
+      title: "Blocker",
+    };
+    const delimiterMimic = `${finding.path}\u0000${finding.startLine}\u0000${finding.endLine}\u0000${finding.title}`;
+    const unanchored = StoredAdjudication.make({
+      title: delimiterMimic,
+      disposition: "refuted",
+      actor: "dan",
+    });
+    const anchored = StoredAdjudication.make({
+      ...finding,
+      disposition: "refuted",
+      actor: "dan",
+    });
+
+    expect(adjudicationIdentity(anchored)).toBe(findingIdentity(finding));
+    expect(adjudicationIdentity(unanchored)).toBe(concernIdentity(unanchored));
+    expect(adjudicationIdentity(unanchored)).not.toBe(findingIdentity(finding));
+  });
+
+  it("rejects adjudications with partial locations at the persisted-state boundary", () => {
+    const common = {
+      title: "Still requires attention",
+      disposition: "accepted-risk",
+      actor: "dan",
+    } as const;
+    for (const partial of [
+      { path: "src/accepted.ts" },
+      { startLine: 1 },
+      { endLine: 1 },
+      { path: "src/accepted.ts", startLine: 1 },
+      { path: "src/accepted.ts", endLine: 1 },
+      { startLine: 1, endLine: 1 },
+    ]) {
+      expect(Schema.decodeUnknownExit(StoredAdjudication)({ ...common, ...partial })._tag).toBe(
+        "Failure",
+      );
+    }
+    expect(Schema.decodeUnknownExit(StoredAdjudication)(common)._tag).toBe("Success");
+    expect(
+      Schema.decodeUnknownExit(StoredAdjudication)({
+        ...common,
+        path: "src/accepted.ts",
+        startLine: 1,
+        endLine: 1,
+      })._tag,
+    ).toBe("Success");
+  });
+
   it.effect("authenticates only a terminal schema-validated review-body marker", () =>
     Effect.gen(function* () {
       const secret = Redacted.make("stable-state-secret");
@@ -126,6 +183,43 @@ describe("review state", () => {
           yield* authenticate("<!-- effect-agent-pr-review state-v2:not-base64 -->"),
         ),
       ).toBeUndefined();
+    }),
+  );
+
+  it.effect("round-trips adjudications and still decodes markers without the field", () =>
+    Effect.gen(function* () {
+      const secret = Redacted.make("stable-state-secret");
+      const roundTrip = (state: ReviewState) =>
+        Effect.gen(function* () {
+          const authenticator = yield* ReviewStateAuthenticator;
+          const marker = yield* authenticator.render(state);
+          return yield* authenticator.extract(`review body\n${marker}`);
+        }).pipe(Effect.provide(webCryptoReviewStateAuthenticatorLayer(secret)));
+      const adjudicated = ReviewState.make({
+        ...priorState,
+        adjudications: [
+          StoredAdjudication.make({
+            path: "src/accepted.ts",
+            startLine: 1,
+            endLine: 1,
+            title: "Still requires attention",
+            disposition: "accepted-risk",
+            reason: "Known cost, accepted for launch",
+            actor: "dan",
+          }),
+          StoredAdjudication.make({
+            title: "No rollout note",
+            disposition: "refuted",
+            actor: "dan",
+          }),
+        ],
+      });
+      expect(Option.getOrUndefined(yield* roundTrip(adjudicated))).toEqual(adjudicated);
+      // A marker signed before the field existed carries no `adjudications`
+      // key and must keep decoding unchanged.
+      const legacy = Option.getOrUndefined(yield* roundTrip(priorState));
+      expect(legacy).toEqual(priorState);
+      expect(legacy?.adjudications).toBeUndefined();
     }),
   );
 

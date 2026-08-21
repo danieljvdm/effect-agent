@@ -12,7 +12,7 @@ import {
   type ReviewConcern,
   type WalkthroughEntry,
 } from "./review-agent.ts";
-import type { ReviewScopeMode, ReviewStateMarker } from "./review-state.ts";
+import type { ReviewScopeMode, ReviewStateMarker, StoredAdjudication } from "./review-state.ts";
 
 // ---------------------------------------------------------------------------
 // Publication planning: pure, deterministic, and fail-closed. Model output is
@@ -336,6 +336,23 @@ const renderCarriedFinding = (finding: ReviewFinding): string =>
   `- \`${finding.path}:${finding.startLine}${finding.endLine === finding.startLine ? "" : `-${finding.endLine}`}\` **[${findingLabel(finding)}] ${finding.title}** — ${finding.body}`;
 
 /**
+ * One adjudicated identity: its location (absent for unanchored concerns),
+ * title, maintainer disposition, actor, and the optional reason. Rendered in
+ * the collapsed adjudicated section so the audit distinguishes fixed,
+ * adjudicated, and still-open items.
+ */
+const renderAdjudicated = (adjudication: StoredAdjudication): string => {
+  const location =
+    adjudication.path !== undefined &&
+    adjudication.startLine !== undefined &&
+    adjudication.endLine !== undefined
+      ? `\`${adjudication.path}:${adjudication.startLine}${adjudication.endLine === adjudication.startLine ? "" : `-${adjudication.endLine}`}\` `
+      : "";
+  const reason = adjudication.reason === undefined ? "" : `: ${adjudication.reason}`;
+  return `- ${location}${adjudication.title} — ${adjudication.disposition} by @${adjudication.actor}${reason}`;
+};
+
+/**
  * Validate the model's walkthrough against the real changeset: entries whose
  * path is not a changed file are dropped (the walkthrough analogue of anchor
  * validation), duplicates keep the first entry, and the result is ordered by
@@ -489,6 +506,12 @@ export const planPublication = (
     /** Unchanged unresolved items carried from the prior reviewed baseline. */
     readonly carriedFindings?: ReadonlyArray<ReviewFinding> | undefined;
     readonly carriedConcerns?: ReadonlyArray<ReviewConcern> | undefined;
+    /**
+     * Standing maintainer adjudications. The caller excludes their identities
+     * from the review, the carried items, and every severity count; this
+     * planner only renders them as the collapsed adjudicated section.
+     */
+    readonly adjudications?: ReadonlyArray<StoredAdjudication> | undefined;
     /** Selected review scope, made visible whenever orchestration chose it. */
     readonly reviewMode?: ReviewScopeMode | undefined;
     readonly reviewReason?: string | undefined;
@@ -555,6 +578,7 @@ export const planPublication = (
     omitted: number,
     walkthroughKept: boolean,
     promptsKept: boolean,
+    adjudicationsKept: boolean,
   ): string => {
     const carriedFindings = options.carriedFindings ?? [];
     const carriedConcerns = options.carriedConcerns ?? [];
@@ -634,6 +658,22 @@ export const planPublication = (
     }
     for (const concern of sortedConcerns.slice(0, concernsKept)) {
       parts.push("", renderConcern(concern));
+    }
+    const adjudications = options.adjudications ?? [];
+    if (adjudications.length > 0) {
+      parts.push(
+        "",
+        adjudicationsKept
+          ? [
+              "<details>",
+              `<summary>Adjudicated (${adjudications.length})</summary>`,
+              "",
+              ...adjudications.map(renderAdjudicated),
+              "",
+              "</details>",
+            ].join("\n")
+          : "⚠️ Adjudicated section omitted — the body exceeded GitHub's review size cap.",
+      );
     }
     if (files.length < options.totalChangedFiles) {
       parts.push(
@@ -716,20 +756,30 @@ export const planPublication = (
   const headBudget = 60_000 - tail.length - 1;
 
   // Shed whole trailing items — the derivative consolidated prompt first,
-  // then the informational walkthrough, then demoted bullets (they already
-  // failed validation), then concerns — instead of slicing markdown
-  // mid-block. Every omission is announced, and `plan.demoted` keeps the full
-  // data regardless.
+  // then the informational walkthrough, then the adjudicated record, then
+  // demoted bullets (they already failed validation), then concerns — instead
+  // of slicing markdown mid-block. Every omission is announced, and
+  // `plan.demoted` keeps the full data regardless.
+  const adjudicationCount = options.adjudications?.length ?? 0;
   let concernsKept = sortedConcerns.length;
   let demotedKept = sortedDemoted.length;
   let omitted = 0;
   let walkthroughKept = true;
   let promptsKept = true;
-  let head = renderHead(concernsKept, demotedKept, omitted, walkthroughKept, promptsKept);
+  let adjudicationsKept = true;
+  let head = renderHead(
+    concernsKept,
+    demotedKept,
+    omitted,
+    walkthroughKept,
+    promptsKept,
+    adjudicationsKept,
+  );
   while (
     head.length > headBudget &&
     ((promptsKept && consolidatedPromptWanted) ||
       (walkthroughKept && walkthrough.length > 0) ||
+      (adjudicationsKept && adjudicationCount > 0) ||
       demotedKept > 0 ||
       concernsKept > 0)
   ) {
@@ -737,6 +787,8 @@ export const planPublication = (
       promptsKept = false;
     } else if (walkthroughKept && walkthrough.length > 0) {
       walkthroughKept = false;
+    } else if (adjudicationsKept && adjudicationCount > 0) {
+      adjudicationsKept = false;
     } else if (demotedKept > 0) {
       demotedKept -= 1;
       omitted += 1;
@@ -744,7 +796,14 @@ export const planPublication = (
       concernsKept -= 1;
       omitted += 1;
     }
-    head = renderHead(concernsKept, demotedKept, omitted, walkthroughKept, promptsKept);
+    head = renderHead(
+      concernsKept,
+      demotedKept,
+      omitted,
+      walkthroughKept,
+      promptsKept,
+      adjudicationsKept,
+    );
   }
   // Last resort for a pathological summary; unreachable while the CodeReview
   // schema caps the summary well below the budget.

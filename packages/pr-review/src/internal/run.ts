@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
   makeUsageBudget,
   toRunBudgetHook,
@@ -9,6 +9,12 @@ import {
 } from "effect-agent";
 import { type Tool } from "effect/unstable/ai";
 
+import {
+  collectReviewAdjudications,
+  renderAdjudicationContextLine,
+  renderPriorFindingContextLine,
+  buildPriorReviewContext,
+} from "./adjudication.ts";
 import {
   assessFlatReview,
   fanOutInputCoverage,
@@ -28,12 +34,16 @@ import {
   ReviewMission,
 } from "./review-agent.ts";
 import {
+  adjudicationIdentity,
+  concernIdentity,
+  findingIdentity,
   fromStoredConcern,
   fromStoredFinding,
   MAX_STORED_UNREVIEWED_PASSES,
   MAX_STORED_UNREVIEWED_PATHS,
   ReviewExecutionContext,
   ReviewState,
+  StoredAdjudication,
   StoredUnreviewedPass,
   toStoredConcern,
   toStoredFinding,
@@ -106,6 +116,8 @@ export class ReviewRunOutcome extends Schema.Class<ReviewRunOutcome>(
   reviewMode: Schema.optionalKey(Schema.Literals(["incremental", "full"])),
   reviewReason: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(1_000))),
   state: Schema.optionalKey(ReviewState),
+  /** Maintainer adjudications standing against this run's identities. */
+  adjudications: Schema.optionalKey(Schema.Array(StoredAdjudication).check(Schema.isMaxLength(20))),
 }) {}
 
 export interface ExecuteReviewOptions {
@@ -133,10 +145,19 @@ export interface ExecuteReviewOptions {
   readonly runUrl?: string | undefined;
 }
 
-/** Build the mission one review run frames from the source's snapshot. */
+/**
+ * Build the mission one review run frames from the source's snapshot. The
+ * optional continuity context (adjudicated identities, prior-round findings
+ * on re-reviewed scope) reaches only RUN missions — fingerprint missions stay
+ * plain so an adjudication never invalidates skip-unchanged authority.
+ */
 export const buildReviewMission = (
   metadata: PullRequestMetadata,
   files: ReadonlyArray<ChangedFile>,
+  context?: {
+    readonly adjudicated?: ReadonlyArray<string> | undefined;
+    readonly priorFindings?: ReadonlyArray<string> | undefined;
+  },
 ): ReviewMission =>
   ReviewMission.make({
     repository: metadata.repository,
@@ -146,6 +167,12 @@ export const buildReviewMission = (
     baseRef: metadata.baseRef,
     headRef: metadata.headRef,
     changedFileCount: files.length,
+    ...(context?.adjudicated !== undefined && context.adjudicated.length > 0
+      ? { adjudicatedContext: context.adjudicated.slice(0, 20) }
+      : {}),
+    ...(context?.priorFindings !== undefined && context.priorFindings.length > 0
+      ? { priorFindingContext: context.priorFindings.slice(0, 20) }
+      : {}),
   });
 
 /** Enforce the configured findings bound on an already-validated review. */
@@ -162,6 +189,25 @@ export const enforceFindingsBound = (review: CodeReview, maxFindings: number): C
 
 const findingKey = (finding: ReviewFinding): string =>
   `${finding.path}\u0000${finding.startLine}\u0000${finding.endLine}\u0000${finding.severity}\u0000${finding.title}`;
+
+/**
+ * Continuity inputs resolved BEFORE any model work: the standing maintainer
+ * adjudications (fresh host listing merged later-wins over the prior state's
+ * stored set) and the prior-round findings whose paths this run re-reviews.
+ * The latter are dropped from the carry (the new round re-decides them) but
+ * injected as prompt context so successive rounds do not silently contradict
+ * each other — context ONLY, never auto-carried into active findings.
+ */
+const resolveReviewContinuityContext = Effect.fn("resolveReviewContinuityContext")(function* () {
+  const executionContext = yield* ReviewExecutionContext;
+  const priorState =
+    executionContext.mode === "incremental" ? executionContext.priorState : undefined;
+  const adjudications = yield* collectReviewAdjudications(priorState?.adjudications ?? []);
+  const affectedPaths = new Set(executionContext.affectedPaths);
+  const priorFindingsOnScope =
+    priorState?.unresolvedFindings.filter((finding) => affectedPaths.has(finding.path)) ?? [];
+  return { adjudications, priorFindingsOnScope };
+});
 
 /** One shape-specific review result, before the shared settlement tail. */
 interface ReviewCore {
@@ -188,22 +234,46 @@ const settleReviewRun = (
     readonly anchorFiles: ReadonlyArray<ChangedFile>;
     readonly fingerprint: string | undefined;
     readonly usage: UsageTotals | undefined;
+    readonly adjudications?: ReadonlyArray<StoredAdjudication> | undefined;
   },
   options: ExecuteReviewOptions,
 ) =>
   Effect.gen(function* () {
     const { metadata, files, anchorFiles, fingerprint, usage } = context;
-    const executionContext = Option.getOrUndefined(
-      yield* Effect.serviceOption(ReviewExecutionContext),
-    );
-    const boundedReview = enforceFindingsBound(core.review, clampMaxFindings(options.maxFindings));
+    const executionContext = yield* ReviewExecutionContext;
+    const adjudications = context.adjudications ?? [];
+    const adjudicatedIdentities = new Set(adjudications.map(adjudicationIdentity));
+    const isAdjudicatedFinding = (finding: ReviewFinding): boolean =>
+      adjudicatedIdentities.has(findingIdentity(finding));
+    const isAdjudicatedConcern = (concern: ReviewConcern): boolean =>
+      adjudicatedIdentities.has(concernIdentity(concern));
+    // Suppress adjudicated model output before any ranking or bounding. A
+    // suppressed blocker must never consume the slot of an active finding.
+    const filteredReview =
+      adjudicatedIdentities.size === 0
+        ? core.review
+        : CodeReview.make({
+            summary: core.review.summary,
+            verdict: core.review.verdict,
+            findings: core.review.findings.filter((finding) => !isAdjudicatedFinding(finding)),
+            ...(core.review.concerns === undefined
+              ? {}
+              : {
+                  concerns: core.review.concerns.filter(
+                    (concern) => !isAdjudicatedConcern(concern),
+                  ),
+                }),
+            ...(core.review.walkthrough === undefined
+              ? {}
+              : { walkthrough: core.review.walkthrough }),
+          });
     const reviewPaths = new Set(files.map((file) => file.path));
-    const review = CodeReview.make({
-      ...boundedReview,
-      ...(boundedReview.concerns === undefined
+    const normalizedReview = CodeReview.make({
+      ...filteredReview,
+      ...(filteredReview.concerns === undefined
         ? {}
         : {
-            concerns: boundedReview.concerns.map((concern) => {
+            concerns: filteredReview.concerns.map((concern) => {
               const evidencePaths = concern.evidencePaths;
               if (
                 evidencePaths === undefined ||
@@ -219,28 +289,32 @@ const settleReviewRun = (
             }),
           }),
     });
+    // Adjudicated identities leave the published review entirely: no inline
+    // comment, no severity count, no verdict influence — they render only in
+    // the plan's collapsed adjudicated section. Only identity-equal items are
+    // suppressed; a materially different finding at the same location (a
+    // different title) is untouched.
+    const review = enforceFindingsBound(normalizedReview, clampMaxFindings(options.maxFindings));
     const { inputCoverage, assurance } = core;
     const unreviewedPaths = [...new Set(core.unreviewedPaths)].sort();
-    const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
-    const affectedPaths = new Set(
-      executionContext?.affectedPaths ??
-        files.flatMap((file) =>
-          file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
-        ),
-    );
+    const reviewTotalFiles = executionContext.totalFiles;
+    const affectedPaths = new Set(executionContext.affectedPaths);
     const priorState =
-      executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
+      executionContext.mode === "incremental" ? executionContext.priorState : undefined;
     const carriedCandidates =
       priorState?.unresolvedFindings
         .filter((finding) => !affectedPaths.has(finding.path))
         .map(fromStoredFinding) ?? [];
-    const activeFindings = rankAndDedupeFindings([...carriedCandidates, ...review.findings]).slice(
-      0,
-      clampMaxFindings(options.maxFindings),
+    const eligibleCarriedCandidates = carriedCandidates.filter(
+      (finding) => !isAdjudicatedFinding(finding),
     );
+    const activeFindings = rankAndDedupeFindings([
+      ...eligibleCarriedCandidates,
+      ...review.findings.filter((finding) => !isAdjudicatedFinding(finding)),
+    ]).slice(0, clampMaxFindings(options.maxFindings));
     const activeFindingKeys = new Set(activeFindings.map(findingKey));
     const currentFindingKeys = new Set(review.findings.map(findingKey));
-    const carriedFindings = carriedCandidates.filter(
+    const carriedFindings = eligibleCarriedCandidates.filter(
       (finding) =>
         activeFindingKeys.has(findingKey(finding)) && !currentFindingKeys.has(findingKey(finding)),
     );
@@ -255,13 +329,16 @@ const settleReviewRun = (
             concern.evidencePaths.every((path) => !affectedPaths.has(path)),
         )
         .map(fromStoredConcern) ?? [];
+    const eligibleCarriedConcernCandidates = carriedConcernCandidates.filter(
+      (concern) => !isAdjudicatedConcern(concern),
+    );
     const activeConcerns = rankAndDedupeConcerns([
-      ...carriedConcernCandidates,
-      ...(review.concerns ?? []),
+      ...eligibleCarriedConcernCandidates,
+      ...(review.concerns ?? []).filter((concern) => !isAdjudicatedConcern(concern)),
     ]);
     const currentConcernKeys = new Set((review.concerns ?? []).map(reviewConcernKey));
     const activeConcernKeys = new Set(activeConcerns.map(reviewConcernKey));
-    const carriedConcerns = carriedConcernCandidates.filter((concern) => {
+    const carriedConcerns = eligibleCarriedConcernCandidates.filter((concern) => {
       const key = reviewConcernKey(concern);
       return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
     });
@@ -277,8 +354,8 @@ const settleReviewRun = (
     const skipFingerprint = settled && concernsHaveEvidencePaths ? fingerprint : undefined;
     const carriedScopeFits = unreviewedPaths.length <= MAX_STORED_UNREVIEWED_PATHS;
     const stateCandidate =
-      executionContext !== undefined &&
       fingerprint !== undefined &&
+      executionContext.profileFingerprint !== undefined &&
       metadata.baseSha !== undefined &&
       // The fingerprint and stored baseline describe the FULL pull-request
       // surface; a truncated anchor surface cannot make either claim.
@@ -303,22 +380,22 @@ const settleReviewRun = (
             unreviewedPasses: (core.unreviewedPasses ?? []).slice(0, MAX_STORED_UNREVIEWED_PASSES),
             settled,
             lastReviewMode: executionContext.mode,
+            ...(adjudications.length === 0 ? {} : { adjudications }),
           })
         : undefined;
     const continuity =
-      stateCandidate === undefined || executionContext?.stateAuthenticator === undefined
+      stateCandidate === undefined || executionContext.stateAuthenticator === undefined
         ? {
             state: undefined,
             marker: undefined,
-            notice:
-              executionContext !== undefined && !carriedScopeFits
-                ? `carried unreviewed scope (${unreviewedPaths.length} paths) exceeded the ${MAX_STORED_UNREVIEWED_PATHS}-path continuity bound`
-                : executionContext !== undefined && !concernsHaveEvidencePaths
-                  ? "one or more review concerns lacked host-validated affected paths"
-                  : executionContext?.stateAuthenticator?.status === "unavailable"
-                    ? (executionContext.stateAuthenticator.unavailableReason ??
-                      "authenticated continuity state is unavailable")
-                    : undefined,
+            notice: !carriedScopeFits
+              ? `carried unreviewed scope (${unreviewedPaths.length} paths) exceeded the ${MAX_STORED_UNREVIEWED_PATHS}-path continuity bound`
+              : !concernsHaveEvidencePaths
+                ? "one or more review concerns lacked host-validated affected paths"
+                : executionContext.stateAuthenticator?.status === "unavailable"
+                  ? (executionContext.stateAuthenticator.unavailableReason ??
+                    "authenticated continuity state is unavailable")
+                  : undefined,
           }
         : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(
             Effect.match({
@@ -348,13 +425,14 @@ const settleReviewRun = (
       unreviewedPaths,
       carriedFindings,
       carriedConcerns,
-      reviewMode: executionContext?.mode,
-      reviewReason: executionContext?.reason,
-      baselineSha: executionContext?.baselineSha,
+      reviewMode: executionContext.mode,
+      reviewReason: executionContext.reason,
+      baselineSha: executionContext.baselineSha,
       reviewFilesVisible: files.length,
       reviewTotalFiles,
       stateMarker: continuity.marker,
       stateNotice: continuity.notice,
+      ...(adjudications.length === 0 ? {} : { adjudications }),
     });
     const shared = {
       review,
@@ -366,10 +444,10 @@ const settleReviewRun = (
       plan,
       turns: core.turns,
       ...(usage === undefined ? {} : { usage }),
-      ...(executionContext === undefined
-        ? {}
-        : { reviewMode: executionContext.mode, reviewReason: executionContext.reason }),
+      reviewMode: executionContext.mode,
+      reviewReason: executionContext.reason,
       ...(continuity.state === undefined ? {} : { state: continuity.state }),
+      ...(adjudications.length === 0 ? {} : { adjudications }),
     };
     if (!options.post) return ReviewRunOutcome.make(shared);
     const publisher = yield* ReviewPublisher;
@@ -406,10 +484,12 @@ export const executeReview = <
     const metadata = yield* source.metadata;
     const files = yield* source.changedFiles;
     const anchorFiles = yield* source.anchorFiles;
-    const executionContext = Option.getOrUndefined(
-      yield* Effect.serviceOption(ReviewExecutionContext),
-    );
-    const mission = buildReviewMission(metadata, files);
+    const executionContext = yield* ReviewExecutionContext;
+    const continuity = yield* resolveReviewContinuityContext();
+    const mission = buildReviewMission(metadata, files, {
+      adjudicated: continuity.adjudications.map(renderAdjudicationContextLine),
+      priorFindings: continuity.priorFindingsOnScope.map(renderPriorFindingContextLine),
+    });
     const fullMission = buildReviewMission(metadata, anchorFiles);
     const fingerprint =
       options.signature === undefined
@@ -429,7 +509,7 @@ export const executeReview = <
     const review = yield* Schema.decodeUnknownEffect(CodeReview)(result.output);
     const assessment = assessFlatReview({
       files,
-      totalFiles: executionContext?.totalFiles ?? metadata.totalChangedFiles,
+      totalFiles: executionContext.totalFiles,
       anchorFiles,
       totalAnchorFiles: metadata.totalChangedFiles,
       events,
@@ -443,7 +523,7 @@ export const executeReview = <
         unreviewedPaths: assessment.unreviewedPaths,
         turns: result.turns,
       },
-      { metadata, files, anchorFiles, fingerprint, usage },
+      { metadata, files, anchorFiles, fingerprint, usage, adjudications: continuity.adjudications },
       options,
     );
   });
@@ -463,9 +543,7 @@ export const executeFanOutReview = <Provider, ModelProvides, ModelRequires>(
     const metadata = yield* source.metadata;
     const files = yield* source.changedFiles;
     const anchorFiles = yield* source.anchorFiles;
-    const executionContext = Option.getOrUndefined(
-      yield* Effect.serviceOption(ReviewExecutionContext),
-    );
+    const executionContext = yield* ReviewExecutionContext;
     const fullMission = buildReviewMission(metadata, anchorFiles);
     const fingerprint =
       options.signature === undefined
@@ -473,19 +551,28 @@ export const executeFanOutReview = <Provider, ModelProvides, ModelRequires>(
         : yield* computeChangesetFingerprint(anchorFiles, options.signature(fullMission));
 
     const budget = yield* makeUsageBudget(options.limits ?? fanOutReviewBudgetLimits);
-    const totalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
+    const totalFiles = executionContext.totalFiles;
+    const continuity = yield* resolveReviewContinuityContext();
     const pipeline = yield* runFanOutReview(binding, {
       files,
       anchorFiles,
       totalChangedFiles: totalFiles,
       maxFindings: options.maxFindings,
       budget: toRunBudgetHook(budget),
-      ...(executionContext !== undefined && executionContext.retryPaths.length > 0
+      ...(executionContext.retryPaths.length > 0
         ? {
             retry: {
               paths: executionContext.retryPaths,
               stages: executionContext.retryStages,
             },
+          }
+        : {}),
+      ...(continuity.adjudications.length > 0 || continuity.priorFindingsOnScope.length > 0
+        ? {
+            priorContext: buildPriorReviewContext(
+              continuity.adjudications,
+              continuity.priorFindingsOnScope,
+            ),
           }
         : {}),
     });
@@ -513,7 +600,7 @@ export const executeFanOutReview = <Provider, ModelProvides, ModelRequires>(
           ),
         turns: pipeline.turns,
       },
-      { metadata, files, anchorFiles, fingerprint, usage },
+      { metadata, files, anchorFiles, fingerprint, usage, adjudications: continuity.adjudications },
       options,
     );
   });

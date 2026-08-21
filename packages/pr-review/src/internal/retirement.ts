@@ -1,6 +1,8 @@
 import { Context, DateTime, Effect, Option, Schema } from "effect";
 
 import {
+  adjudicationIdentity,
+  findingIdentity,
   ReviewStateAuthenticator,
   type ReviewState,
   type StoredReviewFinding,
@@ -92,14 +94,6 @@ export interface ReviewRetirementDecision {
   readonly priorFindingCount: number;
 }
 
-const findingIdentity = (finding: {
-  readonly path: string;
-  readonly startLine: number;
-  readonly endLine: number;
-  readonly title: string;
-}): string =>
-  `${finding.path}\u0000${finding.startLine}\u0000${finding.endLine}\u0000${finding.title}`;
-
 const REVIEW_METADATA_PATTERN = /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->/g;
 const FINGERPRINT_PATTERN = /<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->/g;
 const STATE_PATTERN =
@@ -112,7 +106,11 @@ const MACHINE_COMMENT_PATTERN = new RegExp(
 );
 const VERDICT_CALLOUT_PATTERN =
   /^(?:> \[!(?:CAUTION|IMPORTANT)\]\n> [^\n]*(?:\n> [^\n]*)*|> (?:ℹ️|✅)[^\n]*)\n*/;
-const INLINE_FINDING_TITLE_PATTERN =
+/**
+ * The first line of every inline finding comment this package posts. Shared
+ * with adjudication so both parse the identical title shape.
+ */
+export const INLINE_FINDING_TITLE_PATTERN =
   /^\*\*\[(?:🛑 blocking|⚠️ important|💅 nit) · [a-z-]+\] ([^\n]+)\*\*$/;
 const MAX_REVIEW_BODY_CHARS = 60_000;
 
@@ -186,8 +184,14 @@ export const decideReviewRetirement = (input: {
   readonly currentReviewUrl: string;
 }): ReviewRetirementDecision => {
   const current = new Set(input.currentState.unresolvedFindings.map(findingIdentity));
+  // Adjudicated identities are distinct from resolved: a maintainer verdict
+  // is not a fix, so retirement neither strikes nor minimizes them.
+  const adjudicated = new Set(
+    (input.currentState.adjudications ?? []).map((entry) => adjudicationIdentity(entry)),
+  );
   const resolvedFindings = input.priorState.unresolvedFindings.filter(
-    (finding) => !current.has(findingIdentity(finding)),
+    (finding) =>
+      !current.has(findingIdentity(finding)) && !adjudicated.has(findingIdentity(finding)),
   );
   return {
     body: renderRetiredBody({ ...input, resolvedFindings }),

@@ -1,15 +1,19 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Option, Redacted } from "effect";
+import { ConfigProvider, Effect, Layer, Option, Redacted } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import {
+  deriveAdjudications,
   GitHubReviewTarget,
   gitHubPullRequestSourceLayer,
   gitHubPriorReviewsLayer,
+  gitHubReviewAdjudicationHostLayer,
+  gitHubReviewLayers,
   gitHubReviewRetirementHostLayer,
   PriorReviews,
   PullRequestSource,
   renderFingerprintMarker,
+  ReviewAdjudicationHost,
   ReviewRetirementHost,
   ReviewState,
   ReviewStateAuthenticator,
@@ -226,6 +230,159 @@ describe("GitHub review retirement comments", () => {
           endLine: 12,
           body: "**[🛑 blocking] Gone stale**\n\nThe line moved.",
         },
+      ]);
+    }),
+  );
+});
+
+describe("GitHub review adjudication comments", () => {
+  const root = {
+    id: 1,
+    path: "src/a.ts",
+    body: "**[🛑 blocking · security] Missing authorization**\n\nDetails.",
+    author_association: "NONE",
+    user: { login: "github-actions[bot]" },
+    created_at: "2026-08-01T00:00:00Z",
+    line: 12,
+  };
+  const reply = (id: number, authorAssociation: string, body: string) => ({
+    id,
+    in_reply_to_id: root.id,
+    path: root.path,
+    body,
+    author_association: authorAssociation,
+    user: { login: authorAssociation === "OWNER" ? "maintainer" : `user-${id}` },
+    created_at: `2026-08-01T00:${String(id % 60).padStart(2, "0")}:00Z`,
+    line: 12,
+  });
+  const layerFor = (comments: ReadonlyArray<object>) => {
+    const client = HttpClient.make((request, url) => {
+      expect(url.pathname).toBe("/repos/acme/widgets/pulls/30/comments");
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const pageComments = comments.slice((page - 1) * 100, page * 100);
+      return Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          new Response(JSON.stringify(pageComments), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+    });
+    return gitHubReviewAdjudicationHostLayer.pipe(
+      Layer.provide(
+        Layer.merge(
+          GitHubReviewTarget.layer({
+            apiUrl: "https://api.github.test",
+            repository: "acme/widgets",
+            number: 30,
+            token: Option.none(),
+          }),
+          Layer.succeed(HttpClient.HttpClient)(client),
+        ),
+      ),
+    );
+  };
+
+  it.effect("bounds authorized command candidates after ignoring an untrusted reply flood", () =>
+    Effect.gen(function* () {
+      const untrusted = Array.from({ length: 100 }, (_, index) =>
+        reply(index + 2, "NONE", "/adjudicate refuted: unauthorized"),
+      );
+      const authorized = reply(102, "OWNER", "/adjudicate accepted-risk: intentional");
+      const threads = yield* Effect.gen(function* () {
+        const host = yield* ReviewAdjudicationHost;
+        return yield* host.listFindingThreads;
+      }).pipe(Effect.provide(layerFor([root, ...untrusted, authorized])));
+
+      expect(threads).toHaveLength(1);
+      expect(threads[0]?.replies.map((comment) => comment.authorLogin)).toEqual(["maintainer"]);
+      expect(threads[0]?.replies[0]?.body).toContain("accepted-risk");
+    }),
+  );
+
+  it.effect("fails closed when one thread exceeds the authorized command bound", () =>
+    Effect.gen(function* () {
+      const commands = Array.from({ length: 101 }, (_, index) =>
+        reply(index + 2, "OWNER", `/adjudicate refuted: command ${index}`),
+      );
+      const failure = yield* Effect.gen(function* () {
+        const host = yield* ReviewAdjudicationHost;
+        return yield* host.listFindingThreads;
+      }).pipe(
+        Effect.provide(layerFor([root, ...commands])),
+        Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }),
+      );
+
+      expect(failure?.operation).toBe("listReviewCommentsForAdjudication");
+      expect(failure?.reason).toContain("exceeds the bounded 100-command");
+    }),
+  );
+
+  it.effect("preserves global creation order before grouping duplicate finding threads", () =>
+    Effect.gen(function* () {
+      const duplicateRoot = { ...root, id: 2 };
+      const tiedAt = "2026-08-01T00:10:00Z";
+      const globallyEarlier = {
+        ...reply(3, "OWNER", "/adjudicate accepted-risk: globally earlier"),
+        in_reply_to_id: duplicateRoot.id,
+        created_at: tiedAt,
+      };
+      const globallyLater = {
+        ...reply(4, "OWNER", "/adjudicate refuted: globally later"),
+        in_reply_to_id: root.id,
+        created_at: tiedAt,
+      };
+      const threads = yield* Effect.gen(function* () {
+        const host = yield* ReviewAdjudicationHost;
+        return yield* host.listFindingThreads;
+      }).pipe(Effect.provide(layerFor([root, duplicateRoot, globallyEarlier, globallyLater])));
+
+      // Thread grouping visits root 1 first even though its reply was globally
+      // later. The wire listing order remains available as the tie-breaker.
+      expect(threads.map((thread) => thread.replies[0]?.sourceOrder)).toEqual([3, 2]);
+      const derived = deriveAdjudications({ threads, issueComments: [] });
+      expect(derived.adjudications).toHaveLength(1);
+      expect(derived.adjudications[0]?.disposition).toBe("refuted");
+      expect(derived.adjudications[0]?.reason).toBe("globally later");
+    }),
+  );
+
+  it.effect("installs the adjudication host in the complete GitHub review bundle", () =>
+    Effect.gen(function* () {
+      const requests: Array<string> = [];
+      const client = HttpClient.make((request, url) => {
+        requests.push(url.pathname);
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response("[]", {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        );
+      });
+      yield* Effect.gen(function* () {
+        const host = yield* ReviewAdjudicationHost;
+        yield* Effect.all([host.listFindingThreads, host.listIssueComments]);
+      }).pipe(
+        Effect.provide(
+          gitHubReviewLayers({ repository: "acme/widgets", number: 30 }).pipe(
+            Layer.provideMerge(
+              Layer.merge(
+                Layer.succeed(HttpClient.HttpClient)(client),
+                ConfigProvider.layer(ConfigProvider.fromEnvRecord({})),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(requests).toEqual([
+        "/repos/acme/widgets/pulls/30/comments",
+        "/repos/acme/widgets/issues/30/comments",
       ]);
     }),
   );

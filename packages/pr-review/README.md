@@ -15,6 +15,7 @@ truncated run posts nothing.
 import { Effect, Layer } from "effect";
 import {
   PrReview,
+  fullReviewExecutionContextLayer,
   gitHubReviewLayers,
   resolveReviewTarget,
   makeOpenAiReviewModel,
@@ -27,13 +28,22 @@ const program = Effect.gen(function* () {
   const target = yield* resolveReviewTarget({ repository: "acme/api", number: 123 });
   return yield* reviewer
     .run({ post: true })
-    .pipe(Effect.provide(Layer.merge(gitHubReviewLayers(target), openAiClientLayer)));
+    .pipe(
+      Effect.provide(
+        fullReviewExecutionContextLayer("explicit direct full review").pipe(
+          Layer.provideMerge(Layer.merge(gitHubReviewLayers(target), openAiClientLayer)),
+        ),
+      ),
+    );
 });
 ```
 
 The run's requirement channel keeps every real dependency visible: the
-`PullRequestSource` and `ReviewPublisher` ports, the provider client, and the
-handler Layer of any extra tool you add. Anthropic is equally supported
+`PullRequestSource`, `ReviewPublisher`, `ReviewAdjudicationHost`, and
+`ReviewExecutionContext` ports, the provider client, and the handler Layer of
+any extra tool you add. Direct callers provide an explicit full-review context
+as above; the packaged action supplies its selected incremental or full range.
+Anthropic is equally supported
 (`makeAnthropicReviewModel`, `anthropicClientLayer`), and the factory accepts
 any Effect AI Model.
 
@@ -97,6 +107,36 @@ that every semantic risk was recognized. Hosts and UI use `inputCoverage` and `a
 The flat reviewer has path-input accounting but no independent verifier, so
 its assurance is `unverified` and the Action check cannot report success from
 that shape.
+
+## Maintainer adjudication
+
+A maintainer can settle a finding without changing code, from the pull request itself:
+
+- On a finding's inline thread, reply `/adjudicate accepted-risk|refuted|obsolete[: reason]`.
+  The thread names the target, so the verb alone suffices.
+- For an unanchored concern, comment
+  `/adjudicate <disposition> "<exact concern title>"[: reason]` in the PR conversation. The quoted
+  title is required and must match exactly.
+
+An adjudicated identity leaves active findings, verdict counts, and the check conclusion; it
+renders in a collapsed "Adjudicated" section instead, and the final audit distinguishes fixed,
+adjudicated, and still-open items. The reviewer prompt names each adjudication so the model does
+not re-raise it without materially new evidence. Identity is exact — path, line range, and title
+for findings, title alone for concerns — so a materially different finding at the same location is
+untouched. Adjudications persist in the signed review state, and the skip-unchanged path re-reads
+them, so an adjudication lifts a blocking check without a new commit.
+
+**Authorization is fail-closed**: only comments whose `author_association` is OWNER, MEMBER, or
+COLLABORATOR adjudicate. Anything else — third parties, bots, malformed commands — is ignored
+(logged at debug). Later adjudications of the same identity win by comment creation order, bounded
+at 20 stored entries (oldest dropped with a logged notice). If either GitHub listing surface fails,
+or one thread exceeds the bounded authorized-command history, fresh collection is discarded and
+the stored set stands unchanged.
+
+**Rejected alternative — parsing free-text rebuttals** ("this is fine because …" replies): only an
+explicit, authorized verb is auditable and fail-closed. Inferring intent from prose would let model
+output or third-party comments silently suppress findings, and nobody could later say which comment
+dismissed what.
 
 ## What a posted review looks like
 
