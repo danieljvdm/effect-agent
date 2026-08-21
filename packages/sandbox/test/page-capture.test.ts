@@ -95,6 +95,47 @@ describe("PageCapture schemas", () => {
     ).toEqual(failure);
   });
 
+  it("accepts only credential-free HTTPS targets and credential-free absolute web links", () => {
+    for (const url of [
+      "not a URL",
+      "http://docs.example.com/pricing",
+      "javascript:alert(1)",
+      "data:text/html,hello",
+      "/pricing",
+      "https://user:secret@docs.example.com/pricing",
+      "https://user@docs.example.com/pricing",
+    ]) {
+      expect(Schema.decodeUnknownExit(PageUrlTarget)({ _tag: "PageUrlTarget", url })._tag).toBe(
+        "Failure",
+      );
+    }
+
+    expect(
+      Schema.decodeSync(PageCaptureOutput)({
+        _tag: "PageLinksCaptured",
+        links: ["http://docs.example.com/legacy", "https://docs.example.com/current"],
+      }),
+    ).toEqual({
+      _tag: "PageLinksCaptured",
+      links: ["http://docs.example.com/legacy", "https://docs.example.com/current"],
+    });
+
+    for (const link of [
+      "not a URL",
+      "javascript:alert(1)",
+      "mailto:person@example.com",
+      "/pricing",
+      "https://user:secret@docs.example.com/pricing",
+    ]) {
+      expect(
+        Schema.decodeUnknownExit(PageCaptureOutput)({
+          _tag: "PageLinksCaptured",
+          links: [link],
+        })._tag,
+      ).toBe("Failure");
+    }
+  });
+
   it("accepts only bounded object JSON Schema documents for structured capture", () => {
     const invalidDocuments: ReadonlyArray<unknown> = [
       null,

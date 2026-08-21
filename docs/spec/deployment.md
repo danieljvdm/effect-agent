@@ -383,8 +383,9 @@ redirects, and subrequests alike. A capture-owned Scope reads response bytes inc
 stops at the first chunk exceeding the request budget. It cancels and unlocks its reader on
 success, failure, or interruption. Response `Content-Type`, not attacker-controlled page text,
 identifies the
-Cloudflare JSON response envelope. Every returned link must satisfy the canonical bounded-link
-Schema; malformed entries and over-limit collections fail typed instead of being discarded.
+Cloudflare JSON response envelope. Every returned link must satisfy the canonical bounded,
+credential-free HTTP(S) link Schema; malformed entries, unsupported schemes, embedded credentials,
+and over-limit collections fail typed instead of being discarded.
 HTTP 429 becomes a typed rate/quota failure; `Retry-After` is included only when conversion to
 milliseconds remains a safe integer.
 

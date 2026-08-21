@@ -40,6 +40,51 @@ const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 /** Bounded by the platform's 60-second browser inactivity ceiling. */
 const BoundedTimeoutMillis = PositiveInt.check(Schema.isLessThanOrEqualTo(60_000));
 
+// The platform-neutral package targets bare ES2023, while supported runtimes
+// provide the WHATWG URL constructor. Missing or malformed runtime support
+// denies URLs instead of guessing at web syntax or importing a Node builtin.
+const pageUrlConstructor = Reflect.get(globalThis, "URL");
+
+const isCredentialFreeWebUrl = (value: string, allowHttp: boolean): boolean => {
+  if (typeof pageUrlConstructor !== "function") return false;
+
+  try {
+    const parsed: unknown = Reflect.construct(pageUrlConstructor, [value]);
+    if (!Predicate.isObject(parsed)) return false;
+
+    const protocol: unknown = Reflect.get(parsed, "protocol");
+    const hostname: unknown = Reflect.get(parsed, "hostname");
+    const username: unknown = Reflect.get(parsed, "username");
+    const password: unknown = Reflect.get(parsed, "password");
+
+    return (
+      (protocol === "https:" || (allowHttp && protocol === "http:")) &&
+      typeof hostname === "string" &&
+      hostname.length > 0 &&
+      username === "" &&
+      password === ""
+    );
+  } catch {
+    return false;
+  }
+};
+
+/** Absolute, bounded HTTPS navigation URL that never carries embedded credentials. */
+export const PageCaptureTargetUrl = BoundedUrl.check(
+  Schema.makeFilter((value) => isCredentialFreeWebUrl(value, false), {
+    title: "an absolute HTTPS URL without embedded credentials",
+  }),
+);
+export type PageCaptureTargetUrl = typeof PageCaptureTargetUrl.Type;
+
+/** Discovered HTTP(S) links are data, never navigation authority, and carry no credentials. */
+export const PageCaptureLinkUrl = BoundedUrl.check(
+  Schema.makeFilter((value) => isCredentialFreeWebUrl(value, true), {
+    title: "an absolute HTTP or HTTPS URL without embedded credentials",
+  }),
+);
+export type PageCaptureLinkUrl = typeof PageCaptureLinkUrl.Type;
+
 const ResponseFormatPrimitive = Schema.Literals([
   "string",
   "number",
@@ -280,7 +325,7 @@ export type PageCaptureResponseFormat = typeof PageCaptureResponseFormat.Type;
 
 /** Capture a URL after a full render, the common case. */
 export class PageUrlTarget extends Schema.TaggedClass<PageUrlTarget>()("PageUrlTarget", {
-  url: BoundedUrl,
+  url: PageCaptureTargetUrl,
 }) {}
 
 /** Render caller-supplied HTML instead of navigating. */
@@ -432,7 +477,7 @@ export class PageMarkdownCaptured extends Schema.TaggedClass<PageMarkdownCapture
 export class PageLinksCaptured extends Schema.TaggedClass<PageLinksCaptured>()(
   "PageLinksCaptured",
   {
-    links: Schema.Array(BoundedUrl).check(Schema.isMaxLength(MAX_LINKS)),
+    links: Schema.Array(PageCaptureLinkUrl).check(Schema.isMaxLength(MAX_LINKS)),
   },
 ) {}
 

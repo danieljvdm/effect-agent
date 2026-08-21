@@ -173,9 +173,11 @@ or included in an executor binding, and the deterministic test substitute identi
 `unisolated` rather than masquerading as a boundary.
 
 Page capture output is a rendered web page and therefore untrusted, attacker-influenced input.
-The capture capability is deny-by-default: an immutable construction-time https host allowlist
-governs navigation, redirects, and every browser subrequest; credentials never ride in capture
-requests; and responses are byte-bounded before buffering. Rendered JavaScript may mutate
+The capture capability is deny-by-default: an immutable construction-time HTTPS host allowlist
+governs navigation, redirects, and every browser subrequest. The request Schema rejects malformed
+URLs, non-HTTPS targets, and embedded credentials; discovered links must be absolute,
+credential-free HTTP(S) URLs and grant no navigation authority. Responses are byte-bounded before
+buffering. Rendered JavaScript may mutate
 remote state, so capture Tools remain `uncertain`, are not automatically replayed, and cannot
 enter readonly-only Code Mode. Structured extraction accepts only a bounded object JSON Schema;
 the request rejects malformed or unsupported root and nested keywords, excessive encoded bytes,

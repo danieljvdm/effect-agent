@@ -222,6 +222,9 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     const hostilePayloads: ReadonlyArray<ReadonlyArray<unknown>> = [
       ["https://docs.example.com/a", 7],
       ["https://docs.example.com/a", ""],
+      ["https://docs.example.com/a", "not a URL"],
+      ["https://docs.example.com/a", "javascript:alert(1)"],
+      ["https://docs.example.com/a", "https://user:secret@docs.example.com/private"],
       ["https://docs.example.com/a", "x".repeat(8 * 1024 + 1)],
       Array.from({ length: 4_097 }, () => "https://a"),
     ];

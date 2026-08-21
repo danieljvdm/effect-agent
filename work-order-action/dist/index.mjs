@@ -40120,6 +40120,29 @@ var BoundedSchemaText = exports_Schema.String.check(exports_Schema.isMaxLength(8
 var BoundedSchemaReference = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
 var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var BoundedTimeoutMillis = PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(60000));
+var pageUrlConstructor = Reflect.get(globalThis, "URL");
+var isCredentialFreeWebUrl = (value4, allowHttp) => {
+  if (typeof pageUrlConstructor !== "function")
+    return false;
+  try {
+    const parsed = Reflect.construct(pageUrlConstructor, [value4]);
+    if (!exports_Predicate.isObject(parsed))
+      return false;
+    const protocol = Reflect.get(parsed, "protocol");
+    const hostname = Reflect.get(parsed, "hostname");
+    const username = Reflect.get(parsed, "username");
+    const password = Reflect.get(parsed, "password");
+    return (protocol === "https:" || allowHttp && protocol === "http:") && typeof hostname === "string" && hostname.length > 0 && username === "" && password === "";
+  } catch {
+    return false;
+  }
+};
+var PageCaptureTargetUrl = BoundedUrl.check(exports_Schema.makeFilter((value4) => isCredentialFreeWebUrl(value4, false), {
+  title: "an absolute HTTPS URL without embedded credentials"
+}));
+var PageCaptureLinkUrl = BoundedUrl.check(exports_Schema.makeFilter((value4) => isCredentialFreeWebUrl(value4, true), {
+  title: "an absolute HTTP or HTTPS URL without embedded credentials"
+}));
 var ResponseFormatPrimitive = exports_Schema.Literals([
   "string",
   "number",
@@ -40255,7 +40278,7 @@ var PageCaptureResponseFormat = exports_Schema.declare(isBoundedResponseFormat, 
 });
 
 class PageUrlTarget extends exports_Schema.TaggedClass()("PageUrlTarget", {
-  url: BoundedUrl
+  url: PageCaptureTargetUrl
 }) {
 }
 
@@ -40355,7 +40378,7 @@ class PageMarkdownCaptured extends exports_Schema.TaggedClass()("PageMarkdownCap
 }
 
 class PageLinksCaptured extends exports_Schema.TaggedClass()("PageLinksCaptured", {
-  links: exports_Schema.Array(BoundedUrl).check(exports_Schema.isMaxLength(MAX_LINKS))
+  links: exports_Schema.Array(PageCaptureLinkUrl).check(exports_Schema.isMaxLength(MAX_LINKS))
 }) {
 }
 

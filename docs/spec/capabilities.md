@@ -338,7 +338,9 @@ interface PageCapture {
 }
 ```
 
-Requests, results, limits, and expected errors are Effect Schemas. The request selects the
+Requests, results, limits, and expected errors are Effect Schemas. Navigation targets must be
+absolute HTTPS URLs without embedded credentials. Returned links are data, never navigation
+authority, and must be absolute credential-free HTTP or HTTPS URLs. The request selects the
 engine (`chromium`, or the lightweight `kitesurf` where an adapter supports it), bounds the
 response in UTF-8 bytes, and may constrain navigation readiness, viewport, and request egress.
 Structured requests accept only object-shaped JSON Schema documents whose root and every nested
@@ -447,8 +449,8 @@ default and are excluded from ordinary span attributes.
   remaining the total), and totals expose the most recent call's input/output tokens as the
   live-context estimate.
 - **CAP-018**: Page capture is deny-by-default: its immutable target-host allowlist governs
-  navigation, redirects, and subrequests; its action set, engine, and byte budget are fixed at
-  capability construction; structured extraction accepts only a bounded object JSON Schema and
-  exposes its decoder requirements; browser execution remains `uncertain`; model inference
-  requires explicit host authorization and accounting; and every result is treated as untrusted
-  input.
+  credential-free HTTPS navigation, redirects, and subrequests; returned links are validated
+  credential-free HTTP(S) data; its action set, engine, and byte budget are fixed at capability
+  construction; structured extraction accepts only a bounded object JSON Schema and exposes its
+  decoder requirements; browser execution remains `uncertain`; model inference requires explicit
+  host authorization and accounting; and every result is treated as untrusted input.
