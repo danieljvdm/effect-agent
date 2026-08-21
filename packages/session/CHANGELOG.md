@@ -1,5 +1,15 @@
 # @effect-agent/session
 
+## 0.1.0-beta.25
+
+### Patch Changes
+
+- [#142](https://github.com/danieljvdm/effect-agent/pull/142) [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Harden durable session recovery against hostile foreign diagnostics and encode joined inputs through Schema-owned JSON. Require ledger adapters to replay semantically identical canonical JSON regardless of object key order.
+
+- Updated dependencies [[`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d), [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d)]:
+  - @effect-agent/engine@0.1.0-beta.25
+  - @effect-agent/core@0.1.0-beta.25
+
 ## 0.1.0-beta.24
 
 ### Patch Changes

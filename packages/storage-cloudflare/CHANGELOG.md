@@ -1,5 +1,14 @@
 # @effect-agent/storage-cloudflare
 
+## 0.1.0-beta.25
+
+### Patch Changes
+
+- [#142](https://github.com/danieljvdm/effect-agent/pull/142) [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Validate storage configuration before acquiring SQLite resources, and compare replayed persisted JSON by Schema semantics instead of serialized key order. Keep Cloudflare transport failures typed under hostile foreign values and narrow routed responses with operation schemas.
+
+- Updated dependencies [[`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d)]:
+  - @effect-agent/session@0.1.0-beta.25
+
 ## 0.1.0-beta.24
 
 ### Patch Changes

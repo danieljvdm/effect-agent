@@ -1,5 +1,14 @@
 # @effect-agent/sandbox-local
 
+## 0.1.0-beta.25
+
+### Patch Changes
+
+- [#142](https://github.com/danieljvdm/effect-agent/pull/142) [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Bound sandbox diagnostics and terminal artifact metadata. Reject mismatched local runtime identities and report post-start transport failures as exit failures.
+
+- Updated dependencies [[`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d)]:
+  - @effect-agent/sandbox@0.1.0-beta.25
+
 ## 0.1.0-beta.24
 
 ### Patch Changes

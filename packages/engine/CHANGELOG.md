@@ -1,5 +1,23 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.25
+
+### Minor Changes
+
+- [#142](https://github.com/danieljvdm/effect-agent/pull/142) [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Bound model responses, Run event replay, Subagent event bursts, diagnostics, and programmatic Tool
+  results with engine-owned limits. BEHAVIOR CHANGE: `ToolBroker.openPass` now requires an explicit
+  positive `maxResultBytes`.
+
+- [#142](https://github.com/danieljvdm/effect-agent/pull/142) [`b6804dd`](https://github.com/danieljvdm/effect-agent/commit/b6804dd60cc83b569d0e87b88521952c20ba9b7d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reject malformed DN/DC resume Tool results and usage seeds before external execution, and preserve
+  engine infrastructure causes on live errors without exposing them in public diagnostics. BEHAVIOR
+  CHANGE: pass a positive finite `maxResultBytes` to `ToolBroker.openPass`; `AgentRuntime.layer` is
+  removed.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.25
+
 ## 0.1.0-beta.24
 
 ### Patch Changes
