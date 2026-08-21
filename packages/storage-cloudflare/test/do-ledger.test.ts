@@ -24,6 +24,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   type DoStorageConfig,
+  DoStorageError,
   DoStorageFailpoint,
   DoValueBoundExceeded,
   evictionFailpointHandler,
@@ -60,6 +61,7 @@ type SubmissionLedgerLayerErrorProof = Assert<
   Equal<Layer.Error<typeof submissionLedgerLayer>, DoStorageInitializationError>
 >;
 const isLedgerError = Schema.is(LedgerError);
+const isDoStorageError = Schema.is(DoStorageError);
 const isDoValueBoundExceeded = Schema.is(DoValueBoundExceeded);
 
 describe("DoSubmissionLedger", () => {
@@ -95,6 +97,16 @@ describe("DoSubmissionLedger", () => {
         );
 
         expect(Exit.isFailure(opened)).toBe(true);
+        if (Exit.isFailure(opened)) {
+          const failure = Cause.findErrorOption(opened.cause);
+          expect(Option.isSome(failure)).toBe(true);
+          if (Option.isSome(failure)) {
+            expect(isDoStorageError(failure.value)).toBe(true);
+            if (isDoStorageError(failure.value)) {
+              expect(failure.value.operation).toBe("configure Durable Object storage");
+            }
+          }
+        }
         const tables = storage.sql
           .exec<{ name: string }>(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'effect_agent_%'",

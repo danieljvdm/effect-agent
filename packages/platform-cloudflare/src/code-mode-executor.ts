@@ -20,19 +20,7 @@ import {
 } from "@effect-agent/sandbox";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import {
-  Clock,
-  Crypto,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Option,
-  Predicate,
-  Queue,
-  Schema,
-} from "effect";
+import { Clock, Crypto, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schema } from "effect";
 
 import { safeCauseDiagnostic, safeCauseMessage } from "./boundary.ts";
 
@@ -342,15 +330,26 @@ const decodeHostCallResult = (value: unknown) => {
   }
 };
 
-/** Dispose a Cloudflare RPC handle when the runtime supplies its untyped disposal hook. */
-const disposeRpcHandle = (handle: unknown): Effect.Effect<void> =>
-  Effect.sync(() => {
-    if (!Predicate.isObjectKeyword(handle) || !(Symbol.dispose in handle)) return;
-    const dispose = Reflect.get(handle, Symbol.dispose);
-    if (typeof dispose === "function") {
-      Reflect.apply(dispose, handle, []);
-    }
-  });
+/** Dispose a Cloudflare RPC handle when the runtime supplies its untyped disposal hook. @internal */
+export const disposeRpcHandle = (handle: unknown): Effect.Effect<void> =>
+  Effect.try({
+    try: () => {
+      if ((typeof handle !== "object" && typeof handle !== "function") || handle === null) return;
+      if (!(Symbol.dispose in handle)) return;
+      const dispose = Reflect.get(handle, Symbol.dispose);
+      if (typeof dispose === "function") {
+        Reflect.apply(dispose, handle, []);
+      }
+    },
+    catch: (cause) =>
+      safeCauseDiagnostic(cause, "The Cloudflare RPC disposal hook failed without a diagnostic"),
+  }).pipe(
+    Effect.catch((diagnostic) =>
+      Effect.logWarning(`Cloudflare RPC handle disposal failed: ${diagnostic}`).pipe(
+        Effect.ignoreCause,
+      ),
+    ),
+  );
 
 /**
  * Project a host outcome to the plain JSON envelope the harness reads. A

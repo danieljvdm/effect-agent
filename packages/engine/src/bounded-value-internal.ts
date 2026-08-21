@@ -56,11 +56,12 @@ export const boundedValueFootprint = (
         return add(16);
       case "undefined":
       case "symbol":
-      case "function":
         return add(16);
+      case "function":
+        return false;
       case "object": {
         if (ancestors.has(value) || !add(OBJECT_OVERHEAD_BYTES)) return false;
-        if (ArrayBuffer.isView(value)) return add(value.byteLength);
+        if (ArrayBuffer.isView(value)) return add(value.buffer.byteLength);
         if (value instanceof ArrayBuffer) return add(value.byteLength);
         if (Array.isArray(value) && !add(value.length)) return false;
 
@@ -74,8 +75,8 @@ export const boundedValueFootprint = (
             if (descriptor === undefined) return false;
             if ("value" in descriptor) {
               if (!visit(descriptor.value, depth + 1)) return false;
-            } else if (!add(16)) {
-              // Accessors are retained but never invoked while measuring hostile values.
+            } else {
+              // Accessors and functions may retain arbitrarily large closure graphs.
               return false;
             }
           }

@@ -45,6 +45,7 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
+import { boundedValueFootprint } from "../src/bounded-value-internal.ts";
 import {
   AgentResultSchema,
   AgentRuntime,
@@ -3609,10 +3610,12 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       );
       const hostileFailure = failureFrom(hostileExit);
       expect(hostileFailure).toBeInstanceOf(ModelProtocolError);
-      expect(hostileFailure.message).toBe("Model response failed: Unknown error");
+      expect(hostileFailure.message).toBe(
+        "Model response exceeded the 8388608-byte retained response limit",
+      );
       expect((yield* Ref.get(hostileEvents)).at(-1)).toMatchObject({
         _tag: "RunFailed",
-        message: "Model response failed: Unknown error",
+        message: "Model response exceeded the 8388608-byte retained response limit",
       });
 
       const oversizedEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
@@ -3719,6 +3722,24 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(boundedJsonSnapshot(payload, 128, maxDepth)).toBeUndefined();
     }
     expect(reflectionAttempts).toBe(0);
+  });
+
+  it("fails closed for retained closures and counts an ArrayBuffer view's whole backing store", () => {
+    const backing = new ArrayBuffer(4_096);
+    expect(boundedValueFootprint(new Uint8Array(backing, 0, 1), 1_024)).toBeUndefined();
+    expect(boundedValueFootprint({ callback: () => undefined }, 1_024)).toBeUndefined();
+
+    let accessorReads = 0;
+    const accessorBacked = {};
+    Object.defineProperty(accessorBacked, "value", {
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return "small";
+      },
+    });
+    expect(boundedValueFootprint(accessorBacked, 1_024)).toBeUndefined();
+    expect(accessorReads).toBe(0);
   });
 
   it.effect("rejects duplicate provider terminals before appending any Tool success", () =>

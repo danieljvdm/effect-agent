@@ -846,6 +846,72 @@ describe("capability contracts", () => {
       }),
   );
 
+  it.effect("linearizes child registration and consumption with handle retirement", () =>
+    Effect.gen(function* () {
+      const delta = UsageDelta.make({
+        modelCalls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        toolCalls: 1,
+        costMicrousd: 0,
+      });
+
+      for (let iteration = 0; iteration < 128; iteration += 1) {
+        const root = yield* makeUsageBudgetRoot(
+          UsageBudgetNodeConfig.make({
+            level: "global",
+            id: `retirement-root-${iteration}`,
+            limits: UsageBudgetLimits.make({}),
+          }),
+        );
+        const parent = yield* root.child(
+          UsageBudgetNodeConfig.make({
+            level: "tenant",
+            id: "tenant-a",
+            limits: UsageBudgetLimits.make({ maxToolCalls: 0 }),
+          }),
+        );
+        const [childExit] = yield* Effect.all(
+          [
+            parent
+              .child(
+                UsageBudgetNodeConfig.make({
+                  level: "run",
+                  id: "run-a",
+                  limits: UsageBudgetLimits.make({}),
+                }),
+              )
+              .pipe(Effect.exit),
+            parent.retire,
+          ],
+          { concurrency: "unbounded" },
+        );
+
+        if (Exit.isSuccess(childExit)) {
+          const consumeExit = yield* childExit.value.consume(delta).pipe(Effect.exit);
+          expect(Exit.isFailure(consumeExit)).toBe(true);
+          yield* childExit.value.retire;
+        }
+
+        const secondParent = yield* root.child(
+          UsageBudgetNodeConfig.make({
+            level: "tenant",
+            id: "tenant-b",
+            limits: UsageBudgetLimits.make({ maxToolCalls: 0 }),
+          }),
+        );
+        const [consumeExit] = yield* Effect.all(
+          [secondParent.consume(delta).pipe(Effect.exit), secondParent.retire],
+          { concurrency: "unbounded" },
+        );
+        expect(Exit.isFailure(consumeExit)).toBe(true);
+        yield* root.retire;
+      }
+    }),
+  );
+
   it.effect("fails stalled guarded work at the earliest hierarchical deadline", () =>
     Effect.gen(function* () {
       const globalBudget = yield* makeUsageBudgetRoot(

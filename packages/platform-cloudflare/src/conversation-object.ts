@@ -30,7 +30,11 @@ import {
   WakeScheduler,
   type DurableSubmitAgent,
 } from "@effect-agent/session";
-import { decodePortRequest, type PortRequest } from "@effect-agent/storage-cloudflare";
+import {
+  decodePortRequest,
+  encodePortResponse,
+  type PortRequest,
+} from "@effect-agent/storage-cloudflare";
 import type { DurableObject as CloudflareDurableObject } from "cloudflare:workers";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import {
@@ -141,14 +145,6 @@ const isMutatingPortRequest = (request: PortRequest): boolean => {
   request satisfies never;
   return false;
 };
-
-const encodedPortRequestMutates = (encoded: unknown): Effect.Effect<boolean> =>
-  decodePortRequest(encoded).pipe(
-    Effect.match({
-      onFailure: () => false,
-      onSuccess: isMutatingPortRequest,
-    }),
-  );
 
 /** The literal encoded `PortFailed(PortProtocolError)` fallback (same shape as WP2's). */
 const encodedPortProtocolFailure = (message: string): unknown => ({
@@ -606,9 +602,20 @@ const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpo
     const ports = yield* ConversationObjectPorts;
     const maintenance = yield* ConversationMaintenance;
     const alarm = yield* DurableAlarmService;
-    const mutating = yield* encodedPortRequestMutates(encoded);
+    const decoded = yield* decodePortRequest(encoded).pipe(
+      Effect.map((request) => ({ _tag: "success" as const, request })),
+      Effect.catch((error) => Effect.succeed({ _tag: "failure" as const, message: error.message })),
+    );
+    if (decoded._tag === "failure") {
+      return encodedPortProtocolFailure(
+        `The port request could not be decoded: ${decoded.message}`,
+      );
+    }
+    const mutating = isMutatingPortRequest(decoded.request);
     const handled = yield* (
-      mutating ? maintenance.withMutation(ports.handle(encoded)) : ports.handle(encoded)
+      mutating
+        ? maintenance.withMutation(ports.handle(decoded.request))
+        : ports.handle(decoded.request)
     ).pipe(Effect.exit);
     if (handled._tag === "Failure") {
       // Without the committed generation/alarm the invariant cannot be promised; refuse before
@@ -617,7 +624,13 @@ const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpo
         "The owner Object could not arm its maintenance alarm before the mutation.",
       );
     }
-    const response = handled.value;
+    const response = yield* encodePortResponse(handled.value).pipe(
+      Effect.catch((error) =>
+        Effect.succeed(
+          encodedPortProtocolFailure(`The port response could not be encoded: ${error.message}`),
+        ),
+      ),
+    );
     if (mutating) {
       // Prompt processing hint; the pre-armed alarm already guarantees convergence.
       yield* alarm.scheduleNow.pipe(

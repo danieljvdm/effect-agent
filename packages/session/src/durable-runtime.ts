@@ -696,8 +696,6 @@ const PolicyFailure = Schema.TaggedStruct("AgentPolicyError", {
   limit: PolicyLimit,
 });
 const decodePolicyFailure = Schema.decodeUnknownOption(PolicyFailure);
-const decodeAgentApprovalPending = Schema.decodeUnknownOption(AgentApprovalPending);
-const decodeAgentChildPending = Schema.decodeUnknownOption(AgentChildPending);
 
 const decodePolicyFailureSafely = (error: unknown) => {
   try {
@@ -707,17 +705,19 @@ const decodePolicyFailureSafely = (error: unknown) => {
   }
 };
 
-const decodeAgentApprovalPendingSafely = (error: unknown): Option.Option<AgentApprovalPending> => {
+const agentApprovalPendingOption = (error: unknown): Option.Option<AgentApprovalPending> => {
   try {
-    return decodeAgentApprovalPending(error);
+    // Suspension authority is nominal. Schema.is/decode would accept a forged tagged object.
+    return error instanceof AgentApprovalPending ? Option.some(error) : Option.none();
   } catch {
     return Option.none();
   }
 };
 
-const decodeAgentChildPendingSafely = (error: unknown): Option.Option<AgentChildPending> => {
+const agentChildPendingOption = (error: unknown): Option.Option<AgentChildPending> => {
   try {
-    return decodeAgentChildPending(error);
+    // Suspension authority is nominal. Schema.is/decode would accept a forged tagged object.
+    return error instanceof AgentChildPending ? Option.some(error) : Option.none();
   } catch {
     return Option.none();
   }
@@ -4581,7 +4581,7 @@ const make = Effect.gen(function* () {
             if (error instanceof CoordinatorHalt) {
               return Effect.fail(error.failure);
             }
-            const approvalPending = decodeAgentApprovalPendingSafely(error);
+            const approvalPending = agentApprovalPendingOption(error);
             if (Option.isSome(approvalPending)) {
               // Durable approval suspension (plan §2.6): the approval hook already made the
               // request canonical; `runAttempt` owns the ledger transition. The engine decoded
@@ -4591,7 +4591,7 @@ const make = Effect.gen(function* () {
                 Effect.map((toolCallId) => ({ _tag: "suspendedRun" as const, toolCallId })),
               );
             }
-            const childPending = decodeAgentChildPendingSafely(error);
+            const childPending = agentChildPendingOption(error);
             if (Option.isSome(childPending)) {
               // Durable waitingForChild suspension (spec §12 step 10): every non-waiting
               // sibling settled before the Run terminated; commit their results as per-call

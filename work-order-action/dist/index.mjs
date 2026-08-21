@@ -35524,7 +35524,7 @@ var pruneRetiredHierarchy = (nodes, hierarchy) => {
     const candidate = nodes.get(candidateKey);
     if (candidate === undefined)
       continue;
-    if (candidate.registrations > 0)
+    if (candidate.handles.size > 0)
       break;
     const childPrefix = `${candidateKey}/`;
     if ([...nodes.keys()].some((otherKey) => otherKey.startsWith(childPrefix))) {
@@ -35534,27 +35534,43 @@ var pruneRetiredHierarchy = (nodes, hierarchy) => {
   }
   return nodes;
 };
-var makeNode = (ledger, key, ancestors, config) => {
+var makeNode = (ledger, key, ancestors, config, handleId) => {
   const hierarchy = [...ancestors, key];
-  let retired = false;
-  const assertLive = exports_Effect.suspend(() => retired ? exports_Effect.die(new Error(`Usage budget handle ${config.level}:${config.id} was used after retirement`)) : exports_Effect.void);
-  const snapshot3 = exports_Effect.gen(function* () {
-    yield* assertLive;
-    const now3 = yield* exports_Clock.currentTimeMillis;
-    const state = yield* exports_Ref.get(ledger);
-    const node = state.nodes.get(key);
-    return node === undefined ? emptyTotals() : withElapsed(node, now3);
-  });
-  const guard = (effect2) => exports_Effect.gen(function* () {
-    yield* assertLive;
-    const now3 = yield* exports_Clock.currentTimeMillis;
-    const state = yield* exports_Ref.get(ledger);
-    let deadline;
+  const retiredDefect = () => exports_Effect.die(new Error(`Usage budget handle ${config.level}:${config.id} was used after retirement`));
+  const liveHierarchy = (state) => {
+    const current = state.nodes.get(key);
+    if (current === undefined || !current.handles.has(handleId))
+      return;
+    const nodes = [];
     for (const ancestorKey of hierarchy) {
       const node = state.nodes.get(ancestorKey);
-      if (node === undefined) {
-        continue;
-      }
+      if (node === undefined)
+        return;
+      nodes.push(node);
+    }
+    return nodes;
+  };
+  const readLiveHierarchy = exports_Ref.modify(ledger, (state) => [
+    liveHierarchy(state),
+    state
+  ]);
+  const snapshot3 = exports_Effect.gen(function* () {
+    const now3 = yield* exports_Clock.currentTimeMillis;
+    const nodes = yield* readLiveHierarchy;
+    if (nodes === undefined)
+      return yield* retiredDefect();
+    const node = nodes[nodes.length - 1];
+    if (node === undefined)
+      return yield* retiredDefect();
+    return withElapsed(node, now3);
+  });
+  const guard = (effect2) => exports_Effect.gen(function* () {
+    const now3 = yield* exports_Clock.currentTimeMillis;
+    const nodes = yield* readLiveHierarchy;
+    if (nodes === undefined)
+      return yield* retiredDefect();
+    let deadline;
+    for (const node of nodes) {
       const current = withElapsed(node, now3);
       const alreadyExceeded = exceeded(node, current);
       if (alreadyExceeded !== undefined) {
@@ -35581,78 +35597,89 @@ var makeNode = (ledger, key, ancestors, config) => {
     }));
   });
   const child = exports_Effect.fn("UsageBudgetNode.child")(function* (childConfig) {
-    yield* assertLive;
-    if (levelOrder[childConfig.level] <= levelOrder[config.level]) {
-      return yield* InvalidBudgetHierarchy.make({
-        parentLevel: config.level,
-        childLevel: childConfig.level
-      });
-    }
     const childKey = `${key}/${childConfig.level}:${childConfig.id}`;
+    const childHandleId = Symbol(`usage-budget:${childConfig.level}:${childConfig.id}`);
     const now3 = yield* exports_Clock.currentTimeMillis;
-    const conflict = yield* exports_Ref.modify(ledger, (state) => {
+    const registration = yield* exports_Ref.modify(ledger, (state) => {
+      if (liveHierarchy(state) === undefined) {
+        return [{ _tag: "retired" }, state];
+      }
+      if (levelOrder[childConfig.level] <= levelOrder[config.level]) {
+        return [
+          {
+            _tag: "invalid",
+            error: InvalidBudgetHierarchy.make({
+              parentLevel: config.level,
+              childLevel: childConfig.level
+            })
+          },
+          state
+        ];
+      }
       const existing = state.nodes.get(childKey);
       if (existing !== undefined) {
         return sameLimits(existing.config.limits, childConfig.limits) ? [
-          undefined,
+          { _tag: "success" },
           {
             nodes: new Map(state.nodes).set(childKey, {
               ...existing,
-              registrations: existing.registrations + 1
+              handles: new Set(existing.handles).add(childHandleId)
             })
           }
         ] : [
-          BudgetNodeConflict.make({
-            scopeLevel: childConfig.level,
-            scopeId: childConfig.id
-          }),
+          {
+            _tag: "conflict",
+            error: BudgetNodeConflict.make({
+              scopeLevel: childConfig.level,
+              scopeId: childConfig.id
+            })
+          },
           state
         ];
       }
       return [
-        undefined,
+        { _tag: "success" },
         {
           nodes: new Map(state.nodes).set(childKey, {
             config: childConfig,
             startedAt: now3,
             totals: emptyTotals(),
-            registrations: 1
+            handles: new Set([childHandleId])
           })
         }
       ];
     });
-    if (conflict !== undefined)
-      return yield* conflict;
-    return makeNode(ledger, childKey, hierarchy, childConfig);
+    if (registration._tag === "retired")
+      return yield* retiredDefect();
+    if (registration._tag === "conflict" || registration._tag === "invalid") {
+      return yield* registration.error;
+    }
+    return makeNode(ledger, childKey, hierarchy, childConfig, childHandleId);
   });
-  const retire = exports_Effect.uninterruptible(exports_Effect.sync(() => {
-    if (retired)
-      return false;
-    retired = true;
-    return true;
-  }).pipe(exports_Effect.flatMap((release3) => release3 ? exports_Ref.update(ledger, (state) => {
+  const retire = exports_Effect.uninterruptible(exports_Ref.update(ledger, (state) => {
     const existing = state.nodes.get(key);
-    if (existing === undefined)
+    if (existing === undefined || !existing.handles.has(handleId))
       return state;
-    const nodes = new Map(state.nodes).set(key, {
-      ...existing,
-      registrations: Math.max(0, existing.registrations - 1)
-    });
+    const handles = new Set(existing.handles);
+    handles.delete(handleId);
+    const nodes = new Map(state.nodes).set(key, { ...existing, handles });
     return { nodes: pruneRetiredHierarchy(nodes, hierarchy) };
-  }) : exports_Effect.void)));
+  }));
   return {
     level: config.level,
     id: config.id,
     child,
     childScoped: (childConfig) => exports_Effect.acquireRelease(child(childConfig), (node) => node.retire),
     retire,
-    consume: (delta) => assertLive.pipe(exports_Effect.andThen(exports_Clock.currentTimeMillis.pipe(exports_Effect.flatMap((now3) => exports_Ref.modify(ledger, (state) => {
+    consume: (delta) => exports_Clock.currentTimeMillis.pipe(exports_Effect.flatMap((now3) => exports_Ref.modify(ledger, (state) => {
+      if (liveHierarchy(state) === undefined) {
+        return [{ _tag: "retired" }, state];
+      }
       const updates = new Map;
       for (const ancestorKey of hierarchy) {
         const node = state.nodes.get(ancestorKey);
-        if (node === undefined) {
-          continue;
-        }
+        if (node === undefined)
+          return [{ _tag: "retired" }, state];
         const totals = addUsage(node, delta, now3);
         const error2 = exceeded(node, totals);
         if (error2 !== undefined) {
@@ -35664,9 +35691,18 @@ var makeNode = (ledger, key, ancestors, config) => {
       for (const [updatedKey, updatedNode] of updates) {
         nextNodes.set(updatedKey, updatedNode);
       }
-      const value4 = updates.get(key)?.totals ?? emptyTotals();
-      return [{ _tag: "success", value: value4 }, { nodes: nextNodes }];
-    }).pipe(exports_Effect.flatMap((result4) => result4._tag === "success" ? exports_Effect.succeed(result4.value) : exports_Effect.fail(result4.error))))))),
+      const value4 = updates.get(key)?.totals;
+      return value4 === undefined ? [{ _tag: "retired" }, state] : [{ _tag: "success", value: value4 }, { nodes: nextNodes }];
+    }).pipe(exports_Effect.flatMap((result4) => {
+      switch (result4._tag) {
+        case "success":
+          return exports_Effect.succeed(result4.value);
+        case "failure":
+          return exports_Effect.fail(result4.error);
+        case "retired":
+          return retiredDefect();
+      }
+    })))),
     snapshot: snapshot3,
     guard
   };
@@ -35674,6 +35710,7 @@ var makeNode = (ledger, key, ancestors, config) => {
 var makeUsageBudgetRoot = exports_Effect.fn("makeUsageBudgetRoot")(function* (config) {
   const startedAt = yield* exports_Clock.currentTimeMillis;
   const key = `${config.level}:${config.id}`;
+  const handleId = Symbol(`usage-budget:${config.level}:${config.id}`);
   const ledger = yield* exports_Ref.make({
     nodes: new Map([
       [
@@ -35682,12 +35719,12 @@ var makeUsageBudgetRoot = exports_Effect.fn("makeUsageBudgetRoot")(function* (co
           config,
           startedAt,
           totals: emptyTotals(),
-          registrations: 1
+          handles: new Set([handleId])
         }
       ]
     ])
   });
-  return makeNode(ledger, key, [], config);
+  return makeNode(ledger, key, [], config, handleId);
 });
 // packages/engine/src/bounded-value-internal.ts
 var DEFAULT_MAX_DEPTH = 128;
@@ -35728,13 +35765,14 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
         return add5(16);
       case "undefined":
       case "symbol":
-      case "function":
         return add5(16);
+      case "function":
+        return false;
       case "object": {
         if (ancestors.has(value4) || !add5(OBJECT_OVERHEAD_BYTES))
           return false;
         if (ArrayBuffer.isView(value4))
-          return add5(value4.byteLength);
+          return add5(value4.buffer.byteLength);
         if (value4 instanceof ArrayBuffer)
           return add5(value4.byteLength);
         if (Array.isArray(value4) && !add5(value4.length))
@@ -35754,7 +35792,7 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
             if ("value" in descriptor) {
               if (!visit(descriptor.value, depth + 1))
                 return false;
-            } else if (!add5(16)) {
+            } else {
               return false;
             }
           }
@@ -36721,10 +36759,17 @@ var decodeResumedSettledCall = exports_Effect.fn("AgentRuntime.decodeResumedSett
       if (input === null || typeof input !== "object") {
         throw new TypeError("settled Tool Call must be an object");
       }
+      const readOwnDataProperty = (key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(input, key);
+        if (descriptor === undefined || !("value" in descriptor)) {
+          throw new TypeError(`settled Tool Call ${key} must be an own data property`);
+        }
+        return descriptor.value;
+      };
       return {
-        id: Reflect.get(input, "id"),
-        result: Reflect.get(input, "result"),
-        isFailure: Reflect.get(input, "isFailure")
+        id: readOwnDataProperty("id"),
+        result: readOwnDataProperty("result"),
+        isFailure: readOwnDataProperty("isFailure")
       };
     },
     catch: () => ModelProtocolError.make({

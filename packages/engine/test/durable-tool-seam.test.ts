@@ -813,6 +813,40 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
         expect((failure as ModelProtocolError).message).toContain("bounded canonical JSON");
       }
 
+      let accessorReads = 0;
+      const accessorSettled: RunTurnResume["settled"][number] = {
+        id: "call-settled",
+        result: "small",
+        isFailure: false,
+      };
+      Object.defineProperty(accessorSettled, "result", {
+        enumerable: true,
+        get: () => {
+          accessorReads += 1;
+          return "small";
+        },
+      });
+      const accessorResume: RunTurnResume = {
+        turn: 1,
+        turnId: resumeTurnId,
+        calls: [
+          { id: "call-settled", name: "lookup", params: { key: "a" } },
+          { id: "call-open", name: "lookup", params: { key: "b" } },
+        ],
+        settled: [accessorSettled],
+      };
+      const accessorExit = yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "resume" },
+        { resume: accessorResume, durability: markingDurability(marks) },
+      ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+      const accessorFailure = failureFrom(accessorExit);
+      expect(accessorFailure).toBeInstanceOf(ModelProtocolError);
+      if (accessorFailure instanceof ModelProtocolError) {
+        expect(accessorFailure.message).toContain("invalid settled Tool Call");
+      }
+      expect(accessorReads).toBe(0);
+
       expect(handlerStarts).toBe(0);
       expect(modelCalls).toBe(0);
       expect(yield* Ref.get(marks)).toEqual([]);

@@ -332,8 +332,8 @@ Every application Tool result, including MCP results, is bounded once at the set
 `AgentPolicy.toolResultBounds` (default 50 KiB) before it enters records or prompts, so both
 carry the same value. An oversized encoded result becomes the canonical `TruncatedToolResult`
 envelope preserving head, tail, and original byte size. A durable resume rechecks the recorded
-settled result against the same bound and rejects non-JSON or hostile values instead of changing
-them. Provider-executed results are exempt.
+settled result against the same bound in the DN and DC assemblies and rejects non-JSON or hostile
+values instead of changing them. Provider-executed results are exempt.
 
 ### Run-status message
 
@@ -448,9 +448,10 @@ exported `withTerminalDefectEvent` combinator, whose contract is:
 - identity fields come from the last event already streamed; a defect before the first event is
   rethrown without an event, because the helper never fabricates Run identities.
 
-Engine-owned Durable Step and durable-Subagent infrastructure errors use fixed, bounded public
-messages. Foreign hook failures are reported through Effect's installed error reporters before
-the engine maps them, but their messages, stacks, and payloads never enter Tool or Run events.
+In the DN and DC assemblies, engine-owned Durable Step and durable-Subagent infrastructure errors
+use fixed, bounded public messages. Foreign hook failures are reported through Effect's installed
+error reporters before the engine maps them, but their messages, stacks, and payloads never enter
+Tool or Run events.
 
 ## 11. Backpressure
 

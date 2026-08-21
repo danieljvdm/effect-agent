@@ -12,13 +12,14 @@ import { conversationStoreConformanceCases } from "@effect-agent/session/testing
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { Crypto } from "effect";
-import { Cause, Effect, Exit, Layer, Schema } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   type DoStorageConfig,
   conversationStoreLayer,
+  DoStorageError,
   DoStorageFailpoint,
   DoValueBoundExceeded,
   layer,
@@ -53,6 +54,7 @@ type ConversationStoreLayerErrorProof = Assert<
   Equal<Layer.Error<typeof conversationStoreLayer>, DoStorageInitializationError>
 >;
 const isConversationStoreError = Schema.is(ConversationStoreError);
+const isDoStorageError = Schema.is(DoStorageError);
 const isDoValueBoundExceeded = Schema.is(DoValueBoundExceeded);
 
 const inputRecord = (recordId: string, input: string): CanonicalRecord =>
@@ -113,6 +115,16 @@ describe("DoConversationStore", () => {
         );
 
         expect(Exit.isFailure(opened)).toBe(true);
+        if (Exit.isFailure(opened)) {
+          const failure = Cause.findErrorOption(opened.cause);
+          expect(Option.isSome(failure)).toBe(true);
+          if (Option.isSome(failure)) {
+            expect(isDoStorageError(failure.value)).toBe(true);
+            if (isDoStorageError(failure.value)) {
+              expect(failure.value.operation).toBe("configure Durable Object storage");
+            }
+          }
+        }
         const tables = storage.sql
           .exec<{ name: string }>(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'effect_agent_%'",

@@ -761,10 +761,17 @@ const decodeResumedSettledCall = Effect.fn("AgentRuntime.decodeResumedSettledCal
           if (input === null || typeof input !== "object") {
             throw new TypeError("settled Tool Call must be an object");
           }
+          const readOwnDataProperty = (key: "id" | "result" | "isFailure"): unknown => {
+            const descriptor = Object.getOwnPropertyDescriptor(input, key);
+            if (descriptor === undefined || !("value" in descriptor)) {
+              throw new TypeError(`settled Tool Call ${key} must be an own data property`);
+            }
+            return descriptor.value;
+          };
           return {
-            id: Reflect.get(input, "id"),
-            result: Reflect.get(input, "result"),
-            isFailure: Reflect.get(input, "isFailure"),
+            id: readOwnDataProperty("id"),
+            result: readOwnDataProperty("result"),
+            isFailure: readOwnDataProperty("isFailure"),
           };
         },
         catch: () =>
