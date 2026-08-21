@@ -7,6 +7,7 @@ import { Tool } from "effect/unstable/ai";
 import {
   CandidateAssessment,
   ChangedFile,
+  DiscoveredConcern,
   annotatePatch,
   executeFanOutReview,
   fanOutInputCoverage,
@@ -29,6 +30,7 @@ import {
   planReviewUnits,
   PullRequestMetadata,
   rankAndDedupeFindings,
+  ReviewConcern,
   ReviewFinding,
   ReviewExecutionContext,
   type ReviewPassMisbehaved,
@@ -141,6 +143,15 @@ const unsupportedFinding = ReviewFinding.make({
   body: "The candidate claims the true literal disables the path, but the bounded evidence does not support that behavior.",
 });
 
+const supportedConcern = DiscoveredConcern.make({
+  concern: ReviewConcern.make({
+    severity: "blocking",
+    title: "Authentication rollout has no old-version gate",
+    body: "The bounded configuration removes the old path without a mixed-version guard.",
+  }),
+  evidencePaths: ["examples/pr-work-order-ingress/src/authenticate.ts"],
+});
+
 /** The host assigns candidate IDs by kept-finding position, 1-based. */
 const candidateId = (passId: string, index: number): string =>
   `${passId}:finding:${String(index).padStart(3, "0")}`;
@@ -148,13 +159,14 @@ const candidateId = (passId: string, index: number): string =>
 const discoveryReport = (
   pass: typeof generalPass,
   findings: ReadonlyArray<ReviewFinding>,
+  concerns: ReadonlyArray<DiscoveredConcern> = [],
 ): FileReviewReport =>
   FileReviewReport.make({
     phase: "discovery",
     workId: pass.passId,
     unitId: pass.unitId,
     findings,
-    concerns: [],
+    concerns,
     fileSummaries:
       pass.perspective === "general"
         ? pass.paths.map((path) =>
@@ -715,6 +727,40 @@ describe("host-scheduled discovery and verification pipeline", () => {
       }),
   );
 
+  it.effect("preserves a confirmed concern's validated evidence paths", () =>
+    Effect.gen(function* () {
+      const result = yield* runOfflineFanOut({
+        children: [
+          report(generalPass.passId, discoveryReport(generalPass, [])),
+          report(specialistPass.passId, discoveryReport(specialistPass, [], [supportedConcern])),
+          report(
+            verificationWorkId,
+            verificationReport([
+              CandidateAssessment.make({
+                candidateId: `${specialistPass.passId}:concern:001`,
+                disposition: "confirmed",
+                rationale: "The bounded evidence confirms the rollout concern.",
+              }),
+            ]),
+          ),
+        ],
+      });
+
+      expect(result.outcome.review.concerns).toEqual([
+        ReviewConcern.make({
+          ...supportedConcern.concern,
+          evidencePaths: supportedConcern.evidencePaths,
+        }),
+      ]);
+      expect(result.outcome.state?.unresolvedConcerns[0]?.evidencePaths).toEqual(
+        supportedConcern.evidencePaths,
+      );
+      expect(result.outcome.plan.body).toContain(
+        "_Affected paths: `examples/pr-work-order-ingress/src/authenticate.ts`_",
+      );
+    }),
+  );
+
   it.effect("verifies an equivalent cross-pass candidate once and publishes it once", () =>
     Effect.gen(function* () {
       const result = yield* runOfflineFanOut({
@@ -1135,6 +1181,10 @@ describe("host-scheduled discovery and verification pipeline", () => {
       expect(result.outcome.state?.settled).toBe(false);
       expect(result.outcome.state?.unreviewedPaths).toContain("assets/logo.png");
       expect(result.outcome.plan.body).toContain("Incomplete input coverage");
+      // The rendered callout must not promise a retry that can never settle a
+      // binary; it instructs removal or ignore globs instead.
+      expect(result.outcome.plan.body).not.toContain("retried automatically");
+      expect(result.outcome.plan.body).toContain("ignore globs");
     }),
   );
 });

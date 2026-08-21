@@ -128,6 +128,47 @@ export const boundedListReason = (label: string, values: Iterable<string>): stri
   return rendered;
 };
 
+export interface CarriedScope {
+  /** Carried paths a retry can actually settle (failed passes, overflow). */
+  readonly retryablePaths: ReadonlyArray<string>;
+  /** Carried paths no retry can settle (binaries, oversized files). */
+  readonly undiffablePaths: ReadonlyArray<string>;
+  /** Whether any incompleteness beyond the undiffable files exists. */
+  readonly retryableGap: boolean;
+}
+
+/**
+ * Split carried scope into paths a retry can settle and paths it never can.
+ * Undiffable files are a property of the pull request, not a transient
+ * reviewer-side failure: gate reasons and rendered callouts must never promise
+ * they are "retried automatically" — the honest instruction is to remove them
+ * from the pull request or exclude them with ignore globs.
+ */
+export const splitCarriedScope = (input: {
+  readonly inputCoverage?: ReviewInputCoverage | undefined;
+  readonly assurance?: ReviewAssurance | undefined;
+  readonly unreviewedPaths?: ReadonlyArray<string> | undefined;
+}): CarriedScope => {
+  const undiffable = new Set(input.inputCoverage?.undiffablePaths ?? []);
+  const retryablePaths = (input.unreviewedPaths ?? []).filter((path) => !undiffable.has(path));
+  const undiffablePaths = sortedUnique(undiffable);
+  // Every non-undiffable coverage gap (range truncation, capacity overflow,
+  // truncated or missing evidence, anchor surface) contributes its own reason
+  // line, so a lone reason alongside undiffable paths means the undiffable
+  // files are the entire gap.
+  const coverageGapBeyondUndiffable =
+    input.inputCoverage?.status === "incomplete" &&
+    input.inputCoverage.reasons.length > (undiffablePaths.length > 0 ? 1 : 0);
+  return {
+    retryablePaths,
+    undiffablePaths,
+    retryableGap:
+      input.assurance?.status === "incomplete" ||
+      retryablePaths.length > 0 ||
+      coverageGapBeyondUndiffable,
+  };
+};
+
 const anchorSurfaceAdjusted = (
   inputCoverage: ReviewInputCoverage,
   anchorFiles: ReadonlyArray<ChangedFile>,

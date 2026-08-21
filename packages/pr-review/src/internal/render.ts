@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 import { anchorViolation } from "./anchors.ts";
 export { anchorViolation } from "./anchors.ts";
+import { splitCarriedScope } from "./coverage.ts";
 import type { ReviewAssurance, ReviewInputCoverage } from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
 import { renderFingerprintMarker } from "./fingerprint.ts";
@@ -185,24 +186,85 @@ const renderDemoted = (finding: ReviewFinding, reason: string): string => {
 const countNoun = (count: number, noun: string): string =>
   `${count} ${noun}${count === 1 ? "" : "s"}`;
 
-/** The validated finding + concern severities, tallied for callout and event. */
+interface SeverityTally {
+  readonly blocking: number;
+  readonly important: number;
+  readonly nit: number;
+  readonly total: number;
+}
+
+interface ReviewItemCounts {
+  readonly findings: SeverityTally;
+  readonly concerns: SeverityTally;
+  readonly carriedFindings: SeverityTally;
+  readonly carriedConcerns: SeverityTally;
+  readonly total: SeverityTally;
+}
+
+const tallySeverities = (
+  items: ReadonlyArray<{ readonly severity: ReviewFinding["severity"] }>,
+): SeverityTally => {
+  const blocking = items.filter((item) => item.severity === "blocking").length;
+  const important = items.filter((item) => item.severity === "important").length;
+  const nit = items.length - blocking - important;
+  return { blocking, important, nit, total: items.length };
+};
+
+/** The validated finding + concern severities, kept separate by provenance. */
 const severityCounts = (
   review: CodeReview,
   carriedFindings: ReadonlyArray<ReviewFinding> = [],
   carriedConcerns: ReadonlyArray<ReviewConcern> = [],
-) => {
-  const severities = [
-    ...review.findings.map((finding) => finding.severity),
-    ...(review.concerns ?? []).map((concern) => concern.severity),
-    ...carriedFindings.map((finding) => finding.severity),
-    ...carriedConcerns.map((concern) => concern.severity),
-  ];
+): ReviewItemCounts => {
+  const findings = tallySeverities(review.findings);
+  const concerns = tallySeverities(review.concerns ?? []);
+  const priorFindings = tallySeverities(carriedFindings);
+  const priorConcerns = tallySeverities(carriedConcerns);
   return {
-    blocking: severities.filter((severity) => severity === "blocking").length,
-    important: severities.filter((severity) => severity === "important").length,
-    total: severities.length,
+    findings,
+    concerns,
+    carriedFindings: priorFindings,
+    carriedConcerns: priorConcerns,
+    total: {
+      blocking:
+        findings.blocking + concerns.blocking + priorFindings.blocking + priorConcerns.blocking,
+      important:
+        findings.important + concerns.important + priorFindings.important + priorConcerns.important,
+      nit: findings.nit + concerns.nit + priorFindings.nit + priorConcerns.nit,
+      total: findings.total + concerns.total + priorFindings.total + priorConcerns.total,
+    },
   };
 };
+
+const joinItemCounts = (items: ReadonlyArray<string>): string =>
+  items.length <= 1
+    ? (items[0] ?? "none")
+    : items.length === 2
+      ? `${items[0]} and ${items[1]}`
+      : `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
+
+const severityItemParts = (
+  counts: ReviewItemCounts,
+  severity: keyof Pick<SeverityTally, "blocking" | "important" | "nit">,
+): ReadonlyArray<string> => [
+  ...(counts.findings[severity] === 0
+    ? []
+    : [countNoun(counts.findings[severity], `${severity} finding`)]),
+  ...(counts.concerns[severity] === 0
+    ? []
+    : [countNoun(counts.concerns[severity], `${severity} concern`)]),
+  ...(counts.carriedFindings[severity] === 0
+    ? []
+    : [countNoun(counts.carriedFindings[severity], `carried ${severity} finding`)]),
+  ...(counts.carriedConcerns[severity] === 0
+    ? []
+    : [countNoun(counts.carriedConcerns[severity], `carried ${severity} concern`)]),
+];
+
+const renderSeverityItems = (
+  counts: ReviewItemCounts,
+  severity: keyof Pick<SeverityTally, "blocking" | "important" | "nit">,
+): string => joinItemCounts(severityItemParts(counts, severity));
 
 /**
  * The opening callout: the review's overall tier, derived HOST-SIDE from the
@@ -223,33 +285,52 @@ const renderVerdictCallout = (
   const counts = severityCounts(review, options.carriedFindings, options.carriedConcerns);
   // Code findings outrank machinery gaps: a blocking finding is the
   // actionable signal, and unsettled reviewer-side work is carried forward.
-  if (counts.blocking > 0) {
-    return `> [!CAUTION]\n> ${countNoun(counts.blocking, "blocking finding")} — do not merge before addressing ${counts.blocking === 1 ? "it" : "them"}.`;
+  if (counts.total.blocking > 0) {
+    return `> [!CAUTION]\n> ${renderSeverityItems(counts, "blocking")}. Do not merge before addressing ${counts.total.blocking === 1 ? "it" : "them"}.`;
   }
-  const carried = options.unreviewedPaths?.length ?? 0;
   if (
     options.inputCoverage?.status === "incomplete" ||
     options.assurance?.status === "incomplete"
   ) {
-    const carriedNote =
-      carried > 0
-        ? ` ${countNoun(carried, "affected path")} ${carried === 1 ? "is" : "are"} carried forward and retried automatically on the next run.`
+    const scope = splitCarriedScope(options);
+    const undiffableCount = scope.undiffablePaths.length;
+    const undiffableNote =
+      undiffableCount > 0
+        ? ` ${countNoun(undiffableCount, "unreviewable file")} (binary or oversized) ${undiffableCount === 1 ? "has" : "have"} no diff a retry could settle — remove ${undiffableCount === 1 ? "it" : "them"} from the pull request or exclude ${undiffableCount === 1 ? "it" : "them"} with ignore globs.`
         : "";
-    return `> [!WARNING]\n> Review infrastructure did not settle — a reviewer-side gap, NOT a request to change code.${carriedNote} The check reports "incomplete" until a run settles.`;
+    // Undiffable-only gaps are NOT reviewer-side and DO ask for a change (to
+    // the changeset or the ignore configuration), so they get their own
+    // banner instead of the carried-forward retry promise.
+    if (!scope.retryableGap) {
+      return `> [!WARNING]\n>${undiffableNote} The check reports "incomplete" while ${undiffableCount === 1 ? "it remains" : "they remain"} part of the pull request.`;
+    }
+    const retryableCount = scope.retryablePaths.length;
+    const carriedNote =
+      retryableCount > 0
+        ? ` ${countNoun(retryableCount, "affected path")} ${retryableCount === 1 ? "is" : "are"} carried forward and retried automatically on the next run.`
+        : "";
+    return `> [!WARNING]\n> Review infrastructure did not settle. This is a reviewer-side gap, NOT a request to change code.${carriedNote}${undiffableNote} The check reports "incomplete" until a run settles.`;
   }
-  if (counts.important > 0) {
-    return `> [!IMPORTANT]\n> ${countNoun(counts.important, "important finding")} to address before merging.`;
+  if (counts.total.important > 0) {
+    return `> [!IMPORTANT]\n> ${renderSeverityItems(counts, "important")} to address before merging.`;
   }
-  if (counts.total > 0) {
-    return "> ℹ️ Minor suggestions only — mergeable as-is.";
+  if (counts.total.total > 0) {
+    return `> ℹ️ ${renderSeverityItems(counts, "nit")}; mergeable as-is.`;
   }
   return review.verdict === "approve"
     ? "> ✅ No issues found."
-    : "> ℹ️ No findings — see the summary.";
+    : "> ℹ️ No review items. See the summary.";
 };
 
 const renderConcern = (concern: ReviewConcern): string =>
-  [`### ${severityEmoji[concern.severity]} ${concern.title}`, "", concern.body].join("\n");
+  [
+    `### ${severityEmoji[concern.severity]} ${concern.title}`,
+    ...(concern.evidencePaths === undefined
+      ? []
+      : ["", `_Affected paths: ${concern.evidencePaths.map((path) => `\`${path}\``).join(", ")}_`]),
+    "",
+    concern.body,
+  ].join("\n");
 
 const renderCarriedFinding = (finding: ReviewFinding): string =>
   `- \`${finding.path}:${finding.startLine}${finding.endLine === finding.startLine ? "" : `-${finding.endLine}`}\` **[${findingLabel(finding)}] ${finding.title}** — ${finding.body}`;
@@ -311,7 +392,7 @@ export const estimateReviewEffort = (
 const renderReviewStats = (
   files: ReadonlyArray<ChangedFile>,
   totalChangedFiles: number,
-  counts: { readonly blocking: number; readonly important: number; readonly total: number },
+  counts: ReviewItemCounts,
 ): string => {
   const additions = files.reduce((total, file) => total + file.additions, 0);
   const deletions = files.reduce((total, file) => total + file.deletions, 0);
@@ -319,17 +400,16 @@ const renderReviewStats = (
     files.length < totalChangedFiles
       ? `${files.length} of ${totalChangedFiles} files`
       : countNoun(files.length, "file");
-  const nits = counts.total - counts.blocking - counts.important;
   const tally =
-    counts.total === 0
+    counts.total.total === 0
       ? "none"
-      : [
-          ...(counts.blocking > 0 ? [`${counts.blocking} blocking`] : []),
-          ...(counts.important > 0 ? [`${counts.important} important`] : []),
-          ...(nits > 0 ? [`${nits} nit`] : []),
-        ].join(", ");
+      : joinItemCounts(
+          (["blocking", "important", "nit"] as const).flatMap((severity) =>
+            severityItemParts(counts, severity),
+          ),
+        );
   const effort = estimateReviewEffort(files);
-  return `**Changeset:** ${fileCount} (+${additions} / −${deletions}) · **Findings:** ${tally} · **Review effort:** ${effort.score}/5 (${effort.label})`;
+  return `**Changeset:** ${fileCount} (+${additions} / −${deletions}) · **Review items:** ${tally} · **Review effort:** ${effort.score}/5 (${effort.label})`;
 };
 
 /** HTML comments must not contain `--`; interpolated values are sanitized. */
@@ -544,7 +624,12 @@ export const planPublication = (
       );
     }
     if (carriedConcerns.length > 0) {
-      parts.push("", "### Unresolved concerns carried to the final audit");
+      parts.push(
+        "",
+        `### Unresolved concerns from unchanged paths (${carriedConcerns.length})`,
+        "",
+        "These concerns were reported in an earlier review and were not reverified in this incremental pass. They remain active because none of their affected paths changed.",
+      );
       for (const concern of carriedConcerns) parts.push("", renderConcern(concern));
     }
     for (const concern of sortedConcerns.slice(0, concernsKept)) {
@@ -607,9 +692,9 @@ export const planPublication = (
     options.inputCoverage?.status === "incomplete" || options.assurance?.status === "incomplete";
   const event: ReviewEvent = !options.applyVerdict
     ? "COMMENT"
-    : counts.blocking > 0
+    : counts.total.blocking > 0
       ? "REQUEST_CHANGES"
-      : review.verdict === "approve" && counts.important === 0 && !unclean
+      : review.verdict === "approve" && counts.total.important === 0 && !unclean
         ? "APPROVE"
         : "COMMENT";
 

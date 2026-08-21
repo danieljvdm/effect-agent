@@ -361,12 +361,18 @@ export type ReviewVerdict = typeof ReviewVerdict.Type;
  * A concern with no diff line to anchor to: a missing deletion or cleanup,
  * rollout or migration sequencing, a coverage gap the diff implies but does
  * not add, or a scope question only the author can answer. Rendered as a
- * review-body section — never as an inline comment, so it needs no anchor and
- * is never demoted.
+ * review-body section instead of an inline comment. `evidencePaths` binds the
+ * concern to changed files so a later incremental review can invalidate and
+ * recheck it when any supporting path changes. It remains optional only for
+ * decoding review output and continuity state written before path binding was
+ * introduced; a pathless concern cannot authorize incremental continuity.
  */
 export class ReviewConcern extends Schema.Class<ReviewConcern>(
   "@effect-agent/pr-review/ReviewConcern",
 )({
+  evidencePaths: Schema.optionalKey(
+    Schema.Array(ChangedPath).check(Schema.isMinLength(1)).check(Schema.isMaxLength(3)),
+  ),
   severity: FindingSeverity,
   title: Schema.NonEmptyString.check(Schema.isMaxLength(120)),
   body: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
@@ -456,9 +462,9 @@ export const makeReviewInstructions =
       "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
       "Go shallow only when the diff has no behavioral surface at all: doc typos, formatting, lockfile or generated-code regeneration, a mechanical rename. Line count is not the signal — a one-line change to auth, money, SQL, a comparison operator, or a config default is not trivial.",
       "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
-      '5. After collecting anchored findings, deliberately scan for concerns with NO line to point at: deletion or cleanup plans for code the diff replaces, rollout or migration sequencing, coverage gaps the diff implies but does not add, scope questions only the author can answer. Report each as a "concern", never as a finding with an invented anchor; report none when none exist.',
+      '5. After collecting anchored findings, deliberately scan for concerns with NO line to point at: deletion or cleanup plans for code the diff replaces, rollout or migration sequencing, coverage gaps the diff implies but does not add, scope questions only the author can answer. Report each as a "concern", never as a finding with an invented anchor. Every concern must list 1-3 exact changed evidencePaths that support it so later incremental reviews can recheck it when those files change. Report none when none exist, and never split one root concern into differently worded restatements.',
       `6. Write a walkthrough: for every file whose evidence you examined, one factual sentence (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars) describing what changed in that file — written for a reader scanning the pull request, never restating the diff line by line. Use only paths from list_changed_files; invented paths are dropped.`,
-      '7. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "category": <OPTIONAL: "correctness" | "security" | "concurrency" | "performance" | "resources" | "error-handling" | "testing" | "maintainability" | "style" | "docs">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for step-5 concerns with no valid anchor — never duplicate a finding here>, "walkthrough": <array, OPTIONAL: [{"path": <string, a changed file path>, "summary": <string, the step-6 sentence>}], one entry per reviewed file>}.',
+      '7. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "category": <OPTIONAL: "correctness" | "security" | "concurrency" | "performance" | "resources" | "error-handling" | "testing" | "maintainability" | "style" | "docs">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"evidencePaths": <array of 1-3 exact changed file paths>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for step-5 concerns with no valid anchor — never duplicate a finding here>, "walkthrough": <array, OPTIONAL: [{"path": <string, a changed file path>, "summary": <string, the step-6 sentence>}], one entry per reviewed file>}.',
       `Report at most ${maxFindings} findings and at most ${MAX_CONCERNS} concerns; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
       'Use verdict "request-changes" only when at least one finding or concern is "blocking". Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.',
     ].join("\n");
