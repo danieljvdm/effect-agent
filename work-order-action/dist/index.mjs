@@ -35730,6 +35730,7 @@ var makeUsageBudgetRoot = exports_Effect.fn("makeUsageBudgetRoot")(function* (co
 var DEFAULT_MAX_DEPTH = 128;
 var OBJECT_OVERHEAD_BYTES = 32;
 var PROPERTY_OVERHEAD_BYTES = 8;
+var dateTimeUtcPrototype = Object.getPrototypeOf(exports_DateTime.makeUnsafe(0));
 var redactedPrototype = Object.getPrototypeOf(exports_Redacted.make(undefined));
 var arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")?.get;
 var typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
@@ -35780,6 +35781,8 @@ var inspectPrototype = (prototype, isArray2, trustedSchemaProduct) => {
   }
   if (prototype === Object.prototype)
     return { trustChildren: trustedSchemaProduct };
+  if (prototype === dateTimeUtcPrototype)
+    return { trustChildren: false };
   const constructorDescriptor = Object.getOwnPropertyDescriptor(prototype, "constructor");
   if (constructorDescriptor !== undefined && "value" in constructorDescriptor && typeof constructorDescriptor.value === "function") {
     const constructorPrototype = Object.getOwnPropertyDescriptor(constructorDescriptor.value, "prototype");

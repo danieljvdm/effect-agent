@@ -1,8 +1,9 @@
-import { Redacted, Schema } from "effect";
+import { DateTime, Redacted, Schema } from "effect";
 
 const DEFAULT_MAX_DEPTH = 128;
 const OBJECT_OVERHEAD_BYTES = 32;
 const PROPERTY_OVERHEAD_BYTES = 8;
+const dateTimeUtcPrototype = Object.getPrototypeOf(DateTime.makeUnsafe(0)) as object;
 const redactedPrototype = Object.getPrototypeOf(Redacted.make(undefined)) as object;
 
 const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
@@ -75,6 +76,7 @@ const inspectPrototype = (
     return prototype === Array.prototype ? { trustChildren: trustedSchemaProduct } : undefined;
   }
   if (prototype === Object.prototype) return { trustChildren: trustedSchemaProduct };
+  if (prototype === dateTimeUtcPrototype) return { trustChildren: false };
 
   const constructorDescriptor = Object.getOwnPropertyDescriptor(prototype, "constructor");
   if (

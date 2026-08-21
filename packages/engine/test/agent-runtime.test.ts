@@ -3747,6 +3747,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     expect(boundedValueFootprint(backing, 8_192)).toBe(4_128);
     expect(binaryAccessorReads).toBe(0);
     expect(boundedValueFootprint(Redacted.make("secret"), 1_024)).toBe(40);
+    expect(boundedValueFootprint(DateTime.makeUnsafe(0), 1_024)).toBeDefined();
     expect(
       boundedValueFootprint(Redacted.make(new Map([["small", "value"]])), 1_024),
     ).toBeUndefined();
