@@ -1419,8 +1419,9 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       const reporter = ErrorReporter.make(({ error }) => {
         reported.push(error.message);
       });
+      const hookFailure = HookFailure.make({ message: "lookup boom" });
       const failingStepHook: RunStepHook<HookFailure> = {
-        lookup: () => Effect.fail(HookFailure.make({ message: "lookup boom" })),
+        lookup: () => Effect.fail(hookFailure),
         commit: () => Effect.void,
       };
       const durability: RunDurabilityHook<HookFailure> = {
@@ -1485,9 +1486,9 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       expect(failure).toBeInstanceOf(DurableStepError);
       expect((failure as DurableStepError).reason).toBe("lookup-failed");
       expect((failure as DurableStepError).message).toBe("Durable Step lookup failed");
-      expect(JSON.stringify(failure)).not.toContain("lookup boom");
+      expect((failure as DurableStepError).cause).toBe(hookFailure);
       expect(JSON.stringify(observed)).not.toContain("lookup boom");
-      expect(reported.some((message) => message.includes("lookup boom"))).toBe(true);
+      expect(reported).toEqual([]);
       expect(bodyRuns).toBe(0);
     }),
   );

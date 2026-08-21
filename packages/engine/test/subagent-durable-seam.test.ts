@@ -674,8 +674,9 @@ layer(identifiers)("S2 WP1 durable Subagent engine seam", (it) => {
       const reporter = ErrorReporter.make(({ error }) => {
         reported.push(error.message);
       });
+      const hookFailure = HookFailure.make({ message: "ledger unavailable" });
       const subagent: RunSubagentHook<HookFailure> = {
-        establish: () => Effect.fail(HookFailure.make({ message: "ledger unavailable" })),
+        establish: () => Effect.fail(hookFailure),
         join: () => Effect.void,
       };
       const model = scriptedModel(
@@ -708,9 +709,9 @@ layer(identifiers)("S2 WP1 durable Subagent engine seam", (it) => {
       expect(failure.operation).toBe("establish");
       expect(failure.reason).toBe("hook-failed");
       expect(failure.message).toBe("Durable child establishment failed");
-      expect(JSON.stringify(failure)).not.toContain("ledger unavailable");
+      expect(failure.cause).toBe(hookFailure);
       expect(JSON.stringify(yield* Ref.get(events))).not.toContain("ledger unavailable");
-      expect(reported.some((message) => message.includes("ledger unavailable"))).toBe(true);
+      expect(reported).toEqual([]);
     }),
   );
 

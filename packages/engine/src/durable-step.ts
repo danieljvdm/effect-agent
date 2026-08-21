@@ -86,6 +86,8 @@ export class DurableStepError extends Schema.TaggedError<DurableStepError>()("Du
   ]),
   message: Schema.String.check(Schema.isMaxLength(4_096)),
   toolCallId: Schema.optionalKey(ToolCallId),
+  /** Diagnostic cause for the live Effect only; Run events retain the fixed public message. */
+  cause: Schema.optionalKey(Schema.Defect()),
 }) {}
 
 /**

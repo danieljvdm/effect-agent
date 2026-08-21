@@ -34018,6 +34018,20 @@ var OBJECT_OVERHEAD_BYTES = 32;
 var PROPERTY_OVERHEAD_BYTES = 8;
 var dateTimeUtcPrototype = Object.getPrototypeOf(exports_DateTime.makeUnsafe(0));
 var redactedPrototype = Object.getPrototypeOf(exports_Redacted.make(undefined));
+var intrinsicViewPrototypes = new Set([
+  DataView.prototype,
+  Int8Array.prototype,
+  Uint8Array.prototype,
+  Uint8ClampedArray.prototype,
+  Int16Array.prototype,
+  Uint16Array.prototype,
+  Int32Array.prototype,
+  Uint32Array.prototype,
+  Float32Array.prototype,
+  Float64Array.prototype,
+  BigInt64Array.prototype,
+  BigUint64Array.prototype
+]);
 var arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")?.get;
 var typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 var typedArrayBufferGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer")?.get;
@@ -34025,6 +34039,7 @@ var dataViewBufferGetter = Object.getOwnPropertyDescriptor(DataView.prototype, "
 var urlConstructor = Reflect.get(globalThis, "URL");
 var urlPrototypeDescriptor = typeof urlConstructor === "function" ? Object.getOwnPropertyDescriptor(urlConstructor, "prototype") : undefined;
 var urlHrefGetter = urlPrototypeDescriptor !== undefined && "value" in urlPrototypeDescriptor && urlPrototypeDescriptor.value !== null && typeof urlPrototypeDescriptor.value === "object" ? Object.getOwnPropertyDescriptor(urlPrototypeDescriptor.value, "href")?.get : undefined;
+var urlPrototype = urlPrototypeDescriptor !== undefined && "value" in urlPrototypeDescriptor && urlPrototypeDescriptor.value !== null && typeof urlPrototypeDescriptor.value === "object" ? urlPrototypeDescriptor.value : undefined;
 var intrinsicArrayBufferByteLength = (value4) => {
   if (arrayBufferByteLengthGetter === undefined)
     return;
@@ -34059,22 +34074,13 @@ var intrinsicUrlByteLength = (value4) => {
     return;
   }
 };
-var inspectPrototype = (prototype, isArray2) => {
+var inspectPrototype = (prototype, isArray2, knownSafePrototypes) => {
   if (prototype === null)
     return true;
   if (isArray2) {
     return prototype === Array.prototype;
   }
-  if (prototype === Object.prototype || prototype === dateTimeUtcPrototype)
-    return true;
-  const constructorDescriptor = Object.getOwnPropertyDescriptor(prototype, "constructor");
-  if (constructorDescriptor !== undefined && "value" in constructorDescriptor && typeof constructorDescriptor.value === "function") {
-    const constructorPrototype = Object.getOwnPropertyDescriptor(constructorDescriptor.value, "prototype");
-    if (constructorPrototype !== undefined && "value" in constructorPrototype && constructorPrototype.value === prototype && exports_Schema.isSchema(constructorDescriptor.value)) {
-      return true;
-    }
-  }
-  return false;
+  return prototype === Object.prototype || prototype === dateTimeUtcPrototype || knownSafePrototypes.has(prototype);
 };
 var isCanonicalArrayIndex = (key) => {
   const index2 = Number(key);
@@ -34088,7 +34094,7 @@ var utf8ByteLength2 = (value4) => {
   }
   return total;
 };
-var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
+var boundedValueFootprint = (root, maxBytes, knownSafePrototypes = new Set, maxDepth = DEFAULT_MAX_DEPTH) => {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || !Number.isSafeInteger(maxDepth) || maxDepth < 0) {
     return;
   }
@@ -34122,9 +34128,12 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
       case "object": {
         if (ancestors.has(value4) || !add5(OBJECT_OVERHEAD_BYTES))
           return false;
+        const prototype = Object.getPrototypeOf(value4);
         let skipIndexedProperties = false;
         let supportedSpecialObject = false;
         if (ArrayBuffer.isView(value4)) {
+          if (!intrinsicViewPrototypes.has(prototype))
+            return false;
           const byteLength = intrinsicViewBackingByteLength(value4);
           if (byteLength === undefined || !add5(byteLength))
             return false;
@@ -34134,6 +34143,8 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
         if (!supportedSpecialObject) {
           const bufferByteLength = intrinsicArrayBufferByteLength(value4);
           if (bufferByteLength !== undefined) {
+            if (prototype !== ArrayBuffer.prototype)
+              return false;
             if (!add5(bufferByteLength))
               return false;
             supportedSpecialObject = true;
@@ -34142,12 +34153,13 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
         if (!supportedSpecialObject) {
           const urlByteLength = intrinsicUrlByteLength(value4);
           if (urlByteLength !== undefined) {
+            if (prototype !== urlPrototype)
+              return false;
             if (!add5(urlByteLength))
               return false;
             supportedSpecialObject = true;
           }
         }
-        const prototype = Object.getPrototypeOf(value4);
         let redactedValue;
         let isRedacted2 = false;
         if (prototype === redactedPrototype) {
@@ -34162,7 +34174,7 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
           }
         }
         const isArray2 = Array.isArray(value4);
-        if (!supportedSpecialObject && !isRedacted2 && !inspectPrototype(prototype, isArray2)) {
+        if (!supportedSpecialObject && !isRedacted2 && !inspectPrototype(prototype, isArray2, knownSafePrototypes)) {
           return false;
         }
         if (isArray2) {
@@ -34991,7 +35003,8 @@ class DurableStepError extends exports_Schema.TaggedError()("DurableStepError", 
     "no-active-tool-call"
   ]),
   message: exports_Schema.String.check(exports_Schema.isMaxLength(4096)),
-  toolCallId: exports_Schema.optionalKey(ToolCallId)
+  toolCallId: exports_Schema.optionalKey(ToolCallId),
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
 
@@ -35071,12 +35084,40 @@ var effectiveRunBufferLimits = (configured) => ({
   maxSubagentEventsPerBatch: tighteningBufferLimit(configured?.maxSubagentEventsPerBatch, DEFAULT_RUN_BUFFER_LIMITS.maxSubagentEventsPerBatch, 1)
 });
 var structuredCloneFunction = Reflect.get(globalThis, "structuredClone");
-var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart")(function* (part, toolkit) {
+var knownSafeModelResponsePrototypes = new Set([exports_Response.Usage.prototype]);
+var modelResponseInputPrototypes = (toolkit) => {
+  const prototypes = new Set(knownSafeModelResponsePrototypes);
+  for (const tool of Object.values(toolkit.tools)) {
+    for (const schema2 of [tool.parametersSchema, tool.successSchema, tool.failureSchema]) {
+      if (typeof schema2 !== "function" || !exports_Schema.isSchema(schema2))
+        continue;
+      const descriptor = Object.getOwnPropertyDescriptor(schema2, "prototype");
+      if (descriptor !== undefined && "value" in descriptor && descriptor.value !== null && typeof descriptor.value === "object") {
+        prototypes.add(descriptor.value);
+      }
+    }
+  }
+  return prototypes;
+};
+var inspectModelResponsePartCapacity = (usage, part, limits, knownSafePrototypes = knownSafeModelResponsePrototypes) => exports_Effect.suspend(() => {
+  if (usage.responsePartCount >= limits.maxModelResponseParts) {
+    return exports_Effect.fail(ModelProtocolError.make({
+      message: `Model response exceeded the ${limits.maxModelResponseParts}-part response limit`
+    }));
+  }
+  const bytes = boundedValueFootprint(part, limits.maxModelResponseBytes - usage.responsePartBytes, knownSafePrototypes);
+  return bytes === undefined ? exports_Effect.fail(ModelProtocolError.make({
+    message: `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`
+  })) : exports_Effect.succeed(bytes);
+});
+var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart")(function* (part, toolkit, usage, limits) {
+  yield* inspectModelResponsePartCapacity(usage, part, limits, modelResponseInputPrototypes(toolkit));
   const codec = exports_Schema.toCodecJson(exports_Response.StreamPart(toolkit));
   const encodingFailure = ModelProtocolError.make({
     message: "Model response part failed canonical encoding"
   });
-  const encoded = yield* exports_Schema.encodeUnknownEffect(codec)(part).pipe(exports_Effect.mapError(() => encodingFailure), exports_Effect.catchCause(() => exports_Effect.fail(encodingFailure)));
+  const encoded = yield* exports_Schema.encodeUnknownEffect(codec)(part).pipe(exports_Effect.mapError(() => encodingFailure));
+  const retainedBytes = yield* inspectModelResponsePartCapacity(usage, encoded, limits);
   const ownedEncoded = yield* exports_Effect.try({
     try: () => {
       if (typeof structuredCloneFunction !== "function") {
@@ -35092,23 +35133,19 @@ var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart"
   const decodingFailure = ModelProtocolError.make({
     message: "Model response part failed canonical decoding"
   });
-  return yield* exports_Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(exports_Effect.mapError(() => decodingFailure), exports_Effect.catchCause(() => exports_Effect.fail(decodingFailure)));
+  const ownedPart = yield* exports_Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(exports_Effect.mapError(() => decodingFailure));
+  return { ownedPart, retainedBytes };
 });
-var consumeModelResponsePart = (usage, part, limits) => exports_Effect.suspend(() => {
-  if (usage.responsePartCount >= limits.maxModelResponseParts) {
+var consumeModelResponsePart = (usage, retainedBytes, limits) => exports_Effect.suspend(() => {
+  if (usage.responsePartCount >= limits.maxModelResponseParts || !Number.isSafeInteger(retainedBytes) || retainedBytes < 0 || retainedBytes > limits.maxModelResponseBytes - usage.responsePartBytes) {
     return exports_Effect.fail(ModelProtocolError.make({
-      message: `Model response exceeded the ${limits.maxModelResponseParts}-part response limit`
+      message: usage.responsePartCount >= limits.maxModelResponseParts ? `Model response exceeded the ${limits.maxModelResponseParts}-part response limit` : `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`
     }));
   }
-  const bytes = boundedValueFootprint(part, limits.maxModelResponseBytes - usage.responsePartBytes);
-  if (bytes === undefined) {
-    return exports_Effect.fail(ModelProtocolError.make({
-      message: `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`
-    }));
-  }
-  usage.responsePartCount += 1;
-  usage.responsePartBytes += bytes;
-  return exports_Effect.void;
+  return exports_Effect.sync(() => {
+    usage.responsePartCount += 1;
+    usage.responsePartBytes += retainedBytes;
+  });
 });
 var withSemaphorePermit = (semaphore, stream) => exports_Stream.scoped(exports_Stream.fromEffect(exports_Effect.acquireRelease(semaphore.take(1), (permits) => semaphore.release(permits).pipe(exports_Effect.asVoid))).pipe(exports_Stream.flatMap(() => stream)));
 var hasTool = (tools, name) => Object.hasOwn(tools, name);
@@ -36116,8 +36153,9 @@ ${transcript}
   };
   let summaryUsage;
   yield* guardBudgetStream(exports_LanguageModel.streamText({ prompt: summarizerPrompt }), options.budget).pipe(exports_Stream.runForEach((part) => exports_Effect.gen(function* () {
-    const ownedPart = yield* ownModelResponsePart(part, exports_Toolkit.empty);
-    yield* consumeModelResponsePart(responseUsage, ownedPart, context3.bufferLimits);
+    const owned = yield* ownModelResponsePart(part, exports_Toolkit.empty, responseUsage, context3.bufferLimits);
+    yield* consumeModelResponsePart(responseUsage, owned.retainedBytes, context3.bufferLimits);
+    const ownedPart = owned.ownedPart;
     if (ownedPart.type === "text-delta") {
       pieces.push(ownedPart.delta);
     } else if (ownedPart.type === "finish") {
@@ -36274,8 +36312,8 @@ var promptFromTurnParts = (trace2) => {
   }
   return exports_Prompt.fromMessages(messages);
 };
-var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn, tools, trace2, part) {
-  yield* consumeModelResponsePart(trace2, part, context3.bufferLimits);
+var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn, tools, trace2, part, retainedBytes) {
+  yield* consumeModelResponsePart(trace2, retainedBytes, context3.bufferLimits);
   if (trace2.finished) {
     return yield* ModelProtocolError.make({
       message: "Model response emitted content after its finish part"
@@ -36673,7 +36711,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     toolkit: agent2.definition.toolkit,
     disableToolCallResolution: true,
     ...finalAnswerOnly ? { toolChoice: "none" } : {}
-  }), options.budget).pipe(exports_Stream.mapEffect((part) => ownModelResponsePart(part, agent2.definition.toolkit).pipe(exports_Effect.flatMap((ownedPart) => eventsForPart(context3, turnId, turn, agent2.definition.toolkit.tools, trace2, ownedPart)))), exports_Stream.flatMap(exports_Stream.fromIterable)))));
+  }), options.budget).pipe(exports_Stream.mapEffect((part) => ownModelResponsePart(part, agent2.definition.toolkit, trace2, context3.bufferLimits).pipe(exports_Effect.flatMap((owned) => eventsForPart(context3, turnId, turn, agent2.definition.toolkit.tools, trace2, owned.ownedPart, owned.retainedBytes)))), exports_Stream.flatMap(exports_Stream.fromIterable)))));
   const response = attempt(compactedOutgoing()).pipe(exports_Stream.catch((error2) => {
     if (!(error2 instanceof exports_AiError.AiError) || !isContextOverflowMessage(overflowText(error2))) {
       return exports_Stream.fail(error2);
@@ -37261,13 +37299,16 @@ var run4 = exports_Effect.fn("AgentRuntime.run")(function* (agent2, input, optio
 var start = exports_Effect.fn("AgentRuntime.start")(function* (agent2, input, options = {}) {
   yield* exports_Scope.Scope;
   const bufferLimits = Object.freeze(effectiveRunBufferLimits(options.bufferLimits));
-  const executionOptions = Object.create(Object.getPrototypeOf(options), Object.getOwnPropertyDescriptors(options));
-  Object.defineProperty(executionOptions, "bufferLimits", {
-    configurable: false,
-    enumerable: true,
-    value: bufferLimits,
-    writable: false
-  });
+  const executionOptionDescriptors = {
+    ...Object.getOwnPropertyDescriptors(options),
+    bufferLimits: {
+      configurable: false,
+      enumerable: true,
+      value: bufferLimits,
+      writable: false
+    }
+  };
+  const executionOptions = Object.create(Object.getPrototypeOf(options), executionOptionDescriptors);
   const captured = [];
   const observationCapacity = bufferLimits.maxRunEvents + 1;
   const pubsub = yield* exports_PubSub.dropping({
@@ -37560,11 +37601,12 @@ var makeDurableStepService = (toolCallId, hook, hookServices) => {
       }
       usedNames.add(name);
       const key = { toolCallId, stepName: name };
-      const recorded = yield* provideHookServices(hook.lookup(key), hookServices).pipe(exports_Effect.tapError((error2) => exports_ErrorReporter.report(exports_Cause.fail(error2))), exports_Effect.mapError(() => DurableStepError.make({
+      const recorded = yield* provideHookServices(hook.lookup(key), hookServices).pipe(exports_Effect.mapError((cause) => DurableStepError.make({
         toolCallId,
         stepName: name,
         reason: "lookup-failed",
-        message: "Durable Step lookup failed"
+        message: "Durable Step lookup failed",
+        cause
       })));
       if (exports_Option.isSome(recorded)) {
         return yield* exports_Schema.decodeUnknownEffect(output)(recorded.value.encodedOutput).pipe(exports_Effect.mapError(() => DurableStepError.make({
@@ -37581,11 +37623,12 @@ var makeDurableStepService = (toolCallId, hook, hookServices) => {
         reason: "output-encoding-failed",
         message: "Durable Step output failed the declared output Schema"
       })));
-      yield* provideHookServices(hook.commit(key, encodedOutput), hookServices).pipe(exports_Effect.tapError((error2) => exports_ErrorReporter.report(exports_Cause.fail(error2))), exports_Effect.mapError(() => DurableStepError.make({
+      yield* provideHookServices(hook.commit(key, encodedOutput), hookServices).pipe(exports_Effect.mapError((cause) => DurableStepError.make({
         toolCallId,
         stepName: name,
         reason: "commit-failed",
-        message: "Durable Step commit failed"
+        message: "Durable Step commit failed",
+        cause
       })));
       return value4;
     })
@@ -37617,7 +37660,8 @@ class SubagentDurabilityError extends exports_Schema.TaggedError()("SubagentDura
   operation: exports_Schema.Literals(["establish", "join", "waiting"]),
   reason: exports_Schema.Literals(["hook-failed", "no-active-tool-batch"]),
   message: exports_Schema.String.check(exports_Schema.isMaxLength(4096)),
-  toolCallId: exports_Schema.optionalKey(ToolCallId)
+  toolCallId: exports_Schema.optionalKey(ToolCallId),
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
 
@@ -37638,17 +37682,19 @@ var closedSubagentDurability = {
 };
 var makeSubagentDurabilityService = (hook, hookServices) => ({
   mode: "durable",
-  establish: (request3) => provideHookServices(hook.establish(request3), hookServices).pipe(exports_Effect.tapError((error2) => exports_ErrorReporter.report(exports_Cause.fail(error2))), exports_Effect.mapError(() => SubagentDurabilityError.make({
+  establish: (request3) => provideHookServices(hook.establish(request3), hookServices).pipe(exports_Effect.mapError((cause) => SubagentDurabilityError.make({
     operation: "establish",
     reason: "hook-failed",
     toolCallId: request3.toolCallId,
-    message: "Durable child establishment failed"
+    message: "Durable child establishment failed",
+    cause
   }))),
-  join: (request3) => provideHookServices(hook.join(request3), hookServices).pipe(exports_Effect.tapError((error2) => exports_ErrorReporter.report(exports_Cause.fail(error2))), exports_Effect.mapError(() => SubagentDurabilityError.make({
+  join: (request3) => provideHookServices(hook.join(request3), hookServices).pipe(exports_Effect.mapError((cause) => SubagentDurabilityError.make({
     operation: "join",
     reason: "hook-failed",
     toolCallId: request3.toolCallId,
-    message: "Durable child join failed"
+    message: "Durable child join failed",
+    cause
   }))),
   waiting: (toolCallId, child) => exports_Effect.fail(ToolCallWaiting.make({
     toolCallId,

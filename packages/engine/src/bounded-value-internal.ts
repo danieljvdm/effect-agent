@@ -1,10 +1,24 @@
-import { DateTime, Redacted, Schema } from "effect";
+import { DateTime, Redacted } from "effect";
 
 const DEFAULT_MAX_DEPTH = 128;
 const OBJECT_OVERHEAD_BYTES = 32;
 const PROPERTY_OVERHEAD_BYTES = 8;
 const dateTimeUtcPrototype = Object.getPrototypeOf(DateTime.makeUnsafe(0)) as object;
 const redactedPrototype = Object.getPrototypeOf(Redacted.make(undefined)) as object;
+const intrinsicViewPrototypes = new Set<object>([
+  DataView.prototype,
+  Int8Array.prototype,
+  Uint8Array.prototype,
+  Uint8ClampedArray.prototype,
+  Int16Array.prototype,
+  Uint16Array.prototype,
+  Int32Array.prototype,
+  Uint32Array.prototype,
+  Float32Array.prototype,
+  Float64Array.prototype,
+  BigInt64Array.prototype,
+  BigUint64Array.prototype,
+]);
 
 const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
   ArrayBuffer.prototype,
@@ -24,6 +38,13 @@ const urlHrefGetter =
   urlPrototypeDescriptor.value !== null &&
   typeof urlPrototypeDescriptor.value === "object"
     ? Object.getOwnPropertyDescriptor(urlPrototypeDescriptor.value, "href")?.get
+    : undefined;
+const urlPrototype =
+  urlPrototypeDescriptor !== undefined &&
+  "value" in urlPrototypeDescriptor &&
+  urlPrototypeDescriptor.value !== null &&
+  typeof urlPrototypeDescriptor.value === "object"
+    ? urlPrototypeDescriptor.value
     : undefined;
 
 const intrinsicArrayBufferByteLength = (value: object): number | undefined => {
@@ -62,35 +83,20 @@ const intrinsicUrlByteLength = (value: object): number | undefined => {
   }
 };
 
-const inspectPrototype = (prototype: object | null, isArray: boolean): boolean => {
+const inspectPrototype = (
+  prototype: object | null,
+  isArray: boolean,
+  knownSafePrototypes: ReadonlySet<object>,
+): boolean => {
   if (prototype === null) return true;
   if (isArray) {
     return prototype === Array.prototype;
   }
-  if (prototype === Object.prototype || prototype === dateTimeUtcPrototype) return true;
-
-  const constructorDescriptor = Object.getOwnPropertyDescriptor(prototype, "constructor");
-  if (
-    constructorDescriptor !== undefined &&
-    "value" in constructorDescriptor &&
-    typeof constructorDescriptor.value === "function"
-  ) {
-    const constructorPrototype = Object.getOwnPropertyDescriptor(
-      constructorDescriptor.value,
-      "prototype",
-    );
-    if (
-      constructorPrototype !== undefined &&
-      "value" in constructorPrototype &&
-      constructorPrototype.value === prototype &&
-      Schema.isSchema(constructorDescriptor.value)
-    ) {
-      // Schema classes are decoded data products. Their state remains in own fields, unlike
-      // arbitrary class instances with private or native internal slots.
-      return true;
-    }
-  }
-  return false;
+  return (
+    prototype === Object.prototype ||
+    prototype === dateTimeUtcPrototype ||
+    knownSafePrototypes.has(prototype)
+  );
 };
 
 const isCanonicalArrayIndex = (key: string): boolean => {
@@ -121,6 +127,7 @@ export const utf8ByteLength = (value: string): number => {
 export const boundedValueFootprint = (
   root: unknown,
   maxBytes: number,
+  knownSafePrototypes: ReadonlySet<object> = new Set(),
   maxDepth = DEFAULT_MAX_DEPTH,
 ): number | undefined => {
   if (
@@ -159,9 +166,11 @@ export const boundedValueFootprint = (
         return false;
       case "object": {
         if (ancestors.has(value) || !add(OBJECT_OVERHEAD_BYTES)) return false;
+        const prototype = Object.getPrototypeOf(value);
         let skipIndexedProperties = false;
         let supportedSpecialObject = false;
         if (ArrayBuffer.isView(value)) {
+          if (!intrinsicViewPrototypes.has(prototype)) return false;
           const byteLength = intrinsicViewBackingByteLength(value);
           if (byteLength === undefined || !add(byteLength)) return false;
           skipIndexedProperties = true;
@@ -170,6 +179,7 @@ export const boundedValueFootprint = (
         if (!supportedSpecialObject) {
           const bufferByteLength = intrinsicArrayBufferByteLength(value);
           if (bufferByteLength !== undefined) {
+            if (prototype !== ArrayBuffer.prototype) return false;
             if (!add(bufferByteLength)) return false;
             supportedSpecialObject = true;
           }
@@ -177,12 +187,11 @@ export const boundedValueFootprint = (
         if (!supportedSpecialObject) {
           const urlByteLength = intrinsicUrlByteLength(value);
           if (urlByteLength !== undefined) {
+            if (prototype !== urlPrototype) return false;
             if (!add(urlByteLength)) return false;
             supportedSpecialObject = true;
           }
         }
-
-        const prototype = Object.getPrototypeOf(value);
         let redactedValue: unknown;
         let isRedacted = false;
         if (prototype === redactedPrototype) {
@@ -197,10 +206,14 @@ export const boundedValueFootprint = (
         }
 
         const isArray = Array.isArray(value);
-        if (!supportedSpecialObject && !isRedacted && !inspectPrototype(prototype, isArray)) {
+        if (
+          !supportedSpecialObject &&
+          !isRedacted &&
+          !inspectPrototype(prototype, isArray, knownSafePrototypes)
+        ) {
           // Maps, Sets, arbitrary class instances, and other objects can retain storage that
-          // own-key traversal cannot see. Plain data and known Effect Schema values are
-          // measurable because their state lives in own data properties.
+          // own-key traversal cannot see. Only plain data and caller-supplied exact prototypes
+          // whose implementations guarantee own-property state are measurable.
           return false;
         }
         if (isArray) {

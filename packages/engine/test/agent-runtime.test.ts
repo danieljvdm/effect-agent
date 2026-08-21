@@ -3599,18 +3599,21 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     }),
   );
 
-  it.effect("projects hostile and oversized provider failures without defecting", () =>
+  it.effect("rejects unmeasurable and oversized provider failures without reading accessors", () =>
     Effect.gen(function* () {
+      let hostileReads = 0;
       const hostile = Object.create(null) as Record<PropertyKey, unknown>;
       Object.defineProperty(hostile, "message", {
         enumerable: true,
         get: () => {
+          hostileReads += 1;
           throw new Error("message getter must not escape");
         },
       });
       Object.defineProperty(hostile, "_tag", {
         enumerable: true,
         get: () => {
+          hostileReads += 1;
           throw new Error("tag getter must not escape");
         },
       });
@@ -3631,11 +3634,11 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       );
       const hostileFailure = failureFrom(hostileExit);
       expect(hostileFailure).toBeInstanceOf(ModelProtocolError);
-      expect(hostileFailure.message).toBe("Model response part failed canonical encoding");
+      expect(hostileFailure.message).toContain("retained response limit");
       expect((yield* Ref.get(hostileEvents)).at(-1)).toMatchObject({
         _tag: "RunFailed",
-        message: "Model response part failed canonical encoding",
       });
+      expect(hostileReads).toBe(0);
 
       const oversizedEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       const oversizedExit = yield* AgentRuntime.stream(
@@ -3653,6 +3656,32 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       if (terminal?._tag === "RunFailed") {
         expect(terminal.message.length).toBeLessThanOrEqual(4_096);
       }
+    }),
+  );
+
+  it.effect("preserves a canonical encoder defect as a defect", () =>
+    Effect.gen(function* () {
+      const encoderDefect = new Error("response encoder defect");
+      const target: Response.StreamPartEncoded = { type: "text-start", id: "answer" };
+      const defectingPart = new Proxy(target, {
+        get: (part, key, receiver) => {
+          if (key === "id") throw encoderDefect;
+          return Reflect.get(part, key, receiver);
+        },
+      });
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const exit = yield* AgentRuntime.stream(makeAgent([defectingPart]), {
+        question: "defect",
+      }).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) throw new Error("Expected the encoder defect to fail the Run");
+      expect(Cause.squash(exit.cause)).toBe(encoderDefect);
+      expect((yield* Ref.get(events)).some((event) => event._tag === "RunFailed")).toBe(false);
     }),
   );
 
@@ -3771,6 +3800,20 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     const expandedView = new Uint8Array(1);
     Object.defineProperty(expandedView, "payload", { value: "x".repeat(2_048) });
     expect(boundedValueFootprint(expandedView, 1_024)).toBeUndefined();
+    class HiddenView extends Uint8Array {
+      readonly #payload = "x".repeat(2_048);
+      retainedPayload(): string {
+        return this.#payload;
+      }
+    }
+    class HiddenBuffer extends ArrayBuffer {
+      readonly #payload = "x".repeat(2_048);
+      retainedPayload(): string {
+        return this.#payload;
+      }
+    }
+    expect(boundedValueFootprint(new HiddenView(1), 1_024)).toBeUndefined();
+    expect(boundedValueFootprint(new HiddenBuffer(1), 1_024)).toBeUndefined();
     expect(boundedValueFootprint(1n, 1_024)).toBeUndefined();
     expect(boundedValueFootprint(Symbol("small"), 1_024)).toBeUndefined();
     expect(boundedValueFootprint({ [Symbol("key")]: "value" }, 1_024)).toBeUndefined();
@@ -3789,6 +3832,9 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     class UnknownEnvelope extends Schema.Class<UnknownEnvelope>("UnknownEnvelope")({
       value: Schema.Unknown,
     }) {}
+    expect(
+      boundedValueFootprint(Schema.decodeSync(UnknownEnvelope)({ value: "small" }), 1_024),
+    ).toBeUndefined();
     expect(
       boundedValueFootprint(
         Schema.decodeSync(UnknownEnvelope)({ value: forgedEffectValue }),
@@ -5371,6 +5417,13 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect((yield* detached.events).at(-1)?._tag).toBe("RunCompleted");
       expect(bufferLimitReads).toBe(1);
       yield* Fiber.interrupt(slowObserver);
+
+      const frozenDetached = yield* AgentRuntime.start(
+        makeAgent(finalParts('{"answer":"frozen"}')),
+        { question: "accept frozen options" },
+        Object.freeze({ bufferLimits: Object.freeze({ maxRunEvents: 8 }) }),
+      );
+      expect((yield* frozenDetached.await).output).toEqual({ answer: "frozen" });
     }),
   );
 

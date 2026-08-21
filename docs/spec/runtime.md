@@ -449,9 +449,10 @@ exported `withTerminalDefectEvent` combinator, whose contract is:
   rethrown without an event, because the helper never fabricates Run identities.
 
 In the DN and DC assemblies, engine-owned Durable Step and durable-Subagent infrastructure errors
-use fixed, bounded public messages. Foreign hook failures are reported through Effect's installed
-error reporters before the engine maps them, but their messages, stacks, and payloads never enter
-Tool or Run events.
+use fixed, bounded public messages. A mapped error preserves the foreign hook failure in its
+Schema-safe diagnostic `cause` for the live Effect, while Tool and Run events retain only the fixed
+message. Reporting that diagnostic is a composition-edge decision; the engine does not send it to
+ambient error reporters.
 
 ## 11. Backpressure
 

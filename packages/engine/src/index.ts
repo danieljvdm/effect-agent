@@ -62,7 +62,6 @@ import {
   DateTime,
   Duration,
   Effect,
-  ErrorReporter,
   Exit,
   Fiber,
   Metric,
@@ -512,18 +511,85 @@ interface ModelResponseBufferUsage {
 }
 
 const structuredCloneFunction = Reflect.get(globalThis, "structuredClone");
+const knownSafeModelResponsePrototypes = new Set<object>([Response.Usage.prototype]);
+
+const modelResponseInputPrototypes = <Tools extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.Toolkit<Tools>,
+): ReadonlySet<object> => {
+  const prototypes = new Set(knownSafeModelResponsePrototypes);
+  for (const tool of Object.values(toolkit.tools)) {
+    for (const schema of [tool.parametersSchema, tool.successSchema, tool.failureSchema]) {
+      if (typeof schema !== "function" || !Schema.isSchema(schema)) continue;
+      const descriptor = Object.getOwnPropertyDescriptor(schema, "prototype");
+      if (
+        descriptor !== undefined &&
+        "value" in descriptor &&
+        descriptor.value !== null &&
+        typeof descriptor.value === "object"
+      ) {
+        // These exact prototypes belong to application-selected Tool codecs. Their hidden state,
+        // if any, is toolkit-owned rather than provider-controlled; the canonical encoded output
+        // is measured again using only intrinsic and plain-data prototypes before decoding.
+        prototypes.add(descriptor.value);
+      }
+    }
+  }
+  return prototypes;
+};
+
+const inspectModelResponsePartCapacity = (
+  usage: ModelResponseBufferUsage,
+  part: unknown,
+  limits: EffectiveRunBufferLimits,
+  knownSafePrototypes: ReadonlySet<object> = knownSafeModelResponsePrototypes,
+): Effect.Effect<number, ModelProtocolError> =>
+  Effect.suspend(() => {
+    if (usage.responsePartCount >= limits.maxModelResponseParts) {
+      return Effect.fail(
+        ModelProtocolError.make({
+          message: `Model response exceeded the ${limits.maxModelResponseParts}-part response limit`,
+        }),
+      );
+    }
+    const bytes = boundedValueFootprint(
+      part,
+      limits.maxModelResponseBytes - usage.responsePartBytes,
+      knownSafePrototypes,
+    );
+    return bytes === undefined
+      ? Effect.fail(
+          ModelProtocolError.make({
+            message: `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`,
+          }),
+        )
+      : Effect.succeed(bytes);
+  });
 
 const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(function* <
   Tools extends Record<string, Tool.Any>,
->(part: unknown, toolkit: Toolkit.Toolkit<Tools>) {
+>(
+  part: unknown,
+  toolkit: Toolkit.Toolkit<Tools>,
+  usage: ModelResponseBufferUsage,
+  limits: EffectiveRunBufferLimits,
+) {
+  // Reject an oversized provider graph before schema encoding, structured cloning, or decoding
+  // can allocate additional full copies. The canonical encoded value is measured again before
+  // cloning because application-selected Schema transformations may change its representation.
+  yield* inspectModelResponsePartCapacity(
+    usage,
+    part,
+    limits,
+    modelResponseInputPrototypes(toolkit),
+  );
   const codec = Schema.toCodecJson(Response.StreamPart(toolkit));
   const encodingFailure = ModelProtocolError.make({
     message: "Model response part failed canonical encoding",
   });
   const encoded = yield* Schema.encodeUnknownEffect(codec)(part).pipe(
     Effect.mapError(() => encodingFailure),
-    Effect.catchCause(() => Effect.fail(encodingFailure)),
   );
+  const retainedBytes = yield* inspectModelResponsePartCapacity(usage, encoded, limits);
   const ownedEncoded = yield* Effect.try({
     try: () => {
       if (typeof structuredCloneFunction !== "function") {
@@ -540,39 +606,37 @@ const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(func
   const decodingFailure = ModelProtocolError.make({
     message: "Model response part failed canonical decoding",
   });
-  return yield* Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(
+  const ownedPart = yield* Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(
     Effect.mapError(() => decodingFailure),
-    Effect.catchCause(() => Effect.fail(decodingFailure)),
   );
+  return { ownedPart, retainedBytes };
 });
 
 const consumeModelResponsePart = (
   usage: ModelResponseBufferUsage,
-  part: Response.AnyPart,
+  retainedBytes: number,
   limits: EffectiveRunBufferLimits,
 ): Effect.Effect<void, ModelProtocolError> =>
   Effect.suspend(() => {
-    if (usage.responsePartCount >= limits.maxModelResponseParts) {
+    if (
+      usage.responsePartCount >= limits.maxModelResponseParts ||
+      !Number.isSafeInteger(retainedBytes) ||
+      retainedBytes < 0 ||
+      retainedBytes > limits.maxModelResponseBytes - usage.responsePartBytes
+    ) {
       return Effect.fail(
         ModelProtocolError.make({
-          message: `Model response exceeded the ${limits.maxModelResponseParts}-part response limit`,
+          message:
+            usage.responsePartCount >= limits.maxModelResponseParts
+              ? `Model response exceeded the ${limits.maxModelResponseParts}-part response limit`
+              : `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`,
         }),
       );
     }
-    const bytes = boundedValueFootprint(
-      part,
-      limits.maxModelResponseBytes - usage.responsePartBytes,
-    );
-    if (bytes === undefined) {
-      return Effect.fail(
-        ModelProtocolError.make({
-          message: `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`,
-        }),
-      );
-    }
-    usage.responsePartCount += 1;
-    usage.responsePartBytes += bytes;
-    return Effect.void;
+    return Effect.sync(() => {
+      usage.responsePartCount += 1;
+      usage.responsePartBytes += retainedBytes;
+    });
   });
 
 type PartLifecycle = "open" | "closed";
@@ -2580,8 +2644,14 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
     ).pipe(
       Stream.runForEach((part) =>
         Effect.gen(function* () {
-          const ownedPart = yield* ownModelResponsePart(part, Toolkit.empty);
-          yield* consumeModelResponsePart(responseUsage, ownedPart, context.bufferLimits);
+          const owned = yield* ownModelResponsePart(
+            part,
+            Toolkit.empty,
+            responseUsage,
+            context.bufferLimits,
+          );
+          yield* consumeModelResponsePart(responseUsage, owned.retainedBytes, context.bufferLimits);
+          const ownedPart = owned.ownedPart;
           if (ownedPart.type === "text-delta") {
             pieces.push(ownedPart.delta);
           } else if (ownedPart.type === "finish") {
@@ -2857,12 +2927,13 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
   tools: Tools,
   trace: TurnTrace,
   part: Response.AnyPart,
+  retainedBytes: number,
 ): Effect.fn.Return<
   ReadonlyArray<RunEvent>,
   ModelProtocolError,
   Tool.HandlerServices<ToolUnion<Tools>>
 > {
-  yield* consumeModelResponsePart(trace, part, context.bufferLimits);
+  yield* consumeModelResponsePart(trace, retainedBytes, context.bufferLimits);
   if (trace.finished) {
     return yield* ModelProtocolError.make({
       message: "Model response emitted content after its finish part",
@@ -3502,15 +3573,21 @@ const makeTurn = <
                 options.budget,
               ).pipe(
                 Stream.mapEffect((part) =>
-                  ownModelResponsePart(part, agent.definition.toolkit).pipe(
-                    Effect.flatMap((ownedPart) =>
+                  ownModelResponsePart(
+                    part,
+                    agent.definition.toolkit,
+                    trace,
+                    context.bufferLimits,
+                  ).pipe(
+                    Effect.flatMap((owned) =>
                       eventsForPart(
                         context,
                         turnId,
                         turn,
                         agent.definition.toolkit.tools,
                         trace,
-                        ownedPart,
+                        owned.ownedPart,
+                        owned.retainedBytes,
                       ),
                     ),
                   ),
@@ -4901,16 +4978,19 @@ const start = Effect.fn("AgentRuntime.start")(function* <
 > {
   yield* Scope.Scope;
   const bufferLimits = Object.freeze(effectiveRunBufferLimits(options.bufferLimits));
+  const executionOptionDescriptors: PropertyDescriptorMap = {
+    ...Object.getOwnPropertyDescriptors(options),
+    bufferLimits: {
+      configurable: false,
+      enumerable: true,
+      value: bufferLimits,
+      writable: false,
+    },
+  };
   const executionOptions: RunOptions<HookError, HookRequirements> = Object.create(
     Object.getPrototypeOf(options),
-    Object.getOwnPropertyDescriptors(options),
+    executionOptionDescriptors,
   );
-  Object.defineProperty(executionOptions, "bufferLimits", {
-    configurable: false,
-    enumerable: true,
-    value: bufferLimits,
-    writable: false,
-  });
   // Single-writer append-only trace owned by the Run fiber; readers only see
   // it after the fiber settles. `stream` admits at most `maxRunEvents`, so this
   // array has the same finite ceiling without per-event immutable copies.
@@ -5535,13 +5615,13 @@ const makeDurableStepService = <HookError, HookRequirements>(
         usedNames.add(name);
         const key: RunStepKey = { toolCallId, stepName: name };
         const recorded = yield* provideHookServices(hook.lookup(key), hookServices).pipe(
-          Effect.tapError((error) => ErrorReporter.report(Cause.fail(error))),
-          Effect.mapError(() =>
+          Effect.mapError((cause) =>
             DurableStepError.make({
               toolCallId,
               stepName: name,
               reason: "lookup-failed",
               message: "Durable Step lookup failed",
+              cause,
             }),
           ),
         );
@@ -5569,13 +5649,13 @@ const makeDurableStepService = <HookError, HookRequirements>(
           ),
         );
         yield* provideHookServices(hook.commit(key, encodedOutput), hookServices).pipe(
-          Effect.tapError((error) => ErrorReporter.report(Cause.fail(error))),
-          Effect.mapError(() =>
+          Effect.mapError((cause) =>
             DurableStepError.make({
               toolCallId,
               stepName: name,
               reason: "commit-failed",
               message: "Durable Step commit failed",
+              cause,
             }),
           ),
         );
@@ -5639,6 +5719,8 @@ export class SubagentDurabilityError extends Schema.TaggedError<SubagentDurabili
     reason: Schema.Literals(["hook-failed", "no-active-tool-batch"]),
     message: Schema.String.check(Schema.isMaxLength(4_096)),
     toolCallId: Schema.optionalKey(ToolCallId),
+    /** Diagnostic cause for the live Effect only; Run events retain the fixed public message. */
+    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
 
@@ -5740,25 +5822,25 @@ const makeSubagentDurabilityService = <HookError, HookRequirements>(
   mode: "durable",
   establish: (request) =>
     provideHookServices(hook.establish(request), hookServices).pipe(
-      Effect.tapError((error) => ErrorReporter.report(Cause.fail(error))),
-      Effect.mapError(() =>
+      Effect.mapError((cause) =>
         SubagentDurabilityError.make({
           operation: "establish",
           reason: "hook-failed",
           toolCallId: request.toolCallId,
           message: "Durable child establishment failed",
+          cause,
         }),
       ),
     ),
   join: (request) =>
     provideHookServices(hook.join(request), hookServices).pipe(
-      Effect.tapError((error) => ErrorReporter.report(Cause.fail(error))),
-      Effect.mapError(() =>
+      Effect.mapError((cause) =>
         SubagentDurabilityError.make({
           operation: "join",
           reason: "hook-failed",
           toolCallId: request.toolCallId,
           message: "Durable child join failed",
+          cause,
         }),
       ),
     ),
