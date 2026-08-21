@@ -81,9 +81,8 @@ export default defineConfig({
       {
         // The Code Mode Dynamic Worker executor lane runs the real adapter
         // inside a bundled worker under programmatic Miniflare (like the
-        // restart lane): pool-workers wraps the user worker, so a
-        // `kCurrentWorker` self-binding to the host entrypoint is only
-        // reachable when the worker under test IS the top-level worker.
+        // restart lane) so Worker Loader and cross-event RPC ownership use a
+        // real workerd process rather than a Node substitute.
         test: {
           name: "code-mode",
           include: ["test/code-mode/**/*.test.ts"],

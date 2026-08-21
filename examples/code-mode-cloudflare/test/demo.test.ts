@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
 import { build } from "esbuild";
-import { Miniflare, kCurrentWorker } from "miniflare";
+import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
 /**
@@ -18,20 +18,19 @@ const workerEntry = join(import.meta.dirname, "..", "src", "worker.ts");
 let workerScript = "";
 
 const openRuntime = (): Miniflare =>
-  new Miniflare({
-    modules: true,
-    script: workerScript,
-    modulesRoot: "/",
-    compatibilityDate: "2025-05-01",
-    compatibilityFlags: ["nodejs_compat", "experimental"],
-    durableObjects: {
-      WAREHOUSE: { className: "WarehouseObject", useSQLite: true },
-    },
-    workerLoaders: { LOADER: {} },
-    serviceBindings: {
-      CODE_MODE_HOST: { name: kCurrentWorker, entrypoint: "CodeModeHostEntrypoint" },
-    },
-  });
+  new Miniflare(
+    convertV4MiniflareOptions({
+      modules: true,
+      script: workerScript,
+      modulesRoot: "/",
+      compatibilityDate: "2025-05-01",
+      compatibilityFlags: ["nodejs_compat", "experimental"],
+      durableObjects: {
+        WAREHOUSE: { className: "WarehouseObject", useSQLite: true },
+      },
+      workerLoaders: { LOADER: {} },
+    }),
+  );
 
 interface AskResult {
   readonly answer: string;

@@ -12,28 +12,35 @@ import {
   type CodeHostCall,
   type CodeHostCallResult,
 } from "@effect-agent/sandbox";
-import { Cause, Context, Duration, Effect, Exit, Option, Predicate, type Layer } from "effect";
+import { DurableObject } from "cloudflare:workers";
+import {
+  Cause,
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  ManagedRuntime,
+  Option,
+  Predicate,
+  type Layer,
+} from "effect";
 
 // Workspace-relative source import: esbuild bundles it, and the package
 // barrel would pull in Node-only storage fixtures the worker cannot load.
 import { codeExecutorConformanceCases } from "../../../testing/src/code-executor-conformance.ts";
 import {
-  CodeModeHostEntrypoint,
   disposeRpcHandle,
   dynamicWorkerCodeExecutorLayer,
   dynamicWorkerImplementation,
-  type CodeModeHostStub,
 } from "../../src/code-mode-executor.ts";
-
-export { CodeModeHostEntrypoint };
 
 interface WorkerEnv {
   readonly LOADER: WorkerLoader;
-  readonly CODE_MODE_HOST: CodeModeHostStub;
+  readonly CODE_MODE_EXECUTORS: DurableObjectNamespace<CodeModeExecutorObject>;
 }
 
 const executorLayerFor = (env: WorkerEnv): Layer.Layer<CodeExecutor> =>
-  dynamicWorkerCodeExecutorLayer({ loader: env.LOADER, hostStub: env.CODE_MODE_HOST });
+  dynamicWorkerCodeExecutorLayer({ loader: env.LOADER });
 
 const baseLimits = CodeExecutionLimits.make({
   maxSourceBytes: 64 * 1024,
@@ -65,11 +72,10 @@ const unusedHost: CodeExecutionHost["Service"] = {
   call: () => Effect.die(new Error("no host call expected")),
 };
 
-const runOutcome = (
+const executeOutcome = (
   req: CodeExecutionRequest,
-  layer: Layer.Layer<CodeExecutor>,
   host: CodeExecutionHost["Service"] = unusedHost,
-): Effect.Effect<{ readonly tag: string; readonly detail: unknown }> =>
+): Effect.Effect<{ readonly tag: string; readonly detail: unknown }, never, CodeExecutor> =>
   Effect.gen(function* () {
     const executor = yield* CodeExecutor;
     return yield* executor
@@ -77,13 +83,19 @@ const runOutcome = (
       .pipe(Effect.provideService(CodeExecutionHost, CodeExecutionHost.of(host)));
   }).pipe(
     Effect.scoped,
-    Effect.provide(layer),
     Effect.map((result) => ({
       tag: "success",
       detail: { value: result.value, logs: result.logs, implementation: result.implementation },
     })),
     Effect.catch((error: CodeExecutionError) => Effect.succeed({ tag: error._tag, detail: error })),
   );
+
+const runOutcome = (
+  req: CodeExecutionRequest,
+  layer: Layer.Layer<CodeExecutor>,
+  host: CodeExecutionHost["Service"] = unusedHost,
+): Effect.Effect<{ readonly tag: string; readonly detail: unknown }> =>
+  executeOutcome(req, host).pipe(Effect.provide(layer));
 
 /**
  * A representative subset of the shared conformance suite plus the
@@ -273,6 +285,57 @@ const runHostCallScopeRegression = (env: WorkerEnv) => {
   ).pipe(Effect.provideService(ExecutorFiberMarker, "executor"));
 };
 
+export class CodeModeExecutorObject extends DurableObject<WorkerEnv> {
+  readonly #runtime: ManagedRuntime.ManagedRuntime<CodeExecutor, never>;
+
+  constructor(ctx: DurableObjectState, env: WorkerEnv) {
+    super(ctx, env);
+    this.#runtime = ManagedRuntime.make(executorLayerFor(this.env));
+  }
+
+  async prime(): Promise<void> {
+    await this.ctx.storage.put("marker", "executor");
+    await this.#runtime.runPromise(
+      Effect.promise(() => this.ctx.storage.get("marker")).pipe(
+        Effect.andThen(CodeExecutor),
+        Effect.asVoid,
+      ),
+    );
+  }
+
+  async run(): Promise<{ readonly tag: string; readonly value: unknown }> {
+    await this.ctx.storage.put("marker", "executor");
+    const namespace = CodeExecutionNamespace.make({ name: "warehouse", methods: ["query"] });
+    const host: CodeExecutionHost["Service"] = {
+      call: () =>
+        Effect.promise(() => this.ctx.storage.get<string>("marker")).pipe(
+          Effect.map((value) => CodeHostCallSuccess.make({ value })),
+        ),
+    };
+    return this.#runtime.runPromise(
+      executeOutcome(
+        request("async () => warehouse.query({ sql: 'select 1' })", {
+          namespaces: [namespace],
+        }),
+        host,
+      ).pipe(
+        Effect.map((outcome) => ({
+          tag: outcome.tag,
+          value:
+            Predicate.isObject(outcome.detail) && "value" in outcome.detail
+              ? outcome.detail.value
+              : null,
+        })),
+      ),
+    );
+  }
+}
+
+interface CodeModeExecutorStub {
+  readonly prime: () => Promise<void>;
+  readonly run: () => Promise<{ readonly tag: string; readonly value: unknown }>;
+}
+
 const runDisposalRegression = Effect.gen(function* () {
   const hostileHandles: ReadonlyArray<unknown> = [
     new Proxy(
@@ -306,6 +369,16 @@ const runDisposalRegression = Effect.gen(function* () {
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     try {
+      if (new URL(request.url).pathname === "/durable-object-host-call") {
+        const first = env.CODE_MODE_EXECUTORS.getByName("first") as unknown as CodeModeExecutorStub;
+        const second = env.CODE_MODE_EXECUTORS.getByName(
+          "second",
+        ) as unknown as CodeModeExecutorStub;
+        await first.prime();
+        await second.prime();
+        const outcomes = [await second.run(), await first.run()];
+        return Response.json({ outcomes });
+      }
       if (new URL(request.url).pathname === "/host-call-pass-scope") {
         return Response.json(await Effect.runPromise(runHostCallScopeRegression(env)));
       }

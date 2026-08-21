@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Miniflare } from "miniflare";
+import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, describe, expect, it } from "vite-plus/test";
 
 /**
@@ -64,16 +64,18 @@ export default {
 `;
 
 const openRuntime = (persistDirectory: string, alarmReportUrl: string) =>
-  new Miniflare({
-    modules: true,
-    script: probeWorkerScript,
-    compatibilityDate: "2025-05-01",
-    durableObjects: {
-      PROBE: { className: "RestartProbeObject", useSQLite: true },
-    },
-    durableObjectsPersist: persistDirectory,
-    bindings: { ALARM_REPORT_URL: alarmReportUrl },
-  });
+  new Miniflare(
+    convertV4MiniflareOptions({
+      modules: true,
+      script: probeWorkerScript,
+      compatibilityDate: "2025-05-01",
+      durableObjects: {
+        PROBE: { className: "RestartProbeObject", useSQLite: true },
+      },
+      resourcePersistencePath: persistDirectory,
+      bindings: { ALARM_REPORT_URL: alarmReportUrl },
+    }),
+  );
 
 describe("Miniflare persist-dir restart lane (WP0 probe 4)", () => {
   const cleanups: Array<() => Promise<void>> = [];

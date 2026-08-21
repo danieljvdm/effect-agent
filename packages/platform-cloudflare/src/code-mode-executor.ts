@@ -18,9 +18,8 @@ import {
   type CodeExecutorExecute,
   type CodeExecutionRequest,
 } from "@effect-agent/sandbox";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { WorkerEntrypoint } from "cloudflare:workers";
-import { Clock, Crypto, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schema } from "effect";
+import { RpcTarget } from "cloudflare:workers";
+import { Clock, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schema } from "effect";
 
 import { safeCauseDiagnostic, safeCauseMessage } from "./boundary.ts";
 
@@ -28,56 +27,43 @@ import { safeCauseDiagnostic, safeCauseMessage } from "./boundary.ts";
  * The Cloudflare Dynamic Worker `CodeExecutor` adapter (C4 of ADR-0017;
  * DEPLOY-011). Each pass loads one fresh Worker through the Worker Loader
  * with `globalOutbound: null`, so generated code has no ambient network,
- * bindings, or secrets; its only authority is the pass-scoped host stub that
- * routes back to `CodeModeHostEntrypoint` and, from there, into the pass's
- * `CodeExecutionHost` service. Platform CPU limits stop synchronous runaway
- * programs; the executor-owned wall-clock deadline interrupts asynchronously
- * suspended passes. Deployment class `E` only: the adapter records no
- * persistent state and a later pass may run in a completely different
- * isolate.
+ * bindings, or secrets; its only authority is the pass-scoped RPC target that
+ * routes back into the owning event's `CodeExecutionHost` service. Platform
+ * CPU limits stop synchronous runaway programs; the executor-owned wall-clock
+ * deadline interrupts asynchronously suspended passes. Deployment class `E`
+ * only: the adapter records no persistent state and a later pass may run in a
+ * completely different isolate.
  */
 export const dynamicWorkerImplementation = SandboxImplementation.make({
   isolation: "isolated",
   identity: "cloudflare-dynamic-worker",
 });
 
-/** The narrow host stub the dynamic worker receives (Workers RPC). */
-export interface CodeModeHostStub {
-  readonly call: (passId: string, hostCall: unknown) => Promise<unknown>;
+interface CodeModePassHost extends Rpc.RpcTargetBranded {
+  readonly call: (hostCall: unknown) => Promise<unknown>;
 }
 
 interface CodeModeHarnessEntrypoint extends Rpc.WorkerEntrypointBranded {
-  readonly run: () => Promise<unknown>;
-}
-
-interface RegisteredPass {
-  readonly dispatch: (hostCall: unknown) => Promise<unknown>;
+  readonly run: (host: CodeModePassHost) => Promise<unknown>;
 }
 
 /**
- * Live passes by identity. Entries are Scope-managed: registered when a pass
- * opens and removed by its finalizer, so a stale harness (or a forged
- * `passId`) cannot reach any host authority.
+ * One object-capability endpoint for one execution pass. Workers RPC invokes
+ * the target in the request context where it was created, so the native
+ * Promise returned by `dispatch` and the Effect fiber that settles it share
+ * one I/O owner. Passing the target as `run()`'s argument also scopes the
+ * remote stub to that RPC call; no request state lives at module scope.
  */
-const passRegistry = new Map<string, RegisteredPass>();
+class CodeModePassHostTarget extends RpcTarget implements CodeModePassHost {
+  readonly #dispatch: (hostCall: unknown) => Promise<unknown>;
 
-/**
- * The host-side RPC target for dynamic workers. The application exposes it
- * from its Worker entry (`export { CodeModeHostEntrypoint }`) and hands the
- * adapter a same-instance stub — `ctx.exports.CodeModeHostEntrypoint()` in
- * production (a self service binding may reach a different instance and must
- * not be used there); tests bind it through Miniflare's `kCurrentWorker`.
- */
-export class CodeModeHostEntrypoint extends WorkerEntrypoint {
-  async call(passId: unknown, hostCall: unknown): Promise<unknown> {
-    if (typeof passId !== "string") {
-      throw new TypeError("Code Mode pass identities must be strings");
-    }
-    const pass = passRegistry.get(passId);
-    if (pass === undefined) {
-      throw new Error("Unknown Code Mode pass");
-    }
-    return pass.dispatch(hostCall);
+  constructor(dispatch: (hostCall: unknown) => Promise<unknown>) {
+    super();
+    this.#dispatch = dispatch;
+  }
+
+  call(hostCall: unknown): Promise<unknown> {
+    return this.#dispatch(hostCall);
   }
 }
 
@@ -113,9 +99,8 @@ const safeJson = (value) => {
 };
 
 export default class CodeModeHarness extends WorkerEntrypoint {
-  async run() {
+  async run(host) {
     const config = this.env.CODE_MODE_PASS;
-    const host = this.env.CODE_MODE_HOST;
     const limits = config.limits;
     const logs = [];
     let logBytes = 0;
@@ -153,7 +138,7 @@ export default class CodeModeHarness extends WorkerEntrypoint {
         };
         throw new Error("code-mode host-call argument limit exceeded");
       }
-      const outcome = await host.call(config.passId, {
+      const outcome = await host.call({
         namespace,
         method,
         argument: JSON.parse(argText),
@@ -287,7 +272,6 @@ const HarnessOutcome = Schema.Union([
 ]);
 
 const HarnessPassConfig = Schema.Struct({
-  passId: Schema.NonEmptyString,
   namespaces: Schema.Array(
     Schema.Struct({
       name: Schema.NonEmptyString,
@@ -409,19 +393,12 @@ const reservedHarnessGlobals = new Set(["console"]);
 export interface DynamicWorkerCodeExecutorOptions {
   /** The `worker_loader` binding. */
   readonly loader: WorkerLoader;
-  /**
-   * A SAME-INSTANCE stub of `CodeModeHostEntrypoint`. In production create it
-   * with `ctx.exports.CodeModeHostEntrypoint()`; a cross-instance stub would
-   * dispatch host calls into an isolate without this pass's registry entry.
-   */
-  readonly hostStub: CodeModeHostStub;
   /** Compatibility date for dynamic workers; defaults to `2025-05-01`. */
   readonly compatibilityDate?: string | undefined;
 }
 
 const makeExecute = (
   options: DynamicWorkerCodeExecutorOptions,
-  crypto: Crypto.Crypto,
   clock: Clock.Clock,
 ): CodeExecutorExecute =>
   Effect.fn("DynamicWorkerCodeExecutor.execute")(function* (request: CodeExecutionRequest) {
@@ -450,25 +427,7 @@ const makeExecute = (
         });
       }
     }
-
     const host = yield* CodeExecutionHost;
-    // The pass id is the only credential a loaded program presents to reach
-    // its host authority, so it must be unguessable: a program cannot forge
-    // another pass's id even if two passes were ever concurrent (the broker
-    // keeps them sequential, but the id must not rely on that).
-    const passId = yield* crypto.randomUUIDv4.pipe(
-      Effect.mapError((cause) =>
-        CodeExecutorStartError.make({
-          implementation: dynamicWorkerImplementation,
-          message: `Could not mint the Code Mode pass identity: ${safeCauseMessage(
-            cause,
-            "the crypto service failed without a diagnostic",
-          )}`.slice(0, 8_000),
-          cause,
-        }),
-      ),
-      Effect.map((uuid) => `code-mode-pass-${uuid}`),
-    );
 
     // This synchronous clock access is confined to callbacks that must compute a timeout
     // immediately. The Clock service remains the authority, so tests and hosts can replace it.
@@ -604,16 +563,9 @@ const makeExecute = (
 
     const closeAdmission = Effect.sync(() => {
       passOpen = false;
-      passRegistry.delete(passId);
       rejectQueuedHostCalls(new Error("Code Mode pass is closing"));
     });
-
-    yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        passRegistry.set(passId, { dispatch });
-      }),
-      () => closeAdmission.pipe(Effect.andThen(Fiber.interrupt(server))),
-    );
+    yield* Effect.addFinalizer(() => closeAdmission.pipe(Effect.andThen(Fiber.interrupt(server))));
 
     // No `allowExperimental`: the runtime only accepts it when the CALLING
     // worker carries the `experimental` compatibility flag, which deployed
@@ -627,9 +579,7 @@ const makeExecute = (
         "program.js": `export default (\n${request.source}\n);`,
       },
       env: {
-        CODE_MODE_HOST: options.hostStub,
         CODE_MODE_PASS: encodeHarnessPassConfig({
-          passId,
           namespaces: request.namespaces.map((namespace) => ({
             name: namespace.name,
             methods: namespace.methods,
@@ -687,7 +637,7 @@ const makeExecute = (
     );
 
     const rpc = Effect.tryPromise({
-      try: () => entrypoint.run(),
+      try: () => entrypoint.run(new CodeModePassHostTarget(dispatch)),
       catch: (cause) => classifyWorkerFailure(cause, request.limits.maxWallTime),
     });
 
@@ -860,8 +810,7 @@ export const dynamicWorkerCodeExecutorLayer = (
   Layer.effect(
     CodeExecutor,
     Effect.gen(function* () {
-      const crypto = yield* Crypto.Crypto;
       const clock = yield* Clock.Clock;
-      return CodeExecutor.of({ execute: makeExecute(options, crypto, clock) });
+      return CodeExecutor.of({ execute: makeExecute(options, clock) });
     }),
-  ).pipe(Layer.provide(BrowserCrypto.layer));
+  );

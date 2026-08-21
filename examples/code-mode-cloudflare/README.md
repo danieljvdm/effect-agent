@@ -104,11 +104,11 @@ rejects requests without a matching bearer token, so the paid path never
 serves anonymous callers. The offline scripted default (no `OPENAI_API_KEY`)
 needs no token.
 
-`wrangler.jsonc` wires the `WAREHOUSE` Durable Object, the `LOADER`
+`wrangler.jsonc` wires the `WAREHOUSE` Durable Object and the `LOADER`
 (`worker_loaders`) binding the Dynamic Worker executor loads generated programs
-through, and the `CODE_MODE_HOST` self service binding to
-`CodeModeHostEntrypoint` (the production seam for
-`ctx.exports.CodeModeHostEntrypoint()`).
+through. The executor passes a request-owned RPC capability directly to each
+loaded program, so the application needs no callback entrypoint or self service
+binding.
 
 Worker Loader is currently a Cloudflare beta; this example makes no hosted-
 platform, cost, or durability claim beyond deployment class E. Without

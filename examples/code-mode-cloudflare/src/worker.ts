@@ -1,10 +1,8 @@
 import { IdGenerator } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
 import {
-  CodeModeHostEntrypoint,
   dynamicWorkerCodeExecutorLayer,
   dynamicWorkerImplementation,
-  type CodeModeHostStub,
 } from "@effect-agent/platform-cloudflare";
 import { Effect, Layer, Stream } from "effect";
 
@@ -22,17 +20,15 @@ import { isValidTenant, Warehouse, WarehouseObject, warehouseLayer } from "./war
  * Agent runs ephemerally; the Durable Object is the warehouse data store, not
  * a Conversation store.
  *
- * `WarehouseObject` and `CodeModeHostEntrypoint` are exported for the Worker
- * runtime; the host entrypoint is bound to itself as `CODE_MODE_HOST` (see
- * wrangler.jsonc), matching the production `ctx.exports.CodeModeHostEntrypoint()`
- * seam.
+ * `WarehouseObject` is exported for the Worker runtime. The Code Mode
+ * executor creates each host RPC capability inside the request that owns it,
+ * so the application needs no callback entrypoint or self service binding.
  */
-export { WarehouseObject, CodeModeHostEntrypoint };
+export { WarehouseObject };
 
 interface WorkerEnv {
   readonly WAREHOUSE: DurableObjectNamespace<WarehouseObject>;
   readonly LOADER: WorkerLoader;
-  readonly CODE_MODE_HOST: CodeModeHostStub;
   readonly OPENAI_API_KEY?: string;
   /**
    * Optional shared secret. When set, `/ask` requires a matching
@@ -117,9 +113,7 @@ const runBound = (
   const layers = Layer.mergeAll(
     codeModeHandlersLayer.pipe(
       Layer.provide(warehouseLayer(env.WAREHOUSE, tenant)),
-      Layer.provide(
-        dynamicWorkerCodeExecutorLayer({ loader: env.LOADER, hostStub: env.CODE_MODE_HOST }),
-      ),
+      Layer.provide(dynamicWorkerCodeExecutorLayer({ loader: env.LOADER })),
     ),
     IdGenerator.layer,
   );

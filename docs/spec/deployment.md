@@ -349,14 +349,17 @@ outside the claims until open-source preparation revisits it.
 
 The first isolated `CodeExecutor` adapter is a Cloudflare Dynamic Worker Layer in
 `@effect-agent/platform-cloudflare`. Each pass creates one fresh Worker through the
-Worker Loader with `globalOutbound: null`, supplies only the scoped Tool-broker RPC stub and
+Worker Loader with `globalOutbound: null`, supplies only the scoped Tool-broker RPC capability and
 explicitly allowed structured values, applies the configured Dynamic Worker CPU and subrequest
 limits plus an executor-owned wall-clock deadline (an asynchronously suspended pass consumes no
 CPU and must not outlive its deadline), invokes one fixed entrypoint, validates the returned
 envelope through Effect Schema, and disposes the entrypoint and Worker handles in Scope
-finalizers. Host callbacks run one at a time on a Scope-owned child fiber of the pass so they
-inherit the `execute` Context and die with the pass Scope, while remaining a sibling of the
-guest RPC waiter so the return RPC is not coupled to the still-open `entrypoint.run()`; pass
+finalizers. The executor creates one `RpcTarget` in the caller's current event and passes it as the
+entrypoint invocation's argument. Workers RPC routes each callback to that target's owning event
+context and releases the remote stub with the invocation; no callback registry or request state
+lives at module scope. Host callbacks run one at a time on a Scope-owned child fiber of the pass
+so they inherit the `execute` Context and die with the pass Scope, while remaining a sibling of
+the guest RPC waiter so the return RPC is not coupled to the still-open `entrypoint.run()`; pass
 teardown closes callback admission, interrupts and awaits active work, and settles queued
 calls. One absolute monotonic deadline applies to the worker RPC and every host callback. A synchronous runaway program is stopped by
 platform CPU limits rather than relying on a JavaScript timer alone.
@@ -409,8 +412,9 @@ Current platform references:
 - **DEPLOY-010**: Cloudflare platform bindings are supplied as Effect services/Layers and remain
   experimental until they pass the shared durability suite.
 - **DEPLOY-011**: The Dynamic Worker Code Mode executor denies ambient egress, enforces platform
-  CPU and executor wall-clock limits, disposes Worker and RPC handles in Scope finalizers, and
-  claims deployment class `E` only.
+  CPU and executor wall-clock limits, routes host calls through a pass-scoped RPC target owned by
+  the caller's event context, disposes Worker and RPC handles in Scope finalizers, and claims
+  deployment class `E` only.
 - **DEPLOY-012**: Cloudflare Conversation maintenance is generation-incremental and quiescent for
   stable external waits; pre-armed mutations, pass acknowledgement, restart recovery, and
   autonomous rearming obey the protocol above.
