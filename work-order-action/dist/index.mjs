@@ -35773,34 +35773,26 @@ var intrinsicUrlByteLength = (value4) => {
     return;
   }
 };
-var inspectPrototype = (prototype, isArray2, trustedSchemaProduct) => {
+var inspectPrototype = (prototype, isArray2) => {
   if (prototype === null)
-    return { trustChildren: trustedSchemaProduct };
+    return true;
   if (isArray2) {
-    return prototype === Array.prototype ? { trustChildren: trustedSchemaProduct } : undefined;
+    return prototype === Array.prototype;
   }
-  if (prototype === Object.prototype)
-    return { trustChildren: trustedSchemaProduct };
-  if (prototype === dateTimeUtcPrototype)
-    return { trustChildren: false };
+  if (prototype === Object.prototype || prototype === dateTimeUtcPrototype)
+    return true;
   const constructorDescriptor = Object.getOwnPropertyDescriptor(prototype, "constructor");
   if (constructorDescriptor !== undefined && "value" in constructorDescriptor && typeof constructorDescriptor.value === "function") {
     const constructorPrototype = Object.getOwnPropertyDescriptor(constructorDescriptor.value, "prototype");
     if (constructorPrototype !== undefined && "value" in constructorPrototype && constructorPrototype.value === prototype && exports_Schema.isSchema(constructorDescriptor.value)) {
-      return { trustChildren: true };
+      return true;
     }
   }
-  if (trustedSchemaProduct) {
-    const isEffectData = Reflect.ownKeys(prototype).some((key) => {
-      if (typeof key !== "string" || !key.startsWith("~effect/"))
-        return false;
-      const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
-      return descriptor !== undefined && "value" in descriptor && descriptor.value === key;
-    });
-    if (isEffectData)
-      return { trustChildren: true };
-  }
-  return;
+  return false;
+};
+var isCanonicalArrayIndex = (key) => {
+  const index2 = Number(key);
+  return Number.isInteger(index2) && index2 >= 0 && index2 < 4294967295 && String(index2) === key;
 };
 var utf8ByteLength2 = (value4) => {
   let total = 0;
@@ -35822,7 +35814,7 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
     total += bytes;
     return true;
   };
-  const visit = (value4, depth, trustedSchemaProduct = false) => {
+  const visit = (value4, depth) => {
     if (depth > maxDepth)
       return false;
     if (value4 === null)
@@ -35833,26 +35825,42 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
       case "boolean":
         return add5(4);
       case "number":
-      case "bigint":
         return add5(16);
-      case "undefined":
+      case "bigint":
       case "symbol":
+        return false;
+      case "undefined":
         return add5(16);
       case "function":
         return false;
       case "object": {
         if (ancestors.has(value4) || !add5(OBJECT_OVERHEAD_BYTES))
           return false;
+        let skipIndexedProperties = false;
+        let supportedSpecialObject = false;
         if (ArrayBuffer.isView(value4)) {
           const byteLength = intrinsicViewBackingByteLength(value4);
-          return byteLength !== undefined && add5(byteLength);
+          if (byteLength === undefined || !add5(byteLength))
+            return false;
+          skipIndexedProperties = true;
+          supportedSpecialObject = true;
         }
-        const bufferByteLength = intrinsicArrayBufferByteLength(value4);
-        if (bufferByteLength !== undefined)
-          return add5(bufferByteLength);
-        const urlByteLength = intrinsicUrlByteLength(value4);
-        if (urlByteLength !== undefined)
-          return add5(urlByteLength);
+        if (!supportedSpecialObject) {
+          const bufferByteLength = intrinsicArrayBufferByteLength(value4);
+          if (bufferByteLength !== undefined) {
+            if (!add5(bufferByteLength))
+              return false;
+            supportedSpecialObject = true;
+          }
+        }
+        if (!supportedSpecialObject) {
+          const urlByteLength = intrinsicUrlByteLength(value4);
+          if (urlByteLength !== undefined) {
+            if (!add5(urlByteLength))
+              return false;
+            supportedSpecialObject = true;
+          }
+        }
         const prototype = Object.getPrototypeOf(value4);
         let redactedValue;
         let isRedacted2 = false;
@@ -35868,8 +35876,7 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
           }
         }
         const isArray2 = Array.isArray(value4);
-        const inspection = isRedacted2 ? { trustChildren: false } : inspectPrototype(prototype, isArray2, trustedSchemaProduct);
-        if (inspection === undefined) {
+        if (!supportedSpecialObject && !isRedacted2 && !inspectPrototype(prototype, isArray2)) {
           return false;
         }
         if (isArray2) {
@@ -35885,15 +35892,19 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
           for (const key of Reflect.ownKeys(value4)) {
             if (key === "length" && isArray2)
               continue;
+            if (typeof key === "symbol")
+              return false;
+            if (skipIndexedProperties && isCanonicalArrayIndex(key))
+              continue;
             if (!add5(PROPERTY_OVERHEAD_BYTES))
               return false;
-            if (typeof key === "string" && !add5(utf8ByteLength2(key)))
+            if (!add5(utf8ByteLength2(key)))
               return false;
             const descriptor = Object.getOwnPropertyDescriptor(value4, key);
             if (descriptor === undefined)
               return false;
             if ("value" in descriptor) {
-              if (!visit(descriptor.value, depth + 1, inspection.trustChildren))
+              if (!visit(descriptor.value, depth + 1))
                 return false;
             } else {
               return false;
@@ -36772,6 +36783,24 @@ var effectiveRunBufferLimits = (configured) => ({
   maxModelResponseBytes: tighteningBufferLimit(configured?.maxModelResponseBytes, DEFAULT_RUN_BUFFER_LIMITS.maxModelResponseBytes, 1),
   maxRunEvents: tighteningBufferLimit(configured?.maxRunEvents, DEFAULT_RUN_BUFFER_LIMITS.maxRunEvents, 2),
   maxSubagentEventsPerBatch: tighteningBufferLimit(configured?.maxSubagentEventsPerBatch, DEFAULT_RUN_BUFFER_LIMITS.maxSubagentEventsPerBatch, 1)
+});
+var structuredCloneFunction = Reflect.get(globalThis, "structuredClone");
+var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart")(function* (part, toolkit) {
+  const codec = exports_Response.StreamPart(toolkit);
+  const encoded = yield* exports_Schema.encodeUnknownEffect(codec)(part).pipe(exports_Effect.mapError(() => ModelProtocolError.make({ message: "Model response part failed canonical encoding" })));
+  const ownedEncoded = yield* exports_Effect.try({
+    try: () => {
+      if (typeof structuredCloneFunction !== "function") {
+        throw new TypeError("structuredClone is unavailable");
+      }
+      const cloned = Reflect.apply(structuredCloneFunction, globalThis, [encoded]);
+      return cloned;
+    },
+    catch: () => ModelProtocolError.make({
+      message: "Model response part could not be converted into engine-owned data"
+    })
+  });
+  return yield* exports_Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(exports_Effect.mapError(() => ModelProtocolError.make({ message: "Model response part failed canonical decoding" })));
 });
 var consumeModelResponsePart = (usage, part, limits) => exports_Effect.suspend(() => {
   if (usage.responsePartCount >= limits.maxModelResponseParts) {
@@ -37795,11 +37824,12 @@ ${transcript}
   };
   let summaryUsage;
   yield* guardBudgetStream(exports_LanguageModel.streamText({ prompt: summarizerPrompt }), options3.budget).pipe(exports_Stream.runForEach((part) => exports_Effect.gen(function* () {
-    yield* consumeModelResponsePart(responseUsage, part, context3.bufferLimits);
-    if (part.type === "text-delta") {
-      pieces.push(part.delta);
-    } else if (part.type === "finish") {
-      summaryUsage = part.usage;
+    const ownedPart = yield* ownModelResponsePart(part, exports_Toolkit.empty);
+    yield* consumeModelResponsePart(responseUsage, ownedPart, context3.bufferLimits);
+    if (ownedPart.type === "text-delta") {
+      pieces.push(ownedPart.delta);
+    } else if (ownedPart.type === "finish") {
+      summaryUsage = ownedPart.usage;
     }
   })));
   const wasFinalizing = context3.finalizing;
@@ -38351,7 +38381,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
     toolkit: agent2.definition.toolkit,
     disableToolCallResolution: true,
     ...finalAnswerOnly ? { toolChoice: "none" } : {}
-  }), options3.budget).pipe(exports_Stream.mapEffect((part) => eventsForPart(context3, turnId, turn, agent2.definition.toolkit.tools, trace3, part)), exports_Stream.flatMap(exports_Stream.fromIterable)))));
+  }), options3.budget).pipe(exports_Stream.mapEffect((part) => ownModelResponsePart(part, agent2.definition.toolkit).pipe(exports_Effect.flatMap((ownedPart) => eventsForPart(context3, turnId, turn, agent2.definition.toolkit.tools, trace3, ownedPart)))), exports_Stream.flatMap(exports_Stream.fromIterable)))));
   const response = attempt(compactedOutgoing()).pipe(exports_Stream.catch((error2) => {
     if (!(error2 instanceof exports_AiError.AiError) || !isContextOverflowMessage(overflowText(error2))) {
       return exports_Stream.fail(error2);
@@ -38938,7 +38968,14 @@ var run4 = exports_Effect.fn("AgentRuntime.run")(function* (agent2, input, optio
 });
 var start = exports_Effect.fn("AgentRuntime.start")(function* (agent2, input, options3 = {}) {
   yield* exports_Scope.Scope;
-  const bufferLimits = effectiveRunBufferLimits(options3.bufferLimits);
+  const bufferLimits = Object.freeze(effectiveRunBufferLimits(options3.bufferLimits));
+  const executionOptions = Object.create(Object.getPrototypeOf(options3), Object.getOwnPropertyDescriptors(options3));
+  Object.defineProperty(executionOptions, "bufferLimits", {
+    configurable: false,
+    enumerable: true,
+    value: bufferLimits,
+    writable: false
+  });
   const captured = [];
   const observationCapacity = bufferLimits.maxRunEvents + 1;
   const pubsub = yield* exports_PubSub.dropping({
@@ -38946,7 +38983,7 @@ var start = exports_Effect.fn("AgentRuntime.start")(function* (agent2, input, op
     replay: observationCapacity
   });
   yield* exports_Effect.addFinalizer(() => exports_PubSub.shutdown(pubsub));
-  const execution = reduceRunEvents(agent2, stream3(agent2, input, options3).pipe(exports_Stream.tap((event) => exports_Effect.suspend(() => {
+  const execution = reduceRunEvents(agent2, stream3(agent2, input, executionOptions).pipe(exports_Stream.tap((event) => exports_Effect.suspend(() => {
     captured.push(event);
     return exports_PubSub.publish(pubsub, [event]);
   })))).pipe(exports_Effect.ensuring(exports_PubSub.publish(pubsub, exports_Exit.void)));
@@ -39058,9 +39095,9 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
           message: "The outer Tool Call for this broker has already settled"
         });
       }
-      if (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0) {
+      if (passOptions === undefined || !Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0) {
         return yield* ToolBrokerConfigurationError.make({
-          message: `maxResultBytes must be a positive safe integer; received ${String(passOptions.maxResultBytes)}`
+          message: `maxResultBytes must be a positive safe integer; received ${String(passOptions?.maxResultBytes)}`
         });
       }
       const handlerServices = yield* exports_Effect.context();

@@ -62,21 +62,12 @@ const intrinsicUrlByteLength = (value: object): number | undefined => {
   }
 };
 
-interface PrototypeInspection {
-  readonly trustChildren: boolean;
-}
-
-const inspectPrototype = (
-  prototype: object | null,
-  isArray: boolean,
-  trustedSchemaProduct: boolean,
-): PrototypeInspection | undefined => {
-  if (prototype === null) return { trustChildren: trustedSchemaProduct };
+const inspectPrototype = (prototype: object | null, isArray: boolean): boolean => {
+  if (prototype === null) return true;
   if (isArray) {
-    return prototype === Array.prototype ? { trustChildren: trustedSchemaProduct } : undefined;
+    return prototype === Array.prototype;
   }
-  if (prototype === Object.prototype) return { trustChildren: trustedSchemaProduct };
-  if (prototype === dateTimeUtcPrototype) return { trustChildren: false };
+  if (prototype === Object.prototype || prototype === dateTimeUtcPrototype) return true;
 
   const constructorDescriptor = Object.getOwnPropertyDescriptor(prototype, "constructor");
   if (
@@ -96,23 +87,15 @@ const inspectPrototype = (
     ) {
       // Schema classes are decoded data products. Their state remains in own fields, unlike
       // arbitrary class instances with private or native internal slots.
-      return { trustChildren: true };
+      return true;
     }
   }
+  return false;
+};
 
-  if (trustedSchemaProduct) {
-    // Effect data types such as DateTime use fixed-shape, constructor-free prototypes with a
-    // self-identifying TypeId. Admit them only beneath a decoded Schema class, so arbitrary
-    // provider metadata cannot forge the marker into authority.
-    const isEffectData = Reflect.ownKeys(prototype).some((key) => {
-      if (typeof key !== "string" || !key.startsWith("~effect/")) return false;
-      const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
-      return descriptor !== undefined && "value" in descriptor && descriptor.value === key;
-    });
-    if (isEffectData) return { trustChildren: true };
-  }
-
-  return undefined;
+const isCanonicalArrayIndex = (key: string): boolean => {
+  const index = Number(key);
+  return Number.isInteger(index) && index >= 0 && index < 0xffff_ffff && String(index) === key;
 };
 
 /** Platform-neutral UTF-8 byte length; the engine's TypeScript lib excludes `TextEncoder`. */
@@ -126,13 +109,14 @@ export const utf8ByteLength = (value: string): number => {
 };
 
 /**
- * Conservatively measure one retained JavaScript value without invoking getters, coercion,
- * `toJSON`, or other user code. `undefined` means the value exceeded the allowance or hostile
- * reflection prevented a trustworthy measurement.
+ * Conservatively measure one retained, engine-owned JavaScript value without invoking getters,
+ * coercion, or `toJSON`. `undefined` means the value exceeded the allowance or its shape could not
+ * be measured without executing an accessor.
  *
- * This is a memory-retention guard, not a wire codec. Schema boundaries still own validation and
- * canonical encoding. Object and property overheads deliberately make the estimate larger than
- * the visible primitive payload for ordinary response values.
+ * This is a memory-retention guard, not an untrusted wire boundary. Callers must first canonicalize
+ * provider values into owned data because JavaScript offers no portable, trap-free Proxy test.
+ * Object and property overheads deliberately make the estimate larger than the visible primitive
+ * payload for ordinary response values.
  */
 export const boundedValueFootprint = (
   root: unknown,
@@ -156,7 +140,7 @@ export const boundedValueFootprint = (
     return true;
   };
 
-  const visit = (value: unknown, depth: number, trustedSchemaProduct = false): boolean => {
+  const visit = (value: unknown, depth: number): boolean => {
     if (depth > maxDepth) return false;
     if (value === null) return add(4);
     switch (typeof value) {
@@ -165,23 +149,38 @@ export const boundedValueFootprint = (
       case "boolean":
         return add(4);
       case "number":
-      case "bigint":
         return add(16);
-      case "undefined":
+      case "bigint":
       case "symbol":
+        return false;
+      case "undefined":
         return add(16);
       case "function":
         return false;
       case "object": {
         if (ancestors.has(value) || !add(OBJECT_OVERHEAD_BYTES)) return false;
+        let skipIndexedProperties = false;
+        let supportedSpecialObject = false;
         if (ArrayBuffer.isView(value)) {
           const byteLength = intrinsicViewBackingByteLength(value);
-          return byteLength !== undefined && add(byteLength);
+          if (byteLength === undefined || !add(byteLength)) return false;
+          skipIndexedProperties = true;
+          supportedSpecialObject = true;
         }
-        const bufferByteLength = intrinsicArrayBufferByteLength(value);
-        if (bufferByteLength !== undefined) return add(bufferByteLength);
-        const urlByteLength = intrinsicUrlByteLength(value);
-        if (urlByteLength !== undefined) return add(urlByteLength);
+        if (!supportedSpecialObject) {
+          const bufferByteLength = intrinsicArrayBufferByteLength(value);
+          if (bufferByteLength !== undefined) {
+            if (!add(bufferByteLength)) return false;
+            supportedSpecialObject = true;
+          }
+        }
+        if (!supportedSpecialObject) {
+          const urlByteLength = intrinsicUrlByteLength(value);
+          if (urlByteLength !== undefined) {
+            if (!add(urlByteLength)) return false;
+            supportedSpecialObject = true;
+          }
+        }
 
         const prototype = Object.getPrototypeOf(value);
         let redactedValue: unknown;
@@ -198,10 +197,7 @@ export const boundedValueFootprint = (
         }
 
         const isArray = Array.isArray(value);
-        const inspection = isRedacted
-          ? { trustChildren: false }
-          : inspectPrototype(prototype, isArray, trustedSchemaProduct);
-        if (inspection === undefined) {
+        if (!supportedSpecialObject && !isRedacted && !inspectPrototype(prototype, isArray)) {
           // Maps, Sets, arbitrary class instances, and other objects can retain storage that
           // own-key traversal cannot see. Plain data and known Effect Schema values are
           // measurable because their state lives in own data properties.
@@ -225,12 +221,14 @@ export const boundedValueFootprint = (
           if (isRedacted && !visit(redactedValue, depth + 1)) return false;
           for (const key of Reflect.ownKeys(value)) {
             if (key === "length" && isArray) continue;
+            if (typeof key === "symbol") return false;
+            if (skipIndexedProperties && isCanonicalArrayIndex(key)) continue;
             if (!add(PROPERTY_OVERHEAD_BYTES)) return false;
-            if (typeof key === "string" && !add(utf8ByteLength(key))) return false;
+            if (!add(utf8ByteLength(key))) return false;
             const descriptor = Object.getOwnPropertyDescriptor(value, key);
             if (descriptor === undefined) return false;
             if ("value" in descriptor) {
-              if (!visit(descriptor.value, depth + 1, inspection.trustChildren)) return false;
+              if (!visit(descriptor.value, depth + 1)) return false;
             } else {
               // Accessors and functions may retain arbitrarily large closure graphs.
               return false;

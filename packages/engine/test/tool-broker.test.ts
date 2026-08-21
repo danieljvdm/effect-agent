@@ -21,6 +21,7 @@ import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unsta
 import {
   AgentRuntime,
   ToolBroker,
+  ToolBrokerConfigurationError,
   ToolExecutionClass,
   type ProgrammaticCallOutcome,
   type ToolBrokerPass,
@@ -168,6 +169,59 @@ const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
   });
 
 layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
+  it.effect("rejects omitted pass options through the typed configuration channel", () =>
+    Effect.gen(function* () {
+      const captured = yield* Ref.make<unknown>(undefined);
+      const innerToolkit = Toolkit.make(Query);
+      const Orchestrate = Tool.make("orchestrate", {
+        parameters: Schema.Struct({ plan: Schema.String }),
+        success: Schema.Any,
+      }).addDependency(ToolBroker);
+      const outerToolkit = Toolkit.make(Orchestrate);
+      const definition = Agent.define("broker-missing-options", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Orchestrate.",
+        toolkit: outerToolkit,
+        policy: policy(),
+      });
+      const handlers = outerToolkit
+        .toLayer(
+          Effect.gen(function* () {
+            const inner = yield* innerToolkit;
+            return {
+              orchestrate: () =>
+                Effect.gen(function* () {
+                  const broker = yield* ToolBroker;
+                  // @ts-expect-error Exercise the JavaScript boundary where the required argument
+                  // can be omitted despite the TypeScript declaration.
+                  const exit = yield* broker.openPass(inner).pipe(Effect.exit);
+                  if (Exit.isSuccess(exit)) {
+                    throw new Error("Expected missing pass options to fail");
+                  }
+                  yield* Ref.set(
+                    captured,
+                    Option.getOrUndefined(Cause.findErrorOption(exit.cause)),
+                  );
+                  return null;
+                }),
+            };
+          }),
+        )
+        .pipe(Layer.provide(innerToolkit.toLayer({ query: () => Effect.succeed({ rows: [] }) })));
+
+      yield* AgentRuntime.run(
+        Agent.withModel(
+          definition,
+          scriptedModel(orchestrateCall("missing-options-1"), '{"answer":"done"}'),
+        ),
+        { question: "go" },
+      ).pipe(Effect.provide(handlers), Effect.scoped);
+
+      expect(yield* Ref.get(captured)).toBeInstanceOf(ToolBrokerConfigurationError);
+    }),
+  );
+
   it.effect(
     "RUN-016 direct and programmatic invocation of the same Tool are observably equivalent",
     () =>

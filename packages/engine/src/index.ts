@@ -81,7 +81,7 @@ import {
   type Model,
   Prompt,
   Response,
-  type Toolkit,
+  Toolkit,
 } from "effect/unstable/ai";
 
 import { boundedValueFootprint, utf8ByteLength } from "./bounded-value-internal.ts";
@@ -510,6 +510,37 @@ interface ModelResponseBufferUsage {
   responsePartCount: number;
   responsePartBytes: number;
 }
+
+const structuredCloneFunction = Reflect.get(globalThis, "structuredClone");
+
+const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(function* <
+  Tools extends Record<string, Tool.Any>,
+>(part: unknown, toolkit: Toolkit.Toolkit<Tools>) {
+  const codec = Response.StreamPart(toolkit);
+  const encoded = yield* Schema.encodeUnknownEffect(codec)(part).pipe(
+    Effect.mapError(() =>
+      ModelProtocolError.make({ message: "Model response part failed canonical encoding" }),
+    ),
+  );
+  const ownedEncoded = yield* Effect.try({
+    try: () => {
+      if (typeof structuredCloneFunction !== "function") {
+        throw new TypeError("structuredClone is unavailable");
+      }
+      const cloned: unknown = Reflect.apply(structuredCloneFunction, globalThis, [encoded]);
+      return cloned;
+    },
+    catch: () =>
+      ModelProtocolError.make({
+        message: "Model response part could not be converted into engine-owned data",
+      }),
+  });
+  return yield* Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(
+    Effect.mapError(() =>
+      ModelProtocolError.make({ message: "Model response part failed canonical decoding" }),
+    ),
+  );
+});
 
 const consumeModelResponsePart = (
   usage: ModelResponseBufferUsage,
@@ -2545,11 +2576,12 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
     ).pipe(
       Stream.runForEach((part) =>
         Effect.gen(function* () {
-          yield* consumeModelResponsePart(responseUsage, part, context.bufferLimits);
-          if (part.type === "text-delta") {
-            pieces.push(part.delta);
-          } else if (part.type === "finish") {
-            summaryUsage = part.usage;
+          const ownedPart = yield* ownModelResponsePart(part, Toolkit.empty);
+          yield* consumeModelResponsePart(responseUsage, ownedPart, context.bufferLimits);
+          if (ownedPart.type === "text-delta") {
+            pieces.push(ownedPart.delta);
+          } else if (ownedPart.type === "finish") {
+            summaryUsage = ownedPart.usage;
           }
         }),
       ),
@@ -3466,7 +3498,18 @@ const makeTurn = <
                 options.budget,
               ).pipe(
                 Stream.mapEffect((part) =>
-                  eventsForPart(context, turnId, turn, agent.definition.toolkit.tools, trace, part),
+                  ownModelResponsePart(part, agent.definition.toolkit).pipe(
+                    Effect.flatMap((ownedPart) =>
+                      eventsForPart(
+                        context,
+                        turnId,
+                        turn,
+                        agent.definition.toolkit.tools,
+                        trace,
+                        ownedPart,
+                      ),
+                    ),
+                  ),
                 ),
                 Stream.flatMap(Stream.fromIterable),
               ),
@@ -4853,7 +4896,17 @@ const start = Effect.fn("AgentRuntime.start")(function* <
   AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements> | Scope.Scope
 > {
   yield* Scope.Scope;
-  const bufferLimits = effectiveRunBufferLimits(options.bufferLimits);
+  const bufferLimits = Object.freeze(effectiveRunBufferLimits(options.bufferLimits));
+  const executionOptions: RunOptions<HookError, HookRequirements> = Object.create(
+    Object.getPrototypeOf(options),
+    Object.getOwnPropertyDescriptors(options),
+  );
+  Object.defineProperty(executionOptions, "bufferLimits", {
+    configurable: false,
+    enumerable: true,
+    value: bufferLimits,
+    writable: false,
+  });
   // Single-writer append-only trace owned by the Run fiber; readers only see
   // it after the fiber settles. `stream` admits at most `maxRunEvents`, so this
   // array has the same finite ceiling without per-event immutable copies.
@@ -4869,7 +4922,7 @@ const start = Effect.fn("AgentRuntime.start")(function* <
   yield* Effect.addFinalizer(() => PubSub.shutdown(pubsub));
   const execution = reduceRunEvents(
     agent,
-    stream(agent, input, options).pipe(
+    stream(agent, input, executionOptions).pipe(
       Stream.tap((event) =>
         Effect.suspend(() => {
           captured.push(event);
@@ -5112,9 +5165,13 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
         }
         // A malformed result bound would fail open (`NaN` defeats every
         // comparison), so it is rejected typed before the pass opens.
-        if (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0) {
+        if (
+          passOptions === undefined ||
+          !Number.isSafeInteger(passOptions.maxResultBytes) ||
+          passOptions.maxResultBytes <= 0
+        ) {
           return yield* ToolBrokerConfigurationError.make({
-            message: `maxResultBytes must be a positive safe integer; received ${String(passOptions.maxResultBytes)}`,
+            message: `maxResultBytes must be a positive safe integer; received ${String(passOptions?.maxResultBytes)}`,
           });
         }
         // Capture the handler services present at the pass edge once; nothing

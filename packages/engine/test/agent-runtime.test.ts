@@ -3612,11 +3612,11 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const hostileFailure = failureFrom(hostileExit);
       expect(hostileFailure).toBeInstanceOf(ModelProtocolError);
       expect(hostileFailure.message).toBe(
-        "Model response exceeded the 8388608-byte retained response limit",
+        "Model response part could not be converted into engine-owned data",
       );
       expect((yield* Ref.get(hostileEvents)).at(-1)).toMatchObject({
         _tag: "RunFailed",
-        message: "Model response exceeded the 8388608-byte retained response limit",
+        message: "Model response part could not be converted into engine-owned data",
       });
 
       const oversizedEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
@@ -3726,6 +3726,8 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
   });
 
   it("fails closed for retained closures and hidden object storage", () => {
+    const cleanBacking = new ArrayBuffer(4_096);
+    const cleanView = new Uint8Array(cleanBacking, 0, 1);
     const backing = new ArrayBuffer(4_096);
     const view = new Uint8Array(backing, 0, 1);
     let binaryAccessorReads = 0;
@@ -3743,9 +3745,17 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     });
 
     expect(boundedValueFootprint(view, 1_024)).toBeUndefined();
-    expect(boundedValueFootprint(view, 8_192)).toBe(4_128);
-    expect(boundedValueFootprint(backing, 8_192)).toBe(4_128);
+    expect(boundedValueFootprint(view, 8_192)).toBeUndefined();
+    expect(boundedValueFootprint(backing, 8_192)).toBeUndefined();
+    expect(boundedValueFootprint(cleanView, 8_192)).toBe(4_128);
+    expect(boundedValueFootprint(cleanBacking, 8_192)).toBe(4_128);
     expect(binaryAccessorReads).toBe(0);
+    const expandedView = new Uint8Array(1);
+    Object.defineProperty(expandedView, "payload", { value: "x".repeat(2_048) });
+    expect(boundedValueFootprint(expandedView, 1_024)).toBeUndefined();
+    expect(boundedValueFootprint(1n, 1_024)).toBeUndefined();
+    expect(boundedValueFootprint(Symbol("small"), 1_024)).toBeUndefined();
+    expect(boundedValueFootprint({ [Symbol("key")]: "value" }, 1_024)).toBeUndefined();
     expect(boundedValueFootprint(Redacted.make("secret"), 1_024)).toBe(40);
     expect(boundedValueFootprint(DateTime.makeUnsafe(0), 1_024)).toBeDefined();
     expect(
@@ -3758,6 +3768,15 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     const forgedEffectValue = Object.create({ "~effect/forged": "~effect/forged" });
     forgedEffectValue.value = "small";
     expect(boundedValueFootprint(forgedEffectValue, 1_024)).toBeUndefined();
+    class UnknownEnvelope extends Schema.Class<UnknownEnvelope>("UnknownEnvelope")({
+      value: Schema.Unknown,
+    }) {}
+    expect(
+      boundedValueFootprint(
+        Schema.decodeSync(UnknownEnvelope)({ value: forgedEffectValue }),
+        1_024,
+      ),
+    ).toBeUndefined();
     expect(boundedValueFootprint({ callback: () => undefined }, 1_024)).toBeUndefined();
 
     let accessorReads = 0;
@@ -5312,10 +5331,17 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("does not let a slow detached observer determine completion", () =>
     Effect.gen(function* () {
+      let bufferLimitReads = 0;
+      const options = {
+        get bufferLimits() {
+          bufferLimitReads += 1;
+          return { maxRunEvents: 8 };
+        },
+      };
       const detached = yield* AgentRuntime.start(
         makeAgent(finalParts('{"answer":"detached"}')),
         { question: "complete independently" },
-        { bufferLimits: { maxRunEvents: 8 } },
+        options,
       );
       const slowObserver = yield* detached.observe.pipe(
         Stream.runForEach(() => Effect.never),
@@ -5325,6 +5351,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
       expect(result.output).toEqual({ answer: "detached" });
       expect((yield* detached.events).at(-1)?._tag).toBe("RunCompleted");
+      expect(bufferLimitReads).toBe(1);
       yield* Fiber.interrupt(slowObserver);
     }),
   );
