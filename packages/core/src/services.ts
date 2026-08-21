@@ -1,14 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect";
+import { IdGenerator as EffectAiIdGenerator } from "effect/unstable/ai";
 
 import { ConversationId, RunId, TurnId } from "./identifiers.ts";
-
-/**
- * Web Crypto is a standard runtime global on every supported platform
- * (Node.js >= 20, edge workers, browsers). Core compiles without platform
- * type libraries, so the one standard member used here is declared locally
- * instead of importing DOM or Node types.
- */
-declare const crypto: { readonly randomUUID: () => string };
 
 /** Replaceable authority for creating runtime identities, including deterministic test IDs. */
 export class IdGenerator extends Context.Service<
@@ -23,19 +16,19 @@ export class IdGenerator extends Context.Service<
   }
 >()("@effect-agent/core/IdGenerator") {
   /**
-   * Default identity authority backed by Web Crypto's `randomUUID`, which is
-   * available without a platform import on Node.js >= 20, edge workers, and
-   * browsers. Tests that need deterministic identities replace this Layer.
+   * Default identity authority backed by Effect AI's built-in generator. Its
+   * Effect Random dependency is fiber-local and can be seeded in tests, so core
+   * neither reaches into a runtime global nor selects a platform adapter.
    */
   static readonly layer: Layer.Layer<IdGenerator> = Layer.succeed(IdGenerator, {
-    nextConversationId: Effect.sync(() => `conversation-${crypto.randomUUID()}`).pipe(
-      Effect.map(Schema.decodeSync(ConversationId)),
-    ),
-    nextRunId: Effect.sync(() => `run-${crypto.randomUUID()}`).pipe(
-      Effect.map(Schema.decodeSync(RunId)),
-    ),
-    nextTurnId: Effect.sync(() => `turn-${crypto.randomUUID()}`).pipe(
-      Effect.map(Schema.decodeSync(TurnId)),
-    ),
+    nextConversationId: EffectAiIdGenerator.defaultIdGenerator
+      .generateId()
+      .pipe(Effect.map((id) => Schema.decodeSync(ConversationId)(`conversation-${id}`))),
+    nextRunId: EffectAiIdGenerator.defaultIdGenerator
+      .generateId()
+      .pipe(Effect.map((id) => Schema.decodeSync(RunId)(`run-${id}`))),
+    nextTurnId: EffectAiIdGenerator.defaultIdGenerator
+      .generateId()
+      .pipe(Effect.map((id) => Schema.decodeSync(TurnId)(`turn-${id}`))),
   });
 }

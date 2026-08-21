@@ -1,9 +1,9 @@
 import { ToolExecutionClass } from "@effect-agent/engine";
 import { SqliteClient } from "@effect/sql-sqlite-node";
-import { Context, Duration, Effect, Layer, Option, Predicate, Schema } from "effect";
+import { Context, Effect, Layer, Option, Predicate, Schema, type Duration } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { SqlError } from "effect/unstable/sql/SqlError";
+import type { SqlError } from "effect/unstable/sql/SqlError";
 
 /**
  * The C3 read-only SQL reference integration (plan §8, SEC-015): application
@@ -196,7 +196,7 @@ const decodeRow = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema
  * on the reason's cause. No error-text matching.
  */
 const isWriteDenial = (error: SqlError): boolean => {
-  const cause = (error.reason as { readonly cause?: unknown }).cause;
+  const cause = error.reason.cause;
   return (
     Predicate.isObject(cause) &&
     "errcode" in cause &&
@@ -206,7 +206,7 @@ const isWriteDenial = (error: SqlError): boolean => {
 };
 
 const sqlFailureMessage = (error: SqlError): string => {
-  const cause = (error.reason as { readonly cause?: unknown }).cause;
+  const cause = error.reason.cause;
   const detail =
     Predicate.isObject(cause) && "errstr" in cause && typeof cause.errstr === "string"
       ? `: ${cause.errstr}`
@@ -275,7 +275,7 @@ export const warehouseDbLayer = (
           return yield* denied;
         }
         const rawRows = yield* sql
-          .unsafe<Record<string, unknown>>(text, parameters as Array<unknown>)
+          .unsafe<Record<string, unknown>>(text, [...parameters])
           .withoutTransform.pipe(
             Effect.catchTag("SqlError", (error) =>
               Effect.fail<WarehouseQueryDenied | WarehouseQueryFailed>(

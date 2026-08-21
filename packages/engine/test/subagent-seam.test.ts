@@ -242,10 +242,11 @@ layer(identifiers)("SUB S1 engine execution seam", (it) => {
       );
 
       return Effect.gen(function* () {
-        const events = yield* AgentRuntime.stream(agent, { question: "root?" }).pipe(
-          Stream.runCollect,
-          Effect.provide(toolLayer),
-        );
+        const events = yield* AgentRuntime.stream(
+          agent,
+          { question: "root?" },
+          { bufferLimits: { maxSubagentEventsPerBatch: 1 } },
+        ).pipe(Stream.runCollect, Effect.provide(toolLayer));
 
         const subagentEvents = events.filter(isSubagentEvent);
         expect(subagentEvents.map((event) => event._tag)).toEqual([

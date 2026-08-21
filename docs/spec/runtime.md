@@ -171,6 +171,13 @@ but writes no new preparation. DN/DC then record the ordinary bounded failed Sub
 which is terminal and cannot select the call for another retry. A hook failure remains typed in the
 Run error channel and is likewise fail-closed.
 
+Before that resume can start input hooks, Handlers, or model execution, the engine Schema-decodes
+the prior-Attempt usage seed and every settled-call envelope. Settled results must be bounded
+canonical JSON and are copied into history only from an owned snapshot. Usage counts and
+microdollars must be non-negative safe integers, and each last-call token count must not exceed its
+cumulative total. Invalid recovery input fails with `ModelProtocolError`; the engine neither
+repairs it nor continues with weaker budget accounting.
+
 ### Scheduling
 
 The default is bounded parallel execution owned by the engine.
@@ -324,7 +331,9 @@ belongs to `costBudgetMicrousd`.
 Every application Tool result, including MCP results, is bounded once at the settle boundary by
 `AgentPolicy.toolResultBounds` (default 50 KiB) before it enters records or prompts, so both
 carry the same value. An oversized encoded result becomes the canonical `TruncatedToolResult`
-envelope preserving head, tail, and original byte size. Provider-executed results are exempt.
+envelope preserving head, tail, and original byte size. A durable resume rechecks the recorded
+settled result against the same bound in the DN and DC assemblies and rejects non-JSON or hostile
+values instead of changing them. Provider-executed results are exempt.
 
 ### Run-status message
 
@@ -439,6 +448,12 @@ exported `withTerminalDefectEvent` combinator, whose contract is:
 - identity fields come from the last event already streamed; a defect before the first event is
   rethrown without an event, because the helper never fabricates Run identities.
 
+In the DN and DC assemblies, engine-owned Durable Step and durable-Subagent infrastructure errors
+use fixed, bounded public messages. A mapped error preserves the foreign hook failure in its
+Schema-safe diagnostic `cause` for the live Effect, while Tool and Run events retain only the fixed
+message. Reporting that diagnostic is a composition-edge decision; the engine does not send it to
+ambient error reporters.
+
 ## 11. Backpressure
 
 Local `stream` uses a bounded queue:
@@ -448,6 +463,17 @@ Local `stream` uses a bounded queue:
 - semantic terminal events are never dropped;
 - disconnecting/interrupting the sole ephemeral consumer interrupts the Run unless execution was
   explicitly detached.
+
+Every Run also has tightening-only `RunOptions.bufferLimits`. Engine defaults cap one model call at
+16,384 decoded response parts and an 8 MiB conservative retained-memory estimate, one Run at 65,536
+semantic events including a reserved terminal slot, and one Tool batch at 1,024 queued Subagent
+events. Non-finite or wider overrides retain the engine ceiling; smaller positive values tighten it.
+Crossing a model-response or Run-event ceiling fails with `ModelProtocolError`. Compaction model
+calls use the same per-response limits as ordinary Turns.
+
+`AgentRuntime.start` sizes its non-blocking multicast and replay storage from the effective Run-event
+ceiling plus one settlement marker. `events` and `observe` therefore preserve a complete replay
+without allowing a slow observer to backpressure execution or retain an unbounded trace.
 
 Durable transports observe from the journal/projection and do not own execution liveness.
 
@@ -480,13 +506,12 @@ core event minus `eventVersion`, `runId`, `conversationId`, `agentId`,
 `sequence`, `timestamp`, and `turnId`); the engine stamps those fields through
 the same `eventBase` path as every other event, so the base identity and the
 emitting batch's Turn are authoritative and the Run sequence stays monotonic.
-Each Tool batch owns one sink backed by an unbounded queue drained by the
-Run's own stream. Consistent with the Run's existing buffering, the Run
-stream is the only consumer, so no external observer can backpressure the
-batch. Sink events appear inside the batch, and the batch settles, including on failure, only
-after already-emitted events have surfaced in the Run stream. Emission after
-the batch settled, or outside any Tool batch, fails closed with the typed
-`RunEventSinkClosedError`.
+Each Tool batch owns one sink backed by a bounded queue drained by the Run's own stream. When a
+handler burst fills that queue, structured backpressure suspends the handler until the internal Run
+stream drains capacity. A detached external observer cannot backpressure the batch. Sink events
+appear inside the batch, and the batch settles, including on failure, only after already-emitted
+events have surfaced in the Run stream. Emission after the batch settled, or outside any Tool batch,
+fails closed with the typed `RunEventSinkClosedError`.
 
 ### AgentSpawner
 
@@ -535,8 +560,8 @@ or forge it.
 Two behaviors are specific to the broker path. Tool-call and duration budgets are consumed and
 checked before every inner invocation, so budget exhaustion prevents the next call mid-pass;
 direct model-declared calls keep their Turn-boundary accounting unchanged. Result size bounds
-and redaction at the sandbox boundary are broker-owned; no such stage is added to the direct
-path. An inner call that would require approval fails with a typed policy failure and never
+and redaction at the sandbox boundary are broker-owned; `openPass` requires a positive finite
+`maxResultBytes`, and no such stage is added to the direct path. An inner call that would require approval fails with a typed policy failure and never
 suspends in the ephemeral slice. Per-Tool authorization remains application- and handler-owned;
 the engine contributes approval policy, scheduling, budgets, encoding, and telemetry only.
 
@@ -597,7 +622,9 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   original byte size, and provider-executed results are exempt.
 - **RUN-023:** The engine accounts cache-read and cache-write input tokens distinctly from
   uncached input and tracks the most recent call's input/output tokens as the live-context
-  estimate, both visible through the budget hook.
+  estimate, both visible through the budget hook. A recovery usage seed must contain non-negative
+  safe integers with last-call token counts no greater than cumulative totals; invalid seeds fail
+  before Run input hooks or external execution.
 - **RUN-024:** With policy `runStatus: "appended"`, every outgoing model request carries a
   derived run-status message showing Turns, Tool Calls, tokens, and elapsed time; the
   message is never persisted as canonical history.

@@ -8,7 +8,8 @@ import {
 } from "@effect-agent/session";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, PlatformError, Schema, Stream } from "effect";
+import type { PlatformError } from "effect";
+import { Effect, FileSystem, Layer, Schema, Stream } from "effect";
 
 import {
   TravelPlannerCloudflareProfile,

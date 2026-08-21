@@ -56,12 +56,12 @@ import {
   DoStorageConfigValue,
 } from "./do-storage-config.ts";
 import { DoStorageFailpoint, type DoStorageFailpointHandler } from "./do-storage-failpoint.ts";
+import type { DoStorageCompatibilityError } from "./errors.ts";
 import {
   DoAppendConflict,
   DoCheckpointConflict,
   DoFenceRejected,
   type DoStorageFailpointLocation,
-  DoStorageCompatibilityError,
   DoStorageCorruptionError,
   DoStorageError,
 } from "./errors.ts";
@@ -102,6 +102,9 @@ const OffsetText = Schema.String.check(Schema.isMaxLength(4 * 1024));
 const DO_OFFSET_PREFIX = "effect-agent-do@1:";
 const ZERO_CANONICAL_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 const isDigest = Schema.is(Digest);
+const isDoFenceRejected = Schema.is(DoFenceRejected);
+const isDoAppendConflict = Schema.is(DoAppendConflict);
+const isDoCheckpointConflict = Schema.is(DoCheckpointConflict);
 
 const storeError = (operation: string, error: { readonly message: string }) =>
   ConversationStoreError.make({
@@ -550,10 +553,10 @@ const makeServices = Effect.fn("DoConversationStore.makeServices")(function* () 
       yield* hitFailpoint("append:before");
       const result = yield* journal.append(rawRequest).pipe(
         Effect.mapError((error) => {
-          if (error instanceof DoFenceRejected) {
+          if (isDoFenceRejected(error)) {
             return mapFence(validated.conversationId, error);
           }
-          if (error instanceof DoAppendConflict) {
+          if (isDoAppendConflict(error)) {
             return error.actualTailSequence !== undefined && isDigest(error.actualTailDigest)
               ? AppendConflict.make({
                   conversationId: validated.conversationId,
@@ -720,7 +723,7 @@ const makeServices = Effect.fn("DoConversationStore.makeServices")(function* () 
     yield* hitFailpoint("save-checkpoint:before");
     yield* journal.saveCheckpoint(raw).pipe(
       Effect.mapError((error) =>
-        error instanceof DoCheckpointConflict
+        isDoCheckpointConflict(error)
           ? CheckpointRejected.make({
               conversationId: validated.checkpoint.conversationId,
               reason: "digest-mismatch",
@@ -832,19 +835,21 @@ export const storageFailpointLayer = (
  */
 export const layer = (
   options: DoStorageOptions,
-): Layer.Layer<ConversationStore, DoStorageInitializationError> => {
-  const sqlLayer = SqliteClient.layer({ storage: options.storage });
-  return conversationStoreLayer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        storageConfigLayer(options),
-        storageFailpointLayer(options),
-        sqlLayer,
-        BrowserCrypto.layer,
+): Layer.Layer<ConversationStore, DoStorageInitializationError> =>
+  Layer.unwrap(
+    Effect.map(DoStorageConfig, (config) =>
+      conversationStoreLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(DoStorageConfig)(config),
+            storageFailpointLayer(options),
+            SqliteClient.layer({ storage: options.storage }),
+            BrowserCrypto.layer,
+          ),
+        ),
       ),
     ),
-  );
-};
+  ).pipe(Layer.provide(storageConfigLayer(options)));
 
 /** Create an adapter-owned resumable observation offset for a known canonical sequence. */
 export const observationOffsetAt = makeOffset;

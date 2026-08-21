@@ -462,8 +462,15 @@ export const rankAndDedupeFindings = (
 };
 
 /**
- * The concern analogue of `rankAndDedupeFindings`: dedupe by exact content
- * keeping the most severe duplicate, rank by severity, and cap at the
+ * Stable identity for one concern. The paths are part of the claim: identical
+ * prose about two independent files must not collapse into one item.
+ */
+export const reviewConcernKey = (concern: ReviewConcern): string =>
+  `${(concern.evidencePaths ?? []).join("\u0000")}\u0001${concern.title}\u0000${concern.body}`;
+
+/**
+ * The concern analogue of `rankAndDedupeFindings`: dedupe by exact scoped
+ * content keeping the most severe duplicate, rank by severity, and cap at the
  * `CodeReview` concerns bound.
  */
 export const rankAndDedupeConcerns = (
@@ -471,7 +478,7 @@ export const rankAndDedupeConcerns = (
 ): ReadonlyArray<ReviewConcern> => {
   const byContent = new Map<string, ReviewConcern>();
   for (const concern of concerns) {
-    const key = `${concern.title}\u0000${concern.body}`;
+    const key = reviewConcernKey(concern);
     const previous = byContent.get(key);
     if (
       previous === undefined ||

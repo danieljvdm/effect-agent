@@ -180,6 +180,15 @@ export class SubagentParentBudgetConflict extends Schema.TaggedError<SubagentPar
   },
 ) {}
 
+/** A parent budget cannot retire while one of its child reservations is unsettled. */
+export class SubagentParentBudgetActive extends Schema.TaggedError<SubagentParentBudgetActive>()(
+  "SubagentParentBudgetActive",
+  {
+    parentRunId: RunId,
+    openReservations: Natural,
+  },
+) {}
+
 /**
  * Parent-owned hierarchical Subagent budget reservation authority
  * (spec/subagents.md §7 and §8).
@@ -251,6 +260,14 @@ export class SubagentReservations extends Context.Service<
     readonly acquireChildSlot: (
       parentRunId: RunId,
     ) => Effect.Effect<void, SubagentParentBudgetUnknown | SubagentBudgetExhausted, Scope.Scope>;
+    /**
+     * Reclaim one terminal parent registration and all of its released child
+     * reservations. Retirement is idempotent; an unknown parent is already
+     * retired. Open reservations fail typed and leave the ledger unchanged.
+     * The Run owner must call this after its final accounting snapshot no
+     * longer needs to be observable.
+     */
+    readonly retireParent: (parentRunId: RunId) => Effect.Effect<void, SubagentParentBudgetActive>;
     /** Read the aggregate parent view for auditing and conservation checks. */
     readonly parentSnapshot: (
       parentRunId: RunId,
@@ -663,6 +680,33 @@ const releaseTransition = (
   return [ok(reservationView(reservationId, settled)), next];
 };
 
+const retireParentTransition = (
+  ledger: ReservationLedger,
+  parentRunId: RunId,
+): readonly [TransitionResult<void, SubagentParentBudgetActive>, ReservationLedger] => {
+  if (!ledger.parents.has(parentRunId)) {
+    return [ok(undefined), ledger];
+  }
+  let openReservations = 0;
+  for (const reservation of ledger.reservations.values()) {
+    if (reservation.parentRunId === parentRunId && reservation.status !== "released") {
+      openReservations += 1;
+    }
+  }
+  if (openReservations > 0) {
+    return [fail(SubagentParentBudgetActive.make({ parentRunId, openReservations })), ledger];
+  }
+  const parents = new Map(ledger.parents);
+  parents.delete(parentRunId);
+  const reservations = new Map(ledger.reservations);
+  for (const [reservationId, reservation] of reservations) {
+    if (reservation.parentRunId === parentRunId) {
+      reservations.delete(reservationId);
+    }
+  }
+  return [ok(undefined), { parents, reservations }];
+};
+
 /**
  * In-memory reservation ledger. All state lives in one `Ref` owned by the
  * Layer's Scope; every transition is a single atomic `Ref.modify`.
@@ -733,6 +777,12 @@ export const SubagentReservationsMemoryLive: Layer.Layer<SubagentReservations> =
           (permits) => gate.release(permits).pipe(Effect.asVoid),
           { interruptible: true },
         );
+      }),
+      retireParent: Effect.fn("SubagentReservations.retireParent")(function* (parentRunId) {
+        const result = yield* Ref.modify(state, (ledger) =>
+          retireParentTransition(ledger, parentRunId),
+        );
+        return yield* resolve(result);
       }),
       parentSnapshot: Effect.fn("SubagentReservations.parentSnapshot")(function* (parentRunId) {
         const ledger = yield* Ref.get(state);

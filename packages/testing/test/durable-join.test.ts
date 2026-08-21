@@ -1,7 +1,6 @@
-import { Agent, AgentPolicy, ConversationId, SubmissionId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ConversationId, type SubmissionId } from "@effect-agent/core";
 import {
   AbortCommand,
-  CanonicalRecordEnvelope,
   ConversationRead,
   ConversationStore,
   DefinitionDigests,
@@ -23,6 +22,7 @@ import {
   runIdForSubmission,
   type DurableRuntimeFailpointLocation,
   type DurableSubmitOptions,
+  type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
 import {
   MemoryConversationStoreLive,
@@ -31,7 +31,7 @@ import {
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Toolkit, type Prompt, type Response } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-join");

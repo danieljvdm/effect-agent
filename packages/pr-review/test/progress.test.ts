@@ -74,7 +74,7 @@ describe("progress comment rendering", () => {
     expect(parseProgressClaim(success)).toEqual(CLAIM);
 
     expect(renderProgressSettleBody({ ...base, conclusion: "blocking" }, CLAIM)).toContain(
-      "🛑 **Code review posted** — blocking findings",
+      "🛑 **Code review posted:** blocking review items",
     );
     expect(renderProgressSettleBody({ ...base, conclusion: "incomplete" }, CLAIM)).toContain(
       "input coverage or configured review assurance is incomplete",

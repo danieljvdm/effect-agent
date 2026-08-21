@@ -1,4 +1,5 @@
-import { Context, Effect, Schema } from "effect";
+import type { Effect } from "effect";
+import { Context, Schema } from "effect";
 import type { Tool, Toolkit } from "effect/unstable/ai";
 
 /**
@@ -68,7 +69,7 @@ export interface ToolBrokerPassOptions {
    * boundary. The broker owns this bound (runtime spec §12.1); the executor
    * enforces its own transport bound independently.
    */
-  readonly maxResultBytes?: number | undefined;
+  readonly maxResultBytes: number;
   /**
    * Optional broker-owned redaction pass applied to every encoded success
    * result before the size bound. It must be total; a defect stays a defect.
@@ -114,7 +115,7 @@ export class ToolBrokerConfigurationError extends Schema.TaggedError<ToolBrokerC
 export interface ToolBrokerService {
   readonly openPass: <Tools extends Record<string, Tool.Any>>(
     toolkit: Toolkit.WithHandler<Tools>,
-    options?: ToolBrokerPassOptions,
+    options: ToolBrokerPassOptions,
   ) => Effect.Effect<
     ToolBrokerPass,
     ToolBrokerUnavailableError | ToolBrokerConfigurationError,

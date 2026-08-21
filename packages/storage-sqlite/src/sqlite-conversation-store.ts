@@ -43,12 +43,12 @@ import {
 } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
+import type { SqliteStorageCompatibilityError } from "./errors.ts";
 import {
   SqliteAppendConflict,
   SqliteCheckpointConflict,
   SqliteFenceRejected,
   type SqliteStorageFailpointLocation,
-  SqliteStorageCompatibilityError,
   SqliteStorageCorruptionError,
   SqliteStorageError,
 } from "./errors.ts";
@@ -93,6 +93,9 @@ const OffsetText = Schema.String.check(Schema.isMaxLength(4 * 1024));
 const SQLITE_OFFSET_PREFIX = "effect-agent-sqlite@1:";
 const ZERO_CANONICAL_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 const isDigest = Schema.is(Digest);
+const isSqliteFenceRejected = Schema.is(SqliteFenceRejected);
+const isSqliteAppendConflict = Schema.is(SqliteAppendConflict);
+const isSqliteCheckpointConflict = Schema.is(SqliteCheckpointConflict);
 
 const storeError = (operation: string, error: { readonly message: string }) =>
   ConversationStoreError.make({
@@ -542,10 +545,10 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
     yield* hitFailpoint("append:before");
     const result = yield* journal.append(rawRequest).pipe(
       Effect.mapError((error) => {
-        if (error instanceof SqliteFenceRejected) {
+        if (isSqliteFenceRejected(error)) {
           return mapFence(validated.conversationId, error);
         }
-        if (error instanceof SqliteAppendConflict) {
+        if (isSqliteAppendConflict(error)) {
           return error.actualTailSequence !== undefined && isDigest(error.actualTailDigest)
             ? AppendConflict.make({
                 conversationId: validated.conversationId,
@@ -713,7 +716,7 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
     yield* hitFailpoint("save-checkpoint:before");
     yield* journal.saveCheckpoint(raw).pipe(
       Effect.mapError((error) =>
-        error instanceof SqliteCheckpointConflict
+        isSqliteCheckpointConflict(error)
           ? CheckpointRejected.make({
               conversationId: validated.checkpoint.conversationId,
               reason: "digest-mismatch",
@@ -823,19 +826,21 @@ export const storageFailpointLayer = (
  */
 export const layer = (
   options: SqliteStorageOptions,
-): Layer.Layer<ConversationStore, SqliteStorageInitializationError> => {
-  const sqlLayer = SqliteClient.layer({ filename: options.filename });
-  return conversationStoreLayer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        storageConfigLayer(options),
-        storageFailpointLayer(options),
-        sqlLayer,
-        NodeCrypto.layer,
+): Layer.Layer<ConversationStore, SqliteStorageInitializationError> =>
+  Layer.unwrap(
+    Effect.map(SqliteStorageConfig, (config) =>
+      conversationStoreLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(SqliteStorageConfig)(config),
+            storageFailpointLayer(options),
+            SqliteClient.layer({ filename: options.filename }),
+            NodeCrypto.layer,
+          ),
+        ),
       ),
     ),
-  );
-};
+  ).pipe(Layer.provide(storageConfigLayer(options)));
 
 /** Create an adapter-owned resumable observation offset for a known canonical sequence. */
 export const observationOffsetAt = makeOffset;

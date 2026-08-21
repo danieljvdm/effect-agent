@@ -28,6 +28,7 @@ import {
   Layer,
   Logger,
   Option,
+  Redacted,
   Ref,
   References,
   Schema,
@@ -45,6 +46,8 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
+import { boundedValueFootprint } from "../src/bounded-value-internal.ts";
+import { errorMessage, errorTag } from "../src/error-diagnostic-internal.ts";
 import {
   AgentResultSchema,
   AgentRuntime,
@@ -3516,6 +3519,190 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     }),
   );
 
+  it.effect("bounds every decoded model response by part count and retained bytes", () =>
+    Effect.gen(function* () {
+      const metadataExit = yield* AgentRuntime.stream(
+        makeAgent([
+          {
+            type: "response-metadata",
+            id: "response-1",
+            modelId: "scripted",
+            timestamp: "2026-01-01T00:00:00.000Z",
+            request: {
+              method: "POST",
+              url: "https://example.invalid/responses",
+              urlParams: [],
+              headers: { authorization: Redacted.make("secret") },
+            },
+          },
+          ...finalParts('{"answer":"owned metadata"}'),
+        ]),
+        { question: "metadata" },
+      ).pipe(Stream.runDrain, Effect.exit);
+      expect(Exit.isSuccess(metadataExit)).toBe(true);
+
+      const countEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const countExit = yield* AgentRuntime.stream(
+        makeAgent(finalParts('{"answer":"count"}')),
+        { question: "count" },
+        { bufferLimits: { maxModelResponseParts: 2 } },
+      ).pipe(
+        Stream.tap((event) => Ref.update(countEvents, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const countFailure = failureFrom(countExit);
+      expect(countFailure).toBeInstanceOf(ModelProtocolError);
+      expect(countFailure.message).toContain("2-part response limit");
+      expect((yield* Ref.get(countEvents)).at(-1)?._tag).toBe("RunFailed");
+
+      const byteEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const byteExit = yield* AgentRuntime.stream(
+        makeAgent(finalParts(`{"answer":"${"x".repeat(4_096)}"}`)),
+        { question: "bytes" },
+        { bufferLimits: { maxModelResponseBytes: 1_024 } },
+      ).pipe(
+        Stream.tap((event) => Ref.update(byteEvents, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const byteFailure = failureFrom(byteExit);
+      expect(byteFailure).toBeInstanceOf(ModelProtocolError);
+      expect(byteFailure.message).toContain("1024-byte retained response limit");
+      expect((yield* Ref.get(byteEvents)).at(-1)?._tag).toBe("RunFailed");
+    }),
+  );
+
+  it.effect("reserves one bounded Run event slot for a typed terminal failure", () =>
+    Effect.gen(function* () {
+      const observed = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const exit = yield* AgentRuntime.stream(
+        makeAgent(finalParts('{"answer":"event bound"}')),
+        { question: "events" },
+        { bufferLimits: { maxRunEvents: 4 } },
+      ).pipe(
+        Stream.tap((event) => Ref.update(observed, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      const events = yield* Ref.get(observed);
+
+      expect(failure).toBeInstanceOf(ModelProtocolError);
+      expect(failure.message).toContain("4-event buffer limit");
+      expect(events).toHaveLength(4);
+      expect(events.map(({ sequence }) => sequence)).toEqual([0, 1, 2, 3]);
+      expect(events.at(-1)).toMatchObject({
+        _tag: "RunFailed",
+        errorTag: "ModelProtocolError",
+        message: "Run exceeded the 4-event buffer limit",
+      });
+    }),
+  );
+
+  it.effect("rejects unmeasurable and oversized provider failures without reading accessors", () =>
+    Effect.gen(function* () {
+      let hostileReads = 0;
+      const hostile = Object.create(null) as Record<PropertyKey, unknown>;
+      Object.defineProperty(hostile, "message", {
+        enumerable: true,
+        get: () => {
+          hostileReads += 1;
+          throw new Error("message getter must not escape");
+        },
+      });
+      Object.defineProperty(hostile, "_tag", {
+        enumerable: true,
+        get: () => {
+          hostileReads += 1;
+          throw new Error("tag getter must not escape");
+        },
+      });
+      Object.defineProperty(hostile, Symbol.toPrimitive, {
+        value: () => {
+          throw new Error("coercion must not run");
+        },
+      });
+
+      const hostileEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const hostileExit = yield* AgentRuntime.stream(
+        makeAgent([{ type: "error", error: hostile }]),
+        { question: "hostile" },
+      ).pipe(
+        Stream.tap((event) => Ref.update(hostileEvents, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const hostileFailure = failureFrom(hostileExit);
+      expect(hostileFailure).toBeInstanceOf(ModelProtocolError);
+      expect(hostileFailure.message).toContain("retained response limit");
+      expect((yield* Ref.get(hostileEvents)).at(-1)).toMatchObject({
+        _tag: "RunFailed",
+      });
+      expect(hostileReads).toBe(0);
+
+      const diagnosticFailure = Object.create(null) as Record<PropertyKey, unknown>;
+      Object.defineProperty(diagnosticFailure, "message", {
+        get: () => {
+          hostileReads += 1;
+          throw new Error("diagnostic message getter must not run");
+        },
+      });
+      Object.defineProperty(diagnosticFailure, "_tag", {
+        get: () => {
+          hostileReads += 1;
+          throw new Error("diagnostic tag getter must not run");
+        },
+      });
+      expect(errorMessage(diagnosticFailure)).toBe("Unknown error");
+      expect(errorTag(diagnosticFailure)).toBe("UnknownError");
+      expect(hostileReads).toBe(0);
+
+      const oversizedEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const oversizedExit = yield* AgentRuntime.stream(
+        makeAgent([{ type: "error", error: { message: "x".repeat(8_192) } }]),
+        { question: "oversized" },
+      ).pipe(
+        Stream.tap((event) => Ref.update(oversizedEvents, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const oversizedFailure = failureFrom(oversizedExit);
+      expect(oversizedFailure).toBeInstanceOf(ModelProtocolError);
+      const terminal = (yield* Ref.get(oversizedEvents)).at(-1);
+      expect(terminal?._tag).toBe("RunFailed");
+      if (terminal?._tag === "RunFailed") {
+        expect(terminal.message.length).toBeLessThanOrEqual(4_096);
+      }
+    }),
+  );
+
+  it.effect("preserves a canonical encoder defect as a defect", () =>
+    Effect.gen(function* () {
+      const encoderDefect = new Error("response encoder defect");
+      const target: Response.StreamPartEncoded = { type: "text-start", id: "answer" };
+      const defectingPart = new Proxy(target, {
+        get: (part, key, receiver) => {
+          if (key === "id") throw encoderDefect;
+          return Reflect.get(part, key, receiver);
+        },
+      });
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const exit = yield* AgentRuntime.stream(makeAgent([defectingPart]), {
+        question: "defect",
+      }).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) throw new Error("Expected the encoder defect to fail the Run");
+      expect(Cause.squash(exit.cause)).toBe(encoderDefect);
+      expect((yield* Ref.get(events)).some((event) => event._tag === "RunFailed")).toBe(false);
+    }),
+  );
+
   it("normalizes one bounded JSON snapshot without invoking dynamic serialization behavior", () => {
     let suffixReads = 0;
     const payload: Array<unknown> = ["x".repeat(32)];
@@ -3601,6 +3788,98 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(boundedJsonSnapshot(payload, 128, maxDepth)).toBeUndefined();
     }
     expect(reflectionAttempts).toBe(0);
+  });
+
+  it("fails closed for retained closures and hidden object storage", () => {
+    const cleanBacking = new ArrayBuffer(4_096);
+    const cleanView = new Uint8Array(cleanBacking, 0, 1);
+    const backing = new ArrayBuffer(4_096);
+    const view = new Uint8Array(backing, 0, 1);
+    let binaryAccessorReads = 0;
+    Object.defineProperty(view, "buffer", {
+      get: () => {
+        binaryAccessorReads += 1;
+        throw new Error("view buffer accessor must not run");
+      },
+    });
+    Object.defineProperty(backing, "byteLength", {
+      get: () => {
+        binaryAccessorReads += 1;
+        throw new Error("buffer byteLength accessor must not run");
+      },
+    });
+
+    expect(boundedValueFootprint(view, 1_024)).toBeUndefined();
+    expect(boundedValueFootprint(view, 8_192)).toBeUndefined();
+    expect(boundedValueFootprint(backing, 8_192)).toBeUndefined();
+    expect(boundedValueFootprint(cleanView, 8_192)).toBe(4_128);
+    expect(boundedValueFootprint(cleanBacking, 8_192)).toBe(4_128);
+    // The backing bytes fit, but materializing thousands of indexed keys does not.
+    expect(boundedValueFootprint(new Uint8Array(4_096), 8_192)).toBeUndefined();
+    expect(
+      boundedValueFootprint(
+        Array.from({ length: 4_096 }, () => 0),
+        8_192,
+      ),
+    ).toBeUndefined();
+    expect(binaryAccessorReads).toBe(0);
+    const expandedView = new Uint8Array(1);
+    Object.defineProperty(expandedView, "payload", { value: "x".repeat(2_048) });
+    expect(boundedValueFootprint(expandedView, 1_024)).toBeUndefined();
+    class HiddenView extends Uint8Array {
+      readonly #payload = "x".repeat(2_048);
+      retainedPayload(): string {
+        return this.#payload;
+      }
+    }
+    class HiddenBuffer extends ArrayBuffer {
+      readonly #payload = "x".repeat(2_048);
+      retainedPayload(): string {
+        return this.#payload;
+      }
+    }
+    expect(boundedValueFootprint(new HiddenView(1), 1_024)).toBeUndefined();
+    expect(boundedValueFootprint(new HiddenBuffer(1), 1_024)).toBeUndefined();
+    expect(boundedValueFootprint(1n, 1_024)).toBeUndefined();
+    expect(boundedValueFootprint(Symbol("small"), 1_024)).toBeUndefined();
+    expect(boundedValueFootprint({ [Symbol("key")]: "value" }, 1_024)).toBeUndefined();
+    expect(boundedValueFootprint(Redacted.make("secret"), 1_024)).toBe(40);
+    expect(boundedValueFootprint(DateTime.makeUnsafe(0), 1_024)).toBeDefined();
+    expect(
+      boundedValueFootprint(Redacted.make(new Map([["small", "value"]])), 1_024),
+    ).toBeUndefined();
+    const forgedRedacted = Object.create(Object.getPrototypeOf(Redacted.make("secret")));
+    expect(boundedValueFootprint(forgedRedacted, 1_024)).toBeUndefined();
+    expect(boundedValueFootprint(new Map([["small", "value"]]), 1_024)).toBeUndefined();
+    expect(boundedValueFootprint(new Set(["small"]), 1_024)).toBeUndefined();
+    const forgedEffectValue = Object.create({ "~effect/forged": "~effect/forged" });
+    forgedEffectValue.value = "small";
+    expect(boundedValueFootprint(forgedEffectValue, 1_024)).toBeUndefined();
+    class UnknownEnvelope extends Schema.Class<UnknownEnvelope>("UnknownEnvelope")({
+      value: Schema.Unknown,
+    }) {}
+    expect(
+      boundedValueFootprint(Schema.decodeSync(UnknownEnvelope)({ value: "small" }), 1_024),
+    ).toBeUndefined();
+    expect(
+      boundedValueFootprint(
+        Schema.decodeSync(UnknownEnvelope)({ value: forgedEffectValue }),
+        1_024,
+      ),
+    ).toBeUndefined();
+    expect(boundedValueFootprint({ callback: () => undefined }, 1_024)).toBeUndefined();
+
+    let accessorReads = 0;
+    const accessorBacked = {};
+    Object.defineProperty(accessorBacked, "value", {
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return "small";
+      },
+    });
+    expect(boundedValueFootprint(accessorBacked, 1_024)).toBeUndefined();
+    expect(accessorReads).toBe(0);
   });
 
   it.effect("rejects duplicate provider terminals before appending any Tool success", () =>
@@ -5142,9 +5421,18 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("does not let a slow detached observer determine completion", () =>
     Effect.gen(function* () {
-      const detached = yield* AgentRuntime.start(makeAgent(finalParts('{"answer":"detached"}')), {
-        question: "complete independently",
-      });
+      let bufferLimitReads = 0;
+      const options = {
+        get bufferLimits() {
+          bufferLimitReads += 1;
+          return { maxRunEvents: 8 };
+        },
+      };
+      const detached = yield* AgentRuntime.start(
+        makeAgent(finalParts('{"answer":"detached"}')),
+        { question: "complete independently" },
+        options,
+      );
       const slowObserver = yield* detached.observe.pipe(
         Stream.runForEach(() => Effect.never),
         Effect.forkChild,
@@ -5153,7 +5441,15 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
       expect(result.output).toEqual({ answer: "detached" });
       expect((yield* detached.events).at(-1)?._tag).toBe("RunCompleted");
+      expect(bufferLimitReads).toBe(1);
       yield* Fiber.interrupt(slowObserver);
+
+      const frozenDetached = yield* AgentRuntime.start(
+        makeAgent(finalParts('{"answer":"frozen"}')),
+        { question: "accept frozen options" },
+        Object.freeze({ bufferLimits: Object.freeze({ maxRunEvents: 8 }) }),
+      );
+      expect((yield* frozenDetached.await).output).toEqual({ answer: "frozen" });
     }),
   );
 

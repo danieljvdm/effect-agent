@@ -265,7 +265,9 @@ The request declares:
 The result records exit status, bounded output, resource use, artifacts, and the
 sandbox implementation identity. A local process runner may satisfy the interface
 for trusted development, but it must identify itself as `unisolated`; it is not a
-security sandbox.
+security sandbox. An adapter rejects a runtime identity it cannot honor instead of
+echoing it as an observed runtime. Event artifact metadata and failure diagnostics
+are bounded at the adapter boundary.
 
 ## 9.1 Code Mode and the CodeExecutor port
 

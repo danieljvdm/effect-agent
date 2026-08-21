@@ -2,12 +2,12 @@ import { ConversationId, RunId, SubmissionId } from "@effect-agent/core";
 import { Effect, DateTime, Option, Schema, Stream } from "effect";
 
 import { EMPTY_TAIL_DIGEST } from "./digest.ts";
+import type { Digest } from "./records.ts";
 import {
   BatchId,
   CanonicalBatch,
   CanonicalSequence,
   DeploymentId,
-  Digest,
   ProducerEpoch,
   ProducerId,
   RecordEnvelope,
@@ -15,8 +15,8 @@ import {
   UserInputRecorded,
 } from "./records.ts";
 import {
+  type AppendResult,
   AppendConflict,
-  AppendResult,
   CheckpointRejected,
   ConversationCheckpoint,
   ConversationExportRequest,
@@ -72,6 +72,10 @@ const ZERO_SEQUENCE = decodeSequence(0);
 const EPOCH_ONE = decodeEpoch(1);
 const EPOCH_TWO = decodeEpoch(2);
 const EMPTY_TAIL = { lastSequence: ZERO_SEQUENCE, tailDigest: EMPTY_TAIL_DIGEST } as const;
+const isAppendConflict = Schema.is(AppendConflict);
+const isFenceRejected = Schema.is(FenceRejected);
+const isCheckpointRejected = Schema.is(CheckpointRejected);
+const isConversationNotMaterialized = Schema.is(ConversationNotMaterialized);
 
 const record = (recordId: string, input: string): RecordEnvelope =>
   RecordEnvelope.make({
@@ -225,7 +229,7 @@ const atomicBatchVisibility = conformanceCase(
         append(conversationId, batch("atomic-batch-2", [duplicate, duplicate]), committed),
       );
       yield* ensure(
-        intraBatch instanceof AppendConflict && intraBatch.reason === "record-identity",
+        isAppendConflict(intraBatch) && intraBatch.reason === "record-identity",
         "A duplicated record ID inside one batch must conflict with reason record-identity",
       );
 
@@ -238,7 +242,7 @@ const atomicBatchVisibility = conformanceCase(
         ),
       );
       yield* ensure(
-        crossBatch instanceof AppendConflict && crossBatch.reason === "record-identity",
+        isAppendConflict(crossBatch) && crossBatch.reason === "record-identity",
         "A record ID reused across batches must conflict with reason record-identity",
       );
 
@@ -280,7 +284,7 @@ const idempotentReplay = conformanceCase(
         append(conversationId, batch("replay-batch-1", [record("replay-record-3", "Faro")])),
       );
       yield* ensure(
-        altered instanceof AppendConflict && altered.reason === "batch-digest",
+        isAppendConflict(altered) && altered.reason === "batch-digest",
         "A batch ID replayed with different content must conflict with reason batch-digest",
       );
 
@@ -305,11 +309,11 @@ const tailConflict = conformanceCase(
         append(conversationId, batch("tail-batch-2", [record("tail-record-2", "second")])),
       );
       yield* ensure(
-        staleSequence instanceof AppendConflict && staleSequence.reason === "tail",
+        isAppendConflict(staleSequence) && staleSequence.reason === "tail",
         "A stale expected tail sequence must conflict with reason tail",
       );
       yield* ensure(
-        staleSequence instanceof AppendConflict &&
+        isAppendConflict(staleSequence) &&
           staleSequence.actualTailSequence === first.lastSequence &&
           staleSequence.actualTailDigest === first.tailDigest,
         "A tail conflict must carry the actual committed tail as a resume hint",
@@ -323,7 +327,7 @@ const tailConflict = conformanceCase(
         }),
       );
       yield* ensure(
-        staleDigest instanceof AppendConflict && staleDigest.reason === "tail",
+        isAppendConflict(staleDigest) && staleDigest.reason === "tail",
         "A stale expected tail digest must conflict with reason tail",
       );
 
@@ -362,7 +366,7 @@ const producerFencing = conformanceCase(
         ),
       );
       yield* ensure(
-        staleAppend instanceof FenceRejected &&
+        isFenceRejected(staleAppend) &&
           staleAppend.actualEpoch === EPOCH_TWO &&
           staleAppend.attemptedEpoch === EPOCH_ONE,
         "A stale producer epoch must be fenced with both epochs reported",
@@ -373,7 +377,7 @@ const producerFencing = conformanceCase(
         materialize(conversationId, EPOCH_ONE),
       );
       yield* ensure(
-        staleMaterialize instanceof FenceRejected,
+        isFenceRejected(staleMaterialize),
         "A stale producer epoch must not re-register through materialization",
       );
 
@@ -469,7 +473,7 @@ const checkpointBoundaries = conformanceCase(
         ),
       );
       yield* ensure(
-        aheadOfTail instanceof CheckpointRejected && aheadOfTail.reason === "ahead-of-tail",
+        isCheckpointRejected(aheadOfTail) && aheadOfTail.reason === "ahead-of-tail",
         "A checkpoint ahead of the tail must be rejected with reason ahead-of-tail",
       );
 
@@ -482,7 +486,7 @@ const checkpointBoundaries = conformanceCase(
         ),
       );
       yield* ensure(
-        digestMismatch instanceof CheckpointRejected && digestMismatch.reason === "digest-mismatch",
+        isCheckpointRejected(digestMismatch) && digestMismatch.reason === "digest-mismatch",
         "A checkpoint with a mismatched digest must be rejected with reason digest-mismatch",
       );
       yield* ensure(
@@ -537,7 +541,7 @@ const tailInspection = conformanceCase(
         store.inspectTail(ConversationTailRequest.make({ conversationId })),
       );
       yield* ensure(
-        missing instanceof ConversationNotMaterialized && missing.conversationId === conversationId,
+        isConversationNotMaterialized(missing) && missing.conversationId === conversationId,
         "Tail inspection of an unmaterialized Conversation must fail as not materialized",
       );
 
@@ -630,8 +634,7 @@ const notMaterializedOperations = conformanceCase(
         failures,
         (failure) =>
           ensure(
-            failure instanceof ConversationNotMaterialized &&
-              failure.conversationId === conversationId,
+            isConversationNotMaterialized(failure) && failure.conversationId === conversationId,
             "Operations against an unmaterialized Conversation must fail as not materialized",
           ),
         { discard: true },

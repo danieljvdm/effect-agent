@@ -47,7 +47,7 @@ import {
   toStoredConcern,
   toStoredFinding,
 } from "./review-state.ts";
-import { rankAndDedupeConcerns, rankAndDedupeFindings } from "./review-units.ts";
+import { rankAndDedupeConcerns, rankAndDedupeFindings, reviewConcernKey } from "./review-units.ts";
 import { PullRequestSource, type PullRequestMetadata } from "./source.ts";
 
 // ---------------------------------------------------------------------------
@@ -250,7 +250,29 @@ const settleReviewRun = (
       adjudicatedIdentities.has(findingIdentity(finding));
     const isAdjudicatedConcern = (concern: ReviewConcern): boolean =>
       adjudicatedIdentities.has(concern.title);
-    const bounded = enforceFindingsBound(core.review, clampMaxFindings(options.maxFindings));
+    const boundedReview = enforceFindingsBound(core.review, clampMaxFindings(options.maxFindings));
+    const reviewPaths = new Set(files.map((file) => file.path));
+    const normalizedReview = CodeReview.make({
+      ...boundedReview,
+      ...(boundedReview.concerns === undefined
+        ? {}
+        : {
+            concerns: boundedReview.concerns.map((concern) => {
+              const evidencePaths = concern.evidencePaths;
+              if (
+                evidencePaths === undefined ||
+                evidencePaths.some((path) => !reviewPaths.has(path))
+              ) {
+                const { evidencePaths: _invalid, ...pathless } = concern;
+                return ReviewConcern.make(pathless);
+              }
+              return ReviewConcern.make({
+                ...concern,
+                evidencePaths: [...new Set(evidencePaths)].sort(),
+              });
+            }),
+          }),
+    });
     // Adjudicated identities leave the published review entirely: no inline
     // comment, no severity count, no verdict influence — they render only in
     // the plan's collapsed adjudicated section. Only identity-equal items are
@@ -258,15 +280,21 @@ const settleReviewRun = (
     // different title) is untouched.
     const review =
       adjudicatedIdentities.size === 0
-        ? bounded
+        ? normalizedReview
         : CodeReview.make({
-            summary: bounded.summary,
-            verdict: bounded.verdict,
-            findings: bounded.findings.filter((finding) => !isAdjudicatedFinding(finding)),
-            ...(bounded.concerns === undefined
+            summary: normalizedReview.summary,
+            verdict: normalizedReview.verdict,
+            findings: normalizedReview.findings.filter((finding) => !isAdjudicatedFinding(finding)),
+            ...(normalizedReview.concerns === undefined
               ? {}
-              : { concerns: bounded.concerns.filter((concern) => !isAdjudicatedConcern(concern)) }),
-            ...(bounded.walkthrough === undefined ? {} : { walkthrough: bounded.walkthrough }),
+              : {
+                  concerns: normalizedReview.concerns.filter(
+                    (concern) => !isAdjudicatedConcern(concern),
+                  ),
+                }),
+            ...(normalizedReview.walkthrough === undefined
+              ? {}
+              : { walkthrough: normalizedReview.walkthrough }),
           });
     const { inputCoverage, assurance } = core;
     const unreviewedPaths = [...new Set(core.unreviewedPaths)].sort();
@@ -297,30 +325,37 @@ const settleReviewRun = (
       (finding) =>
         activeFindingKeys.has(findingKey(finding)) && !currentFindingKeys.has(findingKey(finding)),
     );
-    // Non-anchored concerns cannot be mapped safely to one affected path, so
-    // incremental runs carry them conservatively until the explicit final audit.
-    const carriedConcernCandidates = priorState?.unresolvedConcerns.map(fromStoredConcern) ?? [];
+    // A concern remains active only while every host-validated evidence path
+    // is unchanged. Touching or removing any one invalidates the old claim;
+    // range selection reopens its remaining current paths for fresh context.
+    const carriedConcernCandidates =
+      priorState?.unresolvedConcerns
+        .filter(
+          (concern) =>
+            concern.evidencePaths !== undefined &&
+            concern.evidencePaths.every((path) => !affectedPaths.has(path)),
+        )
+        .map(fromStoredConcern) ?? [];
     const activeConcerns = rankAndDedupeConcerns([
       ...carriedConcernCandidates,
       ...(review.concerns ?? []),
     ]).filter((concern) => !isAdjudicatedConcern(concern));
-    const currentConcernKeys = new Set(
-      (review.concerns ?? []).map((concern) => `${concern.title}\u0000${concern.body}`),
-    );
-    const activeConcernKeys = new Set(
-      activeConcerns.map((concern) => `${concern.title}\u0000${concern.body}`),
-    );
+    const currentConcernKeys = new Set((review.concerns ?? []).map(reviewConcernKey));
+    const activeConcernKeys = new Set(activeConcerns.map(reviewConcernKey));
     const carriedConcerns = carriedConcernCandidates.filter((concern) => {
-      const key = `${concern.title}\u0000${concern.body}`;
+      const key = reviewConcernKey(concern);
       return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
     });
     const settled =
       inputCoverage.status === "complete" &&
       assurance.status !== "incomplete" &&
       unreviewedPaths.length === 0;
+    const concernsHaveEvidencePaths = activeConcerns.every(
+      (concern) => concern.evidencePaths !== undefined,
+    );
     // The fingerprint marker is standalone skip authority for fingerprint-only
     // harnesses, so it is embedded only for a fully settled run.
-    const skipFingerprint = settled ? fingerprint : undefined;
+    const skipFingerprint = settled && concernsHaveEvidencePaths ? fingerprint : undefined;
     const carriedScopeFits = unreviewedPaths.length <= MAX_STORED_UNREVIEWED_PATHS;
     const stateCandidate =
       executionContext !== undefined &&
@@ -330,6 +365,7 @@ const settleReviewRun = (
       // surface; a truncated anchor surface cannot make either claim.
       anchorFiles.length >= metadata.totalChangedFiles &&
       carriedScopeFits &&
+      concernsHaveEvidencePaths &&
       executionContext.stateAuthenticator?.status === "available"
         ? ReviewState.make({
             version: 1,
@@ -359,10 +395,12 @@ const settleReviewRun = (
             notice:
               executionContext !== undefined && !carriedScopeFits
                 ? `carried unreviewed scope (${unreviewedPaths.length} paths) exceeded the ${MAX_STORED_UNREVIEWED_PATHS}-path continuity bound`
-                : executionContext?.stateAuthenticator?.status === "unavailable"
-                  ? (executionContext.stateAuthenticator.unavailableReason ??
-                    "authenticated continuity state is unavailable")
-                  : undefined,
+                : executionContext !== undefined && !concernsHaveEvidencePaths
+                  ? "one or more review concerns lacked host-validated affected paths"
+                  : executionContext?.stateAuthenticator?.status === "unavailable"
+                    ? (executionContext.stateAuthenticator.unavailableReason ??
+                      "authenticated continuity state is unavailable")
+                    : undefined,
           }
         : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(
             Effect.match({

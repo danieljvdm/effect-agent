@@ -177,6 +177,8 @@ const fakeOutcome = (
     readonly blocking?: boolean;
     readonly incomplete?: boolean;
     readonly assuranceIncomplete?: boolean;
+    /** The only gap is a binary: settled assurance, one undiffable path. */
+    readonly undiffableOnly?: boolean;
     readonly state?: ReviewState;
   } = {},
 ): ReviewRunOutcome => {
@@ -198,13 +200,17 @@ const fakeOutcome = (
     activeFindings: findings,
     activeConcerns: review.concerns ?? [],
     inputCoverage: ReviewInputCoverage.make({
-      status: options.incomplete ? "incomplete" : "complete",
+      status: options.incomplete || options.undiffableOnly ? "incomplete" : "complete",
       requiredPaths: [],
       assignedPaths: [],
       partialPaths: [],
       unassignedPaths: [],
-      undiffablePaths: [],
-      reasons: options.incomplete ? ["review input was not completely assigned"] : [],
+      undiffablePaths: options.undiffableOnly ? ["assets/logo.png"] : [],
+      reasons: options.undiffableOnly
+        ? ["required paths have no reviewable diff or bounded text (1): assets/logo.png"]
+        : options.incomplete
+          ? ["review input was not completely assigned"]
+          : [],
     }),
     assurance: ReviewAssurance.make({
       status: options.incomplete || options.assuranceIncomplete ? "incomplete" : "settled",
@@ -225,7 +231,11 @@ const fakeOutcome = (
           ? ["review discovery did not settle"]
           : [],
     }),
-    unreviewedPaths: options.incomplete || options.assuranceIncomplete ? ["src/a.ts"] : [],
+    unreviewedPaths: options.undiffableOnly
+      ? ["assets/logo.png"]
+      : options.incomplete || options.assuranceIncomplete
+        ? ["src/a.ts"]
+        : [],
     plan: planPublication(review, [], {
       applyVerdict: false,
       headSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
@@ -573,6 +583,33 @@ describe("runReviewAction", () => {
       expect(outputs).toContain("input-coverage=complete");
       expect(outputs).toContain("review-assurance=incomplete");
       expect(outputs).toContain("conclusion=incomplete");
+    }),
+  );
+
+  it.effect("names removal or ignore globs — not retry — for an undiffable-only gap", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+      );
+      const exit = yield* runReviewAction(
+        { run: () => Effect.succeed(fakeOutcome("approve", { undiffableOnly: true })) },
+        { post: false },
+      ).pipe(Effect.provide(harness.layer), Effect.exit);
+      const failure = failureFrom(exit);
+      expect(Schema.is(ReviewGateFailed)(failure)).toBe(true);
+      if (Schema.is(ReviewGateFailed)(failure)) {
+        expect(failure.conclusion).toBe("incomplete");
+        // A retry can never settle a binary: the gate must instruct the one
+        // real remedy (remove the file or ignore-glob it) and must not promise
+        // an automatic retry that cannot succeed.
+        const joined = failure.reasons.join("\n");
+        expect(joined).not.toContain("retried automatically");
+        expect(joined).toContain("remove them from the pull request or exclude them");
+        expect(joined).toContain("assets/logo.png");
+      }
     }),
   );
 

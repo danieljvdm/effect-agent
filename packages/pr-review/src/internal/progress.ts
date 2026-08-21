@@ -133,7 +133,7 @@ const settleCallout = (info: ReviewProgressSettle): string => {
     case "success":
       return `> ✅ **Code review posted** — verdict \`${info.verdict}\`, ${info.inlineComments} inline comment(s), nothing blocking.`;
     case "blocking":
-      return `> 🛑 **Code review posted** — blocking findings; the check fails until they are addressed.`;
+      return `> 🛑 **Code review posted:** blocking review items; the check fails until they are addressed.`;
     case "incomplete":
       return `> ⚠️ **Code review posted** — input coverage or configured review assurance is incomplete, so the check fails.`;
   }

@@ -91,25 +91,28 @@ const findEvent = <Tag extends RunEvent["_tag"]>(
 const subagentTags = (events: ReadonlyArray<RunEvent>): ReadonlyArray<string> =>
   events.map((event) => event._tag).filter((tag) => tag.startsWith("Subagent"));
 
+const subagentLifecycleTags: ReadonlySet<string> = new Set([
+  "SubagentRequested",
+  "SubagentStarted",
+  "SubagentProgress",
+  "SubagentCompleted",
+  "SubagentFailed",
+  "SubagentInterrupted",
+  "SubagentJoined",
+]);
+
 /** The ordered Subagent lifecycle observed for one delegation Tool Call. */
 const subagentLifecycle = (
   events: ReadonlyArray<RunEvent>,
   toolCallId: string,
 ): ReadonlyArray<string> =>
-  events.flatMap((event) => {
-    switch (event._tag) {
-      case "SubagentRequested":
-      case "SubagentStarted":
-      case "SubagentProgress":
-      case "SubagentCompleted":
-      case "SubagentFailed":
-      case "SubagentInterrupted":
-      case "SubagentJoined":
-        return event.toolCallId === toolCallId ? [event._tag] : [];
-      default:
-        return [];
-    }
-  });
+  events.flatMap((event) =>
+    subagentLifecycleTags.has(event._tag) &&
+    "toolCallId" in event &&
+    event.toolCallId === toolCallId
+      ? [event._tag]
+      : [],
+  );
 
 const dimensionKeys = [
   "turns",

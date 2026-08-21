@@ -49,11 +49,13 @@ base branch. Do not combine `guidance-file` with `pull_request_target`.
 ## Incremental reviews and authenticated continuity state
 
 Each completed review may embed a bounded, schema-validated state marker. `state-secret` signs the
-PR identity, base/head lineage, reviewer profile, settled-scope fingerprint, unresolved findings,
-retryable paths, and settlement status. On `synchronize`, the action reviews changed paths still
-present in the PR plus carried unreviewed paths. Unchanged findings remain active; changed or
-reverted paths receive fresh discovery. A failed pass carries only its own scope forward, and the
-baseline still advances. A compatible base advance also includes overlapping PR paths.
+PR identity, base/head lineage, reviewer profile, settled-scope fingerprint, unresolved findings
+and concerns, retryable paths, and settlement status. On `synchronize`, the action reviews changed
+paths still present in the PR plus carried unreviewed paths. Unchanged findings and path-bound
+concerns remain active. Changing, reverting, or removing a supporting path invalidates its prior
+review item and schedules the current paths for fresh discovery. A legacy pathless concern forces a
+full review. A failed pass carries only its own scope forward, and the baseline still advances. A
+compatible base advance also includes overlapping PR paths.
 
 Before comparing ancestry, the action checks the authenticated settled-scope fingerprint. It
 hashes the effective diff, bounded patchless
@@ -106,9 +108,10 @@ Logs render one line per event. Use `log-level: Debug` for per-turn and per-hand
 candidates. This repository runs it when an operator applies `pr-review:final-audit`. The required
 `review` check blocks merges on a blocking or incomplete result.
 
-Posted reviews contain a host-derived severity callout and statistics, a path-validated walkthrough,
-concerns, inline comments, a copyable agent prompt, and a run footer. Full-review fallbacks name
-their reason. The action also writes a step summary and `conclusion`, `input-coverage`,
+Posted reviews contain a host-derived severity callout and statistics that distinguish findings,
+concerns, and carried items. They also contain a path-validated walkthrough, concerns with their
+affected paths, inline comments, a copyable agent prompt, and a run footer. Full-review fallbacks
+name their reason. The action also writes a step summary and `conclusion`, `input-coverage`,
 `review-assurance`, `review-mode`, and `review-reason` outputs.
 
 The check ignores the model verdict. Blocking findings or concerns produce `blocking`; incomplete

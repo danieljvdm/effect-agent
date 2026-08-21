@@ -1,6 +1,5 @@
 import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import { ToolExecutionClass } from "@effect-agent/engine";
-import { AgentRuntime } from "@effect-agent/engine";
+import { ToolExecutionClass, AgentRuntime } from "@effect-agent/engine";
 import {
   CodeExecutionHost,
   CodeExecutionResult,
@@ -12,7 +11,8 @@ import { describe, expect, it, layer } from "@effect/vitest";
 import { Context, Duration, Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
-import { CodeMode, CodeModeFailure, CodeModeSuccess } from "../src/index.ts";
+import type { CodeModeFailure, CodeModeSuccess } from "../src/index.ts";
+import { CodeMode } from "../src/index.ts";
 
 const Query = Tool.make("query_warehouse", {
   description: "Run one read-only SQL query",
@@ -33,6 +33,12 @@ const NeedsApproval = Tool.make("approval_tool", {
 
 const Unrenderable = Tool.make("unrenderable", {
   parameters: Schema.Struct({ anything: Schema.Any }),
+  success: Schema.String,
+}).annotate(ToolExecutionClass, "readonly");
+
+const ArraySchema = Tool.dynamic("array_schema", {
+  // @ts-expect-error Exercise the runtime boundary with a malformed raw JSON Schema.
+  parameters: [],
   success: Schema.String,
 }).annotate(ToolExecutionClass, "readonly");
 
@@ -92,6 +98,12 @@ describe("CAP-014 CodeMode.make construction", () => {
       CodeMode.make("run_javascript", {
         description: "d",
         tools: { ns: { call: Unrenderable } },
+      }),
+    ).toThrow(/cannot render/);
+    expect(() =>
+      CodeMode.make("run_javascript", {
+        description: "d",
+        tools: { ns: { call: ArraySchema } },
       }),
     ).toThrow(/cannot render/);
   });

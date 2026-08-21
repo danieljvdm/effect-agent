@@ -9,6 +9,7 @@ Architecture review method — apply to every changed service, Layer, tool, hand
 - Resource safety. Every acquired resource belongs to a Scope. Flag daemon fibers, missing finalizers on new acquire paths, and unbounded concurrency — tool and task batches use structured concurrency with Semaphore permits, never a detached Promise scheduler.
 - Pass-through abstractions. Apply the deletion test: a wrapper that only yields a service and forwards one method, or an abstraction whose removal leaves equally clear code, should be folded into its owner. Do not propose a wrapper, service, or Schema merely for symmetry.
 - Public surface. Public asynchronous operations return Effect or Stream, never naked Promises; Promise conversion exists only at external boundaries.
+- Effect failure semantics. Values that implement `YieldableError`, including `Schema.TaggedError` instances, are themselves failing Effects. Returning one directly from a function whose return type is `Effect` preserves the typed failure channel; do not require `Effect.fail(error)`. Inside an `Effect.gen` generator, plain `return error` succeeds with the error value, while `return yield* error` fails. Inspect the enclosing function before reporting this pattern.
 
 Review-assurance posture:
 

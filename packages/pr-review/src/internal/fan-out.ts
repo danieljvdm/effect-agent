@@ -175,8 +175,8 @@ export const confirmedFindingForPublication = (
 /**
  * Concern candidates need explicit paths internally to bind the claim to
  * scheduled evidence. The verifier receives the complete bounded unit so it
- * can use neighboring evidence to falsify the claim. The public ReviewConcern
- * remains path-free after the host confirms and projects it.
+ * can use neighboring evidence to falsify the claim. The host copies these
+ * validated paths onto a confirmed public concern for incremental continuity.
  */
 export class DiscoveredConcern extends Schema.Class<DiscoveredConcern>(
   "@effect-agent/pr-review/DiscoveredConcern",
@@ -325,7 +325,7 @@ export const makeFileReviewerInstructions =
             ...priorFindings.map((line) => `- ${line}`),
           ]),
       "The discovery evidence array contains every complete shard in the unit. Review every entry and every shard of a multi-shard path. A later independent verifier, not you, decides which candidates publish.",
-      "When a non-anchored concern depends on one or more unit files, list 1-3 exact evidencePaths to bind the claim to scheduled evidence.",
+      "Every non-anchored concern must list 1-3 exact evidencePaths to bind the claim to scheduled evidence. Report one root concern once; never split it into differently worded restatements.",
       `Return ONLY JSON with phase "discovery", the exact workId/unitId, up to ${MAX_CHILD_FINDINGS} findings, up to ${MAX_CHILD_CONCERNS} concerns shaped as {concern, evidencePaths}, one factual file summary per path (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars), and an empty assessments array. Empty candidate arrays are valid; do not invent defects.`,
       'Each finding is {"path": <a unit file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "category": <OPTIONAL problem-kind label>, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement source code for exactly lines startLine..endLine, ready to commit>}.',
       'Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement source for every line in the range and nothing else — never prose describing the change, which belongs in "body".',
@@ -1007,7 +1007,14 @@ export const runFanOutReview = <Provider, ModelProvides, ModelRequires>(
     );
     const concerns = rankAndDedupeConcerns(
       confirmed.flatMap(({ candidate }) =>
-        candidate._tag === "ConcernCandidate" ? [candidate.concern] : [],
+        candidate._tag === "ConcernCandidate"
+          ? [
+              ReviewConcern.make({
+                ...candidate.concern,
+                evidencePaths: [...new Set(candidate.evidencePaths)].sort(),
+              }),
+            ]
+          : [],
       ),
     );
     const walkthrough = outcomes.flatMap((outcome) => outcome.walkthrough);

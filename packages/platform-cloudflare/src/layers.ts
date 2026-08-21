@@ -18,7 +18,7 @@ import {
 } from "@effect-agent/session";
 import {
   conversationStoreLayer,
-  handleEncodedPortRequest,
+  executePortRequest,
   routedConversationStoreLayer,
   routedSubmissionLedgerLayer,
   storageConfigLayer,
@@ -27,6 +27,8 @@ import {
   type DoStorageFailpointHandler,
   type DoStorageInitializationError,
   type DoStorageOptions,
+  type PortRequest,
+  type PortResponse,
 } from "@effect-agent/storage-cloudflare";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
@@ -174,15 +176,15 @@ export type CloudflareDurableRuntimeServices =
   | ProgressWaitRegistry;
 
 /**
- * Owner-side endpoint body for the Conversation Object's `portCall` (plan §1.3): decode,
- * execute against THIS Object's LOCAL port facets — never the routed decorators, so a
- * request cannot bounce between Objects — and answer the encoded response envelope. Total by
- * construction (protocol anomalies answer `PortFailed(PortProtocolError)`).
+ * Owner-side execution port for a `portCall` request the wire endpoint has already decoded.
+ * It executes against THIS Object's LOCAL port facets — never the routed decorators, so a
+ * request cannot bounce between Objects — and returns the typed response for the endpoint to
+ * encode.
  */
 export class ConversationObjectPorts extends Context.Service<
   ConversationObjectPorts,
   {
-    readonly handle: (encoded: unknown) => Effect.Effect<unknown>;
+    readonly handle: (request: PortRequest) => Effect.Effect<PortResponse>;
   }
 >()("@effect-agent/platform-cloudflare/ConversationObjectPorts") {}
 
@@ -340,7 +342,7 @@ export class CloudflareDurableRuntime {
           Effect.gen(function* () {
             const local = yield* Effect.context<SubmissionLedger | ConversationStore>();
             return ConversationObjectPorts.of({
-              handle: (encoded) => handleEncodedPortRequest(encoded).pipe(Effect.provide(local)),
+              handle: (request) => executePortRequest(request).pipe(Effect.provide(local)),
             });
           }),
         ).pipe(Layer.provide(localPorts));

@@ -27,7 +27,7 @@ import {
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, Prompt, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, type Prompt, type Response } from "effect/unstable/ai";
 
 import {
   ActivityCatalogLayer,

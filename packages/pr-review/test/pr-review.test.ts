@@ -158,6 +158,7 @@ const fixture = FixturePullRequest.make({
  * plus one non-anchored concern so the structured-output decode boundary is
  * exercised end-to-end, not only the planner. */
 const scriptedConcern = ReviewConcern.make({
+  evidencePaths: ["src/hello.ts"],
   severity: "important",
   title: "No test pins the new export",
   body: "The diff exports `three` but adds no coverage for it.",
@@ -535,14 +536,15 @@ describe("review presentation", () => {
   });
 
   it("opens with the host-derived stats line under the callout", () => {
-    // 2 files, +2 −1; 2 important (1 demoted + 1 concern), 2 nits; cost
+    // 2 files, +2 −1; 1 important finding + 1 important concern, 2 nit
+    // findings; cost
     // 3 + 2*15 = 33 → effort 1/5.
     expect(planFor(scriptedReview).body).toContain(
-      "**Changeset:** 2 files (+2 / −1) · **Findings:** 2 important, 2 nit · **Review effort:** 1/5 (trivial)",
+      "**Changeset:** 2 files (+2 / −1) · **Review items:** 1 important finding, 1 important concern, and 2 nit findings · **Review effort:** 1/5 (trivial)",
     );
     expect(
       planFor(CodeReview.make({ summary: "s", verdict: "approve", findings: [] })).body,
-    ).toContain("**Findings:** none");
+    ).toContain("**Review items:** none");
   });
 
   it("pins the effort thresholds to the changeset shape alone", () => {
@@ -725,6 +727,44 @@ describe("verdict callout", () => {
     expect(plan.body.startsWith("> [!CAUTION]\n> 1 blocking finding")).toBe(true);
   });
 
+  it("separates current findings from carried concerns in the blocker count", () => {
+    const carriedConcerns = [
+      ReviewConcern.make({
+        evidencePaths: ["src/hello.ts"],
+        severity: "blocking",
+        title: "Prior migration concern",
+        body: "This unchanged path still needs a migration answer.",
+      }),
+      ReviewConcern.make({
+        evidencePaths: ["src/hello.ts"],
+        severity: "blocking",
+        title: "Prior rollback concern",
+        body: "This unchanged path still needs a rollback answer.",
+      }),
+    ];
+    const plan = planPublication(
+      CodeReview.make({
+        summary: "One current finding.",
+        verdict: "request-changes",
+        findings: [finding("blocking")],
+      }),
+      files,
+      {
+        applyVerdict: false,
+        headSha: FIXTURE_SHA,
+        totalChangedFiles: 2,
+        carriedConcerns,
+      },
+    );
+
+    expect(plan.body).toContain(
+      "> 1 blocking finding and 2 carried blocking concerns. Do not merge before addressing them.",
+    );
+    expect(plan.body).toContain(
+      "**Review items:** 1 blocking finding and 2 carried blocking concerns",
+    );
+  });
+
   it("opens with IMPORTANT when the worst finding is important", () => {
     const plan = planFor(
       CodeReview.make({
@@ -740,7 +780,7 @@ describe("verdict callout", () => {
     expect(
       planFor(
         CodeReview.make({ summary: "s", verdict: "comment", findings: [finding("nit")] }),
-      ).body.startsWith("> ℹ️ Minor suggestions only"),
+      ).body.startsWith("> ℹ️ 1 nit finding; mergeable as-is."),
     ).toBe(true);
     expect(
       planFor(CodeReview.make({ summary: "s", verdict: "approve", findings: [] })).body.startsWith(
@@ -749,7 +789,7 @@ describe("verdict callout", () => {
     ).toBe(true);
     expect(
       planFor(CodeReview.make({ summary: "s", verdict: "comment", findings: [] })).body.startsWith(
-        "> ℹ️ No findings",
+        "> ℹ️ No review items",
       ),
     ).toBe(true);
   });
@@ -771,7 +811,7 @@ describe("verdict callout", () => {
         ],
       }),
     );
-    expect(plan.body.startsWith("> [!CAUTION]\n> 1 blocking finding")).toBe(true);
+    expect(plan.body.startsWith("> [!CAUTION]\n> 1 blocking concern")).toBe(true);
   });
 
   it("clamps the mapped event fail-closed against the validated severities", () => {
@@ -867,6 +907,7 @@ describe("concerns, metadata, and footer", () => {
         findings: [],
         concerns: [
           ReviewConcern.make({
+            evidencePaths: ["src/hello.ts"],
             severity: "important",
             title: "No rollout note for the schema change",
             body: "In-flight records decode against the old shape during deploy.",
@@ -877,6 +918,7 @@ describe("concerns, metadata, and footer", () => {
       { applyVerdict: false, headSha: FIXTURE_SHA, totalChangedFiles: 2 },
     );
     expect(plan.body).toContain("### ⚠️ No rollout note for the schema change");
+    expect(plan.body).toContain("_Affected paths: `src/hello.ts`_");
     expect(plan.body).toContain("In-flight records decode against the old shape during deploy.");
   });
 
@@ -1061,7 +1103,6 @@ describe("offline review run", () => {
       const prompts = yield* scripted.prompts;
       expect(prompts[0]).toContain("pull request #7");
       expect(prompts[0]).toContain("acme/widgets");
-
       // Anchor validation split the findings exactly as planned.
       expect(outcome.plan.comments).toHaveLength(1);
       expect(outcome.plan.demoted).toHaveLength(2);
@@ -1162,7 +1203,7 @@ describe("offline review run", () => {
     }),
   );
 
-  it.effect("carries unresolved findings from unchanged scope without re-reviewing it", () =>
+  it.effect("carries unresolved items only from unchanged scope", () =>
     Effect.gen(function* () {
       const baseSha = "1".repeat(40);
       const reviewedHeadSha = "2".repeat(40);
@@ -1209,6 +1250,25 @@ describe("offline review run", () => {
         title: "Affected finding must be revalidated",
         body: "A new delta touching this path invalidates the carried finding.",
       });
+      const priorConcern = StoredReviewConcern.make({
+        evidencePaths: [unchangedFile.path],
+        severity: "blocking",
+        title: "Unchanged rollout concern",
+        body: "This remains active while its evidence path is unchanged.",
+      });
+      const affectedPriorConcern = StoredReviewConcern.make({
+        evidencePaths: [correctiveFile.path],
+        severity: "blocking",
+        title: "Affected concern must be revalidated",
+        body: "Changing its evidence path invalidates the carried concern.",
+      });
+      const removedConcernPath = "ops/temporary-repair.ts";
+      const removedPriorConcern = StoredReviewConcern.make({
+        evidencePaths: [removedConcernPath],
+        severity: "blocking",
+        title: "Removed repair worker concern",
+        body: "Deleting its evidence path invalidates the carried concern.",
+      });
       const priorState = ReviewState.make({
         version: 1,
         repository: metadata.repository,
@@ -1221,7 +1281,7 @@ describe("offline review run", () => {
         settledScopeFingerprint: "b".repeat(64),
         reviewedPathCount: 2,
         unresolvedFindings: [priorFinding, affectedPriorFinding],
-        unresolvedConcerns: [],
+        unresolvedConcerns: [priorConcern, affectedPriorConcern, removedPriorConcern],
         unreviewedPaths: [],
         unreviewedPasses: [],
         settled: true,
@@ -1238,7 +1298,16 @@ describe("offline review run", () => {
           baseSha: reviewedHeadSha,
           headSha,
           mergeBaseSha: reviewedHeadSha,
-          files: [correctiveFile],
+          files: [
+            correctiveFile,
+            ChangedFile.make({
+              path: removedConcernPath,
+              status: "removed",
+              additions: 0,
+              deletions: 1,
+              patch: "@@ -1 +0,0 @@\n-export {};",
+            }),
+          ],
           truncated: false,
         }),
       });
@@ -1287,8 +1356,17 @@ describe("offline review run", () => {
       expect(outcome.activeFindings.map((finding) => finding.title)).not.toContain(
         affectedPriorFinding.title,
       );
+      expect(outcome.activeConcerns.map((concern) => concern.title)).toEqual([priorConcern.title]);
+      expect(outcome.activeConcerns.map((concern) => concern.title)).not.toContain(
+        affectedPriorConcern.title,
+      );
+      expect(outcome.activeConcerns.map((concern) => concern.title)).not.toContain(
+        removedPriorConcern.title,
+      );
       expect(outcome.plan.body).toContain("Unresolved findings carried from unchanged scope");
       expect(outcome.plan.body).toContain(priorFinding.title);
+      expect(outcome.plan.body).toContain("Unresolved concerns from unchanged paths (1)");
+      expect(outcome.plan.body).toContain(priorConcern.title);
       // The affected-path prior finding is dropped from the carry but injected
       // as prompt context so the new round confirms, resolves, or withdraws it
       // explicitly instead of silently contradicting the previous round.
@@ -1389,7 +1467,9 @@ describe("offline review run", () => {
       // stats tally carries only the surviving finding and concern.
       expect(outcome.plan.event).toBe("COMMENT");
       expect(outcome.plan.body).not.toContain("[!CAUTION]");
-      expect(outcome.plan.body).toContain("**Findings:** 1 important, 1 nit");
+      expect(outcome.plan.body).toContain(
+        "**Review items:** 1 important finding and 1 nit concern",
+      );
       expect(outcome.plan.comments).toHaveLength(1);
       expect(outcome.plan.comments[0]?.body).toContain(differentTitle.title);
       expect(outcome.plan.comments[0]?.body).not.toContain(adjudicatedFinding.title);
@@ -1446,11 +1526,13 @@ describe("offline review run", () => {
         body: "Would stay blocking forever without an adjudication.",
       });
       const adjudicatedConcern = StoredReviewConcern.make({
+        evidencePaths: ["src/unchanged.ts"],
         severity: "important",
         title: "Adjudicated audit concern",
         body: "Settled by a maintainer in the conversation.",
       });
       const openConcern = StoredReviewConcern.make({
+        evidencePaths: ["src/unchanged.ts"],
         severity: "nit",
         title: "Open audit concern",
         body: "Still carried to the final audit.",
@@ -1571,7 +1653,7 @@ describe("offline review run", () => {
       expect(outcome.activeConcerns.map((concern) => concern.title)).toEqual([openConcern.title]);
       expect(outcome.plan.body).not.toContain("Unresolved findings carried from unchanged scope");
       const carriedSection = outcome.plan.body.slice(
-        outcome.plan.body.indexOf("Unresolved concerns carried to the final audit"),
+        outcome.plan.body.indexOf("Unresolved concerns from unchanged paths"),
         outcome.plan.body.indexOf("<summary>Adjudicated"),
       );
       expect(carriedSection).toContain(openConcern.title);

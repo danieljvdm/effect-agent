@@ -1,18 +1,18 @@
 import {
-  CodeExecutionError,
   CodeExecutionHost,
   CodeExecutionLimits,
   CodeExecutionNamespace,
   CodeExecutionRequest,
-  CodeExecutionResult,
   CodeExecutor,
-  CodeHostCall,
   CodeHostCallFailure,
-  CodeHostCallResult,
   CodeHostCallSuccess,
   NetworkAllowlist,
   NetworkDisabled,
-  SandboxImplementation,
+  type CodeExecutionError,
+  type CodeExecutionResult,
+  type CodeHostCall,
+  type CodeHostCallResult,
+  type SandboxImplementation,
 } from "@effect-agent/sandbox";
 import { Deferred, Duration, Effect, Fiber, Schema } from "effect";
 
@@ -404,6 +404,8 @@ export const codeExecutorConformanceCases = (
         "TEST-015 fails typed on a host outcome outside the protocol schema",
         makeRequest("async () => warehouse.query({})", { namespaces: [warehouseNamespace] }),
         {
+          // Deliberately violate the compile-time host contract to verify that an adapter
+          // independently decodes the runtime protocol boundary.
           call: () => Effect.succeed({ bogus: true } as unknown as CodeHostCallResult),
         },
         "CodeExecutionProtocolError",

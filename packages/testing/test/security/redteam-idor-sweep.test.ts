@@ -9,7 +9,6 @@ import {
   DurableRuntimeFailpoint,
   IdempotencyKey,
   ObligationThresholds,
-  OperationAuthorizationRequest,
   OperationAuthorizer,
   OperationDenied,
   Principal,
@@ -21,6 +20,7 @@ import {
   WakeScheduler,
   type AuthorizedOperation,
   type DurableSubmitOptions,
+  type OperationAuthorizationRequest,
   type OperationAuthorizerService,
 } from "@effect-agent/session";
 import {

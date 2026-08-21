@@ -14,9 +14,10 @@ import {
   scriptedFinalParts,
   scriptedToolTurn,
 } from "@effect-agent/pr-review/testing";
-import { NodeCrypto } from "@effect/platform-node";
+import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Ref, Schema } from "effect";
+import { Effect, Layer, Ref, Schema, Stream } from "effect";
+import { ChildProcess } from "effect/unstable/process";
 
 import {
   makeExampleReviewer,
@@ -85,6 +86,28 @@ const scriptedReview = CodeReview.make({
   ],
 });
 
+const runReviewCli = Effect.fn("exampleReviewerTest.runReviewCli")(function* (
+  args: ReadonlyArray<string>,
+) {
+  const child = yield* ChildProcess.make("bun", ["src/cli.ts", ...args], {
+    cwd: ".",
+    env: {
+      GITHUB_EVENT_PATH: "",
+      GITHUB_REPOSITORY: "",
+      OPENAI_API_KEY: "",
+    },
+    extendEnv: true,
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [stdout, stderr, exitCode] = yield* Effect.all([
+    Stream.mkString(Stream.decodeText(child.stdout)),
+    Stream.mkString(Stream.decodeText(child.stderr)),
+    child.exitCode,
+  ]);
+  return { stdout, stderr, exitCode: Number(exitCode) } as const;
+});
+
 describe("example reviewer", () => {
   it.effect("runs the customized reviewer end-to-end offline", () =>
     Effect.gen(function* () {
@@ -131,5 +154,19 @@ describe("example reviewer", () => {
       expect(outcome.plan.comments.map((comment) => comment.path)).toEqual(["src/loader.ts"]);
       expect(yield* Ref.get(published)).toHaveLength(1);
     }),
+  );
+
+  it.effect("the real CLI exposes help and reports operational failures", () =>
+    Effect.gen(function* () {
+      const help = yield* runReviewCli(["--help"]);
+      expect(help.exitCode).toBe(0);
+      expect(help.stdout).toContain("USAGE");
+      expect(help.stdout).toContain("--post");
+
+      const failure = yield* runReviewCli([]);
+      expect(failure.exitCode).not.toBe(0);
+      expect(`${failure.stdout}\n${failure.stderr}`).toContain("No pull request to review");
+      expect(`${failure.stdout}\n${failure.stderr}`).not.toContain("src/command.ts");
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

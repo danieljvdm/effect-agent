@@ -1,4 +1,4 @@
-import { Duration, Effect, Encoding, Schema } from "effect";
+import { Duration, Effect, Encoding, Random, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -118,6 +118,7 @@ describe("core schemas", () => {
   });
 
   it("round-trips every framework-owned expected failure through the public union", () => {
+    const toolCallId = Schema.decodeSync(ToolCallId)("hold-1");
     const failures = [
       AgentInputError.make({ message: "invalid trip input" }),
       AgentOutputError.make({ message: "invalid itinerary output" }),
@@ -136,7 +137,7 @@ describe("core schemas", () => {
         message: "denied",
       }),
       AgentToolAuthorizationDenied.make({
-        toolCallId: Schema.decodeSync(ToolCallId)("hold-1"),
+        toolCallId,
         toolName: "hold",
         message: "current execution authority was denied",
       }),
@@ -410,7 +411,7 @@ describe("core schemas", () => {
         run: yield* ids.nextRunId,
         turn: yield* ids.nextTurnId,
       };
-    }).pipe(Effect.provide(IdGenerator.layer));
+    }).pipe(Effect.provide(IdGenerator.layer), Random.withSeed("core-id-generator"));
     const { firstConversation, secondConversation, run, turn } = Effect.runSync(program);
 
     expect(Schema.decodeSync(ConversationId)(firstConversation)).toBe(firstConversation);
@@ -614,7 +615,7 @@ describe("context-economics errors and events", () => {
     ).toThrow();
   });
 
-  it("decodes terminal completion events with and without the exhausted marker", () => {
+  it("enforces terminal completion metadata at the public Schema boundary", () => {
     const encodedRun = {
       _tag: "RunCompleted",
       eventVersion: 1,
@@ -629,12 +630,30 @@ describe("context-economics errors and events", () => {
     } satisfies typeof RunCompleted.Encoded;
 
     expect(Schema.decodeSync(RunCompleted)(encodedRun).exhausted).toBeUndefined();
+    expect(Schema.decodeUnknownExit(RunEvent)({ ...encodedRun, exhausted: "tokens" })._tag).toBe(
+      "Failure",
+    );
     expect(
-      Schema.decodeUnknownSync(RunEvent)({ ...encodedRun, exhausted: "tokens" }),
+      Schema.decodeUnknownExit(RunEvent)({
+        ...encodedRun,
+        finishReason: "budget-exhausted",
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(RunEvent)({
+        ...encodedRun,
+        finishReason: "budget-exhausted",
+        exhausted: "tokens",
+        runDisposition: "application-complete",
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownSync(RunEvent)({
+        ...encodedRun,
+        finishReason: "budget-exhausted",
+        exhausted: "tokens",
+      }),
     ).toMatchObject({ _tag: "RunCompleted", exhausted: "tokens" });
-    expect(() =>
-      Schema.decodeUnknownSync(RunEvent)({ ...encodedRun, exhausted: "duration" }),
-    ).toThrow();
 
     const encodedChild = {
       _tag: "SubagentCompleted",
@@ -652,7 +671,7 @@ describe("context-economics errors and events", () => {
       targetAgentId: "research-specialist",
       depth: 1,
       turns: 2,
-      finishReason: "completed",
+      finishReason: "budget-exhausted",
       exhausted: "turns",
     } satisfies typeof SubagentCompleted.Encoded;
 
@@ -660,5 +679,14 @@ describe("context-economics errors and events", () => {
       _tag: "SubagentCompleted",
       exhausted: "turns",
     });
+    expect(
+      Schema.decodeUnknownExit(RunEvent)({ ...encodedChild, finishReason: "completed" })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(RunEvent)({
+        ...encodedChild,
+        exhausted: undefined,
+      })._tag,
+    ).toBe("Failure");
   });
 });

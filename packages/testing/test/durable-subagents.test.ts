@@ -10,14 +10,13 @@ import {
   ConversationId,
   IdGenerator,
   RunId,
-  SubmissionId,
   ToolCallId,
   TurnId,
+  type SubmissionId,
 } from "@effect-agent/core";
 import {
   AbortCommand,
   AgentBindingResolver,
-  CanonicalRecordEnvelope,
   ClaimRequest,
   ConversationRead,
   ConversationStore,
@@ -46,6 +45,7 @@ import {
   type DurableRuntimeFailpointLocation,
   type DurableSubmitOptions,
   type ResolvedBinding,
+  type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
 import {
   MemoryConversationStoreLive,
@@ -56,7 +56,14 @@ import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import {
+  LanguageModel,
+  Model,
+  Tool,
+  Toolkit,
+  type Prompt,
+  type Response,
+} from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PARENT_DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });

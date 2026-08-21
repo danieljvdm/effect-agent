@@ -15,7 +15,13 @@ import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Layer, Schema } from "effect";
 
-import { ChaosPlan, chaosSeedFromEnv, generateChaosPlans, runChaosPlan } from "../src/index.ts";
+import {
+  ChaosPlan,
+  DEFAULT_CHAOS_SEED,
+  chaosSeedFromEnv,
+  generateChaosPlans,
+  runChaosPlan,
+} from "../src/index.ts";
 
 /**
  * P7 WP4 memory chaos lane (plan §5): ~200 seeded plans over the in-memory adapter pair,
@@ -57,6 +63,13 @@ const replayHint = (planIndex: number, plan: ChaosPlan): string =>
   `arms [${[...plan.failpointArms, ...plan.adapterArms].join(", ")}])`;
 
 describe("DUR-002/DUR-004/DUR-017 P7 chaos (memory adapters)", () => {
+  it("accepts only schema-valid safe-integer CHAOS_SEED values", () => {
+    expect(chaosSeedFromEnv({ CHAOS_SEED: "-42" })).toBe(-42);
+    expect(chaosSeedFromEnv({ CHAOS_SEED: "12x" })).toBe(DEFAULT_CHAOS_SEED);
+    expect(chaosSeedFromEnv({ CHAOS_SEED: "9007199254740992" })).toBe(DEFAULT_CHAOS_SEED);
+    expect(chaosSeedFromEnv({ CHAOS_SEED: "" })).toBe(DEFAULT_CHAOS_SEED);
+  });
+
   it.effect(
     `CHAOS: ${PLAN_COUNT} seeded failpoint/abort interleavings over memory adapters converge to verified invariants`,
     () =>

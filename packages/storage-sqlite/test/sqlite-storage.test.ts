@@ -92,6 +92,8 @@ const id = <A>(schema: Schema.Codec<A, string>, value: string): A =>
 
 const sequence = (value: number) => Schema.decodeSync(CanonicalSequence)(value);
 const epoch = (value: number) => Schema.decodeSync(ProducerEpoch)(value);
+const isSqliteStorageError = Schema.is(SqliteStorageError);
+const isConversationStoreError = Schema.is(ConversationStoreError);
 
 const at = (millis: number) => DateTime.toUtc(DateTime.makeUnsafe(millis));
 
@@ -264,11 +266,15 @@ describe("SqliteConversationStore", () => {
         if (Exit.isFailure(opened)) {
           const error = Cause.squash(opened.cause);
           expect(error).toBeInstanceOf(SqliteStorageError);
-          if (error instanceof SqliteStorageError) {
+          if (isSqliteStorageError(error)) {
             expect(error.operation).toBe("configure SQLite storage");
             expect(error.cause).toBeDefined();
           }
         }
+        const databaseExists = yield* FileSystem.FileSystem.use((fs) => fs.exists(filename)).pipe(
+          Effect.provide(NodeFileSystem.layer),
+        );
+        expect(databaseExists).toBe(false);
       }),
     ),
   );
@@ -437,7 +443,7 @@ describe("SqliteConversationStore", () => {
         if (Exit.isFailure(exit)) {
           const error = Cause.squash(exit.cause);
           expect(error).toBeInstanceOf(ConversationStoreError);
-          if (error instanceof ConversationStoreError) {
+          if (isConversationStoreError(error)) {
             expect(error.operation).toBe("encode observation offset");
           }
         }
@@ -529,7 +535,7 @@ describe("SqliteConversationStore", () => {
         if (Exit.isFailure(lazyRead)) {
           const error = Cause.squash(lazyRead.cause);
           expect(error).toBeInstanceOf(ConversationStoreError);
-          if (error instanceof ConversationStoreError) {
+          if (isConversationStoreError(error)) {
             expect(error.operation).toBe("decode canonical record");
           }
         }
@@ -719,7 +725,7 @@ describe("SqliteConversationStore", () => {
             if (Exit.isFailure(contended)) {
               const error = Cause.squash(contended.cause);
               expect(error).toBeInstanceOf(ConversationStoreError);
-              if (error instanceof ConversationStoreError) {
+              if (isConversationStoreError(error)) {
                 expect(error.cause).toBeInstanceOf(SqliteWriteContention);
               }
             }
@@ -858,7 +864,7 @@ describe("SqliteConversationStore", () => {
               if (Exit.isFailure(exit)) {
                 const error = Cause.squash(exit.cause);
                 expect(error).toBeInstanceOf(ConversationStoreError);
-                if (error instanceof ConversationStoreError) {
+                if (isConversationStoreError(error)) {
                   expect(error.operation).toBe("append canonical batch");
                   expect(error.message).toContain(location);
                 }

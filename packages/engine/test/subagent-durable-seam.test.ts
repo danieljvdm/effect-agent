@@ -13,8 +13,27 @@ import {
   type RunEvent,
 } from "@effect-agent/core";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Context, Deferred, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  ErrorReporter,
+  Exit,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
+import {
+  LanguageModel,
+  Model,
+  type Prompt,
+  type Response,
+  Tool,
+  Toolkit,
+} from "effect/unstable/ai";
 
 import {
   AgentChildPending,
@@ -650,8 +669,14 @@ layer(identifiers)("S2 WP1 durable Subagent engine seam", (it) => {
 
   it.effect("a hook failure surfaces as typed SubagentDurabilityError", () =>
     Effect.gen(function* () {
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const reported: Array<string> = [];
+      const reporter = ErrorReporter.make(({ error }) => {
+        reported.push(error.message);
+      });
+      const hookFailure = HookFailure.make({ message: "ledger unavailable" });
       const subagent: RunSubagentHook<HookFailure> = {
-        establish: () => Effect.fail(HookFailure.make({ message: "ledger unavailable" })),
+        establish: () => Effect.fail(hookFailure),
         join: () => Effect.void,
       };
       const model = scriptedModel(
@@ -663,11 +688,18 @@ layer(identifiers)("S2 WP1 durable Subagent engine seam", (it) => {
         lookup: ({ key }) => Effect.succeed(`handled-${key}`),
       });
 
-      const exit = yield* AgentRuntime.run(
+      const exit = yield* AgentRuntime.stream(
         Agent.withModel(batchDefinition, model),
         { question: "root?" },
         { subagent },
-      ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+      ).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(
+          Layer.merge(toolLayer, ErrorReporter.layer([reporter], { mergeWithExisting: true })),
+        ),
+        Effect.exit,
+      );
 
       const failure = failureFrom(exit);
       expect(failure).toBeInstanceOf(SubagentDurabilityError);
@@ -676,7 +708,10 @@ layer(identifiers)("S2 WP1 durable Subagent engine seam", (it) => {
       }
       expect(failure.operation).toBe("establish");
       expect(failure.reason).toBe("hook-failed");
-      expect(failure.message).toContain("ledger unavailable");
+      expect(failure.message).toBe("Durable child establishment failed");
+      expect(failure.cause).toBe(hookFailure);
+      expect(JSON.stringify(yield* Ref.get(events))).not.toContain("ledger unavailable");
+      expect(reported).toEqual([]);
     }),
   );
 

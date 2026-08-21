@@ -51,8 +51,8 @@ import {
   type ResolvedBinding,
   type SubmissionSnapshot,
 } from "@effect-agent/session";
-import type { CertificationCaseResult } from "@effect-agent/session/testing";
 import {
+  type CertificationCaseResult,
   CertificationReport,
   CertificationSweepResult,
   CertificationTierThreeReport,
@@ -670,7 +670,7 @@ const failureTagOf = <E>(cause: Cause.Cause<E>): string => {
   if (Option.isSome(failure)) {
     const error: unknown = failure.value;
     if (typeof error === "object" && error !== null && "_tag" in error) {
-      return String((error as { _tag: unknown })._tag);
+      return String(error._tag);
     }
     return String(error).slice(0, 256);
   }

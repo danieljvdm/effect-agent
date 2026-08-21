@@ -14,10 +14,11 @@ const FailedSnapshot = Symbol("@effect-agent/engine/FailedProviderResultSnapshot
  * exact UTF-8 bytes of that same snapshot. The traversal never invokes `toJSON` or accessors,
  * rejects non-plain objects and excessive nesting, and stops as soon as the byte budget is spent.
  */
-export const boundedJsonSnapshot = (
+const snapshotJson = (
   root: unknown,
   maxBytes: number,
-  maxDepth = MAX_JSON_DEPTH,
+  maxDepth: number,
+  rejectNonFiniteNumbers: boolean,
 ): BoundedJsonSnapshot | undefined => {
   if (
     !Number.isSafeInteger(maxBytes) ||
@@ -75,7 +76,9 @@ export const boundedJsonSnapshot = (
       case "number": {
         // JSON's numeric representation is inherently bounded for one IEEE-754 value. Retain the
         // wire-equivalent null for non-finite values so counting and later serialization agree.
-        if (!Number.isFinite(value)) return add(4) ? null : FailedSnapshot;
+        if (!Number.isFinite(value)) {
+          return rejectNonFiniteNumbers ? FailedSnapshot : add(4) ? null : FailedSnapshot;
+        }
         const encoded = JSON.stringify(value);
         return encoded !== undefined && add(encoded.length) ? value : FailedSnapshot;
       }
@@ -163,3 +166,25 @@ export const boundedJsonSnapshot = (
     return undefined;
   }
 };
+
+/**
+ * Normalize provider-owned JSON using JSON serialization's `NaN`/infinity to
+ * `null` behavior. Provider events use this form so byte accounting matches
+ * their eventual JSON representation.
+ */
+export const boundedJsonSnapshot = (
+  root: unknown,
+  maxBytes: number,
+  maxDepth = MAX_JSON_DEPTH,
+): BoundedJsonSnapshot | undefined => snapshotJson(root, maxBytes, maxDepth, false);
+
+/**
+ * Validate canonical JSON without repairing non-finite numbers. Recovery
+ * inputs use this form because changing a recorded value would fabricate
+ * history.
+ */
+export const boundedCanonicalJsonSnapshot = (
+  root: unknown,
+  maxBytes: number,
+  maxDepth = MAX_JSON_DEPTH,
+): BoundedJsonSnapshot | undefined => snapshotJson(root, maxBytes, maxDepth, true);

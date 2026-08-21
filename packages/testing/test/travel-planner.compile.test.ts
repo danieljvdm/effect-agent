@@ -1,14 +1,15 @@
-import type {
-  AgentApprovalDenied,
-  AgentApprovalPending,
-  AgentInputError,
-  AgentOutputError,
-  AgentPolicyError,
-  ContextOverflowError,
-  IdGenerator,
-  ModelProtocolError,
+import {
+  type AgentApprovalDenied,
+  type AgentApprovalPending,
+  type AgentInputError,
+  type AgentOutputError,
+  type AgentPolicyError,
+  type ContextOverflowError,
+  type IdGenerator,
+  type ModelProtocolError,
+  Agent,
+  type AgentToolAuthorizationDenied,
 } from "@effect-agent/core";
-import { Agent, type AgentToolAuthorizationDenied } from "@effect-agent/core";
 import {
   type AgentChildPending,
   AgentRuntime,

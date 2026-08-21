@@ -9,7 +9,7 @@ import {
   decodePortResponse,
   encodePortRequest,
 } from "@effect-agent/storage-cloudflare";
-import { runDurableObjectAlarm } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -358,6 +358,27 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     );
     const before = await readCanonical(ref, SUBAGENTS);
     const markersBefore = await settlementMarkers(ref);
+    const instrumented = await runInDurableObject(stubFor(ref, SUBAGENTS), async (instance) => {
+      const requestDescriptor = Object.getOwnPropertyDescriptor(redelivery, "request");
+      if (requestDescriptor === undefined || !("value" in requestDescriptor)) {
+        throw new Error("Expected an encoded port request with an own request data property");
+      }
+      let requestReads = 0;
+      const envelope = Object.defineProperties({}, Object.getOwnPropertyDescriptors(redelivery));
+      Object.defineProperty(envelope, "request", {
+        enumerable: true,
+        get: () => {
+          requestReads += 1;
+          return requestDescriptor.value;
+        },
+      });
+      const response = await instance.portCall(envelope);
+      return { requestReads, response };
+    });
+    expect(instrumented.requestReads).toBe(1);
+    expect((await Effect.runPromise(decodePortResponse(instrumented.response)))._tag).toBe(
+      "PortSucceeded",
+    );
     for (let delivery = 0; delivery < 2; delivery++) {
       const decoded = await Effect.runPromise(
         decodePortResponse(await stubFor(ref, SUBAGENTS).portCall(redelivery)),

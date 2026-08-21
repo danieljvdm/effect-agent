@@ -32,7 +32,7 @@ import {
 } from "@effect-agent/session";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Cause, Crypto, Effect, Exit, Option, Ref, Schema } from "effect";
+import { Cause, Effect, Exit, Option, Ref, Schema, type Crypto } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
@@ -65,6 +65,8 @@ import {
 const S2_FAILPOINT_RESERVATION = Schema.decodeSync(ChildReservationId)(
   "child-reservation:run-s2fp:call-1",
 );
+const isLedgerError = Schema.is(LedgerError);
+const isDoStorageFailpointError = Schema.is(DoStorageFailpointError);
 
 const expectInjectedFailure = <A>(
   exit: Exit.Exit<A, unknown>,
@@ -74,9 +76,9 @@ const expectInjectedFailure = <A>(
   if (Exit.isFailure(exit)) {
     const error = Cause.squash(exit.cause);
     expect(error).toBeInstanceOf(LedgerError);
-    if (error instanceof LedgerError) {
+    if (isLedgerError(error)) {
       expect(error.cause).toBeInstanceOf(DoStorageFailpointError);
-      if (error.cause instanceof DoStorageFailpointError) {
+      if (isDoStorageFailpointError(error.cause)) {
         expect(error.cause.location).toBe(location);
       }
     }

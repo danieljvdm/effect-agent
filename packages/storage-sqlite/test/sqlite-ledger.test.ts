@@ -83,8 +83,8 @@ import {
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
-import type { SqliteStorageConfig } from "../src/index.ts";
 import {
+  type SqliteStorageConfig,
   conversationStoreLayer,
   ledgerLayer,
   storageConfigLayer,
@@ -124,6 +124,10 @@ const sequence = (value: number) => Schema.decodeSync(CanonicalSequence)(value);
 const at = (millis: number) => DateTime.toUtc(DateTime.makeUnsafe(millis));
 
 const toolCall = (value: string) => id(ApprovalDecisionCommand.fields.toolCallId, value);
+const isFenceRejected = Schema.is(FenceRejected);
+const isLedgerError = Schema.is(LedgerError);
+const isSqliteStorageCompatibilityError = Schema.is(SqliteStorageCompatibilityError);
+const isSqliteStorageFailpointError = Schema.is(SqliteStorageFailpointError);
 
 const TEST_PRINCIPAL = id(Principal, "principal-sqlite-ledger");
 const TEST_PRODUCER = id(ProducerId, "producer-sqlite-ledger");
@@ -303,6 +307,123 @@ describe("SqliteSubmissionLedger", () => {
     expect(errorProof).toBe(true);
   });
 
+  it.effect("validates convenience-layer configuration before constructing the ledger", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const opened = yield* SubmissionLedger.pipe(
+          Effect.provide(ledgerLayer({ filename, observationPollInterval: -1 })),
+          Effect.exit,
+        );
+
+        expect(Exit.isFailure(opened)).toBe(true);
+        if (Exit.isFailure(opened)) {
+          expect(Cause.squash(opened.cause)).toHaveProperty("_tag", "SqliteStorageError");
+        }
+        const databaseExists = yield* FileSystem.FileSystem.use((fs) => fs.exists(filename)).pipe(
+          Effect.provide(NodeFileSystem.layer),
+        );
+        expect(databaseExists).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("treats reordered persisted JSON as an idempotent replay", () =>
+    withTemporaryDatabase((filename) =>
+      withLedger(
+        filename,
+        Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+          const lane = conversation("conversation-semantic-json");
+          const admitted = yield* ledger.admit(
+            yield* admission("conversation-semantic-json", "semantic-json-key", {
+              work: "semantic JSON",
+            }),
+          );
+          yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+          const claim = yield* ledger.claim(
+            ClaimRequest.make({ conversationId: lane, producerId: TEST_PRODUCER }),
+          );
+          if (Option.isNone(claim)) return yield* Effect.die("missing semantic JSON claim");
+
+          const allocation = { turns: 4, toolCalls: 8 };
+          const reorderedAllocation = { toolCalls: 8, turns: 4 };
+          const allocationDigest = yield* digestJson(allocation);
+          expect(yield* digestJson(reorderedAllocation)).toBe(allocationDigest);
+          const reservationId = id(ChildReservationId, "child-reservation:sqlite-semantic-json");
+          const reservationFields = {
+            reservationId,
+            parentSubmissionId: admitted.submissionId,
+            parentToolCallId: toolCall("call-sqlite-semantic-json"),
+            ownershipToken: claim.value.ownershipToken,
+            allocationDigest,
+          };
+          yield* ledger.reserveChildBudget(
+            ChildBudgetReservationRequest.make({ ...reservationFields, allocation }),
+          );
+          const replayed = yield* ledger.reserveChildBudget(
+            ChildBudgetReservationRequest.make({
+              ...reservationFields,
+              allocation: reorderedAllocation,
+            }),
+          );
+          expect(replayed.replayed).toBe(true);
+
+          const accounting = {
+            consumed: { turns: 1, toolCalls: 2 },
+            released: { turns: 3, toolCalls: 6 },
+          };
+          yield* ledger.beginChildBudgetRelease(
+            BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
+          );
+          const replayedFreeze = yield* ledger.beginChildBudgetRelease(
+            BeginChildBudgetReleaseRequest.make({
+              reservationId,
+              accounting: {
+                released: { toolCalls: 6, turns: 3 },
+                consumed: { toolCalls: 2, turns: 1 },
+              },
+            }),
+          );
+          expect(replayedFreeze.status).toBe("releasePending");
+
+          const resolutionCall = toolCall("call-sqlite-semantic-resolution");
+          yield* ledger.markUnknown(
+            MarkUnknownRequest.make({
+              submissionId: admitted.submissionId,
+              toolCallIds: [resolutionCall],
+              reason: "semantic JSON replay",
+            }),
+          );
+          const firstResolution = yield* ledger.recordUnknownResolution(
+            UnknownResolutionCommand.make({
+              submissionId: admitted.submissionId,
+              toolCallId: resolutionCall,
+              author: "sqlite-ledger-test",
+              reason: "supplier answered",
+              resolution: ResolutionCompletedWithResult.make({
+                result: { bookingRef: "booking-1", details: { city: "Kyoto", nights: 2 } },
+                isFailure: false,
+              }),
+            }),
+          );
+          const replayedResolution = yield* ledger.recordUnknownResolution(
+            UnknownResolutionCommand.make({
+              submissionId: admitted.submissionId,
+              toolCallId: resolutionCall,
+              author: "sqlite-ledger-test-replay",
+              reason: "same supplier answer",
+              resolution: ResolutionCompletedWithResult.make({
+                isFailure: false,
+                result: { details: { nights: 2, city: "Kyoto" }, bookingRef: "booking-1" },
+              }),
+            }),
+          );
+          expect(replayedResolution.resolvedAt).toEqual(firstResolution.resolvedAt);
+        }),
+      ),
+    ),
+  );
+
   it.effect("persists admissions durably across process-style reopen", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
@@ -399,7 +520,7 @@ describe("SqliteSubmissionLedger", () => {
         if (Exit.isFailure(stale)) {
           const error = Cause.squash(stale.cause);
           expect(error).toBeInstanceOf(FenceRejected);
-          if (error instanceof FenceRejected) {
+          if (isFenceRejected(error)) {
             expect(error.actualEpoch).toBe(2);
             expect(error.attemptedEpoch).toBe(1);
           }
@@ -488,7 +609,7 @@ describe("SqliteSubmissionLedger", () => {
             if (Exit.isFailure(contended)) {
               const error = Cause.squash(contended.cause);
               expect(error).toBeInstanceOf(LedgerError);
-              if (error instanceof LedgerError) {
+              if (isLedgerError(error)) {
                 expect(error.cause).toBeInstanceOf(SqliteWriteContention);
               }
             }
@@ -529,7 +650,7 @@ describe("SqliteSubmissionLedger", () => {
             if (Exit.isFailure(opened)) {
               const error = Cause.squash(opened.cause);
               expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
-              if (error instanceof SqliteStorageCompatibilityError) {
+              if (isSqliteStorageCompatibilityError(error)) {
                 expect(error.actualVersion).toBe(storedVersion);
                 expect(error.supportedVersion).toBe(4);
                 expect(error.message).toContain("Reset the database file explicitly");
@@ -586,9 +707,9 @@ describe("SqliteSubmissionLedger", () => {
           if (Exit.isFailure(exit)) {
             const error = Cause.squash(exit.cause);
             expect(error).toBeInstanceOf(LedgerError);
-            if (error instanceof LedgerError) {
+            if (isLedgerError(error)) {
               expect(error.cause).toBeInstanceOf(SqliteStorageFailpointError);
-              if (error.cause instanceof SqliteStorageFailpointError) {
+              if (isSqliteStorageFailpointError(error.cause)) {
                 expect(error.cause.location).toBe(location);
               }
             }
@@ -1176,9 +1297,9 @@ describe("SqliteSubmissionLedger", () => {
           if (Exit.isFailure(exit)) {
             const error = Cause.squash(exit.cause);
             expect(error).toBeInstanceOf(LedgerError);
-            if (error instanceof LedgerError) {
+            if (isLedgerError(error)) {
               expect(error.cause).toBeInstanceOf(SqliteStorageFailpointError);
-              if (error.cause instanceof SqliteStorageFailpointError) {
+              if (isSqliteStorageFailpointError(error.cause)) {
                 expect(error.cause.location).toBe(location);
               }
             }
@@ -1748,9 +1869,9 @@ describe("SqliteSubmissionLedger", () => {
           if (Exit.isFailure(exit)) {
             const error = Cause.squash(exit.cause);
             expect(error).toBeInstanceOf(LedgerError);
-            if (error instanceof LedgerError) {
+            if (isLedgerError(error)) {
               expect(error.cause).toBeInstanceOf(SqliteStorageFailpointError);
-              if (error.cause instanceof SqliteStorageFailpointError) {
+              if (isSqliteStorageFailpointError(error.cause)) {
                 expect(error.cause.location).toBe(location);
               }
             }

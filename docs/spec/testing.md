@@ -94,6 +94,8 @@ Generated command sequences cover:
 - child-agent completion/interruption;
 - budget exhaustion;
 - subscriber backpressure;
+- model-response part/byte ceilings and Run-event terminal-slot reservation;
+- hostile diagnostic getters, coercion hooks, proxies, and oversized messages;
 - parent Scope closure.
 
 Properties include:
@@ -134,6 +136,13 @@ Every durable boundary supports injected failure:
 The suite kills actual worker processes for Node/SQLite tests and forces Durable
 Object eviction/alarm retries in Cloudflare tests instead of limiting coverage to
 Fiber interruption.
+
+Seeded chaos runs accept `CHAOS_SEED` only when it decodes as a safe integer; malformed values
+select the documented default instead of being partially parsed. A plan derives lane drive order
+from seeded ranks with a stable lane-index tie break, so replay order does not depend on a
+runtime's handling of a random comparator. The runner retains concrete durable submit and worker
+failure unions internally while exposing convergence failures through its typed error channel.
+
 After recovery it asserts:
 
 - no accepted submission disappears;
@@ -355,8 +364,11 @@ a defect missed by general discovery can still become a candidate; and an indepe
 rejects an unsupported candidate before host-side publication. Failed or exhausted discovery and
 verification passes remain visible, leave candidates unsettled, emit no authenticated continuity
 state, and cannot produce a successful Action conclusion. Incremental fixtures prove that newly
-affected paths invalidate carried findings while unchanged findings remain active. Explicit final
-mode discards prior assurance scope and plans fresh discovery over the complete bounded diff.
+affected paths invalidate carried findings while unchanged findings remain active. Confirmed
+non-anchored concerns retain their host-validated evidence paths; changing or deleting any one
+invalidates the old concern and reopens the remaining current paths for context, while legacy
+pathless concern state forces a full review. Explicit final mode discards prior assurance scope and
+plans fresh discovery over the complete bounded diff.
 Overflow fixtures preserve every affected path and the exact unassigned-shard count while bounding
 identifier diagnostics. Extra or duplicate delegation declarations cannot hide behind an expected
 work ID, equivalent cross-pass candidates are verified once, and an empty plan settles without
