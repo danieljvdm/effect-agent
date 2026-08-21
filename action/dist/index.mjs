@@ -38250,6 +38250,370 @@ var CodeExecutionError = exports_Schema.Union([
 
 class CodeExecutor extends exports_Context.Service()("@effect-agent/sandbox/CodeExecutor") {
 }
+// packages/sandbox/src/page-capture.ts
+var MAX_OUTPUT_BYTES2 = 8 * 1024 * 1024;
+var MAX_LINKS = 4096;
+var MAX_RESPONSE_FORMAT_BYTES = 64 * 1024;
+var MAX_RESPONSE_FORMAT_DEPTH = 32;
+var MAX_RESPONSE_FORMAT_NODES = 4096;
+var MAX_RESPONSE_FORMAT_COLLECTION_LENGTH = 256;
+var BoundedOutputText2 = exports_Schema.String.check(exports_Schema.isMaxLength(MAX_OUTPUT_BYTES2));
+var BoundedUrl = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
+var BoundedHtml = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2 * 1024 * 1024));
+var BoundedPrompt = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
+var BoundedSelector = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
+var BoundedPattern = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
+var BoundedMessage2 = exports_Schema.String.check(exports_Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
+var BoundedSchemaProperty = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
+var BoundedSchemaText = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
+var BoundedSchemaReference = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
+var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var BoundedTimeoutMillis = PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(60000));
+var pageUrlConstructor = Reflect.get(globalThis, "URL");
+var isCredentialFreeWebUrl = (value4, allowHttp) => {
+  if (typeof pageUrlConstructor !== "function")
+    return false;
+  try {
+    const parsed = Reflect.construct(pageUrlConstructor, [value4]);
+    if (!exports_Predicate.isObject(parsed))
+      return false;
+    const protocol = Reflect.get(parsed, "protocol");
+    const hostname = Reflect.get(parsed, "hostname");
+    const username = Reflect.get(parsed, "username");
+    const password = Reflect.get(parsed, "password");
+    return (protocol === "https:" || allowHttp && protocol === "http:") && typeof hostname === "string" && hostname.length > 0 && username === "" && password === "";
+  } catch {
+    return false;
+  }
+};
+var PageCaptureTargetUrl = BoundedUrl.check(exports_Schema.makeFilter((value4) => isCredentialFreeWebUrl(value4, false), {
+  title: "an absolute HTTPS URL without embedded credentials"
+}));
+var PageCaptureLinkUrl = BoundedUrl.check(exports_Schema.makeFilter((value4) => isCredentialFreeWebUrl(value4, true), {
+  title: "an absolute HTTP or HTTPS URL without embedded credentials"
+}));
+var ResponseFormatPrimitive = exports_Schema.Literals([
+  "string",
+  "number",
+  "boolean",
+  "array",
+  "object",
+  "null",
+  "integer"
+]);
+var ResponseFormatPrimitiveList = exports_Schema.Array(ResponseFormatPrimitive).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(7), exports_Schema.isUnique());
+var ResponseFormatNode = exports_Schema.suspend(() => exports_Schema.Struct(responseFormatFields()).pipe(exports_Schema.annotate({ parseOptions: { onExcessProperty: "error" } })));
+var responseFormatFields = () => {
+  const boundedNodes = exports_Schema.Array(ResponseFormatNode).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH));
+  const boundedDefinitions = exports_Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(exports_Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH));
+  const boundedRequired = exports_Schema.Array(BoundedSchemaProperty).check(exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH), exports_Schema.isUnique());
+  const subschema = exports_Schema.Union([exports_Schema.Boolean, ResponseFormatNode]);
+  return {
+    $schema: exports_Schema.optionalKey(BoundedSchemaReference),
+    $id: exports_Schema.optionalKey(BoundedSchemaReference),
+    $ref: exports_Schema.optionalKey(BoundedSchemaReference),
+    $anchor: exports_Schema.optionalKey(BoundedSchemaReference),
+    $dynamicRef: exports_Schema.optionalKey(BoundedSchemaReference),
+    $dynamicAnchor: exports_Schema.optionalKey(BoundedSchemaReference),
+    $comment: exports_Schema.optionalKey(BoundedSchemaText),
+    title: exports_Schema.optionalKey(BoundedSchemaText),
+    description: exports_Schema.optionalKey(BoundedSchemaText),
+    default: exports_Schema.optionalKey(exports_Schema.Json),
+    deprecated: exports_Schema.optionalKey(exports_Schema.Boolean),
+    readOnly: exports_Schema.optionalKey(exports_Schema.Boolean),
+    writeOnly: exports_Schema.optionalKey(exports_Schema.Boolean),
+    examples: exports_Schema.optionalKey(exports_Schema.Array(exports_Schema.Json).check(exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
+    type: exports_Schema.optionalKey(exports_Schema.Union([ResponseFormatPrimitive, ResponseFormatPrimitiveList])),
+    enum: exports_Schema.optionalKey(exports_Schema.Array(exports_Schema.Json).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH), exports_Schema.isUnique())),
+    const: exports_Schema.optionalKey(exports_Schema.Json),
+    multipleOf: exports_Schema.optionalKey(exports_Schema.Finite.check(exports_Schema.isGreaterThan(0))),
+    maximum: exports_Schema.optionalKey(exports_Schema.Finite),
+    exclusiveMaximum: exports_Schema.optionalKey(exports_Schema.Finite),
+    minimum: exports_Schema.optionalKey(exports_Schema.Finite),
+    exclusiveMinimum: exports_Schema.optionalKey(exports_Schema.Finite),
+    maxLength: exports_Schema.optionalKey(exports_Schema.Natural),
+    minLength: exports_Schema.optionalKey(exports_Schema.Natural),
+    pattern: exports_Schema.optionalKey(BoundedSchemaText),
+    format: exports_Schema.optionalKey(BoundedSchemaText),
+    maxItems: exports_Schema.optionalKey(exports_Schema.Natural),
+    minItems: exports_Schema.optionalKey(exports_Schema.Natural),
+    uniqueItems: exports_Schema.optionalKey(exports_Schema.Boolean),
+    prefixItems: exports_Schema.optionalKey(boundedNodes),
+    items: exports_Schema.optionalKey(subschema),
+    additionalItems: exports_Schema.optionalKey(subschema),
+    unevaluatedItems: exports_Schema.optionalKey(subschema),
+    contains: exports_Schema.optionalKey(subschema),
+    minContains: exports_Schema.optionalKey(exports_Schema.Natural),
+    maxContains: exports_Schema.optionalKey(exports_Schema.Natural),
+    properties: exports_Schema.optionalKey(boundedDefinitions),
+    patternProperties: exports_Schema.optionalKey(boundedDefinitions),
+    required: exports_Schema.optionalKey(boundedRequired),
+    dependentRequired: exports_Schema.optionalKey(exports_Schema.Record(BoundedSchemaProperty, boundedRequired).check(exports_Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
+    dependentSchemas: exports_Schema.optionalKey(boundedDefinitions),
+    additionalProperties: exports_Schema.optionalKey(subschema),
+    unevaluatedProperties: exports_Schema.optionalKey(subschema),
+    propertyNames: exports_Schema.optionalKey(subschema),
+    minProperties: exports_Schema.optionalKey(exports_Schema.Natural),
+    maxProperties: exports_Schema.optionalKey(exports_Schema.Natural),
+    anyOf: exports_Schema.optionalKey(boundedNodes),
+    oneOf: exports_Schema.optionalKey(boundedNodes),
+    allOf: exports_Schema.optionalKey(boundedNodes),
+    not: exports_Schema.optionalKey(subschema),
+    contentEncoding: exports_Schema.optionalKey(BoundedSchemaText),
+    contentMediaType: exports_Schema.optionalKey(BoundedSchemaText),
+    contentSchema: exports_Schema.optionalKey(subschema),
+    $defs: exports_Schema.optionalKey(boundedDefinitions),
+    definitions: exports_Schema.optionalKey(boundedDefinitions)
+  };
+};
+var ResponseFormatDocument = exports_Schema.Struct({
+  ...responseFormatFields(),
+  type: exports_Schema.Literal("object")
+}).pipe(exports_Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
+var isResponseFormatDocument = exports_Schema.is(ResponseFormatDocument);
+var isBoundedResponseFormat = (input) => {
+  if (!exports_Predicate.isObject(input))
+    return false;
+  const pending = [
+    { value: input, depth: 0 }
+  ];
+  const visited = new WeakSet;
+  let nodes = 0;
+  let textUnits = 0;
+  try {
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (current === undefined || current.depth > MAX_RESPONSE_FORMAT_DEPTH || ++nodes > MAX_RESPONSE_FORMAT_NODES) {
+        return false;
+      }
+      const value4 = current.value;
+      if (value4 === null || typeof value4 === "boolean")
+        continue;
+      if (typeof value4 === "number") {
+        if (!Number.isFinite(value4))
+          return false;
+        continue;
+      }
+      if (typeof value4 === "string") {
+        textUnits += value4.length;
+        if (textUnits > MAX_RESPONSE_FORMAT_BYTES)
+          return false;
+        continue;
+      }
+      if (!exports_Predicate.isObjectOrArray(value4) || visited.has(value4))
+        return false;
+      visited.add(value4);
+      const entries3 = Array.isArray(value4) ? value4.map((entry, index2) => [index2, entry]) : Object.entries(value4);
+      if (entries3.length > MAX_RESPONSE_FORMAT_COLLECTION_LENGTH)
+        return false;
+      for (const [key, entry] of entries3) {
+        textUnits += typeof key === "string" ? key.length : 0;
+        if (textUnits > MAX_RESPONSE_FORMAT_BYTES)
+          return false;
+        pending.push({ value: entry, depth: current.depth + 1 });
+      }
+    }
+    if (!isResponseFormatDocument(input))
+      return false;
+    const encoded = JSON.stringify(input);
+    return exports_Encoding.encodeHex(encoded).length / 2 <= MAX_RESPONSE_FORMAT_BYTES;
+  } catch {
+    return false;
+  }
+};
+var PageCaptureResponseFormat = exports_Schema.declare(isBoundedResponseFormat, {
+  identifier: "@effect-agent/sandbox/PageCaptureResponseFormat",
+  description: "An object JSON Schema bounded to 64 KiB, depth 32, and 4096 nodes"
+});
+
+class PageUrlTarget extends exports_Schema.TaggedClass()("PageUrlTarget", {
+  url: PageCaptureTargetUrl
+}) {
+}
+
+class PageHtmlTarget extends exports_Schema.TaggedClass()("PageHtmlTarget", {
+  html: BoundedHtml
+}) {
+}
+var PageCaptureTarget = exports_Schema.Union([PageUrlTarget, PageHtmlTarget]);
+var PageCaptureEngine = exports_Schema.Literals(["chromium", "kitesurf"]);
+
+class CapturePageContent extends exports_Schema.TaggedClass()("CapturePageContent", {}) {
+}
+
+class CapturePageMarkdown extends exports_Schema.TaggedClass()("CapturePageMarkdown", {}) {
+}
+
+class CapturePageLinks extends exports_Schema.TaggedClass()("CapturePageLinks", {
+  visibleLinksOnly: exports_Schema.optionalKey(exports_Schema.Boolean)
+}) {
+}
+
+class CapturePageStructured extends exports_Schema.TaggedClass()("CapturePageStructured", {
+  responseFormat: PageCaptureResponseFormat,
+  prompt: exports_Schema.optionalKey(BoundedPrompt)
+}) {
+}
+var PageCaptureAction = exports_Schema.Union([
+  CapturePageContent,
+  CapturePageMarkdown,
+  CapturePageLinks,
+  CapturePageStructured
+]);
+
+class PageSelectorWait extends exports_Schema.Class("PageSelectorWait")({
+  selector: BoundedSelector,
+  timeoutMillis: exports_Schema.optionalKey(BoundedTimeoutMillis)
+}) {
+}
+
+class PageNavigationOptions extends exports_Schema.Class("PageNavigationOptions")({
+  waitUntil: exports_Schema.optionalKey(exports_Schema.Literals(["load", "domcontentloaded", "networkidle0", "networkidle2"])),
+  timeoutMillis: exports_Schema.optionalKey(BoundedTimeoutMillis),
+  waitForSelector: exports_Schema.optionalKey(PageSelectorWait)
+}) {
+}
+
+class PageViewport extends exports_Schema.Class("PageViewport")({
+  width: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(7680)),
+  height: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(7680))
+}) {
+}
+
+class PageResourcePolicy extends exports_Schema.Class("PageResourcePolicy")({
+  rejectResourceTypes: exports_Schema.optionalKey(exports_Schema.Array(exports_Schema.Literals([
+    "document",
+    "stylesheet",
+    "image",
+    "media",
+    "font",
+    "script",
+    "texttrack",
+    "xhr",
+    "fetch",
+    "eventsource",
+    "websocket",
+    "manifest",
+    "other"
+  ])).check(exports_Schema.isMaxLength(16))),
+  allowRequestPatterns: exports_Schema.optionalKey(exports_Schema.Array(BoundedPattern).check(exports_Schema.isMaxLength(64)))
+}) {
+}
+
+class PageCaptureLimits extends exports_Schema.Class("PageCaptureLimits")({
+  maxOutputBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES2))
+}) {
+}
+
+class PageCaptureRequest extends exports_Schema.Class("PageCaptureRequest")({
+  target: PageCaptureTarget,
+  action: PageCaptureAction,
+  engine: PageCaptureEngine,
+  limits: PageCaptureLimits,
+  navigation: exports_Schema.optionalKey(PageNavigationOptions),
+  viewport: exports_Schema.optionalKey(PageViewport),
+  resourcePolicy: exports_Schema.optionalKey(PageResourcePolicy)
+}) {
+}
+
+class PageContentCaptured extends exports_Schema.TaggedClass()("PageContentCaptured", {
+  html: BoundedOutputText2
+}) {
+}
+
+class PageMarkdownCaptured extends exports_Schema.TaggedClass()("PageMarkdownCaptured", {
+  markdown: BoundedOutputText2
+}) {
+}
+
+class PageLinksCaptured extends exports_Schema.TaggedClass()("PageLinksCaptured", {
+  links: exports_Schema.Array(PageCaptureLinkUrl).check(exports_Schema.isMaxLength(MAX_LINKS))
+}) {
+}
+
+class PageStructuredCaptured extends exports_Schema.TaggedClass()("PageStructuredCaptured", {
+  value: exports_Schema.Json
+}) {
+}
+var PageCaptureOutput = exports_Schema.Union([
+  PageContentCaptured,
+  PageMarkdownCaptured,
+  PageLinksCaptured,
+  PageStructuredCaptured
+]);
+
+class PageCaptureInferenceUse extends exports_Schema.Class("PageCaptureInferenceUse")({
+  provider: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256)),
+  modelCalls: PositiveInt4
+}) {
+}
+
+class PageCaptureResourceUse extends exports_Schema.Class("PageCaptureResourceUse")({
+  browserMillis: exports_Schema.optionalKey(exports_Schema.Natural),
+  inference: exports_Schema.optionalKey(PageCaptureInferenceUse)
+}) {
+}
+
+class PageCaptureResult extends exports_Schema.Class("PageCaptureResult")({
+  implementation: SandboxImplementation,
+  output: PageCaptureOutput,
+  resourceUse: PageCaptureResourceUse
+}) {
+}
+
+class PageCaptureRateLimitedError extends exports_Schema.TaggedError()("PageCaptureRateLimitedError", {
+  implementation: SandboxImplementation,
+  reason: exports_Schema.Literals(["rate", "quota"]),
+  retryAfterMillis: exports_Schema.optionalKey(exports_Schema.Natural),
+  message: BoundedMessage2,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class PageCaptureNavigationError extends exports_Schema.TaggedError()("PageCaptureNavigationError", {
+  implementation: SandboxImplementation,
+  message: BoundedMessage2,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class PageCaptureUnsupportedError extends exports_Schema.TaggedError()("PageCaptureUnsupportedError", {
+  implementation: SandboxImplementation,
+  feature: exports_Schema.Literals([
+    "engine",
+    "action",
+    "target",
+    "navigation",
+    "viewport",
+    "resource-policy"
+  ]),
+  message: BoundedMessage2
+}) {
+}
+
+class PageCaptureOutputLimitError extends exports_Schema.TaggedError()("PageCaptureOutputLimitError", {
+  implementation: SandboxImplementation,
+  limit: PositiveInt4,
+  observed: exports_Schema.Natural
+}) {
+}
+
+class PageCaptureProtocolError extends exports_Schema.TaggedError()("PageCaptureProtocolError", {
+  implementation: SandboxImplementation,
+  message: BoundedMessage2,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+var PageCaptureError = exports_Schema.Union([
+  PageCaptureRateLimitedError,
+  PageCaptureNavigationError,
+  PageCaptureUnsupportedError,
+  PageCaptureOutputLimitError,
+  PageCaptureProtocolError
+]);
+
+class PageCapture extends exports_Context.Service()("@effect-agent/sandbox/PageCapture") {
+}
 // packages/capabilities/src/code-mode.ts
 var maxFailureTextLength = 4 * 1024;
 var BoundedFailureText = exports_Schema.String.check(exports_Schema.isMaxLength(maxFailureTextLength));
@@ -38542,7 +38906,7 @@ var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, ex
 }));
 
 // packages/capabilities/src/commands.ts
-var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 
 class SteeringCommand extends exports_Schema.TaggedClass()("SteeringCommand", {
   id: exports_Schema.NonEmptyString,
@@ -38566,7 +38930,7 @@ class FollowUpCommand extends exports_Schema.TaggedClass()("FollowUpCommand", {
 var RunCommand = exports_Schema.Union([SteeringCommand, FollowUpCommand]);
 var CommandDrainPolicy = exports_Schema.Literals(["one", "all"]);
 
-class RunCommandQueueConfig extends exports_Schema.Class("@effect-agent/capabilities/RunCommandQueueConfig")({ capacity: PositiveInt4 }) {
+class RunCommandQueueConfig extends exports_Schema.Class("@effect-agent/capabilities/RunCommandQueueConfig")({ capacity: PositiveInt5 }) {
 }
 
 class RunCommandQueueClosed extends exports_Schema.TaggedError()("RunCommandQueueClosed", { runId: RunId }) {
@@ -39769,7 +40133,7 @@ class ElicitationDeclined extends (/* @__PURE__ */ Error4("@effect/ai/McpSchema/
 // packages/capabilities/src/mcp.ts
 var MAX_MCP_TOOLS = 128;
 var MAX_MCP_DISCOVERY_BYTES = 1024 * 1024;
-var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt6 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var Sha256Digest = exports_Schema.String.check(exports_Schema.isPattern(/^sha256:[a-f0-9]{64}$/));
 var JsonArray = exports_Schema.Array(exports_Schema.Json);
 var isJsonArray = exports_Schema.is(JsonArray);
@@ -39782,10 +40146,10 @@ class McpServerIdentity extends exports_Schema.Class("@effect-agent/capabilities
 
 class McpConnectionRequest extends exports_Schema.Class("@effect-agent/capabilities/McpConnectionRequest")({
   serverId: exports_Schema.NonEmptyString,
-  maxToolCount: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
-  maxToolDescriptionBytes: PositiveInt5,
-  maxDiscoveryBytes: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
-  connectTimeoutMillis: PositiveInt5
+  maxToolCount: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
+  maxToolDescriptionBytes: PositiveInt6,
+  maxDiscoveryBytes: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
+  connectTimeoutMillis: PositiveInt6
 }) {
 }
 
@@ -39987,9 +40351,9 @@ var connectMcp = exports_Effect.fn("connectMcp")(function* (request3) {
   };
 });
 // packages/capabilities/src/scheduling.ts
-var PositiveInt6 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt7 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var RunSchedulingOverride = exports_Schema.Union([
-  exports_Schema.Struct({ mode: exports_Schema.Literal("bounded"), concurrency: PositiveInt6 }),
+  exports_Schema.Struct({ mode: exports_Schema.Literal("bounded"), concurrency: PositiveInt7 }),
   exports_Schema.Struct({ mode: exports_Schema.Literal("sequential") })
 ]);
 // packages/capabilities/src/subagent-reservation.ts
@@ -40478,19 +40842,19 @@ var SubagentReservationsMemoryLive = exports_Layer.effect(SubagentReservations, 
 }));
 
 // packages/capabilities/src/subagent.ts
-var PositiveInt7 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt8 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var Natural4 = exports_Schema.Natural;
 var FinitePositiveDuration4 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
 var SubagentPolicyFields = exports_Schema.Struct({
-  maxChildren: PositiveInt7,
-  maxConcurrency: PositiveInt7,
-  maxTurns: PositiveInt7,
-  maxToolCalls: PositiveInt7,
+  maxChildren: PositiveInt8,
+  maxConcurrency: PositiveInt8,
+  maxTurns: PositiveInt8,
+  maxToolCalls: PositiveInt8,
   maxDuration: FinitePositiveDuration4,
-  maxInputTokens: exports_Schema.optionalKey(PositiveInt7),
-  maxOutputTokens: exports_Schema.optionalKey(PositiveInt7),
+  maxInputTokens: exports_Schema.optionalKey(PositiveInt8),
+  maxOutputTokens: exports_Schema.optionalKey(PositiveInt8),
   maxCostMicrousd: exports_Schema.optionalKey(Natural4),
-  maxResultBytes: exports_Schema.optionalKey(PositiveInt7)
+  maxResultBytes: exports_Schema.optionalKey(PositiveInt8)
 });
 
 class SubagentPolicy extends exports_Schema.Class("@effect-agent/capabilities/SubagentPolicy")(SubagentPolicyFields) {
@@ -40585,6 +40949,38 @@ var neverStartedUsage = SubagentObservedUsage.make({
   costMicrousd: 0,
   resultBytes: 0
 });
+// packages/capabilities/src/web-capture.ts
+var maxFailureTextLength2 = 4 * 1024;
+var BoundedFailureText3 = exports_Schema.String.check(exports_Schema.isMaxLength(maxFailureTextLength2));
+var BoundedErrorTag3 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
+var BoundedUrl2 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
+var BoundedContent = exports_Schema.String.check(exports_Schema.isMaxLength(1024 * 1024));
+var WebCaptureAction = exports_Schema.Literals(["markdown", "content", "links"]);
+var WebCaptureParameters = exports_Schema.Struct({
+  url: BoundedUrl2,
+  action: WebCaptureAction
+});
+var WebCaptureExtractParameters = exports_Schema.Struct({
+  url: BoundedUrl2
+});
+
+class WebCaptureSuccess extends exports_Schema.Class("@effect-agent/capabilities/WebCaptureSuccess")({
+  url: BoundedUrl2,
+  action: WebCaptureAction,
+  markdown: exports_Schema.optionalKey(BoundedContent),
+  html: exports_Schema.optionalKey(BoundedContent),
+  links: exports_Schema.optionalKey(exports_Schema.Array(BoundedUrl2).check(exports_Schema.isMaxLength(4096)))
+}) {
+}
+
+class WebCaptureFailure extends exports_Schema.TaggedError()("WebCaptureFailure", {
+  errorTag: BoundedErrorTag3,
+  message: BoundedFailureText3,
+  retryAfterMillis: exports_Schema.optionalKey(exports_Schema.Natural)
+}) {
+}
+var defaultMaxResponseBytes = 128 * 1024;
+var urlConstructor2 = Reflect.get(globalThis, "URL");
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/FetchHttpClient.js
 var exports_FetchHttpClient = {};
 __export(exports_FetchHttpClient, {

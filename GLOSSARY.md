@@ -136,6 +136,14 @@ publication, and thread presentation are implemented by the separately named
 A scoped capability set for filesystem, process, and optional network operations. It is not a
 generic bag of provider SDK methods.
 
+**Page Capture**
+
+A stateless render of one page in a managed headless browser returning exactly one bounded
+output. Its host allowlist, action set, and byte budget are immutable; the host policy governs
+navigation, redirects, and subrequests. Capture results are untrusted, browser JavaScript makes
+execution uncertain rather than read-only, and separately billed model inference requires
+explicit host authorization and accounting.
+
 **Approval**  
 A policy decision that suspends or denies a proposed Tool Call before its Handler starts. Approval
 is not inferred from model prose.
