@@ -1181,6 +1181,10 @@ describe("host-scheduled discovery and verification pipeline", () => {
       expect(result.outcome.state?.settled).toBe(false);
       expect(result.outcome.state?.unreviewedPaths).toContain("assets/logo.png");
       expect(result.outcome.plan.body).toContain("Incomplete input coverage");
+      // The rendered callout must not promise a retry that can never settle a
+      // binary; it instructs removal or ignore globs instead.
+      expect(result.outcome.plan.body).not.toContain("retried automatically");
+      expect(result.outcome.plan.body).toContain("ignore globs");
     }),
   );
 });

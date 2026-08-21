@@ -3,6 +3,7 @@ import { Config, Console, Effect, FileSystem, Layer, Option, Redacted, Schema } 
 import { BudgetExceeded, UsageBudgetLimits } from "effect-agent";
 import { FetchHttpClient } from "effect/unstable/http";
 
+import { splitCarriedScope } from "./internal/coverage.ts";
 import type { ChangedFile } from "./internal/diff.ts";
 import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./internal/effort.ts";
 import { PrReview, type RunReviewOptions } from "./internal/factory.ts";
@@ -279,26 +280,34 @@ const outcomeSummary = (
   outcome: ReviewRunOutcome,
   modelLabel: string | undefined,
   conclusion: ReviewCheckConclusion,
-): ReadonlyArray<string> => [
-  "### Pull-request review",
-  `- Check conclusion: **${conclusion}**`,
-  `- Verdict: **${outcome.review.verdict}**`,
-  `- Input coverage: **${outcome.inputCoverage.status}** · scope: ${outcome.reviewMode ?? "full"}`,
-  `- Review assurance: **${outcome.assurance.status}** · general discovery ${outcome.assurance.completedGeneralDiscoveryPasses}/${outcome.assurance.requiredGeneralDiscoveryPasses} · specialist ${outcome.assurance.completedSpecialistPasses}/${outcome.assurance.requiredSpecialistPasses} · verification ${outcome.assurance.completedVerificationPasses}/${outcome.assurance.requiredVerificationPasses}`,
-  `- Inline comments: ${outcome.plan.comments.length} · demoted findings: ${outcome.plan.demoted.length} · concerns: ${outcome.review.concerns?.length ?? 0}`,
-  ...(outcome.unreviewedPaths.length === 0
-    ? []
-    : [
-        `- Carried forward: ${outcome.unreviewedPaths.length} unreviewed path(s) retried automatically on the next run (reviewer-side gap, not a code defect)`,
-      ]),
-  ...(modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``]),
-  ...(outcome.usage === undefined
-    ? []
-    : [`- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out`]),
-  ...(outcome.published === undefined
-    ? ["- Dry run: nothing posted"]
-    : [`- Posted: ${outcome.published.url}`]),
-];
+): ReadonlyArray<string> => {
+  const scope = splitCarriedScope(outcome);
+  return [
+    "### Pull-request review",
+    `- Check conclusion: **${conclusion}**`,
+    `- Verdict: **${outcome.review.verdict}**`,
+    `- Input coverage: **${outcome.inputCoverage.status}** · scope: ${outcome.reviewMode ?? "full"}`,
+    `- Review assurance: **${outcome.assurance.status}** · general discovery ${outcome.assurance.completedGeneralDiscoveryPasses}/${outcome.assurance.requiredGeneralDiscoveryPasses} · specialist ${outcome.assurance.completedSpecialistPasses}/${outcome.assurance.requiredSpecialistPasses} · verification ${outcome.assurance.completedVerificationPasses}/${outcome.assurance.requiredVerificationPasses}`,
+    `- Inline comments: ${outcome.plan.comments.length} · demoted findings: ${outcome.plan.demoted.length} · concerns: ${outcome.review.concerns?.length ?? 0}`,
+    ...(scope.retryablePaths.length === 0
+      ? []
+      : [
+          `- Carried forward: ${scope.retryablePaths.length} unreviewed path(s) retried automatically on the next run (reviewer-side gap, not a code defect)`,
+        ]),
+    ...(scope.undiffablePaths.length === 0
+      ? []
+      : [
+          `- Unreviewable: ${scope.undiffablePaths.length} path(s) with no reviewable diff (binary or oversized) — remove them from the pull request or exclude them with ignore globs`,
+        ]),
+    ...(modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``]),
+    ...(outcome.usage === undefined
+      ? []
+      : [`- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out`]),
+    ...(outcome.published === undefined
+      ? ["- Dry run: nothing posted"]
+      : [`- Posted: ${outcome.published.url}`]),
+  ];
+};
 
 /** The result of one action invocation: a typed skip or a settled review. */
 export type ReviewActionResult =
@@ -379,10 +388,13 @@ const blockingReasons = (input: {
  * Host-derived check conclusion; model verdict prose cannot weaken it.
  *
  * Blocking code findings outrank machinery gaps — they are the actionable
- * signal. A machinery gap (incomplete input, unsettled passes) concludes
- * `incomplete` with reasons that explicitly say the failure is reviewer-side
- * uncertainty carried forward for retry, never an invitation to change code.
- * The flat reviewer's constant `unverified` assurance is not a gap.
+ * signal. A retryable machinery gap (failed passes, capacity overflow)
+ * concludes `incomplete` with reasons that explicitly say the failure is
+ * reviewer-side uncertainty carried forward for retry, never an invitation to
+ * change code. Undiffable files are the deliberate exception: no retry can
+ * settle them, so their reason instructs removal or ignore globs instead of
+ * promising an automatic retry. The flat reviewer's constant `unverified`
+ * assurance is not a gap.
  */
 export const concludeReviewOutcome = (
   outcome: ReviewRunOutcome,
@@ -392,11 +404,19 @@ export const concludeReviewOutcome = (
 } => {
   const machinery: Array<string> = [];
   if (outcome.inputCoverage.status === "incomplete" || outcome.assurance.status === "incomplete") {
-    machinery.push(
-      outcome.unreviewedPaths.length > 0
-        ? `review infrastructure did not settle — a reviewer-side gap, not a code defect; ${outcome.unreviewedPaths.length} path(s) are carried forward and retried automatically on the next run`
-        : "review infrastructure did not settle — a reviewer-side gap, not a code defect",
-    );
+    const scope = splitCarriedScope(outcome);
+    if (scope.retryableGap) {
+      machinery.push(
+        scope.retryablePaths.length > 0
+          ? `review infrastructure did not settle — a reviewer-side gap, not a code defect; ${scope.retryablePaths.length} path(s) are carried forward and retried automatically on the next run`
+          : "review infrastructure did not settle — a reviewer-side gap, not a code defect",
+      );
+    }
+    if (scope.undiffablePaths.length > 0) {
+      machinery.push(
+        `${scope.undiffablePaths.length} path(s) have no reviewable diff (binary or oversized) and no retry can settle them — remove them from the pull request or exclude them with ignore globs`,
+      );
+    }
     if (outcome.inputCoverage.status === "incomplete") {
       machinery.push(...outcome.inputCoverage.reasons);
     }
