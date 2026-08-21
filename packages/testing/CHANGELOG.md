@@ -1,5 +1,19 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.26
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/capabilities@0.1.0-beta.26
+  - @effect-agent/core@0.1.0-beta.26
+  - @effect-agent/engine@0.1.0-beta.26
+  - @effect-agent/platform-node@0.1.0-beta.26
+  - @effect-agent/sandbox@0.1.0-beta.26
+  - @effect-agent/session@0.1.0-beta.26
+  - @effect-agent/storage-memory@0.1.0-beta.26
+  - @effect-agent/storage-sqlite@0.1.0-beta.26
+
 ## 0.1.0-beta.25
 
 ### Minor Changes

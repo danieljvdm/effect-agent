@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.26
+
+### Patch Changes
+
+- [#146](https://github.com/danieljvdm/effect-agent/pull/146) [`02311ad`](https://github.com/danieljvdm/effect-agent/commit/02311ad49b6982a15525b8be3f9252536a77be8a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Route Dynamic Worker host calls through a pass-scoped RPC target owned by the caller's event context.
+  Remove the application-provided Code Mode host entrypoint binding.
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.26
+  - @effect-agent/engine@0.1.0-beta.26
+  - @effect-agent/sandbox@0.1.0-beta.26
+  - @effect-agent/session@0.1.0-beta.26
+  - @effect-agent/storage-cloudflare@0.1.0-beta.26
+
 ## 0.1.0-beta.25
 
 ### Minor Changes
