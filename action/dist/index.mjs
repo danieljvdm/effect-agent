@@ -37488,10 +37488,14 @@ var AgentRuntime = {
 var BoundedName = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
 var BoundedPath = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(4 * 1024));
 var BoundedArgument = exports_Schema.String.check(exports_Schema.isMaxLength(32 * 1024));
-var BoundedOutputText = exports_Schema.String.check(exports_Schema.isMaxLength(16 * 1024 * 1024));
+var MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+var MAX_ARTIFACT_RULES = 64;
+var BoundedOutputText = exports_Schema.String.check(exports_Schema.isMaxLength(MAX_OUTPUT_BYTES));
+var SANDBOX_DIAGNOSTIC_MAX_LENGTH = 8 * 1024;
+var BoundedDiagnostic = exports_Schema.String.check(exports_Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
 var PositiveInt2 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var PositiveNumber = exports_Schema.Finite.check(exports_Schema.isGreaterThan(0));
-var MaxOutputBytes = PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(16 * 1024 * 1024));
+var MaxOutputBytes = PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES));
 var BoundedArguments = exports_Schema.Array(BoundedArgument).check(exports_Schema.isMaxLength(256));
 var BoundedEnvironmentNames = exports_Schema.Array(BoundedName).check(exports_Schema.isMaxLength(128));
 var FinitePositiveDuration2 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
@@ -37553,7 +37557,7 @@ class SandboxArtifactRule extends exports_Schema.Class("SandboxArtifactRule")({
 
 class SandboxArtifact extends exports_Schema.Class("SandboxArtifact")({
   path: BoundedPath,
-  bytes: exports_Schema.Natural,
+  bytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES)),
   digest: BoundedName,
   mediaType: exports_Schema.optionalKey(BoundedName)
 }) {
@@ -37569,14 +37573,14 @@ class SandboxRequest extends exports_Schema.Class("SandboxRequest")({
   network: SandboxNetworkPolicy,
   limits: SandboxLimits,
   secretHandles: exports_Schema.Array(SandboxSecretHandle).check(exports_Schema.isMaxLength(64)),
-  artifactRules: exports_Schema.Array(SandboxArtifactRule).check(exports_Schema.isMaxLength(64))
+  artifactRules: exports_Schema.Array(SandboxArtifactRule).check(exports_Schema.isMaxLength(MAX_ARTIFACT_RULES))
 }) {
 }
 
 class SandboxResourceUse extends exports_Schema.Class("SandboxResourceUse")({
   wallTime: FiniteNonNegativeDuration,
-  stdoutBytes: exports_Schema.Natural,
-  stderrBytes: exports_Schema.Natural,
+  stdoutBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES)),
+  stderrBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES)),
   cpuMillis: exports_Schema.optionalKey(exports_Schema.Natural),
   memoryBytes: exports_Schema.optionalKey(exports_Schema.Natural)
 }) {
@@ -37596,7 +37600,7 @@ class SandboxOutput extends exports_Schema.TaggedClass()("SandboxOutput", {
   ...SandboxEventBase,
   stream: exports_Schema.Literals(["stdout", "stderr"]),
   text: BoundedOutputText,
-  bytes: exports_Schema.Natural
+  bytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES))
 }) {
 }
 
@@ -37604,7 +37608,7 @@ class SandboxExited extends exports_Schema.TaggedClass()("SandboxExited", {
   ...SandboxEventBase,
   exitCode: exports_Schema.Int,
   resourceUse: SandboxResourceUse,
-  artifacts: exports_Schema.Array(SandboxArtifact)
+  artifacts: exports_Schema.Array(SandboxArtifact).check(exports_Schema.isMaxLength(MAX_ARTIFACT_RULES))
 }) {
 }
 var SandboxEvent = exports_Schema.Union([SandboxStarted, SandboxOutput, SandboxExited]);
@@ -37612,7 +37616,7 @@ var SandboxEvent = exports_Schema.Union([SandboxStarted, SandboxOutput, SandboxE
 class SandboxSpawnError extends exports_Schema.TaggedError()("SandboxSpawnError", {
   implementation: SandboxImplementation,
   command: BoundedPath,
-  message: exports_Schema.String,
+  message: BoundedDiagnostic,
   cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
@@ -37620,7 +37624,7 @@ class SandboxSpawnError extends exports_Schema.TaggedError()("SandboxSpawnError"
 class SandboxExitError extends exports_Schema.TaggedError()("SandboxExitError", {
   implementation: SandboxImplementation,
   exitCode: exports_Schema.Int,
-  message: exports_Schema.String,
+  message: BoundedDiagnostic,
   cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
@@ -37650,7 +37654,7 @@ class SandboxUnsupportedRequestError extends exports_Schema.TaggedError()("Sandb
     "secret-handles",
     "artifacts"
   ]),
-  message: exports_Schema.String
+  message: BoundedDiagnostic
 }) {
 }
 var SandboxError = exports_Schema.Union([
@@ -37666,7 +37670,7 @@ class Sandbox extends exports_Context.Service()("@effect-agent/sandbox/Sandbox")
 
 // packages/sandbox/src/code-executor.ts
 var BoundedLogLine = exports_Schema.String.check(exports_Schema.isMaxLength(16 * 1024));
-var BoundedMessage = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
+var BoundedMessage = exports_Schema.String.check(exports_Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
 var BoundedLogs = exports_Schema.Array(BoundedLogLine).check(exports_Schema.isMaxLength(4096));
 var BoundedSourceText = exports_Schema.String.check(exports_Schema.isMaxLength(4 * 1024 * 1024));
 var PositiveInt3 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
@@ -38572,7 +38576,7 @@ var symbol4 = "~effect/interfaces/PrimaryKey";
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/rpc/RpcSchema.js
 var StreamSchemaTypeId = "~effect/rpc/RpcSchema/StreamSchema";
 var schema2 = /* @__PURE__ */ declare(isStream);
-function Stream2(success, error2) {
+function Stream(success, error2) {
   return make38(schema2.ast, {
     [StreamSchemaTypeId]: StreamSchemaTypeId,
     success,
@@ -38689,7 +38693,7 @@ var make54 = (tag2, options) => {
   return makeProto3({
     _tag: tag2,
     payloadSchema,
-    successSchema: options?.stream ? Stream2(successSchema, errorSchema) : successSchema,
+    successSchema: options?.stream ? Stream(successSchema, errorSchema) : successSchema,
     errorSchema: options?.stream ? Never2 : errorSchema,
     defectSchema,
     annotations: empty(),
@@ -40844,7 +40848,7 @@ var formDataRecord = (entries3) => {
   return formData(data);
 };
 
-class Stream3 extends Proto16 {
+class Stream2 extends Proto16 {
   _tag = "Stream";
   stream;
   contentType;
@@ -40864,7 +40868,7 @@ class Stream3 extends Proto16 {
     };
   }
 }
-var stream2 = (body, contentType, contentLength) => new Stream3(body, contentType ?? "application/octet-stream", contentLength);
+var stream2 = (body, contentType, contentLength) => new Stream2(body, contentType ?? "application/octet-stream", contentLength);
 var fileContentLength = (size9, options) => {
   const available = Math.max(0, Number(size9) - Number(options?.offset ?? 0));
   return options?.bytesToRead === undefined ? available : Math.min(available, Math.max(0, Number(options.bytesToRead)));
