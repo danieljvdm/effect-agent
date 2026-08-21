@@ -35072,8 +35072,11 @@ var effectiveRunBufferLimits = (configured) => ({
 });
 var structuredCloneFunction = Reflect.get(globalThis, "structuredClone");
 var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart")(function* (part, toolkit) {
-  const codec = exports_Response.StreamPart(toolkit);
-  const encoded = yield* exports_Schema.encodeUnknownEffect(codec)(part).pipe(exports_Effect.mapError(() => ModelProtocolError.make({ message: "Model response part failed canonical encoding" })));
+  const codec = exports_Schema.toCodecJson(exports_Response.StreamPart(toolkit));
+  const encodingFailure = ModelProtocolError.make({
+    message: "Model response part failed canonical encoding"
+  });
+  const encoded = yield* exports_Schema.encodeUnknownEffect(codec)(part).pipe(exports_Effect.mapError(() => encodingFailure), exports_Effect.catchCause(() => exports_Effect.fail(encodingFailure)));
   const ownedEncoded = yield* exports_Effect.try({
     try: () => {
       if (typeof structuredCloneFunction !== "function") {
@@ -35086,7 +35089,10 @@ var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart"
       message: "Model response part could not be converted into engine-owned data"
     })
   });
-  return yield* exports_Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(exports_Effect.mapError(() => ModelProtocolError.make({ message: "Model response part failed canonical decoding" })));
+  const decodingFailure = ModelProtocolError.make({
+    message: "Model response part failed canonical decoding"
+  });
+  return yield* exports_Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(exports_Effect.mapError(() => decodingFailure), exports_Effect.catchCause(() => exports_Effect.fail(decodingFailure)));
 });
 var consumeModelResponsePart = (usage, part, limits) => exports_Effect.suspend(() => {
   if (usage.responsePartCount >= limits.maxModelResponseParts) {

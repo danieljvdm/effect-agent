@@ -516,11 +516,13 @@ const structuredCloneFunction = Reflect.get(globalThis, "structuredClone");
 const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(function* <
   Tools extends Record<string, Tool.Any>,
 >(part: unknown, toolkit: Toolkit.Toolkit<Tools>) {
-  const codec = Response.StreamPart(toolkit);
+  const codec = Schema.toCodecJson(Response.StreamPart(toolkit));
+  const encodingFailure = ModelProtocolError.make({
+    message: "Model response part failed canonical encoding",
+  });
   const encoded = yield* Schema.encodeUnknownEffect(codec)(part).pipe(
-    Effect.mapError(() =>
-      ModelProtocolError.make({ message: "Model response part failed canonical encoding" }),
-    ),
+    Effect.mapError(() => encodingFailure),
+    Effect.catchCause(() => Effect.fail(encodingFailure)),
   );
   const ownedEncoded = yield* Effect.try({
     try: () => {
@@ -535,10 +537,12 @@ const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(func
         message: "Model response part could not be converted into engine-owned data",
       }),
   });
+  const decodingFailure = ModelProtocolError.make({
+    message: "Model response part failed canonical decoding",
+  });
   return yield* Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(
-    Effect.mapError(() =>
-      ModelProtocolError.make({ message: "Model response part failed canonical decoding" }),
-    ),
+    Effect.mapError(() => decodingFailure),
+    Effect.catchCause(() => Effect.fail(decodingFailure)),
   );
 });
 

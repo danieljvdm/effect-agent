@@ -3520,6 +3520,26 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("bounds every decoded model response by part count and retained bytes", () =>
     Effect.gen(function* () {
+      const metadataExit = yield* AgentRuntime.stream(
+        makeAgent([
+          {
+            type: "response-metadata",
+            id: "response-1",
+            modelId: "scripted",
+            timestamp: "2026-01-01T00:00:00.000Z",
+            request: {
+              method: "POST",
+              url: "https://example.invalid/responses",
+              urlParams: [],
+              headers: { authorization: Redacted.make("secret") },
+            },
+          },
+          ...finalParts('{"answer":"owned metadata"}'),
+        ]),
+        { question: "metadata" },
+      ).pipe(Stream.runDrain, Effect.exit);
+      expect(Exit.isSuccess(metadataExit)).toBe(true);
+
       const countEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       const countExit = yield* AgentRuntime.stream(
         makeAgent(finalParts('{"answer":"count"}')),
@@ -3611,12 +3631,10 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       );
       const hostileFailure = failureFrom(hostileExit);
       expect(hostileFailure).toBeInstanceOf(ModelProtocolError);
-      expect(hostileFailure.message).toBe(
-        "Model response part could not be converted into engine-owned data",
-      );
+      expect(hostileFailure.message).toBe("Model response part failed canonical encoding");
       expect((yield* Ref.get(hostileEvents)).at(-1)).toMatchObject({
         _tag: "RunFailed",
-        message: "Model response part could not be converted into engine-owned data",
+        message: "Model response part failed canonical encoding",
       });
 
       const oversizedEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
