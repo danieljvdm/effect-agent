@@ -23,7 +23,30 @@ describe("PageCapture schemas", () => {
     const request = PageCaptureRequest.make({
       target: PageUrlTarget.make({ url: "https://docs.example.com/pricing" }),
       action: CapturePageStructured.make({
-        responseFormat: { type: "object", properties: { plans: { type: "array" } } },
+        responseFormat: {
+          type: "object",
+          title: "Pricing plans",
+          description: "The public subscription plans.",
+          properties: {
+            plans: {
+              type: "array",
+              minItems: 1,
+              items: { $ref: "#/$defs/Plan" },
+            },
+          },
+          required: ["plans"],
+          additionalProperties: false,
+          $defs: {
+            Plan: {
+              type: "object",
+              properties: {
+                tier: { type: "string", enum: ["Basic", "Business"] },
+                monthlyUsd: { type: "number", minimum: 0 },
+              },
+              required: ["tier", "monthlyUsd"],
+            },
+          },
+        },
         prompt: "Extract the pricing plans",
       }),
       engine: "chromium",
@@ -83,6 +106,12 @@ describe("PageCapture schemas", () => {
       { type: "object", properties: { price: 7 } },
       { type: "object", properties: { price: { type: "unsupported" } } },
       { type: "object", required: ["price", "price"] },
+      { type: "object", $ref: 42 },
+      { type: "object", enum: "not-an-array" },
+      { type: "object", description: 7 },
+      { type: "object", unsupportedKeyword: true },
+      { type: "object", properties: { price: { type: "number", minimum: "zero" } } },
+      { type: "object", properties: { price: { type: "number", unsupportedKeyword: true } } },
       { type: "object", description: "x".repeat(64 * 1024 + 1) },
       {
         type: "object",

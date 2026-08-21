@@ -178,8 +178,9 @@ governs navigation, redirects, and every browser subrequest; credentials never r
 requests; and responses are byte-bounded before buffering. Rendered JavaScript may mutate
 remote state, so capture Tools remain `uncertain`, are not automatically replayed, and cannot
 enter readonly-only Code Mode. Structured extraction accepts only a bounded object JSON Schema;
-the request rejects malformed nested schema nodes, excessive encoded bytes, excessive depth,
-oversized collections, and cycles before any provider can run. Extraction requires an explicit
+the request rejects malformed or unsupported root and nested keywords, excessive encoded bytes,
+excessive depth, oversized collections, and cycles before any provider can run. Browser RPC
+authority is an explicit host-owned service. Extraction additionally requires an explicit
 host authorization and accounting service for any platform-selected model provider, and results
 are decoded through the caller's service-aware Effect Schema before use. A page that instructs
 the model is data, never authority.

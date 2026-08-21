@@ -34,6 +34,8 @@ const BoundedSelector = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 const BoundedPattern = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 const BoundedMessage = Schema.String.check(Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
 const BoundedSchemaProperty = Schema.NonEmptyString.check(Schema.isMaxLength(256));
+const BoundedSchemaText = Schema.String.check(Schema.isMaxLength(8 * 1024));
+const BoundedSchemaReference = Schema.NonEmptyString.check(Schema.isMaxLength(8 * 1024));
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 /** Bounded by the platform's 60-second browser inactivity ceiling. */
 const BoundedTimeoutMillis = PositiveInt.check(Schema.isLessThanOrEqualTo(60_000));
@@ -54,93 +56,162 @@ const ResponseFormatPrimitiveList = Schema.Array(ResponseFormatPrimitive).check(
 );
 
 type ResponseFormatNode = Schema.JsonObject & {
+  readonly $schema?: string | undefined;
+  readonly $id?: string | undefined;
+  readonly $ref?: string | undefined;
+  readonly $anchor?: string | undefined;
+  readonly $dynamicRef?: string | undefined;
+  readonly $dynamicAnchor?: string | undefined;
+  readonly $comment?: string | undefined;
+  readonly title?: string | undefined;
+  readonly description?: string | undefined;
+  readonly default?: Schema.Json | undefined;
+  readonly deprecated?: boolean | undefined;
+  readonly readOnly?: boolean | undefined;
+  readonly writeOnly?: boolean | undefined;
+  readonly examples?: ReadonlyArray<Schema.Json> | undefined;
   readonly type?:
     | typeof ResponseFormatPrimitive.Type
     | typeof ResponseFormatPrimitiveList.Type
     | undefined;
+  readonly enum?: ReadonlyArray<Schema.Json> | undefined;
+  readonly const?: Schema.Json | undefined;
+  readonly multipleOf?: number | undefined;
+  readonly maximum?: number | undefined;
+  readonly exclusiveMaximum?: number | undefined;
+  readonly minimum?: number | undefined;
+  readonly exclusiveMinimum?: number | undefined;
+  readonly maxLength?: number | undefined;
+  readonly minLength?: number | undefined;
+  readonly pattern?: string | undefined;
+  readonly format?: string | undefined;
+  readonly maxItems?: number | undefined;
+  readonly minItems?: number | undefined;
+  readonly uniqueItems?: boolean | undefined;
+  readonly prefixItems?: ReadonlyArray<ResponseFormatNode> | undefined;
   readonly properties?: Readonly<Record<string, ResponseFormatNode>> | undefined;
+  readonly patternProperties?: Readonly<Record<string, ResponseFormatNode>> | undefined;
   readonly required?: ReadonlyArray<string> | undefined;
+  readonly dependentRequired?: Readonly<Record<string, ReadonlyArray<string>>> | undefined;
+  readonly dependentSchemas?: Readonly<Record<string, ResponseFormatNode>> | undefined;
   readonly items?: ResponseFormatNode | boolean | undefined;
+  readonly additionalItems?: ResponseFormatNode | boolean | undefined;
+  readonly unevaluatedItems?: ResponseFormatNode | boolean | undefined;
+  readonly contains?: ResponseFormatNode | boolean | undefined;
+  readonly minContains?: number | undefined;
+  readonly maxContains?: number | undefined;
   readonly additionalProperties?: ResponseFormatNode | boolean | undefined;
+  readonly unevaluatedProperties?: ResponseFormatNode | boolean | undefined;
+  readonly propertyNames?: ResponseFormatNode | boolean | undefined;
+  readonly minProperties?: number | undefined;
+  readonly maxProperties?: number | undefined;
   readonly anyOf?: ReadonlyArray<ResponseFormatNode> | undefined;
   readonly oneOf?: ReadonlyArray<ResponseFormatNode> | undefined;
   readonly allOf?: ReadonlyArray<ResponseFormatNode> | undefined;
+  readonly not?: ResponseFormatNode | boolean | undefined;
+  readonly contentEncoding?: string | undefined;
+  readonly contentMediaType?: string | undefined;
+  readonly contentSchema?: ResponseFormatNode | boolean | undefined;
   readonly $defs?: Readonly<Record<string, ResponseFormatNode>> | undefined;
+  readonly definitions?: Readonly<Record<string, ResponseFormatNode>> | undefined;
 };
 
 const ResponseFormatNode: Schema.Codec<ResponseFormatNode> = Schema.suspend(
   (): Schema.Codec<ResponseFormatNode> =>
-    Schema.StructWithRest(
-      Schema.Struct({
-        type: Schema.optionalKey(
-          Schema.Union([ResponseFormatPrimitive, ResponseFormatPrimitiveList]),
-        ),
-        properties: Schema.optionalKey(
-          Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(
-            Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
-          ),
-        ),
-        required: Schema.optionalKey(
-          Schema.Array(BoundedSchemaProperty).check(
-            Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
-            Schema.isUnique(),
-          ),
-        ),
-        items: Schema.optionalKey(Schema.Union([Schema.Boolean, ResponseFormatNode])),
-        additionalProperties: Schema.optionalKey(
-          Schema.Union([Schema.Boolean, ResponseFormatNode]),
-        ),
-        anyOf: Schema.optionalKey(
-          Schema.Array(ResponseFormatNode).check(
-            Schema.isMinLength(1),
-            Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
-          ),
-        ),
-        oneOf: Schema.optionalKey(
-          Schema.Array(ResponseFormatNode).check(
-            Schema.isMinLength(1),
-            Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
-          ),
-        ),
-        allOf: Schema.optionalKey(
-          Schema.Array(ResponseFormatNode).check(
-            Schema.isMinLength(1),
-            Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
-          ),
-        ),
-        $defs: Schema.optionalKey(
-          Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(
-            Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
-          ),
-        ),
-      }),
-      [Schema.Record(Schema.String, Schema.Json)],
+    Schema.Struct(responseFormatFields()).pipe(
+      Schema.annotate({ parseOptions: { onExcessProperty: "error" } }),
     ),
 );
 
-const ResponseFormatDocument = Schema.StructWithRest(
-  Schema.Struct({
-    type: Schema.Literal("object"),
-    properties: Schema.optionalKey(
-      Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(
-        Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
-      ),
+const responseFormatFields = () => {
+  const boundedNodes = Schema.Array(ResponseFormatNode).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
+  );
+  const boundedDefinitions = Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(
+    Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
+  );
+  const boundedRequired = Schema.Array(BoundedSchemaProperty).check(
+    Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
+    Schema.isUnique(),
+  );
+  const subschema = Schema.Union([Schema.Boolean, ResponseFormatNode]);
+
+  return {
+    $schema: Schema.optionalKey(BoundedSchemaReference),
+    $id: Schema.optionalKey(BoundedSchemaReference),
+    $ref: Schema.optionalKey(BoundedSchemaReference),
+    $anchor: Schema.optionalKey(BoundedSchemaReference),
+    $dynamicRef: Schema.optionalKey(BoundedSchemaReference),
+    $dynamicAnchor: Schema.optionalKey(BoundedSchemaReference),
+    $comment: Schema.optionalKey(BoundedSchemaText),
+    title: Schema.optionalKey(BoundedSchemaText),
+    description: Schema.optionalKey(BoundedSchemaText),
+    default: Schema.optionalKey(Schema.Json),
+    deprecated: Schema.optionalKey(Schema.Boolean),
+    readOnly: Schema.optionalKey(Schema.Boolean),
+    writeOnly: Schema.optionalKey(Schema.Boolean),
+    examples: Schema.optionalKey(
+      Schema.Array(Schema.Json).check(Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH)),
     ),
-    required: Schema.optionalKey(
-      Schema.Array(BoundedSchemaProperty).check(
+    type: Schema.optionalKey(Schema.Union([ResponseFormatPrimitive, ResponseFormatPrimitiveList])),
+    enum: Schema.optionalKey(
+      Schema.Array(Schema.Json).check(
+        Schema.isMinLength(1),
         Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
         Schema.isUnique(),
       ),
     ),
-    additionalProperties: Schema.optionalKey(Schema.Union([Schema.Boolean, ResponseFormatNode])),
-    $defs: Schema.optionalKey(
-      Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(
+    const: Schema.optionalKey(Schema.Json),
+    multipleOf: Schema.optionalKey(Schema.Finite.check(Schema.isGreaterThan(0))),
+    maximum: Schema.optionalKey(Schema.Finite),
+    exclusiveMaximum: Schema.optionalKey(Schema.Finite),
+    minimum: Schema.optionalKey(Schema.Finite),
+    exclusiveMinimum: Schema.optionalKey(Schema.Finite),
+    maxLength: Schema.optionalKey(Schema.Natural),
+    minLength: Schema.optionalKey(Schema.Natural),
+    pattern: Schema.optionalKey(BoundedSchemaText),
+    format: Schema.optionalKey(BoundedSchemaText),
+    maxItems: Schema.optionalKey(Schema.Natural),
+    minItems: Schema.optionalKey(Schema.Natural),
+    uniqueItems: Schema.optionalKey(Schema.Boolean),
+    prefixItems: Schema.optionalKey(boundedNodes),
+    items: Schema.optionalKey(subschema),
+    additionalItems: Schema.optionalKey(subschema),
+    unevaluatedItems: Schema.optionalKey(subschema),
+    contains: Schema.optionalKey(subschema),
+    minContains: Schema.optionalKey(Schema.Natural),
+    maxContains: Schema.optionalKey(Schema.Natural),
+    properties: Schema.optionalKey(boundedDefinitions),
+    patternProperties: Schema.optionalKey(boundedDefinitions),
+    required: Schema.optionalKey(boundedRequired),
+    dependentRequired: Schema.optionalKey(
+      Schema.Record(BoundedSchemaProperty, boundedRequired).check(
         Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
       ),
     ),
-  }),
-  [Schema.Record(Schema.String, Schema.Json)],
-);
+    dependentSchemas: Schema.optionalKey(boundedDefinitions),
+    additionalProperties: Schema.optionalKey(subschema),
+    unevaluatedProperties: Schema.optionalKey(subschema),
+    propertyNames: Schema.optionalKey(subschema),
+    minProperties: Schema.optionalKey(Schema.Natural),
+    maxProperties: Schema.optionalKey(Schema.Natural),
+    anyOf: Schema.optionalKey(boundedNodes),
+    oneOf: Schema.optionalKey(boundedNodes),
+    allOf: Schema.optionalKey(boundedNodes),
+    not: Schema.optionalKey(subschema),
+    contentEncoding: Schema.optionalKey(BoundedSchemaText),
+    contentMediaType: Schema.optionalKey(BoundedSchemaText),
+    contentSchema: Schema.optionalKey(subschema),
+    $defs: Schema.optionalKey(boundedDefinitions),
+    definitions: Schema.optionalKey(boundedDefinitions),
+  };
+};
+
+const ResponseFormatDocument = Schema.Struct({
+  ...responseFormatFields(),
+  type: Schema.Literal("object"),
+}).pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
 
 const isResponseFormatDocument = Schema.is(ResponseFormatDocument);
 

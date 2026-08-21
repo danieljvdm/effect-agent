@@ -38265,6 +38265,8 @@ var BoundedSelector = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLe
 var BoundedPattern = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
 var BoundedMessage2 = exports_Schema.String.check(exports_Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
 var BoundedSchemaProperty = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
+var BoundedSchemaText = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
+var BoundedSchemaReference = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
 var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var BoundedTimeoutMillis = PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(60000));
 var ResponseFormatPrimitive = exports_Schema.Literals([
@@ -38277,24 +38279,74 @@ var ResponseFormatPrimitive = exports_Schema.Literals([
   "integer"
 ]);
 var ResponseFormatPrimitiveList = exports_Schema.Array(ResponseFormatPrimitive).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(7), exports_Schema.isUnique());
-var ResponseFormatNode = exports_Schema.suspend(() => exports_Schema.StructWithRest(exports_Schema.Struct({
-  type: exports_Schema.optionalKey(exports_Schema.Union([ResponseFormatPrimitive, ResponseFormatPrimitiveList])),
-  properties: exports_Schema.optionalKey(exports_Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(exports_Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
-  required: exports_Schema.optionalKey(exports_Schema.Array(BoundedSchemaProperty).check(exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH), exports_Schema.isUnique())),
-  items: exports_Schema.optionalKey(exports_Schema.Union([exports_Schema.Boolean, ResponseFormatNode])),
-  additionalProperties: exports_Schema.optionalKey(exports_Schema.Union([exports_Schema.Boolean, ResponseFormatNode])),
-  anyOf: exports_Schema.optionalKey(exports_Schema.Array(ResponseFormatNode).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
-  oneOf: exports_Schema.optionalKey(exports_Schema.Array(ResponseFormatNode).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
-  allOf: exports_Schema.optionalKey(exports_Schema.Array(ResponseFormatNode).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
-  $defs: exports_Schema.optionalKey(exports_Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(exports_Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH)))
-}), [exports_Schema.Record(exports_Schema.String, exports_Schema.Json)]));
-var ResponseFormatDocument = exports_Schema.StructWithRest(exports_Schema.Struct({
-  type: exports_Schema.Literal("object"),
-  properties: exports_Schema.optionalKey(exports_Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(exports_Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
-  required: exports_Schema.optionalKey(exports_Schema.Array(BoundedSchemaProperty).check(exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH), exports_Schema.isUnique())),
-  additionalProperties: exports_Schema.optionalKey(exports_Schema.Union([exports_Schema.Boolean, ResponseFormatNode])),
-  $defs: exports_Schema.optionalKey(exports_Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(exports_Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH)))
-}), [exports_Schema.Record(exports_Schema.String, exports_Schema.Json)]);
+var ResponseFormatNode = exports_Schema.suspend(() => exports_Schema.Struct(responseFormatFields()).pipe(exports_Schema.annotate({ parseOptions: { onExcessProperty: "error" } })));
+var responseFormatFields = () => {
+  const boundedNodes = exports_Schema.Array(ResponseFormatNode).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH));
+  const boundedDefinitions = exports_Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(exports_Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH));
+  const boundedRequired = exports_Schema.Array(BoundedSchemaProperty).check(exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH), exports_Schema.isUnique());
+  const subschema = exports_Schema.Union([exports_Schema.Boolean, ResponseFormatNode]);
+  return {
+    $schema: exports_Schema.optionalKey(BoundedSchemaReference),
+    $id: exports_Schema.optionalKey(BoundedSchemaReference),
+    $ref: exports_Schema.optionalKey(BoundedSchemaReference),
+    $anchor: exports_Schema.optionalKey(BoundedSchemaReference),
+    $dynamicRef: exports_Schema.optionalKey(BoundedSchemaReference),
+    $dynamicAnchor: exports_Schema.optionalKey(BoundedSchemaReference),
+    $comment: exports_Schema.optionalKey(BoundedSchemaText),
+    title: exports_Schema.optionalKey(BoundedSchemaText),
+    description: exports_Schema.optionalKey(BoundedSchemaText),
+    default: exports_Schema.optionalKey(exports_Schema.Json),
+    deprecated: exports_Schema.optionalKey(exports_Schema.Boolean),
+    readOnly: exports_Schema.optionalKey(exports_Schema.Boolean),
+    writeOnly: exports_Schema.optionalKey(exports_Schema.Boolean),
+    examples: exports_Schema.optionalKey(exports_Schema.Array(exports_Schema.Json).check(exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
+    type: exports_Schema.optionalKey(exports_Schema.Union([ResponseFormatPrimitive, ResponseFormatPrimitiveList])),
+    enum: exports_Schema.optionalKey(exports_Schema.Array(exports_Schema.Json).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH), exports_Schema.isUnique())),
+    const: exports_Schema.optionalKey(exports_Schema.Json),
+    multipleOf: exports_Schema.optionalKey(exports_Schema.Finite.check(exports_Schema.isGreaterThan(0))),
+    maximum: exports_Schema.optionalKey(exports_Schema.Finite),
+    exclusiveMaximum: exports_Schema.optionalKey(exports_Schema.Finite),
+    minimum: exports_Schema.optionalKey(exports_Schema.Finite),
+    exclusiveMinimum: exports_Schema.optionalKey(exports_Schema.Finite),
+    maxLength: exports_Schema.optionalKey(exports_Schema.Natural),
+    minLength: exports_Schema.optionalKey(exports_Schema.Natural),
+    pattern: exports_Schema.optionalKey(BoundedSchemaText),
+    format: exports_Schema.optionalKey(BoundedSchemaText),
+    maxItems: exports_Schema.optionalKey(exports_Schema.Natural),
+    minItems: exports_Schema.optionalKey(exports_Schema.Natural),
+    uniqueItems: exports_Schema.optionalKey(exports_Schema.Boolean),
+    prefixItems: exports_Schema.optionalKey(boundedNodes),
+    items: exports_Schema.optionalKey(subschema),
+    additionalItems: exports_Schema.optionalKey(subschema),
+    unevaluatedItems: exports_Schema.optionalKey(subschema),
+    contains: exports_Schema.optionalKey(subschema),
+    minContains: exports_Schema.optionalKey(exports_Schema.Natural),
+    maxContains: exports_Schema.optionalKey(exports_Schema.Natural),
+    properties: exports_Schema.optionalKey(boundedDefinitions),
+    patternProperties: exports_Schema.optionalKey(boundedDefinitions),
+    required: exports_Schema.optionalKey(boundedRequired),
+    dependentRequired: exports_Schema.optionalKey(exports_Schema.Record(BoundedSchemaProperty, boundedRequired).check(exports_Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH))),
+    dependentSchemas: exports_Schema.optionalKey(boundedDefinitions),
+    additionalProperties: exports_Schema.optionalKey(subschema),
+    unevaluatedProperties: exports_Schema.optionalKey(subschema),
+    propertyNames: exports_Schema.optionalKey(subschema),
+    minProperties: exports_Schema.optionalKey(exports_Schema.Natural),
+    maxProperties: exports_Schema.optionalKey(exports_Schema.Natural),
+    anyOf: exports_Schema.optionalKey(boundedNodes),
+    oneOf: exports_Schema.optionalKey(boundedNodes),
+    allOf: exports_Schema.optionalKey(boundedNodes),
+    not: exports_Schema.optionalKey(subschema),
+    contentEncoding: exports_Schema.optionalKey(BoundedSchemaText),
+    contentMediaType: exports_Schema.optionalKey(BoundedSchemaText),
+    contentSchema: exports_Schema.optionalKey(subschema),
+    $defs: exports_Schema.optionalKey(boundedDefinitions),
+    definitions: exports_Schema.optionalKey(boundedDefinitions)
+  };
+};
+var ResponseFormatDocument = exports_Schema.Struct({
+  ...responseFormatFields(),
+  type: exports_Schema.Literal("object")
+}).pipe(exports_Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
 var isResponseFormatDocument = exports_Schema.is(ResponseFormatDocument);
 var isBoundedResponseFormat = (input) => {
   if (!exports_Predicate.isObject(input))

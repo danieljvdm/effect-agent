@@ -341,9 +341,11 @@ interface PageCapture {
 Requests, results, limits, and expected errors are Effect Schemas. The request selects the
 engine (`chromium`, or the lightweight `kitesurf` where an adapter supports it), bounds the
 response in UTF-8 bytes, and may constrain navigation readiness, viewport, and request egress.
-Structured requests accept only object-shaped JSON Schema documents with valid nested schema
-nodes, at most 64 KiB of encoded data, depth 32, 4,096 total nodes, and 256 entries per
-collection. Malformed, cyclic, or over-budget documents fail at the request Schema boundary.
+Structured requests accept only object-shaped JSON Schema documents whose root and every nested
+node use the explicitly supported, type-checked JSON Schema vocabulary. The document is limited
+to 64 KiB of encoded data, depth 32, 4,096 total nodes, and 256 entries per collection.
+Malformed keywords, unsupported keywords, cycles, and over-budget documents fail at the request
+Schema boundary.
 Adapters reuse the `SandboxImplementation` posture idiom (CAP-010), reject any feature or engine
 they cannot honor, and surface platform rate and quota refusals as one typed failure carrying
 the platform's own backoff hint. Capture resource use records browser time and, when an adapter

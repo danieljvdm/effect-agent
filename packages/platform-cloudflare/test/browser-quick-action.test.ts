@@ -15,6 +15,7 @@ import { Deferred, Effect, Fiber, Layer } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  BrowserQuickActionBrowserBinding,
   BrowserQuickActionWorkersAi,
   browserQuickActionImplementation,
   browserQuickActionCaptureLayer,
@@ -97,9 +98,16 @@ const captureLayer = (
   workersAi?: BrowserQuickActionWorkersAiPolicy,
 ): Layer.Layer<PageCapture> =>
   workersAi === undefined
-    ? browserQuickActionCaptureLayer({ browser: binding })
-    : browserQuickActionWorkersAiCaptureLayer({ browser: binding }).pipe(
-        Layer.provide(BrowserQuickActionWorkersAi.layer(workersAi)),
+    ? browserQuickActionCaptureLayer().pipe(
+        Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: binding })),
+      )
+    : browserQuickActionWorkersAiCaptureLayer().pipe(
+        Layer.provide(
+          Layer.merge(
+            BrowserQuickActionBrowserBinding.layer({ browser: binding }),
+            BrowserQuickActionWorkersAi.layer(workersAi),
+          ),
+        ),
       );
 
 const jsonResponse = (body: unknown, init?: ResponseInit): Response =>
@@ -114,15 +122,21 @@ type Equal<Left, Right> =
     : false;
 type LayerRequirements<Value> =
   Value extends Layer.Layer<infer _Output, infer _Error, infer Requirements> ? Requirements : never;
+type BrowserBindingAuthorityIsVisible = Equal<
+  LayerRequirements<ReturnType<typeof browserQuickActionCaptureLayer>>,
+  BrowserQuickActionBrowserBinding
+>;
 type WorkersAiAuthorityIsVisible = Equal<
   LayerRequirements<ReturnType<typeof browserQuickActionWorkersAiCaptureLayer>>,
-  BrowserQuickActionWorkersAi
+  BrowserQuickActionBrowserBinding | BrowserQuickActionWorkersAi
 >;
 
 describe("Browser Run Quick Action PageCapture adapter", () => {
-  it("keeps separately billed Workers AI authority visible in the adapter Layer", () => {
-    const proof: WorkersAiAuthorityIsVisible = true;
-    expect(proof).toBe(true);
+  it("keeps browser RPC and separately billed Workers AI authority visible in adapter Layers", () => {
+    const browserProof: BrowserBindingAuthorityIsVisible = true;
+    const workersAiProof: WorkersAiAuthorityIsVisible = true;
+    expect(browserProof).toBe(true);
+    expect(workersAiProof).toBe(true);
   });
 
   it("projects the request onto the wire options and unwraps the envelope", async () => {
@@ -377,7 +391,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
         const program = Effect.gen(function* () {
           const port = yield* PageCapture;
           return yield* port.capture(request(CapturePageMarkdown.make({})));
-        }).pipe(Effect.provide(browserQuickActionCaptureLayer({ browser: binding })));
+        }).pipe(Effect.provide(captureLayer(binding)));
 
         const fiber = yield* Effect.forkChild(program);
         yield* Deferred.await(readStarted);

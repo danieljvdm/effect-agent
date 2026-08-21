@@ -375,12 +375,14 @@ binding context in cache identity.
 
 The first `PageCapture` adapter (capability spec §9.2) is the Cloudflare Browser Run Quick
 Action Layer in `@effect-agent/platform-cloudflare` (`browserQuickActionCaptureLayer`). Each
-capture is one stateless `quickAction()` RPC on the Wrangler `browser` binding, supplied as a
-resolved constructor option (DEPLOY-010) and never read ambiently. Construction-time host
-patterns reach the binding as `allowRequestPattern`, restricting navigation, redirects, and
-subrequests alike. A capture-owned Scope reads response bytes incrementally, stops at the first
-chunk exceeding the request budget, and cancels and unlocks its reader on success, failure, or
-interruption. Response `Content-Type`, not attacker-controlled page text, identifies the
+capture is one stateless `quickAction()` RPC on the Wrangler `browser` binding. The host resolves
+that binding explicitly and supplies it through `BrowserQuickActionBrowserBinding.layer`; both
+capture Layers visibly require the resulting Effect service (DEPLOY-010) and never read ambiently.
+Construction-time host patterns reach the binding as `allowRequestPattern`, restricting navigation,
+redirects, and subrequests alike. A capture-owned Scope reads response bytes incrementally and
+stops at the first chunk exceeding the request budget. It cancels and unlocks its reader on
+success, failure, or interruption. Response `Content-Type`, not attacker-controlled page text,
+identifies the
 Cloudflare JSON response envelope. Every returned link must satisfy the canonical bounded-link
 Schema; malformed entries and over-limit collections fail typed instead of being discarded.
 HTTP 429 becomes a typed rate/quota failure; `Retry-After` is included only when conversion to
@@ -391,10 +393,10 @@ unless the host selects `browserQuickActionWorkersAiCaptureLayer` and supplies i
 `BrowserQuickActionWorkersAi` service. That service's `authorizeAndAccount` Effect runs before
 the browser RPC, and successful results report `cloudflare-workers-ai` plus one model call
 alongside any `X-Browser-Ms-Used` observation. The ordinary
-`browserQuickActionCaptureLayer` has no Workers AI authority. Both Layers receive the browser
-binding as the explicit resolved constructor value required by DEPLOY-014. The adapter rejects
-typed the `kitesurf` engine the binding cannot select (the REST and CDP surfaces can; a REST
-adapter is a possible later slice).
+`browserQuickActionCaptureLayer` has no Workers AI authority. The host-owned binding service
+keeps browser RPC authority visible in both adapter requirement channels, while the opt-in Layer
+also requires Workers AI authority. The adapter rejects typed the `kitesurf` engine the binding
+cannot select (the REST and CDP surfaces can; a REST adapter is a possible later slice).
 `quickAction()` requires a Worker compatibility date of `2026-03-24` or later and has no local
 implementation: local `wrangler dev` needs remote mode. Ordinary tests use a scripted binding
 inside workerd. An opt-in live smoke in the provider-owning `examples/providers` leaf additionally
@@ -464,9 +466,9 @@ Current platform references:
 - **DEPLOY-013**: A Cloudflare host context-preparation Layer is acquired once per Object
   incarnation, runs only after canonical resume reconstruction, never replaces canonical history,
   and is reconstructible without process-global state.
-- **DEPLOY-014**: The Browser Run Quick Action page-capture adapter receives its binding as a
-  resolved option, applies the fixed browser-request allowlist, incrementally enforces the
-  response byte budget with scoped reader cleanup, distinguishes response envelopes by trusted
-  metadata, rejects malformed link payloads, keeps platform refusals and safe backoff hints
-  typed, denies Workers AI without its explicit host authorization and accounting service, and
-  claims deployment class `E` only.
+- **DEPLOY-014**: The Browser Run Quick Action page-capture adapter visibly requires the
+  host-provided service for an explicitly resolved browser binding, applies the fixed
+  browser-request allowlist, incrementally enforces the response byte budget with scoped reader
+  cleanup, distinguishes response envelopes by trusted metadata, rejects malformed link
+  payloads, keeps platform refusals and safe backoff hints typed, denies Workers AI without its
+  explicit host authorization and accounting service, and claims deployment class `E` only.

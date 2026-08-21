@@ -2,6 +2,7 @@ import { WebCapture, WebCaptureSuccess } from "@effect-agent/capabilities";
 import { Agent, AgentPolicy, IdGenerator } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
 import {
+  BrowserQuickActionBrowserBinding,
   browserQuickActionCaptureLayer,
   type BrowserQuickActionBinding,
 } from "@effect-agent/platform-cloudflare/browser-quick-action";
@@ -130,7 +131,11 @@ describe.skipIf(!liveEnabled)("Browser Run live smoke (opt-in)", () => {
         Effect.gen(function* () {
           const browser = yield* makeLiveBrowserBinding;
           const browserHandlers = readWebpage.handlers.pipe(
-            Layer.provide(browserQuickActionCaptureLayer({ browser: browser.binding })),
+            Layer.provide(
+              browserQuickActionCaptureLayer().pipe(
+                Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: browser.binding })),
+              ),
+            ),
           );
           const events = yield* AgentRuntime.stream(BrowserResearcher, {
             url: PRICING_URL,

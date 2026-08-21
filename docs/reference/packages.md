@@ -116,12 +116,14 @@ and sends explicit scoped cancellation on interruption. The client Layer require
 so its composition root owns collision-resistant cancellation identity generation instead of the
 client reading ambient time or randomness. `CloudflareBindingSource` may capture registered worker
 Bindings from `CloudflareBindingSourceContext` once per Object incarnation, after identity
-derivation. `browserQuickActionCaptureLayer` adapts the Wrangler `browser` binding's
-`quickAction()` to the `PageCapture` port without granting Workers AI authority.
-`browserQuickActionWorkersAiCaptureLayer` additionally requires the explicit
-`BrowserQuickActionWorkersAi` authorization and accounting service before permitting structured
-extraction. The `./browser-quick-action` export provides these adapters without loading Durable
-Object runtime modules. It is a Layer-assembly library, not an application entrypoint.
+derivation. `BrowserQuickActionBrowserBinding.layer` lifts a host-resolved Wrangler `browser`
+binding into an explicit Effect service. `browserQuickActionCaptureLayer` visibly requires that
+service to adapt `quickAction()` to the `PageCapture` port without granting Workers AI authority.
+`browserQuickActionWorkersAiCaptureLayer` requires both the browser-binding service and the
+explicit `BrowserQuickActionWorkersAi` authorization and accounting service before permitting
+structured extraction. The `./browser-quick-action` export provides these adapters without
+loading Durable Object runtime modules. It is a Layer-assembly library, not an application
+entrypoint.
 
 ### `@effect-agent/pr-review`
 

@@ -56,6 +56,18 @@ export interface BrowserQuickActionCaptureOptions {
   readonly browser: BrowserQuickActionBinding;
 }
 
+/** Host-owned browser binding authority, supplied explicitly at the composition root. */
+export class BrowserQuickActionBrowserBinding extends Context.Service<
+  BrowserQuickActionBrowserBinding,
+  BrowserQuickActionBinding
+>()("@effect-agent/platform-cloudflare/BrowserQuickActionBrowserBinding") {
+  static layer(
+    options: BrowserQuickActionCaptureOptions,
+  ): Layer.Layer<BrowserQuickActionBrowserBinding> {
+    return Layer.succeed(BrowserQuickActionBrowserBinding)(options.browser);
+  }
+}
+
 /** Host-owned authorization and accounting for one Workers AI extraction. */
 export interface BrowserQuickActionWorkersAiPolicy {
   readonly authorizeAndAccount: (
@@ -449,21 +461,32 @@ const makeCapture = (
   });
 
 /**
- * Ordinary Quick Actions from the resolved browser binding. Workers AI stays
- * unavailable unless the host deliberately selects its separate Layer.
+ * Ordinary Quick Actions require host-owned browser binding authority. Workers
+ * AI stays unavailable unless the host deliberately selects its separate Layer.
  */
-export const browserQuickActionCaptureLayer = (
-  options: BrowserQuickActionCaptureOptions,
-): Layer.Layer<PageCapture> =>
-  Layer.succeed(PageCapture)(PageCapture.of({ capture: makeCapture(options.browser) }));
-
-/** Structured Quick Actions additionally require visible host-owned Workers AI authority. */
-export const browserQuickActionWorkersAiCaptureLayer = (
-  options: BrowserQuickActionCaptureOptions,
-): Layer.Layer<PageCapture, never, BrowserQuickActionWorkersAi> =>
+export const browserQuickActionCaptureLayer = (): Layer.Layer<
+  PageCapture,
+  never,
+  BrowserQuickActionBrowserBinding
+> =>
   Layer.effect(
     PageCapture,
-    Effect.map(BrowserQuickActionWorkersAi, (workersAi) =>
-      PageCapture.of({ capture: makeCapture(options.browser, workersAi) }),
+    Effect.map(BrowserQuickActionBrowserBinding, (browser) =>
+      PageCapture.of({ capture: makeCapture(browser) }),
     ),
+  );
+
+/** Structured Quick Actions require host-owned browser and Workers AI authority. */
+export const browserQuickActionWorkersAiCaptureLayer = (): Layer.Layer<
+  PageCapture,
+  never,
+  BrowserQuickActionBrowserBinding | BrowserQuickActionWorkersAi
+> =>
+  Layer.effect(
+    PageCapture,
+    Effect.gen(function* () {
+      const browser = yield* BrowserQuickActionBrowserBinding;
+      const workersAi = yield* BrowserQuickActionWorkersAi;
+      return PageCapture.of({ capture: makeCapture(browser, workersAi) });
+    }),
   );
