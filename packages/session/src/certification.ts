@@ -3,6 +3,7 @@ import { Cause, Effect, Exit, Option, Schema } from "effect";
 
 import { conversationStoreConformanceCases } from "./conformance.ts";
 import { DurableRuntimeFailpointLocation } from "./durable-failpoint.ts";
+import { inspectForeignDiagnostic, safeUnknownString } from "./foreign-diagnostic.ts";
 import { submissionLedgerConformanceCases } from "./ledger-conformance.ts";
 import type { SubmissionLedger } from "./ledger.ts";
 import { LedgerCapabilities } from "./ledger.ts";
@@ -141,18 +142,17 @@ export class CertificationReport extends Schema.Class<CertificationReport>(
 const causeDetail = (cause: Cause.Cause<unknown>): string => {
   const failure = Cause.findErrorOption(cause);
   if (Option.isSome(failure)) {
-    const error: unknown = failure.value;
-    if (typeof error === "object" && error !== null) {
-      const tag = "_tag" in error ? String((error as { _tag: unknown })._tag) : "Error";
-      const message =
-        "message" in error && (error as { message?: unknown }).message !== undefined
-          ? String((error as { message?: unknown }).message)
-          : "";
-      return `${tag}${message === "" ? "" : `: ${message}`}`.slice(0, 4_096);
+    const diagnostic = inspectForeignDiagnostic(failure.value);
+    if (diagnostic.tag !== undefined || diagnostic.message !== undefined) {
+      const tag = diagnostic.tag ?? "Error";
+      return `${tag}${diagnostic.message === undefined ? "" : `: ${diagnostic.message}`}`.slice(
+        0,
+        4_096,
+      );
     }
-    return String(error).slice(0, 4_096);
+    return safeUnknownString(failure.value, "Unknown foreign failure").slice(0, 4_096);
   }
-  return `defect: ${String(cause)}`.slice(0, 4_096);
+  return `defect: ${safeUnknownString(cause, "Unknown defect")}`.slice(0, 4_096);
 };
 
 const caseResult = <A, E>(

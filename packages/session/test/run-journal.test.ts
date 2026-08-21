@@ -41,12 +41,14 @@ import {
 const SUBMISSION_ID = Schema.decodeSync(SubmissionId)("submission-journal");
 const RUN_ID = runIdForSubmission(SUBMISSION_ID);
 const LATER_RUN_ID = runIdForSubmission(Schema.decodeSync(SubmissionId)("submission-later"));
+const RUN_NONE_ID = runIdForSubmission(Schema.decodeSync(SubmissionId)("none"));
 const CALL_ONE = Schema.decodeSync(ToolCallId)("call-1");
 const CALL_TWO = Schema.decodeSync(ToolCallId)("call-2");
 const PRODUCER_ID = Schema.decodeSync(ProducerId)("producer-journal");
 const DEPLOYMENT_ID = Schema.decodeSync(DeploymentId)("deployment-journal");
 const CREATED_AT = DateTime.toUtc(DateTime.makeUnsafe(1_000));
 const CONVERSATION_ID = Schema.decodeSync(ConversationId)("conversation-journal");
+const isRunJournalError = Schema.is(RunJournalError);
 
 /** One tool-declaring Turn: instructions + input + assistant declaration + two tool results. */
 const toolTurnAppended: ReadonlyArray<Prompt.Message> = [
@@ -215,12 +217,11 @@ describe("run journal batch split (plan §2.1)", () => {
 
     it.effect("does not reserve the real run:none identity for canonical prompt projection", () =>
       Effect.gen(function* () {
-        const runNone = runIdForSubmission(Schema.decodeSync(SubmissionId)("none"));
-        expect(runNone).toBe("run:none");
-        const response = yield* turnResponseBatch(turnInput(toolTurnAppended, 1, runNone));
+        expect(RUN_NONE_ID).toBe("run:none");
+        const response = yield* turnResponseBatch(turnInput(toolTurnAppended, 1, RUN_NONE_ID));
         const records = envelopesOf([response]);
 
-        const recovering = yield* projectRunJournal(records, runNone);
+        const recovering = yield* projectRunJournal(records, RUN_NONE_ID);
         expect(recovering.prompt.content.map((message) => message.role)).toEqual([
           "system",
           "user",
@@ -249,7 +250,7 @@ describe("run journal batch split (plan §2.1)", () => {
         const response = yield* turnResponseBatch(turnInput(malformedTurn));
 
         const error = yield* promptFromCanonicalRecords(envelopesOf([response])).pipe(Effect.flip);
-        expect(error).toBeInstanceOf(RunJournalError);
+        expect(isRunJournalError(error)).toBe(true);
         expect(error.message).toBe("Failed to decode a declared Tool Call ID");
       }),
     );
@@ -656,9 +657,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
     prompt.content.flatMap((message) =>
       typeof message.content === "string"
         ? []
-        : message.content.flatMap((part) =>
-            part.type === "tool-result" ? [part.result as unknown] : [],
-          ),
+        : message.content.flatMap((part) => (part.type === "tool-result" ? [part.result] : [])),
     );
 
   interface CompactionOverrides {
