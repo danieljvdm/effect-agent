@@ -1,12 +1,16 @@
-import { Context, Duration, Schema, Stream } from "effect";
+import { Context, Duration, Schema, type Stream } from "effect";
 
 const BoundedName = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 const BoundedPath = Schema.NonEmptyString.check(Schema.isMaxLength(4 * 1024));
 const BoundedArgument = Schema.String.check(Schema.isMaxLength(32 * 1024));
-const BoundedOutputText = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
+const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+const MAX_ARTIFACT_RULES = 64;
+const BoundedOutputText = Schema.String.check(Schema.isMaxLength(MAX_OUTPUT_BYTES));
+export const SANDBOX_DIAGNOSTIC_MAX_LENGTH = 8 * 1024;
+const BoundedDiagnostic = Schema.String.check(Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 const PositiveNumber = Schema.Finite.check(Schema.isGreaterThan(0));
-const MaxOutputBytes = PositiveInt.check(Schema.isLessThanOrEqualTo(16 * 1024 * 1024));
+const MaxOutputBytes = PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES));
 const BoundedArguments = Schema.Array(BoundedArgument).check(Schema.isMaxLength(256));
 const BoundedEnvironmentNames = Schema.Array(BoundedName).check(Schema.isMaxLength(128));
 const FinitePositiveDuration = Schema.Duration.pipe(
@@ -90,7 +94,7 @@ export class SandboxArtifactRule extends Schema.Class<SandboxArtifactRule>("Sand
 /** Metadata for an artifact that a sandbox implementation released after applying its rules. */
 export class SandboxArtifact extends Schema.Class<SandboxArtifact>("SandboxArtifact")({
   path: BoundedPath,
-  bytes: Schema.Natural,
+  bytes: Schema.Natural.check(Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES)),
   digest: BoundedName,
   mediaType: Schema.optionalKey(BoundedName),
 }) {}
@@ -106,14 +110,14 @@ export class SandboxRequest extends Schema.Class<SandboxRequest>("SandboxRequest
   network: SandboxNetworkPolicy,
   limits: SandboxLimits,
   secretHandles: Schema.Array(SandboxSecretHandle).check(Schema.isMaxLength(64)),
-  artifactRules: Schema.Array(SandboxArtifactRule).check(Schema.isMaxLength(64)),
+  artifactRules: Schema.Array(SandboxArtifactRule).check(Schema.isMaxLength(MAX_ARTIFACT_RULES)),
 }) {}
 
 /** Accounting that a sandbox implementation was able to observe for one execution. */
 export class SandboxResourceUse extends Schema.Class<SandboxResourceUse>("SandboxResourceUse")({
   wallTime: FiniteNonNegativeDuration,
-  stdoutBytes: Schema.Natural,
-  stderrBytes: Schema.Natural,
+  stdoutBytes: Schema.Natural.check(Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES)),
+  stderrBytes: Schema.Natural.check(Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES)),
   cpuMillis: Schema.optionalKey(Schema.Natural),
   memoryBytes: Schema.optionalKey(Schema.Natural),
 }) {}
@@ -134,7 +138,7 @@ export class SandboxOutput extends Schema.TaggedClass<SandboxOutput>()("SandboxO
   ...SandboxEventBase,
   stream: Schema.Literals(["stdout", "stderr"]),
   text: BoundedOutputText,
-  bytes: Schema.Natural,
+  bytes: Schema.Natural.check(Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES)),
 }) {}
 
 /** The terminal process status and observed bounded resource usage. */
@@ -142,7 +146,7 @@ export class SandboxExited extends Schema.TaggedClass<SandboxExited>()("SandboxE
   ...SandboxEventBase,
   exitCode: Schema.Int,
   resourceUse: SandboxResourceUse,
-  artifacts: Schema.Array(SandboxArtifact),
+  artifacts: Schema.Array(SandboxArtifact).check(Schema.isMaxLength(MAX_ARTIFACT_RULES)),
 }) {}
 
 /** Versioned execution event stream. */
@@ -155,7 +159,7 @@ export class SandboxSpawnError extends Schema.TaggedError<SandboxSpawnError>()(
   {
     implementation: SandboxImplementation,
     command: BoundedPath,
-    message: Schema.String,
+    message: BoundedDiagnostic,
     cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
@@ -164,7 +168,7 @@ export class SandboxSpawnError extends Schema.TaggedError<SandboxSpawnError>()(
 export class SandboxExitError extends Schema.TaggedError<SandboxExitError>()("SandboxExitError", {
   implementation: SandboxImplementation,
   exitCode: Schema.Int,
-  message: Schema.String,
+  message: BoundedDiagnostic,
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}
 
@@ -202,7 +206,7 @@ export class SandboxUnsupportedRequestError extends Schema.TaggedError<SandboxUn
       "secret-handles",
       "artifacts",
     ]),
-    message: Schema.String,
+    message: BoundedDiagnostic,
   },
 ) {}
 

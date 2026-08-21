@@ -1,4 +1,5 @@
 import {
+  SANDBOX_DIAGNOSTIC_MAX_LENGTH,
   Sandbox,
   SandboxExited,
   SandboxExitError,
@@ -10,7 +11,6 @@ import {
   SandboxStarted,
   SandboxTimeoutError,
   SandboxUnsupportedRequestError,
-  type SandboxError,
   type SandboxEvent,
   type SandboxExecute,
   type SandboxRequest,
@@ -34,6 +34,9 @@ type OutputCounts = Readonly<Record<OutputStream, number>>;
 
 const zeroOutput: OutputCounts = { stdout: 0, stderr: 0 };
 
+const boundedDiagnostic = (message: string): string =>
+  message.slice(0, SANDBOX_DIAGNOSTIC_MAX_LENGTH);
+
 const unsupported = (
   feature: Parameters<typeof SandboxUnsupportedRequestError.make>[0]["feature"],
   message: string,
@@ -41,68 +44,72 @@ const unsupported = (
   SandboxUnsupportedRequestError.make({
     implementation: unisolatedImplementation,
     feature,
-    message,
+    message: boundedDiagnostic(message),
   });
 
-const validateRequest = (request: SandboxRequest): Effect.Effect<void, SandboxError> => {
-  if (request.runtime.kind !== "unisolated-process") {
-    return Effect.fail(
-      unsupported(
-        "runtime",
-        "The local process runner only accepts runtime.kind 'unisolated-process'.",
-      ),
+const validateRequest = Effect.fn("LocalSandbox.validateRequest")(function* (
+  request: SandboxRequest,
+) {
+  if (
+    request.runtime.kind !== "unisolated-process" ||
+    request.runtime.identity !== unisolatedImplementation.identity
+  ) {
+    return yield* unsupported(
+      "runtime",
+      "The local process runner only accepts runtime kind 'unisolated-process' with identity 'local-process'.",
     );
   }
   if (request.mounts.length > 0) {
-    return Effect.fail(
-      unsupported(
-        "mounts",
-        "The unisolated local process runner cannot enforce mount access modes.",
-      ),
+    return yield* unsupported(
+      "mounts",
+      "The unisolated local process runner cannot enforce mount access modes.",
     );
   }
   if (request.network._tag !== "NetworkDisabled") {
-    return Effect.fail(
-      unsupported(
-        "network",
-        "The unisolated local process runner cannot enforce workload network policy.",
-      ),
+    return yield* unsupported(
+      "network",
+      "The unisolated local process runner cannot enforce workload network policy.",
     );
   }
   if (request.limits.cpuCores !== undefined) {
-    return Effect.fail(
-      unsupported("cpu-limit", "The unisolated local process runner cannot enforce CPU limits."),
+    return yield* unsupported(
+      "cpu-limit",
+      "The unisolated local process runner cannot enforce CPU limits.",
     );
   }
   if (request.limits.memoryBytes !== undefined) {
-    return Effect.fail(
-      unsupported(
-        "memory-limit",
-        "The unisolated local process runner cannot enforce memory limits.",
-      ),
+    return yield* unsupported(
+      "memory-limit",
+      "The unisolated local process runner cannot enforce memory limits.",
     );
   }
   if (request.secretHandles.length > 0) {
-    return Effect.fail(
-      unsupported(
-        "secret-handles",
-        "The unisolated local process runner does not resolve secret handles into an environment.",
-      ),
+    return yield* unsupported(
+      "secret-handles",
+      "The unisolated local process runner does not resolve secret handles into an environment.",
     );
   }
   if (request.artifactRules.length > 0) {
-    return Effect.fail(
-      unsupported("artifacts", "The unisolated local process runner does not collect artifacts."),
+    return yield* unsupported(
+      "artifacts",
+      "The unisolated local process runner does not collect artifacts.",
     );
   }
-  return Effect.void;
-};
+});
 
 const spawnError = (request: SandboxRequest, message: string, cause?: unknown) =>
   SandboxSpawnError.make({
     implementation: unisolatedImplementation,
     command: request.command,
-    message,
+    message: boundedDiagnostic(message),
+    ...(cause === undefined ? {} : { cause }),
+  });
+
+const exitError = (message: string, cause?: unknown, exitCode = -1) =>
+  SandboxExitError.make({
+    implementation: unisolatedImplementation,
+    exitCode,
+    message: boundedDiagnostic(message),
     ...(cause === undefined ? {} : { cause }),
   });
 
@@ -208,7 +215,7 @@ const makeExecute =
         const streamOutput = (stream: OutputStream, decoder: TextDecoder) => {
           const source = stream === "stdout" ? child.stdout : child.stderr;
           return source.pipe(
-            Stream.mapError((error) => spawnError(request, error.message, error)),
+            Stream.mapError((error) => exitError(error.message, error)),
             Stream.mapEffect((bytes) =>
               outputEvent(counts, stream, bytes, decoder, request.limits.maxOutputBytes),
             ),
@@ -219,14 +226,7 @@ const makeExecute =
         const terminal = Stream.unwrap(
           Effect.gen(function* () {
             const exitCode = yield* child.exitCode.pipe(
-              Effect.mapError((error) =>
-                SandboxExitError.make({
-                  cause: error,
-                  implementation: unisolatedImplementation,
-                  exitCode: -1,
-                  message: error.message,
-                }),
-              ),
+              Effect.mapError((error) => exitError(error.message, error)),
             );
             const endedAt = yield* Clock.currentTimeMillis;
             const output = yield* Ref.get(counts);
@@ -247,11 +247,11 @@ const makeExecute =
               : Stream.concat(
                   Stream.succeed<SandboxEvent>(exited),
                   Stream.fail(
-                    SandboxExitError.make({
-                      implementation: unisolatedImplementation,
+                    exitError(
+                      `Unisolated local process exited with code ${exitCode}.`,
+                      undefined,
                       exitCode,
-                      message: `Unisolated local process exited with code ${exitCode}.`,
-                    }),
+                    ),
                   ),
                 );
           }),
