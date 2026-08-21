@@ -721,10 +721,14 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             ),
           )
         : runReview;
-      const outcome = yield* reviewEffect.pipe(
-        Effect.provide(selectedPullRequestSourceLayer(executionContext)),
-        Effect.provideService(ReviewExecutionContext, executionContext),
-      );
+      const executionLayer =
+        selection === undefined
+          ? Layer.succeed(ReviewExecutionContext)(executionContext)
+          : Layer.merge(
+              Layer.succeed(ReviewExecutionContext)(executionContext),
+              selectedPullRequestSourceLayer(executionContext),
+            );
+      const outcome = yield* reviewEffect.pipe(Effect.provide(executionLayer));
       yield* Console.log(
         `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
           `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`,

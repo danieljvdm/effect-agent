@@ -49,9 +49,16 @@ export const command = CliCommand.make(
     const outcome = yield* reviewer
       .run({ post: flags.post })
       .pipe(
-        Effect.provide(fullReviewExecutionContextLayer("explicit example CLI full review")),
         Effect.provide(
-          Layer.mergeAll(gitHubReviewLayers(target), openAiClientLayer, ReadReviewConventionsLayer),
+          fullReviewExecutionContextLayer("explicit example CLI full review").pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                gitHubReviewLayers(target),
+                openAiClientLayer,
+                ReadReviewConventionsLayer,
+              ),
+            ),
+          ),
         ),
       );
     yield* Console.log(

@@ -29,8 +29,11 @@ const program = Effect.gen(function* () {
   return yield* reviewer
     .run({ post: true })
     .pipe(
-      Effect.provide(fullReviewExecutionContextLayer("explicit direct full review")),
-      Effect.provide(Layer.merge(gitHubReviewLayers(target), openAiClientLayer)),
+      Effect.provide(
+        fullReviewExecutionContextLayer("explicit direct full review").pipe(
+          Layer.provideMerge(Layer.merge(gitHubReviewLayers(target), openAiClientLayer)),
+        ),
+      ),
     );
 });
 ```

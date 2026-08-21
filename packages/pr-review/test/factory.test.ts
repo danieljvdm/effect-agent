@@ -167,11 +167,14 @@ const runFactoryReviewer = <E, R>(
     const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
     const outcome = yield* run({ post: true }).pipe(
       Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
-      Effect.provide(fullReviewExecutionContextLayer("offline factory full review")),
       Effect.provide(
-        Layer.merge(
-          fixturePullRequestSourceLayer(fixture),
-          collectingReviewPublisherLayer(published),
+        fullReviewExecutionContextLayer("offline factory full review").pipe(
+          Layer.provideMerge(
+            Layer.merge(
+              fixturePullRequestSourceLayer(fixture),
+              collectingReviewPublisherLayer(published),
+            ),
+          ),
         ),
       ),
     );
@@ -327,12 +330,15 @@ layer(NodeCrypto.layer)("PrReview.make", (it) => {
         .run({ post: true })
         .pipe(
           Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
-          Effect.provide(fullReviewExecutionContextLayer("offline extra-tool full review")),
           Effect.provide(
-            Layer.mergeAll(
-              fixturePullRequestSourceLayer(fixture),
-              collectingReviewPublisherLayer(published),
-              guidelinesLayer,
+            fullReviewExecutionContextLayer("offline extra-tool full review").pipe(
+              Layer.provideMerge(
+                Layer.mergeAll(
+                  fixturePullRequestSourceLayer(fixture),
+                  collectingReviewPublisherLayer(published),
+                  guidelinesLayer,
+                ),
+              ),
             ),
           ),
         );

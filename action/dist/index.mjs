@@ -57623,7 +57623,8 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       runUrl,
       modelLabel: options3.modelLabel
     }))) : runReview;
-    const outcome = yield* reviewEffect.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(executionContext)), exports_Effect.provideService(ReviewExecutionContext, executionContext));
+    const executionLayer = selection === undefined ? exports_Layer.succeed(ReviewExecutionContext)(executionContext) : exports_Layer.merge(exports_Layer.succeed(ReviewExecutionContext)(executionContext), selectedPullRequestSourceLayer(executionContext));
+    const outcome = yield* reviewEffect.pipe(exports_Effect.provide(executionLayer));
     yield* exports_Console.log(`Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` + `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`);
     if (outcome.published !== undefined) {
       yield* exports_Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);

@@ -133,13 +133,16 @@ describe("example reviewer", () => {
         .run({ post: true })
         .pipe(
           Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
-          Effect.provide(fullReviewExecutionContextLayer("offline example full review")),
           Effect.provide(
-            Layer.mergeAll(
-              fixturePullRequestSourceLayer(fixture),
-              collectingReviewPublisherLayer(published),
-              ReadReviewConventionsLayer,
-              NodeCrypto.layer,
+            fullReviewExecutionContextLayer("offline example full review").pipe(
+              Layer.provideMerge(
+                Layer.mergeAll(
+                  fixturePullRequestSourceLayer(fixture),
+                  collectingReviewPublisherLayer(published),
+                  ReadReviewConventionsLayer,
+                  NodeCrypto.layer,
+                ),
+              ),
             ),
           ),
         );

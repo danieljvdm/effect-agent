@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Option, Redacted } from "effect";
+import { ConfigProvider, Effect, Layer, Option, Redacted } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import {
@@ -8,6 +8,7 @@ import {
   gitHubPullRequestSourceLayer,
   gitHubPriorReviewsLayer,
   gitHubReviewAdjudicationHostLayer,
+  gitHubReviewLayers,
   gitHubReviewRetirementHostLayer,
   PriorReviews,
   PullRequestSource,
@@ -345,6 +346,44 @@ describe("GitHub review adjudication comments", () => {
       expect(derived.adjudications).toHaveLength(1);
       expect(derived.adjudications[0]?.disposition).toBe("refuted");
       expect(derived.adjudications[0]?.reason).toBe("globally later");
+    }),
+  );
+
+  it.effect("installs the adjudication host in the complete GitHub review bundle", () =>
+    Effect.gen(function* () {
+      const requests: Array<string> = [];
+      const client = HttpClient.make((request, url) => {
+        requests.push(url.pathname);
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response("[]", {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        );
+      });
+      yield* Effect.gen(function* () {
+        const host = yield* ReviewAdjudicationHost;
+        yield* Effect.all([host.listFindingThreads, host.listIssueComments]);
+      }).pipe(
+        Effect.provide(
+          gitHubReviewLayers({ repository: "acme/widgets", number: 30 }).pipe(
+            Layer.provideMerge(
+              Layer.merge(
+                Layer.succeed(HttpClient.HttpClient)(client),
+                ConfigProvider.layer(ConfigProvider.fromEnvRecord({})),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(requests).toEqual([
+        "/repos/acme/widgets/pulls/30/comments",
+        "/repos/acme/widgets/issues/30/comments",
+      ]);
     }),
   );
 });

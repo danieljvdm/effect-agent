@@ -1076,13 +1076,16 @@ describe("offline review run", () => {
 
       const program = executeReview(binding, { post: true, applyVerdict: false }).pipe(
         Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
-        Effect.provide(fullReviewExecutionContextLayer("offline flat full review")),
         Effect.provide(
-          Layer.mergeAll(
-            ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
-            collectingReviewPublisherLayer(published),
-            IdGenerator.layer,
-            NodeCrypto.layer,
+          fullReviewExecutionContextLayer("offline flat full review").pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
+                collectingReviewPublisherLayer(published),
+                IdGenerator.layer,
+                NodeCrypto.layer,
+              ),
+            ),
           ),
         ),
         Effect.scoped,
@@ -1140,13 +1143,16 @@ describe("offline review run", () => {
       const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
       const outcome = yield* executeReview(binding, { post: false, applyVerdict: false }).pipe(
         Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
-        Effect.provide(fullReviewExecutionContextLayer("offline dry-run full review")),
         Effect.provide(
-          Layer.mergeAll(
-            ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
-            collectingReviewPublisherLayer(published),
-            IdGenerator.layer,
-            NodeCrypto.layer,
+          fullReviewExecutionContextLayer("offline dry-run full review").pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
+                collectingReviewPublisherLayer(published),
+                IdGenerator.layer,
+                NodeCrypto.layer,
+              ),
+            ),
           ),
         ),
         Effect.scoped,
@@ -1194,13 +1200,16 @@ describe("offline review run", () => {
       const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
       const outcome = yield* executeReview(binding, { post: false, applyVerdict: false }).pipe(
         Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
-        Effect.provide(fullReviewExecutionContextLayer("offline probe full review")),
         Effect.provide(
-          Layer.mergeAll(
-            ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
-            collectingReviewPublisherLayer(published),
-            IdGenerator.layer,
-            NodeCrypto.layer,
+          fullReviewExecutionContextLayer("offline probe full review").pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
+                collectingReviewPublisherLayer(published),
+                IdGenerator.layer,
+                NodeCrypto.layer,
+              ),
+            ),
           ),
         ),
         Effect.scoped,
@@ -1457,13 +1466,16 @@ describe("offline review run", () => {
         applyVerdict: true,
         maxFindings: 1,
       }).pipe(
-        Effect.provide(fullReviewExecutionContextLayer("offline adjudication full review")),
         Effect.provide(
-          Layer.mergeAll(
-            ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
-            collectingReviewPublisherLayer(published),
-            IdGenerator.layer,
-            NodeCrypto.layer,
+          fullReviewExecutionContextLayer("offline adjudication full review").pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
+                collectingReviewPublisherLayer(published),
+                IdGenerator.layer,
+                NodeCrypto.layer,
+              ),
+            ),
           ),
         ),
         Effect.provideService(ReviewAdjudicationHost, host),
@@ -1728,14 +1740,19 @@ describe.skipIf(!liveEnabled)("pr-review live profile (opt-in)", () => {
           applyVerdict: false,
         }).pipe(
           Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
-          Effect.provide(fullReviewExecutionContextLayer("live explicit full review")),
           Effect.provide(
-            Layer.mergeAll(
-              ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
-              collectingReviewPublisherLayer(published),
-              openAiClientLayer,
-              IdGenerator.layer,
-              NodeCrypto.layer,
+            fullReviewExecutionContextLayer("live explicit full review").pipe(
+              Layer.provideMerge(
+                Layer.mergeAll(
+                  ReviewToolkitLayer.pipe(
+                    Layer.provideMerge(fixturePullRequestSourceLayer(fixture)),
+                  ),
+                  collectingReviewPublisherLayer(published),
+                  openAiClientLayer,
+                  IdGenerator.layer,
+                  NodeCrypto.layer,
+                ),
+              ),
             ),
           ),
           Effect.scoped,
