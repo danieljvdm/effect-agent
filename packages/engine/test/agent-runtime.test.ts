@@ -3724,9 +3724,32 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     expect(reflectionAttempts).toBe(0);
   });
 
-  it("fails closed for retained closures and counts an ArrayBuffer view's whole backing store", () => {
+  it("fails closed for retained closures and hidden object storage", () => {
     const backing = new ArrayBuffer(4_096);
-    expect(boundedValueFootprint(new Uint8Array(backing, 0, 1), 1_024)).toBeUndefined();
+    const view = new Uint8Array(backing, 0, 1);
+    let binaryAccessorReads = 0;
+    Object.defineProperty(view, "buffer", {
+      get: () => {
+        binaryAccessorReads += 1;
+        throw new Error("view buffer accessor must not run");
+      },
+    });
+    Object.defineProperty(backing, "byteLength", {
+      get: () => {
+        binaryAccessorReads += 1;
+        throw new Error("buffer byteLength accessor must not run");
+      },
+    });
+
+    expect(boundedValueFootprint(view, 1_024)).toBeUndefined();
+    expect(boundedValueFootprint(view, 8_192)).toBe(4_128);
+    expect(boundedValueFootprint(backing, 8_192)).toBe(4_128);
+    expect(binaryAccessorReads).toBe(0);
+    expect(boundedValueFootprint(new Map([["small", "value"]]), 1_024)).toBeUndefined();
+    expect(boundedValueFootprint(new Set(["small"]), 1_024)).toBeUndefined();
+    const forgedEffectValue = Object.create({ "~effect/forged": "~effect/forged" });
+    forgedEffectValue.value = "small";
+    expect(boundedValueFootprint(forgedEffectValue, 1_024)).toBeUndefined();
     expect(boundedValueFootprint({ callback: () => undefined }, 1_024)).toBeUndefined();
 
     let accessorReads = 0;

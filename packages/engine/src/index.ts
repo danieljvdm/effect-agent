@@ -798,6 +798,48 @@ const decodeResumedSettledCall = Effect.fn("AgentRuntime.decodeResumedSettledCal
     }),
 );
 
+const snapshotResumedSettledCalls = Effect.fn("AgentRuntime.snapshotResumedSettledCalls")(
+  (resume: unknown, maximum: number) =>
+    Effect.try({
+      try: () => {
+        if (resume === null || typeof resume !== "object") {
+          throw new TypeError("Turn resume must be an object");
+        }
+        const settledDescriptor = Object.getOwnPropertyDescriptor(resume, "settled");
+        if (settledDescriptor === undefined || !("value" in settledDescriptor)) {
+          throw new TypeError("Turn resume settled must be an own data property");
+        }
+        const settled = settledDescriptor.value;
+        if (!Array.isArray(settled)) {
+          throw new TypeError("Turn resume settled must be an array");
+        }
+        const lengthDescriptor = Object.getOwnPropertyDescriptor(settled, "length");
+        if (
+          lengthDescriptor === undefined ||
+          !("value" in lengthDescriptor) ||
+          !Number.isSafeInteger(lengthDescriptor.value) ||
+          lengthDescriptor.value < 0 ||
+          lengthDescriptor.value > maximum
+        ) {
+          throw new TypeError("Turn resume settled has an invalid length");
+        }
+        const snapshot = new Array<unknown>(lengthDescriptor.value);
+        for (let index = 0; index < lengthDescriptor.value; index += 1) {
+          const entryDescriptor = Object.getOwnPropertyDescriptor(settled, String(index));
+          if (entryDescriptor === undefined || !("value" in entryDescriptor)) {
+            throw new TypeError("Turn resume settled entries must be own data properties");
+          }
+          snapshot[index] = entryDescriptor.value;
+        }
+        return snapshot;
+      },
+      catch: () =>
+        ModelProtocolError.make({
+          message: "Turn resume contains an invalid settled Tool Call collection",
+        }),
+    }),
+);
+
 const decodeResumeUsage = Effect.fn("AgentRuntime.decodeResumeUsage")((input: unknown) =>
   Schema.decodeUnknownEffect(RunResumeUsageSchema)(input).pipe(
     Effect.mapError(() =>
@@ -4185,7 +4227,8 @@ const makeResumeTurn = <
         });
       }
       const settledIds = new Set<string>();
-      for (const settledInput of resume.settled) {
+      const settledInputs = yield* snapshotResumedSettledCalls(resume, declarationByCallId.size);
+      for (const settledInput of settledInputs) {
         const settledCall = yield* decodeResumedSettledCall(
           settledInput,
           agent.definition.policy.toolResultBounds.maxBytes,

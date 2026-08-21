@@ -1,6 +1,116 @@
+import { Schema } from "effect";
+
 const DEFAULT_MAX_DEPTH = 128;
 const OBJECT_OVERHEAD_BYTES = 32;
 const PROPERTY_OVERHEAD_BYTES = 8;
+
+const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  "byteLength",
+)?.get;
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object;
+const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer")?.get;
+const dataViewBufferGetter = Object.getOwnPropertyDescriptor(DataView.prototype, "buffer")?.get;
+const urlConstructor = Reflect.get(globalThis, "URL");
+const urlPrototypeDescriptor =
+  typeof urlConstructor === "function"
+    ? Object.getOwnPropertyDescriptor(urlConstructor, "prototype")
+    : undefined;
+const urlHrefGetter =
+  urlPrototypeDescriptor !== undefined &&
+  "value" in urlPrototypeDescriptor &&
+  urlPrototypeDescriptor.value !== null &&
+  typeof urlPrototypeDescriptor.value === "object"
+    ? Object.getOwnPropertyDescriptor(urlPrototypeDescriptor.value, "href")?.get
+    : undefined;
+
+const intrinsicArrayBufferByteLength = (value: object): number | undefined => {
+  if (arrayBufferByteLengthGetter === undefined) return undefined;
+  try {
+    const byteLength = Reflect.apply(arrayBufferByteLengthGetter, value, []);
+    return Number.isSafeInteger(byteLength) && byteLength >= 0 ? byteLength : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const intrinsicViewBackingByteLength = (value: object): number | undefined => {
+  const getters = [typedArrayBufferGetter, dataViewBufferGetter];
+  for (const getter of getters) {
+    if (getter === undefined) continue;
+    try {
+      const buffer = Reflect.apply(getter, value, []);
+      if (buffer !== null && typeof buffer === "object") {
+        return intrinsicArrayBufferByteLength(buffer);
+      }
+    } catch {
+      // Try the other supported view family without consulting user properties.
+    }
+  }
+  return undefined;
+};
+
+const intrinsicUrlByteLength = (value: object): number | undefined => {
+  if (urlHrefGetter === undefined) return undefined;
+  try {
+    const href = Reflect.apply(urlHrefGetter, value, []);
+    return typeof href === "string" ? utf8ByteLength(href) + 2 : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+interface PrototypeInspection {
+  readonly trustChildren: boolean;
+}
+
+const inspectPrototype = (
+  prototype: object | null,
+  isArray: boolean,
+  trustedSchemaProduct: boolean,
+): PrototypeInspection | undefined => {
+  if (prototype === null) return { trustChildren: trustedSchemaProduct };
+  if (isArray) {
+    return prototype === Array.prototype ? { trustChildren: trustedSchemaProduct } : undefined;
+  }
+  if (prototype === Object.prototype) return { trustChildren: trustedSchemaProduct };
+
+  const constructorDescriptor = Object.getOwnPropertyDescriptor(prototype, "constructor");
+  if (
+    constructorDescriptor !== undefined &&
+    "value" in constructorDescriptor &&
+    typeof constructorDescriptor.value === "function"
+  ) {
+    const constructorPrototype = Object.getOwnPropertyDescriptor(
+      constructorDescriptor.value,
+      "prototype",
+    );
+    if (
+      constructorPrototype !== undefined &&
+      "value" in constructorPrototype &&
+      constructorPrototype.value === prototype &&
+      Schema.isSchema(constructorDescriptor.value)
+    ) {
+      // Schema classes are decoded data products. Their state remains in own fields, unlike
+      // arbitrary class instances with private or native internal slots.
+      return { trustChildren: true };
+    }
+  }
+
+  if (trustedSchemaProduct) {
+    // Effect data types such as DateTime use fixed-shape, constructor-free prototypes with a
+    // self-identifying TypeId. Admit them only beneath a decoded Schema class, so arbitrary
+    // provider metadata cannot forge the marker into authority.
+    const isEffectData = Reflect.ownKeys(prototype).some((key) => {
+      if (typeof key !== "string" || !key.startsWith("~effect/")) return false;
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
+      return descriptor !== undefined && "value" in descriptor && descriptor.value === key;
+    });
+    if (isEffectData) return { trustChildren: true };
+  }
+
+  return undefined;
+};
 
 /** Platform-neutral UTF-8 byte length; the engine's TypeScript lib excludes `TextEncoder`. */
 export const utf8ByteLength = (value: string): number => {
@@ -43,7 +153,7 @@ export const boundedValueFootprint = (
     return true;
   };
 
-  const visit = (value: unknown, depth: number): boolean => {
+  const visit = (value: unknown, depth: number, trustedSchemaProduct = false): boolean => {
     if (depth > maxDepth) return false;
     if (value === null) return add(4);
     switch (typeof value) {
@@ -61,20 +171,47 @@ export const boundedValueFootprint = (
         return false;
       case "object": {
         if (ancestors.has(value) || !add(OBJECT_OVERHEAD_BYTES)) return false;
-        if (ArrayBuffer.isView(value)) return add(value.buffer.byteLength);
-        if (value instanceof ArrayBuffer) return add(value.byteLength);
-        if (Array.isArray(value) && !add(value.length)) return false;
+        if (ArrayBuffer.isView(value)) {
+          const byteLength = intrinsicViewBackingByteLength(value);
+          return byteLength !== undefined && add(byteLength);
+        }
+        const bufferByteLength = intrinsicArrayBufferByteLength(value);
+        if (bufferByteLength !== undefined) return add(bufferByteLength);
+        const urlByteLength = intrinsicUrlByteLength(value);
+        if (urlByteLength !== undefined) return add(urlByteLength);
+
+        const isArray = Array.isArray(value);
+        const prototype = Object.getPrototypeOf(value);
+        const inspection = inspectPrototype(prototype, isArray, trustedSchemaProduct);
+        if (inspection === undefined) {
+          // Maps, Sets, arbitrary class instances, and other objects can retain storage that
+          // own-key traversal cannot see. Plain data and known Effect Schema values are
+          // measurable because their state lives in own data properties.
+          return false;
+        }
+        if (isArray) {
+          const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+          if (
+            lengthDescriptor === undefined ||
+            !("value" in lengthDescriptor) ||
+            !Number.isSafeInteger(lengthDescriptor.value) ||
+            lengthDescriptor.value < 0 ||
+            !add(lengthDescriptor.value)
+          ) {
+            return false;
+          }
+        }
 
         ancestors.add(value);
         try {
           for (const key of Reflect.ownKeys(value)) {
-            if (key === "length" && Array.isArray(value)) continue;
+            if (key === "length" && isArray) continue;
             if (!add(PROPERTY_OVERHEAD_BYTES)) return false;
             if (typeof key === "string" && !add(utf8ByteLength(key))) return false;
             const descriptor = Object.getOwnPropertyDescriptor(value, key);
             if (descriptor === undefined) return false;
             if ("value" in descriptor) {
-              if (!visit(descriptor.value, depth + 1)) return false;
+              if (!visit(descriptor.value, depth + 1, inspection.trustChildren)) return false;
             } else {
               // Accessors and functions may retain arbitrarily large closure graphs.
               return false;

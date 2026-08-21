@@ -683,6 +683,16 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
           lookup: ({ key }) =>
             Ref.update(handled, (all) => [...all, key]).pipe(Effect.as(`handled-${key}`)),
         });
+        let settledIteratorReads = 0;
+        const settled: RunTurnResume["settled"] = [
+          { id: "call-a", result: "recorded-a", isFailure: false },
+        ];
+        Object.defineProperty(settled, Symbol.iterator, {
+          get: () => {
+            settledIteratorReads += 1;
+            throw new Error("settled iterator must not run");
+          },
+        });
         const resume: RunTurnResume = {
           turn: 1,
           turnId: resumeTurnId,
@@ -690,7 +700,7 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
             { id: "call-a", name: "lookup", params: { key: "a" } },
             { id: "call-b", name: "lookup", params: { key: "b" } },
           ],
-          settled: [{ id: "call-a", result: "recorded-a", isFailure: false }],
+          settled,
         };
 
         const result = yield* AgentRuntime.stream(
@@ -722,6 +732,7 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
         ]);
         // Only the open call executed; the settled call was injected.
         expect(yield* Ref.get(handled)).toEqual(["b"]);
+        expect(settledIteratorReads).toBe(0);
         const started = (yield* Ref.get(events)).filter(
           (event) => event._tag === "ToolCallStarted",
         );
@@ -846,6 +857,31 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
         expect(accessorFailure.message).toContain("invalid settled Tool Call");
       }
       expect(accessorReads).toBe(0);
+
+      let collectionAccessorReads = 0;
+      const collectionAccessorResume: RunTurnResume = {
+        turn: 1,
+        turnId: resumeTurnId,
+        calls: [{ id: "call-open", name: "lookup", params: { key: "b" } }],
+        settled: [],
+      };
+      Object.defineProperty(collectionAccessorResume, "settled", {
+        get: () => {
+          collectionAccessorReads += 1;
+          throw new Error("settled collection accessor must not run");
+        },
+      });
+      const collectionAccessorExit = yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "resume" },
+        { resume: collectionAccessorResume, durability: markingDurability(marks) },
+      ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+      const collectionAccessorFailure = failureFrom(collectionAccessorExit);
+      expect(collectionAccessorFailure).toBeInstanceOf(ModelProtocolError);
+      if (collectionAccessorFailure instanceof ModelProtocolError) {
+        expect(collectionAccessorFailure.message).toContain("invalid settled Tool Call collection");
+      }
+      expect(collectionAccessorReads).toBe(0);
 
       expect(handlerStarts).toBe(0);
       expect(modelCalls).toBe(0);

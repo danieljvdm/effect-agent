@@ -34016,6 +34016,74 @@ var makeUsageBudget = (limits) => makeUsageBudgetRoot(UsageBudgetNodeConfig.make
 var DEFAULT_MAX_DEPTH = 128;
 var OBJECT_OVERHEAD_BYTES = 32;
 var PROPERTY_OVERHEAD_BYTES = 8;
+var arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")?.get;
+var typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+var typedArrayBufferGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer")?.get;
+var dataViewBufferGetter = Object.getOwnPropertyDescriptor(DataView.prototype, "buffer")?.get;
+var urlConstructor = Reflect.get(globalThis, "URL");
+var urlPrototypeDescriptor = typeof urlConstructor === "function" ? Object.getOwnPropertyDescriptor(urlConstructor, "prototype") : undefined;
+var urlHrefGetter = urlPrototypeDescriptor !== undefined && "value" in urlPrototypeDescriptor && urlPrototypeDescriptor.value !== null && typeof urlPrototypeDescriptor.value === "object" ? Object.getOwnPropertyDescriptor(urlPrototypeDescriptor.value, "href")?.get : undefined;
+var intrinsicArrayBufferByteLength = (value4) => {
+  if (arrayBufferByteLengthGetter === undefined)
+    return;
+  try {
+    const byteLength = Reflect.apply(arrayBufferByteLengthGetter, value4, []);
+    return Number.isSafeInteger(byteLength) && byteLength >= 0 ? byteLength : undefined;
+  } catch {
+    return;
+  }
+};
+var intrinsicViewBackingByteLength = (value4) => {
+  const getters = [typedArrayBufferGetter, dataViewBufferGetter];
+  for (const getter of getters) {
+    if (getter === undefined)
+      continue;
+    try {
+      const buffer3 = Reflect.apply(getter, value4, []);
+      if (buffer3 !== null && typeof buffer3 === "object") {
+        return intrinsicArrayBufferByteLength(buffer3);
+      }
+    } catch {}
+  }
+  return;
+};
+var intrinsicUrlByteLength = (value4) => {
+  if (urlHrefGetter === undefined)
+    return;
+  try {
+    const href = Reflect.apply(urlHrefGetter, value4, []);
+    return typeof href === "string" ? utf8ByteLength2(href) + 2 : undefined;
+  } catch {
+    return;
+  }
+};
+var inspectPrototype = (prototype, isArray2, trustedSchemaProduct) => {
+  if (prototype === null)
+    return { trustChildren: trustedSchemaProduct };
+  if (isArray2) {
+    return prototype === Array.prototype ? { trustChildren: trustedSchemaProduct } : undefined;
+  }
+  if (prototype === Object.prototype)
+    return { trustChildren: trustedSchemaProduct };
+  const constructorDescriptor = Object.getOwnPropertyDescriptor(prototype, "constructor");
+  if (constructorDescriptor !== undefined && "value" in constructorDescriptor && typeof constructorDescriptor.value === "function") {
+    const constructorPrototype = Object.getOwnPropertyDescriptor(constructorDescriptor.value, "prototype");
+    if (constructorPrototype !== undefined && "value" in constructorPrototype && constructorPrototype.value === prototype && exports_Schema.isSchema(constructorDescriptor.value)) {
+      return { trustChildren: true };
+    }
+  }
+  if (trustedSchemaProduct) {
+    const isEffectData = Reflect.ownKeys(prototype).some((key) => {
+      if (typeof key !== "string" || !key.startsWith("~effect/"))
+        return false;
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
+      return descriptor !== undefined && "value" in descriptor && descriptor.value === key;
+    });
+    if (isEffectData)
+      return { trustChildren: true };
+  }
+  return;
+};
 var utf8ByteLength2 = (value4) => {
   let total = 0;
   for (const character of value4) {
@@ -34036,7 +34104,7 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
     total += bytes;
     return true;
   };
-  const visit = (value4, depth) => {
+  const visit = (value4, depth, trustedSchemaProduct = false) => {
     if (depth > maxDepth)
       return false;
     if (value4 === null)
@@ -34057,16 +34125,32 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
       case "object": {
         if (ancestors.has(value4) || !add5(OBJECT_OVERHEAD_BYTES))
           return false;
-        if (ArrayBuffer.isView(value4))
-          return add5(value4.buffer.byteLength);
-        if (value4 instanceof ArrayBuffer)
-          return add5(value4.byteLength);
-        if (Array.isArray(value4) && !add5(value4.length))
+        if (ArrayBuffer.isView(value4)) {
+          const byteLength = intrinsicViewBackingByteLength(value4);
+          return byteLength !== undefined && add5(byteLength);
+        }
+        const bufferByteLength = intrinsicArrayBufferByteLength(value4);
+        if (bufferByteLength !== undefined)
+          return add5(bufferByteLength);
+        const urlByteLength = intrinsicUrlByteLength(value4);
+        if (urlByteLength !== undefined)
+          return add5(urlByteLength);
+        const isArray2 = Array.isArray(value4);
+        const prototype = Object.getPrototypeOf(value4);
+        const inspection = inspectPrototype(prototype, isArray2, trustedSchemaProduct);
+        if (inspection === undefined) {
           return false;
+        }
+        if (isArray2) {
+          const lengthDescriptor = Object.getOwnPropertyDescriptor(value4, "length");
+          if (lengthDescriptor === undefined || !("value" in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 || !add5(lengthDescriptor.value)) {
+            return false;
+          }
+        }
         ancestors.add(value4);
         try {
           for (const key of Reflect.ownKeys(value4)) {
-            if (key === "length" && Array.isArray(value4))
+            if (key === "length" && isArray2)
               continue;
             if (!add5(PROPERTY_OVERHEAD_BYTES))
               return false;
@@ -34076,7 +34160,7 @@ var boundedValueFootprint = (root, maxBytes, maxDepth = DEFAULT_MAX_DEPTH) => {
             if (descriptor === undefined)
               return false;
             if ("value" in descriptor) {
-              if (!visit(descriptor.value, depth + 1))
+              if (!visit(descriptor.value, depth + 1, inspection.trustChildren))
                 return false;
             } else {
               return false;
@@ -35074,6 +35158,37 @@ var decodeResumedSettledCall = exports_Effect.fn("AgentRuntime.decodeResumedSett
   }).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
     message: "Turn resume contains an invalid settled Tool Call"
   })));
+}));
+var snapshotResumedSettledCalls = exports_Effect.fn("AgentRuntime.snapshotResumedSettledCalls")((resume, maximum) => exports_Effect.try({
+  try: () => {
+    if (resume === null || typeof resume !== "object") {
+      throw new TypeError("Turn resume must be an object");
+    }
+    const settledDescriptor = Object.getOwnPropertyDescriptor(resume, "settled");
+    if (settledDescriptor === undefined || !("value" in settledDescriptor)) {
+      throw new TypeError("Turn resume settled must be an own data property");
+    }
+    const settled = settledDescriptor.value;
+    if (!Array.isArray(settled)) {
+      throw new TypeError("Turn resume settled must be an array");
+    }
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(settled, "length");
+    if (lengthDescriptor === undefined || !("value" in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 || lengthDescriptor.value > maximum) {
+      throw new TypeError("Turn resume settled has an invalid length");
+    }
+    const snapshot3 = new Array(lengthDescriptor.value);
+    for (let index2 = 0;index2 < lengthDescriptor.value; index2 += 1) {
+      const entryDescriptor = Object.getOwnPropertyDescriptor(settled, String(index2));
+      if (entryDescriptor === undefined || !("value" in entryDescriptor)) {
+        throw new TypeError("Turn resume settled entries must be own data properties");
+      }
+      snapshot3[index2] = entryDescriptor.value;
+    }
+    return snapshot3;
+  },
+  catch: () => ModelProtocolError.make({
+    message: "Turn resume contains an invalid settled Tool Call collection"
+  })
 }));
 var decodeResumeUsage = exports_Effect.fn("AgentRuntime.decodeResumeUsage")((input) => exports_Schema.decodeUnknownEffect(RunResumeUsageSchema)(input).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
   message: "Run resume usage requires non-negative safe-integer totals and last-call tokens no greater than their cumulative totals"
@@ -36829,7 +36944,8 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
     });
   }
   const settledIds = new Set;
-  for (const settledInput of resume.settled) {
+  const settledInputs = yield* snapshotResumedSettledCalls(resume, declarationByCallId.size);
+  for (const settledInput of settledInputs) {
     const settledCall = yield* decodeResumedSettledCall(settledInput, agent2.definition.policy.toolResultBounds.maxBytes);
     const declared = declarationByCallId.get(settledCall.id);
     if (declared === undefined) {
