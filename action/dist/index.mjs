@@ -42946,8 +42946,7 @@ class StoredReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/
 }
 var AdjudicationDisposition = exports_Schema.Literals(["accepted-risk", "refuted", "obsolete"]);
 var MAX_STORED_ADJUDICATIONS = 20;
-
-class StoredAdjudication extends exports_Schema.Class("@effect-agent/pr-review/StoredAdjudication")({
+var StoredAdjudicationFields = exports_Schema.Struct({
   path: exports_Schema.optionalKey(ChangedPath),
   startLine: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isGreaterThan(0))),
   endLine: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isGreaterThan(0))),
@@ -42955,7 +42954,16 @@ class StoredAdjudication extends exports_Schema.Class("@effect-agent/pr-review/S
   disposition: AdjudicationDisposition,
   reason: exports_Schema.optionalKey(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300))),
   actor: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(100))
-}) {
+}).check(exports_Schema.makeFilter((adjudication) => {
+  const locationParts = [
+    adjudication.path,
+    adjudication.startLine,
+    adjudication.endLine
+  ].filter((part) => part !== undefined).length;
+  return locationParts === 0 || locationParts === 3 ? undefined : "path, startLine, and endLine must be either all present or all absent";
+}, { title: "adjudication locations are complete or unanchored" }));
+
+class StoredAdjudication extends exports_Schema.Class("@effect-agent/pr-review/StoredAdjudication")(StoredAdjudicationFields) {
 }
 var findingIdentity = (finding) => `${finding.path}\x00${finding.startLine}\x00${finding.endLine}\x00${finding.title}`;
 var adjudicationIdentity = (adjudication) => adjudication.path !== undefined && adjudication.startLine !== undefined && adjudication.endLine !== undefined ? findingIdentity({
@@ -43534,6 +43542,7 @@ var retireStaleReviews = exports_Effect.fn("retireStaleReviews")(function* (inpu
 
 // packages/pr-review/src/internal/adjudication.ts
 var PositiveLine2 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var MAX_THREAD_ADJUDICATION_COMMANDS = 100;
 
 class AdjudicationComment extends exports_Schema.Class("@effect-agent/pr-review/AdjudicationComment")({
   body: exports_Schema.String.check(exports_Schema.isMaxLength(65536)),
@@ -43548,7 +43557,7 @@ class AdjudicableThread extends exports_Schema.Class("@effect-agent/pr-review/Ad
   startLine: exports_Schema.NullOr(PositiveLine2),
   endLine: exports_Schema.NullOr(PositiveLine2),
   rootBody: exports_Schema.String.check(exports_Schema.isMaxLength(65536)),
-  replies: exports_Schema.Array(AdjudicationComment).check(exports_Schema.isMaxLength(100))
+  replies: exports_Schema.Array(AdjudicationComment).check(exports_Schema.isMaxLength(MAX_THREAD_ADJUDICATION_COMMANDS))
 }) {
 }
 
@@ -43563,6 +43572,11 @@ class ReviewAdjudicationFailure extends exports_Schema.TaggedError()("ReviewAdju
 
 class ReviewAdjudicationHost extends exports_Context.Service()("@effect-agent/pr-review/ReviewAdjudicationHost") {
 }
+var noReviewAdjudicationHost = ReviewAdjudicationHost.of({
+  listFindingThreads: exports_Effect.succeed([]),
+  listIssueComments: exports_Effect.succeed([])
+});
+var noReviewAdjudicationHostLayer = exports_Layer.succeed(ReviewAdjudicationHost)(noReviewAdjudicationHost);
 var AUTHORIZED_ADJUDICATION_ASSOCIATIONS = new Set([
   "OWNER",
   "MEMBER",
@@ -43705,14 +43719,16 @@ var mergeAdjudications = (prior, fresh2) => {
   return merged.slice(Math.max(0, merged.length - MAX_STORED_ADJUDICATIONS));
 };
 var collectReviewAdjudications = exports_Effect.fn("collectReviewAdjudications")(function* (prior) {
-  const host = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewAdjudicationHost));
-  if (host === undefined)
-    return prior.slice(0, MAX_STORED_ADJUDICATIONS);
-  const threads = yield* host.listFindingThreads.pipe(exports_Effect.catch((error2) => exports_Effect.logWarning(`Could not list finding threads for adjudication: ${error2.reason}`).pipe(exports_Effect.as(undefined))));
-  const issueComments = yield* host.listIssueComments.pipe(exports_Effect.catch((error2) => exports_Effect.logWarning(`Could not list issue comments for adjudication: ${error2.reason}`).pipe(exports_Effect.as(undefined))));
+  const host = yield* ReviewAdjudicationHost;
+  const listings = yield* exports_Effect.all({
+    threads: host.listFindingThreads,
+    issueComments: host.listIssueComments
+  }).pipe(exports_Effect.catch((error2) => exports_Effect.logWarning(`Could not collect adjudications from '${error2.operation}': ${error2.reason}; retaining stored adjudications unchanged.`).pipe(exports_Effect.as(undefined))));
+  if (listings === undefined)
+    return prior;
   const derived = deriveAdjudications({
-    threads: threads ?? [],
-    issueComments: issueComments ?? []
+    threads: listings.threads,
+    issueComments: listings.issueComments
   });
   for (const note of derived.ignored) {
     yield* exports_Effect.logDebug(`Ignored adjudication command — ${note}`);
@@ -45334,8 +45350,22 @@ var gitHubReviewAdjudicationHostLayer = exports_Layer.effect(ReviewAdjudicationH
       if (thread === undefined)
         continue;
       const reply = toAdjudicationComment(wire);
-      if (reply !== undefined && thread.replies.length < 100)
-        thread.replies.push(reply);
+      if (reply === undefined)
+        continue;
+      const command = parseThreadAdjudication(reply.body);
+      if (command === undefined)
+        continue;
+      if (!AUTHORIZED_ADJUDICATION_ASSOCIATIONS.has(reply.authorAssociation)) {
+        yield* exports_Effect.logDebug(`Ignored inline adjudication command from @${reply.authorLogin} (${reply.authorAssociation}).`);
+        continue;
+      }
+      if (thread.replies.length >= MAX_THREAD_ADJUDICATION_COMMANDS) {
+        return yield* ReviewAdjudicationFailure.make({
+          operation: "listReviewCommentsForAdjudication",
+          reason: `inline thread ${wire.in_reply_to_id} exceeds the bounded ${MAX_THREAD_ADJUDICATION_COMMANDS}-command adjudication lookup`
+        });
+      }
+      thread.replies.push(reply);
     }
     return [...threads.values()].filter((thread) => thread.root.path.length > 0 && thread.root.path.length <= 500).map(({ root, replies }) => {
       const endLine = positiveLine(root.line ?? root.original_line);
@@ -45914,12 +45944,20 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
   const adjudicatedIdentities = new Set(adjudications.map(adjudicationIdentity));
   const isAdjudicatedFinding = (finding) => adjudicatedIdentities.has(findingIdentity(finding));
   const isAdjudicatedConcern = (concern) => adjudicatedIdentities.has(concern.title);
-  const boundedReview = enforceFindingsBound(core2.review, clampMaxFindings(options3.maxFindings));
+  const filteredReview = adjudicatedIdentities.size === 0 ? core2.review : CodeReview.make({
+    summary: core2.review.summary,
+    verdict: core2.review.verdict,
+    findings: core2.review.findings.filter((finding) => !isAdjudicatedFinding(finding)),
+    ...core2.review.concerns === undefined ? {} : {
+      concerns: core2.review.concerns.filter((concern) => !isAdjudicatedConcern(concern))
+    },
+    ...core2.review.walkthrough === undefined ? {} : { walkthrough: core2.review.walkthrough }
+  });
   const reviewPaths = new Set(files.map((file2) => file2.path));
   const normalizedReview = CodeReview.make({
-    ...boundedReview,
-    ...boundedReview.concerns === undefined ? {} : {
-      concerns: boundedReview.concerns.map((concern) => {
+    ...filteredReview,
+    ...filteredReview.concerns === undefined ? {} : {
+      concerns: filteredReview.concerns.map((concern) => {
         const evidencePaths = concern.evidencePaths;
         if (evidencePaths === undefined || evidencePaths.some((path) => !reviewPaths.has(path))) {
           const { evidencePaths: _invalid, ...pathless } = concern;
@@ -45932,33 +45970,30 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
       })
     }
   });
-  const review = adjudicatedIdentities.size === 0 ? normalizedReview : CodeReview.make({
-    summary: normalizedReview.summary,
-    verdict: normalizedReview.verdict,
-    findings: normalizedReview.findings.filter((finding) => !isAdjudicatedFinding(finding)),
-    ...normalizedReview.concerns === undefined ? {} : {
-      concerns: normalizedReview.concerns.filter((concern) => !isAdjudicatedConcern(concern))
-    },
-    ...normalizedReview.walkthrough === undefined ? {} : { walkthrough: normalizedReview.walkthrough }
-  });
+  const review = enforceFindingsBound(normalizedReview, clampMaxFindings(options3.maxFindings));
   const { inputCoverage, assurance } = core2;
   const unreviewedPaths = [...new Set(core2.unreviewedPaths)].sort();
   const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
   const affectedPaths = new Set(executionContext?.affectedPaths ?? files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]));
   const priorState = executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
   const carriedCandidates = priorState?.unresolvedFindings.filter((finding) => !affectedPaths.has(finding.path)).map(fromStoredFinding) ?? [];
-  const activeFindings = rankAndDedupeFindings([...carriedCandidates, ...review.findings]).slice(0, clampMaxFindings(options3.maxFindings)).filter((finding) => !isAdjudicatedFinding(finding));
+  const eligibleCarriedCandidates = carriedCandidates.filter((finding) => !isAdjudicatedFinding(finding));
+  const activeFindings = rankAndDedupeFindings([
+    ...eligibleCarriedCandidates,
+    ...review.findings.filter((finding) => !isAdjudicatedFinding(finding))
+  ]).slice(0, clampMaxFindings(options3.maxFindings));
   const activeFindingKeys = new Set(activeFindings.map(findingKey));
   const currentFindingKeys = new Set(review.findings.map(findingKey));
-  const carriedFindings = carriedCandidates.filter((finding) => activeFindingKeys.has(findingKey(finding)) && !currentFindingKeys.has(findingKey(finding)));
+  const carriedFindings = eligibleCarriedCandidates.filter((finding) => activeFindingKeys.has(findingKey(finding)) && !currentFindingKeys.has(findingKey(finding)));
   const carriedConcernCandidates = priorState?.unresolvedConcerns.filter((concern) => concern.evidencePaths !== undefined && concern.evidencePaths.every((path) => !affectedPaths.has(path))).map(fromStoredConcern) ?? [];
+  const eligibleCarriedConcernCandidates = carriedConcernCandidates.filter((concern) => !isAdjudicatedConcern(concern));
   const activeConcerns = rankAndDedupeConcerns([
-    ...carriedConcernCandidates,
-    ...review.concerns ?? []
-  ]).filter((concern) => !isAdjudicatedConcern(concern));
+    ...eligibleCarriedConcernCandidates,
+    ...(review.concerns ?? []).filter((concern) => !isAdjudicatedConcern(concern))
+  ]);
   const currentConcernKeys = new Set((review.concerns ?? []).map(reviewConcernKey));
   const activeConcernKeys = new Set(activeConcerns.map(reviewConcernKey));
-  const carriedConcerns = carriedConcernCandidates.filter((concern) => {
+  const carriedConcerns = eligibleCarriedConcernCandidates.filter((concern) => {
     const key = reviewConcernKey(concern);
     return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
   });

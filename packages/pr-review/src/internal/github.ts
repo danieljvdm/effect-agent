@@ -5,6 +5,9 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import {
   AdjudicableThread,
   AdjudicationComment,
+  AUTHORIZED_ADJUDICATION_ASSOCIATIONS,
+  MAX_THREAD_ADJUDICATION_COMMANDS,
+  parseThreadAdjudication,
   ReviewAdjudicationFailure,
   ReviewAdjudicationHost,
 } from "./adjudication.ts";
@@ -791,7 +794,22 @@ export const gitHubReviewAdjudicationHostLayer: Layer.Layer<
         const thread = threads.get(wire.in_reply_to_id);
         if (thread === undefined) continue;
         const reply = toAdjudicationComment(wire);
-        if (reply !== undefined && thread.replies.length < 100) thread.replies.push(reply);
+        if (reply === undefined) continue;
+        const command = parseThreadAdjudication(reply.body);
+        if (command === undefined) continue;
+        if (!AUTHORIZED_ADJUDICATION_ASSOCIATIONS.has(reply.authorAssociation)) {
+          yield* Effect.logDebug(
+            `Ignored inline adjudication command from @${reply.authorLogin} (${reply.authorAssociation}).`,
+          );
+          continue;
+        }
+        if (thread.replies.length >= MAX_THREAD_ADJUDICATION_COMMANDS) {
+          return yield* ReviewAdjudicationFailure.make({
+            operation: "listReviewCommentsForAdjudication",
+            reason: `inline thread ${wire.in_reply_to_id} exceeds the bounded ${MAX_THREAD_ADJUDICATION_COMMANDS}-command adjudication lookup`,
+          });
+        }
+        thread.replies.push(reply);
       }
       return [...threads.values()]
         .filter((thread) => thread.root.path.length > 0 && thread.root.path.length <= 500)

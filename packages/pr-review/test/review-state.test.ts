@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Option, Redacted } from "effect";
+import { Effect, Option, Redacted, Schema } from "effect";
 
 import {
   ChangedFile,
@@ -99,6 +99,35 @@ const select = (overrides: Partial<Parameters<typeof selectReviewRange>[0]> = {}
   });
 
 describe("review state", () => {
+  it("rejects adjudications with partial locations at the persisted-state boundary", () => {
+    const common = {
+      title: "Still requires attention",
+      disposition: "accepted-risk",
+      actor: "dan",
+    } as const;
+    for (const partial of [
+      { path: "src/accepted.ts" },
+      { startLine: 1 },
+      { endLine: 1 },
+      { path: "src/accepted.ts", startLine: 1 },
+      { path: "src/accepted.ts", endLine: 1 },
+      { startLine: 1, endLine: 1 },
+    ]) {
+      expect(Schema.decodeUnknownExit(StoredAdjudication)({ ...common, ...partial })._tag).toBe(
+        "Failure",
+      );
+    }
+    expect(Schema.decodeUnknownExit(StoredAdjudication)(common)._tag).toBe("Success");
+    expect(
+      Schema.decodeUnknownExit(StoredAdjudication)({
+        ...common,
+        path: "src/accepted.ts",
+        startLine: 1,
+        endLine: 1,
+      })._tag,
+    ).toBe("Success");
+  });
+
   it.effect("authenticates only a terminal schema-validated review-body marker", () =>
     Effect.gen(function* () {
       const secret = Redacted.make("stable-state-secret");

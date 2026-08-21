@@ -119,7 +119,9 @@ them, so an adjudication lifts a blocking check without a new commit.
 **Authorization is fail-closed**: only comments whose `author_association` is OWNER, MEMBER, or
 COLLABORATOR adjudicate. Anything else — third parties, bots, malformed commands — is ignored
 (logged at debug). Later adjudications of the same identity win by comment creation order, bounded
-at 20 stored entries (oldest dropped with a logged notice).
+at 20 stored entries (oldest dropped with a logged notice). If either GitHub listing surface fails,
+or one thread exceeds the bounded authorized-command history, fresh collection is discarded and
+the stored set stands unchanged.
 
 **Rejected alternative — parsing free-text rebuttals** ("this is fine because …" replies): only an
 explicit, authorized verb is auditable and fail-closed. Inferring intent from prose would let model

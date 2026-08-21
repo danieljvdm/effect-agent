@@ -2,7 +2,9 @@ import type { ReviewPublicationPlan } from "@effect-agent/pr-review";
 import {
   ChangedFile,
   CodeReview,
+  noReviewAdjudicationHost,
   PullRequestMetadata,
+  ReviewAdjudicationHost,
   ReviewFinding,
 } from "@effect-agent/pr-review";
 import {
@@ -129,6 +131,7 @@ describe("example reviewer", () => {
       const outcome = yield* reviewer
         .run({ post: true })
         .pipe(
+          Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
           Effect.provide(
             Layer.mergeAll(
               fixturePullRequestSourceLayer(fixture),

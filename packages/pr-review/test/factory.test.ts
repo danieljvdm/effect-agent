@@ -12,8 +12,10 @@ import {
   CodeReview,
   compileIgnoreGlobs,
   enforceFindingsBound,
+  noReviewAdjudicationHost,
   PrReview,
   PullRequestMetadata,
+  ReviewAdjudicationHost,
   ReviewFinding,
 } from "../src/index.ts";
 import {
@@ -160,6 +162,7 @@ const runFactoryReviewer = <E, R>(
   Effect.gen(function* () {
     const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
     const outcome = yield* run({ post: true }).pipe(
+      Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
       Effect.provide(
         Layer.merge(
           fixturePullRequestSourceLayer(fixture),
@@ -318,6 +321,7 @@ layer(NodeCrypto.layer)("PrReview.make", (it) => {
       const outcome = yield* reviewer
         .run({ post: true })
         .pipe(
+          Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
           Effect.provide(
             Layer.mergeAll(
               fixturePullRequestSourceLayer(fixture),
@@ -370,13 +374,19 @@ type PlainServices = ServicesOf<typeof plainRun>;
 type ExtraServices = ServicesOf<typeof extraRun>;
 type FanOutServices = ServicesOf<typeof fanOutRun>;
 
-// The two ports and Crypto stay visible on every shape.
+// The source, publisher, adjudication host, and Crypto stay visible on every shape.
 type PlainSourceProof = Assert<Equal<Extract<PlainServices, PullRequestSource>, PullRequestSource>>;
 type PlainPublisherProof = Assert<Equal<Extract<PlainServices, ReviewPublisher>, ReviewPublisher>>;
+type PlainAdjudicationHostProof = Assert<
+  Equal<Extract<PlainServices, ReviewAdjudicationHost>, ReviewAdjudicationHost>
+>;
 type PlainCryptoProof = Assert<Equal<Extract<PlainServices, Crypto.Crypto>, Crypto.Crypto>>;
 type FanOutCryptoProof = Assert<Equal<Extract<FanOutServices, Crypto.Crypto>, Crypto.Crypto>>;
 type FanOutSourceProof = Assert<
   Equal<Extract<FanOutServices, PullRequestSource>, PullRequestSource>
+>;
+type FanOutAdjudicationHostProof = Assert<
+  Equal<Extract<FanOutServices, ReviewAdjudicationHost>, ReviewAdjudicationHost>
 >;
 // Framework plumbing is satisfied internally.
 type PlainIdGeneratorExcludedProof = Assert<Equal<Extract<PlainServices, IdGenerator>, never>>;
@@ -397,9 +407,11 @@ describe("factory type proofs", () => {
   it("keeps ports and extra handlers visible while hiding framework plumbing", () => {
     const plainSourceProof: PlainSourceProof = true;
     const plainPublisherProof: PlainPublisherProof = true;
+    const plainAdjudicationHostProof: PlainAdjudicationHostProof = true;
     const plainCryptoProof: PlainCryptoProof = true;
     const fanOutCryptoProof: FanOutCryptoProof = true;
     const fanOutSourceProof: FanOutSourceProof = true;
+    const fanOutAdjudicationHostProof: FanOutAdjudicationHostProof = true;
     const plainIdGeneratorExcludedProof: PlainIdGeneratorExcludedProof = true;
     const fanOutIdGeneratorExcludedProof: FanOutIdGeneratorExcludedProof = true;
     const extraHandlerProof: ExtraHandlerProof = true;
@@ -407,14 +419,16 @@ describe("factory type proofs", () => {
     expect([
       plainSourceProof,
       plainPublisherProof,
+      plainAdjudicationHostProof,
       plainCryptoProof,
       fanOutCryptoProof,
       fanOutSourceProof,
+      fanOutAdjudicationHostProof,
       plainIdGeneratorExcludedProof,
       fanOutIdGeneratorExcludedProof,
       extraHandlerProof,
       plainHandlerExcludedProof,
-    ]).toEqual([true, true, true, true, true, true, true, true, true]);
+    ]).toEqual([true, true, true, true, true, true, true, true, true, true, true]);
   });
 });
 

@@ -62,9 +62,7 @@ export const MAX_STORED_ADJUDICATIONS = 20;
  * findings carry their full location identity; unanchored concerns are
  * identified by title alone, so the location fields stay absent.
  */
-export class StoredAdjudication extends Schema.Class<StoredAdjudication>(
-  "@effect-agent/pr-review/StoredAdjudication",
-)({
+const StoredAdjudicationFields = Schema.Struct({
   path: Schema.optionalKey(ChangedPath),
   startLine: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   endLine: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
@@ -73,7 +71,25 @@ export class StoredAdjudication extends Schema.Class<StoredAdjudication>(
   reason: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(300))),
   /** GitHub login of the maintainer whose comment adjudicated the identity. */
   actor: Schema.NonEmptyString.check(Schema.isMaxLength(100)),
-}) {}
+}).check(
+  Schema.makeFilter(
+    (adjudication) => {
+      const locationParts = [
+        adjudication.path,
+        adjudication.startLine,
+        adjudication.endLine,
+      ].filter((part) => part !== undefined).length;
+      return locationParts === 0 || locationParts === 3
+        ? undefined
+        : "path, startLine, and endLine must be either all present or all absent";
+    },
+    { title: "adjudication locations are complete or unanchored" },
+  ),
+);
+
+export class StoredAdjudication extends Schema.Class<StoredAdjudication>(
+  "@effect-agent/pr-review/StoredAdjudication",
+)(StoredAdjudicationFields) {}
 
 /**
  * The one finding-identity composition shared by retirement, adjudication,

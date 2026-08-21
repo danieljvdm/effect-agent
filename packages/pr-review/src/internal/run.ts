@@ -250,14 +250,33 @@ const settleReviewRun = (
       adjudicatedIdentities.has(findingIdentity(finding));
     const isAdjudicatedConcern = (concern: ReviewConcern): boolean =>
       adjudicatedIdentities.has(concern.title);
-    const boundedReview = enforceFindingsBound(core.review, clampMaxFindings(options.maxFindings));
+    // Suppress adjudicated model output before any ranking or bounding. A
+    // suppressed blocker must never consume the slot of an active finding.
+    const filteredReview =
+      adjudicatedIdentities.size === 0
+        ? core.review
+        : CodeReview.make({
+            summary: core.review.summary,
+            verdict: core.review.verdict,
+            findings: core.review.findings.filter((finding) => !isAdjudicatedFinding(finding)),
+            ...(core.review.concerns === undefined
+              ? {}
+              : {
+                  concerns: core.review.concerns.filter(
+                    (concern) => !isAdjudicatedConcern(concern),
+                  ),
+                }),
+            ...(core.review.walkthrough === undefined
+              ? {}
+              : { walkthrough: core.review.walkthrough }),
+          });
     const reviewPaths = new Set(files.map((file) => file.path));
     const normalizedReview = CodeReview.make({
-      ...boundedReview,
-      ...(boundedReview.concerns === undefined
+      ...filteredReview,
+      ...(filteredReview.concerns === undefined
         ? {}
         : {
-            concerns: boundedReview.concerns.map((concern) => {
+            concerns: filteredReview.concerns.map((concern) => {
               const evidencePaths = concern.evidencePaths;
               if (
                 evidencePaths === undefined ||
@@ -278,24 +297,7 @@ const settleReviewRun = (
     // the plan's collapsed adjudicated section. Only identity-equal items are
     // suppressed; a materially different finding at the same location (a
     // different title) is untouched.
-    const review =
-      adjudicatedIdentities.size === 0
-        ? normalizedReview
-        : CodeReview.make({
-            summary: normalizedReview.summary,
-            verdict: normalizedReview.verdict,
-            findings: normalizedReview.findings.filter((finding) => !isAdjudicatedFinding(finding)),
-            ...(normalizedReview.concerns === undefined
-              ? {}
-              : {
-                  concerns: normalizedReview.concerns.filter(
-                    (concern) => !isAdjudicatedConcern(concern),
-                  ),
-                }),
-            ...(normalizedReview.walkthrough === undefined
-              ? {}
-              : { walkthrough: normalizedReview.walkthrough }),
-          });
+    const review = enforceFindingsBound(normalizedReview, clampMaxFindings(options.maxFindings));
     const { inputCoverage, assurance } = core;
     const unreviewedPaths = [...new Set(core.unreviewedPaths)].sort();
     const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
@@ -311,17 +313,16 @@ const settleReviewRun = (
       priorState?.unresolvedFindings
         .filter((finding) => !affectedPaths.has(finding.path))
         .map(fromStoredFinding) ?? [];
-    // The rank input takes the already-filtered review (so an adjudicated
-    // finding cannot evict a different-title finding sharing its anchor
-    // during dedupe), and the result is filtered again AFTER rank-and-dedupe
-    // so a carried candidate re-entering with the adjudicated identity is
-    // also swallowed.
-    const activeFindings = rankAndDedupeFindings([...carriedCandidates, ...review.findings])
-      .slice(0, clampMaxFindings(options.maxFindings))
-      .filter((finding) => !isAdjudicatedFinding(finding));
+    const eligibleCarriedCandidates = carriedCandidates.filter(
+      (finding) => !isAdjudicatedFinding(finding),
+    );
+    const activeFindings = rankAndDedupeFindings([
+      ...eligibleCarriedCandidates,
+      ...review.findings.filter((finding) => !isAdjudicatedFinding(finding)),
+    ]).slice(0, clampMaxFindings(options.maxFindings));
     const activeFindingKeys = new Set(activeFindings.map(findingKey));
     const currentFindingKeys = new Set(review.findings.map(findingKey));
-    const carriedFindings = carriedCandidates.filter(
+    const carriedFindings = eligibleCarriedCandidates.filter(
       (finding) =>
         activeFindingKeys.has(findingKey(finding)) && !currentFindingKeys.has(findingKey(finding)),
     );
@@ -336,13 +337,16 @@ const settleReviewRun = (
             concern.evidencePaths.every((path) => !affectedPaths.has(path)),
         )
         .map(fromStoredConcern) ?? [];
+    const eligibleCarriedConcernCandidates = carriedConcernCandidates.filter(
+      (concern) => !isAdjudicatedConcern(concern),
+    );
     const activeConcerns = rankAndDedupeConcerns([
-      ...carriedConcernCandidates,
-      ...(review.concerns ?? []),
-    ]).filter((concern) => !isAdjudicatedConcern(concern));
+      ...eligibleCarriedConcernCandidates,
+      ...(review.concerns ?? []).filter((concern) => !isAdjudicatedConcern(concern)),
+    ]);
     const currentConcernKeys = new Set((review.concerns ?? []).map(reviewConcernKey));
     const activeConcernKeys = new Set(activeConcerns.map(reviewConcernKey));
-    const carriedConcerns = carriedConcernCandidates.filter((concern) => {
+    const carriedConcerns = eligibleCarriedConcernCandidates.filter((concern) => {
       const key = reviewConcernKey(concern);
       return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
     });

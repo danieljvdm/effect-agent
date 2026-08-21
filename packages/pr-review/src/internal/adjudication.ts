@@ -1,4 +1,4 @@
-import { Context, DateTime, Effect, Option, Schema } from "effect";
+import { Context, DateTime, Effect, Layer, Schema } from "effect";
 
 import { INLINE_FINDING_TITLE_PATTERN } from "./retirement.ts";
 import {
@@ -21,6 +21,9 @@ import {
 
 const PositiveLine = Schema.Int.check(Schema.isGreaterThan(0));
 
+/** Maximum authorized command candidates retained for one inline thread. */
+export const MAX_THREAD_ADJUDICATION_COMMANDS = 100;
+
 /** One reply or top-level comment observed through the adjudication host. */
 export class AdjudicationComment extends Schema.Class<AdjudicationComment>(
   "@effect-agent/pr-review/AdjudicationComment",
@@ -42,7 +45,9 @@ export class AdjudicableThread extends Schema.Class<AdjudicableThread>(
   endLine: Schema.NullOr(PositiveLine),
   /** The root comment's body; its first line carries the finding title. */
   rootBody: Schema.String.check(Schema.isMaxLength(65_536)),
-  replies: Schema.Array(AdjudicationComment).check(Schema.isMaxLength(100)),
+  replies: Schema.Array(AdjudicationComment).check(
+    Schema.isMaxLength(MAX_THREAD_ADJUDICATION_COMMANDS),
+  ),
 }) {}
 
 /** A GitHub adjudication read failed. */
@@ -78,6 +83,16 @@ export class ReviewAdjudicationHost extends Context.Service<
     >;
   }
 >()("@effect-agent/pr-review/ReviewAdjudicationHost") {}
+
+/** Explicit program-edge adapter for runs that intentionally perform no host reads. */
+export const noReviewAdjudicationHost = ReviewAdjudicationHost.of({
+  listFindingThreads: Effect.succeed([]),
+  listIssueComments: Effect.succeed([]),
+});
+
+/** Layer form of {@link noReviewAdjudicationHost}. */
+export const noReviewAdjudicationHostLayer =
+  Layer.succeed(ReviewAdjudicationHost)(noReviewAdjudicationHost);
 
 // ---------------------------------------------------------------------------
 // Verb grammar. A body whose first line starts with `/adjudicate` is a
@@ -315,33 +330,30 @@ export const mergeAdjudications = (
 
 /**
  * Collect the standing maintainer adjudications: freshly derived through the
- * host when one is provided, merged later-wins over the prior state's stored
- * set. Fail-open — a listing fault keeps the prior adjudications and never
- * fails the review, because NOT suppressing a finding is the conservative
- * direction.
+ * host, merged later-wins over the prior state's stored set. The host is a
+ * visible Effect requirement; program edges that intentionally perform no
+ * reads provide {@link noReviewAdjudicationHost}. Fail-open — any listing
+ * fault keeps the complete prior set and never fails the review, because NOT
+ * suppressing a finding is the conservative direction.
  */
 export const collectReviewAdjudications = Effect.fn("collectReviewAdjudications")(function* (
   prior: ReadonlyArray<StoredAdjudication>,
 ) {
-  const host = Option.getOrUndefined(yield* Effect.serviceOption(ReviewAdjudicationHost));
-  if (host === undefined) return prior.slice(0, MAX_STORED_ADJUDICATIONS);
-  const threads = yield* host.listFindingThreads.pipe(
+  const host = yield* ReviewAdjudicationHost;
+  const listings = yield* Effect.all({
+    threads: host.listFindingThreads,
+    issueComments: host.listIssueComments,
+  }).pipe(
     Effect.catch((error) =>
-      Effect.logWarning(`Could not list finding threads for adjudication: ${error.reason}`).pipe(
-        Effect.as(undefined),
-      ),
+      Effect.logWarning(
+        `Could not collect adjudications from '${error.operation}': ${error.reason}; retaining stored adjudications unchanged.`,
+      ).pipe(Effect.as(undefined)),
     ),
   );
-  const issueComments = yield* host.listIssueComments.pipe(
-    Effect.catch((error) =>
-      Effect.logWarning(`Could not list issue comments for adjudication: ${error.reason}`).pipe(
-        Effect.as(undefined),
-      ),
-    ),
-  );
+  if (listings === undefined) return prior;
   const derived = deriveAdjudications({
-    threads: threads ?? [],
-    issueComments: issueComments ?? [],
+    threads: listings.threads,
+    issueComments: listings.issueComments,
   });
   for (const note of derived.ignored) {
     yield* Effect.logDebug(`Ignored adjudication command — ${note}`);

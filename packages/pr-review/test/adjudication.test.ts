@@ -8,6 +8,7 @@ import {
   collectReviewAdjudications,
   deriveAdjudications,
   mergeAdjudications,
+  noReviewAdjudicationHost,
   parseIssueAdjudication,
   parseThreadAdjudication,
   ReviewAdjudicationFailure,
@@ -15,6 +16,14 @@ import {
   StoredAdjudication,
   threadFindingTarget,
 } from "../src/index.ts";
+
+type Equal<Left, Right> =
+  (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
+    ? (<Value>() => Value extends Right ? 1 : 2) extends <Value>() => Value extends Left ? 1 : 2
+      ? true
+      : false
+    : false;
+type EffectRequirements<T> = T extends Effect.Effect<infer _A, infer _E, infer R> ? R : never;
 
 const at = (iso: string) => DateTime.makeUnsafe(iso);
 
@@ -207,9 +216,13 @@ describe("adjudication collection", () => {
         ]),
         listIssueComments: Effect.succeed([comment('/adjudicate obsolete "Open question"')]),
       });
-      const merged = yield* collectReviewAdjudications([priorAdjudication]).pipe(
-        Effect.provideService(ReviewAdjudicationHost, host),
-      );
+      const operation = collectReviewAdjudications([priorAdjudication]);
+      const hostRequirement: Equal<
+        EffectRequirements<typeof operation>,
+        ReviewAdjudicationHost
+      > = true;
+      expect(hostRequirement).toBe(true);
+      const merged = yield* operation.pipe(Effect.provideService(ReviewAdjudicationHost, host));
       expect(merged).toHaveLength(2);
       const byIdentity = new Map(merged.map((entry) => [adjudicationIdentity(entry), entry]));
       const refreshed = byIdentity.get(adjudicationIdentity(priorAdjudication));
@@ -219,23 +232,42 @@ describe("adjudication collection", () => {
     }),
   );
 
-  it.effect("fails open: a listing fault keeps the stored prior adjudications", () =>
+  it.effect("fails open atomically: either listing fault keeps the complete stored set", () =>
     Effect.gen(function* () {
       const failure = ReviewAdjudicationFailure.make({
         operation: "listReviewCommentsForAdjudication",
         reason: "scripted failure",
       });
-      const host = ReviewAdjudicationHost.of({
-        listFindingThreads: Effect.fail(failure),
-        listIssueComments: Effect.fail(failure),
+      const freshThread = findingThread([
+        comment("/adjudicate refuted: fresh verdict", {
+          createdAt: at("2026-08-03T10:00:00Z"),
+        }),
+      ]);
+      const freshIssueComment = comment('/adjudicate refuted "Fresh concern"', {
+        createdAt: at("2026-08-03T10:00:00Z"),
       });
-      const kept = yield* collectReviewAdjudications([priorAdjudication]).pipe(
-        Effect.provideService(ReviewAdjudicationHost, host),
+      const hosts = [
+        ReviewAdjudicationHost.of({
+          listFindingThreads: Effect.fail(failure),
+          listIssueComments: Effect.succeed([freshIssueComment]),
+        }),
+        ReviewAdjudicationHost.of({
+          listFindingThreads: Effect.succeed([freshThread]),
+          listIssueComments: Effect.fail(failure),
+        }),
+      ];
+      for (const host of hosts) {
+        const kept = yield* collectReviewAdjudications([priorAdjudication]).pipe(
+          Effect.provideService(ReviewAdjudicationHost, host),
+        );
+        expect(kept).toEqual([priorAdjudication]);
+      }
+      // Program edges that intentionally do not read host history say so with
+      // the explicit no-op adapter; they retain the stored set unchanged.
+      const withoutReads = yield* collectReviewAdjudications([priorAdjudication]).pipe(
+        Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
       );
-      expect(kept).toEqual([priorAdjudication]);
-      // Without a host at all, the stored set stands unchanged.
-      const withoutHost = yield* collectReviewAdjudications([priorAdjudication]);
-      expect(withoutHost).toEqual([priorAdjudication]);
+      expect(withoutReads).toEqual([priorAdjudication]);
     }),
   );
 

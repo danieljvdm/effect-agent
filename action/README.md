@@ -89,7 +89,8 @@ push, or a manual re-run) applies it, and the skip-unchanged path re-reads adjud
 blocking check lifts without a new commit. Only OWNER, MEMBER, or COLLABORATOR comments count —
 everything else is ignored fail-closed — the later adjudication of an identity wins, and an
 adjudication never strikes a finding as "resolved" during retirement (a verdict is not a fix).
-Free-text rebuttals are deliberately not parsed: only the explicit verb is auditable.
+Free-text rebuttals are deliberately not parsed: only the explicit verb is auditable. A partial or
+overflowing GitHub history read discards fresh collection and preserves the stored set unchanged.
 
 ## Run visibility
 

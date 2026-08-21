@@ -27,10 +27,12 @@ import {
   MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS,
   MAX_REVIEW_UNITS,
   MAX_UNIT_FILES,
+  noReviewAdjudicationHost,
   planReviewUnits,
   PullRequestMetadata,
   rankAndDedupeFindings,
   ReviewConcern,
+  ReviewAdjudicationHost,
   ReviewFinding,
   ReviewExecutionContext,
   type ReviewPassMisbehaved,
@@ -225,6 +227,7 @@ const runOfflineFanOut = (script: {
       ...(script.maxFindings === undefined ? {} : { maxFindings: script.maxFindings }),
       signature: () => "offline-assurance-profile-v3",
     }).pipe(
+      Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
       Effect.provide(
         Layer.mergeAll(
           fixturePullRequestSourceLayer(fixture),

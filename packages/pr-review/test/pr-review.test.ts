@@ -18,6 +18,7 @@ import {
   liveProfileEnabled,
   ListChangedFiles,
   makeOpenAiReviewModel,
+  noReviewAdjudicationHost,
   normalizeRepoRelativePath,
   openAiClientLayer,
   parsePatch,
@@ -1073,6 +1074,7 @@ describe("offline review run", () => {
       const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
 
       const program = executeReview(binding, { post: true, applyVerdict: false }).pipe(
+        Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
         Effect.provide(
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
@@ -1135,6 +1137,7 @@ describe("offline review run", () => {
       const binding = Agent.withModel(PullRequestReviewer, scripted.model);
       const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
       const outcome = yield* executeReview(binding, { post: false, applyVerdict: false }).pipe(
+        Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
         Effect.provide(
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
@@ -1187,6 +1190,7 @@ describe("offline review run", () => {
       const binding = Agent.withModel(PullRequestReviewer, scripted.model);
       const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
       const outcome = yield* executeReview(binding, { post: false, applyVerdict: false }).pipe(
+        Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
         Effect.provide(
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
@@ -1348,6 +1352,7 @@ describe("offline review run", () => {
           ),
         ),
         Effect.provideService(ReviewExecutionContext, selection),
+        Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
         Effect.scoped,
       );
 
@@ -1441,7 +1446,11 @@ describe("offline review run", () => {
       });
       const binding = Agent.withModel(PullRequestReviewer, scripted.model);
       const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
-      const outcome = yield* executeReview(binding, { post: false, applyVerdict: true }).pipe(
+      const outcome = yield* executeReview(binding, {
+        post: false,
+        applyVerdict: true,
+        maxFindings: 1,
+      }).pipe(
         Effect.provide(
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
@@ -1525,6 +1534,14 @@ describe("offline review run", () => {
         title: "Unchanged blocker",
         body: "Would stay blocking forever without an adjudication.",
       });
+      const openCarriedFinding = StoredReviewFinding.make({
+        path: "src/unchanged.ts",
+        startLine: 2,
+        endLine: 2,
+        severity: "important",
+        title: "Open carried finding",
+        body: "Must retain the sole active slot after the blocker is adjudicated.",
+      });
       const adjudicatedConcern = StoredReviewConcern.make({
         evidencePaths: ["src/unchanged.ts"],
         severity: "important",
@@ -1548,7 +1565,7 @@ describe("offline review run", () => {
         profileFingerprint,
         settledScopeFingerprint: "b".repeat(64),
         reviewedPathCount: 2,
-        unresolvedFindings: [carriedBlocker],
+        unresolvedFindings: [carriedBlocker, openCarriedFinding],
         unresolvedConcerns: [adjudicatedConcern, openConcern],
         unreviewedPaths: [],
         unreviewedPasses: [],
@@ -1627,6 +1644,7 @@ describe("offline review run", () => {
       const outcome = yield* executeReview(binding, {
         post: false,
         applyVerdict: false,
+        maxFindings: 1,
         signature: () => "adjudication-signature",
       }).pipe(
         Effect.provide(
@@ -1646,12 +1664,16 @@ describe("offline review run", () => {
         Effect.scoped,
       );
 
-      // The carried blocking finding was swallowed AFTER the carry merge, and
-      // the adjudicated concern left the carried-to-final-audit section; the
-      // open concern still travels.
-      expect(outcome.activeFindings).toHaveLength(0);
+      // The adjudicated blocker is removed BEFORE the findings bound, so the
+      // open carried finding keeps the sole active slot. The adjudicated
+      // concern leaves the carried-to-final-audit section; the open concern
+      // still travels.
+      expect(outcome.activeFindings.map((finding) => finding.title)).toEqual([
+        openCarriedFinding.title,
+      ]);
       expect(outcome.activeConcerns.map((concern) => concern.title)).toEqual([openConcern.title]);
-      expect(outcome.plan.body).not.toContain("Unresolved findings carried from unchanged scope");
+      expect(outcome.plan.body).toContain("Unresolved findings carried from unchanged scope");
+      expect(outcome.plan.body).toContain(openCarriedFinding.title);
       const carriedSection = outcome.plan.body.slice(
         outcome.plan.body.indexOf("Unresolved concerns from unchanged paths"),
         outcome.plan.body.indexOf("<summary>Adjudicated"),
@@ -1667,7 +1689,9 @@ describe("offline review run", () => {
       // adjudicated identity as unresolved.
       expect(outcome.state).toBeDefined();
       expect(outcome.state?.adjudications).toHaveLength(2);
-      expect(outcome.state?.unresolvedFindings).toHaveLength(0);
+      expect(outcome.state?.unresolvedFindings.map((finding) => finding.title)).toEqual([
+        openCarriedFinding.title,
+      ]);
       expect(outcome.state?.unresolvedConcerns.map((concern) => concern.title)).toEqual([
         openConcern.title,
       ]);
@@ -1694,6 +1718,7 @@ describe.skipIf(!liveEnabled)("pr-review live profile (opt-in)", () => {
           post: false,
           applyVerdict: false,
         }).pipe(
+          Effect.provideService(ReviewAdjudicationHost, noReviewAdjudicationHost),
           Effect.provide(
             Layer.mergeAll(
               ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),

@@ -6,10 +6,12 @@ import {
   GitHubReviewTarget,
   gitHubPullRequestSourceLayer,
   gitHubPriorReviewsLayer,
+  gitHubReviewAdjudicationHostLayer,
   gitHubReviewRetirementHostLayer,
   PriorReviews,
   PullRequestSource,
   renderFingerprintMarker,
+  ReviewAdjudicationHost,
   ReviewRetirementHost,
   ReviewState,
   ReviewStateAuthenticator,
@@ -227,6 +229,92 @@ describe("GitHub review retirement comments", () => {
           body: "**[🛑 blocking] Gone stale**\n\nThe line moved.",
         },
       ]);
+    }),
+  );
+});
+
+describe("GitHub review adjudication comments", () => {
+  const root = {
+    id: 1,
+    path: "src/a.ts",
+    body: "**[🛑 blocking · security] Missing authorization**\n\nDetails.",
+    author_association: "NONE",
+    user: { login: "github-actions[bot]" },
+    created_at: "2026-08-01T00:00:00Z",
+    line: 12,
+  };
+  const reply = (id: number, authorAssociation: string, body: string) => ({
+    id,
+    in_reply_to_id: root.id,
+    path: root.path,
+    body,
+    author_association: authorAssociation,
+    user: { login: authorAssociation === "OWNER" ? "maintainer" : `user-${id}` },
+    created_at: `2026-08-01T00:${String(id % 60).padStart(2, "0")}:00Z`,
+    line: 12,
+  });
+  const layerFor = (comments: ReadonlyArray<object>) => {
+    const client = HttpClient.make((request, url) => {
+      expect(url.pathname).toBe("/repos/acme/widgets/pulls/30/comments");
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const pageComments = comments.slice((page - 1) * 100, page * 100);
+      return Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          new Response(JSON.stringify(pageComments), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+    });
+    return gitHubReviewAdjudicationHostLayer.pipe(
+      Layer.provide(
+        Layer.merge(
+          GitHubReviewTarget.layer({
+            apiUrl: "https://api.github.test",
+            repository: "acme/widgets",
+            number: 30,
+            token: Option.none(),
+          }),
+          Layer.succeed(HttpClient.HttpClient)(client),
+        ),
+      ),
+    );
+  };
+
+  it.effect("bounds authorized command candidates after ignoring an untrusted reply flood", () =>
+    Effect.gen(function* () {
+      const untrusted = Array.from({ length: 100 }, (_, index) =>
+        reply(index + 2, "NONE", "/adjudicate refuted: unauthorized"),
+      );
+      const authorized = reply(102, "OWNER", "/adjudicate accepted-risk: intentional");
+      const threads = yield* Effect.gen(function* () {
+        const host = yield* ReviewAdjudicationHost;
+        return yield* host.listFindingThreads;
+      }).pipe(Effect.provide(layerFor([root, ...untrusted, authorized])));
+
+      expect(threads).toHaveLength(1);
+      expect(threads[0]?.replies.map((comment) => comment.authorLogin)).toEqual(["maintainer"]);
+      expect(threads[0]?.replies[0]?.body).toContain("accepted-risk");
+    }),
+  );
+
+  it.effect("fails closed when one thread exceeds the authorized command bound", () =>
+    Effect.gen(function* () {
+      const commands = Array.from({ length: 101 }, (_, index) =>
+        reply(index + 2, "OWNER", `/adjudicate refuted: command ${index}`),
+      );
+      const failure = yield* Effect.gen(function* () {
+        const host = yield* ReviewAdjudicationHost;
+        return yield* host.listFindingThreads;
+      }).pipe(
+        Effect.provide(layerFor([root, ...commands])),
+        Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }),
+      );
+
+      expect(failure?.operation).toBe("listReviewCommentsForAdjudication");
+      expect(failure?.reason).toContain("exceeds the bounded 100-command");
     }),
   );
 });
