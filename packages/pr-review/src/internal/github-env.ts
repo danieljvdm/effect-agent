@@ -147,15 +147,17 @@ export const gitHubReviewLayers = (
         token,
         reviewAuthorLogin,
       });
+      const adjudicationHostLayer = gitHubReviewAdjudicationHostLayer.pipe(
+        Layer.provide(targetLayer),
+      );
       return Layer.mergeAll(
         gitHubPullRequestSourceLayer.pipe(Layer.provide(targetLayer)),
         gitHubReviewPublisherLayer.pipe(Layer.provide(targetLayer)),
         gitHubPriorReviewsLayer.pipe(Layer.provide(targetLayer)),
         gitHubReviewRetirementHostLayer.pipe(Layer.provide(targetLayer)),
         // Adjudication is an unconditional run dependency, so the public
-        // GitHub bundle owns its live host alongside the other target-bound
-        // adapters.
-        gitHubReviewAdjudicationHostLayer.pipe(Layer.provide(targetLayer)),
+        // GitHub bundle owns its target-bound live host explicitly.
+        adjudicationHostLayer,
         gitHubReviewProgressLayer.pipe(Layer.provide(targetLayer)),
       );
     }),

@@ -46534,7 +46534,8 @@ var gitHubReviewLayers = (target) => exports_Layer.unwrap(exports_Effect.gen(fun
     token,
     reviewAuthorLogin
   });
-  return exports_Layer.mergeAll(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(targetLayer)), gitHubPriorReviewsLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewRetirementHostLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewAdjudicationHostLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewProgressLayer.pipe(exports_Layer.provide(targetLayer)));
+  const adjudicationHostLayer = gitHubReviewAdjudicationHostLayer.pipe(exports_Layer.provide(targetLayer));
+  return exports_Layer.mergeAll(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(targetLayer)), gitHubPriorReviewsLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewRetirementHostLayer.pipe(exports_Layer.provide(targetLayer)), adjudicationHostLayer, gitHubReviewProgressLayer.pipe(exports_Layer.provide(targetLayer)));
 }));
 
 // packages/pr-review/src/internal/logging.ts
