@@ -17,6 +17,7 @@ export * from "@effect-agent/engine";
 // Explicit re-exports resolve the star-export ambiguities so these names
 // stay present on the umbrella: `capabilities` re-exports the two core-owned
 // delegation-naming helpers, and both `engine` (type only) and `capabilities`
-// (Schema value + type) declare RunSchedulingOverride — the Schema form wins.
+// (Schema value + type) declare CommandDrainPolicy and RunSchedulingOverride;
+// the Schema forms win.
 export { delegationToolPrefix, isDelegationToolName } from "@effect-agent/core";
 export { CommandDrainPolicy, RunSchedulingOverride } from "@effect-agent/capabilities";

@@ -1,86 +1,27 @@
-import {
-  gitHubReviewLayers,
-  makeOpenAiReviewModel,
-  openAiClientLayer,
-  resolveReviewTarget,
-  ReviewPublicationPlan,
-} from "@effect-agent/pr-review";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Console, Effect, Layer, Option, Schema } from "effect";
-import { Command as CliCommand, Flag } from "effect/unstable/cli";
+import { Cause, Console, Effect, Layer } from "effect";
+import { Command as CliCommand } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { makeExampleReviewer, ReadReviewConventionsLayer } from "./reviewer.ts";
+import { command } from "./command.ts";
 
 // ---------------------------------------------------------------------------
-// The rung-2 consumer shape: your own reviewer configuration in a script the
-// host runs directly. Target resolution, GitHub adapters, and the provider
-// client all come from the package; only the customization is local.
+// The executable boundary owns platform provisioning, Scope, signal handling,
+// process completion, and concise diagnostics for unhandled failures.
 // ---------------------------------------------------------------------------
-
-const repoFlag = Flag.string("repo").pipe(
-  Flag.optional,
-  Flag.withDescription("Repository as owner/name; defaults to GITHUB_REPOSITORY."),
-);
-const prFlag = Flag.integer("pr").pipe(
-  Flag.optional,
-  Flag.withDescription("Pull request number; defaults to the GITHUB_EVENT_PATH payload."),
-);
-const modelFlag = Flag.string("model").pipe(
-  Flag.optional,
-  Flag.withDescription("OpenAI model id (defaults to the package default)."),
-);
-const postFlag = Flag.boolean("post").pipe(
-  Flag.withDefault(false),
-  Flag.withDescription("Post the review to GitHub; without it the plan prints to stdout."),
-);
-
-const command = CliCommand.make(
-  "example-pr-review",
-  { repo: repoFlag, pr: prFlag, model: modelFlag, post: postFlag },
-  (flags) =>
-    Effect.gen(function* () {
-      const target = yield* resolveReviewTarget({
-        repository: Option.getOrUndefined(flags.repo),
-        number: Option.getOrUndefined(flags.pr),
-      });
-      const reviewer = makeExampleReviewer(
-        makeOpenAiReviewModel(Option.getOrUndefined(flags.model)),
-      );
-      yield* Console.log(
-        `Reviewing ${target.repository}#${target.number} with the example reviewer (${flags.post ? "posting" : "dry run"})...`,
-      );
-      const outcome = yield* reviewer
-        .run({ post: flags.post })
-        .pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              gitHubReviewLayers(target),
-              openAiClientLayer,
-              ReadReviewConventionsLayer,
-            ),
-          ),
-        );
-      yield* Console.log(
-        `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
-          `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`,
-      );
-      if (outcome.published !== undefined) {
-        yield* Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
-      } else {
-        const encodedPlan = yield* Schema.encodeEffect(ReviewPublicationPlan)(outcome.plan);
-        yield* Console.log(JSON.stringify(encodedPlan, null, 2));
-      }
-    }),
-).pipe(
-  CliCommand.withDescription(
-    "Review one GitHub pull request with this example's customized @effect-agent/pr-review reviewer.",
-  ),
-);
 
 const program = CliCommand.run(command, { version: "0.0.0" }).pipe(
   Effect.scoped,
   Effect.provide(Layer.merge(NodeServices.layer, FetchHttpClient.layer)),
+  Effect.tapCause((cause) =>
+    Cause.hasInterruptsOnly(cause)
+      ? Effect.void
+      : Console.error(
+          Cause.prettyErrors(cause)
+            .map((error) => error.message)
+            .join("\n"),
+        ),
+  ),
 );
 
 NodeRuntime.runMain(program, { disableErrorReporting: true });

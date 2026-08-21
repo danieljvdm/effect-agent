@@ -43,7 +43,8 @@ import {
 } from "@effect-agent/session";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { runInDurableObject } from "cloudflare:test";
-import { Crypto, Effect, Layer, Option, Stream } from "effect";
+import type { Crypto } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -73,6 +74,14 @@ import {
 const submissionId = (value: string) => id(MarkReadyRequest.fields.submissionId, value);
 const ownershipToken = (value: string) => id(RenewOwnershipRequest.fields.ownershipToken, value);
 const idempotencyKey = (value: string) => id(IdempotencyKey, value);
+const isAdmissionConflict = Schema.is(AdmissionConflict);
+const isSettlementConflict = Schema.is(SettlementConflict);
+const isJoinedToHost = Schema.is(JoinedToHost);
+const isConversationNotMaterialized = Schema.is(ConversationNotMaterialized);
+const isAppendConflict = Schema.is(AppendConflict);
+const isFenceRejected = Schema.is(FenceRejected);
+const isLedgerError = Schema.is(LedgerError);
+const isConversationStoreError = Schema.is(ConversationStoreError);
 
 /**
  * Shared mutable control for the test transport: `fault` simulates an unreachable owning
@@ -168,6 +177,39 @@ const claimedLocalLane = Effect.fn("RoutingTest.claimedLocalLane")(function* (
 });
 
 describe("cross-DO port routing", () => {
+  it("maps hostile transport causes without escaping the typed error channel", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("hostile getter");
+        },
+        getPrototypeOf: () => {
+          throw new Error("hostile prototype");
+        },
+      },
+    );
+
+    expect(() => portTransportFailure("foreign-conversation", hostile)).not.toThrow();
+    const mapped = portTransportFailure("foreign-conversation", hostile);
+    expect(mapped).toMatchObject({
+      _tag: "PortTransportError",
+      target: "foreign-conversation",
+      message: "[unavailable transport diagnostic]",
+    });
+    expect(mapped.retryable).toBeUndefined();
+
+    const signaled = portTransportFailure("foreign-conversation", {
+      message: "overloaded",
+      retryable: true,
+      toString: () => "overloaded",
+    });
+    expect(signaled.retryable).toBe(true);
+    expect(portTransportFailure("foreign-conversation", "x".repeat(5_000)).message).toHaveLength(
+      4_096,
+    );
+  });
+
   it("routes the admission subset to the owning Conversation Object with error-tag fidelity", async () => {
     const parentConv = "wp2-admission-parent";
     const childConv = "wp2-admission-child";
@@ -206,7 +248,7 @@ describe("cross-DO port routing", () => {
         const divergent = yield* admission(childConv, "wp2-child-key", { task: "different" });
         const conflict = yield* ledger.admit(divergent).pipe(Effect.flip);
         expect(conflict).toBeInstanceOf(AdmissionConflict);
-        if (conflict instanceof AdmissionConflict) {
+        if (isAdmissionConflict(conflict)) {
           expect(conflict.conversationId).toBe(childConv);
           expect(conflict.existingInputDigest).toBe(request.inputDigest);
           expect(conflict.attemptedInputDigest).toBe(divergent.inputDigest);
@@ -351,7 +393,7 @@ describe("cross-DO port routing", () => {
           )
           .pipe(Effect.flip);
         expect(settledConflict).toBeInstanceOf(SettlementConflict);
-        if (settledConflict instanceof SettlementConflict) {
+        if (isSettlementConflict(settledConflict)) {
           expect(settledConflict.existingOutcome).toBe("completed");
           expect(settledConflict.submissionId).toBe(prepared.host.submissionId);
         }
@@ -367,7 +409,7 @@ describe("cross-DO port routing", () => {
           )
           .pipe(Effect.flip);
         expect(joinedRedirect).toBeInstanceOf(JoinedToHost);
-        if (joinedRedirect instanceof JoinedToHost) {
+        if (isJoinedToHost(joinedRedirect)) {
           expect(joinedRedirect.hostSubmissionId).toBe(prepared.host.submissionId);
         }
 
@@ -564,7 +606,7 @@ describe("cross-DO port routing", () => {
           .inspectTail(ConversationTailRequest.make({ conversationId: conversation(targetConv) }))
           .pipe(Effect.flip);
         expect(missing).toBeInstanceOf(ConversationNotMaterialized);
-        if (missing instanceof ConversationNotMaterialized) {
+        if (isConversationNotMaterialized(missing)) {
           expect(missing.conversationId).toBe(targetConv);
         }
 
@@ -626,7 +668,7 @@ describe("cross-DO port routing", () => {
           )
           .pipe(Effect.flip);
         expect(staleTail).toBeInstanceOf(AppendConflict);
-        if (staleTail instanceof AppendConflict) {
+        if (isAppendConflict(staleTail)) {
           expect(staleTail.reason).toBe("tail");
           expect(staleTail.actualTailSequence).toBe(2);
           expect(staleTail.actualTailDigest).toBe(appended.tailDigest);
@@ -645,7 +687,7 @@ describe("cross-DO port routing", () => {
           )
           .pipe(Effect.flip);
         expect(fenced).toBeInstanceOf(FenceRejected);
-        if (fenced instanceof FenceRejected) {
+        if (isFenceRejected(fenced)) {
           expect(fenced.actualEpoch).toBe(1);
           expect(fenced.attemptedEpoch).toBe(9);
         }
@@ -693,7 +735,7 @@ describe("cross-DO port routing", () => {
             Effect.flip,
             Effect.map((error) => {
               expect(error).toBeInstanceOf(LedgerError);
-              if (error instanceof LedgerError) {
+              if (isLedgerError(error)) {
                 expect(error.message).toContain("not route-capable");
               }
             }),
@@ -754,7 +796,7 @@ describe("cross-DO port routing", () => {
           .observe(ConversationObservation.make({ conversationId: conversation(foreignConv) }))
           .pipe(Stream.runCollect, Effect.flip);
         expect(observeFailure).toBeInstanceOf(ConversationStoreError);
-        if (observeFailure instanceof ConversationStoreError) {
+        if (isConversationStoreError(observeFailure)) {
           expect(observeFailure.message).toContain("not route-capable");
         }
 
@@ -762,7 +804,7 @@ describe("cross-DO port routing", () => {
           .loadCheckpoint(LoadCheckpointRequest.make({ conversationId: conversation(foreignConv) }))
           .pipe(Effect.flip);
         expect(checkpointFailure).toBeInstanceOf(ConversationStoreError);
-        if (checkpointFailure instanceof ConversationStoreError) {
+        if (isConversationStoreError(checkpointFailure)) {
           expect(checkpointFailure.message).toContain("not route-capable");
         }
       }),
@@ -786,7 +828,7 @@ describe("cross-DO port routing", () => {
           .markReady(MarkReadyRequest.make({ submissionId: oversized }))
           .pipe(Effect.flip);
         expect(failure).toBeInstanceOf(LedgerError);
-        if (failure instanceof LedgerError) {
+        if (isLedgerError(failure)) {
           expect(failure.message).toContain("1024");
         }
       }),

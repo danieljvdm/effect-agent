@@ -16,7 +16,8 @@ import {
 } from "@effect-agent/session";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Option, PlatformError, Schema, Stream } from "effect";
+import type { PlatformError } from "effect";
+import { Effect, FileSystem, Option, Schema, Stream } from "effect";
 
 import {
   assertDiscoveryMatchesAuthoredToolkit,

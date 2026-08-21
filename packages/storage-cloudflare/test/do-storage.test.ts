@@ -12,13 +12,14 @@ import { conversationStoreConformanceCases } from "@effect-agent/session/testing
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { Crypto } from "effect";
-import { Cause, Effect, Exit, Layer, Schema } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { DoStorageConfig } from "../src/index.ts";
 import {
+  type DoStorageConfig,
   conversationStoreLayer,
+  DoStorageError,
   DoStorageFailpoint,
   DoValueBoundExceeded,
   layer,
@@ -52,6 +53,9 @@ type ConversationStoreLayerRequirementsProof = Assert<
 type ConversationStoreLayerErrorProof = Assert<
   Equal<Layer.Error<typeof conversationStoreLayer>, DoStorageInitializationError>
 >;
+const isConversationStoreError = Schema.is(ConversationStoreError);
+const isDoStorageError = Schema.is(DoStorageError);
+const isDoValueBoundExceeded = Schema.is(DoValueBoundExceeded);
 
 const inputRecord = (recordId: string, input: string): CanonicalRecord =>
   CanonicalRecord.make({
@@ -102,6 +106,34 @@ describe("DoConversationStore", () => {
     expect(errorProof).toBe(true);
   });
 
+  it("validates convenience-layer configuration before initializing storage", () =>
+    withConversationStorage("wp1-store-invalid-config", (storage) =>
+      Effect.gen(function* () {
+        const opened = yield* ConversationStore.pipe(
+          Effect.provide(layer({ storage, observationPollInterval: -1 })),
+          Effect.exit,
+        );
+
+        expect(Exit.isFailure(opened)).toBe(true);
+        if (Exit.isFailure(opened)) {
+          const failure = Cause.findErrorOption(opened.cause);
+          expect(Option.isSome(failure)).toBe(true);
+          if (Option.isSome(failure)) {
+            expect(isDoStorageError(failure.value)).toBe(true);
+            if (isDoStorageError(failure.value)) {
+              expect(failure.value.operation).toBe("configure Durable Object storage");
+            }
+          }
+        }
+        const tables = storage.sql
+          .exec<{ name: string }>(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'effect_agent_%'",
+          )
+          .toArray();
+        expect(tables).toEqual([]);
+      }),
+    ));
+
   it("refuses an over-bound canonical append typed before any write", () =>
     withConversationStorage("wp1-store-value-bound", (storage) =>
       Effect.gen(function* () {
@@ -136,9 +168,9 @@ describe("DoConversationStore", () => {
         if (Exit.isFailure(exit)) {
           const error = Cause.squash(exit.cause);
           expect(error).toBeInstanceOf(ConversationStoreError);
-          if (error instanceof ConversationStoreError) {
+          if (isConversationStoreError(error)) {
             expect(error.cause).toBeInstanceOf(DoValueBoundExceeded);
-            if (error.cause instanceof DoValueBoundExceeded) {
+            if (isDoValueBoundExceeded(error.cause)) {
               expect(error.cause.maxBytes).toBe(1_024);
               expect(error.cause.actualBytes).toBeGreaterThan(1_024);
               expect(error.cause.message).toContain("R2");

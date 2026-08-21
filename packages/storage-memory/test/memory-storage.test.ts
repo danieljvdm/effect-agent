@@ -1,6 +1,6 @@
 import { ConversationId, RunId, SubmissionId } from "@effect-agent/core";
-import type { AppendResult } from "@effect-agent/session";
 import {
+  type AppendResult,
   CanonicalBatch,
   CanonicalRecord,
   CanonicalSequence,
@@ -55,6 +55,7 @@ const canonicalSequence = Schema.decodeSync(CanonicalSequence);
 const producerEpoch = Schema.decodeSync(ProducerEpoch);
 const ZERO_CANONICAL_SEQUENCE = canonicalSequence(0);
 const FIRST_PRODUCER_EPOCH = producerEpoch(1);
+const isConversationStoreError = Schema.is(ConversationStoreError);
 
 const id = <A>(schema: Schema.Codec<A, string>, value: string): A =>
   Schema.decodeSync(schema)(value);
@@ -172,7 +173,7 @@ describe("MemoryConversationStore", () => {
           return yield* Effect.die(new Error("Expected append to return an Effect"));
         }
         const failure = yield* unvalidatedResult.pipe(Effect.flip);
-        if (!(failure instanceof ConversationStoreError)) {
+        if (!isConversationStoreError(failure)) {
           return yield* Effect.die(new Error("Expected a ConversationStoreError"));
         }
         expect(failure).toMatchObject({
@@ -232,7 +233,7 @@ describe("MemoryConversationStore", () => {
           return yield* Effect.die(new Error("Expected append to return an Effect"));
         }
         const failure = yield* unvalidatedResult.pipe(Effect.flip);
-        if (!(failure instanceof ConversationStoreError)) {
+        if (!isConversationStoreError(failure)) {
           return yield* Effect.die(new Error("Expected a ConversationStoreError"));
         }
         expect(failure).toMatchObject({

@@ -7,8 +7,8 @@ import {
   type RunToolAuthorizationDecision,
   type RunToolAuthorizationRequest,
 } from "@effect-agent/engine";
-import type { CanonicalRecordEnvelope } from "@effect-agent/session";
 import {
+  type CanonicalRecordEnvelope,
   AbortCommand,
   ConversationRead,
   ConversationStore,
@@ -66,8 +66,14 @@ import {
   SchemaGetter,
   Stream,
 } from "effect";
-import type { Prompt } from "effect/unstable/ai";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import {
+  type Prompt,
+  LanguageModel,
+  Model,
+  Tool,
+  Toolkit,
+  type Response,
+} from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-tools");

@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Ref } from "effect";
 
-import { DoStorageFailpointError, type DoStorageFailpointLocation } from "./errors.ts";
+import type { DoStorageFailpointError, DoStorageFailpointLocation } from "./errors.ts";
 
 export type DoStorageFailpointHandler = (
   location: DoStorageFailpointLocation,

@@ -119,9 +119,11 @@ describe("CAP-015 CodeExecutor schemas", () => {
   });
 
   it("rejects reserved words, invalid identifiers, and oversized collections at the boundary", () => {
-    expect(() => Schema.decodeUnknownSync(JsIdentifier)("await")).toThrow();
-    expect(() => Schema.decodeUnknownSync(JsIdentifier)("not-an-identifier")).toThrow();
-    expect(() => Schema.decodeUnknownSync(JsIdentifier)("1leading")).toThrow();
+    expect(() => Schema.decodeUnknownSync(JsIdentifier)("await")).toThrow(/not a reserved word/);
+    expect(() => Schema.decodeUnknownSync(JsIdentifier)("not-an-identifier")).toThrow(
+      /matching the RegExp/,
+    );
+    expect(() => Schema.decodeUnknownSync(JsIdentifier)("1leading")).toThrow(/matching the RegExp/);
     expect(() => Schema.decodeUnknownSync(JsIdentifier)("valid_$Name")).not.toThrow();
 
     expect(() =>
@@ -132,8 +134,10 @@ describe("CAP-015 CodeExecutor schemas", () => {
         network: NetworkDisabled.make({}),
         limits,
       }),
-    ).toThrow();
+    ).toThrow(/Schema validation failed/);
 
-    expect(() => CodeExecutionLimits.make({ ...limits, maxLogBytes: 2 * 1024 * 1024 })).toThrow();
+    expect(() => CodeExecutionLimits.make({ ...limits, maxLogBytes: 2 * 1024 * 1024 })).toThrow(
+      /Schema validation failed/,
+    );
   });
 });

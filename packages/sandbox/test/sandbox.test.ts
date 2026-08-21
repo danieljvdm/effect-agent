@@ -3,11 +3,15 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   NetworkDisabled,
+  SANDBOX_DIAGNOSTIC_MAX_LENGTH,
   SandboxError,
   SandboxEvent,
   SandboxExitError,
+  SandboxExited,
   SandboxImplementation,
   SandboxRequest,
+  SandboxResourceUse,
+  SandboxSpawnError,
 } from "../src/index.ts";
 
 describe("Sandbox schemas", () => {
@@ -60,7 +64,7 @@ describe("Sandbox schemas", () => {
     );
   });
 
-  it("rejects oversized untrusted request collections at the Schema boundary", () => {
+  it("rejects oversized untrusted collections and diagnostics at the Schema boundary", () => {
     const oversizedArgs = Array.from({ length: 257 }, () => "argument");
     expect(() =>
       Schema.decodeSync(SandboxRequest)({
@@ -78,6 +82,36 @@ describe("Sandbox schemas", () => {
         secretHandles: [],
         artifactRules: [],
       }),
-    ).toThrow();
+    ).toThrow(/length of at most 256/);
+
+    const implementation = SandboxImplementation.make({
+      isolation: "isolated",
+      identity: "test-sandbox",
+    });
+    const resourceUse = SandboxResourceUse.make({
+      wallTime: Duration.millis(1),
+      stdoutBytes: 0,
+      stderrBytes: 0,
+    });
+    expect(() =>
+      SandboxExited.make({
+        eventVersion: 1,
+        implementation,
+        exitCode: 0,
+        resourceUse,
+        artifacts: Array.from({ length: 65 }, (_, index) => ({
+          path: `/workspace/artifact-${index}`,
+          bytes: 0,
+          digest: `digest-${index}`,
+        })),
+      }),
+    ).toThrow(/Schema validation failed/);
+    expect(() =>
+      SandboxSpawnError.make({
+        implementation,
+        command: "node",
+        message: "x".repeat(SANDBOX_DIAGNOSTIC_MAX_LENGTH + 1),
+      }),
+    ).toThrow(/Schema validation failed/);
   });
 });

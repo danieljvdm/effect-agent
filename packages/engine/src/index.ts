@@ -1,5 +1,5 @@
-import type { Agent } from "@effect-agent/core";
 import {
+  type Agent,
   AgentApprovalDenied,
   AgentApprovalPending,
   AgentInputError,
@@ -64,7 +64,6 @@ import {
   Effect,
   Exit,
   Fiber,
-  Layer,
   Metric,
   Option,
   PubSub,
@@ -74,18 +73,20 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import type { Tool } from "effect/unstable/ai";
 import {
+  type Tool,
   AiError,
   LanguageModel,
   type Model,
   Prompt,
   Response,
-  type Toolkit,
+  Toolkit,
 } from "effect/unstable/ai";
 
+import { boundedValueFootprint, utf8ByteLength } from "./bounded-value-internal.ts";
 import { insertOutputContract, outputSchemaContract } from "./output-contract-internal.ts";
 import {
+  boundedCanonicalJsonSnapshot,
   boundedJsonSnapshot,
   type BoundedJsonSnapshot,
 } from "./provider-result-staging-internal.ts";
@@ -177,10 +178,14 @@ import {
   type RunStepHook,
   type RunStepKey,
 } from "./durable-step.ts";
+import { errorMessage, errorTag } from "./error-diagnostic-internal.ts";
 import {
   type ChildEstablishStatus,
   type CommandDrainPolicy,
   type RunApprovalDecision,
+  type RunBufferLimits,
+  type RunResumeUsage,
+  RunResumeUsageSchema,
   type RunOptions,
   type RunSchedulingHook,
   type RunSubagentChildIdentity,
@@ -189,6 +194,7 @@ import {
   type RunSubagentJoinRequest,
   type RunCompactionCommit,
   type RunToolCallDescriptor,
+  RunTurnResumeSettledCallSchema,
   type RunTurnResume,
   type RunUsageDelta,
 } from "./run-options.ts";
@@ -345,6 +351,8 @@ interface RunContext {
   exhaustedDimension: "tokens" | "tool-calls" | "turns" | undefined;
   /** Model-visible view state for engine-native compaction (RUN-026). */
   readonly compaction: ContextCompactionState;
+  /** Finite engine-owned memory ceilings, optionally tightened per Run. */
+  readonly bufferLimits: EffectiveRunBufferLimits;
   sequence: number;
   /**
    * Run-wide count of programmatic (broker) Tool invocations whose handler
@@ -367,14 +375,16 @@ const toolCounter = Metric.counter("effect_agent_tool_calls_total", {
 });
 
 /**
- * Tool Call parameters live in two intentionally divergent forms on the
- * trace: `parts` carries the prompt/canonical form (parameters encoded back
- * through the owning Schema — the wire form official history and canonical
- * records persist), while `applicationToolCalls` keeps the handler form
- * (Schema-decoded parameters, because the pinned `Toolkit.handle` expects the
- * value `prepareToolCall` re-encodes for it).
+ * Tool Call parameters remain in their prompt/canonical form everywhere on
+ * the trace. `prepareToolCall` decodes that bounded plain data for policy and
+ * authorization, while the pinned `Toolkit.handle` receives the same encoded
+ * value and performs its own decode before invoking the handler.
  */
 interface TurnTrace {
+  /** Number of decoded provider parts retained or inspected during this model call. */
+  responsePartCount: number;
+  /** Conservative retained-memory estimate across decoded provider parts. */
+  responsePartBytes: number;
   readonly parts: Array<Response.AnyPart>;
   readonly text: Array<string>;
   readonly textParts: Map<string, PartLifecycle>;
@@ -445,6 +455,238 @@ type ProviderResultEventPayload =
 // fail-closed only while the additional staging allocation itself is deterministic and bounded.
 const MAX_STAGED_PROVIDER_EVENTS = 256;
 const MAX_STAGED_PROVIDER_BYTES = 1024 * 1024;
+
+const DEFAULT_RUN_BUFFER_LIMITS = {
+  maxModelResponseParts: 16_384,
+  maxModelResponseBytes: 8 * 1024 * 1024,
+  maxRunEvents: 65_536,
+  maxSubagentEventsPerBatch: 1_024,
+} as const;
+
+interface EffectiveRunBufferLimits {
+  readonly maxModelResponseParts: number;
+  readonly maxModelResponseBytes: number;
+  readonly maxRunEvents: number;
+  readonly maxSubagentEventsPerBatch: number;
+}
+
+const tighteningBufferLimit = (
+  configured: number | undefined,
+  ceiling: number,
+  minimum: number,
+): number =>
+  configured === undefined || !Number.isFinite(configured)
+    ? ceiling
+    : Math.min(ceiling, Math.max(minimum, Math.floor(configured)));
+
+const effectiveRunBufferLimits = (
+  configured: RunBufferLimits | undefined,
+): EffectiveRunBufferLimits => ({
+  maxModelResponseParts: tighteningBufferLimit(
+    configured?.maxModelResponseParts,
+    DEFAULT_RUN_BUFFER_LIMITS.maxModelResponseParts,
+    1,
+  ),
+  maxModelResponseBytes: tighteningBufferLimit(
+    configured?.maxModelResponseBytes,
+    DEFAULT_RUN_BUFFER_LIMITS.maxModelResponseBytes,
+    1,
+  ),
+  // A Run always needs one ordinary event and one reserved typed terminal event.
+  maxRunEvents: tighteningBufferLimit(
+    configured?.maxRunEvents,
+    DEFAULT_RUN_BUFFER_LIMITS.maxRunEvents,
+    2,
+  ),
+  maxSubagentEventsPerBatch: tighteningBufferLimit(
+    configured?.maxSubagentEventsPerBatch,
+    DEFAULT_RUN_BUFFER_LIMITS.maxSubagentEventsPerBatch,
+    1,
+  ),
+});
+
+interface ModelResponseBufferUsage {
+  responsePartCount: number;
+  responsePartBytes: number;
+}
+
+const structuredCloneFunction = Reflect.get(globalThis, "structuredClone");
+const knownSafeModelResponsePrototypes = new Set<object>([Response.Usage.prototype]);
+
+const schemaClassPrototype = (schema: Schema.Top): object | undefined => {
+  if (typeof schema !== "function" || !Schema.isSchema(schema)) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(schema, "prototype");
+  return descriptor !== undefined &&
+    "value" in descriptor &&
+    descriptor.value !== null &&
+    typeof descriptor.value === "object"
+    ? descriptor.value
+    : undefined;
+};
+
+/**
+ * Build the bounded preflight view for a decoded Tool payload whose root is an
+ * application-selected Schema class. The class instance is deliberately omitted:
+ * its complete canonical encoding is measured before cloning, and it is never
+ * retained in the Turn trace. Every other response field remains in the preflight.
+ */
+const schemaClassToolPartPreflight = <Tools extends Record<string, Tool.Any>>(
+  part: unknown,
+  toolkit: Toolkit.Toolkit<Tools>,
+): object | undefined => {
+  try {
+    if (part === null || typeof part !== "object") return undefined;
+    const read = (key: string): unknown => {
+      const descriptor = Object.getOwnPropertyDescriptor(part, key);
+      if (descriptor === undefined || !("value" in descriptor)) {
+        throw new TypeError(`response part ${key} must be an own data property`);
+      }
+      return descriptor.value;
+    };
+    const type = read("type");
+    if (type !== "tool-call" && type !== "tool-result") return undefined;
+    const name = read("name");
+    if (typeof name !== "string" || !hasTool(toolkit.tools, name)) return undefined;
+    const tool = toolkit.tools[name];
+    const payload = read(type === "tool-call" ? "params" : "result");
+    if (payload === null || typeof payload !== "object") return undefined;
+    const payloadPrototype = Object.getPrototypeOf(payload);
+    const schemas =
+      type === "tool-call" ? [tool.parametersSchema] : [tool.successSchema, tool.failureSchema];
+    if (!schemas.some((schema) => schemaClassPrototype(schema) === payloadPrototype)) {
+      return undefined;
+    }
+
+    const preflight: Record<string, unknown> = {};
+    const retainedKeys =
+      type === "tool-call"
+        ? ["type", "id", "name", "providerExecuted", "metadata"]
+        : [
+            "type",
+            "id",
+            "name",
+            "isFailure",
+            "providerExecuted",
+            "preliminary",
+            "metadata",
+            "encodedResult",
+          ];
+    for (const key of retainedKeys) {
+      preflight[key] = read(key);
+    }
+    return preflight;
+  } catch {
+    return undefined;
+  }
+};
+
+const inspectModelResponsePartCapacity = (
+  usage: ModelResponseBufferUsage,
+  part: unknown,
+  limits: EffectiveRunBufferLimits,
+  knownSafePrototypes: ReadonlySet<object> = knownSafeModelResponsePrototypes,
+): Effect.Effect<number, ModelProtocolError> =>
+  Effect.suspend(() => {
+    if (usage.responsePartCount >= limits.maxModelResponseParts) {
+      return Effect.fail(
+        ModelProtocolError.make({
+          message: `Model response exceeded the ${limits.maxModelResponseParts}-part response limit`,
+        }),
+      );
+    }
+    const bytes = boundedValueFootprint(
+      part,
+      limits.maxModelResponseBytes - usage.responsePartBytes,
+      knownSafePrototypes,
+    );
+    return bytes === undefined
+      ? Effect.fail(
+          ModelProtocolError.make({
+            message: `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`,
+          }),
+        )
+      : Effect.succeed(bytes);
+  });
+
+const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(function* <
+  Tools extends Record<string, Tool.Any>,
+>(
+  part: unknown,
+  toolkit: Toolkit.Toolkit<Tools>,
+  usage: ModelResponseBufferUsage,
+  limits: EffectiveRunBufferLimits,
+) {
+  // Reject an oversized provider graph before schema encoding, structured cloning, or decoding
+  // can allocate additional full copies. A decoded application Schema class is the sole exception:
+  // preflight its enclosing response fields, then measure its complete canonical plain encoding
+  // before cloning. The class instance never enters retained Turn state.
+  const directInputBytes = boundedValueFootprint(
+    part,
+    limits.maxModelResponseBytes - usage.responsePartBytes,
+    knownSafeModelResponsePrototypes,
+  );
+  if (directInputBytes === undefined) {
+    const preflight = schemaClassToolPartPreflight(part, toolkit);
+    yield* inspectModelResponsePartCapacity(usage, preflight ?? part, limits);
+  } else {
+    yield* inspectModelResponsePartCapacity(usage, part, limits);
+  }
+  const codec = Schema.toCodecJson(Response.StreamPart(toolkit));
+  const encodingFailure = ModelProtocolError.make({
+    message: "Model response part failed canonical encoding",
+  });
+  const encoded = yield* Schema.encodeUnknownEffect(codec)(part).pipe(
+    Effect.mapError(() => encodingFailure),
+  );
+  const retainedBytes = yield* inspectModelResponsePartCapacity(usage, encoded, limits);
+  const ownedEncoded = yield* Effect.try({
+    try: () => {
+      if (typeof structuredCloneFunction !== "function") {
+        throw new TypeError("structuredClone is unavailable");
+      }
+      const cloned: unknown = Reflect.apply(structuredCloneFunction, globalThis, [encoded]);
+      return cloned;
+    },
+    catch: () =>
+      ModelProtocolError.make({
+        message: "Model response part could not be converted into engine-owned data",
+      }),
+  });
+  const decodingFailure = ModelProtocolError.make({
+    message: "Model response part failed canonical decoding",
+  });
+  const ownedPart = yield* Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(
+    Effect.mapError(() => decodingFailure),
+  );
+  return { ownedPart, retainedBytes };
+});
+
+const consumeModelResponsePart = (
+  usage: ModelResponseBufferUsage,
+  retainedBytes: number,
+  limits: EffectiveRunBufferLimits,
+): Effect.Effect<void, ModelProtocolError> =>
+  Effect.suspend(() => {
+    if (
+      usage.responsePartCount >= limits.maxModelResponseParts ||
+      !Number.isSafeInteger(retainedBytes) ||
+      retainedBytes < 0 ||
+      retainedBytes > limits.maxModelResponseBytes - usage.responsePartBytes
+    ) {
+      return Effect.fail(
+        ModelProtocolError.make({
+          message:
+            usage.responsePartCount >= limits.maxModelResponseParts
+              ? `Model response exceeded the ${limits.maxModelResponseParts}-part response limit`
+              : `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`,
+        }),
+      );
+    }
+    return Effect.sync(() => {
+      usage.responsePartCount += 1;
+      usage.responsePartBytes += retainedBytes;
+    });
+  });
 
 type PartLifecycle = "open" | "closed";
 
@@ -559,9 +801,40 @@ const encodeToolCallParameters = <Tools extends Record<string, Tool.Any>>(
 };
 
 /**
- * The pinned `Toolkit.handle` implementation decodes once more internally,
- * despite its decoded-parameter signature, so handler parameters are the
- * encoded form produced by `encodeToolCallParameters`.
+ * Decode canonically recorded Tool parameters for policy and authorization.
+ * The private assertion restores the correlation lost by dynamic record
+ * lookup only around a successful Schema decode.
+ */
+const decodeToolCallParameters = <Tools extends Record<string, Tool.Any>>(
+  tool: ToolUnion<Tools>,
+  toolName: string,
+  encodedParams: unknown,
+  boundary: "execution" | "resume" = "execution",
+): Effect.Effect<
+  Tool.Parameters<ToolUnion<Tools>>,
+  ModelProtocolError,
+  Tool.HandlerServices<ToolUnion<Tools>>
+> => {
+  const decodeParameters = Schema.decodeUnknownEffect(tool.parametersSchema) as (
+    input: unknown,
+  ) => Effect.Effect<
+    Tool.Parameters<ToolUnion<Tools>>,
+    Schema.SchemaError,
+    Tool.HandlerServices<ToolUnion<Tools>>
+  >;
+  return decodeParameters(encodedParams).pipe(
+    Effect.mapError((cause) =>
+      ModelProtocolError.make({
+        message: `Recorded parameters for Tool ${toolName} failed validation${boundary === "resume" ? " on resume" : ""}: ${cause.message}`,
+      }),
+    ),
+  );
+};
+
+/**
+ * The pinned `Toolkit.handle` implementation decodes internally despite its
+ * decoded-parameter signature, so the native handler boundary receives the
+ * canonical encoded parameters retained by the Turn trace.
  */
 const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
@@ -579,16 +852,15 @@ const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
     );
   }
   const tool = toolkit.tools[name] as ToolUnion<Tools>;
-  const decodedParams = call.params as Tool.Parameters<ToolUnion<Tools>>;
   return decodeToolCallId(call.id).pipe(
     Effect.flatMap((toolCallId) =>
-      encodeToolCallParameters<Tools>(tool, call.name, decodedParams).pipe(
-        Effect.map((encodedParams) => ({
+      decodeToolCallParameters<Tools>(tool, call.name, call.params).pipe(
+        Effect.map((decodedParams) => ({
           call,
           name,
           toolCallId,
           decodedParams,
-          nativeHandlerParams: encodedParams as Tool.Parameters<ToolUnion<Tools>>,
+          nativeHandlerParams: call.params as Tool.Parameters<ToolUnion<Tools>>,
           tool,
           declarationIndex,
         })),
@@ -634,30 +906,132 @@ const effectiveRunBounds = (
   maxToolCalls: boundedAllowance(policy.maxToolCalls, options.toolCallAllowance),
 });
 
-const decodeResumedToolCallParameters = <Tools extends Record<string, Tool.Any>>(
-  tool: ToolUnion<Tools>,
-  toolName: string,
-  encodedParams: unknown,
-): Effect.Effect<
-  Tool.Parameters<ToolUnion<Tools>>,
-  ModelProtocolError,
-  Tool.HandlerServices<ToolUnion<Tools>>
-> => {
-  const decodeParameters = Schema.decodeUnknownEffect(tool.parametersSchema) as (
-    input: unknown,
-  ) => Effect.Effect<
-    Tool.Parameters<ToolUnion<Tools>>,
-    Schema.SchemaError,
-    Tool.HandlerServices<ToolUnion<Tools>>
-  >;
-  return decodeParameters(encodedParams).pipe(
-    Effect.mapError((cause) =>
-      ModelProtocolError.make({
-        message: `Recorded parameters for Tool ${toolName} failed validation on resume: ${cause.message}`,
-      }),
-    ),
-  );
-};
+const decodeResumedSettledCall = Effect.fn("AgentRuntime.decodeResumedSettledCall")(
+  (input: unknown, maxResultBytes: number) =>
+    Effect.gen(function* () {
+      const raw = yield* Effect.try({
+        try: () => {
+          if (input === null || typeof input !== "object") {
+            throw new TypeError("settled Tool Call must be an object");
+          }
+          const readOwnDataProperty = (key: "id" | "result" | "isFailure"): unknown => {
+            const descriptor = Object.getOwnPropertyDescriptor(input, key);
+            if (descriptor === undefined || !("value" in descriptor)) {
+              throw new TypeError(`settled Tool Call ${key} must be an own data property`);
+            }
+            return descriptor.value;
+          };
+          return {
+            id: readOwnDataProperty("id"),
+            result: readOwnDataProperty("result"),
+            isFailure: readOwnDataProperty("isFailure"),
+          };
+        },
+        catch: () =>
+          ModelProtocolError.make({
+            message: "Turn resume contains an invalid settled Tool Call",
+          }),
+      });
+      const result = boundedCanonicalJsonSnapshot(raw.result, maxResultBytes);
+      if (result === undefined) {
+        return yield* ModelProtocolError.make({
+          message: "Turn resume settled Tool result is not bounded canonical JSON",
+        });
+      }
+      return yield* Schema.decodeUnknownEffect(RunTurnResumeSettledCallSchema)({
+        ...raw,
+        result: result.value,
+      }).pipe(
+        Effect.mapError(() =>
+          ModelProtocolError.make({
+            message: "Turn resume contains an invalid settled Tool Call",
+          }),
+        ),
+      );
+    }),
+);
+
+const snapshotResumedSettledCalls = Effect.fn("AgentRuntime.snapshotResumedSettledCalls")(
+  (resume: unknown, maximum: number) =>
+    Effect.try({
+      try: () => {
+        if (resume === null || typeof resume !== "object") {
+          throw new TypeError("Turn resume must be an object");
+        }
+        const settledDescriptor = Object.getOwnPropertyDescriptor(resume, "settled");
+        if (settledDescriptor === undefined || !("value" in settledDescriptor)) {
+          throw new TypeError("Turn resume settled must be an own data property");
+        }
+        const settled = settledDescriptor.value;
+        if (!Array.isArray(settled)) {
+          throw new TypeError("Turn resume settled must be an array");
+        }
+        const lengthDescriptor = Object.getOwnPropertyDescriptor(settled, "length");
+        if (
+          lengthDescriptor === undefined ||
+          !("value" in lengthDescriptor) ||
+          !Number.isSafeInteger(lengthDescriptor.value) ||
+          lengthDescriptor.value < 0 ||
+          lengthDescriptor.value > maximum
+        ) {
+          throw new TypeError("Turn resume settled has an invalid length");
+        }
+        const snapshot = new Array<unknown>(lengthDescriptor.value);
+        for (let index = 0; index < lengthDescriptor.value; index += 1) {
+          const entryDescriptor = Object.getOwnPropertyDescriptor(settled, String(index));
+          if (entryDescriptor === undefined || !("value" in entryDescriptor)) {
+            throw new TypeError("Turn resume settled entries must be own data properties");
+          }
+          snapshot[index] = entryDescriptor.value;
+        }
+        return snapshot;
+      },
+      catch: () =>
+        ModelProtocolError.make({
+          message: "Turn resume contains an invalid settled Tool Call collection",
+        }),
+    }),
+);
+
+const decodeResumeUsage = Effect.fn("AgentRuntime.decodeResumeUsage")((input: unknown) =>
+  Effect.gen(function* () {
+    const snapshot = yield* Effect.try({
+      try: () => {
+        if (input === null || typeof input !== "object") {
+          throw new TypeError("Run resume usage must be an object");
+        }
+        const read = (key: keyof RunResumeUsage): unknown => {
+          const descriptor = Object.getOwnPropertyDescriptor(input, key);
+          if (descriptor === undefined || !("value" in descriptor)) {
+            throw new TypeError(`Run resume usage ${key} must be an own data property`);
+          }
+          return descriptor.value;
+        };
+        return {
+          modelCalls: read("modelCalls"),
+          inputTokens: read("inputTokens"),
+          outputTokens: read("outputTokens"),
+          lastInputTokens: read("lastInputTokens"),
+          lastOutputTokens: read("lastOutputTokens"),
+          costMicrousd: read("costMicrousd"),
+        };
+      },
+      catch: () =>
+        ModelProtocolError.make({
+          message:
+            "Run resume usage requires own data properties with non-negative safe-integer totals and last-call tokens no greater than their cumulative totals",
+        }),
+    });
+    return yield* Schema.decodeUnknownEffect(RunResumeUsageSchema)(snapshot).pipe(
+      Effect.mapError(() =>
+        ModelProtocolError.make({
+          message:
+            "Run resume usage requires own data properties with non-negative safe-integer totals and last-call tokens no greater than their cumulative totals",
+        }),
+      ),
+    );
+  }),
+);
 
 const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (
   context: RunContext,
@@ -730,7 +1104,7 @@ const stampSubagentEvent = Effect.fn("AgentRuntime.stampSubagentEvent")(function
   context: RunContext,
   turnId: TurnId,
   payload: SubagentEventPayload,
-): Effect.fn.Return<RunEvent> {
+): Effect.fn.Return<RunEvent, ModelProtocolError> {
   const shared = {
     ...(yield* eventBase(context)),
     turnId,
@@ -929,7 +1303,11 @@ const preflightToolAuthorization = <HookError, HookRequirements>(
   turn: number,
   call: RunToolCallDescriptor,
   options: RunOptions<HookError, HookRequirements>,
-): Stream.Stream<RunEvent, HookError | AgentToolAuthorizationDenied, HookRequirements> => {
+): Stream.Stream<
+  RunEvent,
+  HookError | ModelProtocolError | AgentToolAuthorizationDenied,
+  HookRequirements
+> => {
   const authorization = options.toolAuthorization;
   if (authorization === undefined) return Stream.empty;
   return Stream.unwrap(
@@ -1434,7 +1812,11 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           ? descriptors
           : descriptors.filter((call) => !settledCallIds.has(call.toolCallId));
       const authorizationPreflight = executableDescriptors.reduce<
-        Stream.Stream<RunEvent, HookError | AgentToolAuthorizationDenied, HookRequirements>
+        Stream.Stream<
+          RunEvent,
+          HookError | ModelProtocolError | AgentToolAuthorizationDenied,
+          HookRequirements
+        >
       >(
         (stream, call) =>
           stream.pipe(
@@ -1565,12 +1947,13 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         return stream.pipe(Stream.concat(next));
       }, Stream.empty);
 
-      // This batch's live sink. The queue is unbounded and drained by the
-      // Run's own stream below, matching the Run's existing buffering:
-      // emission never blocks a handler and no external observer can
-      // backpressure the batch. Emitting after the batch settled fails closed
-      // with `RunEventSinkClosedError`.
-      const sinkQueue = yield* Queue.unbounded<SubagentEventPayload, Cause.Done>();
+      // This batch's live sink uses bounded structured backpressure. The Run's own stream drains
+      // it concurrently with handlers, so a burst may suspend its emitting handler but a detached
+      // external observer can never backpressure the batch. Emitting after settlement still fails
+      // closed with `RunEventSinkClosedError`.
+      const sinkQueue = yield* Queue.bounded<SubagentEventPayload, Cause.Done>(
+        context.bufferLimits.maxSubagentEventsPerBatch,
+      );
       const batchSink: RunEventSinkService = {
         emit: (payload) =>
           Queue.offer(sinkQueue, payload).pipe(
@@ -1666,21 +2049,6 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       );
     }),
   );
-
-const ErrorMessage = Schema.Struct({ message: Schema.String });
-const ErrorTag = Schema.Struct({ _tag: Schema.NonEmptyString });
-
-const errorMessage = (error: unknown): string =>
-  Option.match(Schema.decodeUnknownOption(ErrorMessage)(error), {
-    onNone: () => String(error),
-    onSome: ({ message }) => message,
-  });
-
-const errorTag = (error: unknown): string =>
-  Option.match(Schema.decodeUnknownOption(ErrorTag)(error), {
-    onNone: () => "UnknownError",
-    onSome: ({ _tag }) => _tag,
-  });
 
 const schedulingConcurrency = (
   configured: number,
@@ -1943,7 +2311,11 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
   usage: Response.Usage | undefined,
   toolCallCount: number,
   options: RunOptions<HookError, HookRequirements>,
-): Effect.Effect<ConsumedUsage, AgentPolicyError | HookError, HookRequirements> =>
+): Effect.Effect<
+  ConsumedUsage,
+  AgentPolicyError | ModelProtocolError | HookError,
+  HookRequirements
+> =>
   Effect.gen(function* () {
     if (usage === undefined) {
       return yield* AgentPolicyError.make({
@@ -2057,7 +2429,15 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
 // `Effect.fnUntraced`: this helper runs for every streamed Response Part, so a
 // named span here would emit one span per TextDelta/ReasoningDelta. Spans stay
 // on per-Run, per-Turn, and per-Tool operations.
-const eventBase = Effect.fnUntraced(function* (context: RunContext) {
+const eventBaseFor = Effect.fnUntraced(function* (context: RunContext, terminal: boolean) {
+  const ceiling = terminal
+    ? context.bufferLimits.maxRunEvents
+    : context.bufferLimits.maxRunEvents - 1;
+  if (context.sequence >= ceiling) {
+    return yield* ModelProtocolError.make({
+      message: `Run exceeded the ${context.bufferLimits.maxRunEvents}-event buffer limit`,
+    });
+  }
   const timestamp = DateTime.makeUnsafe(yield* Clock.currentTimeMillis);
   const sequence = context.sequence;
   context.sequence += 1;
@@ -2070,6 +2450,11 @@ const eventBase = Effect.fnUntraced(function* (context: RunContext) {
     timestamp,
   };
 });
+
+const eventBase = (context: RunContext) => eventBaseFor(context, false);
+
+/** The ordinary event budget always reserves one slot for this typed terminal projection. */
+const terminalEventBase = (context: RunContext) => eventBaseFor(context, true);
 
 const snapshotStagedProviderEvent = (
   trace: TurnTrace,
@@ -2169,7 +2554,7 @@ const stampProviderResultEvent = (
   context: RunContext,
   turnId: TurnId,
   payload: ProviderResultEventPayload,
-): Effect.Effect<RunEvent> =>
+): Effect.Effect<RunEvent, ModelProtocolError> =>
   Effect.map(eventBase(context), (base) => {
     switch (payload._tag) {
       case "ToolProgress":
@@ -2232,7 +2617,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
   forceSummarize: boolean,
 ): Effect.Effect<
   CompactionOutcome,
-  AgentPolicyError | AiError.AiError | HookError,
+  AgentPolicyError | ModelProtocolError | AiError.AiError | HookError,
   HookRequirements | LanguageModel.LanguageModel
 > =>
   Effect.gen(function* () {
@@ -2296,17 +2681,29 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
       }),
     ]);
     const pieces: Array<string> = [];
+    const responseUsage: ModelResponseBufferUsage = {
+      responsePartCount: 0,
+      responsePartBytes: 0,
+    };
     let summaryUsage: Response.Usage | undefined;
     yield* guardBudgetStream(
       LanguageModel.streamText({ prompt: summarizerPrompt }),
       options.budget,
     ).pipe(
       Stream.runForEach((part) =>
-        Effect.sync(() => {
-          if (part.type === "text-delta") {
-            pieces.push(part.delta);
-          } else if (part.type === "finish") {
-            summaryUsage = part.usage;
+        Effect.gen(function* () {
+          const owned = yield* ownModelResponsePart(
+            part,
+            Toolkit.empty,
+            responseUsage,
+            context.bufferLimits,
+          );
+          yield* consumeModelResponsePart(responseUsage, owned.retainedBytes, context.bufferLimits);
+          const ownedPart = owned.ownedPart;
+          if (ownedPart.type === "text-delta") {
+            pieces.push(ownedPart.delta);
+          } else if (ownedPart.type === "finish") {
+            summaryUsage = ownedPart.usage;
           }
         }),
       ),
@@ -2578,11 +2975,13 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
   tools: Tools,
   trace: TurnTrace,
   part: Response.AnyPart,
+  retainedBytes: number,
 ): Effect.fn.Return<
   ReadonlyArray<RunEvent>,
   ModelProtocolError,
   Tool.HandlerServices<ToolUnion<Tools>>
 > {
+  yield* consumeModelResponsePart(trace, retainedBytes, context.bufferLimits);
   if (trace.finished) {
     return yield* ModelProtocolError.make({
       message: "Model response emitted content after its finish part",
@@ -2696,25 +3095,20 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
         part.params as Tool.Parameters<ToolUnion<Tools>>,
       );
       const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
-      // Official history carries the wire form: rebuild the trace
-      // part with the Schema-encoded parameters (the provider re-serializes
-      // them on the next request regardless), while `applicationToolCalls`
-      // below keeps the decoded part for the handler path — see TurnTrace.
-      trace.parts.push(
-        Response.makePart("tool-call", {
-          id: part.id,
-          name: part.name,
-          params: parameters,
-          providerExecuted: part.providerExecuted,
-          metadata: part.metadata,
-        }),
-      );
+      const canonicalCall = Response.makePart("tool-call", {
+        id: part.id,
+        name: part.name,
+        params: parameters,
+        providerExecuted: part.providerExecuted,
+        metadata: part.metadata,
+      });
+      trace.parts.push(canonicalCall);
       trace.toolCalls.set(part.id, {
         name: part.name,
         providerExecuted: part.providerExecuted,
       });
       if (!part.providerExecuted) {
-        trace.applicationToolCalls.push(part);
+        trace.applicationToolCalls.push(canonicalCall);
         trace.applicationCallDescriptors.push({
           toolCallId,
           toolName: part.name,
@@ -3079,6 +3473,8 @@ const makeTurn = <
                 : { outputContract: outputContractMessage }),
             });
       const trace: TurnTrace = {
+        responsePartCount: 0,
+        responsePartBytes: 0,
         parts: [],
         text: [],
         textParts: new Map(),
@@ -3220,7 +3616,24 @@ const makeTurn = <
                 options.budget,
               ).pipe(
                 Stream.mapEffect((part) =>
-                  eventsForPart(context, turnId, turn, agent.definition.toolkit.tools, trace, part),
+                  ownModelResponsePart(
+                    part,
+                    agent.definition.toolkit,
+                    trace,
+                    context.bufferLimits,
+                  ).pipe(
+                    Effect.flatMap((owned) =>
+                      eventsForPart(
+                        context,
+                        turnId,
+                        turn,
+                        agent.definition.toolkit.tools,
+                        trace,
+                        owned.ownedPart,
+                        owned.retainedBytes,
+                      ),
+                    ),
+                  ),
                 ),
                 Stream.flatMap(Stream.fromIterable),
               ),
@@ -3910,6 +4323,8 @@ const makeResumeTurn = <
         );
       }
       const trace: TurnTrace = {
+        responsePartCount: 0,
+        responsePartBytes: 0,
         parts: [],
         text: [],
         textParts: new Map(),
@@ -3944,11 +4359,7 @@ const makeResumeTurn = <
         }
         const tool = tools[call.name] as ToolUnion<Tools>;
         const toolCallId = yield* decodeToolCallId(call.id);
-        const decodedParams = yield* decodeResumedToolCallParameters<Tools>(
-          tool,
-          call.name,
-          call.params,
-        );
+        yield* decodeToolCallParameters<Tools>(tool, call.name, call.params, "resume");
         const parameters = yield* decodeEventJson(call.params, "Tool parameters");
         declarationByCallId.set(call.id, {
           index: trace.applicationToolCalls.length,
@@ -3967,7 +4378,7 @@ const makeResumeTurn = <
           Response.makePart("tool-call", {
             id: call.id,
             name: call.name,
-            params: decodedParams,
+            params: parameters,
             providerExecuted: false,
           }),
         );
@@ -3979,7 +4390,12 @@ const makeResumeTurn = <
         });
       }
       const settledIds = new Set<string>();
-      for (const settledCall of resume.settled) {
+      const settledInputs = yield* snapshotResumedSettledCalls(resume, declarationByCallId.size);
+      for (const settledInput of settledInputs) {
+        const settledCall = yield* decodeResumedSettledCall(
+          settledInput,
+          agent.definition.policy.toolResultBounds.maxBytes,
+        );
         const declared = declarationByCallId.get(settledCall.id);
         if (declared === undefined) {
           return failRunEventStream(
@@ -4232,6 +4648,10 @@ const stream = <
 > => {
   const interpreted = Stream.unwrap(
     Effect.gen(function* () {
+      const resumeUsage =
+        options.resumeUsage === undefined
+          ? undefined
+          : yield* decodeResumeUsage(options.resumeUsage);
       const attemptStartedAtMillis = yield* Clock.currentTimeMillis;
       const maxDurationMillis = Duration.toMillis(agent.definition.policy.maxDuration);
       const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
@@ -4261,19 +4681,20 @@ const stream = <
         // RUN-019: a resumed Attempt re-seeds cumulative usage from the
         // canonical response records so token budgets and the compaction
         // trigger keep accounting across ownership changes.
-        modelCalls: options.resumeUsage?.modelCalls ?? 0,
+        modelCalls: resumeUsage?.modelCalls ?? 0,
         consecutiveToolFailures: 0,
-        inputTokens: options.resumeUsage?.inputTokens ?? 0,
-        outputTokens: options.resumeUsage?.outputTokens ?? 0,
-        lastInputTokens: options.resumeUsage?.lastInputTokens ?? 0,
-        lastOutputTokens: options.resumeUsage?.lastOutputTokens ?? 0,
-        costMicrousd: options.resumeUsage?.costMicrousd ?? 0,
+        inputTokens: resumeUsage?.inputTokens ?? 0,
+        outputTokens: resumeUsage?.outputTokens ?? 0,
+        lastInputTokens: resumeUsage?.lastInputTokens ?? 0,
+        lastOutputTokens: resumeUsage?.lastOutputTokens ?? 0,
+        costMicrousd: resumeUsage?.costMicrousd ?? 0,
         lastCostMicrousd: 0,
         warnedLimits: new Set(),
         finalizing: false,
         tokenExhausted: false,
         exhaustedDimension: undefined,
         compaction: initialCompactionState(),
+        bufferLimits: effectiveRunBufferLimits(options.bufferLimits),
         sequence: 0,
         programmaticToolCalls: 0,
       };
@@ -4281,7 +4702,7 @@ const stream = <
       // the resumed Attempt must never issue an unconstrained external call.
       // "fail" rejects before any model call or resumed handler runs;
       // "final-answer" starts already constrained via the one-shot flag.
-      if (options.resumeUsage !== undefined) {
+      if (resumeUsage !== undefined) {
         // Cost is an unconditional hard rail with no grace call in either
         // exhaustion mode (runtime spec §3): a resume whose seeded spend
         // already breaches the budget rejects before input, resumed
@@ -4402,12 +4823,12 @@ const stream = <
             Effect.gen(function* () {
               if (error instanceof AgentApprovalPending || error instanceof AgentChildPending) {
                 return RunSuspended.make({
-                  ...(yield* eventBase(context)),
+                  ...(yield* terminalEventBase(context)),
                   reason: error.message,
                 });
               }
               return RunFailed.make({
-                ...(yield* eventBase(context)),
+                ...(yield* terminalEventBase(context)),
                 errorTag: errorTag(error),
                 message: errorMessage(error),
               });
@@ -4544,10 +4965,11 @@ const run = Effect.fn("AgentRuntime.run")(function* <
  *
  * `observe` is a live multicast subscription: each subscription replays every
  * event the Run has already emitted, follows subsequent events as they occur,
- * and ends once the Run settles. Events are never dropped for a slow
- * subscriber, and publishing never blocks the Run. `events` remains the
- * complete replay, available after settlement. Both belong to the `start`
- * Scope; observing after that Scope closes interrupts the observer.
+ * and ends once the Run settles. The finite Run event ceiling sizes the replay
+ * buffer so events are never dropped for a slow subscriber and publishing
+ * never blocks the Run. `events` remains the complete bounded replay,
+ * available after settlement. Both belong to the `start` Scope; observing
+ * after that Scope closes interrupts the observer.
  */
 export interface DetachedRun<Output, Error> {
   readonly await: Effect.Effect<AgentResult<Output>, Error>;
@@ -4594,21 +5016,36 @@ const start = Effect.fn("AgentRuntime.start")(function* <
   AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements> | Scope.Scope
 > {
   yield* Scope.Scope;
+  const bufferLimits = Object.freeze(effectiveRunBufferLimits(options.bufferLimits));
+  const executionOptionDescriptors: PropertyDescriptorMap = {
+    ...Object.getOwnPropertyDescriptors(options),
+    bufferLimits: {
+      configurable: false,
+      enumerable: true,
+      value: bufferLimits,
+      writable: false,
+    },
+  };
+  const executionOptions: RunOptions<HookError, HookRequirements> = Object.create(
+    Object.getPrototypeOf(options),
+    executionOptionDescriptors,
+  );
   // Single-writer append-only trace owned by the Run fiber; readers only see
-  // it after the fiber settles, so a plain array avoids the quadratic cost of
-  // copying an immutable Ref array per event.
+  // it after the fiber settles. `stream` admits at most `maxRunEvents`, so this
+  // array has the same finite ceiling without per-event immutable copies.
   const captured: Array<RunEvent> = [];
-  // The unbounded replay window keeps `observe` subscriptions live without
-  // backpressuring the Run: it retains references to the same events as
-  // `captured`, replays them to subscribers that attach mid-Run or after
-  // settlement, and the terminal `Exit.void` Take ends every subscription.
-  const pubsub = yield* PubSub.unbounded<Take.Take<RunEvent>>({
-    replay: Number.MAX_SAFE_INTEGER,
+  // One extra slot carries the terminal `Exit.void` Take after the bounded Run
+  // event trace. Dropping is non-blocking, while the capacity proof means the
+  // strategy never drops a valid event or the terminal marker.
+  const observationCapacity = bufferLimits.maxRunEvents + 1;
+  const pubsub = yield* PubSub.dropping<Take.Take<RunEvent>>({
+    capacity: observationCapacity,
+    replay: observationCapacity,
   });
   yield* Effect.addFinalizer(() => PubSub.shutdown(pubsub));
   const execution = reduceRunEvents(
     agent,
-    stream(agent, input, options).pipe(
+    stream(agent, input, executionOptions).pipe(
       Stream.tap((event) =>
         Effect.suspend(() => {
           captured.push(event);
@@ -4660,7 +5097,7 @@ const closedDurableStep: DurableStepService = {
       DurableStepError.make({
         stepName: name,
         reason: "no-active-tool-call",
-        message: `Durable Step ${name} was executed outside an active Tool Call`,
+        message: "Durable Step was executed outside an active Tool Call",
       }),
     ),
 };
@@ -4788,20 +5225,10 @@ const observeProgrammaticToolCall = <R>(
     );
   });
 
-// Platform-neutral UTF-8 byte counting (the engine's TS lib declares no
-// TextEncoder); same code-point walk as the capabilities redaction module.
-const brokerUtf8ByteLength = (value: string): number => {
-  let total = 0;
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    total += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
-  }
-  return total;
-};
 const brokerEncodedByteLength = (value: unknown): number | undefined => {
   try {
     const encoded = JSON.stringify(value);
-    return encoded === undefined ? undefined : brokerUtf8ByteLength(encoded);
+    return encoded === undefined ? undefined : utf8ByteLength(encoded);
   } catch {
     return undefined;
   }
@@ -4862,11 +5289,12 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
         // A malformed result bound would fail open (`NaN` defeats every
         // comparison), so it is rejected typed before the pass opens.
         if (
-          passOptions?.maxResultBytes !== undefined &&
-          (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0)
+          passOptions === undefined ||
+          !Number.isSafeInteger(passOptions.maxResultBytes) ||
+          passOptions.maxResultBytes <= 0
         ) {
           return yield* ToolBrokerConfigurationError.make({
-            message: `maxResultBytes must be a positive safe integer; received ${String(passOptions.maxResultBytes)}`,
+            message: `maxResultBytes must be a positive safe integer; received ${String(passOptions?.maxResultBytes)}`,
           });
         }
         // Capture the handler services present at the pass edge once; nothing
@@ -5065,7 +5493,7 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                   );
                 }
                 let encodedResult = terminal.encodedResult;
-                if (passOptions?.redactResult !== undefined) {
+                if (passOptions.redactResult !== undefined) {
                   // A redactor is a substitution point: its replacement re-crosses
                   // the JSON boundary or the call fails closed.
                   const redacted = brokerDecodeJson(yield* passOptions.redactResult(encodedResult));
@@ -5078,15 +5506,13 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                   }
                   encodedResult = redacted.value;
                 }
-                if (passOptions?.maxResultBytes !== undefined) {
-                  const bytes = brokerEncodedByteLength(encodedResult);
-                  if (bytes === undefined || bytes > passOptions.maxResultBytes) {
-                    return programmaticOutcomeError(
-                      index,
-                      "ProgrammaticResultLimitError",
-                      `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`,
-                    );
-                  }
+                const bytes = brokerEncodedByteLength(encodedResult);
+                if (bytes === undefined || bytes > passOptions.maxResultBytes) {
+                  return programmaticOutcomeError(
+                    index,
+                    "ProgrammaticResultLimitError",
+                    `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`,
+                  );
                 }
                 return { _tag: "ProgrammaticCallSuccess", index, encodedResult } as const;
               }),
@@ -5164,7 +5590,7 @@ const passthroughDurableStep = (): DurableStepService => {
               DurableStepError.make({
                 stepName: name,
                 reason: "duplicate-step-name",
-                message: `Durable Step name ${name} was reused within one Tool Call`,
+                message: "Durable Step name was reused within one Tool Call",
               }),
             );
           }
@@ -5222,7 +5648,7 @@ const makeDurableStepService = <HookError, HookRequirements>(
             toolCallId,
             stepName: name,
             reason: "duplicate-step-name",
-            message: `Durable Step name ${name} was reused within Tool Call ${toolCallId}`,
+            message: "Durable Step name was reused within one Tool Call",
           });
         }
         usedNames.add(name);
@@ -5233,30 +5659,31 @@ const makeDurableStepService = <HookError, HookRequirements>(
               toolCallId,
               stepName: name,
               reason: "lookup-failed",
-              message: `Durable Step lookup failed: ${errorMessage(cause)}`,
+              message: "Durable Step lookup failed",
+              cause,
             }),
           ),
         );
         if (Option.isSome(recorded)) {
           return yield* Schema.decodeUnknownEffect(output)(recorded.value.encodedOutput).pipe(
-            Effect.mapError((cause) =>
+            Effect.mapError(() =>
               DurableStepError.make({
                 toolCallId,
                 stepName: name,
                 reason: "recorded-result-invalid",
-                message: `Recorded Durable Step result did not decode through the declared output Schema: ${cause.message}`,
+                message: "Recorded Durable Step result failed the declared output Schema",
               }),
             ),
           );
         }
         const value = yield* execute;
         const encodedOutput = yield* Schema.encodeEffect(output)(value).pipe(
-          Effect.mapError((cause) =>
+          Effect.mapError(() =>
             DurableStepError.make({
               toolCallId,
               stepName: name,
               reason: "output-encoding-failed",
-              message: `Durable Step output did not encode through the declared output Schema: ${cause.message}`,
+              message: "Durable Step output failed the declared output Schema",
             }),
           ),
         );
@@ -5266,7 +5693,8 @@ const makeDurableStepService = <HookError, HookRequirements>(
               toolCallId,
               stepName: name,
               reason: "commit-failed",
-              message: `Durable Step commit failed: ${errorMessage(cause)}`,
+              message: "Durable Step commit failed",
+              cause,
             }),
           ),
         );
@@ -5328,8 +5756,10 @@ export class SubagentDurabilityError extends Schema.TaggedError<SubagentDurabili
   {
     operation: Schema.Literals(["establish", "join", "waiting"]),
     reason: Schema.Literals(["hook-failed", "no-active-tool-batch"]),
-    message: Schema.String,
+    message: Schema.String.check(Schema.isMaxLength(4_096)),
     toolCallId: Schema.optionalKey(ToolCallId),
+    /** Diagnostic cause for the live Effect only; Run events retain the fixed public message. */
+    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
 
@@ -5436,7 +5866,8 @@ const makeSubagentDurabilityService = <HookError, HookRequirements>(
           operation: "establish",
           reason: "hook-failed",
           toolCallId: request.toolCallId,
-          message: `Durable child establishment failed: ${errorMessage(cause)}`,
+          message: "Durable child establishment failed",
+          cause,
         }),
       ),
     ),
@@ -5447,7 +5878,8 @@ const makeSubagentDurabilityService = <HookError, HookRequirements>(
           operation: "join",
           reason: "hook-failed",
           toolCallId: request.toolCallId,
-          message: `Durable child join failed: ${errorMessage(cause)}`,
+          message: "Durable child join failed",
+          cause,
         }),
       ),
     ),
@@ -5677,11 +6109,10 @@ export const withTerminalDefectEvent = <E, R>(
  * event stream exposed by `stream`.
  *
  * The bound Model is provided locally; all remaining requirements stay visible
- * in the returned Effect or Stream. `layer` is empty because this interpreter
- * owns no shared runtime state.
+ * in the returned Effect or Stream. The interpreter owns no shared service or
+ * Layer state.
  */
 export const AgentRuntime = {
-  layer: Layer.empty,
   run,
   start,
   stream,

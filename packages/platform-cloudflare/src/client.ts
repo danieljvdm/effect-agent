@@ -34,6 +34,7 @@ import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect";
 
 import { DurableAlarmError } from "./alarm.ts";
 import { ConversationObjectNamespace, type ConversationObjectRpc } from "./bindings.ts";
+import { cloudflareFailureSignals, safeCauseMessage } from "./boundary.ts";
 import { AdmissionLimitExceeded } from "./config.ts";
 
 /**
@@ -249,122 +250,61 @@ export const decodeHostResponse = Schema.decodeUnknownEffect(HostResponse);
 // ---------------------------------------------------------------------------
 
 /** Failure surface of `CloudflareConversationClient.submit`. */
-export type ClientSubmitFailure =
-  | AgentInputError
-  | DigestError
-  | AdmissionConflict
-  | LedgerError
-  | ConversationStoreError
-  | ConversationNotMaterialized
-  | AppendConflict
-  | FenceRejected
-  | DurableRuntimeFailpointError
-  | AdmissionLimitExceeded
-  | DurableAlarmError
-  | HostProtocolError
-  | ConversationClientError;
-
-export type ClientAwaitFailure =
-  | LedgerError
-  | SettlementConflict
-  | HostProtocolError
-  | ConversationClientError;
-
-export type ClientObserveFailure =
-  | ConversationStoreError
-  | ConversationNotMaterialized
-  | OperationDenied
-  | HostProtocolError
-  | ConversationClientError;
-
-export type ClientProgressFailure =
-  | ConversationStoreError
-  | ConversationNotMaterialized
-  | OperationDenied
-  | HostProtocolError
-  | ConversationClientError;
-
-export type ClientAbortFailure =
-  | LedgerError
-  | SettlementConflict
-  | JoinedToHost
-  | DurableRuntimeFailpointError
-  | DurableAlarmError
-  | HostProtocolError
-  | ConversationClientError;
-
-export type ClientApprovalFailure =
-  | LedgerError
-  | SettlementConflict
-  | ApprovalConflict
-  | OperationDenied
-  | DurableAlarmError
-  | HostProtocolError
-  | ConversationClientError;
-
-export type ClientUnknownFailure =
-  | LedgerError
-  | SettlementConflict
-  | UnknownResolutionConflict
-  | JoinedToHost
-  | DurableRuntimeFailpointError
-  | OperationDenied
-  | DurableAlarmError
-  | HostProtocolError
-  | ConversationClientError;
-
-const SUBMIT_FAILURE_TAGS: ReadonlySet<string> = new Set([
-  "AgentInputError",
-  "DigestError",
-  "AdmissionConflict",
-  "LedgerError",
-  "ConversationStoreError",
-  "ConversationNotMaterialized",
-  "AppendConflict",
-  "FenceRejected",
-  "DurableRuntimeFailpointError",
-  "AdmissionLimitExceeded",
-  "DurableAlarmError",
-  "HostProtocolError",
+const ClientSubmitHostFailure = Schema.Union([
+  AgentInputError,
+  DigestError,
+  AdmissionConflict,
+  LedgerError,
+  ConversationStoreError,
+  ConversationNotMaterialized,
+  AppendConflict,
+  FenceRejected,
+  DurableRuntimeFailpointError,
+  AdmissionLimitExceeded,
+  DurableAlarmError,
+  HostProtocolError,
 ]);
-const AWAIT_FAILURE_TAGS: ReadonlySet<string> = new Set([
-  "LedgerError",
-  "SettlementConflict",
-  "HostProtocolError",
+const ClientAwaitHostFailure = Schema.Union([LedgerError, SettlementConflict, HostProtocolError]);
+const ClientObserveHostFailure = Schema.Union([
+  ConversationStoreError,
+  ConversationNotMaterialized,
+  OperationDenied,
+  HostProtocolError,
 ]);
-const OBSERVE_FAILURE_TAGS: ReadonlySet<string> = new Set([
-  "ConversationStoreError",
-  "ConversationNotMaterialized",
-  "OperationDenied",
-  "HostProtocolError",
+const ClientAbortHostFailure = Schema.Union([
+  LedgerError,
+  SettlementConflict,
+  JoinedToHost,
+  DurableRuntimeFailpointError,
+  DurableAlarmError,
+  HostProtocolError,
 ]);
-const PROGRESS_FAILURE_TAGS = OBSERVE_FAILURE_TAGS;
-const ABORT_FAILURE_TAGS: ReadonlySet<string> = new Set([
-  "LedgerError",
-  "SettlementConflict",
-  "JoinedToHost",
-  "DurableRuntimeFailpointError",
-  "DurableAlarmError",
-  "HostProtocolError",
+const ClientApprovalHostFailure = Schema.Union([
+  LedgerError,
+  SettlementConflict,
+  ApprovalConflict,
+  OperationDenied,
+  DurableAlarmError,
+  HostProtocolError,
 ]);
-const APPROVAL_FAILURE_TAGS: ReadonlySet<string> = new Set([
-  "LedgerError",
-  "SettlementConflict",
-  "ApprovalConflict",
-  "OperationDenied",
-  "DurableAlarmError",
-  "HostProtocolError",
+const ClientUnknownHostFailure = Schema.Union([
+  LedgerError,
+  SettlementConflict,
+  UnknownResolutionConflict,
+  JoinedToHost,
+  DurableRuntimeFailpointError,
+  OperationDenied,
+  DurableAlarmError,
+  HostProtocolError,
 ]);
-const UNKNOWN_FAILURE_TAGS: ReadonlySet<string> = new Set([
-  "LedgerError",
-  "SettlementConflict",
-  "UnknownResolutionConflict",
-  "JoinedToHost",
-  "DurableRuntimeFailpointError",
-  "OperationDenied",
-  "DurableAlarmError",
-  "HostProtocolError",
-]);
+
+export type ClientSubmitFailure = typeof ClientSubmitHostFailure.Type | ConversationClientError;
+export type ClientAwaitFailure = typeof ClientAwaitHostFailure.Type | ConversationClientError;
+export type ClientObserveFailure = typeof ClientObserveHostFailure.Type | ConversationClientError;
+export type ClientProgressFailure = ClientObserveFailure;
+export type ClientAbortFailure = typeof ClientAbortHostFailure.Type | ConversationClientError;
+export type ClientApprovalFailure = typeof ClientApprovalHostFailure.Type | ConversationClientError;
+export type ClientUnknownFailure = typeof ClientUnknownHostFailure.Type | ConversationClientError;
 
 const outOfContract = (
   conversationId: string,
@@ -377,17 +317,6 @@ const outOfContract = (
       `The Conversation Object answered ${operation} with the out-of-contract ${observed}.`,
     ),
   });
-
-/**
- * Narrow one decoded `HostFailed.failure` to the operation's declared failure family; an
- * out-of-contract tag folds into `ConversationClientError` instead of being erased or
- * re-thrown raw (the WP2 discipline). The predicate is the single documented narrowing over
- * the closed `HostFailure` union.
- */
-const narrowFailure =
-  <Failure extends HostFailure>(tags: ReadonlySet<string>) =>
-  (failure: HostFailure): failure is Failure =>
-    tags.has(failure._tag);
 
 /** Worker-side client over the Conversation Object namespace (DEPLOY-010). */
 export class CloudflareConversationClient extends Context.Service<
@@ -453,32 +382,6 @@ export class CloudflareConversationClient extends Context.Service<
       const { namespace } = yield* ConversationObjectNamespace;
       const crypto = yield* Crypto.Crypto;
 
-      const platformSignals = (cause: unknown) => {
-        let retryable: boolean | undefined;
-        let overloaded: boolean | undefined;
-        if (typeof cause === "object" && cause !== null) {
-          if ("retryable" in cause && typeof cause.retryable === "boolean") {
-            retryable = cause.retryable;
-          }
-          if ("overloaded" in cause && typeof cause.overloaded === "boolean") {
-            overloaded = cause.overloaded;
-          }
-          // Miniflare's faithful `ctx.abort()` signal predates the public `retryable` field.
-          // Treat only its explicit reset marker as the same idempotent-retry classification.
-          if (
-            retryable === undefined &&
-            "durableObjectReset" in cause &&
-            cause.durableObjectReset === true
-          ) {
-            retryable = true;
-          }
-        }
-        return {
-          ...(retryable === undefined ? {} : { retryable }),
-          ...(overloaded === undefined ? {} : { overloaded }),
-        };
-      };
-
       const call = (
         conversationId: string,
         operation: string,
@@ -490,12 +393,13 @@ export class CloudflareConversationClient extends Context.Service<
             ConversationClientError.make({
               conversationId,
               message: boundHostDiagnostic(
-                `${operation} did not reach the Conversation Object: ${
-                  cause instanceof Error ? cause.message : String(cause)
-                }`,
+                `${operation} did not reach the Conversation Object: ${safeCauseMessage(
+                  cause,
+                  "the RPC failed without a diagnostic",
+                )}`,
               ),
               cause,
-              ...platformSignals(cause),
+              ...cloudflareFailureSignals(cause),
             }),
         }).pipe(
           Effect.flatMap((raw) =>
@@ -515,29 +419,27 @@ export class CloudflareConversationClient extends Context.Service<
           }),
         );
 
-      const expect = <
-        Result extends Exclude<HostResponse, HostFailed>,
-        Failure extends HostFailure,
-      >(
+      const expect = <ResultSchema extends Schema.Top, FailureSchema extends Schema.Top>(
         conversationId: string,
         operation: string,
-        resultTag: Result["_tag"],
-        tags: ReadonlySet<string>,
+        resultSchema: ResultSchema,
+        failureSchema: FailureSchema,
       ) => {
-        const isExpected = narrowFailure<Failure>(tags);
+        const isExpectedResult = Schema.is(resultSchema);
+        const isExpectedFailure = Schema.is(failureSchema);
         return (
           response: HostResponse,
-        ): Effect.Effect<Result, Failure | ConversationClientError> => {
+        ): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | ConversationClientError> => {
           if (response._tag === "HostFailed") {
             const failure = response.failure;
-            return isExpected(failure)
+            return isExpectedFailure(failure)
               ? Effect.fail(failure)
               : Effect.fail(outOfContract(conversationId, operation, `failure ${failure._tag}`));
           }
-          if (response._tag !== resultTag) {
+          if (!isExpectedResult(response)) {
             return Effect.fail(outOfContract(conversationId, operation, `result ${response._tag}`));
           }
-          return Effect.succeed(response as Result);
+          return Effect.succeed(response);
         };
       };
 
@@ -565,11 +467,11 @@ export class CloudflareConversationClient extends Context.Service<
           const response = yield* call(conversationId, "observePage", (stub) =>
             stub.observePage(encoded),
           );
-          const page = yield* expect<ObservedPage, ClientObserveFailure & HostFailure>(
+          const page = yield* expect(
             conversationId,
             "observePage",
-            "ObservedPage",
-            OBSERVE_FAILURE_TAGS,
+            ObservedPage,
+            ClientObserveHostFailure,
           )(response);
           return page.records;
         });
@@ -627,11 +529,11 @@ export class CloudflareConversationClient extends Context.Service<
             const response = yield* call(options.conversationId, "submit", (stub) =>
               stub.submitEncoded(encoded),
             );
-            const succeeded = yield* expect<SubmitSucceeded, ClientSubmitFailure & HostFailure>(
+            const succeeded = yield* expect(
               options.conversationId,
               "submit",
-              "SubmitSucceeded",
-              SUBMIT_FAILURE_TAGS,
+              SubmitSucceeded,
+              ClientSubmitHostFailure,
             )(response);
             return succeeded.receipt;
           }),
@@ -648,11 +550,11 @@ export class CloudflareConversationClient extends Context.Service<
             const response = yield* call(receipt.conversationId, "awaitSettlement", (stub) =>
               stub.awaitSettlementEncoded(encoded),
             );
-            const settled = yield* expect<SettlementReached, ClientAwaitFailure & HostFailure>(
+            const settled = yield* expect(
               receipt.conversationId,
               "awaitSettlement",
-              "SettlementReached",
-              AWAIT_FAILURE_TAGS,
+              SettlementReached,
+              ClientAwaitHostFailure,
             )(response);
             return settled.settlement;
           }),
@@ -684,11 +586,11 @@ export class CloudflareConversationClient extends Context.Service<
                 stub.awaitProgressEncoded(encoded),
               ).pipe(
                 Effect.flatMap(
-                  expect<ProgressObserved, ClientProgressFailure & HostFailure>(
+                  expect(
                     conversationId,
                     "awaitProgress",
-                    "ProgressObserved",
-                    PROGRESS_FAILURE_TAGS,
+                    ProgressObserved,
+                    ClientObserveHostFailure,
                   ),
                 ),
                 Effect.asVoid,
@@ -733,11 +635,11 @@ export class CloudflareConversationClient extends Context.Service<
             const response = yield* call(conversationId, "abort", (stub) =>
               stub.abortEncoded(encoded),
             );
-            const recorded = yield* expect<AbortRecorded, ClientAbortFailure & HostFailure>(
+            const recorded = yield* expect(
               conversationId,
               "abort",
-              "AbortRecorded",
-              ABORT_FAILURE_TAGS,
+              AbortRecorded,
+              ClientAbortHostFailure,
             )(response);
             return recorded.intent;
           }),
@@ -754,11 +656,11 @@ export class CloudflareConversationClient extends Context.Service<
             const response = yield* call(conversationId, "resolveApproval", (stub) =>
               stub.resolveApprovalEncoded(encoded),
             );
-            const recorded = yield* expect<ApprovalRecorded, ClientApprovalFailure & HostFailure>(
+            const recorded = yield* expect(
               conversationId,
               "resolveApproval",
-              "ApprovalRecorded",
-              APPROVAL_FAILURE_TAGS,
+              ApprovalRecorded,
+              ClientApprovalHostFailure,
             )(response);
             return recorded.intent;
           }),
@@ -777,14 +679,11 @@ export class CloudflareConversationClient extends Context.Service<
             const response = yield* call(conversationId, "resolveUnknown", (stub) =>
               stub.resolveUnknownEncoded(encoded),
             );
-            const recorded = yield* expect<
-              UnknownResolutionRecorded,
-              ClientUnknownFailure & HostFailure
-            >(
+            const recorded = yield* expect(
               conversationId,
               "resolveUnknown",
-              "UnknownResolutionRecorded",
-              UNKNOWN_FAILURE_TAGS,
+              UnknownResolutionRecorded,
+              ClientUnknownHostFailure,
             )(response);
             return recorded.intent;
           }),

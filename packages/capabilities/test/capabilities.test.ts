@@ -68,7 +68,6 @@ import {
   UsageBudgetNodeConfig,
   UsageDelta,
   validateMcpDiscovery,
-  resolveToolConcurrency,
   conversationPrompt,
   contextCompactorRunContextLayer,
   toRunBudgetHook,
@@ -784,6 +783,131 @@ describe("capability contracts", () => {
         expect(decoded).toBeInstanceOf(BudgetNodeConflict);
         expect(decoded.scopeLevel).toBe("run");
         expect(decoded.scopeId).toBe("run-1");
+      }
+    }),
+  );
+
+  it.effect(
+    "retires scoped budget nodes on success, failure, and interruption without refunding ancestors",
+    () =>
+      Effect.gen(function* () {
+        const globalBudget = yield* makeUsageBudgetRoot(
+          UsageBudgetNodeConfig.make({
+            level: "global",
+            id: "lifecycle-root",
+            limits: UsageBudgetLimits.make({}),
+          }),
+        );
+        const config = (id: string) =>
+          UsageBudgetNodeConfig.make({
+            level: "run",
+            id,
+            limits: UsageBudgetLimits.make({}),
+          });
+        const delta = UsageDelta.make({
+          modelCalls: 1,
+          inputTokens: 1,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          toolCalls: 0,
+          costMicrousd: 0,
+        });
+
+        yield* Effect.scoped(
+          globalBudget
+            .childScoped(config("success"))
+            .pipe(Effect.flatMap((node) => node.consume(delta))),
+        );
+        yield* Effect.scoped(
+          globalBudget.childScoped(config("failure")).pipe(
+            Effect.flatMap((node) => node.consume(delta)),
+            Effect.andThen(Effect.fail("expected failure")),
+          ),
+        ).pipe(Effect.ignore);
+
+        const started = yield* Deferred.make<void>();
+        const interrupted = yield* Effect.scoped(
+          globalBudget.childScoped(config("interruption")).pipe(
+            Effect.flatMap((node) => node.consume(delta)),
+            Effect.andThen(Deferred.succeed(started, undefined)),
+            Effect.andThen(Effect.never),
+          ),
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(interrupted);
+
+        expect((yield* globalBudget.snapshot).inputTokens).toBe(3);
+        for (const id of ["success", "failure", "interruption"]) {
+          const fresh = yield* globalBudget.child(config(id));
+          expect((yield* fresh.snapshot).inputTokens).toBe(0);
+          yield* fresh.retire;
+        }
+      }),
+  );
+
+  it.effect("linearizes child registration and consumption with handle retirement", () =>
+    Effect.gen(function* () {
+      const delta = UsageDelta.make({
+        modelCalls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        toolCalls: 1,
+        costMicrousd: 0,
+      });
+
+      for (let iteration = 0; iteration < 128; iteration += 1) {
+        const root = yield* makeUsageBudgetRoot(
+          UsageBudgetNodeConfig.make({
+            level: "global",
+            id: `retirement-root-${iteration}`,
+            limits: UsageBudgetLimits.make({}),
+          }),
+        );
+        const parent = yield* root.child(
+          UsageBudgetNodeConfig.make({
+            level: "tenant",
+            id: "tenant-a",
+            limits: UsageBudgetLimits.make({ maxToolCalls: 0 }),
+          }),
+        );
+        const [childExit] = yield* Effect.all(
+          [
+            parent
+              .child(
+                UsageBudgetNodeConfig.make({
+                  level: "run",
+                  id: "run-a",
+                  limits: UsageBudgetLimits.make({}),
+                }),
+              )
+              .pipe(Effect.exit),
+            parent.retire,
+          ],
+          { concurrency: "unbounded" },
+        );
+
+        if (Exit.isSuccess(childExit)) {
+          const consumeExit = yield* childExit.value.consume(delta).pipe(Effect.exit);
+          expect(Exit.isFailure(consumeExit)).toBe(true);
+          yield* childExit.value.retire;
+        }
+
+        const secondParent = yield* root.child(
+          UsageBudgetNodeConfig.make({
+            level: "tenant",
+            id: "tenant-b",
+            limits: UsageBudgetLimits.make({ maxToolCalls: 0 }),
+          }),
+        );
+        const [consumeExit] = yield* Effect.all(
+          [secondParent.consume(delta).pipe(Effect.exit), secondParent.retire],
+          { concurrency: "unbounded" },
+        );
+        expect(Exit.isFailure(consumeExit)).toBe(true);
+        yield* root.retire;
       }
     }),
   );
@@ -1554,11 +1678,4 @@ describe("capability contracts", () => {
       }),
     ),
   );
-
-  it("keeps every scheduler override finite and lets sequential requirements win", () => {
-    expect(resolveToolConcurrency(4, undefined, false)).toBe(4);
-    expect(resolveToolConcurrency(4, { mode: "bounded", concurrency: 2 }, false)).toBe(2);
-    expect(resolveToolConcurrency(4, { mode: "sequential" }, false)).toBe(1);
-    expect(resolveToolConcurrency(4, { mode: "bounded", concurrency: 2 }, true)).toBe(1);
-  });
 });

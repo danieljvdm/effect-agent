@@ -31834,10 +31834,16 @@ class AgentPolicyError extends exports_Schema.TaggedError()("AgentPolicyError", 
 }
 
 class AgentApprovalDenied extends exports_Schema.TaggedError()("AgentApprovalDenied", {
-  toolCallId: exports_Schema.NonEmptyString,
+  toolCallId: ToolCallId,
   toolName: exports_Schema.NonEmptyString,
   message: exports_Schema.String
 }) {
+  static make(input) {
+    return super.make({
+      ...input,
+      toolCallId: exports_Schema.decodeSync(ToolCallId)(input.toolCallId)
+    });
+  }
 }
 
 class AgentToolAuthorizationDenied extends exports_Schema.TaggedError()("AgentToolAuthorizationDenied", {
@@ -31849,10 +31855,16 @@ class AgentToolAuthorizationDenied extends exports_Schema.TaggedError()("AgentTo
 
 class AgentApprovalPending extends exports_Schema.TaggedError()("AgentApprovalPending", {
   approvalId: exports_Schema.NonEmptyString,
-  toolCallId: exports_Schema.NonEmptyString,
+  toolCallId: ToolCallId,
   toolName: exports_Schema.NonEmptyString,
   message: exports_Schema.String
 }) {
+  static make(input) {
+    return super.make({
+      ...input,
+      toolCallId: exports_Schema.decodeSync(ToolCallId)(input.toolCallId)
+    });
+  }
 }
 
 class ModelProtocolError extends exports_Schema.TaggedError()("ModelProtocolError", {
@@ -32020,15 +32032,27 @@ class CompactionPerformed extends exports_Schema.TaggedClass()("CompactionPerfor
 }) {
 }
 var ExhaustedLimit = exports_Schema.Literals(["tokens", "tool-calls", "turns"]);
-
-class RunCompleted extends exports_Schema.TaggedClass()("RunCompleted", {
+var CompletionFinishReason = exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"]);
+var validateCompletionMetadata = ({
+  exhausted,
+  finishReason
+}) => {
+  const isBudgetExhausted = finishReason === "budget-exhausted";
+  return isBudgetExhausted === (exhausted !== undefined) ? undefined : '`exhausted` must be present exactly when `finishReason` is "budget-exhausted"';
+};
+var RunCompletedFields = exports_Schema.Struct({
   ...RunEventBase,
   output: exports_Schema.Json,
   runDisposition: exports_Schema.optionalKey(exports_Schema.Json),
   turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  finishReason: exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
+  finishReason: CompletionFinishReason,
   exhausted: exports_Schema.optionalKey(ExhaustedLimit)
-}) {
+}).check(exports_Schema.makeFilter((event) => validateCompletionMetadata(event)), exports_Schema.makeFilter((event) => event.finishReason === "budget-exhausted" && event.runDisposition !== undefined ? {
+  path: ["runDisposition"],
+  issue: '`runDisposition` is not allowed when `finishReason` is "budget-exhausted"'
+} : undefined));
+
+class RunCompleted extends exports_Schema.TaggedClass()("RunCompleted", RunCompletedFields) {
 }
 
 class RunFailed extends exports_Schema.TaggedClass()("RunFailed", {
@@ -32073,12 +32097,12 @@ class SubagentProgress extends exports_Schema.TaggedClass()("SubagentProgress", 
 }) {
 }
 
-class SubagentCompleted extends exports_Schema.TaggedClass()("SubagentCompleted", {
+class SubagentCompleted extends exports_Schema.TaggedClass()("SubagentCompleted", exports_Schema.Struct({
   ...SubagentEventBase,
   turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  finishReason: exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
+  finishReason: CompletionFinishReason,
   exhausted: exports_Schema.optionalKey(ExhaustedLimit)
-}) {
+}).check(exports_Schema.makeFilter((event) => validateCompletionMetadata(event)))) {
 }
 
 class SubagentFailed extends exports_Schema.TaggedClass()("SubagentFailed", {
@@ -32285,585 +32309,6 @@ class AgentPolicy extends exports_Schema.Class("AgentPolicy")(AgentPolicyFields)
     });
   }
 }
-// packages/core/src/services.ts
-class IdGenerator extends exports_Context.Service()("@effect-agent/core/IdGenerator") {
-  static layer = exports_Layer.succeed(IdGenerator, {
-    nextConversationId: exports_Effect.sync(() => `conversation-${crypto.randomUUID()}`).pipe(exports_Effect.map(exports_Schema.decodeSync(ConversationId))),
-    nextRunId: exports_Effect.sync(() => `run-${crypto.randomUUID()}`).pipe(exports_Effect.map(exports_Schema.decodeSync(RunId))),
-    nextTurnId: exports_Effect.sync(() => `turn-${crypto.randomUUID()}`).pipe(exports_Effect.map(exports_Schema.decodeSync(TurnId)))
-  });
-}
-// packages/capabilities/src/redaction.ts
-var MAX_REDACTED_PREVIEW_BYTES = 8 * 1024;
-var MAX_REDACTION_NODES = 4096;
-var MAX_REDACTION_DEPTH = 16;
-var utf8Bytes = (value4) => {
-  let total = 0;
-  for (const character of value4) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    total += codePoint <= 127 ? 1 : codePoint <= 2047 ? 2 : codePoint <= 65535 ? 3 : 4;
-  }
-  return total;
-};
-var RedactedPreview = exports_Schema.String.pipe(exports_Schema.refine((value4) => utf8Bytes(value4) <= MAX_REDACTED_PREVIEW_BYTES, {
-  expected: `redacted preview of at most ${MAX_REDACTED_PREVIEW_BYTES} UTF-8 bytes`
-}), exports_Schema.brand("@effect-agent/capabilities/RedactedPreview"));
-
-class RedactionError extends exports_Schema.TaggedError()("RedactionError", {
-  reason: exports_Schema.Literals(["input-too-deep", "input-too-large", "encoding-failed"]),
-  message: exports_Schema.String
-}) {
-}
-
-class Redactor extends exports_Context.Service()("@effect-agent/capabilities/Redactor") {
-}
-var redactValue = (value4, depth, counter2) => {
-  if (depth > MAX_REDACTION_DEPTH) {
-    throw RedactionError.make({
-      reason: "input-too-deep",
-      message: `Decoded value exceeds redaction depth ${MAX_REDACTION_DEPTH}`
-    });
-  }
-  counter2.nodes += 1;
-  if (counter2.nodes > MAX_REDACTION_NODES) {
-    throw RedactionError.make({
-      reason: "input-too-large",
-      message: `Decoded value exceeds redaction node count ${MAX_REDACTION_NODES}`
-    });
-  }
-  if (Array.isArray(value4)) {
-    return value4.map((item) => redactValue(item, depth + 1, counter2));
-  }
-  if (value4 !== null && typeof value4 === "object") {
-    const redacted2 = {};
-    for (const [key, item] of Object.entries(value4)) {
-      redacted2[key] = redactValue(item, depth + 1, counter2);
-    }
-    return redacted2;
-  }
-  if (value4 === null)
-    return "[REDACTED:null]";
-  if (typeof value4 === "string")
-    return "[REDACTED:string]";
-  if (typeof value4 === "number")
-    return "[REDACTED:number]";
-  if (typeof value4 === "boolean")
-    return "[REDACTED:boolean]";
-  return "[REDACTED:unsupported]";
-};
-var truncateUtf8 = (value4, maxBytes) => {
-  if (utf8Bytes(value4) <= maxBytes) {
-    return value4;
-  }
-  const suffix = "…";
-  const suffixBytes = utf8Bytes(suffix);
-  let output = "";
-  let bytes = 0;
-  for (const character of value4) {
-    const characterBytes = utf8Bytes(character);
-    if (bytes + characterBytes + suffixBytes > maxBytes) {
-      break;
-    }
-    output += character;
-    bytes += characterBytes;
-  }
-  return `${output}${suffix}`;
-};
-var encodeRunEvent = exports_Schema.encodeEffect(RunEvent);
-var StructuralRedactorLive = exports_Layer.succeed(Redactor)({
-  redact: (decodedValue) => exports_Effect.try({
-    try: () => {
-      const structurallyRedacted = redactValue(decodedValue, 0, { nodes: 0 });
-      return truncateUtf8(JSON.stringify(structurallyRedacted), MAX_REDACTED_PREVIEW_BYTES);
-    },
-    catch: (cause) => cause instanceof RedactionError ? cause : RedactionError.make({
-      reason: "encoding-failed",
-      message: "Could not encode the structurally redacted preview"
-    })
-  }).pipe(exports_Effect.flatMap((preview) => exports_Schema.decodeUnknownEffect(RedactedPreview)(preview).pipe(exports_Effect.mapError(() => RedactionError.make({
-    reason: "encoding-failed",
-    message: "Redacted preview did not satisfy its bounded schema"
-  })))))
-});
-
-// packages/capabilities/src/approval.ts
-var MAX_APPROVAL_TARGETS = 32;
-var MAX_APPROVAL_TARGET_BYTES = 64 * 1024;
-var MAX_APPROVAL_AUDIT_EVENTS = 2048;
-var ApprovalTargets = exports_Schema.Array(exports_Schema.String.check(exports_Schema.isMaxLength(2 * 1024))).check(exports_Schema.isMaxLength(MAX_APPROVAL_TARGETS)).pipe(exports_Schema.refine((targets) => targets.reduce((total, target) => total + exports_Encoding.encodeHex(target).length / 2, 0) <= MAX_APPROVAL_TARGET_BYTES, { expected: `approval targets totaling at most ${MAX_APPROVAL_TARGET_BYTES} UTF-8 bytes` }));
-var ApprovalRequestFields = {
-  requestId: exports_Schema.NonEmptyString,
-  runId: RunId,
-  conversationId: ConversationId,
-  toolCallId: ToolCallId,
-  toolName: exports_Schema.NonEmptyString,
-  actionSummary: exports_Schema.String.check(exports_Schema.isMaxLength(2 * 1024)),
-  resourceTargets: ApprovalTargets,
-  risk: exports_Schema.Literals(["low", "medium", "high", "critical"]),
-  expiresAt: exports_Schema.DateTimeUtcFromString,
-  denial: exports_Schema.Literals(["terminal", "recoverable"])
-};
-
-class ApprovalRequestDraft extends exports_Schema.Class("@effect-agent/capabilities/ApprovalRequestDraft")(ApprovalRequestFields) {
-}
-
-class ApprovalRequest extends exports_Schema.Class("@effect-agent/capabilities/ApprovalRequest")({
-  ...ApprovalRequestFields,
-  redactedInputPreview: RedactedPreview
-}) {
-}
-
-class ApprovalApproved extends exports_Schema.TaggedClass()("ApprovalApproved", {
-  requestId: exports_Schema.NonEmptyString,
-  decidedAt: exports_Schema.DateTimeUtcFromString,
-  resolver: exports_Schema.NonEmptyString
-}) {
-}
-
-class ApprovalDenied extends exports_Schema.TaggedClass()("ApprovalDenied", {
-  requestId: exports_Schema.NonEmptyString,
-  decidedAt: exports_Schema.DateTimeUtcFromString,
-  resolver: exports_Schema.NonEmptyString,
-  reason: exports_Schema.String.check(exports_Schema.isMaxLength(2 * 1024)),
-  timedOut: exports_Schema.Boolean
-}) {
-}
-var ApprovalDecision = exports_Schema.Union([ApprovalApproved, ApprovalDenied]);
-
-class ApprovalResolverError extends exports_Schema.TaggedError()("ApprovalResolverError", { message: exports_Schema.String }) {
-}
-
-class ApprovalTimedOut extends exports_Schema.TaggedError()("ApprovalTimedOut", {
-  requestId: exports_Schema.NonEmptyString
-}) {
-}
-
-class ApprovalResolver extends exports_Context.Service()("@effect-agent/capabilities/ApprovalResolver") {
-}
-
-class ApprovalRequestRecorded extends exports_Schema.TaggedClass()("ApprovalRequestRecorded", {
-  sequence: exports_Schema.Natural,
-  recordedAt: exports_Schema.DateTimeUtcFromString,
-  request: ApprovalRequest
-}) {
-}
-
-class ApprovalDecisionRecorded extends exports_Schema.TaggedClass()("ApprovalDecisionRecorded", {
-  sequence: exports_Schema.Natural,
-  recordedAt: exports_Schema.DateTimeUtcFromString,
-  decision: ApprovalDecision
-}) {
-}
-var ApprovalAuditEvent = exports_Schema.Union([ApprovalRequestRecorded, ApprovalDecisionRecorded]);
-var ApprovalAuditEvents = exports_Schema.Array(ApprovalAuditEvent).check(exports_Schema.isMaxLength(MAX_APPROVAL_AUDIT_EVENTS));
-
-class ApprovalAuditLimitExceeded extends exports_Schema.TaggedError()("ApprovalAuditLimitExceeded", {
-  limitValue: exports_Schema.Natural,
-  observedValue: exports_Schema.Natural
-}) {
-}
-
-class ApprovalDecisionMismatch extends exports_Schema.TaggedError()("ApprovalDecisionMismatch", {
-  expectedRequestId: exports_Schema.NonEmptyString,
-  observedRequestId: exports_Schema.NonEmptyString
-}) {
-}
-
-class ApprovalAudit extends exports_Context.Service()("@effect-agent/capabilities/ApprovalAudit") {
-}
-var ApprovalAuditMemoryLive = exports_Layer.effect(ApprovalAudit, exports_Effect.gen(function* () {
-  const state = yield* exports_Ref.make({ events: [], pending: new Set });
-  return ApprovalAudit.of({
-    recordRequest: (request3) => exports_Effect.gen(function* () {
-      const recordedAt = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis));
-      const error2 = yield* exports_Ref.modify(state, (current) => {
-        const reservedSize = current.events.length + current.pending.size + 2;
-        if (reservedSize > MAX_APPROVAL_AUDIT_EVENTS) {
-          return [
-            ApprovalAuditLimitExceeded.make({
-              limitValue: MAX_APPROVAL_AUDIT_EVENTS,
-              observedValue: reservedSize
-            }),
-            current
-          ];
-        }
-        const event = ApprovalRequestRecorded.make({
-          sequence: current.events.length,
-          recordedAt,
-          request: request3
-        });
-        return [
-          undefined,
-          {
-            events: [...current.events, event],
-            pending: new Set(current.pending).add(request3.requestId)
-          }
-        ];
-      });
-      if (error2 !== undefined)
-        return yield* error2;
-    }),
-    recordDecision: (decision) => exports_Effect.gen(function* () {
-      const recordedAt = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis));
-      const error2 = yield* exports_Ref.modify(state, (current) => {
-        if (!current.pending.has(decision.requestId)) {
-          return [
-            ApprovalDecisionMismatch.make({
-              expectedRequestId: [...current.pending][0] ?? "no-pending-request",
-              observedRequestId: decision.requestId
-            }),
-            current
-          ];
-        }
-        const pending = new Set(current.pending);
-        pending.delete(decision.requestId);
-        const event = ApprovalDecisionRecorded.make({
-          sequence: current.events.length,
-          recordedAt,
-          decision
-        });
-        return [
-          undefined,
-          {
-            events: [...current.events, event],
-            pending
-          }
-        ];
-      });
-      if (error2 !== undefined)
-        return yield* error2;
-    }),
-    events: exports_Ref.get(state).pipe(exports_Effect.map((current) => current.events))
-  });
-}));
-var makeApprovalRequest = exports_Effect.fn("makeApprovalRequest")(function* (draft, decodedToolInput) {
-  const redactor = yield* Redactor;
-  const redactedInputPreview = yield* redactor.redact(decodedToolInput);
-  return ApprovalRequest.make({
-    requestId: draft.requestId,
-    runId: draft.runId,
-    conversationId: draft.conversationId,
-    toolCallId: draft.toolCallId,
-    toolName: draft.toolName,
-    actionSummary: draft.actionSummary,
-    resourceTargets: draft.resourceTargets,
-    risk: draft.risk,
-    expiresAt: draft.expiresAt,
-    denial: draft.denial,
-    redactedInputPreview
-  });
-});
-var timeoutDenial = (request3, decidedAt) => ApprovalDenied.make({
-  requestId: request3.requestId,
-  decidedAt,
-  resolver: "effect-agent.timeout-deny",
-  reason: "Approval request expired before a decision was available",
-  timedOut: true
-});
-var requestApproval = exports_Effect.fn("requestApproval")(function* (request3) {
-  const audit = yield* ApprovalAudit;
-  yield* audit.recordRequest(request3);
-  const nowMillis = yield* exports_Clock.currentTimeMillis;
-  const now3 = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(nowMillis));
-  const remainingMillis = exports_DateTime.toEpochMillis(request3.expiresAt) - nowMillis;
-  let decision;
-  if (remainingMillis <= 0) {
-    decision = timeoutDenial(request3, now3);
-  } else {
-    const resolver = yield* ApprovalResolver;
-    decision = yield* resolver.request(request3).pipe(exports_Effect.timeoutOrElse({
-      duration: exports_Duration.millis(remainingMillis),
-      orElse: () => exports_Clock.currentTimeMillis.pipe(exports_Effect.map((millis2) => timeoutDenial(request3, exports_DateTime.toUtc(exports_DateTime.makeUnsafe(millis2)))))
-    }), exports_Effect.catchTag("ApprovalTimedOut", () => exports_Clock.currentTimeMillis.pipe(exports_Effect.map((millis2) => timeoutDenial(request3, exports_DateTime.toUtc(exports_DateTime.makeUnsafe(millis2)))))), exports_Effect.tapError(() => exports_Clock.currentTimeMillis.pipe(exports_Effect.flatMap((millis2) => audit.recordDecision(ApprovalDenied.make({
-      requestId: request3.requestId,
-      decidedAt: exports_DateTime.toUtc(exports_DateTime.makeUnsafe(millis2)),
-      resolver: "effect-agent.resolver-error",
-      reason: "Approval resolver failed before making a policy decision",
-      timedOut: false
-    }))))));
-  }
-  if (decision.requestId !== request3.requestId) {
-    const mismatch = ApprovalDecisionMismatch.make({
-      expectedRequestId: request3.requestId,
-      observedRequestId: decision.requestId
-    });
-    const denied = ApprovalDenied.make({
-      requestId: request3.requestId,
-      decidedAt: exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis)),
-      resolver: "effect-agent.correlation-check",
-      reason: "Approval resolver returned a decision for another request",
-      timedOut: false
-    });
-    yield* audit.recordDecision(denied);
-    return yield* mismatch;
-  }
-  yield* audit.recordDecision(decision);
-  return decision;
-});
-var ApprovalDenyAll = exports_Layer.succeed(ApprovalResolver)({
-  request: (request3) => exports_Clock.currentTimeMillis.pipe(exports_Effect.map((millis2) => ApprovalDenied.make({
-    requestId: request3.requestId,
-    decidedAt: exports_DateTime.toUtc(exports_DateTime.makeUnsafe(millis2)),
-    resolver: "effect-agent.deny-all",
-    reason: "No approving policy is configured",
-    timedOut: false
-  })))
-});
-// packages/capabilities/src/budget.ts
-var Natural2 = exports_Schema.Natural;
-var BudgetLevel = exports_Schema.Literals(["global", "tenant", "agent", "conversation", "run"]);
-
-class UsageTotals extends exports_Schema.Class("@effect-agent/capabilities/UsageTotals")({
-  inputTokens: Natural2,
-  outputTokens: Natural2,
-  cacheReadInputTokens: Natural2,
-  cacheWriteInputTokens: Natural2,
-  lastInputTokens: Natural2,
-  lastOutputTokens: Natural2,
-  toolCalls: Natural2,
-  costMicrousd: Natural2,
-  elapsedMillis: Natural2
-}) {
-}
-
-class UsageDelta extends exports_Schema.Class("@effect-agent/capabilities/UsageDelta")({
-  modelCalls: Natural2,
-  inputTokens: Natural2,
-  outputTokens: Natural2,
-  cacheReadInputTokens: Natural2,
-  cacheWriteInputTokens: Natural2,
-  toolCalls: Natural2,
-  costMicrousd: Natural2
-}) {
-}
-
-class UsageBudgetLimits extends exports_Schema.Class("@effect-agent/capabilities/UsageBudgetLimits")({
-  maxInputTokens: exports_Schema.optionalKey(Natural2),
-  maxOutputTokens: exports_Schema.optionalKey(Natural2),
-  maxToolCalls: exports_Schema.optionalKey(Natural2),
-  maxCostMicrousd: exports_Schema.optionalKey(Natural2),
-  maxDurationMillis: exports_Schema.optionalKey(Natural2)
-}) {
-}
-
-class UsageBudgetNodeConfig extends exports_Schema.Class("@effect-agent/capabilities/UsageBudgetNodeConfig")({
-  level: BudgetLevel,
-  id: exports_Schema.NonEmptyString,
-  limits: UsageBudgetLimits
-}) {
-}
-
-class BudgetExceeded extends exports_Schema.TaggedError()("BudgetExceeded", {
-  scopeLevel: BudgetLevel,
-  scopeId: exports_Schema.NonEmptyString,
-  limit: exports_Schema.Literals(["input-tokens", "output-tokens", "tool-calls", "cost", "duration"]),
-  limitValue: Natural2,
-  observedValue: Natural2
-}) {
-}
-
-class InvalidBudgetHierarchy extends exports_Schema.TaggedError()("InvalidBudgetHierarchy", {
-  parentLevel: BudgetLevel,
-  childLevel: BudgetLevel
-}) {
-}
-
-class BudgetNodeConflict extends exports_Schema.TaggedError()("BudgetNodeConflict", {
-  scopeLevel: BudgetLevel,
-  scopeId: exports_Schema.NonEmptyString
-}) {
-}
-
-class UsageBudget extends exports_Context.Service()("@effect-agent/capabilities/UsageBudget") {
-}
-var levelOrder = {
-  global: 0,
-  tenant: 1,
-  agent: 2,
-  conversation: 3,
-  run: 4
-};
-var emptyTotals = (elapsedMillis = 0) => UsageTotals.make({
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadInputTokens: 0,
-  cacheWriteInputTokens: 0,
-  lastInputTokens: 0,
-  lastOutputTokens: 0,
-  toolCalls: 0,
-  costMicrousd: 0,
-  elapsedMillis
-});
-var withElapsed = (node, now3) => UsageTotals.make({
-  ...node.totals,
-  elapsedMillis: Math.max(0, now3 - node.startedAt)
-});
-var addUsage = (node, delta, now3) => UsageTotals.make({
-  inputTokens: node.totals.inputTokens + delta.inputTokens,
-  outputTokens: node.totals.outputTokens + delta.outputTokens,
-  cacheReadInputTokens: node.totals.cacheReadInputTokens + delta.cacheReadInputTokens,
-  cacheWriteInputTokens: node.totals.cacheWriteInputTokens + delta.cacheWriteInputTokens,
-  lastInputTokens: delta.modelCalls > 0 ? delta.inputTokens : node.totals.lastInputTokens,
-  lastOutputTokens: delta.modelCalls > 0 ? delta.outputTokens : node.totals.lastOutputTokens,
-  toolCalls: node.totals.toolCalls + delta.toolCalls,
-  costMicrousd: node.totals.costMicrousd + delta.costMicrousd,
-  elapsedMillis: Math.max(0, now3 - node.startedAt)
-});
-var exceeded = (node, totals) => {
-  const limits = node.config.limits;
-  const checks = [
-    ["input-tokens", limits.maxInputTokens, totals.inputTokens],
-    ["output-tokens", limits.maxOutputTokens, totals.outputTokens],
-    ["tool-calls", limits.maxToolCalls, totals.toolCalls],
-    ["cost", limits.maxCostMicrousd, totals.costMicrousd],
-    ["duration", limits.maxDurationMillis, totals.elapsedMillis]
-  ];
-  for (const [limit, limitValue, observedValue] of checks) {
-    if (limitValue !== undefined && observedValue > limitValue) {
-      return BudgetExceeded.make({
-        scopeLevel: node.config.level,
-        scopeId: node.config.id,
-        limit,
-        limitValue,
-        observedValue
-      });
-    }
-  }
-  return;
-};
-var sameLimits = (a, b) => a.maxInputTokens === b.maxInputTokens && a.maxOutputTokens === b.maxOutputTokens && a.maxToolCalls === b.maxToolCalls && a.maxCostMicrousd === b.maxCostMicrousd && a.maxDurationMillis === b.maxDurationMillis;
-var durationExceeded = (node, now3) => {
-  const limitValue = node.config.limits.maxDurationMillis ?? 0;
-  return BudgetExceeded.make({
-    scopeLevel: node.config.level,
-    scopeId: node.config.id,
-    limit: "duration",
-    limitValue,
-    observedValue: Math.max(limitValue + 1, now3 - node.startedAt)
-  });
-};
-var makeNode = (ledger, key, ancestors, config) => {
-  const hierarchy = [...ancestors, key];
-  const snapshot3 = exports_Effect.gen(function* () {
-    const now3 = yield* exports_Clock.currentTimeMillis;
-    const state = yield* exports_Ref.get(ledger);
-    const node = state.nodes.get(key);
-    return node === undefined ? emptyTotals() : withElapsed(node, now3);
-  });
-  const guard = (effect2) => exports_Effect.gen(function* () {
-    const now3 = yield* exports_Clock.currentTimeMillis;
-    const state = yield* exports_Ref.get(ledger);
-    let deadline;
-    for (const ancestorKey of hierarchy) {
-      const node = state.nodes.get(ancestorKey);
-      if (node === undefined) {
-        continue;
-      }
-      const current = withElapsed(node, now3);
-      const alreadyExceeded = exceeded(node, current);
-      if (alreadyExceeded !== undefined) {
-        return yield* alreadyExceeded;
-      }
-      const maxDuration = node.config.limits.maxDurationMillis;
-      if (maxDuration !== undefined) {
-        const remaining2 = maxDuration - current.elapsedMillis;
-        if (remaining2 <= 0) {
-          return yield* durationExceeded(node, now3);
-        }
-        if (deadline === undefined || remaining2 < deadline.remaining) {
-          deadline = { remaining: remaining2, node };
-        }
-      }
-    }
-    if (deadline === undefined) {
-      return yield* effect2;
-    }
-    const selected = deadline;
-    return yield* effect2.pipe(exports_Effect.timeoutOrElse({
-      duration: exports_Duration.millis(selected.remaining),
-      orElse: () => exports_Clock.currentTimeMillis.pipe(exports_Effect.flatMap((timeoutAt) => exports_Effect.fail(durationExceeded(selected.node, timeoutAt))))
-    }));
-  });
-  return {
-    level: config.level,
-    id: config.id,
-    child: (childConfig) => exports_Effect.gen(function* () {
-      if (levelOrder[childConfig.level] <= levelOrder[config.level]) {
-        return yield* InvalidBudgetHierarchy.make({
-          parentLevel: config.level,
-          childLevel: childConfig.level
-        });
-      }
-      const childKey = `${key}/${childConfig.level}:${childConfig.id}`;
-      const now3 = yield* exports_Clock.currentTimeMillis;
-      const conflict = yield* exports_Ref.modify(ledger, (state) => {
-        const existing = state.nodes.get(childKey);
-        if (existing !== undefined) {
-          return sameLimits(existing.config.limits, childConfig.limits) ? [undefined, state] : [
-            BudgetNodeConflict.make({
-              scopeLevel: childConfig.level,
-              scopeId: childConfig.id
-            }),
-            state
-          ];
-        }
-        return [
-          undefined,
-          {
-            nodes: new Map(state.nodes).set(childKey, {
-              config: childConfig,
-              startedAt: now3,
-              totals: emptyTotals()
-            })
-          }
-        ];
-      });
-      if (conflict !== undefined)
-        return yield* conflict;
-      return makeNode(ledger, childKey, hierarchy, childConfig);
-    }),
-    consume: (delta) => exports_Clock.currentTimeMillis.pipe(exports_Effect.flatMap((now3) => exports_Ref.modify(ledger, (state) => {
-      const updates = new Map;
-      for (const ancestorKey of hierarchy) {
-        const node = state.nodes.get(ancestorKey);
-        if (node === undefined) {
-          continue;
-        }
-        const totals = addUsage(node, delta, now3);
-        const error2 = exceeded(node, totals);
-        if (error2 !== undefined) {
-          return [{ _tag: "failure", error: error2 }, state];
-        }
-        updates.set(ancestorKey, { ...node, totals });
-      }
-      const nextNodes = new Map(state.nodes);
-      for (const [updatedKey, updatedNode] of updates) {
-        nextNodes.set(updatedKey, updatedNode);
-      }
-      const value4 = updates.get(key)?.totals ?? emptyTotals();
-      return [{ _tag: "success", value: value4 }, { nodes: nextNodes }];
-    }).pipe(exports_Effect.flatMap((result4) => result4._tag === "success" ? exports_Effect.succeed(result4.value) : exports_Effect.fail(result4.error))))),
-    snapshot: snapshot3,
-    guard
-  };
-};
-var makeUsageBudgetRoot = exports_Effect.fn("makeUsageBudgetRoot")(function* (config) {
-  const startedAt = yield* exports_Clock.currentTimeMillis;
-  const key = `${config.level}:${config.id}`;
-  const ledger = yield* exports_Ref.make({
-    nodes: new Map([
-      [
-        key,
-        {
-          config,
-          startedAt,
-          totals: emptyTotals()
-        }
-      ]
-    ])
-  });
-  return makeNode(ledger, key, [], config);
-});
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/AiError.js
 var exports_AiError = {};
 __export(exports_AiError, {
@@ -33635,11 +33080,77 @@ var reasonFromHttpStatus = (params) => {
       return new UnknownError3(common);
   }
 };
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/IdGenerator.js
+var exports_IdGenerator = {};
+__export(exports_IdGenerator, {
+  make: () => make52,
+  layer: () => layer16,
+  defaultIdGenerator: () => defaultIdGenerator,
+  IdGenerator: () => IdGenerator
+});
+
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Random.js
+var Random3 = Random;
+var randomWith = (f) => withFiber2((fiber3) => succeed7(f(fiber3.getRef(Random3))));
+var next = /* @__PURE__ */ randomWith((r) => r.nextDoubleUnsafe());
+
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/IdGenerator.js
+class IdGenerator extends (/* @__PURE__ */ Service()("@effect/ai/IdGenerator")) {
+}
+var DEFAULT_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+var DEFAULT_SEPARATOR = "_";
+var DEFAULT_SIZE = 16;
+var makeGenerator = ({
+  alphabet = DEFAULT_ALPHABET,
+  prefix: prefix3,
+  separator = DEFAULT_SEPARATOR,
+  size: size9 = DEFAULT_SIZE
+}) => {
+  const alphabetLength = alphabet.length;
+  return fnUntraced2(function* () {
+    const chars = new Array(size9);
+    for (let i = 0;i < size9; i++) {
+      const index2 = yield* next;
+      chars[i] = alphabet[index2 * alphabetLength | 0];
+    }
+    const identifier3 = chars.join("");
+    if (isUndefined(prefix3)) {
+      return identifier3;
+    }
+    return `${prefix3}${separator}${identifier3}`;
+  });
+};
+var defaultIdGenerator = {
+  generateId: /* @__PURE__ */ makeGenerator({
+    prefix: "id"
+  })
+};
+var make52 = /* @__PURE__ */ fnUntraced2(function* ({
+  alphabet = DEFAULT_ALPHABET,
+  prefix: prefix3,
+  separator = DEFAULT_SEPARATOR,
+  size: size9 = DEFAULT_SIZE
+}) {
+  if (alphabet.includes(separator)) {
+    const message = `The separator "${separator}" must not be part of the alphabet "${alphabet}".`;
+    return yield* new IllegalArgumentError2(message);
+  }
+  const generateId = makeGenerator({
+    alphabet,
+    prefix: prefix3,
+    separator,
+    size: size9
+  });
+  return {
+    generateId
+  };
+});
+var layer16 = (options3) => effect(IdGenerator)(make52(options3));
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/LanguageModel.js
 var exports_LanguageModel = {};
 __export(exports_LanguageModel, {
   streamText: () => streamText,
-  make: () => make56,
+  make: () => make57,
   getObjectName: () => getObjectName,
   generateText: () => generateText,
   generateObject: () => generateObject,
@@ -33677,7 +33188,7 @@ var makeUnsafe10 = (backing, deferred) => {
   self.deferred = deferred;
   return self;
 };
-var make52 = () => acquireRelease2(sync4(() => makeUnsafe10(new Set, makeUnsafe2())), (set8) => suspend3(() => {
+var make53 = () => acquireRelease2(sync4(() => makeUnsafe10(new Set, makeUnsafe2())), (set8) => suspend3(() => {
   const state = set8.state;
   if (state._tag === "Closed")
     return void_5;
@@ -33732,8 +33243,8 @@ var runImpl = (self, effect2, options3) => withFiber2((parent) => {
   addUnsafe2(self, fiber3, options3);
   return succeed7(fiber3);
 });
-var runtime = (self) => () => map8(context2(), (services2) => {
-  const runFork3 = runForkWith2(services2);
+var runtime = (self) => () => map8(context2(), (services) => {
+  const runFork3 = runForkWith2(services);
   return (effect2, options3) => {
     if (self.state._tag === "Closed") {
       return constInterruptedFiber();
@@ -33749,43 +33260,6 @@ var awaitEmpty = (self) => whileLoop2({
   body: () => await_(headUnsafe(self)),
   step: constVoid
 });
-
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Random.js
-var Random3 = Random;
-var randomWith = (f) => withFiber2((fiber3) => succeed7(f(fiber3.getRef(Random3))));
-var next = /* @__PURE__ */ randomWith((r) => r.nextDoubleUnsafe());
-
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/IdGenerator.js
-class IdGenerator2 extends (/* @__PURE__ */ Service()("@effect/ai/IdGenerator")) {
-}
-var DEFAULT_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-var DEFAULT_SEPARATOR = "_";
-var DEFAULT_SIZE = 16;
-var makeGenerator = ({
-  alphabet = DEFAULT_ALPHABET,
-  prefix: prefix3,
-  separator = DEFAULT_SEPARATOR,
-  size: size9 = DEFAULT_SIZE
-}) => {
-  const alphabetLength = alphabet.length;
-  return fnUntraced2(function* () {
-    const chars = new Array(size9);
-    for (let i = 0;i < size9; i++) {
-      const index2 = yield* next;
-      chars[i] = alphabet[index2 * alphabetLength | 0];
-    }
-    const identifier3 = chars.join("");
-    if (isUndefined(prefix3)) {
-      return identifier3;
-    }
-    return `${prefix3}${separator}${identifier3}`;
-  });
-};
-var defaultIdGenerator = {
-  generateId: /* @__PURE__ */ makeGenerator({
-    prefix: "id"
-  })
-};
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/internal/codec-transformer.js
 var makeDefaultCodecTransformer = (toJsonSchemaDocument3) => {
@@ -33821,7 +33295,7 @@ __export(exports_Prompt, {
   prependSystem: () => prependSystem,
   makePart: () => makePart2,
   makeMessage: () => makeMessage,
-  make: () => make53,
+  make: () => make54,
   isPrompt: () => isPrompt,
   isPart: () => isPart2,
   isMessage: () => isMessage,
@@ -34026,7 +33500,7 @@ var makePrompt = (content) => Object.assign(Object.create(Proto15), {
 });
 var decodeMessagesSync = /* @__PURE__ */ decodeSync2(/* @__PURE__ */ ArraySchema(Message));
 var empty16 = /* @__PURE__ */ makePrompt([]);
-var make53 = (input) => {
+var make54 = (input) => {
   if (typeof input === "string") {
     const part = makePart2("text", {
       text: input
@@ -34174,7 +33648,7 @@ var fromResponseParts = (parts2) => {
   return makePrompt(messages);
 };
 var concat3 = /* @__PURE__ */ dual(2, (self, input) => {
-  const other = make53(input);
+  const other = make54(input);
   if (self.content.length === 0) {
     return other;
   }
@@ -34232,7 +33706,7 @@ var appendSystem = /* @__PURE__ */ dual(2, (self, content) => {
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/ResponseIdTracker.js
 class ResponseIdTracker extends (/* @__PURE__ */ Service()("effect/ai/ResponseIdTracker")) {
 }
-var make54 = /* @__PURE__ */ sync4(() => {
+var make55 = /* @__PURE__ */ sync4(() => {
   const sentParts = new Map;
   const none3 = () => {
     sentParts.clear();
@@ -34325,7 +33799,7 @@ class CurrentSpanTransformer extends (/* @__PURE__ */ Service()("effect/ai/Telem
 var exports_Toolkit = {};
 __export(exports_Toolkit, {
   merge: () => merge8,
-  make: () => make55,
+  make: () => make56,
   empty: () => empty17
 });
 var TypeId56 = "~effect/ai/Toolkit";
@@ -34334,12 +33808,12 @@ var Proto16 = {
     label: "Toolkit",
     evaluate: /* @__PURE__ */ fnUntraced2(function* (parent) {
       const tools = this.tools;
-      const services2 = parent.context;
+      const services = parent.context;
       const schemasCache = new WeakMap;
       const getSchemas = (tool) => {
         let schemas = schemasCache.get(tool);
         if (isUndefined(schemas)) {
-          const handler = services2.mapUnsafe.get(tool.id);
+          const handler = services.mapUnsafe.get(tool.id);
           const resultSchema = tool.failureMode === "return" ? Union2([tool.successSchema, tool.failureSchema, AiError]) : tool.successSchema;
           const decodeParameters = isSchema(tool.parametersSchema) ? decodeUnknownEffect2(tool.parametersSchema) : (u) => succeed7(u);
           const decodeResult2 = decodeUnknownEffect2(resultSchema);
@@ -34449,7 +33923,7 @@ var Proto16 = {
     return gen4({
       self: this
     }, function* () {
-      const services2 = yield* context2();
+      const services = yield* context2();
       const handlers = isEffect2(build2) ? yield* build2 : build2;
       const context3 = new Map;
       for (const [name, handler] of Object.entries(handlers)) {
@@ -34458,7 +33932,7 @@ var Proto16 = {
           context3.set(tool.id, {
             name,
             handler,
-            context: services2
+            context: services
           });
         }
       }
@@ -34486,7 +33960,7 @@ var resolveInput = (...tools) => {
   return output;
 };
 var empty17 = /* @__PURE__ */ makeProto2({});
-var make55 = (...tools) => makeProto2(resolveInput(...tools));
+var make56 = (...tools) => makeProto2(resolveInput(...tools));
 var merge8 = (...toolkits) => {
   const tools = {};
   for (const toolkit of toolkits) {
@@ -34566,11 +34040,11 @@ class GenerateObjectResponse extends GenerateTextResponse {
     this.value = value4;
   }
 }
-var make56 = /* @__PURE__ */ fnUntraced2(function* (params) {
+var make57 = /* @__PURE__ */ fnUntraced2(function* (params) {
   const codecTransformer = params.codecTransformer ?? defaultCodecTransformer2;
   const parentSpanTransformer = yield* serviceOption2(CurrentSpanTransformer);
   const getSpanTransformer = serviceOption2(CurrentSpanTransformer).pipe(map8(orElse(() => parentSpanTransformer)));
-  const idGenerator = yield* serviceOption2(IdGenerator2).pipe(map8(getOrElse(() => defaultIdGenerator)));
+  const idGenerator = yield* serviceOption2(IdGenerator).pipe(map8(getOrElse(() => defaultIdGenerator)));
   const generateText = (options3) => useSpan2("LanguageModel.generateText", {
     attributes: {
       concurrency: options3.concurrency,
@@ -34579,7 +34053,7 @@ var make56 = /* @__PURE__ */ fnUntraced2(function* (params) {
   }, fnUntraced2(function* (span2) {
     const spanTransformer = yield* getSpanTransformer;
     const providerOptions = {
-      prompt: make53(options3.prompt),
+      prompt: make54(options3.prompt),
       tools: [],
       toolChoice: "none",
       responseFormat: {
@@ -34598,7 +34072,7 @@ var make56 = /* @__PURE__ */ fnUntraced2(function* (params) {
     reason: InvalidOutputError.fromSchemaError(error2)
   }))), (effect2, span2) => withParentSpan3(effect2, span2, {
     captureStackTrace: false
-  }), provideService2(IdGenerator2, idGenerator)));
+  }), provideService2(IdGenerator, idGenerator)));
   const generateObject = (options3) => {
     const objectName = getObjectName(options3.objectName, options3.schema);
     return useSpan2("LanguageModel.generateObject", {
@@ -34610,7 +34084,7 @@ var make56 = /* @__PURE__ */ fnUntraced2(function* (params) {
     }, fnUntraced2(function* (span2) {
       const spanTransformer = yield* getSpanTransformer;
       const providerOptions = {
-        prompt: make53(options3.prompt),
+        prompt: make54(options3.prompt),
         tools: [],
         toolChoice: "none",
         responseFormat: {
@@ -34644,7 +34118,7 @@ var make56 = /* @__PURE__ */ fnUntraced2(function* (params) {
       reason: InvalidOutputError.fromSchemaError(error2)
     }))), (effect2, span2) => withParentSpan3(effect2, span2, {
       captureStackTrace: false
-    }), provideService2(IdGenerator2, idGenerator)));
+    }), provideService2(IdGenerator, idGenerator)));
   };
   const streamText = fnUntraced2(function* (options3) {
     const span2 = yield* makeSpanScoped2("LanguageModel.streamText", {
@@ -34654,7 +34128,7 @@ var make56 = /* @__PURE__ */ fnUntraced2(function* (params) {
       }
     });
     const providerOptions = {
-      prompt: make53(options3.prompt),
+      prompt: make54(options3.prompt),
       tools: [],
       toolChoice: "none",
       responseFormat: {
@@ -34683,7 +34157,7 @@ var make56 = /* @__PURE__ */ fnUntraced2(function* (params) {
     module: "LanguageModel",
     method: "streamText",
     reason: InvalidOutputError.fromSchemaError(error2)
-  }) : error2), provideService4(IdGenerator2, idGenerator));
+  }) : error2), provideService4(IdGenerator, idGenerator));
   const generateContent = fnUntraced2(function* (options3, providerOptions) {
     const tracker = getOrUndefined(yield* serviceOption2(ResponseIdTracker));
     const toolChoice = options3.toolChoice ?? "auto";
@@ -34982,7 +34456,7 @@ var make56 = /* @__PURE__ */ fnUntraced2(function* (params) {
     if (preResolvedStreamParts.length > 0) {
       yield* offerAll(queue, preResolvedStreamParts);
     }
-    const toolCallFibers = yield* make52();
+    const toolCallFibers = yield* make53();
     const toolCallSemaphore = concurrency === "unbounded" ? undefined : yield* make16(concurrency);
     const handleToolCall = fnUntraced2(function* (part) {
       const tool = toolkit.tools[part.name];
@@ -34990,7 +34464,7 @@ var make56 = /* @__PURE__ */ fnUntraced2(function* (params) {
         return;
       const needsApproval = yield* isApprovalNeeded(tool, part, providerOptions.prompt.content);
       if (needsApproval) {
-        const idGen = yield* IdGenerator2;
+        const idGen = yield* IdGenerator;
         const approvalId = yield* idGen.generateId();
         const approvalPart = makePart("tool-approval-request", {
           approvalId,
@@ -35251,7 +34725,7 @@ var resolveToolCalls = (content, toolkit, messages, concurrency) => {
     }
     const needsApproval = yield* isApprovalNeeded(tool, toolCall, messages);
     if (needsApproval) {
-      const generator = yield* IdGenerator2;
+      const generator = yield* IdGenerator;
       const approvalId = yield* generator.generateId();
       return succeed9(makePart("tool-approval-request", {
         approvalId,
@@ -35321,7 +34795,7 @@ var exports_Tool = {};
 __export(exports_Tool, {
   unsafeSecureJsonParse: () => unsafeSecureJsonParse,
   providerDefined: () => providerDefined,
-  make: () => make57,
+  make: () => make58,
   isUserDefined: () => isUserDefined,
   isProviderDefined: () => isProviderDefined,
   isEmptyParamsRecord: () => isEmptyParamsRecord,
@@ -35414,7 +34888,7 @@ var dynamicProto = (options3) => {
   self.id = `effect/ai/Tool/${options3.name}`;
   return self;
 };
-var make57 = (name, options3) => {
+var make58 = (name, options3) => {
   const successSchema = options3?.success ?? Void2;
   const failureSchema = options3?.failure ?? Never2;
   return userDefinedProto({
@@ -35588,6 +35062,911 @@ var EmptyParams = /* @__PURE__ */ Record(String6, Never2);
 function isEmptyParamsRecord(indexSignature) {
   return indexSignature.parameter === string2 && isNever2(indexSignature.type);
 }
+// packages/core/src/services.ts
+class IdGenerator2 extends exports_Context.Service()("@effect-agent/core/IdGenerator") {
+  static layer = exports_Layer.succeed(IdGenerator2, {
+    nextConversationId: exports_IdGenerator.defaultIdGenerator.generateId().pipe(exports_Effect.map((id2) => exports_Schema.decodeSync(ConversationId)(`conversation-${id2}`))),
+    nextRunId: exports_IdGenerator.defaultIdGenerator.generateId().pipe(exports_Effect.map((id2) => exports_Schema.decodeSync(RunId)(`run-${id2}`))),
+    nextTurnId: exports_IdGenerator.defaultIdGenerator.generateId().pipe(exports_Effect.map((id2) => exports_Schema.decodeSync(TurnId)(`turn-${id2}`)))
+  });
+}
+// packages/capabilities/src/redaction.ts
+var MAX_REDACTED_PREVIEW_BYTES = 8 * 1024;
+var MAX_REDACTION_NODES = 4096;
+var MAX_REDACTION_DEPTH = 16;
+var utf8Bytes = (value4) => {
+  let total = 0;
+  for (const character of value4) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    total += codePoint <= 127 ? 1 : codePoint <= 2047 ? 2 : codePoint <= 65535 ? 3 : 4;
+  }
+  return total;
+};
+var RedactedPreview = exports_Schema.String.pipe(exports_Schema.refine((value4) => utf8Bytes(value4) <= MAX_REDACTED_PREVIEW_BYTES, {
+  expected: `redacted preview of at most ${MAX_REDACTED_PREVIEW_BYTES} UTF-8 bytes`
+}), exports_Schema.brand("@effect-agent/capabilities/RedactedPreview"));
+
+class RedactionError extends exports_Schema.TaggedError()("RedactionError", {
+  reason: exports_Schema.Literals(["input-too-deep", "input-too-large", "encoding-failed"]),
+  message: exports_Schema.String
+}) {
+}
+
+class Redactor extends exports_Context.Service()("@effect-agent/capabilities/Redactor") {
+}
+var redactValue = (value4, depth, counter2) => {
+  if (depth > MAX_REDACTION_DEPTH) {
+    throw RedactionError.make({
+      reason: "input-too-deep",
+      message: `Decoded value exceeds redaction depth ${MAX_REDACTION_DEPTH}`
+    });
+  }
+  counter2.nodes += 1;
+  if (counter2.nodes > MAX_REDACTION_NODES) {
+    throw RedactionError.make({
+      reason: "input-too-large",
+      message: `Decoded value exceeds redaction node count ${MAX_REDACTION_NODES}`
+    });
+  }
+  if (Array.isArray(value4)) {
+    return value4.map((item) => redactValue(item, depth + 1, counter2));
+  }
+  if (value4 !== null && typeof value4 === "object") {
+    const redacted2 = {};
+    for (const [key, item] of Object.entries(value4)) {
+      redacted2[key] = redactValue(item, depth + 1, counter2);
+    }
+    return redacted2;
+  }
+  if (value4 === null)
+    return "[REDACTED:null]";
+  if (typeof value4 === "string")
+    return "[REDACTED:string]";
+  if (typeof value4 === "number")
+    return "[REDACTED:number]";
+  if (typeof value4 === "boolean")
+    return "[REDACTED:boolean]";
+  return "[REDACTED:unsupported]";
+};
+var truncateUtf8 = (value4, maxBytes) => {
+  if (utf8Bytes(value4) <= maxBytes) {
+    return value4;
+  }
+  const suffix = "…";
+  const suffixBytes = utf8Bytes(suffix);
+  let output = "";
+  let bytes = 0;
+  for (const character of value4) {
+    const characterBytes = utf8Bytes(character);
+    if (bytes + characterBytes + suffixBytes > maxBytes) {
+      break;
+    }
+    output += character;
+    bytes += characterBytes;
+  }
+  return `${output}${suffix}`;
+};
+var encodeRunEvent = exports_Schema.encodeEffect(RunEvent);
+var StructuralRedactorLive = exports_Layer.succeed(Redactor)({
+  redact: (decodedValue) => exports_Effect.try({
+    try: () => {
+      const structurallyRedacted = redactValue(decodedValue, 0, { nodes: 0 });
+      return truncateUtf8(JSON.stringify(structurallyRedacted), MAX_REDACTED_PREVIEW_BYTES);
+    },
+    catch: (cause) => exports_Schema.is(RedactionError)(cause) ? cause : RedactionError.make({
+      reason: "encoding-failed",
+      message: "Could not encode the structurally redacted preview"
+    })
+  }).pipe(exports_Effect.flatMap((preview) => exports_Schema.decodeUnknownEffect(RedactedPreview)(preview).pipe(exports_Effect.mapError(() => RedactionError.make({
+    reason: "encoding-failed",
+    message: "Redacted preview did not satisfy its bounded schema"
+  })))))
+});
+
+// packages/capabilities/src/approval.ts
+var MAX_APPROVAL_TARGETS = 32;
+var MAX_APPROVAL_TARGET_BYTES = 64 * 1024;
+var MAX_APPROVAL_AUDIT_EVENTS = 2048;
+var ApprovalTargets = exports_Schema.Array(exports_Schema.String.check(exports_Schema.isMaxLength(2 * 1024))).check(exports_Schema.isMaxLength(MAX_APPROVAL_TARGETS)).pipe(exports_Schema.refine((targets) => targets.reduce((total, target) => total + exports_Encoding.encodeHex(target).length / 2, 0) <= MAX_APPROVAL_TARGET_BYTES, { expected: `approval targets totaling at most ${MAX_APPROVAL_TARGET_BYTES} UTF-8 bytes` }));
+var ApprovalRequestFields = {
+  requestId: exports_Schema.NonEmptyString,
+  runId: RunId,
+  conversationId: ConversationId,
+  toolCallId: ToolCallId,
+  toolName: exports_Schema.NonEmptyString,
+  actionSummary: exports_Schema.String.check(exports_Schema.isMaxLength(2 * 1024)),
+  resourceTargets: ApprovalTargets,
+  risk: exports_Schema.Literals(["low", "medium", "high", "critical"]),
+  expiresAt: exports_Schema.DateTimeUtcFromString,
+  denial: exports_Schema.Literals(["terminal", "recoverable"])
+};
+
+class ApprovalRequestDraft extends exports_Schema.Class("@effect-agent/capabilities/ApprovalRequestDraft")(ApprovalRequestFields) {
+}
+
+class ApprovalRequest extends exports_Schema.Class("@effect-agent/capabilities/ApprovalRequest")({
+  ...ApprovalRequestFields,
+  redactedInputPreview: RedactedPreview
+}) {
+}
+
+class ApprovalApproved extends exports_Schema.TaggedClass()("ApprovalApproved", {
+  requestId: exports_Schema.NonEmptyString,
+  decidedAt: exports_Schema.DateTimeUtcFromString,
+  resolver: exports_Schema.NonEmptyString
+}) {
+}
+
+class ApprovalDenied extends exports_Schema.TaggedClass()("ApprovalDenied", {
+  requestId: exports_Schema.NonEmptyString,
+  decidedAt: exports_Schema.DateTimeUtcFromString,
+  resolver: exports_Schema.NonEmptyString,
+  reason: exports_Schema.String.check(exports_Schema.isMaxLength(2 * 1024)),
+  timedOut: exports_Schema.Boolean
+}) {
+}
+var ApprovalDecision = exports_Schema.Union([ApprovalApproved, ApprovalDenied]);
+
+class ApprovalResolverError extends exports_Schema.TaggedError()("ApprovalResolverError", { message: exports_Schema.String }) {
+}
+
+class ApprovalTimedOut extends exports_Schema.TaggedError()("ApprovalTimedOut", {
+  requestId: exports_Schema.NonEmptyString
+}) {
+}
+
+class ApprovalResolver extends exports_Context.Service()("@effect-agent/capabilities/ApprovalResolver") {
+}
+
+class ApprovalRequestRecorded extends exports_Schema.TaggedClass()("ApprovalRequestRecorded", {
+  sequence: exports_Schema.Natural,
+  recordedAt: exports_Schema.DateTimeUtcFromString,
+  request: ApprovalRequest
+}) {
+}
+
+class ApprovalDecisionRecorded extends exports_Schema.TaggedClass()("ApprovalDecisionRecorded", {
+  sequence: exports_Schema.Natural,
+  recordedAt: exports_Schema.DateTimeUtcFromString,
+  decision: ApprovalDecision
+}) {
+}
+var ApprovalAuditEvent = exports_Schema.Union([ApprovalRequestRecorded, ApprovalDecisionRecorded]);
+var ApprovalAuditEvents = exports_Schema.Array(ApprovalAuditEvent).check(exports_Schema.isMaxLength(MAX_APPROVAL_AUDIT_EVENTS));
+
+class ApprovalAuditLimitExceeded extends exports_Schema.TaggedError()("ApprovalAuditLimitExceeded", {
+  limitValue: exports_Schema.Natural,
+  observedValue: exports_Schema.Natural
+}) {
+}
+
+class ApprovalDecisionMismatch extends exports_Schema.TaggedError()("ApprovalDecisionMismatch", {
+  expectedRequestId: exports_Schema.NonEmptyString,
+  observedRequestId: exports_Schema.NonEmptyString
+}) {
+}
+
+class ApprovalAudit extends exports_Context.Service()("@effect-agent/capabilities/ApprovalAudit") {
+}
+var ApprovalAuditMemoryLive = exports_Layer.effect(ApprovalAudit, exports_Effect.gen(function* () {
+  const state = yield* exports_Ref.make({ events: [], pending: new Set });
+  return ApprovalAudit.of({
+    recordRequest: (request3) => exports_Effect.gen(function* () {
+      const recordedAt = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis));
+      const error2 = yield* exports_Ref.modify(state, (current) => {
+        const reservedSize = current.events.length + current.pending.size + 2;
+        if (reservedSize > MAX_APPROVAL_AUDIT_EVENTS) {
+          return [
+            ApprovalAuditLimitExceeded.make({
+              limitValue: MAX_APPROVAL_AUDIT_EVENTS,
+              observedValue: reservedSize
+            }),
+            current
+          ];
+        }
+        const event = ApprovalRequestRecorded.make({
+          sequence: current.events.length,
+          recordedAt,
+          request: request3
+        });
+        return [
+          undefined,
+          {
+            events: [...current.events, event],
+            pending: new Set(current.pending).add(request3.requestId)
+          }
+        ];
+      });
+      if (error2 !== undefined)
+        return yield* error2;
+    }),
+    recordDecision: (decision) => exports_Effect.gen(function* () {
+      const recordedAt = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis));
+      const error2 = yield* exports_Ref.modify(state, (current) => {
+        if (!current.pending.has(decision.requestId)) {
+          return [
+            ApprovalDecisionMismatch.make({
+              expectedRequestId: [...current.pending][0] ?? "no-pending-request",
+              observedRequestId: decision.requestId
+            }),
+            current
+          ];
+        }
+        const pending = new Set(current.pending);
+        pending.delete(decision.requestId);
+        const event = ApprovalDecisionRecorded.make({
+          sequence: current.events.length,
+          recordedAt,
+          decision
+        });
+        return [
+          undefined,
+          {
+            events: [...current.events, event],
+            pending
+          }
+        ];
+      });
+      if (error2 !== undefined)
+        return yield* error2;
+    }),
+    events: exports_Ref.get(state).pipe(exports_Effect.map((current) => current.events))
+  });
+}));
+var makeApprovalRequest = exports_Effect.fn("makeApprovalRequest")(function* (draft, decodedToolInput) {
+  const redactor = yield* Redactor;
+  const redactedInputPreview = yield* redactor.redact(decodedToolInput);
+  return ApprovalRequest.make({
+    requestId: draft.requestId,
+    runId: draft.runId,
+    conversationId: draft.conversationId,
+    toolCallId: draft.toolCallId,
+    toolName: draft.toolName,
+    actionSummary: draft.actionSummary,
+    resourceTargets: draft.resourceTargets,
+    risk: draft.risk,
+    expiresAt: draft.expiresAt,
+    denial: draft.denial,
+    redactedInputPreview
+  });
+});
+var timeoutDenial = (request3, decidedAt) => ApprovalDenied.make({
+  requestId: request3.requestId,
+  decidedAt,
+  resolver: "effect-agent.timeout-deny",
+  reason: "Approval request expired before a decision was available",
+  timedOut: true
+});
+var requestApproval = exports_Effect.fn("requestApproval")(function* (request3) {
+  const audit = yield* ApprovalAudit;
+  yield* audit.recordRequest(request3);
+  const nowMillis = yield* exports_Clock.currentTimeMillis;
+  const now3 = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(nowMillis));
+  const remainingMillis = exports_DateTime.toEpochMillis(request3.expiresAt) - nowMillis;
+  let decision;
+  if (remainingMillis <= 0) {
+    decision = timeoutDenial(request3, now3);
+  } else {
+    const resolver = yield* ApprovalResolver;
+    decision = yield* resolver.request(request3).pipe(exports_Effect.timeoutOrElse({
+      duration: exports_Duration.millis(remainingMillis),
+      orElse: () => exports_Clock.currentTimeMillis.pipe(exports_Effect.map((millis2) => timeoutDenial(request3, exports_DateTime.toUtc(exports_DateTime.makeUnsafe(millis2)))))
+    }), exports_Effect.catchTag("ApprovalTimedOut", () => exports_Clock.currentTimeMillis.pipe(exports_Effect.map((millis2) => timeoutDenial(request3, exports_DateTime.toUtc(exports_DateTime.makeUnsafe(millis2)))))), exports_Effect.tapError(() => exports_Clock.currentTimeMillis.pipe(exports_Effect.flatMap((millis2) => audit.recordDecision(ApprovalDenied.make({
+      requestId: request3.requestId,
+      decidedAt: exports_DateTime.toUtc(exports_DateTime.makeUnsafe(millis2)),
+      resolver: "effect-agent.resolver-error",
+      reason: "Approval resolver failed before making a policy decision",
+      timedOut: false
+    }))))));
+  }
+  if (decision.requestId !== request3.requestId) {
+    const mismatch = ApprovalDecisionMismatch.make({
+      expectedRequestId: request3.requestId,
+      observedRequestId: decision.requestId
+    });
+    const denied = ApprovalDenied.make({
+      requestId: request3.requestId,
+      decidedAt: exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis)),
+      resolver: "effect-agent.correlation-check",
+      reason: "Approval resolver returned a decision for another request",
+      timedOut: false
+    });
+    yield* audit.recordDecision(denied);
+    return yield* mismatch;
+  }
+  yield* audit.recordDecision(decision);
+  return decision;
+});
+var ApprovalDenyAll = exports_Layer.succeed(ApprovalResolver)({
+  request: (request3) => exports_Clock.currentTimeMillis.pipe(exports_Effect.map((millis2) => ApprovalDenied.make({
+    requestId: request3.requestId,
+    decidedAt: exports_DateTime.toUtc(exports_DateTime.makeUnsafe(millis2)),
+    resolver: "effect-agent.deny-all",
+    reason: "No approving policy is configured",
+    timedOut: false
+  })))
+});
+// packages/capabilities/src/budget.ts
+var Natural2 = exports_Schema.Natural;
+var BudgetLevel = exports_Schema.Literals(["global", "tenant", "agent", "conversation", "run"]);
+
+class UsageTotals extends exports_Schema.Class("@effect-agent/capabilities/UsageTotals")({
+  inputTokens: Natural2,
+  outputTokens: Natural2,
+  cacheReadInputTokens: Natural2,
+  cacheWriteInputTokens: Natural2,
+  lastInputTokens: Natural2,
+  lastOutputTokens: Natural2,
+  toolCalls: Natural2,
+  costMicrousd: Natural2,
+  elapsedMillis: Natural2
+}) {
+}
+
+class UsageDelta extends exports_Schema.Class("@effect-agent/capabilities/UsageDelta")({
+  modelCalls: Natural2,
+  inputTokens: Natural2,
+  outputTokens: Natural2,
+  cacheReadInputTokens: Natural2,
+  cacheWriteInputTokens: Natural2,
+  toolCalls: Natural2,
+  costMicrousd: Natural2
+}) {
+}
+
+class UsageBudgetLimits extends exports_Schema.Class("@effect-agent/capabilities/UsageBudgetLimits")({
+  maxInputTokens: exports_Schema.optionalKey(Natural2),
+  maxOutputTokens: exports_Schema.optionalKey(Natural2),
+  maxToolCalls: exports_Schema.optionalKey(Natural2),
+  maxCostMicrousd: exports_Schema.optionalKey(Natural2),
+  maxDurationMillis: exports_Schema.optionalKey(Natural2)
+}) {
+}
+
+class UsageBudgetNodeConfig extends exports_Schema.Class("@effect-agent/capabilities/UsageBudgetNodeConfig")({
+  level: BudgetLevel,
+  id: exports_Schema.NonEmptyString,
+  limits: UsageBudgetLimits
+}) {
+}
+
+class BudgetExceeded extends exports_Schema.TaggedError()("BudgetExceeded", {
+  scopeLevel: BudgetLevel,
+  scopeId: exports_Schema.NonEmptyString,
+  limit: exports_Schema.Literals(["input-tokens", "output-tokens", "tool-calls", "cost", "duration"]),
+  limitValue: Natural2,
+  observedValue: Natural2
+}) {
+}
+
+class InvalidBudgetHierarchy extends exports_Schema.TaggedError()("InvalidBudgetHierarchy", {
+  parentLevel: BudgetLevel,
+  childLevel: BudgetLevel
+}) {
+}
+
+class BudgetNodeConflict extends exports_Schema.TaggedError()("BudgetNodeConflict", {
+  scopeLevel: BudgetLevel,
+  scopeId: exports_Schema.NonEmptyString
+}) {
+}
+var levelOrder = {
+  global: 0,
+  tenant: 1,
+  agent: 2,
+  conversation: 3,
+  run: 4
+};
+var emptyTotals = (elapsedMillis = 0) => UsageTotals.make({
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadInputTokens: 0,
+  cacheWriteInputTokens: 0,
+  lastInputTokens: 0,
+  lastOutputTokens: 0,
+  toolCalls: 0,
+  costMicrousd: 0,
+  elapsedMillis
+});
+var withElapsed = (node, now3) => UsageTotals.make({
+  ...node.totals,
+  elapsedMillis: Math.max(0, now3 - node.startedAt)
+});
+var addUsage = (node, delta, now3) => UsageTotals.make({
+  inputTokens: node.totals.inputTokens + delta.inputTokens,
+  outputTokens: node.totals.outputTokens + delta.outputTokens,
+  cacheReadInputTokens: node.totals.cacheReadInputTokens + delta.cacheReadInputTokens,
+  cacheWriteInputTokens: node.totals.cacheWriteInputTokens + delta.cacheWriteInputTokens,
+  lastInputTokens: delta.modelCalls > 0 ? delta.inputTokens : node.totals.lastInputTokens,
+  lastOutputTokens: delta.modelCalls > 0 ? delta.outputTokens : node.totals.lastOutputTokens,
+  toolCalls: node.totals.toolCalls + delta.toolCalls,
+  costMicrousd: node.totals.costMicrousd + delta.costMicrousd,
+  elapsedMillis: Math.max(0, now3 - node.startedAt)
+});
+var exceeded = (node, totals) => {
+  const limits = node.config.limits;
+  const checks = [
+    ["input-tokens", limits.maxInputTokens, totals.inputTokens],
+    ["output-tokens", limits.maxOutputTokens, totals.outputTokens],
+    ["tool-calls", limits.maxToolCalls, totals.toolCalls],
+    ["cost", limits.maxCostMicrousd, totals.costMicrousd],
+    ["duration", limits.maxDurationMillis, totals.elapsedMillis]
+  ];
+  for (const [limit, limitValue, observedValue] of checks) {
+    if (limitValue !== undefined && observedValue > limitValue) {
+      return BudgetExceeded.make({
+        scopeLevel: node.config.level,
+        scopeId: node.config.id,
+        limit,
+        limitValue,
+        observedValue
+      });
+    }
+  }
+  return;
+};
+var sameLimits = (a, b) => a.maxInputTokens === b.maxInputTokens && a.maxOutputTokens === b.maxOutputTokens && a.maxToolCalls === b.maxToolCalls && a.maxCostMicrousd === b.maxCostMicrousd && a.maxDurationMillis === b.maxDurationMillis;
+var durationExceeded = (node, now3) => {
+  const limitValue = node.config.limits.maxDurationMillis ?? 0;
+  return BudgetExceeded.make({
+    scopeLevel: node.config.level,
+    scopeId: node.config.id,
+    limit: "duration",
+    limitValue,
+    observedValue: Math.max(limitValue + 1, now3 - node.startedAt)
+  });
+};
+var pruneRetiredHierarchy = (nodes, hierarchy) => {
+  for (let index2 = hierarchy.length - 1;index2 >= 0; index2 -= 1) {
+    const candidateKey = hierarchy[index2];
+    if (candidateKey === undefined)
+      continue;
+    const candidate = nodes.get(candidateKey);
+    if (candidate === undefined)
+      continue;
+    if (candidate.handles.size > 0)
+      break;
+    const childPrefix = `${candidateKey}/`;
+    if ([...nodes.keys()].some((otherKey) => otherKey.startsWith(childPrefix))) {
+      break;
+    }
+    nodes.delete(candidateKey);
+  }
+  return nodes;
+};
+var makeNode = (ledger, key, ancestors, config, handleId) => {
+  const hierarchy = [...ancestors, key];
+  const retiredDefect = () => exports_Effect.die(new Error(`Usage budget handle ${config.level}:${config.id} was used after retirement`));
+  const liveHierarchy = (state) => {
+    const current = state.nodes.get(key);
+    if (current === undefined || !current.handles.has(handleId))
+      return;
+    const nodes = [];
+    for (const ancestorKey of hierarchy) {
+      const node = state.nodes.get(ancestorKey);
+      if (node === undefined)
+        return;
+      nodes.push(node);
+    }
+    return nodes;
+  };
+  const readLiveHierarchy = exports_Ref.modify(ledger, (state) => [
+    liveHierarchy(state),
+    state
+  ]);
+  const snapshot3 = exports_Effect.gen(function* () {
+    const now3 = yield* exports_Clock.currentTimeMillis;
+    const nodes = yield* readLiveHierarchy;
+    if (nodes === undefined)
+      return yield* retiredDefect();
+    const node = nodes[nodes.length - 1];
+    if (node === undefined)
+      return yield* retiredDefect();
+    return withElapsed(node, now3);
+  });
+  const guard = (effect2) => exports_Effect.gen(function* () {
+    const now3 = yield* exports_Clock.currentTimeMillis;
+    const nodes = yield* readLiveHierarchy;
+    if (nodes === undefined)
+      return yield* retiredDefect();
+    let deadline;
+    for (const node of nodes) {
+      const current = withElapsed(node, now3);
+      const alreadyExceeded = exceeded(node, current);
+      if (alreadyExceeded !== undefined) {
+        return yield* alreadyExceeded;
+      }
+      const maxDuration = node.config.limits.maxDurationMillis;
+      if (maxDuration !== undefined) {
+        const remaining2 = maxDuration - current.elapsedMillis;
+        if (remaining2 <= 0) {
+          return yield* durationExceeded(node, now3);
+        }
+        if (deadline === undefined || remaining2 < deadline.remaining) {
+          deadline = { remaining: remaining2, node };
+        }
+      }
+    }
+    if (deadline === undefined) {
+      return yield* effect2;
+    }
+    const selected = deadline;
+    return yield* effect2.pipe(exports_Effect.timeoutOrElse({
+      duration: exports_Duration.millis(selected.remaining),
+      orElse: () => exports_Clock.currentTimeMillis.pipe(exports_Effect.flatMap((timeoutAt) => exports_Effect.fail(durationExceeded(selected.node, timeoutAt))))
+    }));
+  });
+  const child = exports_Effect.fn("UsageBudgetNode.child")(function* (childConfig) {
+    const childKey = `${key}/${childConfig.level}:${childConfig.id}`;
+    const childHandleId = Symbol(`usage-budget:${childConfig.level}:${childConfig.id}`);
+    const now3 = yield* exports_Clock.currentTimeMillis;
+    const registration = yield* exports_Ref.modify(ledger, (state) => {
+      if (liveHierarchy(state) === undefined) {
+        return [{ _tag: "retired" }, state];
+      }
+      if (levelOrder[childConfig.level] <= levelOrder[config.level]) {
+        return [
+          {
+            _tag: "invalid",
+            error: InvalidBudgetHierarchy.make({
+              parentLevel: config.level,
+              childLevel: childConfig.level
+            })
+          },
+          state
+        ];
+      }
+      const existing = state.nodes.get(childKey);
+      if (existing !== undefined) {
+        return sameLimits(existing.config.limits, childConfig.limits) ? [
+          { _tag: "success" },
+          {
+            nodes: new Map(state.nodes).set(childKey, {
+              ...existing,
+              handles: new Set(existing.handles).add(childHandleId)
+            })
+          }
+        ] : [
+          {
+            _tag: "conflict",
+            error: BudgetNodeConflict.make({
+              scopeLevel: childConfig.level,
+              scopeId: childConfig.id
+            })
+          },
+          state
+        ];
+      }
+      return [
+        { _tag: "success" },
+        {
+          nodes: new Map(state.nodes).set(childKey, {
+            config: childConfig,
+            startedAt: now3,
+            totals: emptyTotals(),
+            handles: new Set([childHandleId])
+          })
+        }
+      ];
+    });
+    if (registration._tag === "retired")
+      return yield* retiredDefect();
+    if (registration._tag === "conflict" || registration._tag === "invalid") {
+      return yield* registration.error;
+    }
+    return makeNode(ledger, childKey, hierarchy, childConfig, childHandleId);
+  });
+  const retire = exports_Effect.uninterruptible(exports_Ref.update(ledger, (state) => {
+    const existing = state.nodes.get(key);
+    if (existing === undefined || !existing.handles.has(handleId))
+      return state;
+    const handles = new Set(existing.handles);
+    handles.delete(handleId);
+    const nodes = new Map(state.nodes).set(key, { ...existing, handles });
+    return { nodes: pruneRetiredHierarchy(nodes, hierarchy) };
+  }));
+  return {
+    level: config.level,
+    id: config.id,
+    child,
+    childScoped: (childConfig) => exports_Effect.acquireRelease(child(childConfig), (node) => node.retire),
+    retire,
+    consume: (delta) => exports_Clock.currentTimeMillis.pipe(exports_Effect.flatMap((now3) => exports_Ref.modify(ledger, (state) => {
+      if (liveHierarchy(state) === undefined) {
+        return [{ _tag: "retired" }, state];
+      }
+      const updates = new Map;
+      for (const ancestorKey of hierarchy) {
+        const node = state.nodes.get(ancestorKey);
+        if (node === undefined)
+          return [{ _tag: "retired" }, state];
+        const totals = addUsage(node, delta, now3);
+        const error2 = exceeded(node, totals);
+        if (error2 !== undefined) {
+          return [{ _tag: "failure", error: error2 }, state];
+        }
+        updates.set(ancestorKey, { ...node, totals });
+      }
+      const nextNodes = new Map(state.nodes);
+      for (const [updatedKey, updatedNode] of updates) {
+        nextNodes.set(updatedKey, updatedNode);
+      }
+      const value4 = updates.get(key)?.totals;
+      return value4 === undefined ? [{ _tag: "retired" }, state] : [{ _tag: "success", value: value4 }, { nodes: nextNodes }];
+    }).pipe(exports_Effect.flatMap((result4) => {
+      switch (result4._tag) {
+        case "success":
+          return exports_Effect.succeed(result4.value);
+        case "failure":
+          return exports_Effect.fail(result4.error);
+        case "retired":
+          return retiredDefect();
+      }
+    })))),
+    snapshot: snapshot3,
+    guard
+  };
+};
+var makeUsageBudgetRoot = exports_Effect.fn("makeUsageBudgetRoot")(function* (config) {
+  const startedAt = yield* exports_Clock.currentTimeMillis;
+  const key = `${config.level}:${config.id}`;
+  const handleId = Symbol(`usage-budget:${config.level}:${config.id}`);
+  const ledger = yield* exports_Ref.make({
+    nodes: new Map([
+      [
+        key,
+        {
+          config,
+          startedAt,
+          totals: emptyTotals(),
+          handles: new Set([handleId])
+        }
+      ]
+    ])
+  });
+  return makeNode(ledger, key, [], config, handleId);
+});
+// packages/engine/src/bounded-value-internal.ts
+var DEFAULT_MAX_DEPTH = 128;
+var OBJECT_OVERHEAD_BYTES = 32;
+var PROPERTY_OVERHEAD_BYTES = 8;
+var dateTimeUtcPrototype = Object.getPrototypeOf(exports_DateTime.makeUnsafe(0));
+var redactedPrototype = Object.getPrototypeOf(exports_Redacted.make(undefined));
+var intrinsicViewPrototypes = new Set([
+  DataView.prototype,
+  Int8Array.prototype,
+  Uint8Array.prototype,
+  Uint8ClampedArray.prototype,
+  Int16Array.prototype,
+  Uint16Array.prototype,
+  Int32Array.prototype,
+  Uint32Array.prototype,
+  Float32Array.prototype,
+  Float64Array.prototype,
+  BigInt64Array.prototype,
+  BigUint64Array.prototype
+]);
+var arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")?.get;
+var typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+var typedArrayBufferGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer")?.get;
+var typedArrayLengthGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, "length")?.get;
+var dataViewBufferGetter = Object.getOwnPropertyDescriptor(DataView.prototype, "buffer")?.get;
+var urlConstructor = Reflect.get(globalThis, "URL");
+var urlPrototypeDescriptor = typeof urlConstructor === "function" ? Object.getOwnPropertyDescriptor(urlConstructor, "prototype") : undefined;
+var urlHrefGetter = urlPrototypeDescriptor !== undefined && "value" in urlPrototypeDescriptor && urlPrototypeDescriptor.value !== null && typeof urlPrototypeDescriptor.value === "object" ? Object.getOwnPropertyDescriptor(urlPrototypeDescriptor.value, "href")?.get : undefined;
+var urlPrototype = urlPrototypeDescriptor !== undefined && "value" in urlPrototypeDescriptor && urlPrototypeDescriptor.value !== null && typeof urlPrototypeDescriptor.value === "object" ? urlPrototypeDescriptor.value : undefined;
+var intrinsicArrayBufferByteLength = (value4) => {
+  if (arrayBufferByteLengthGetter === undefined)
+    return;
+  try {
+    const byteLength = Reflect.apply(arrayBufferByteLengthGetter, value4, []);
+    return Number.isSafeInteger(byteLength) && byteLength >= 0 ? byteLength : undefined;
+  } catch {
+    return;
+  }
+};
+var intrinsicViewBackingByteLength = (value4) => {
+  const getters = [typedArrayBufferGetter, dataViewBufferGetter];
+  for (const getter of getters) {
+    if (getter === undefined)
+      continue;
+    try {
+      const buffer3 = Reflect.apply(getter, value4, []);
+      if (buffer3 !== null && typeof buffer3 === "object") {
+        return intrinsicArrayBufferByteLength(buffer3);
+      }
+    } catch {}
+  }
+  return;
+};
+var intrinsicTypedArrayLength = (value4) => {
+  if (typedArrayLengthGetter === undefined)
+    return;
+  try {
+    const length = Reflect.apply(typedArrayLengthGetter, value4, []);
+    return Number.isSafeInteger(length) && length >= 0 ? length : undefined;
+  } catch {
+    return;
+  }
+};
+var intrinsicUrlByteLength = (value4) => {
+  if (urlHrefGetter === undefined)
+    return;
+  try {
+    const href = Reflect.apply(urlHrefGetter, value4, []);
+    return typeof href === "string" ? utf8ByteLength2(href) + 2 : undefined;
+  } catch {
+    return;
+  }
+};
+var inspectPrototype = (prototype, isArray2, knownSafePrototypes) => {
+  if (prototype === null)
+    return true;
+  if (isArray2) {
+    return prototype === Array.prototype;
+  }
+  return prototype === Object.prototype || prototype === dateTimeUtcPrototype || knownSafePrototypes.has(prototype);
+};
+var isCanonicalArrayIndex = (key) => {
+  const index2 = Number(key);
+  return Number.isInteger(index2) && index2 >= 0 && index2 < 4294967295 && String(index2) === key;
+};
+var utf8ByteLength2 = (value4) => {
+  let total = 0;
+  for (const character of value4) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    total += codePoint <= 127 ? 1 : codePoint <= 2047 ? 2 : codePoint <= 65535 ? 3 : 4;
+  }
+  return total;
+};
+var boundedValueFootprint = (root, maxBytes, knownSafePrototypes = new Set, maxDepth = DEFAULT_MAX_DEPTH) => {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || !Number.isSafeInteger(maxDepth) || maxDepth < 0) {
+    return;
+  }
+  let total = 0;
+  const ancestors = new WeakSet;
+  const add5 = (bytes) => {
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > maxBytes - total)
+      return false;
+    total += bytes;
+    return true;
+  };
+  const canMaterializeIndexedKeys = (count2) => {
+    if (!Number.isSafeInteger(count2) || count2 < 0)
+      return false;
+    if (count2 === 0)
+      return true;
+    const largestKeyBytes = utf8ByteLength2(String(count2 - 1));
+    const temporaryBytesPerKey = PROPERTY_OVERHEAD_BYTES + largestKeyBytes;
+    return count2 <= Math.floor((maxBytes - total) / temporaryBytesPerKey);
+  };
+  const visit = (value4, depth) => {
+    if (depth > maxDepth)
+      return false;
+    if (value4 === null)
+      return add5(4);
+    switch (typeof value4) {
+      case "string":
+        return add5(utf8ByteLength2(value4) + 2);
+      case "boolean":
+        return add5(4);
+      case "number":
+        return add5(16);
+      case "bigint":
+      case "symbol":
+        return false;
+      case "undefined":
+        return add5(16);
+      case "function":
+        return false;
+      case "object": {
+        if (ancestors.has(value4) || !add5(OBJECT_OVERHEAD_BYTES))
+          return false;
+        const prototype = Object.getPrototypeOf(value4);
+        let skipIndexedProperties = false;
+        let indexedPropertyCount = 0;
+        let supportedSpecialObject = false;
+        if (ArrayBuffer.isView(value4)) {
+          if (!intrinsicViewPrototypes.has(prototype))
+            return false;
+          const byteLength = intrinsicViewBackingByteLength(value4);
+          if (byteLength === undefined || !add5(byteLength))
+            return false;
+          if (prototype !== DataView.prototype) {
+            const length = intrinsicTypedArrayLength(value4);
+            if (length === undefined)
+              return false;
+            indexedPropertyCount = length;
+          }
+          skipIndexedProperties = true;
+          supportedSpecialObject = true;
+        }
+        if (!supportedSpecialObject) {
+          const bufferByteLength = intrinsicArrayBufferByteLength(value4);
+          if (bufferByteLength !== undefined) {
+            if (prototype !== ArrayBuffer.prototype)
+              return false;
+            if (!add5(bufferByteLength))
+              return false;
+            supportedSpecialObject = true;
+          }
+        }
+        if (!supportedSpecialObject) {
+          const urlByteLength = intrinsicUrlByteLength(value4);
+          if (urlByteLength !== undefined) {
+            if (prototype !== urlPrototype)
+              return false;
+            if (!add5(urlByteLength))
+              return false;
+            supportedSpecialObject = true;
+          }
+        }
+        let redactedValue;
+        let isRedacted2 = false;
+        if (prototype === redactedPrototype) {
+          const labelDescriptor = Object.getOwnPropertyDescriptor(value4, "label");
+          if (labelDescriptor !== undefined && !("value" in labelDescriptor))
+            return false;
+          try {
+            redactedValue = exports_Redacted.value(value4);
+            isRedacted2 = true;
+          } catch {
+            return false;
+          }
+        }
+        const isArray2 = Array.isArray(value4);
+        if (!supportedSpecialObject && !isRedacted2 && !inspectPrototype(prototype, isArray2, knownSafePrototypes)) {
+          return false;
+        }
+        if (isArray2) {
+          const lengthDescriptor = Object.getOwnPropertyDescriptor(value4, "length");
+          if (lengthDescriptor === undefined || !("value" in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 || !add5(lengthDescriptor.value)) {
+            return false;
+          }
+          indexedPropertyCount = lengthDescriptor.value;
+        }
+        if (!canMaterializeIndexedKeys(indexedPropertyCount))
+          return false;
+        ancestors.add(value4);
+        try {
+          if (isRedacted2 && !visit(redactedValue, depth + 1))
+            return false;
+          for (const key of Reflect.ownKeys(value4)) {
+            if (key === "length" && isArray2)
+              continue;
+            if (typeof key === "symbol")
+              return false;
+            if (skipIndexedProperties && isCanonicalArrayIndex(key))
+              continue;
+            if (!add5(PROPERTY_OVERHEAD_BYTES))
+              return false;
+            if (!add5(utf8ByteLength2(key)))
+              return false;
+            const descriptor = Object.getOwnPropertyDescriptor(value4, key);
+            if (descriptor === undefined)
+              return false;
+            if ("value" in descriptor) {
+              if (!visit(descriptor.value, depth + 1))
+                return false;
+            } else {
+              return false;
+            }
+          }
+          return true;
+        } finally {
+          ancestors.delete(value4);
+        }
+      }
+    }
+    return false;
+  };
+  try {
+    return visit(root, 0) ? total : undefined;
+  } catch {
+    return;
+  }
+};
+
 // packages/engine/src/output-contract-internal.ts
 var contractDirective = "Final output contract: when the task is complete, the final assistant message must be only " + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + "before or after the JSON.";
 var outputSchemaContract = (definition) => {
@@ -35624,7 +36003,7 @@ var insertOutputContract = (prompt, message) => {
 // packages/engine/src/provider-result-staging-internal.ts
 var MAX_JSON_DEPTH = 128;
 var FailedSnapshot = Symbol("@effect-agent/engine/FailedProviderResultSnapshot");
-var boundedJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => {
+var snapshotJson = (root, maxBytes, maxDepth, rejectNonFiniteNumbers) => {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || !Number.isSafeInteger(maxDepth) || maxDepth < 0) {
     return;
   }
@@ -35682,8 +36061,9 @@ var boundedJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => {
       case "boolean":
         return add5(value4 ? 4 : 5) ? value4 : FailedSnapshot;
       case "number": {
-        if (!Number.isFinite(value4))
-          return add5(4) ? null : FailedSnapshot;
+        if (!Number.isFinite(value4)) {
+          return rejectNonFiniteNumbers ? FailedSnapshot : add5(4) ? null : FailedSnapshot;
+        }
         const encoded = JSON.stringify(value4);
         return encoded !== undefined && add5(encoded.length) ? value4 : FailedSnapshot;
       }
@@ -35774,6 +36154,8 @@ var boundedJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => {
     return;
   }
 };
+var boundedJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => snapshotJson(root, maxBytes, maxDepth, false);
+var boundedCanonicalJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => snapshotJson(root, maxBytes, maxDepth, true);
 
 // packages/engine/src/tool-telemetry-internal.ts
 class ToolSpanFailure extends exports_AiError.AiError.extend("@effect-agent/engine/ToolSpanFailure")({}) {
@@ -36364,21 +36746,38 @@ class DurableStepError extends exports_Schema.TaggedError()("DurableStepError", 
     "commit-failed",
     "no-active-tool-call"
   ]),
-  message: exports_Schema.String,
-  toolCallId: exports_Schema.optionalKey(ToolCallId)
+  message: exports_Schema.String.check(exports_Schema.isMaxLength(4096)),
+  toolCallId: exports_Schema.optionalKey(ToolCallId),
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
 
 class DurableStep extends exports_Context.Service()("@effect-agent/engine/DurableStep") {
 }
-// packages/engine/src/run-events.ts
-class RunEventSinkClosedError extends exports_Schema.TaggedError()("RunEventSinkClosedError", {
-  message: exports_Schema.String
-}) {
-}
 
-class RunEventSink extends exports_Context.Service()("@effect-agent/engine/RunEventSink") {
-}
+// packages/engine/src/error-diagnostic-internal.ts
+var DIAGNOSTIC_MESSAGE_LIMIT = 4096;
+var DIAGNOSTIC_TAG_LIMIT = 128;
+var boundedDiagnostic = (value4, maxCharacters) => value4.length <= maxCharacters ? value4 : value4.slice(0, maxCharacters);
+var ownStringDiagnostic = (input, key, maxCharacters) => {
+  if (input === null || typeof input !== "object" && typeof input !== "function") {
+    return;
+  }
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    return descriptor !== undefined && "value" in descriptor && typeof descriptor.value === "string" ? boundedDiagnostic(descriptor.value, maxCharacters) : undefined;
+  } catch {
+    return;
+  }
+};
+var errorMessage = (error2) => {
+  const message = ownStringDiagnostic(error2, "message", DIAGNOSTIC_MESSAGE_LIMIT);
+  if (message !== undefined)
+    return message;
+  return typeof error2 === "string" ? boundedDiagnostic(error2, DIAGNOSTIC_MESSAGE_LIMIT) : "Unknown error";
+};
+var errorTag = (error2) => ownStringDiagnostic(error2, "_tag", DIAGNOSTIC_TAG_LIMIT) ?? "UnknownError";
+
 // packages/engine/src/run-options.ts
 class RunContextPreparationError extends exports_Schema.TaggedError()("RunContextPreparationError", {
   preparerId: exports_Schema.NonEmptyString,
@@ -36390,6 +36789,29 @@ class RunContextPreparationError extends exports_Schema.TaggedError()("RunContex
 class RunContextPreparation extends exports_Context.Service()("@effect-agent/engine/RunContextPreparation") {
 }
 var RunContextPreparationPassthrough = exports_Layer.succeed(RunContextPreparation)({});
+var RunTurnResumeSettledCallSchema = exports_Schema.Struct({
+  id: exports_Schema.NonEmptyString,
+  result: exports_Schema.Json,
+  isFailure: exports_Schema.Boolean
+});
+var RunResumeUsageSchema = exports_Schema.Struct({
+  modelCalls: exports_Schema.Natural,
+  inputTokens: exports_Schema.Natural,
+  outputTokens: exports_Schema.Natural,
+  lastInputTokens: exports_Schema.Natural,
+  lastOutputTokens: exports_Schema.Natural,
+  costMicrousd: exports_Schema.Natural
+}).check(exports_Schema.makeFilter((usage) => usage.lastInputTokens <= usage.inputTokens && usage.lastOutputTokens <= usage.outputTokens, {
+  expected: "last-call token usage no greater than cumulative token usage"
+}));
+// packages/engine/src/run-events.ts
+class RunEventSinkClosedError extends exports_Schema.TaggedError()("RunEventSinkClosedError", {
+  message: exports_Schema.String
+}) {
+}
+
+class RunEventSink extends exports_Context.Service()("@effect-agent/engine/RunEventSink") {
+}
 // packages/engine/src/tool-broker.ts
 class ToolBrokerUnavailableError extends exports_Schema.TaggedError()("ToolBrokerUnavailableError", {
   message: exports_Schema.String
@@ -36415,6 +36837,126 @@ var toolCounter = exports_Metric.counter("effect_agent_tool_calls_total", {
 });
 var MAX_STAGED_PROVIDER_EVENTS = 256;
 var MAX_STAGED_PROVIDER_BYTES = 1024 * 1024;
+var DEFAULT_RUN_BUFFER_LIMITS = {
+  maxModelResponseParts: 16384,
+  maxModelResponseBytes: 8 * 1024 * 1024,
+  maxRunEvents: 65536,
+  maxSubagentEventsPerBatch: 1024
+};
+var tighteningBufferLimit = (configured, ceiling, minimum) => configured === undefined || !Number.isFinite(configured) ? ceiling : Math.min(ceiling, Math.max(minimum, Math.floor(configured)));
+var effectiveRunBufferLimits = (configured) => ({
+  maxModelResponseParts: tighteningBufferLimit(configured?.maxModelResponseParts, DEFAULT_RUN_BUFFER_LIMITS.maxModelResponseParts, 1),
+  maxModelResponseBytes: tighteningBufferLimit(configured?.maxModelResponseBytes, DEFAULT_RUN_BUFFER_LIMITS.maxModelResponseBytes, 1),
+  maxRunEvents: tighteningBufferLimit(configured?.maxRunEvents, DEFAULT_RUN_BUFFER_LIMITS.maxRunEvents, 2),
+  maxSubagentEventsPerBatch: tighteningBufferLimit(configured?.maxSubagentEventsPerBatch, DEFAULT_RUN_BUFFER_LIMITS.maxSubagentEventsPerBatch, 1)
+});
+var structuredCloneFunction = Reflect.get(globalThis, "structuredClone");
+var knownSafeModelResponsePrototypes = new Set([exports_Response.Usage.prototype]);
+var schemaClassPrototype = (schema2) => {
+  if (typeof schema2 !== "function" || !exports_Schema.isSchema(schema2))
+    return;
+  const descriptor = Object.getOwnPropertyDescriptor(schema2, "prototype");
+  return descriptor !== undefined && "value" in descriptor && descriptor.value !== null && typeof descriptor.value === "object" ? descriptor.value : undefined;
+};
+var schemaClassToolPartPreflight = (part, toolkit) => {
+  try {
+    if (part === null || typeof part !== "object")
+      return;
+    const read2 = (key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(part, key);
+      if (descriptor === undefined || !("value" in descriptor)) {
+        throw new TypeError(`response part ${key} must be an own data property`);
+      }
+      return descriptor.value;
+    };
+    const type = read2("type");
+    if (type !== "tool-call" && type !== "tool-result")
+      return;
+    const name = read2("name");
+    if (typeof name !== "string" || !hasTool(toolkit.tools, name))
+      return;
+    const tool = toolkit.tools[name];
+    const payload = read2(type === "tool-call" ? "params" : "result");
+    if (payload === null || typeof payload !== "object")
+      return;
+    const payloadPrototype = Object.getPrototypeOf(payload);
+    const schemas = type === "tool-call" ? [tool.parametersSchema] : [tool.successSchema, tool.failureSchema];
+    if (!schemas.some((schema2) => schemaClassPrototype(schema2) === payloadPrototype)) {
+      return;
+    }
+    const preflight = {};
+    const retainedKeys = type === "tool-call" ? ["type", "id", "name", "providerExecuted", "metadata"] : [
+      "type",
+      "id",
+      "name",
+      "isFailure",
+      "providerExecuted",
+      "preliminary",
+      "metadata",
+      "encodedResult"
+    ];
+    for (const key of retainedKeys) {
+      preflight[key] = read2(key);
+    }
+    return preflight;
+  } catch {
+    return;
+  }
+};
+var inspectModelResponsePartCapacity = (usage, part, limits, knownSafePrototypes = knownSafeModelResponsePrototypes) => exports_Effect.suspend(() => {
+  if (usage.responsePartCount >= limits.maxModelResponseParts) {
+    return exports_Effect.fail(ModelProtocolError.make({
+      message: `Model response exceeded the ${limits.maxModelResponseParts}-part response limit`
+    }));
+  }
+  const bytes = boundedValueFootprint(part, limits.maxModelResponseBytes - usage.responsePartBytes, knownSafePrototypes);
+  return bytes === undefined ? exports_Effect.fail(ModelProtocolError.make({
+    message: `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`
+  })) : exports_Effect.succeed(bytes);
+});
+var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart")(function* (part, toolkit, usage, limits) {
+  const directInputBytes = boundedValueFootprint(part, limits.maxModelResponseBytes - usage.responsePartBytes, knownSafeModelResponsePrototypes);
+  if (directInputBytes === undefined) {
+    const preflight = schemaClassToolPartPreflight(part, toolkit);
+    yield* inspectModelResponsePartCapacity(usage, preflight ?? part, limits);
+  } else {
+    yield* inspectModelResponsePartCapacity(usage, part, limits);
+  }
+  const codec = exports_Schema.toCodecJson(exports_Response.StreamPart(toolkit));
+  const encodingFailure = ModelProtocolError.make({
+    message: "Model response part failed canonical encoding"
+  });
+  const encoded = yield* exports_Schema.encodeUnknownEffect(codec)(part).pipe(exports_Effect.mapError(() => encodingFailure));
+  const retainedBytes = yield* inspectModelResponsePartCapacity(usage, encoded, limits);
+  const ownedEncoded = yield* exports_Effect.try({
+    try: () => {
+      if (typeof structuredCloneFunction !== "function") {
+        throw new TypeError("structuredClone is unavailable");
+      }
+      const cloned = Reflect.apply(structuredCloneFunction, globalThis, [encoded]);
+      return cloned;
+    },
+    catch: () => ModelProtocolError.make({
+      message: "Model response part could not be converted into engine-owned data"
+    })
+  });
+  const decodingFailure = ModelProtocolError.make({
+    message: "Model response part failed canonical decoding"
+  });
+  const ownedPart = yield* exports_Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(exports_Effect.mapError(() => decodingFailure));
+  return { ownedPart, retainedBytes };
+});
+var consumeModelResponsePart = (usage, retainedBytes, limits) => exports_Effect.suspend(() => {
+  if (usage.responsePartCount >= limits.maxModelResponseParts || !Number.isSafeInteger(retainedBytes) || retainedBytes < 0 || retainedBytes > limits.maxModelResponseBytes - usage.responsePartBytes) {
+    return exports_Effect.fail(ModelProtocolError.make({
+      message: usage.responsePartCount >= limits.maxModelResponseParts ? `Model response exceeded the ${limits.maxModelResponseParts}-part response limit` : `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`
+    }));
+  }
+  return exports_Effect.sync(() => {
+    usage.responsePartCount += 1;
+    usage.responsePartBytes += retainedBytes;
+  });
+});
 var withSemaphorePermit = (semaphore, stream3) => exports_Stream.scoped(exports_Stream.fromEffect(exports_Effect.acquireRelease(semaphore.take(1), (permits) => semaphore.release(permits).pipe(exports_Effect.asVoid))).pipe(exports_Stream.flatMap(() => stream3)));
 var hasTool = (tools, name) => Object.hasOwn(tools, name);
 var startPart = (parts2, id2, description) => {
@@ -36454,19 +36996,24 @@ var encodeToolCallParameters = (tool, toolName, decodedParams) => {
     message: `Invalid parameters for Tool ${toolName}: ${cause.message}`
   })));
 };
+var decodeToolCallParameters = (tool, toolName, encodedParams, boundary = "execution") => {
+  const decodeParameters = exports_Schema.decodeUnknownEffect(tool.parametersSchema);
+  return decodeParameters(encodedParams).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
+    message: `Recorded parameters for Tool ${toolName} failed validation${boundary === "resume" ? " on resume" : ""}: ${cause.message}`
+  })));
+};
 var prepareToolCall = (toolkit, call, declarationIndex) => {
   const name = call.name;
   if (!hasTool(toolkit.tools, name)) {
     return exports_Effect.fail(ModelProtocolError.make({ message: `Model requested unknown Tool ${call.name}` }));
   }
   const tool = toolkit.tools[name];
-  const decodedParams = call.params;
-  return decodeToolCallId(call.id).pipe(exports_Effect.flatMap((toolCallId) => encodeToolCallParameters(tool, call.name, decodedParams).pipe(exports_Effect.map((encodedParams) => ({
+  return decodeToolCallId(call.id).pipe(exports_Effect.flatMap((toolCallId) => decodeToolCallParameters(tool, call.name, call.params).pipe(exports_Effect.map((decodedParams) => ({
     call,
     name,
     toolCallId,
     decodedParams,
-    nativeHandlerParams: encodedParams,
+    nativeHandlerParams: call.params,
     tool,
     declarationIndex
   })))));
@@ -36476,12 +37023,103 @@ var effectiveRunBounds = (policy2, options3) => ({
   maxTurns: boundedAllowance(policy2.maxTurns, options3.turnAllowance),
   maxToolCalls: boundedAllowance(policy2.maxToolCalls, options3.toolCallAllowance)
 });
-var decodeResumedToolCallParameters = (tool, toolName, encodedParams) => {
-  const decodeParameters = exports_Schema.decodeUnknownEffect(tool.parametersSchema);
-  return decodeParameters(encodedParams).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
-    message: `Recorded parameters for Tool ${toolName} failed validation on resume: ${cause.message}`
+var decodeResumedSettledCall = exports_Effect.fn("AgentRuntime.decodeResumedSettledCall")((input, maxResultBytes) => exports_Effect.gen(function* () {
+  const raw2 = yield* exports_Effect.try({
+    try: () => {
+      if (input === null || typeof input !== "object") {
+        throw new TypeError("settled Tool Call must be an object");
+      }
+      const readOwnDataProperty = (key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(input, key);
+        if (descriptor === undefined || !("value" in descriptor)) {
+          throw new TypeError(`settled Tool Call ${key} must be an own data property`);
+        }
+        return descriptor.value;
+      };
+      return {
+        id: readOwnDataProperty("id"),
+        result: readOwnDataProperty("result"),
+        isFailure: readOwnDataProperty("isFailure")
+      };
+    },
+    catch: () => ModelProtocolError.make({
+      message: "Turn resume contains an invalid settled Tool Call"
+    })
+  });
+  const result4 = boundedCanonicalJsonSnapshot(raw2.result, maxResultBytes);
+  if (result4 === undefined) {
+    return yield* ModelProtocolError.make({
+      message: "Turn resume settled Tool result is not bounded canonical JSON"
+    });
+  }
+  return yield* exports_Schema.decodeUnknownEffect(RunTurnResumeSettledCallSchema)({
+    ...raw2,
+    result: result4.value
+  }).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+    message: "Turn resume contains an invalid settled Tool Call"
   })));
-};
+}));
+var snapshotResumedSettledCalls = exports_Effect.fn("AgentRuntime.snapshotResumedSettledCalls")((resume, maximum) => exports_Effect.try({
+  try: () => {
+    if (resume === null || typeof resume !== "object") {
+      throw new TypeError("Turn resume must be an object");
+    }
+    const settledDescriptor = Object.getOwnPropertyDescriptor(resume, "settled");
+    if (settledDescriptor === undefined || !("value" in settledDescriptor)) {
+      throw new TypeError("Turn resume settled must be an own data property");
+    }
+    const settled = settledDescriptor.value;
+    if (!Array.isArray(settled)) {
+      throw new TypeError("Turn resume settled must be an array");
+    }
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(settled, "length");
+    if (lengthDescriptor === undefined || !("value" in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 || lengthDescriptor.value > maximum) {
+      throw new TypeError("Turn resume settled has an invalid length");
+    }
+    const snapshot3 = new Array(lengthDescriptor.value);
+    for (let index2 = 0;index2 < lengthDescriptor.value; index2 += 1) {
+      const entryDescriptor = Object.getOwnPropertyDescriptor(settled, String(index2));
+      if (entryDescriptor === undefined || !("value" in entryDescriptor)) {
+        throw new TypeError("Turn resume settled entries must be own data properties");
+      }
+      snapshot3[index2] = entryDescriptor.value;
+    }
+    return snapshot3;
+  },
+  catch: () => ModelProtocolError.make({
+    message: "Turn resume contains an invalid settled Tool Call collection"
+  })
+}));
+var decodeResumeUsage = exports_Effect.fn("AgentRuntime.decodeResumeUsage")((input) => exports_Effect.gen(function* () {
+  const snapshot3 = yield* exports_Effect.try({
+    try: () => {
+      if (input === null || typeof input !== "object") {
+        throw new TypeError("Run resume usage must be an object");
+      }
+      const read2 = (key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(input, key);
+        if (descriptor === undefined || !("value" in descriptor)) {
+          throw new TypeError(`Run resume usage ${key} must be an own data property`);
+        }
+        return descriptor.value;
+      };
+      return {
+        modelCalls: read2("modelCalls"),
+        inputTokens: read2("inputTokens"),
+        outputTokens: read2("outputTokens"),
+        lastInputTokens: read2("lastInputTokens"),
+        lastOutputTokens: read2("lastOutputTokens"),
+        costMicrousd: read2("costMicrousd")
+      };
+    },
+    catch: () => ModelProtocolError.make({
+      message: "Run resume usage requires own data properties with non-negative safe-integer totals and last-call tokens no greater than their cumulative totals"
+    })
+  });
+  return yield* exports_Schema.decodeUnknownEffect(RunResumeUsageSchema)(snapshot3).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+    message: "Run resume usage requires own data properties with non-negative safe-integer totals and last-call tokens no greater than their cumulative totals"
+  })));
+}));
 var makeToolFailedEvent = exports_Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (context3, turnId, call, error2) {
   const toolCallId = yield* decodeToolCallId(call.id);
   return ToolCallFailed.make({
@@ -36925,7 +37563,7 @@ var executeToolBatch = (context3, turnId, turn, toolkit, calls, trace3, concurre
     }).pipe(exports_Stream.provideService(DurableStep, stepServiceFor(call)), exports_Stream.provideService(ToolBroker, brokerFor(call).service), exports_Stream.ensuring(exports_Effect.sync(() => brokerFor(call).close()))))), { concurrency: "unbounded" });
     return stream3.pipe(exports_Stream.concat(next2));
   }, exports_Stream.empty);
-  const sinkQueue = yield* exports_Queue.unbounded();
+  const sinkQueue = yield* exports_Queue.bounded(context3.bufferLimits.maxSubagentEventsPerBatch);
   const batchSink = {
     emit: (payload) => exports_Queue.offer(sinkQueue, payload).pipe(exports_Effect.flatMap((accepted) => accepted ? exports_Effect.void : exports_Effect.fail(RunEventSinkClosedError.make({
       message: `Subagent event ${payload._tag} was emitted after its Tool batch settled`
@@ -36959,16 +37597,6 @@ var executeToolBatch = (context3, turnId, turn, toolkit, calls, trace3, concurre
   })).pipe(exports_Stream.drain)));
   return approvalPreflight.pipe(exports_Stream.concat(authorizationPreflight), exports_Stream.concat(preparation), exports_Stream.concat(settled));
 }));
-var ErrorMessage = exports_Schema.Struct({ message: exports_Schema.String });
-var ErrorTag = exports_Schema.Struct({ _tag: exports_Schema.NonEmptyString });
-var errorMessage = (error2) => exports_Option.match(exports_Schema.decodeUnknownOption(ErrorMessage)(error2), {
-  onNone: () => String(error2),
-  onSome: ({ message }) => message
-});
-var errorTag = (error2) => exports_Option.match(exports_Schema.decodeUnknownOption(ErrorTag)(error2), {
-  onNone: () => "UnknownError",
-  onSome: ({ _tag }) => _tag
-});
 var schedulingConcurrency = (configured, scheduling) => {
   const override = scheduling?.runOverride;
   if (override === undefined) {
@@ -37186,7 +37814,13 @@ var consumeUsage = (agent2, context3, usage, toolCallCount, options3) => exports
   }
   return { breach, warnings };
 });
-var eventBase = exports_Effect.fnUntraced(function* (context3) {
+var eventBaseFor = exports_Effect.fnUntraced(function* (context3, terminal) {
+  const ceiling = terminal ? context3.bufferLimits.maxRunEvents : context3.bufferLimits.maxRunEvents - 1;
+  if (context3.sequence >= ceiling) {
+    return yield* ModelProtocolError.make({
+      message: `Run exceeded the ${context3.bufferLimits.maxRunEvents}-event buffer limit`
+    });
+  }
   const timestamp = exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis);
   const sequence = context3.sequence;
   context3.sequence += 1;
@@ -37199,6 +37833,8 @@ var eventBase = exports_Effect.fnUntraced(function* (context3) {
     timestamp
   };
 });
+var eventBase = (context3) => eventBaseFor(context3, false);
+var terminalEventBase = (context3) => eventBaseFor(context3, true);
 var snapshotStagedProviderEvent = (trace3, payload) => exports_Effect.suspend(() => {
   const stagedEventCount = trace3.providerResultPayloads.length + (trace3.turnCompletion === undefined ? 0 : 1);
   if (stagedEventCount >= MAX_STAGED_PROVIDER_EVENTS) {
@@ -37324,12 +37960,19 @@ ${transcript}
     })
   ]);
   const pieces = [];
+  const responseUsage = {
+    responsePartCount: 0,
+    responsePartBytes: 0
+  };
   let summaryUsage;
-  yield* guardBudgetStream(exports_LanguageModel.streamText({ prompt: summarizerPrompt }), options3.budget).pipe(exports_Stream.runForEach((part) => exports_Effect.sync(() => {
-    if (part.type === "text-delta") {
-      pieces.push(part.delta);
-    } else if (part.type === "finish") {
-      summaryUsage = part.usage;
+  yield* guardBudgetStream(exports_LanguageModel.streamText({ prompt: summarizerPrompt }), options3.budget).pipe(exports_Stream.runForEach((part) => exports_Effect.gen(function* () {
+    const owned = yield* ownModelResponsePart(part, exports_Toolkit.empty, responseUsage, context3.bufferLimits);
+    yield* consumeModelResponsePart(responseUsage, owned.retainedBytes, context3.bufferLimits);
+    const ownedPart = owned.ownedPart;
+    if (ownedPart.type === "text-delta") {
+      pieces.push(ownedPart.delta);
+    } else if (ownedPart.type === "finish") {
+      summaryUsage = ownedPart.usage;
     }
   })));
   const wasFinalizing = context3.finalizing;
@@ -37482,7 +38125,8 @@ var promptFromTurnParts = (trace3) => {
   }
   return exports_Prompt.fromMessages(messages);
 };
-var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn, tools, trace3, part) {
+var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn, tools, trace3, part, retainedBytes) {
+  yield* consumeModelResponsePart(trace3, retainedBytes, context3.bufferLimits);
   if (trace3.finished) {
     return yield* ModelProtocolError.make({
       message: "Model response emitted content after its finish part"
@@ -37587,19 +38231,20 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
       const tool = tools[part.name];
       const encodedParameters = yield* encodeToolCallParameters(tool, part.name, part.params);
       const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
-      trace3.parts.push(exports_Response.makePart("tool-call", {
+      const canonicalCall = exports_Response.makePart("tool-call", {
         id: part.id,
         name: part.name,
         params: parameters,
         providerExecuted: part.providerExecuted,
         metadata: part.metadata
-      }));
+      });
+      trace3.parts.push(canonicalCall);
       trace3.toolCalls.set(part.id, {
         name: part.name,
         providerExecuted: part.providerExecuted
       });
       if (!part.providerExecuted) {
-        trace3.applicationToolCalls.push(part);
+        trace3.applicationToolCalls.push(canonicalCall);
         trace3.applicationCallDescriptors.push({
           toolCallId,
           toolName: part.name,
@@ -37792,7 +38437,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
   if (now3 >= context3.durationDeadlineMillis) {
     return failRunEventStream(durationLimitError(agent2.definition.policy));
   }
-  const ids = yield* IdGenerator;
+  const ids = yield* IdGenerator2;
   const turnId = yield* ids.nextTurnId;
   const outputContract = outputSchemaContract(agent2.definition);
   const outputContractMessage = outputContract._tag === "rendered" ? outputContract.message : undefined;
@@ -37805,6 +38450,8 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
     ...outputContractMessage === undefined ? {} : { outputContract: outputContractMessage }
   });
   const trace3 = {
+    responsePartCount: 0,
+    responsePartBytes: 0,
     parts: [],
     text: [],
     textParts: new Map,
@@ -37878,7 +38525,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
     toolkit: agent2.definition.toolkit,
     disableToolCallResolution: true,
     ...finalAnswerOnly ? { toolChoice: "none" } : {}
-  }), options3.budget).pipe(exports_Stream.mapEffect((part) => eventsForPart(context3, turnId, turn, agent2.definition.toolkit.tools, trace3, part)), exports_Stream.flatMap(exports_Stream.fromIterable)))));
+  }), options3.budget).pipe(exports_Stream.mapEffect((part) => ownModelResponsePart(part, agent2.definition.toolkit, trace3, context3.bufferLimits).pipe(exports_Effect.flatMap((owned) => eventsForPart(context3, turnId, turn, agent2.definition.toolkit.tools, trace3, owned.ownedPart, owned.retainedBytes)))), exports_Stream.flatMap(exports_Stream.fromIterable)))));
   const response = attempt(compactedOutgoing()).pipe(exports_Stream.catch((error2) => {
     if (!(error2 instanceof exports_AiError.AiError) || !isContextOverflowMessage(overflowText(error2))) {
       return exports_Stream.fail(error2);
@@ -38148,6 +38795,8 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
     }));
   }
   const trace3 = {
+    responsePartCount: 0,
+    responsePartBytes: 0,
     parts: [],
     text: [],
     textParts: new Map,
@@ -38175,7 +38824,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
     }
     const tool = tools[call.name];
     const toolCallId = yield* decodeToolCallId(call.id);
-    const decodedParams = yield* decodeResumedToolCallParameters(tool, call.name, call.params);
+    yield* decodeToolCallParameters(tool, call.name, call.params, "resume");
     const parameters = yield* decodeEventJson(call.params, "Tool parameters");
     declarationByCallId.set(call.id, {
       index: trace3.applicationToolCalls.length,
@@ -38191,7 +38840,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
     trace3.applicationToolCalls.push(exports_Response.makePart("tool-call", {
       id: call.id,
       name: call.name,
-      params: decodedParams,
+      params: parameters,
       providerExecuted: false
     }));
     trace3.applicationCallDescriptors.push({
@@ -38202,7 +38851,9 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
     });
   }
   const settledIds = new Set;
-  for (const settledCall of resume.settled) {
+  const settledInputs = yield* snapshotResumedSettledCalls(resume, declarationByCallId.size);
+  for (const settledInput of settledInputs) {
+    const settledCall = yield* decodeResumedSettledCall(settledInput, agent2.definition.policy.toolResultBounds.maxBytes);
     const declared = declarationByCallId.get(settledCall.id);
     if (declared === undefined) {
       return failRunEventStream(ModelProtocolError.make({
@@ -38310,12 +38961,13 @@ var enforceDurationDeadline = (execution, durationDeadlineMillis, durationLimit)
 var guardBudgetStream = (stream3, budget) => budget === undefined ? stream3 : exports_Stream.transformPull(stream3, (pull) => exports_Effect.succeed(budget.guard(pull)));
 var stream3 = (agent2, input, options3 = {}) => {
   const interpreted = exports_Stream.unwrap(exports_Effect.gen(function* () {
+    const resumeUsage = options3.resumeUsage === undefined ? undefined : yield* decodeResumeUsage(options3.resumeUsage);
     const attemptStartedAtMillis = yield* exports_Clock.currentTimeMillis;
     const maxDurationMillis = exports_Duration.toMillis(agent2.definition.policy.maxDuration);
     const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
     const durationDeadlineMillis = options3.durationDeadline === undefined ? attemptDeadlineMillis : Math.min(attemptDeadlineMillis, exports_DateTime.toEpochMillis(options3.durationDeadline));
     const startedAtMillis = durationDeadlineMillis - maxDurationMillis;
-    const ids = yield* IdGenerator;
+    const ids = yield* IdGenerator2;
     const conversationId = options3.conversationId === undefined ? yield* ids.nextConversationId : options3.conversationId;
     const runId = options3.runId === undefined ? yield* ids.nextRunId : options3.runId;
     const context3 = {
@@ -38327,23 +38979,24 @@ var stream3 = (agent2, input, options3 = {}) => {
       startedAtMillis,
       durationDeadlineMillis,
       history: options3.history ?? exports_Prompt.empty,
-      modelCalls: options3.resumeUsage?.modelCalls ?? 0,
+      modelCalls: resumeUsage?.modelCalls ?? 0,
       consecutiveToolFailures: 0,
-      inputTokens: options3.resumeUsage?.inputTokens ?? 0,
-      outputTokens: options3.resumeUsage?.outputTokens ?? 0,
-      lastInputTokens: options3.resumeUsage?.lastInputTokens ?? 0,
-      lastOutputTokens: options3.resumeUsage?.lastOutputTokens ?? 0,
-      costMicrousd: options3.resumeUsage?.costMicrousd ?? 0,
+      inputTokens: resumeUsage?.inputTokens ?? 0,
+      outputTokens: resumeUsage?.outputTokens ?? 0,
+      lastInputTokens: resumeUsage?.lastInputTokens ?? 0,
+      lastOutputTokens: resumeUsage?.lastOutputTokens ?? 0,
+      costMicrousd: resumeUsage?.costMicrousd ?? 0,
       lastCostMicrousd: 0,
       warnedLimits: new Set,
       finalizing: false,
       tokenExhausted: false,
       exhaustedDimension: undefined,
       compaction: initialCompactionState(),
+      bufferLimits: effectiveRunBufferLimits(options3.bufferLimits),
       sequence: 0,
       programmaticToolCalls: 0
     };
-    if (options3.resumeUsage !== undefined) {
+    if (resumeUsage !== undefined) {
       const seededCostBudget = agent2.definition.policy.costBudgetMicrousd;
       if (seededCostBudget !== undefined && context3.costMicrousd > seededCostBudget) {
         return failRunEventStream(AgentPolicyError.make({
@@ -38404,12 +39057,12 @@ var stream3 = (agent2, input, options3 = {}) => {
       const terminal = exports_Stream.fromEffect(exports_Effect.gen(function* () {
         if (error2 instanceof AgentApprovalPending || error2 instanceof AgentChildPending) {
           return RunSuspended.make({
-            ...yield* eventBase(context3),
+            ...yield* terminalEventBase(context3),
             reason: error2.message
           });
         }
         return RunFailed.make({
-          ...yield* eventBase(context3),
+          ...yield* terminalEventBase(context3),
           errorTag: errorTag(error2),
           message: errorMessage(error2)
         });
@@ -38459,12 +39112,25 @@ var run4 = exports_Effect.fn("AgentRuntime.run")(function* (agent2, input, optio
 });
 var start = exports_Effect.fn("AgentRuntime.start")(function* (agent2, input, options3 = {}) {
   yield* exports_Scope.Scope;
+  const bufferLimits = Object.freeze(effectiveRunBufferLimits(options3.bufferLimits));
+  const executionOptionDescriptors = {
+    ...Object.getOwnPropertyDescriptors(options3),
+    bufferLimits: {
+      configurable: false,
+      enumerable: true,
+      value: bufferLimits,
+      writable: false
+    }
+  };
+  const executionOptions = Object.create(Object.getPrototypeOf(options3), executionOptionDescriptors);
   const captured = [];
-  const pubsub = yield* exports_PubSub.unbounded({
-    replay: Number.MAX_SAFE_INTEGER
+  const observationCapacity = bufferLimits.maxRunEvents + 1;
+  const pubsub = yield* exports_PubSub.dropping({
+    capacity: observationCapacity,
+    replay: observationCapacity
   });
   yield* exports_Effect.addFinalizer(() => exports_PubSub.shutdown(pubsub));
-  const execution = reduceRunEvents(agent2, stream3(agent2, input, options3).pipe(exports_Stream.tap((event) => exports_Effect.suspend(() => {
+  const execution = reduceRunEvents(agent2, stream3(agent2, input, executionOptions).pipe(exports_Stream.tap((event) => exports_Effect.suspend(() => {
     captured.push(event);
     return exports_PubSub.publish(pubsub, [event]);
   })))).pipe(exports_Effect.ensuring(exports_PubSub.publish(pubsub, exports_Exit.void)));
@@ -38484,7 +39150,7 @@ var closedDurableStep = {
   do: (name) => exports_Effect.fail(DurableStepError.make({
     stepName: name,
     reason: "no-active-tool-call",
-    message: `Durable Step ${name} was executed outside an active Tool Call`
+    message: "Durable Step was executed outside an active Tool Call"
   }))
 };
 var closedToolBroker = {
@@ -38550,18 +39216,10 @@ var observeProgrammaticToolCall = (telemetry, descriptor, effect2) => exports_Ef
     return terminalResult === undefined ? exports_Effect.die("Programmatic Tool telemetry completed without a terminal result") : exports_Effect.succeed(terminalResult);
   }));
 });
-var brokerUtf8ByteLength = (value4) => {
-  let total = 0;
-  for (const character of value4) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    total += codePoint <= 127 ? 1 : codePoint <= 2047 ? 2 : codePoint <= 65535 ? 3 : 4;
-  }
-  return total;
-};
 var brokerEncodedByteLength = (value4) => {
   try {
     const encoded = JSON.stringify(value4);
-    return encoded === undefined ? undefined : brokerUtf8ByteLength(encoded);
+    return encoded === undefined ? undefined : utf8ByteLength2(encoded);
   } catch {
     return;
   }
@@ -38584,9 +39242,9 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
           message: "The outer Tool Call for this broker has already settled"
         });
       }
-      if (passOptions?.maxResultBytes !== undefined && (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0)) {
+      if (passOptions === undefined || !Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0) {
         return yield* ToolBrokerConfigurationError.make({
-          message: `maxResultBytes must be a positive safe integer; received ${String(passOptions.maxResultBytes)}`
+          message: `maxResultBytes must be a positive safe integer; received ${String(passOptions?.maxResultBytes)}`
         });
       }
       const handlerServices = yield* exports_Effect.context();
@@ -38688,18 +39346,16 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
             return programmaticOutcomeError(index2, "ModelProtocolError", `Tool ${input.toolName} produced a success encoding outside JSON`);
           }
           let encodedResult = terminal.encodedResult;
-          if (passOptions?.redactResult !== undefined) {
+          if (passOptions.redactResult !== undefined) {
             const redacted2 = brokerDecodeJson(yield* passOptions.redactResult(encodedResult));
             if (exports_Option.isNone(redacted2)) {
               return programmaticOutcomeError(index2, "ModelProtocolError", `The redacted result for Tool ${input.toolName} is outside the JSON surface`);
             }
             encodedResult = redacted2.value;
           }
-          if (passOptions?.maxResultBytes !== undefined) {
-            const bytes = brokerEncodedByteLength(encodedResult);
-            if (bytes === undefined || bytes > passOptions.maxResultBytes) {
-              return programmaticOutcomeError(index2, "ProgrammaticResultLimitError", `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`);
-            }
+          const bytes = brokerEncodedByteLength(encodedResult);
+          if (bytes === undefined || bytes > passOptions.maxResultBytes) {
+            return programmaticOutcomeError(index2, "ProgrammaticResultLimitError", `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`);
           }
           return { _tag: "ProgrammaticCallSuccess", index: index2, encodedResult };
         }));
@@ -38736,7 +39392,7 @@ var passthroughDurableStep = () => {
         return exports_Effect.fail(DurableStepError.make({
           stepName: name,
           reason: "duplicate-step-name",
-          message: `Durable Step name ${name} was reused within one Tool Call`
+          message: "Durable Step name was reused within one Tool Call"
         }));
       }
       usedNames.add(name);
@@ -38754,7 +39410,7 @@ var makeDurableStepService = (toolCallId, hook, hookServices) => {
           toolCallId,
           stepName: name,
           reason: "duplicate-step-name",
-          message: `Durable Step name ${name} was reused within Tool Call ${toolCallId}`
+          message: "Durable Step name was reused within one Tool Call"
         });
       }
       usedNames.add(name);
@@ -38763,28 +39419,30 @@ var makeDurableStepService = (toolCallId, hook, hookServices) => {
         toolCallId,
         stepName: name,
         reason: "lookup-failed",
-        message: `Durable Step lookup failed: ${errorMessage(cause)}`
+        message: "Durable Step lookup failed",
+        cause
       })));
       if (exports_Option.isSome(recorded)) {
-        return yield* exports_Schema.decodeUnknownEffect(output)(recorded.value.encodedOutput).pipe(exports_Effect.mapError((cause) => DurableStepError.make({
+        return yield* exports_Schema.decodeUnknownEffect(output)(recorded.value.encodedOutput).pipe(exports_Effect.mapError(() => DurableStepError.make({
           toolCallId,
           stepName: name,
           reason: "recorded-result-invalid",
-          message: `Recorded Durable Step result did not decode through the declared output Schema: ${cause.message}`
+          message: "Recorded Durable Step result failed the declared output Schema"
         })));
       }
       const value4 = yield* execute2;
-      const encodedOutput = yield* exports_Schema.encodeEffect(output)(value4).pipe(exports_Effect.mapError((cause) => DurableStepError.make({
+      const encodedOutput = yield* exports_Schema.encodeEffect(output)(value4).pipe(exports_Effect.mapError(() => DurableStepError.make({
         toolCallId,
         stepName: name,
         reason: "output-encoding-failed",
-        message: `Durable Step output did not encode through the declared output Schema: ${cause.message}`
+        message: "Durable Step output failed the declared output Schema"
       })));
       yield* provideHookServices(hook.commit(key, encodedOutput), hookServices).pipe(exports_Effect.mapError((cause) => DurableStepError.make({
         toolCallId,
         stepName: name,
         reason: "commit-failed",
-        message: `Durable Step commit failed: ${errorMessage(cause)}`
+        message: "Durable Step commit failed",
+        cause
       })));
       return value4;
     })
@@ -38815,8 +39473,9 @@ class AgentChildPending extends exports_Schema.TaggedError()("AgentChildPending"
 class SubagentDurabilityError extends exports_Schema.TaggedError()("SubagentDurabilityError", {
   operation: exports_Schema.Literals(["establish", "join", "waiting"]),
   reason: exports_Schema.Literals(["hook-failed", "no-active-tool-batch"]),
-  message: exports_Schema.String,
-  toolCallId: exports_Schema.optionalKey(ToolCallId)
+  message: exports_Schema.String.check(exports_Schema.isMaxLength(4096)),
+  toolCallId: exports_Schema.optionalKey(ToolCallId),
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
 
@@ -38841,13 +39500,15 @@ var makeSubagentDurabilityService = (hook, hookServices) => ({
     operation: "establish",
     reason: "hook-failed",
     toolCallId: request3.toolCallId,
-    message: `Durable child establishment failed: ${errorMessage(cause)}`
+    message: "Durable child establishment failed",
+    cause
   }))),
   join: (request3) => provideHookServices(hook.join(request3), hookServices).pipe(exports_Effect.mapError((cause) => SubagentDurabilityError.make({
     operation: "join",
     reason: "hook-failed",
     toolCallId: request3.toolCallId,
-    message: `Durable child join failed: ${errorMessage(cause)}`
+    message: "Durable child join failed",
+    cause
   }))),
   waiting: (toolCallId, child) => exports_Effect.fail(ToolCallWaiting.make({
     toolCallId,
@@ -38867,7 +39528,7 @@ var waitingFromCause = (cause) => {
   return squashed instanceof ToolCallWaiting ? squashed : undefined;
 };
 var spawnWithParent = (parent, depth) => exports_Effect.fn("AgentSpawner.spawn")(function* (binding, input, delegation, options3) {
-  const ids = yield* IdGenerator;
+  const ids = yield* IdGenerator2;
   const conversationId = yield* ids.nextConversationId;
   const runId = yield* ids.nextRunId;
   const childDepth = yield* exports_Schema.decodeEffect(DelegationDepth)(depth + 1).pipe(exports_Effect.orDie);
@@ -38901,7 +39562,6 @@ var makeAgentSpawner = (parent, depth) => ({
   spawn: spawnWithParent(parent, depth)
 });
 var AgentRuntime = {
-  layer: exports_Layer.empty,
   run: run4,
   start,
   stream: stream3
@@ -38911,10 +39571,14 @@ var AgentRuntime = {
 var BoundedName = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
 var BoundedPath = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(4 * 1024));
 var BoundedArgument = exports_Schema.String.check(exports_Schema.isMaxLength(32 * 1024));
-var BoundedOutputText = exports_Schema.String.check(exports_Schema.isMaxLength(16 * 1024 * 1024));
+var MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+var MAX_ARTIFACT_RULES = 64;
+var BoundedOutputText = exports_Schema.String.check(exports_Schema.isMaxLength(MAX_OUTPUT_BYTES));
+var SANDBOX_DIAGNOSTIC_MAX_LENGTH = 8 * 1024;
+var BoundedDiagnostic = exports_Schema.String.check(exports_Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
 var PositiveInt2 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var PositiveNumber = exports_Schema.Finite.check(exports_Schema.isGreaterThan(0));
-var MaxOutputBytes = PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(16 * 1024 * 1024));
+var MaxOutputBytes = PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES));
 var BoundedArguments = exports_Schema.Array(BoundedArgument).check(exports_Schema.isMaxLength(256));
 var BoundedEnvironmentNames = exports_Schema.Array(BoundedName).check(exports_Schema.isMaxLength(128));
 var FinitePositiveDuration2 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
@@ -38976,7 +39640,7 @@ class SandboxArtifactRule extends exports_Schema.Class("SandboxArtifactRule")({
 
 class SandboxArtifact extends exports_Schema.Class("SandboxArtifact")({
   path: BoundedPath,
-  bytes: exports_Schema.Natural,
+  bytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES)),
   digest: BoundedName,
   mediaType: exports_Schema.optionalKey(BoundedName)
 }) {
@@ -38992,14 +39656,14 @@ class SandboxRequest extends exports_Schema.Class("SandboxRequest")({
   network: SandboxNetworkPolicy,
   limits: SandboxLimits,
   secretHandles: exports_Schema.Array(SandboxSecretHandle).check(exports_Schema.isMaxLength(64)),
-  artifactRules: exports_Schema.Array(SandboxArtifactRule).check(exports_Schema.isMaxLength(64))
+  artifactRules: exports_Schema.Array(SandboxArtifactRule).check(exports_Schema.isMaxLength(MAX_ARTIFACT_RULES))
 }) {
 }
 
 class SandboxResourceUse extends exports_Schema.Class("SandboxResourceUse")({
   wallTime: FiniteNonNegativeDuration,
-  stdoutBytes: exports_Schema.Natural,
-  stderrBytes: exports_Schema.Natural,
+  stdoutBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES)),
+  stderrBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES)),
   cpuMillis: exports_Schema.optionalKey(exports_Schema.Natural),
   memoryBytes: exports_Schema.optionalKey(exports_Schema.Natural)
 }) {
@@ -39019,7 +39683,7 @@ class SandboxOutput extends exports_Schema.TaggedClass()("SandboxOutput", {
   ...SandboxEventBase,
   stream: exports_Schema.Literals(["stdout", "stderr"]),
   text: BoundedOutputText,
-  bytes: exports_Schema.Natural
+  bytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES))
 }) {
 }
 
@@ -39027,7 +39691,7 @@ class SandboxExited extends exports_Schema.TaggedClass()("SandboxExited", {
   ...SandboxEventBase,
   exitCode: exports_Schema.Int,
   resourceUse: SandboxResourceUse,
-  artifacts: exports_Schema.Array(SandboxArtifact)
+  artifacts: exports_Schema.Array(SandboxArtifact).check(exports_Schema.isMaxLength(MAX_ARTIFACT_RULES))
 }) {
 }
 var SandboxEvent = exports_Schema.Union([SandboxStarted, SandboxOutput, SandboxExited]);
@@ -39035,7 +39699,7 @@ var SandboxEvent = exports_Schema.Union([SandboxStarted, SandboxOutput, SandboxE
 class SandboxSpawnError extends exports_Schema.TaggedError()("SandboxSpawnError", {
   implementation: SandboxImplementation,
   command: BoundedPath,
-  message: exports_Schema.String,
+  message: BoundedDiagnostic,
   cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
@@ -39043,7 +39707,7 @@ class SandboxSpawnError extends exports_Schema.TaggedError()("SandboxSpawnError"
 class SandboxExitError extends exports_Schema.TaggedError()("SandboxExitError", {
   implementation: SandboxImplementation,
   exitCode: exports_Schema.Int,
-  message: exports_Schema.String,
+  message: BoundedDiagnostic,
   cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
@@ -39073,7 +39737,7 @@ class SandboxUnsupportedRequestError extends exports_Schema.TaggedError()("Sandb
     "secret-handles",
     "artifacts"
   ]),
-  message: exports_Schema.String
+  message: BoundedDiagnostic
 }) {
 }
 var SandboxError = exports_Schema.Union([
@@ -39089,7 +39753,7 @@ class Sandbox extends exports_Context.Service()("@effect-agent/sandbox/Sandbox")
 
 // packages/sandbox/src/code-executor.ts
 var BoundedLogLine = exports_Schema.String.check(exports_Schema.isMaxLength(16 * 1024));
-var BoundedMessage = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
+var BoundedMessage = exports_Schema.String.check(exports_Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
 var BoundedLogs = exports_Schema.Array(BoundedLogLine).check(exports_Schema.isMaxLength(4096));
 var BoundedSourceText = exports_Schema.String.check(exports_Schema.isMaxLength(4 * 1024 * 1024));
 var PositiveInt3 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
@@ -39981,7 +40645,7 @@ var symbol4 = "~effect/interfaces/PrimaryKey";
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/rpc/RpcSchema.js
 var StreamSchemaTypeId = "~effect/rpc/RpcSchema/StreamSchema";
 var schema2 = /* @__PURE__ */ declare(isStream);
-function Stream3(success, error2) {
+function Stream2(success, error2) {
   return make39(schema2.ast, {
     [StreamSchemaTypeId]: StreamSchemaTypeId,
     success,
@@ -40081,7 +40745,7 @@ var makeProto3 = (options3) => {
   Rpc.key = `effect/rpc/Rpc/${options3._tag}`;
   return Rpc;
 };
-var make58 = (tag2, options3) => {
+var make59 = (tag2, options3) => {
   const successSchema = options3?.success ?? Void2;
   const errorSchema = options3?.error ?? Never2;
   const defectSchema = options3?.defect ?? Defect();
@@ -40098,7 +40762,7 @@ var make58 = (tag2, options3) => {
   return makeProto3({
     _tag: tag2,
     payloadSchema,
-    successSchema: options3?.stream ? Stream3(successSchema, errorSchema) : successSchema,
+    successSchema: options3?.stream ? Stream2(successSchema, errorSchema) : successSchema,
     errorSchema: options3?.stream ? Never2 : errorSchema,
     defectSchema,
     annotations: empty(),
@@ -40274,7 +40938,7 @@ class InitializeResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct(
 }))) {
 }
 
-class Initialize extends (/* @__PURE__ */ make58("initialize", {
+class Initialize extends (/* @__PURE__ */ make59("initialize", {
   success: InitializeResult,
   error: McpError,
   payload: {
@@ -40285,7 +40949,7 @@ class Initialize extends (/* @__PURE__ */ make58("initialize", {
   }
 })) {
 }
-class CancelledNotification extends (/* @__PURE__ */ make58("notifications/cancelled", {
+class CancelledNotification extends (/* @__PURE__ */ make59("notifications/cancelled", {
   payload: {
     ...NotificationMeta.fields,
     requestId: RequestId,
@@ -40294,7 +40958,7 @@ class CancelledNotification extends (/* @__PURE__ */ make58("notifications/cance
 })) {
 }
 
-class ProgressNotification extends (/* @__PURE__ */ make58("notifications/progress", {
+class ProgressNotification extends (/* @__PURE__ */ make59("notifications/progress", {
   payload: {
     ...NotificationMeta.fields,
     progressToken: ProgressToken,
@@ -40365,7 +41029,7 @@ class ReadResourceResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struc
 }))) {
 }
 
-class ReadResource extends (/* @__PURE__ */ make58("resources/read", {
+class ReadResource extends (/* @__PURE__ */ make59("resources/read", {
   success: ReadResourceResult,
   error: McpError,
   payload: {
@@ -40374,7 +41038,7 @@ class ReadResource extends (/* @__PURE__ */ make58("resources/read", {
   }
 })) {
 }
-class Subscribe extends (/* @__PURE__ */ make58("resources/subscribe", {
+class Subscribe extends (/* @__PURE__ */ make59("resources/subscribe", {
   success: /* @__PURE__ */ Struct({}),
   error: McpError,
   payload: {
@@ -40384,7 +41048,7 @@ class Subscribe extends (/* @__PURE__ */ make58("resources/subscribe", {
 })) {
 }
 
-class Unsubscribe extends (/* @__PURE__ */ make58("resources/unsubscribe", {
+class Unsubscribe extends (/* @__PURE__ */ make59("resources/unsubscribe", {
   success: /* @__PURE__ */ Struct({}),
   error: McpError,
   payload: {
@@ -40394,7 +41058,7 @@ class Unsubscribe extends (/* @__PURE__ */ make58("resources/unsubscribe", {
 })) {
 }
 
-class ResourceUpdatedNotification extends (/* @__PURE__ */ make58("notifications/resources/updated", {
+class ResourceUpdatedNotification extends (/* @__PURE__ */ make59("notifications/resources/updated", {
   payload: {
     ...NotificationMeta.fields,
     uri: String6
@@ -40479,7 +41143,7 @@ class GetPromptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/GetP
 })) {
 }
 
-class GetPrompt extends (/* @__PURE__ */ make58("prompts/get", {
+class GetPrompt extends (/* @__PURE__ */ make59("prompts/get", {
   success: GetPromptResult,
   error: McpError,
   payload: {
@@ -40529,7 +41193,7 @@ class CallToolResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CallT
 })) {
 }
 
-class CallTool extends (/* @__PURE__ */ make58("tools/call", {
+class CallTool extends (/* @__PURE__ */ make59("tools/call", {
   success: CallToolResult,
   error: McpError,
   payload: {
@@ -40541,7 +41205,7 @@ class CallTool extends (/* @__PURE__ */ make58("tools/call", {
 }
 var LoggingLevel = /* @__PURE__ */ Literals(["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]);
 
-class SetLevel extends (/* @__PURE__ */ make58("logging/setLevel", {
+class SetLevel extends (/* @__PURE__ */ make59("logging/setLevel", {
   payload: {
     ...RequestMeta.fields,
     level: LoggingLevel
@@ -40551,7 +41215,7 @@ class SetLevel extends (/* @__PURE__ */ make58("logging/setLevel", {
 })) {
 }
 
-class LoggingMessageNotification extends (/* @__PURE__ */ make58("notifications/message", {
+class LoggingMessageNotification extends (/* @__PURE__ */ make59("notifications/message", {
   payload: /* @__PURE__ */ Struct({
     ...NotificationMeta.fields,
     level: LoggingLevel,
@@ -40624,7 +41288,7 @@ class CreateMessageResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/
 })) {
 }
 
-class CreateMessage extends (/* @__PURE__ */ make58("sampling/createMessage", {
+class CreateMessage extends (/* @__PURE__ */ make59("sampling/createMessage", {
   success: CreateMessageResult,
   error: McpError,
   payload: {
@@ -40789,7 +41453,7 @@ class ElicitDeclineResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/
 }
 var ElicitResult = /* @__PURE__ */ Union2([ElicitAcceptResult, ElicitDeclineResult]);
 
-class Elicit extends (/* @__PURE__ */ make58("elicitation/create", {
+class Elicit extends (/* @__PURE__ */ make59("elicitation/create", {
   success: ElicitResult,
   error: McpError,
   payload: ElicitRequestParams
@@ -41150,6 +41814,12 @@ class SubagentParentBudgetConflict extends exports_Schema.TaggedError()("Subagen
 }) {
 }
 
+class SubagentParentBudgetActive extends exports_Schema.TaggedError()("SubagentParentBudgetActive", {
+  parentRunId: RunId,
+  openReservations: Natural3
+}) {
+}
+
 class SubagentReservations extends exports_Context.Service()("@effect-agent/capabilities/SubagentReservations") {
 }
 var dimensionSpecs = [
@@ -41421,6 +42091,29 @@ var releaseTransition = (ledger, reservationId) => {
   };
   return [ok(reservationView(reservationId, settled)), next2];
 };
+var retireParentTransition = (ledger, parentRunId) => {
+  if (!ledger.parents.has(parentRunId)) {
+    return [ok(undefined), ledger];
+  }
+  let openReservations = 0;
+  for (const reservation of ledger.reservations.values()) {
+    if (reservation.parentRunId === parentRunId && reservation.status !== "released") {
+      openReservations += 1;
+    }
+  }
+  if (openReservations > 0) {
+    return [fail14(SubagentParentBudgetActive.make({ parentRunId, openReservations })), ledger];
+  }
+  const parents = new Map(ledger.parents);
+  parents.delete(parentRunId);
+  const reservations = new Map(ledger.reservations);
+  for (const [reservationId, reservation] of reservations) {
+    if (reservation.parentRunId === parentRunId) {
+      reservations.delete(reservationId);
+    }
+  }
+  return [ok(undefined), { parents, reservations }];
+};
 var SubagentReservationsMemoryLive = exports_Layer.effect(SubagentReservations, exports_Effect.gen(function* () {
   const state = yield* exports_Ref.make({
     parents: new Map,
@@ -41468,6 +42161,10 @@ var SubagentReservationsMemoryLive = exports_Layer.effect(SubagentReservations, 
       }
       const gate = parent.gate;
       yield* exports_Effect.acquireRelease(gate.take(1), (permits) => gate.release(permits).pipe(exports_Effect.asVoid), { interruptible: true });
+    }),
+    retireParent: exports_Effect.fn("SubagentReservations.retireParent")(function* (parentRunId) {
+      const result4 = yield* exports_Ref.modify(state, (ledger) => retireParentTransition(ledger, parentRunId));
+      return yield* resolve4(result4);
     }),
     parentSnapshot: exports_Effect.fn("SubagentReservations.parentSnapshot")(function* (parentRunId) {
       const ledger = yield* exports_Ref.get(state);
@@ -41558,8 +42255,8 @@ class SubagentDurableAccounting extends exports_Schema.Class("@effect-agent/capa
 }) {
 }
 var maxEventTextLength = 4 * 1024;
-var ErrorMessage2 = exports_Schema.Struct({ message: exports_Schema.String });
-var ErrorTag2 = exports_Schema.Struct({ _tag: exports_Schema.NonEmptyString });
+var ErrorMessage = exports_Schema.Struct({ message: exports_Schema.String });
+var ErrorTag = exports_Schema.Struct({ _tag: exports_Schema.NonEmptyString });
 var ChildFailureProjection = exports_Schema.Struct({
   errorTag: exports_Schema.NonEmptyString,
   message: exports_Schema.String
@@ -41790,7 +42487,7 @@ var makeImplementationAgent = (model) => {
   const run5 = (mission, workspace) => exports_Effect.gen(function* () {
     const result4 = yield* AgentRuntime.run(binding, mission);
     return yield* exports_Schema.decodeUnknownEffect(WorkOrderReport)(result4.output);
-  }).pipe(exports_Effect.provide(ImplementationToolkitLayer), exports_Effect.provideService(ImplementationWorkspaceService, ImplementationWorkspaceService.of(workspace)), exports_Effect.provide(IdGenerator.layer), exports_Effect.scoped);
+  }).pipe(exports_Effect.provide(ImplementationToolkitLayer), exports_Effect.provideService(ImplementationWorkspaceService, ImplementationWorkspaceService.of(workspace)), exports_Effect.provide(IdGenerator2.layer), exports_Effect.scoped);
   return { definition: PullRequestImplementer, binding, run: run5 };
 };
 
@@ -42289,9 +42986,9 @@ var localGitWorkOrderHostLayer = (config) => exports_Layer.effect(WorkOrderHost,
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
 var exports_AnthropicClient = {};
 __export(exports_AnthropicClient, {
-  make: () => make60,
+  make: () => make61,
   layerConfig: () => layerConfig,
-  layer: () => layer16,
+  layer: () => layer17,
   AnthropicClient: () => AnthropicClient
 });
 
@@ -46089,7 +46786,7 @@ var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet200 = BetaGetSkillVersio
 var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet4XX = BetaErrorResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete200 = BetaDeleteSkillVersionResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete4XX = BetaErrorResponse;
-var make59 = (httpClient, options3 = {}) => {
+var make60 = (httpClient, options3 = {}) => {
   const unexpectedStatus = (response) => flatMap5(orElseSucceed2(response.json, () => "Unexpected status code"), (description) => fail7(new HttpClientError({
     reason: new StatusCodeError({
       request: response.request,
@@ -46878,11 +47575,11 @@ var RedactedAnthropicHeaders = {
   AnthropicApiKey: "x-api-key"
 };
 var withRedactedHeaders = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedAnthropicHeaders)));
-var make60 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make61 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiVersion = options3.apiVersion ?? "2023-06-01";
   const httpClient = baseClient.pipe(mapRequest((request3) => request3.pipe(prependUrl(options3.apiUrl ?? "https://api.anthropic.com"), isNotUndefined(options3.apiKey) ? setHeader(RedactedAnthropicHeaders.AnthropicApiKey, value3(options3.apiKey)) : identity, setHeader("anthropic-version", apiVersion), acceptJson)), isNotUndefined(options3.transformClient) ? options3.transformClient : identity);
-  const client = make59(httpClient, {
+  const client = make60(httpClient, {
     transformClient: fnUntraced2(function* (client2) {
       const config = yield* AnthropicConfig.getOrUndefined;
       if (isNotUndefined(config?.transformClient)) {
@@ -46936,12 +47633,12 @@ var make60 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createMessageStream
   });
 }, withRedactedHeaders);
-var layer16 = (options3) => effect(AnthropicClient, make60(options3));
+var layer17 = (options3) => effect(AnthropicClient, make61(options3));
 var layerConfig = (options3) => effect(AnthropicClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const apiVersion = isNotUndefined(options3?.apiVersion) ? yield* options3.apiVersion : undefined;
-  return yield* make60({
+  return yield* make61({
     apiKey,
     apiUrl,
     apiVersion,
@@ -46953,8 +47650,8 @@ var exports_AnthropicLanguageModel = {};
 __export(exports_AnthropicLanguageModel, {
   withConfigOverride: () => withConfigOverride,
   model: () => model,
-  make: () => make62,
-  layer: () => layer17,
+  make: () => make63,
+  layer: () => layer18,
   Config: () => Config
 });
 
@@ -47619,9 +48316,9 @@ var Proto19 = {
     };
   }
 };
-var make61 = (provider, modelName, layer17) => Object.assign(Object.create(Proto19), {
+var make62 = (provider, modelName, layer18) => Object.assign(Object.create(Proto19), {
   provider
-}, merge3(layer17, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
+}, merge3(layer18, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
 
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicTelemetry.js
 var addAnthropicRequestAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.anthropic.request", camelToSnake);
@@ -47663,11 +48360,11 @@ var formatIssue2 = /* @__PURE__ */ makeFormatterDefault();
 
 class Config extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicLanguageModel/Config")) {
 }
-var model = (model2, config) => make61("anthropic", model2, layer17({
+var model = (model2, config) => make62("anthropic", model2, layer18({
   model: model2,
   config
 }));
-var make62 = /* @__PURE__ */ fnUntraced2(function* ({
+var make63 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model2,
   config: providerConfig
 }) {
@@ -47748,7 +48445,7 @@ var make62 = /* @__PURE__ */ fnUntraced2(function* ({
       payload
     };
   });
-  return yield* make56({
+  return yield* make57({
     codecTransformer: toCodecAnthropic,
     generateText: fnUntraced2(function* (options3) {
       const config = yield* makeConfig;
@@ -47790,7 +48487,7 @@ var make62 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer17 = (options3) => effect(LanguageModel, make62(options3));
+var layer18 = (options3) => effect(LanguageModel, make63(options3));
 var withConfigOverride = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config), (config) => provideService2(self, Config, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -48640,7 +49337,7 @@ var makeResponse = /* @__PURE__ */ fnUntraced2(function* ({
             result: part.content
           });
         } else {
-          const idGenerator = yield* IdGenerator2;
+          const idGenerator = yield* IdGenerator;
           parts2.push({
             type: "tool-result",
             id: part.tool_use_id,
@@ -48998,7 +49695,7 @@ var makeStreamResponse = /* @__PURE__ */ fnUntraced2(function* ({
                 result: part.content
               });
             } else {
-              const idGenerator = yield* IdGenerator2;
+              const idGenerator = yield* IdGenerator;
               parts2.push({
                 type: "tool-result",
                 id: part.tool_use_id,
@@ -49421,7 +50118,7 @@ var extractCitableDocuments = (prompt) => {
   return citableDocuments;
 };
 var processCitation = /* @__PURE__ */ fnUntraced2(function* (citation, citableDocuments) {
-  const idGenerator = yield* IdGenerator2;
+  const idGenerator = yield* IdGenerator;
   if (citation.type === "page_location" || citation.type === "char_location") {
     const citedDocument = citableDocuments[citation.document_index];
     if (isNotUndefined(citedDocument)) {
@@ -49578,10 +50275,10 @@ var transformToolCallParams = /* @__PURE__ */ fnUntraced2(function* (tools, tool
 var exports_OpenAiClient = {};
 __export(exports_OpenAiClient, {
   withWebSocketMode: () => withWebSocketMode,
-  make: () => make64,
+  make: () => make65,
   layerWebSocketMode: () => layerWebSocketMode,
   layerConfig: () => layerConfig2,
-  layer: () => layer18,
+  layer: () => layer19,
   OpenAiSocket: () => OpenAiSocket,
   OpenAiClient: () => OpenAiClient
 });
@@ -49589,7 +50286,7 @@ __export(exports_OpenAiClient, {
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/socket/Socket.js
 var TypeId60 = "~effect/socket/Socket";
 var Socket = /* @__PURE__ */ Service("effect/socket/Socket");
-var make63 = (options3) => Socket.of({
+var make64 = (options3) => Socket.of({
   [TypeId60]: TypeId60,
   runRaw: options3.runRaw,
   run: options3.run ?? ((handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(encoder3.encode(data)) : data instanceof Uint8Array ? handler(data) : handler(new Uint8Array(data)), opts)),
@@ -49681,7 +50378,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
   const acquireContext = fiber3.context;
   const closeCodeIsError = options3?.closeCodeIsError ?? defaultCloseCodeIsError;
   const runRaw = (handler, opts) => scopedWith2(fnUntraced2(function* (scope3) {
-    const fiberSet = yield* make52().pipe(provide(scope3));
+    const fiberSet = yield* make53().pipe(provide(scope3));
     const ws = yield* provide(acquire, scope3);
     const run5 = yield* provideService2(runtime(fiberSet)(), WebSocket, ws);
     let open3 = false;
@@ -49779,7 +50476,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
     }
   }));
   const writer = succeed7(write2);
-  return succeed7(make63({
+  return succeed7(make64({
     runRaw,
     writer
   }));
@@ -50442,7 +51139,7 @@ var RedactedOpenAiHeaders = {
   OpenAiProject: "OpenAI-Project"
 };
 var withRedactedHeaders2 = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedOpenAiHeaders)));
-var make64 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make65 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiUrl = options3.apiUrl ?? "https://api.openai.com/v1";
   const httpClient = baseClient.pipe(mapRequest(flow(prependUrl(apiUrl), options3.apiKey ? bearerToken(value3(options3.apiKey)) : identity, options3.organizationId ? setHeader(RedactedOpenAiHeaders.OpenAiOrganization, value3(options3.organizationId)) : identity, options3.projectId ? setHeader(RedactedOpenAiHeaders.OpenAiProject, value3(options3.projectId)) : identity, acceptJson)), filterStatusOk2, options3.transformClient ? options3.transformClient : identity);
@@ -50488,13 +51185,13 @@ var make64 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createEmbedding
   });
 }, withRedactedHeaders2);
-var layer18 = (options3) => effect(OpenAiClient, make64(options3));
+var layer19 = (options3) => effect(OpenAiClient, make65(options3));
 var layerConfig2 = (options3) => effect(OpenAiClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const organizationId = isNotUndefined(options3?.organizationId) ? yield* options3.organizationId : undefined;
   const projectId = isNotUndefined(options3?.projectId) ? yield* options3.projectId : undefined;
-  return yield* make64({
+  return yield* make65({
     apiKey,
     apiUrl,
     organizationId,
@@ -50507,7 +51204,7 @@ class OpenAiSocket extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiC
 }
 var makeSocket = /* @__PURE__ */ gen4(function* () {
   const client = yield* OpenAiClient;
-  const tracker = yield* make54;
+  const tracker = yield* make55;
   const socketScope = yield* scope2;
   const makeRequest = flatMap5(OpenAiConfig.getOrUndefined, (config) => {
     const httpClient = isNotUndefined(config?.transformClient) ? config.transformClient(client.client) : client.client;
@@ -50654,8 +51351,8 @@ var exports_OpenAiLanguageModel = {};
 __export(exports_OpenAiLanguageModel, {
   withConfigOverride: () => withConfigOverride2,
   model: () => model2,
-  make: () => make65,
-  layer: () => layer19,
+  make: () => make66,
+  layer: () => layer20,
   Config: () => Config2
 });
 
@@ -50705,11 +51402,11 @@ var SharedModelIds = ModelIdsShared.members[1];
 
 class Config2 extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiLanguageModel/Config")) {
 }
-var model2 = (model3, config) => make61("openai", model3, layer19({
+var model2 = (model3, config) => make62("openai", model3, layer20({
   model: model3,
   config
 }));
-var make65 = /* @__PURE__ */ fnUntraced2(function* ({
+var make66 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model3,
   config: providerConfig
 }) {
@@ -50770,7 +51467,7 @@ var make65 = /* @__PURE__ */ fnUntraced2(function* ({
       request3.previous_response_id = options3.previousResponseId;
     return request3;
   });
-  return yield* make56({
+  return yield* make57({
     codecTransformer: toCodecOpenAI,
     generateText: fnUntraced2(function* (options3) {
       const config = yield* makeConfig;
@@ -50813,7 +51510,7 @@ var make65 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer19 = (options3) => effect(LanguageModel, make65(options3));
+var layer20 = (options3) => effect(LanguageModel, make66(options3));
 var withConfigOverride2 = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config2), (config) => provideService2(self, Config2, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -51201,7 +51898,7 @@ var makeResponse2 = /* @__PURE__ */ fnUntraced2(function* ({
   response,
   toolNameMapper
 }) {
-  const idGenerator = yield* IdGenerator2;
+  const idGenerator = yield* IdGenerator;
   const approvalRequests = getApprovalRequestIdMapping(options3.prompt);
   const webSearchTool = options3.tools.find((tool) => isProviderDefined(tool) && (tool.name === "OpenAiWebSearch" || tool.name === "OpenAiWebSearchPreview"));
   let hasToolCalls = false;
@@ -51596,7 +52293,7 @@ var makeStreamResponse2 = /* @__PURE__ */ fnUntraced2(function* ({
   options: options3,
   toolNameMapper
 }) {
-  const idGenerator = yield* IdGenerator2;
+  const idGenerator = yield* IdGenerator;
   const approvalRequests = getApprovalRequestIdMapping(options3.prompt);
   const streamApprovalRequests = new Map;
   let hasToolCalls = false;
@@ -53065,7 +53762,7 @@ var readTerminalArtifactOption = exports_Effect.fn("readTerminalArtifactOption")
 });
 
 // examples/pr-work-order-ingress/src/action-checks.ts
-var MAX_OUTPUT_BYTES = 4000000;
+var MAX_OUTPUT_BYTES2 = 4000000;
 var TRUSTED_VITE_PLUS_BINARY = "/home/vp/.vite-plus/bin/vp";
 var TRUSTED_INSTALL_PATH = "/runtime/.vite-plus/bin:/home/vp/.vite-plus/bin:/usr/local/bin:/usr/bin:/bin";
 var CHECK_PATH = "/workspace/node_modules/.bin:/runtime/.vite-plus/bin:/home/vp/.vite-plus/bin:/usr/local/bin:/usr/bin:/bin";
@@ -53085,10 +53782,10 @@ var runProcess = exports_Effect.fn("workOrderAction.runProcess")(function* (inpu
     const [collected, exitCode] = yield* exports_Effect.all([
       exports_Stream.runFoldEffect(handle.all, () => ({ size: 0, chunks: [] }), (state, chunk) => {
         const size9 = state.size + chunk.length;
-        if (size9 > MAX_OUTPUT_BYTES) {
+        if (size9 > MAX_OUTPUT_BYTES2) {
           return WorkspaceOperationFailure.make({
             operation: input.operation,
-            reason: `process output exceeds ${String(MAX_OUTPUT_BYTES)} bytes`
+            reason: `process output exceeds ${String(MAX_OUTPUT_BYTES2)} bytes`
           });
         }
         return exports_Effect.succeed({ size: size9, chunks: [...state.chunks, chunk] });

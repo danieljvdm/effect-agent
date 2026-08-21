@@ -4,6 +4,7 @@ import { Effect, Layer, PubSub, Schema, Stream } from "effect";
 
 import { DurableAlarmService } from "./alarm.ts";
 import { ConversationObjectIdentity, ConversationObjectNamespace } from "./bindings.ts";
+import { safeCauseMessage } from "./boundary.ts";
 
 /**
  * Bounded in-memory wake buffer for same-incarnation `awaitSettlement` subscribers. Wake
@@ -63,7 +64,7 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
         catch: (cause) =>
           RemoteWakeDropped.make({
             conversationId,
-            message: cause instanceof Error ? cause.message : String(cause),
+            message: safeCauseMessage(cause, "The remote wake failed without a diagnostic"),
             cause,
           }),
       }).pipe(

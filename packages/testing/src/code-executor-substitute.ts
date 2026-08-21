@@ -1,9 +1,6 @@
 import {
   CodeExecutionHost,
-  CodeExecutionLimits,
-  CodeExecutionNamespace,
   CodeExecutionProtocolError,
-  CodeExecutionRequest,
   CodeExecutionResourceUse,
   CodeExecutionResult,
   CodeExecutionTimeoutError,
@@ -17,6 +14,9 @@ import {
   CodeProgramFailedError,
   CodeSourceError,
   SandboxImplementation,
+  type CodeExecutionLimits,
+  type CodeExecutionNamespace,
+  type CodeExecutionRequest,
 } from "@effect-agent/sandbox";
 import { Clock, Duration, Effect, Fiber, Layer, Option, Queue, Schema } from "effect";
 
@@ -346,6 +346,9 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
 
     const factory = yield* Effect.try({
       try: () =>
+        // This substitute intentionally evaluates authored test programs in-process and reports
+        // an `unisolated` posture. Real adapters own the security boundary and never use this path.
+        // oxlint-disable-next-line typescript/no-implied-eval
         new Function(
           ...shadowedGlobals,
           "console",
@@ -399,7 +402,7 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
         }
         let outcome: unknown;
         try {
-          outcome = (candidate as () => unknown)();
+          outcome = candidate();
         } catch (cause) {
           throw new EvaluationThrew(cause);
         }

@@ -19,6 +19,7 @@ import { Cause, Context, Duration, Effect, Exit, Option, Predicate, type Layer }
 import { codeExecutorConformanceCases } from "../../../testing/src/code-executor-conformance.ts";
 import {
   CodeModeHostEntrypoint,
+  disposeRpcHandle,
   dynamicWorkerCodeExecutorLayer,
   dynamicWorkerImplementation,
   type CodeModeHostStub,
@@ -272,11 +273,44 @@ const runHostCallScopeRegression = (env: WorkerEnv) => {
   ).pipe(Effect.provideService(ExecutorFiberMarker, "executor"));
 };
 
+const runDisposalRegression = Effect.gen(function* () {
+  const hostileHandles: ReadonlyArray<unknown> = [
+    new Proxy(
+      {},
+      {
+        has: () => {
+          throw new Error("hostile disposal membership probe");
+        },
+      },
+    ),
+    new Proxy(
+      {},
+      {
+        has: (_target, key) => key === Symbol.dispose,
+        get: () => {
+          throw new Error("hostile disposal getter");
+        },
+      },
+    ),
+    {
+      [Symbol.dispose]: () => {
+        throw new Error("hostile disposal invocation");
+      },
+    },
+  ];
+
+  yield* Effect.forEach(hostileHandles, disposeRpcHandle, { discard: true });
+  return { tag: "success" };
+});
+
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     try {
       if (new URL(request.url).pathname === "/host-call-pass-scope") {
         return Response.json(await Effect.runPromise(runHostCallScopeRegression(env)));
+      }
+      if (new URL(request.url).pathname === "/total-disposal") {
+        return Response.json(await Effect.runPromise(runDisposalRegression));
       }
       const failures = await Effect.runPromise(runAllChecks(env));
       return Response.json({ failures });

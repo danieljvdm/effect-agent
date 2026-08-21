@@ -44,13 +44,22 @@ export const docsMcpIdentity = McpServerIdentity.make({
  * real MCP server advertises on the wire. This inlines the single top-level
  * `$ref` so the derivation described above still holds byte-for-byte.
  */
+const JsonSchemaDefinitions = Schema.Record(
+  Schema.String,
+  Schema.Record(Schema.String, Schema.Unknown),
+);
+const decodeJsonSchemaDefinitions = Schema.decodeUnknownSync(JsonSchemaDefinitions);
+const decodeToolJsonSchema = Schema.decodeUnknownSync(McpSchema.ToolJsonSchema);
+
 const flattenTopLevelRef = (schema: JsonSchema.JsonSchema): McpSchema.ToolJsonSchema => {
   const ref = schema["$ref"];
-  const defs = schema["$defs"] as JsonSchema.Definitions | undefined;
-  if (typeof ref !== "string" || defs === undefined) return schema as McpSchema.ToolJsonSchema;
+  if (typeof ref !== "string") {
+    return decodeToolJsonSchema(schema);
+  }
 
+  const defs = decodeJsonSchemaDefinitions(schema["$defs"]);
   const resolved = JsonSchema.resolve$ref(ref, defs);
-  return (resolved ?? schema) as McpSchema.ToolJsonSchema;
+  return decodeToolJsonSchema(resolved ?? schema);
 };
 
 const fetchDocumentOutputSchema = flattenTopLevelRef(

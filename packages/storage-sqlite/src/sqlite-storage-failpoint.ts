@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Ref } from "effect";
 
-import { SqliteStorageFailpointError, type SqliteStorageFailpointLocation } from "./errors.ts";
+import type { SqliteStorageFailpointError, SqliteStorageFailpointLocation } from "./errors.ts";
 
 export type SqliteStorageFailpointHandler = (
   location: SqliteStorageFailpointLocation,

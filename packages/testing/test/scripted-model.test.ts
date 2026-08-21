@@ -157,7 +157,7 @@ describe("TEST-002 scripted Effect AI LanguageModel", () => {
       termination: { _tag: "Complete" },
     };
 
-    expect(() => Schema.decodeUnknownSync(ScriptedTurn)(unknownPart)).toThrow();
-    expect(() => Schema.decodeUnknownSync(ScriptedTurn)(incompletePart)).toThrow();
+    expect(() => Schema.decodeUnknownSync(ScriptedTurn)(unknownPart)).toThrow("Expected");
+    expect(() => Schema.decodeUnknownSync(ScriptedTurn)(incompletePart)).toThrow("Missing key");
   });
 });

@@ -2,7 +2,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { Sandbox, type SandboxEvent, type SandboxRequest } from "@effect-agent/sandbox";
+import {
+  SANDBOX_DIAGNOSTIC_MAX_LENGTH,
+  Sandbox,
+  type SandboxEvent,
+  type SandboxRequest,
+} from "@effect-agent/sandbox";
 import { describe, expect, it, layer } from "@effect/vitest";
 import {
   Cause,
@@ -20,6 +25,7 @@ import {
   Stream,
   type Scope,
 } from "effect";
+import { PlatformError, SystemError } from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { layer as localSandboxLayer, sandboxLayer } from "../src/index.ts";
@@ -33,7 +39,7 @@ const request = (
   args: ReadonlyArray<string>,
   overrides: Partial<SandboxRequest> = {},
 ): SandboxRequest => ({
-  runtime: { kind: "unisolated-process", identity: "node" },
+  runtime: { kind: "unisolated-process", identity: "local-process" },
   command: process.execPath,
   args,
   cwd: process.cwd(),
@@ -103,6 +109,10 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
         "SandboxOutput",
         "SandboxExited",
       ]);
+      expect(events[0]).toMatchObject({
+        _tag: "SandboxStarted",
+        runtime: { kind: "unisolated-process", identity: "local-process" },
+      });
       expect(events.every((event) => event.implementation.isolation === "unisolated")).toBe(true);
       expect(
         events.find((event) => event._tag === "SandboxOutput" && event.stream === "stdout"),
@@ -223,6 +233,24 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
       expect(failureFrom(exit)).toMatchObject({
         _tag: "SandboxUnsupportedRequestError",
         feature: "mounts",
+      });
+    }),
+  );
+
+  it.effect("rejects a runtime identity the local adapter cannot honor", () =>
+    Effect.gen(function* () {
+      const sandbox = yield* Sandbox;
+      const exit = yield* sandbox
+        .execute(
+          request(["-e", "process.exit(0)"], {
+            runtime: { kind: "unisolated-process", identity: "claimed-runtime" },
+          }),
+        )
+        .pipe(Stream.runDrain, Effect.exit);
+
+      expect(failureFrom(exit)).toMatchObject({
+        _tag: "SandboxUnsupportedRequestError",
+        feature: "runtime",
       });
     }),
   );
@@ -361,8 +389,8 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
   );
 });
 
-const scriptedSpawner = (
-  stdoutChunks: ReadonlyArray<Uint8Array>,
+const spawnerWithStdout = (
+  stdout: Stream.Stream<Uint8Array, PlatformError>,
 ): ChildProcessSpawner.ChildProcessSpawner["Service"] =>
   ChildProcessSpawner.make(() =>
     Effect.succeed(
@@ -372,15 +400,20 @@ const scriptedSpawner = (
         isRunning: Effect.succeed(false),
         kill: () => Effect.void,
         stdin: Sink.drain,
-        stdout: Stream.fromArray(stdoutChunks),
+        stdout,
         stderr: Stream.empty,
-        all: Stream.fromArray(stdoutChunks),
+        all: stdout,
         getInputFd: () => Sink.drain,
         getOutputFd: () => Stream.empty,
         unref: Effect.succeed(Effect.void),
       }),
     ),
   );
+
+const scriptedSpawner = (
+  stdoutChunks: ReadonlyArray<Uint8Array>,
+): ChildProcessSpawner.ChildProcessSpawner["Service"] =>
+  spawnerWithStdout(Stream.fromArray(stdoutChunks));
 
 describe("unisolated local Sandbox with an injected spawner double", () => {
   it.effect("decodes UTF-8 sequences split across chunk boundaries and flushes the tail", () =>
@@ -415,4 +448,40 @@ describe("unisolated local Sandbox with an injected spawner double", () => {
       ),
     ),
   );
+
+  it.effect("reports post-start output transport failures as bounded exit errors", () => {
+    const outputFailure = new PlatformError(
+      new SystemError({
+        _tag: "Unknown",
+        module: "ChildProcess",
+        method: "stdout",
+        description: "x".repeat(16 * 1024),
+      }),
+    );
+    return Effect.gen(function* () {
+      const sandbox = yield* Sandbox;
+      const exit = yield* sandbox.execute(request([])).pipe(Stream.runDrain, Effect.exit);
+      const failure = failureFrom(exit);
+
+      expect(failure).toMatchObject({
+        _tag: "SandboxExitError",
+        exitCode: -1,
+        cause: outputFailure,
+      });
+      if (failure._tag !== "SandboxExitError") {
+        throw new Error("Expected a SandboxExitError for a post-start output failure");
+      }
+      expect(failure.message).toHaveLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH);
+    }).pipe(
+      Effect.provide(
+        sandboxLayer.pipe(
+          Layer.provide(
+            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner)(
+              spawnerWithStdout(Stream.fail(outputFailure)),
+            ),
+          ),
+        ),
+      ),
+    );
+  });
 });

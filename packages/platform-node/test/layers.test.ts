@@ -1,8 +1,8 @@
 import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
 import type { SubmissionId } from "@effect-agent/core";
+import type { AgentBindingResolver } from "@effect-agent/session";
 import {
   AdmissionRequest,
-  AgentBindingResolver,
   ClaimRequest,
   ConversationRead,
   ConversationStore,
@@ -31,6 +31,7 @@ import {
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
+import type { PlatformError } from "effect";
 import {
   Cause,
   Context,
@@ -41,7 +42,6 @@ import {
   FileSystem,
   Layer,
   Option,
-  PlatformError,
   Ref,
   Schema,
   Scope,
@@ -245,6 +245,10 @@ describe("NodeDurableRuntime", () => {
         );
         const error = failureOf(opened);
         expect(error).toHaveProperty("_tag", "NodePlatformConfigError");
+        const databaseExists = yield* FileSystem.FileSystem.use((fs) => fs.exists(filename)).pipe(
+          Effect.provide(NodeFileSystem.layer),
+        );
+        expect(databaseExists).toBe(false);
       }),
     ),
   );

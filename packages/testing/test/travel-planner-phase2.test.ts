@@ -16,7 +16,7 @@ import {
 } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, DateTime, Effect, Fiber, Layer, Option, Ref, Schema } from "effect";
+import { Cause, DateTime, Effect, Fiber, Layer, Option, Ref, Schema, type Exit } from "effect";
 import { Model, Prompt } from "effect/unstable/ai";
 
 import {
@@ -53,7 +53,7 @@ const makePhase2Agent = (turns: ReadonlyArray<ScriptedTurnInput>) =>
     Model.make("scripted", "travel-planner-phase-2", ScriptedModel.layer(turns)),
   );
 
-const failureFrom = <E>(exit: import("effect").Exit.Exit<unknown, E>): E => {
+const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
   if (exit._tag === "Success") {
     throw new Error("Expected the Travel Planner run to fail");
   }

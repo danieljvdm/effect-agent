@@ -14,6 +14,7 @@ import {
   DefinitionDigests,
   DeploymentId,
   Digest,
+  digestJson,
   IdempotencyKey,
   LedgerError,
   MarkJoinedRequest,
@@ -26,6 +27,7 @@ import {
   RecoverySnapshotRequest,
   ReleaseChildBudgetRequest,
   RenewOwnershipRequest,
+  ResolutionCompletedWithResult,
   ResolutionNeverHappened,
   RevertJoiningRequest,
   SettlementFinalization,
@@ -57,6 +59,10 @@ const unknownSubmission = Schema.decodeSync(SubmissionId)("submission-memory-unk
 const unknownToken = Schema.decodeSync(OwnershipToken)("ownership-memory-unknown");
 const unknownCall = Schema.decodeSync(ToolCallId)("call-memory-unknown");
 const unknownReservation = Schema.decodeSync(ChildReservationId)("child-reservation-unknown");
+const semanticReservation = Schema.decodeSync(ChildReservationId)(
+  "child-reservation:semantic-json",
+);
+const isLedgerError = Schema.is(LedgerError);
 const sequenceOne = Schema.decodeSync(CanonicalSequence)(1);
 const waitingParentLane = Schema.decodeSync(ConversationId)("conversation-memory-waiting");
 const waitingChildLane = Schema.decodeSync(ConversationId)("conversation-memory-waiting-child");
@@ -88,6 +94,94 @@ describe("MemorySubmissionLedger", () => {
     for (const conformanceCase of submissionLedgerConformanceCases) {
       it.effect(conformanceCase.name, () => conformanceCase.run.pipe(Effect.provide(testLayer)));
     }
+  });
+
+  it.layer(testLayer)((it) => {
+    it.effect("treats reordered persisted JSON as an idempotent replay", () =>
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+        const admitted = yield* ledger.admit(admissionRequest("semantic-json-key", "af"));
+        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+        const claim = yield* ledger.claim(
+          ClaimRequest.make({ conversationId, producerId: producerA }),
+        );
+        if (Option.isNone(claim)) return yield* Effect.die("missing semantic JSON claim");
+
+        const allocation = { turns: 4, toolCalls: 8 };
+        const reorderedAllocation = { toolCalls: 8, turns: 4 };
+        const allocationDigest = yield* digestJson(allocation);
+        expect(yield* digestJson(reorderedAllocation)).toBe(allocationDigest);
+        const reservationId = semanticReservation;
+        const reservationFields = {
+          reservationId,
+          parentSubmissionId: admitted.submissionId,
+          parentToolCallId: unknownCall,
+          ownershipToken: claim.value.ownershipToken,
+          allocationDigest,
+        };
+        yield* ledger.reserveChildBudget(
+          ChildBudgetReservationRequest.make({ ...reservationFields, allocation }),
+        );
+        const replayed = yield* ledger.reserveChildBudget(
+          ChildBudgetReservationRequest.make({
+            ...reservationFields,
+            allocation: reorderedAllocation,
+          }),
+        );
+        expect(replayed.replayed).toBe(true);
+
+        const accounting = {
+          consumed: { turns: 1, toolCalls: 2 },
+          released: { turns: 3, toolCalls: 6 },
+        };
+        yield* ledger.beginChildBudgetRelease(
+          BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
+        );
+        const replayedFreeze = yield* ledger.beginChildBudgetRelease(
+          BeginChildBudgetReleaseRequest.make({
+            reservationId,
+            accounting: {
+              released: { toolCalls: 6, turns: 3 },
+              consumed: { toolCalls: 2, turns: 1 },
+            },
+          }),
+        );
+        expect(replayedFreeze.status).toBe("releasePending");
+
+        yield* ledger.markUnknown(
+          MarkUnknownRequest.make({
+            submissionId: admitted.submissionId,
+            toolCallIds: [unknownCall],
+            reason: "semantic JSON replay",
+          }),
+        );
+        const firstResolution = yield* ledger.recordUnknownResolution(
+          UnknownResolutionCommand.make({
+            submissionId: admitted.submissionId,
+            toolCallId: unknownCall,
+            author: "memory-ledger-test",
+            reason: "supplier answered",
+            resolution: ResolutionCompletedWithResult.make({
+              result: { bookingRef: "booking-1", details: { city: "Kyoto", nights: 2 } },
+              isFailure: false,
+            }),
+          }),
+        );
+        const replayedResolution = yield* ledger.recordUnknownResolution(
+          UnknownResolutionCommand.make({
+            submissionId: admitted.submissionId,
+            toolCallId: unknownCall,
+            author: "memory-ledger-test-replay",
+            reason: "same supplier answer",
+            resolution: ResolutionCompletedWithResult.make({
+              isFailure: false,
+              result: { details: { nights: 2, city: "Kyoto" }, bookingRef: "booking-1" },
+            }),
+          }),
+        );
+        expect(replayedResolution.resolvedAt).toEqual(firstResolution.resolvedAt);
+      }),
+    );
   });
 
   it.layer(testLayer)((it) => {
@@ -194,7 +288,7 @@ describe("MemorySubmissionLedger", () => {
           return yield* Effect.die(new Error("Expected admit to return an Effect"));
         }
         const failure = yield* unvalidatedResult.pipe(Effect.flip);
-        if (!(failure instanceof LedgerError)) {
+        if (!isLedgerError(failure)) {
           return yield* Effect.die(new Error("Expected a LedgerError"));
         }
         expect(failure).toMatchObject({ _tag: "LedgerError", operation: "admit" });

@@ -87,4 +87,10 @@ describe("DEPLOY-011 Cloudflare Dynamic Worker CodeExecutor", () => {
       detail: { value: "executor" },
     });
   }, 30_000);
+
+  it("keeps RPC finalizers total for hostile disposal hooks", async () => {
+    const response = await runtime.dispatchFetch("http://placeholder/total-disposal");
+    expect(response.ok).toBe(true);
+    expect(await response.json()).toEqual({ tag: "success" });
+  });
 });

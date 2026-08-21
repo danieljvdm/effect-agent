@@ -1,4 +1,4 @@
-import { Clock, Context, Duration, Effect, Layer, Ref, Schema } from "effect";
+import { Clock, Duration, Effect, Ref, Schema, type Scope } from "effect";
 
 const Natural = Schema.Natural;
 const BudgetLevel = Schema.Literals(["global", "tenant", "agent", "conversation", "run"]);
@@ -76,11 +76,23 @@ export interface UsageBudgetNode {
    * Register or re-attach one child node. Re-attaching an already-registered
    * `level:id` with identical limits returns a handle to the shared
    * registration; different limits fail with BudgetNodeConflict rather than
-   * being silently ignored.
+   * being silently ignored. Every returned handle owns one registration and
+   * must be retired when its lifetime ends; prefer `childScoped` when the
+   * lifetime already belongs to an Effect Scope.
    */
   readonly child: (
     config: UsageBudgetNodeConfig,
   ) => Effect.Effect<UsageBudgetNode, InvalidBudgetHierarchy | BudgetNodeConflict>;
+  /** Register a child whose registration is retired when the current Scope closes. */
+  readonly childScoped: (
+    config: UsageBudgetNodeConfig,
+  ) => Effect.Effect<UsageBudgetNode, InvalidBudgetHierarchy | BudgetNodeConflict, Scope.Scope>;
+  /**
+   * Release this handle's registration exactly once. Accumulated usage stays
+   * charged to every live ancestor; a node is reclaimed only after its last
+   * handle and every descendant have retired.
+   */
+  readonly retire: Effect.Effect<void>;
   readonly consume: (delta: UsageDelta) => Effect.Effect<UsageTotals, BudgetExceeded>;
   readonly snapshot: Effect.Effect<UsageTotals>;
   /**
@@ -110,15 +122,12 @@ export class BudgetNodeConflict extends Schema.TaggedError<BudgetNodeConflict>()
   },
 ) {}
 
-/** The Run-local node supplied to engine workflows. */
-export class UsageBudget extends Context.Service<UsageBudget, UsageBudgetNode>()(
-  "@effect-agent/capabilities/UsageBudget",
-) {}
-
 interface LedgerNode {
   readonly config: UsageBudgetNodeConfig;
   readonly startedAt: number;
   readonly totals: UsageTotals;
+  /** Ledger-owned identities of the live handles for this exact registration. */
+  readonly handles: ReadonlySet<symbol>;
 }
 
 interface BudgetLedger {
@@ -127,7 +136,14 @@ interface BudgetLedger {
 
 type ConsumptionResult =
   | { readonly _tag: "success"; readonly value: UsageTotals }
-  | { readonly _tag: "failure"; readonly error: BudgetExceeded };
+  | { readonly _tag: "failure"; readonly error: BudgetExceeded }
+  | { readonly _tag: "retired" };
+
+type ChildRegistrationResult =
+  | { readonly _tag: "success" }
+  | { readonly _tag: "conflict"; readonly error: BudgetNodeConflict }
+  | { readonly _tag: "invalid"; readonly error: InvalidBudgetHierarchy }
+  | { readonly _tag: "retired" };
 
 const levelOrder: Readonly<Record<BudgetLevel, number>> = {
   global: 0,
@@ -212,19 +228,64 @@ const durationExceeded = (node: LedgerNode, now: number): BudgetExceeded => {
   });
 };
 
+/** Reclaim one released leaf and any newly unowned ancestors on its fixed hierarchy path. */
+const pruneRetiredHierarchy = (
+  nodes: Map<string, LedgerNode>,
+  hierarchy: ReadonlyArray<string>,
+): Map<string, LedgerNode> => {
+  for (let index = hierarchy.length - 1; index >= 0; index -= 1) {
+    const candidateKey = hierarchy[index];
+    if (candidateKey === undefined) continue;
+    const candidate = nodes.get(candidateKey);
+    if (candidate === undefined) continue;
+    if (candidate.handles.size > 0) break;
+    const childPrefix = `${candidateKey}/`;
+    if ([...nodes.keys()].some((otherKey) => otherKey.startsWith(childPrefix))) {
+      break;
+    }
+    nodes.delete(candidateKey);
+  }
+  return nodes;
+};
+
 const makeNode = (
   ledger: Ref.Ref<BudgetLedger>,
   key: string,
   ancestors: ReadonlyArray<string>,
   config: UsageBudgetNodeConfig,
+  handleId: symbol,
 ): UsageBudgetNode => {
   const hierarchy = [...ancestors, key];
+  const retiredDefect = () =>
+    Effect.die(
+      new Error(`Usage budget handle ${config.level}:${config.id} was used after retirement`),
+    );
+  const liveHierarchy = (state: BudgetLedger): ReadonlyArray<LedgerNode> | undefined => {
+    const current = state.nodes.get(key);
+    if (current === undefined || !current.handles.has(handleId)) return undefined;
+    const nodes: Array<LedgerNode> = [];
+    for (const ancestorKey of hierarchy) {
+      const node = state.nodes.get(ancestorKey);
+      if (node === undefined) return undefined;
+      nodes.push(node);
+    }
+    return nodes;
+  };
+  const readLiveHierarchy = Ref.modify(
+    ledger,
+    (state): readonly [ReadonlyArray<LedgerNode> | undefined, BudgetLedger] => [
+      liveHierarchy(state),
+      state,
+    ],
+  );
 
   const snapshot = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
-    const state = yield* Ref.get(ledger);
-    const node = state.nodes.get(key);
-    return node === undefined ? emptyTotals() : withElapsed(node, now);
+    const nodes = yield* readLiveHierarchy;
+    if (nodes === undefined) return yield* retiredDefect();
+    const node = nodes[nodes.length - 1];
+    if (node === undefined) return yield* retiredDefect();
+    return withElapsed(node, now);
   });
 
   const guard = <A, E, R>(
@@ -232,13 +293,10 @@ const makeNode = (
   ): Effect.Effect<A, E | BudgetExceeded, R> =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
-      const state = yield* Ref.get(ledger);
+      const nodes = yield* readLiveHierarchy;
+      if (nodes === undefined) return yield* retiredDefect();
       let deadline: { readonly remaining: number; readonly node: LedgerNode } | undefined;
-      for (const ancestorKey of hierarchy) {
-        const node = state.nodes.get(ancestorKey);
-        if (node === undefined) {
-          continue;
-        }
+      for (const node of nodes) {
         const current = withElapsed(node, now);
         const alreadyExceeded = exceeded(node, current);
         if (alreadyExceeded !== undefined) {
@@ -272,59 +330,99 @@ const makeNode = (
       );
     });
 
+  const child = Effect.fn("UsageBudgetNode.child")(function* (childConfig: UsageBudgetNodeConfig) {
+    const childKey = `${key}/${childConfig.level}:${childConfig.id}`;
+    const childHandleId = Symbol(`usage-budget:${childConfig.level}:${childConfig.id}`);
+    const now = yield* Clock.currentTimeMillis;
+    const registration = yield* Ref.modify(
+      ledger,
+      (state): readonly [ChildRegistrationResult, BudgetLedger] => {
+        if (liveHierarchy(state) === undefined) {
+          return [{ _tag: "retired" }, state];
+        }
+        if (levelOrder[childConfig.level] <= levelOrder[config.level]) {
+          return [
+            {
+              _tag: "invalid",
+              error: InvalidBudgetHierarchy.make({
+                parentLevel: config.level,
+                childLevel: childConfig.level,
+              }),
+            },
+            state,
+          ];
+        }
+        const existing = state.nodes.get(childKey);
+        if (existing !== undefined) {
+          return sameLimits(existing.config.limits, childConfig.limits)
+            ? [
+                { _tag: "success" },
+                {
+                  nodes: new Map(state.nodes).set(childKey, {
+                    ...existing,
+                    handles: new Set(existing.handles).add(childHandleId),
+                  }),
+                },
+              ]
+            : [
+                {
+                  _tag: "conflict",
+                  error: BudgetNodeConflict.make({
+                    scopeLevel: childConfig.level,
+                    scopeId: childConfig.id,
+                  }),
+                },
+                state,
+              ];
+        }
+        return [
+          { _tag: "success" },
+          {
+            nodes: new Map(state.nodes).set(childKey, {
+              config: childConfig,
+              startedAt: now,
+              totals: emptyTotals(),
+              handles: new Set([childHandleId]),
+            }),
+          },
+        ];
+      },
+    );
+    if (registration._tag === "retired") return yield* retiredDefect();
+    if (registration._tag === "conflict" || registration._tag === "invalid") {
+      return yield* registration.error;
+    }
+    return makeNode(ledger, childKey, hierarchy, childConfig, childHandleId);
+  });
+
+  const retire = Effect.uninterruptible(
+    Ref.update(ledger, (state) => {
+      const existing = state.nodes.get(key);
+      if (existing === undefined || !existing.handles.has(handleId)) return state;
+      const handles = new Set(existing.handles);
+      handles.delete(handleId);
+      const nodes = new Map(state.nodes).set(key, { ...existing, handles });
+      return { nodes: pruneRetiredHierarchy(nodes, hierarchy) };
+    }),
+  );
+
   return {
     level: config.level,
     id: config.id,
-    child: (childConfig) =>
-      Effect.gen(function* () {
-        if (levelOrder[childConfig.level] <= levelOrder[config.level]) {
-          return yield* InvalidBudgetHierarchy.make({
-            parentLevel: config.level,
-            childLevel: childConfig.level,
-          });
-        }
-        const childKey = `${key}/${childConfig.level}:${childConfig.id}`;
-        const now = yield* Clock.currentTimeMillis;
-        const conflict = yield* Ref.modify(
-          ledger,
-          (state): readonly [BudgetNodeConflict | undefined, BudgetLedger] => {
-            const existing = state.nodes.get(childKey);
-            if (existing !== undefined) {
-              return sameLimits(existing.config.limits, childConfig.limits)
-                ? [undefined, state]
-                : [
-                    BudgetNodeConflict.make({
-                      scopeLevel: childConfig.level,
-                      scopeId: childConfig.id,
-                    }),
-                    state,
-                  ];
-            }
-            return [
-              undefined,
-              {
-                nodes: new Map(state.nodes).set(childKey, {
-                  config: childConfig,
-                  startedAt: now,
-                  totals: emptyTotals(),
-                }),
-              },
-            ];
-          },
-        );
-        if (conflict !== undefined) return yield* conflict;
-        return makeNode(ledger, childKey, hierarchy, childConfig);
-      }),
+    child,
+    childScoped: (childConfig) => Effect.acquireRelease(child(childConfig), (node) => node.retire),
+    retire,
     consume: (delta) =>
       Clock.currentTimeMillis.pipe(
         Effect.flatMap((now) =>
           Ref.modify(ledger, (state): readonly [ConsumptionResult, BudgetLedger] => {
+            if (liveHierarchy(state) === undefined) {
+              return [{ _tag: "retired" }, state];
+            }
             const updates = new Map<string, LedgerNode>();
             for (const ancestorKey of hierarchy) {
               const node = state.nodes.get(ancestorKey);
-              if (node === undefined) {
-                continue;
-              }
+              if (node === undefined) return [{ _tag: "retired" }, state];
               const totals = addUsage(node, delta, now);
               const error = exceeded(node, totals);
               if (error !== undefined) {
@@ -336,12 +434,21 @@ const makeNode = (
             for (const [updatedKey, updatedNode] of updates) {
               nextNodes.set(updatedKey, updatedNode);
             }
-            const value = updates.get(key)?.totals ?? emptyTotals();
-            return [{ _tag: "success", value }, { nodes: nextNodes }];
+            const value = updates.get(key)?.totals;
+            return value === undefined
+              ? [{ _tag: "retired" }, state]
+              : [{ _tag: "success", value }, { nodes: nextNodes }];
           }).pipe(
-            Effect.flatMap((result) =>
-              result._tag === "success" ? Effect.succeed(result.value) : Effect.fail(result.error),
-            ),
+            Effect.flatMap((result) => {
+              switch (result._tag) {
+                case "success":
+                  return Effect.succeed(result.value);
+                case "failure":
+                  return Effect.fail(result.error);
+                case "retired":
+                  return retiredDefect();
+              }
+            }),
           ),
         ),
       ),
@@ -356,6 +463,7 @@ export const makeUsageBudgetRoot = Effect.fn("makeUsageBudgetRoot")(function* (
 ) {
   const startedAt = yield* Clock.currentTimeMillis;
   const key = `${config.level}:${config.id}`;
+  const handleId = Symbol(`usage-budget:${config.level}:${config.id}`);
   const ledger = yield* Ref.make<BudgetLedger>({
     nodes: new Map([
       [
@@ -364,11 +472,12 @@ export const makeUsageBudgetRoot = Effect.fn("makeUsageBudgetRoot")(function* (
           config,
           startedAt,
           totals: emptyTotals(),
+          handles: new Set([handleId]),
         },
       ],
     ]),
   });
-  return makeNode(ledger, key, [], config);
+  return makeNode(ledger, key, [], config, handleId);
 });
 
 /** Compatibility constructor for a standalone Run budget. */
@@ -380,7 +489,3 @@ export const makeUsageBudget = (limits: UsageBudgetLimits): Effect.Effect<UsageB
       limits,
     }),
   );
-
-/** Intrinsic limits are explicit at layer construction; Clock remains test-controllable. */
-export const usageBudgetLayer = (limits: UsageBudgetLimits) =>
-  Layer.effect(UsageBudget)(makeUsageBudget(limits));

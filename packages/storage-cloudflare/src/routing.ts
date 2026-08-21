@@ -1,5 +1,6 @@
 import {
   AdmissionIndeterminate,
+  AdmissionConflict,
   AppendConflict,
   ChildAttachmentSnapshot,
   ConversationMaterialization,
@@ -13,11 +14,10 @@ import {
   SettlementConflict,
   SubmissionLedger,
   SubmissionLookupById,
-  type AdmissionConflict,
   type SubmissionLookupByKey,
   type SubmissionSnapshot,
 } from "@effect-agent/session";
-import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
 
 import {
   boundPortDiagnostic,
@@ -91,20 +91,34 @@ export class PortTransportError extends Schema.TaggedError<PortTransportError>()
   },
 ) {}
 
+const safeTransportDiagnostic = (cause: unknown): string => {
+  try {
+    const message = cause instanceof Error ? cause.message : cause;
+    return boundPortDiagnostic(typeof message === "string" ? message : String(message));
+  } catch {
+    return "[unavailable transport diagnostic]";
+  }
+};
+
+const transportRetryableSignal = (cause: unknown): boolean | undefined => {
+  if (!Predicate.isObjectKeyword(cause)) return undefined;
+  try {
+    const signal = Reflect.get(cause, "retryable");
+    return typeof signal === "boolean" ? signal : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 /**
  * Build a `PortTransportError` from an arbitrary thrown transport cause, preserving the
  * platform stub's own `retryable` signal when present.
  */
 export const portTransportFailure = (target: string, cause: unknown): PortTransportError => {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  let retryable: boolean | undefined;
-  if (typeof cause === "object" && cause !== null && "retryable" in cause) {
-    const signal = cause.retryable;
-    if (typeof signal === "boolean") retryable = signal;
-  }
+  const retryable = transportRetryableSignal(cause);
   return PortTransportError.make({
     target,
-    message: boundPortDiagnostic(message),
+    message: safeTransportDiagnostic(cause),
     ...(retryable === undefined ? {} : { retryable }),
     cause,
   });
@@ -181,26 +195,13 @@ const routableSubmissionTarget = (
     );
   });
 
-const isResultTag =
-  <Tag extends PortResult["_tag"]>(tag: Tag) =>
-  (result: PortResult): result is Extract<PortResult, { readonly _tag: Tag }> =>
-    result._tag === tag;
-
-const isAdmitConflict = (failure: PortFailure): failure is AdmissionConflict =>
-  failure._tag === "AdmissionConflict";
-const isAbortConflict = (failure: PortFailure): failure is SettlementConflict | JoinedToHost =>
-  failure._tag === "SettlementConflict" || failure._tag === "JoinedToHost";
-const noExtraFailure = (_failure: PortFailure): _failure is never => false;
-const isFenceRejected = (failure: PortFailure): failure is FenceRejected =>
-  failure._tag === "FenceRejected";
-const isAppendFailure = (
-  failure: PortFailure,
-): failure is ConversationNotMaterialized | AppendConflict | FenceRejected =>
-  failure._tag === "ConversationNotMaterialized" ||
-  failure._tag === "AppendConflict" ||
-  failure._tag === "FenceRejected";
-const isNotMaterialized = (failure: PortFailure): failure is ConversationNotMaterialized =>
-  failure._tag === "ConversationNotMaterialized";
+const NoAdditionalPortFailure = Schema.Never;
+const AbortPortFailure = Schema.Union([SettlementConflict, JoinedToHost]);
+const AppendPortFailure = Schema.Union([
+  ConversationNotMaterialized,
+  AppendConflict,
+  FenceRejected,
+]);
 
 /**
  * The fail-fast refusal for any foreign operation OUTSIDE the closed route-capable subset
@@ -272,22 +273,19 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
    * any failure outside the operation's declared surface — including protocol anomalies — is
    * folded into a `LedgerError` naming the anomaly instead of being erased or re-thrown raw.
    */
-  const foreignLedgerCall = <Tag extends PortResult["_tag"], ExpectedFailure extends PortFailure>(
+  const foreignLedgerCall = <ResultSchema extends Schema.Top, FailureSchema extends Schema.Top>(
     operation: string,
     target: ConversationId,
     call: PortRequest,
-    resultTag: Tag,
-    isExpectedFailure: (failure: PortFailure) => failure is ExpectedFailure,
-  ): Effect.Effect<Extract<PortResult, { readonly _tag: Tag }>, ExpectedFailure | LedgerError> =>
-    transportCall(target, call).pipe(
+    resultSchema: ResultSchema,
+    failureSchema: FailureSchema,
+  ): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | LedgerError> => {
+    const isExpectedResult = Schema.is(resultSchema);
+    const isExpectedFailure = Schema.is(failureSchema);
+    return transportCall(target, call).pipe(
       Effect.mapError(routeFailure(operation, target)),
       Effect.flatMap(
-        (
-          response,
-        ): Effect.Effect<
-          Extract<PortResult, { readonly _tag: Tag }>,
-          ExpectedFailure | LedgerError
-        > => {
+        (response): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | LedgerError> => {
           if (response._tag === "PortFailed") {
             const failure = response.failure;
             if (isExpectedFailure(failure)) return Effect.fail(failure);
@@ -304,13 +302,13 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
             );
           }
           const result = response.result;
-          if (!isResultTag(resultTag)(result)) {
+          if (!isExpectedResult(result)) {
             return Effect.fail(
               LedgerError.make({
                 operation,
                 message:
                   `The Conversation Object owning ${target} answered ${operation} with the ` +
-                  `mismatched result ${result._tag}; expected ${resultTag}.`,
+                  `mismatched result ${result._tag}.`,
               }),
             );
           }
@@ -321,6 +319,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
         attributes: { operation, target },
       }),
     );
+  };
 
   /**
    * Routed `resolveAdmission` — where the S2 tri-state becomes real (plan §1.3): when the
@@ -394,8 +393,8 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
       operation,
       target,
       LedgerLookupCall.make({ request: SubmissionLookupById.make({ submissionId }) }),
-      "LedgerLookupResult",
-      noExtraFailure,
+      LedgerLookupResult,
+      NoAdditionalPortFailure,
     ).pipe(
       Effect.map((result) =>
         result.submission === undefined ? Option.none() : Option.some(result.submission),
@@ -460,8 +459,8 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
             "ledger admit",
             request.conversationId,
             LedgerAdmitCall.make({ request }),
-            "LedgerAdmitResult",
-            isAdmitConflict,
+            LedgerAdmitResult,
+            AdmissionConflict,
           ).pipe(Effect.map((reply) => reply.result)),
 
     markReady: (request) =>
@@ -473,8 +472,8 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
                 "ledger mark ready",
                 target.conversationId,
                 LedgerMarkReadyCall.make({ request }),
-                "LedgerMarkReadyResult",
-                noExtraFailure,
+                LedgerMarkReadyResult,
+                NoAdditionalPortFailure,
               ).pipe(Effect.asVoid),
         ),
       ),
@@ -494,8 +493,8 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
               "ledger lookup",
               request.conversationId,
               LedgerLookupCall.make({ request }),
-              "LedgerLookupResult",
-              noExtraFailure,
+              LedgerLookupResult,
+              NoAdditionalPortFailure,
             ).pipe(
               Effect.map((result) =>
                 result.submission === undefined ? Option.none() : Option.some(result.submission),
@@ -516,8 +515,8 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
                 "ledger request abort",
                 target.conversationId,
                 LedgerRequestAbortCall.make({ request }),
-                "LedgerRequestAbortResult",
-                isAbortConflict,
+                LedgerRequestAbortResult,
+                AbortPortFailure,
               ).pipe(Effect.map((reply) => reply.intent)),
         ),
       ),
@@ -531,8 +530,8 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
                 "ledger record child settled",
                 target.conversationId,
                 LedgerRecordChildSettledCall.make({ request }),
-                "LedgerRecordChildSettledResult",
-                noExtraFailure,
+                LedgerRecordChildSettledResult,
+                NoAdditionalPortFailure,
               ).pipe(Effect.map((reply) => reply.outcome)),
         ),
       ),
@@ -732,25 +731,21 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
       });
 
   /** The store twin of `foreignLedgerCall` with `ConversationStoreError` as the base error. */
-  const foreignStoreCall = <Tag extends PortResult["_tag"], ExpectedFailure extends PortFailure>(
+  const foreignStoreCall = <ResultSchema extends Schema.Top, FailureSchema extends Schema.Top>(
     operation: string,
     target: ConversationId,
     call: PortRequest,
-    resultTag: Tag,
-    isExpectedFailure: (failure: PortFailure) => failure is ExpectedFailure,
-  ): Effect.Effect<
-    Extract<PortResult, { readonly _tag: Tag }>,
-    ExpectedFailure | ConversationStoreError
-  > =>
-    transportCall(target, call).pipe(
+    resultSchema: ResultSchema,
+    failureSchema: FailureSchema,
+  ): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | ConversationStoreError> => {
+    const isExpectedResult = Schema.is(resultSchema);
+    const isExpectedFailure = Schema.is(failureSchema);
+    return transportCall(target, call).pipe(
       Effect.mapError(routeFailure(operation, target)),
       Effect.flatMap(
         (
           response,
-        ): Effect.Effect<
-          Extract<PortResult, { readonly _tag: Tag }>,
-          ExpectedFailure | ConversationStoreError
-        > => {
+        ): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | ConversationStoreError> => {
           if (response._tag === "PortFailed") {
             const failure = response.failure;
             if (isExpectedFailure(failure)) return Effect.fail(failure);
@@ -767,13 +762,13 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
             );
           }
           const result = response.result;
-          if (!isResultTag(resultTag)(result)) {
+          if (!isExpectedResult(result)) {
             return Effect.fail(
               ConversationStoreError.make({
                 operation,
                 message:
                   `The Conversation Object owning ${target} answered ${operation} with the ` +
-                  `mismatched result ${result._tag}; expected ${resultTag}.`,
+                  `mismatched result ${result._tag}.`,
               }),
             );
           }
@@ -784,6 +779,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
         attributes: { operation, target },
       }),
     );
+  };
 
   const routed = ConversationStore.of({
     materialize: (request) =>
@@ -793,8 +789,8 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
             "conversation materialize",
             request.conversationId,
             StoreMaterializeCall.make({ request }),
-            "StoreMaterializeResult",
-            isFenceRejected,
+            StoreMaterializeResult,
+            FenceRejected,
           ).pipe(Effect.asVoid),
 
     append: (request) =>
@@ -804,8 +800,8 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
             "conversation append",
             request.conversationId,
             StoreAppendCall.make({ request }),
-            "StoreAppendResult",
-            isAppendFailure,
+            StoreAppendResult,
+            AppendPortFailure,
           ).pipe(Effect.map((reply) => reply.result)),
 
     read: (request) =>
@@ -816,8 +812,8 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
               "conversation read",
               request.conversationId,
               StoreReadPageCall.make({ request }),
-              "StoreReadPageResult",
-              isNotMaterialized,
+              StoreReadPageResult,
+              ConversationNotMaterialized,
             ).pipe(Effect.map((reply) => Stream.fromIterable(reply.records))),
           ),
 
@@ -828,8 +824,8 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
             "conversation inspect tail",
             request.conversationId,
             StoreInspectTailCall.make({ request }),
-            "StoreInspectTailResult",
-            isNotMaterialized,
+            StoreInspectTailResult,
+            ConversationNotMaterialized,
           ).pipe(Effect.map((reply) => reply.tail)),
 
     export: (request) =>
@@ -839,8 +835,8 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
             "conversation export",
             request.conversationId,
             StoreExportCall.make({ request }),
-            "StoreExportResult",
-            isNotMaterialized,
+            StoreExportResult,
+            ConversationNotMaterialized,
           ).pipe(Effect.map((reply) => reply.export)),
 
     // Observation and checkpoints are lane-local by construction (plan §1.3): the closed

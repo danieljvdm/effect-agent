@@ -98,12 +98,11 @@ export class RunEventSinkClosedError extends Schema.TaggedError<RunEventSinkClos
  * Service value accepted by Tool handlers to emit first-class Subagent
  * lifecycle events into the parent Run's semantic stream.
  *
- * Emission never blocks the emitting handler: the sink is backed by an
- * unbounded queue drained by the Run's own event stream, matching the Run's
- * existing buffering model (the Run stream is the only consumer, so no
- * external observer can backpressure the Tool batch). Emitting after the
- * owning Tool batch has settled — or outside any Tool batch — fails closed
- * with `RunEventSinkClosedError`.
+ * The sink is backed by a bounded queue drained by the Run's own event stream.
+ * A burst may suspend the emitting handler until that internal stream drains
+ * capacity, but an external detached observer cannot backpressure the Tool
+ * batch. Emitting after the owning Tool batch has settled — or outside any
+ * Tool batch — fails closed with `RunEventSinkClosedError`.
  */
 export interface RunEventSinkService {
   readonly emit: (payload: SubagentEventPayload) => Effect.Effect<void, RunEventSinkClosedError>;

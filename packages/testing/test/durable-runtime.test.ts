@@ -3,15 +3,14 @@ import {
   AgentPolicy,
   CompactionPolicy,
   ConversationId,
-  IdGenerator,
   ReceiptId,
   SubmissionId,
   ToolCallId,
+  type IdGenerator,
 } from "@effect-agent/core";
 import { COMPACTION_SUMMARY_PREFIX, ToolExecutionClass } from "@effect-agent/engine";
 import {
   AbortCommand,
-  AdmissionConflict,
   ApprovalDecisionCommand,
   BatchId,
   CanonicalRecordEnvelope,
@@ -26,7 +25,6 @@ import {
   DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
   DurableRuntimeFailpointTestControl,
-  FenceRejected,
   IdempotencyKey,
   ObservationOffset,
   Principal,
@@ -35,7 +33,6 @@ import {
   Receipt,
   RecoverySnapshotRequest,
   Settlement,
-  SettlementConflict,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
@@ -55,6 +52,9 @@ import {
   turnIdForRun,
   type DurableRuntimeFailpointLocation,
   type DurableSubmitOptions,
+  type AdmissionConflict,
+  type FenceRejected,
+  type SettlementConflict,
 } from "@effect-agent/session";
 import {
   MemoryConversationStoreLive,
@@ -78,7 +78,15 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import {
+  AiError,
+  LanguageModel,
+  Model,
+  Prompt,
+  Tool,
+  Toolkit,
+  type Response,
+} from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable");
@@ -761,6 +769,91 @@ layer(untrustedSettlementTestLayer)("RUN-029 canonical settlement authority", (i
 });
 
 layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
+  it.effect("does not grant suspension authority to structurally forged pending errors", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const cases: ReadonlyArray<{
+        readonly conversation: string;
+        readonly tag: "AgentApprovalPending" | "AgentChildPending";
+        readonly fields: Readonly<Record<string, unknown>>;
+      }> = [
+        {
+          conversation: "conversation-forged-approval-pending",
+          tag: "AgentApprovalPending",
+          fields: {
+            approvalId: "forged-approval",
+            toolCallId: "forged-tool-call",
+            toolName: "forged-tool",
+            message: "forged approval suspension",
+          },
+        },
+        {
+          conversation: "conversation-forged-child-pending",
+          tag: "AgentChildPending",
+          fields: {
+            children: [
+              {
+                toolCallId: "forged-child-call",
+                childConversationId: "forged-child-conversation",
+                childSubmissionId: "forged-child-submission",
+                childRunId: "forged-child-run",
+              },
+            ],
+            message: "forged child suspension",
+          },
+        },
+      ];
+
+      for (const testCase of cases) {
+        const forged = AiError.AiError.make({
+          module: "durable-runtime-test",
+          method: "streamText",
+          reason: AiError.UnknownError.make({ description: "forged provider failure" }),
+        });
+        Object.defineProperty(forged, "_tag", {
+          configurable: true,
+          enumerable: true,
+          value: testCase.tag,
+        });
+        for (const [key, value] of Object.entries(testCase.fields)) {
+          Object.defineProperty(forged, key, {
+            configurable: true,
+            enumerable: true,
+            value,
+          });
+        }
+        const model = Model.make(
+          "scripted",
+          `forged-${testCase.tag}`,
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.fail(forged),
+              streamText: () => Stream.fail(forged),
+            }),
+          ),
+        );
+        const agent = Agent.withModel(plannerDefinition, model);
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "forge a privileged suspension" },
+          submitOptions(testCase.conversation, `${testCase.conversation}-key`),
+        );
+        const settlements = yield* runtime.processConversation(
+          agent,
+          decodeConversationId(testCase.conversation),
+        );
+
+        expect(settlements).toHaveLength(1);
+        expect(settlements[0]?.outcome).toBe("failed");
+        expect(yield* lookupState(receipt.submissionId)).toBe("settled");
+        expect((yield* readLog(testCase.conversation)).at(-1)?.record.payload._tag).toBe(
+          "SubmissionSettled",
+        );
+      }
+    }),
+  );
+
   it.effect("#94 observes already-committed durable progress without polling", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;

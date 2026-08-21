@@ -49,7 +49,6 @@ import {
   type EphemeralConversations,
 } from "./conversation.ts";
 import type { RedactionError, Redactor } from "./redaction.ts";
-import type { RunSchedulingOverride } from "./scheduling.ts";
 
 /** Capability policy could not be normalized into the bounded approval request Schema. */
 export class ApprovalAdapterError extends Schema.TaggedError<ApprovalAdapterError>()(
@@ -427,7 +426,7 @@ export const contextCompactorRunContextLayer: Layer.Layer<
 
 /** Scheduling values are structurally aligned and only reduce finite concurrency. */
 export const toRunSchedulingHook = (
-  runOverride: RunSchedulingOverride | undefined,
+  runOverride: RunSchedulingHook["runOverride"],
   toolRequiresSequential?: (toolName: string) => boolean,
 ): RunSchedulingHook => ({
   runOverride,

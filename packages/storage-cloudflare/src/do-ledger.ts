@@ -108,6 +108,11 @@ const BoundedTimestamp = Schema.NonEmptyString.check(Schema.isMaxLength(128));
 
 const SCAN_PAGE_SIZE = 256;
 const EPOCH_ZERO = Schema.decodeSync(ProducerEpoch)(0);
+const RESUME_IMMEDIATELY: SuspensionOutcome = "resume-immediately";
+const SUSPENDED: SuspensionOutcome = "suspended";
+const NOT_WAITING: ChildSettledOutcome = "not-waiting";
+const STILL_WAITING: ChildSettledOutcome = "still-waiting";
+const WOKEN: ChildSettledOutcome = "woken";
 const MAX_IDENTIFIER_LENGTH = 1_024;
 
 class SubmissionRow extends Schema.Class<SubmissionRow>("SubmissionRow")({
@@ -289,6 +294,9 @@ const decodeChildReservationSnapshotUnknown = Schema.decodeUnknownEffect(
   ChildBudgetReservationSnapshot,
 );
 const decodeChildAttachmentSnapshot = Schema.decodeUnknownEffect(ChildAttachmentSnapshot);
+const equivalentPersistedJson = Schema.toEquivalence(PersistedJson);
+const equivalentUnknownResolution = Schema.toEquivalence(UnknownResolution);
+const isDoStorageError = Schema.is(DoStorageError);
 
 /** Wrap an adapter-internal failure into the port's LedgerError without erasing its tag. */
 const internalFailure =
@@ -352,7 +360,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       .withWriteTransaction(operation)(effect)
       .pipe(
         Effect.mapError((error) =>
-          error instanceof DoStorageError ? internalFailure(operation)(error) : error,
+          isDoStorageError(error) ? internalFailure(operation)(error) : error,
         ),
       );
 
@@ -1819,7 +1827,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             }).pipe(Effect.mapError(internalFailure(operation))),
           );
         }
-        return claimed as ReadonlyArray<JoiningClaim>;
+        return claimed;
       }),
     );
     yield* hitFailpoint("ledger:claim-joining:after", operation);
@@ -1954,7 +1962,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             const decisions = yield* readApprovalDecisions(operation, validated.submissionId);
             const decided = new Set(decisions.map((row) => row.tool_call_id));
             if (validated.reason.toolCallIds.every((toolCallId) => decided.has(toolCallId))) {
-              return "resume-immediately" as SuspensionOutcome;
+              return RESUME_IMMEDIATELY;
             }
           } else {
             const markers = yield* readChildSettlementMarkers(operation, validated.submissionId);
@@ -1972,7 +1980,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               }
             }
             if (allSettled) {
-              return "resume-immediately" as SuspensionOutcome;
+              return RESUME_IMMEDIATELY;
             }
           }
           const now = yield* currentInstant;
@@ -1990,7 +1998,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             DELETE FROM effect_agent_submission_ownership
             WHERE submission_id = ${validated.submissionId}
           `.pipe(Effect.mapError(sqlFailure(operation)));
-          return "suspended" as SuspensionOutcome;
+          return SUSPENDED;
         }),
       );
       yield* hitFailpoint("ledger:suspend:after", operation);
@@ -2198,17 +2206,24 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         }
         const resolutions = yield* readUnknownResolutions(operation, validated.submissionId);
         const existing = resolutions.find((row) => row.tool_call_id === validated.toolCallId);
-        if (existing !== undefined && existing.resolution_json !== resolutionJson) {
+        const existingIntent =
+          existing === undefined
+            ? undefined
+            : yield* unknownResolutionIntentFromRow(operation, existing);
+        if (
+          existingIntent !== undefined &&
+          !equivalentUnknownResolution(existingIntent.resolution, validated.resolution)
+        ) {
           return yield* UnknownResolutionConflict.make({
             submissionId: validated.submissionId,
             toolCallId: validated.toolCallId,
           });
         }
         let resolved: UnknownResolutionIntent;
-        if (existing !== undefined) {
+        if (existingIntent !== undefined) {
           // Idempotent replay of the recorded intent (author/reason may differ; the stored
           // audit fields win, exactly like requestAbort).
-          resolved = yield* unknownResolutionIntentFromRow(operation, existing);
+          resolved = existingIntent;
         } else {
           const now = yield* currentInstant;
           yield* sql`
@@ -2322,7 +2337,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         `.pipe(Effect.mapError(sqlFailure(operation)));
 
         if (parent.state !== "suspended" || parent.suspended_reason_json === null) {
-          return "not-waiting" as ChildSettledOutcome;
+          return NOT_WAITING;
         }
         const reason = yield* Schema.decodeEffect(Schema.fromJsonString(SuspensionReason))(
           parent.suspended_reason_json,
@@ -2337,12 +2352,12 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           ),
         );
         if (reason._tag !== "WaitingForChild") {
-          return "not-waiting" as ChildSettledOutcome;
+          return NOT_WAITING;
         }
         if (
           !reason.children.some((entry) => entry.childSubmissionId === validated.childSubmissionId)
         ) {
-          return "not-waiting" as ChildSettledOutcome;
+          return NOT_WAITING;
         }
         // The parent wakes exactly when EVERY listed child is provably settled — from its
         // local row or a recorded marker (spec §12 step 10); replays re-run the coverage
@@ -2356,7 +2371,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             entry.childSubmissionId,
           );
           if (!settled) {
-            return "still-waiting" as ChildSettledOutcome;
+            return STILL_WAITING;
           }
         }
         yield* sql`
@@ -2367,7 +2382,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             suspended_at = NULL
           WHERE submission_id = ${validated.parentSubmissionId}
         `.pipe(Effect.mapError(sqlFailure(operation)));
-        return "woken" as ChildSettledOutcome;
+        return WOKEN;
       }),
     );
     yield* hitFailpoint("ledger:child-settled:after", operation);
@@ -2390,13 +2405,17 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       Effect.gen(function* () {
         const existing = yield* readChildReservation(operation, validated.reservationId);
         if (Option.isSome(existing)) {
+          const existingSnapshot = yield* childReservationSnapshotFromRow(
+            operation,
+            existing.value,
+          );
           // Identical replays short-circuit before the fence, mirroring reserveSettlement: a
           // replay creates nothing, so a recovering caller resumes rather than duplicates.
           const identical =
             existing.value.parent_submission_id === validated.parentSubmissionId &&
             existing.value.parent_tool_call_id === validated.parentToolCallId &&
             existing.value.allocation_digest === validated.allocationDigest &&
-            existing.value.allocation_json === allocationJson;
+            equivalentPersistedJson(existingSnapshot.allocation, validated.allocation);
           if (!identical) {
             return yield* ChildReservationConflict.make({
               reservationId: validated.reservationId,
@@ -2406,7 +2425,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             });
           }
           return ReservedChildBudget.make({
-            reservation: yield* childReservationSnapshotFromRow(operation, existing.value),
+            reservation: existingSnapshot,
             replayed: true,
           });
         }
@@ -2551,10 +2570,17 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           });
         }
         if (existing.value.status !== "reserved") {
+          const existingSnapshot = yield* childReservationSnapshotFromRow(
+            operation,
+            existing.value,
+          );
           // The accounting decision was already frozen exactly once; an identical replay is a
           // no-op and a divergent decision conflicts (spec §12 join step 6).
-          if (existing.value.accounting_json === accountingJson) {
-            return yield* childReservationSnapshotFromRow(operation, existing.value);
+          if (
+            existingSnapshot.accounting !== undefined &&
+            equivalentPersistedJson(existingSnapshot.accounting, validated.accounting)
+          ) {
+            return existingSnapshot;
           }
           return yield* ChildReservationConflict.make({
             reservationId: validated.reservationId,
@@ -2690,10 +2716,11 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     return [snapshots, next] as const;
   });
 
-  const scanNonterminal: Stream.Stream<SubmissionSnapshot, LedgerError> = Stream.paginate(
-    undefined as ScanCursor | undefined,
-    scanPage,
-  );
+  const scanNonterminal: Stream.Stream<SubmissionSnapshot, LedgerError> = Stream.paginate<
+    ScanCursor | undefined,
+    SubmissionSnapshot,
+    LedgerError
+  >(undefined, scanPage);
 
   const loadRecoverySnapshot: SubmissionLedger["Service"]["loadRecoverySnapshot"] = Effect.fn(
     "DoSubmissionLedger.loadRecoverySnapshot",
@@ -2964,13 +2991,17 @@ export const submissionLedgerLayer: Layer.Layer<
 export const ledgerLayer = (
   options: DoStorageOptions,
 ): Layer.Layer<SubmissionLedger, DoStorageInitializationError> =>
-  submissionLedgerLayer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        storageConfigLayer(options),
-        storageFailpointLayer(options),
-        SqliteClient.layer({ storage: options.storage }),
-        BrowserCrypto.layer,
+  Layer.unwrap(
+    Effect.map(DoStorageConfig, (config) =>
+      submissionLedgerLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(DoStorageConfig)(config),
+            storageFailpointLayer(options),
+            SqliteClient.layer({ storage: options.storage }),
+            BrowserCrypto.layer,
+          ),
+        ),
       ),
     ),
-  );
+  ).pipe(Layer.provide(storageConfigLayer(options)));

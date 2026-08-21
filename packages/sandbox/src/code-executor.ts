@@ -1,6 +1,10 @@
-import { Context, Duration, Effect, Schema, Scope } from "effect";
+import { Context, Duration, Schema, type Effect, type Scope } from "effect";
 
-import { SandboxImplementation, SandboxNetworkPolicy } from "./sandbox.ts";
+import {
+  SANDBOX_DIAGNOSTIC_MAX_LENGTH,
+  SandboxImplementation,
+  SandboxNetworkPolicy,
+} from "./sandbox.ts";
 
 // Schema `isMaxLength` counts UTF-16 string elements: these caps are
 // transport sanity bounds, not byte budgets. The authoritative byte budgets
@@ -8,7 +12,7 @@ import { SandboxImplementation, SandboxNetworkPolicy } from "./sandbox.ts";
 // UTF-8 encoded values (CAP-015); a multibyte payload therefore hits its
 // configured byte limit well before any of these element-count caps.
 const BoundedLogLine = Schema.String.check(Schema.isMaxLength(16 * 1024));
-const BoundedMessage = Schema.String.check(Schema.isMaxLength(8 * 1024));
+const BoundedMessage = Schema.String.check(Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
 const BoundedLogs = Schema.Array(BoundedLogLine).check(Schema.isMaxLength(4_096));
 const BoundedSourceText = Schema.String.check(Schema.isMaxLength(4 * 1024 * 1024));
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));

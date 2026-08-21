@@ -1,20 +1,30 @@
 import {
+  BeginChildBudgetReleaseRequest,
+  ChildBudgetReservationRequest,
+  ChildReservationId,
+  ClaimRequest,
+  digestJson,
   LedgerError,
+  MarkReadyRequest,
+  MarkUnknownRequest,
+  ResolutionCompletedWithResult,
   SubmissionLedger,
   SubmissionLookupByKey,
   IdempotencyKey,
+  UnknownResolutionCommand,
 } from "@effect-agent/session";
 import { submissionLedgerConformanceCases } from "@effect-agent/session/testing";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runInDurableObject } from "cloudflare:test";
 import type { Crypto } from "effect";
-import { Cause, Effect, Exit, Layer, Option, Stream } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { DoStorageConfig } from "../src/index.ts";
 import {
+  type DoStorageConfig,
+  DoStorageError,
   DoStorageFailpoint,
   DoValueBoundExceeded,
   evictionFailpointHandler,
@@ -29,6 +39,8 @@ import {
   conversationStub,
   id,
   TEST_PRINCIPAL,
+  TEST_PRODUCER,
+  toolCall,
   withConversationStorage,
 } from "./harness.ts";
 
@@ -48,6 +60,9 @@ type SubmissionLedgerLayerRequirementsProof = Assert<
 type SubmissionLedgerLayerErrorProof = Assert<
   Equal<Layer.Error<typeof submissionLedgerLayer>, DoStorageInitializationError>
 >;
+const isLedgerError = Schema.is(LedgerError);
+const isDoStorageError = Schema.is(DoStorageError);
+const isDoValueBoundExceeded = Schema.is(DoValueBoundExceeded);
 
 describe("DoSubmissionLedger", () => {
   // The SAME adapter-neutral contract suite the Node/SQLite and in-memory adapters run —
@@ -72,6 +87,127 @@ describe("DoSubmissionLedger", () => {
     expect(requirementsProof).toBe(true);
     expect(errorProof).toBe(true);
   });
+
+  it("validates convenience-layer configuration before initializing storage", () =>
+    withConversationStorage("wp1-ledger-invalid-config", (storage) =>
+      Effect.gen(function* () {
+        const opened = yield* SubmissionLedger.pipe(
+          Effect.provide(ledgerLayer({ storage, observationPollInterval: -1 })),
+          Effect.exit,
+        );
+
+        expect(Exit.isFailure(opened)).toBe(true);
+        if (Exit.isFailure(opened)) {
+          const failure = Cause.findErrorOption(opened.cause);
+          expect(Option.isSome(failure)).toBe(true);
+          if (Option.isSome(failure)) {
+            expect(isDoStorageError(failure.value)).toBe(true);
+            if (isDoStorageError(failure.value)) {
+              expect(failure.value.operation).toBe("configure Durable Object storage");
+            }
+          }
+        }
+        const tables = storage.sql
+          .exec<{ name: string }>(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'effect_agent_%'",
+          )
+          .toArray();
+        expect(tables).toEqual([]);
+      }),
+    ));
+
+  it("treats reordered persisted JSON as an idempotent replay", () =>
+    withConversationStorage("wp1-ledger-semantic-json", (storage) =>
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+        const lane = conversation("conversation-do-semantic-json");
+        const admitted = yield* ledger.admit(
+          yield* admission("conversation-do-semantic-json", "semantic-json-key", {
+            work: "semantic JSON",
+          }),
+        );
+        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+        const claim = yield* ledger.claim(
+          ClaimRequest.make({ conversationId: lane, producerId: TEST_PRODUCER }),
+        );
+        if (Option.isNone(claim)) return yield* Effect.die("missing semantic JSON claim");
+
+        const allocation = { turns: 4, toolCalls: 8 };
+        const reorderedAllocation = { toolCalls: 8, turns: 4 };
+        const allocationDigest = yield* digestJson(allocation);
+        expect(yield* digestJson(reorderedAllocation)).toBe(allocationDigest);
+        const reservationId = id(ChildReservationId, "child-reservation:do-semantic-json");
+        const reservationFields = {
+          reservationId,
+          parentSubmissionId: admitted.submissionId,
+          parentToolCallId: toolCall("call-do-semantic-json"),
+          ownershipToken: claim.value.ownershipToken,
+          allocationDigest,
+        };
+        yield* ledger.reserveChildBudget(
+          ChildBudgetReservationRequest.make({ ...reservationFields, allocation }),
+        );
+        const replayed = yield* ledger.reserveChildBudget(
+          ChildBudgetReservationRequest.make({
+            ...reservationFields,
+            allocation: reorderedAllocation,
+          }),
+        );
+        expect(replayed.replayed).toBe(true);
+
+        const accounting = {
+          consumed: { turns: 1, toolCalls: 2 },
+          released: { turns: 3, toolCalls: 6 },
+        };
+        yield* ledger.beginChildBudgetRelease(
+          BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
+        );
+        const replayedFreeze = yield* ledger.beginChildBudgetRelease(
+          BeginChildBudgetReleaseRequest.make({
+            reservationId,
+            accounting: {
+              released: { toolCalls: 6, turns: 3 },
+              consumed: { toolCalls: 2, turns: 1 },
+            },
+          }),
+        );
+        expect(replayedFreeze.status).toBe("releasePending");
+
+        const resolutionCall = toolCall("call-do-semantic-resolution");
+        yield* ledger.markUnknown(
+          MarkUnknownRequest.make({
+            submissionId: admitted.submissionId,
+            toolCallIds: [resolutionCall],
+            reason: "semantic JSON replay",
+          }),
+        );
+        const firstResolution = yield* ledger.recordUnknownResolution(
+          UnknownResolutionCommand.make({
+            submissionId: admitted.submissionId,
+            toolCallId: resolutionCall,
+            author: "do-ledger-test",
+            reason: "supplier answered",
+            resolution: ResolutionCompletedWithResult.make({
+              result: { bookingRef: "booking-1", details: { city: "Kyoto", nights: 2 } },
+              isFailure: false,
+            }),
+          }),
+        );
+        const replayedResolution = yield* ledger.recordUnknownResolution(
+          UnknownResolutionCommand.make({
+            submissionId: admitted.submissionId,
+            toolCallId: resolutionCall,
+            author: "do-ledger-test-replay",
+            reason: "same supplier answer",
+            resolution: ResolutionCompletedWithResult.make({
+              isFailure: false,
+              result: { details: { nights: 2, city: "Kyoto" }, bookingRef: "booking-1" },
+            }),
+          }),
+        );
+        expect(replayedResolution.resolvedAt).toEqual(firstResolution.resolvedAt);
+      }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
+    ));
 
   // The DC realization of "persists admissions durably across process-style reopen": the
   // Durable Object is evicted mid-flight through the failpoint's `ctx.abort()` mode — the
@@ -178,9 +314,9 @@ describe("DoSubmissionLedger", () => {
         if (Exit.isFailure(exit)) {
           const error = Cause.squash(exit.cause);
           expect(error).toBeInstanceOf(LedgerError);
-          if (error instanceof LedgerError) {
+          if (isLedgerError(error)) {
             expect(error.cause).toBeInstanceOf(DoValueBoundExceeded);
-            if (error.cause instanceof DoValueBoundExceeded) {
+            if (isDoValueBoundExceeded(error.cause)) {
               expect(error.cause.maxBytes).toBe(1_024);
               expect(error.cause.actualBytes).toBeGreaterThan(1_024);
               expect(error.cause.message).toContain("R2");

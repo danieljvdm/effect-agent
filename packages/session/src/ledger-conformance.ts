@@ -1,13 +1,15 @@
-import { AgentId, ConversationId, ReceiptId, SubmissionId, ToolCallId } from "@effect-agent/core";
-import { Clock, Crypto, DateTime, Duration, Effect, Option, Schema, Stream } from "effect";
+import type { ReceiptId } from "@effect-agent/core";
+import { AgentId, ConversationId, SubmissionId, ToolCallId } from "@effect-agent/core";
+import type { Crypto } from "effect";
+import { Clock, DateTime, Duration, Effect, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 import { digestJson, type DigestError } from "./digest.ts";
 import {
+  type AdmissionResult,
   AbortCommand,
   AdmissionConflict,
   AdmissionRequest,
-  AdmissionResult,
   ApprovalConflict,
   ApprovalDecisionCommand,
   ApprovalPendingSuspension,
@@ -63,7 +65,7 @@ import {
   RecordEnvelope,
   SubmissionSettled,
   SubmissionSettledRecord,
-  type PersistedJson,
+  PersistedJson,
   type SettlementFailureDiagnostic,
 } from "./records.ts";
 
@@ -107,8 +109,15 @@ const decodeChildReservationId = Schema.decodeSync(ChildReservationId);
 /** A token that never owned any lane, for ownership-fencing assertions. */
 const BOGUS_TOKEN = Schema.decodeSync(OwnershipToken)("ownership-ledger-conformance-bogus");
 
-const sameJson = (left: unknown, right: unknown): boolean =>
-  JSON.stringify(left) === JSON.stringify(right);
+const persistedJsonEquivalent = Schema.toEquivalence(PersistedJson);
+const isAdmissionConflict = Schema.is(AdmissionConflict);
+const isApprovalConflict = Schema.is(ApprovalConflict);
+const isChildReservationConflict = Schema.is(ChildReservationConflict);
+const isJoinedToHost = Schema.is(JoinedToHost);
+const isLedgerError = Schema.is(LedgerError);
+const isOwnershipLost = Schema.is(OwnershipLost);
+const isSettlementConflict = Schema.is(SettlementConflict);
+const isUnknownResolutionConflict = Schema.is(UnknownResolutionConflict);
 
 const CONFORMANCE_PRINCIPAL = Schema.decodeSync(Principal)("principal-ledger-conformance");
 const OTHER_PRINCIPAL = Schema.decodeSync(Principal)("principal-ledger-conformance-other");
@@ -355,7 +364,7 @@ const admissionIdempotency = conformanceCase(
         ledger.admit(conflicting),
       );
       yield* ensure(
-        conflict instanceof AdmissionConflict &&
+        isAdmissionConflict(conflict) &&
           conflict.existingInputDigest === request.inputDigest &&
           conflict.attemptedInputDigest === conflicting.inputDigest,
         "A same-key admission with a different digest must fail with both digests reported",
@@ -649,7 +658,7 @@ const leaseExpiryReclaim = conformanceCase(
         ),
       );
       yield* ensure(
-        staleRenew instanceof OwnershipLost && staleRenew.actualEpoch === reclaim.producerEpoch,
+        isOwnershipLost(staleRenew) && staleRenew.actualEpoch === reclaim.producerEpoch,
         "A superseded token must fail renewal with the current epoch reported",
       );
       const staleRelease = yield* expectFailure(
@@ -661,10 +670,7 @@ const leaseExpiryReclaim = conformanceCase(
           }),
         ),
       );
-      yield* ensure(
-        staleRelease instanceof OwnershipLost,
-        "A superseded token must not release the lane",
-      );
+      yield* ensure(isOwnershipLost(staleRelease), "A superseded token must not release the lane");
       const staleMark = yield* expectFailure(
         "marking input applied with the superseded token",
         ledger.markInputApplied(
@@ -677,7 +683,7 @@ const leaseExpiryReclaim = conformanceCase(
         ),
       );
       yield* ensure(
-        staleMark instanceof OwnershipLost,
+        isOwnershipLost(staleMark),
         "A superseded token must not mark canonical input applied",
       );
       const staleReservation = yield* settlementReservation({
@@ -691,7 +697,7 @@ const leaseExpiryReclaim = conformanceCase(
         ledger.reserveSettlement(staleReservation),
       );
       yield* ensure(
-        staleReserve instanceof OwnershipLost,
+        isOwnershipLost(staleReserve),
         "A superseded token must not reserve a settlement",
       );
       const afterStale = yield* recoverySnapshot(admitted.submissionId);
@@ -757,7 +763,7 @@ const releaseMakesHeadClaimable = conformanceCase(
         ),
       );
       yield* ensure(
-        releasedRenew instanceof OwnershipLost,
+        isOwnershipLost(releasedRenew),
         "A released token must no longer renew the lease",
       );
 
@@ -780,7 +786,7 @@ const releaseMakesHeadClaimable = conformanceCase(
         ),
       );
       yield* ensure(
-        doubleRelease instanceof OwnershipLost,
+        isOwnershipLost(doubleRelease),
         "A superseded token must not release the new Attempt's ownership",
       );
       yield* settleClaimed(admitted, reclaim.ownershipToken);
@@ -988,8 +994,7 @@ const settlementConflicts = conformanceCase(
         ledger.reserveSettlement(conflictingOutcome),
       );
       yield* ensure(
-        outcomeConflict instanceof SettlementConflict &&
-          outcomeConflict.existingOutcome === "completed",
+        isSettlementConflict(outcomeConflict) && outcomeConflict.existingOutcome === "completed",
         "A second reservation with a different outcome must conflict with the recorded outcome",
       );
 
@@ -1005,8 +1010,7 @@ const settlementConflicts = conformanceCase(
         ledger.reserveSettlement(conflictingContent),
       );
       yield* ensure(
-        contentConflict instanceof SettlementConflict &&
-          contentConflict.existingOutcome === "completed",
+        isSettlementConflict(contentConflict) && contentConflict.existingOutcome === "completed",
         "A second reservation with different content must conflict even when outcomes match",
       );
 
@@ -1022,7 +1026,7 @@ const settlementConflicts = conformanceCase(
         ),
       );
       yield* ensure(
-        wrongFinalization instanceof SettlementConflict &&
+        isSettlementConflict(wrongFinalization) &&
           wrongFinalization.existingOutcome === "completed",
         "Finalization disagreeing with the reserved settlement must conflict",
       );
@@ -1095,8 +1099,7 @@ const abortIdempotency = conformanceCase(
         ),
       );
       yield* ensure(
-        terminalAbort instanceof SettlementConflict &&
-          terminalAbort.existingOutcome === "completed",
+        isSettlementConflict(terminalAbort) && terminalAbort.existingOutcome === "completed",
         "Abort must never rewrite a terminal outcome",
       );
     }),
@@ -1375,7 +1378,7 @@ const joiningPrefixClaim = conformanceCase(
         ),
       );
       yield* ensure(
-        foreign instanceof OwnershipLost,
+        isOwnershipLost(foreign),
         "claimJoining must be fenced by the host's ownership token",
       );
 
@@ -1391,7 +1394,7 @@ const joiningPrefixClaim = conformanceCase(
         first.length === 1 &&
           first[0].submissionId === second.submissionId &&
           first[0].queueSequence === second.queueSequence &&
-          sameJson(first[0].inputPayload, { queued: 2 }),
+          persistedJsonEquivalent(first[0].inputPayload, { queued: 2 }),
         "maxCount must bound the claim to exactly the next queued Submission with its input",
       );
 
@@ -1625,7 +1628,7 @@ const markJoinedIdempotency = conformanceCase(
         ),
       );
       yield* ensure(
-        !(divergent instanceof OwnershipLost),
+        !isOwnershipLost(divergent),
         "A divergent join marker must fail as a ledger integrity error, not ownership loss",
       );
 
@@ -1640,10 +1643,7 @@ const markJoinedIdempotency = conformanceCase(
           }),
         ),
       );
-      yield* ensure(
-        stale instanceof OwnershipLost,
-        "markJoined must be fenced by the host's ownership",
-      );
+      yield* ensure(isOwnershipLost(stale), "markJoined must be fenced by the host's ownership");
 
       // Repairable from history: the host Attempt dies and a later host Attempt repairs the
       // lost marker under its fresh ownership token (DUR-016).
@@ -1674,7 +1674,7 @@ const markJoinedIdempotency = conformanceCase(
         ),
       );
       yield* ensure(
-        superseded instanceof OwnershipLost,
+        isOwnershipLost(superseded),
         "A superseded host token must not repair a join marker",
       );
       yield* ledger.markJoined(
@@ -1771,8 +1771,7 @@ const claimNeverGrantsBlockedHead = conformanceCase(
         ),
       );
       yield* ensure(
-        joinedAbort instanceof JoinedToHost &&
-          joinedAbort.hostSubmissionId === joinedHost.submissionId,
+        isJoinedToHost(joinedAbort) && joinedAbort.hostSubmissionId === joinedHost.submissionId,
         "Abort of a joined Submission must fail with the host linkage — the abort target is the host",
       );
       yield* settleClaimed(joinedHost, joinedHostClaim.ownershipToken);
@@ -1920,7 +1919,7 @@ const approvalDecisionIdempotency = conformanceCase(
         ),
       );
       yield* ensure(
-        conflict instanceof ApprovalConflict &&
+        isApprovalConflict(conflict) &&
           conflict.toolCallId === callA &&
           conflict.existingDecision === "approved",
         "A divergent re-decision must conflict with the recorded decision",
@@ -1961,7 +1960,7 @@ const approvalDecisionIdempotency = conformanceCase(
         ),
       );
       yield* ensure(
-        late instanceof SettlementConflict && late.existingOutcome === "completed",
+        isSettlementConflict(late) && late.existingOutcome === "completed",
         "A decision must never land on a settled Submission",
       );
     }),
@@ -2037,7 +2036,7 @@ const unknownResolutionLifecycle = conformanceCase(
         ),
       );
       yield* ensure(
-        divergent instanceof UnknownResolutionConflict && divergent.toolCallId === call1,
+        isUnknownResolutionConflict(divergent) && divergent.toolCallId === call1,
         "A divergent re-resolution must conflict",
       );
       const replayed = yield* ledger.recordUnknownResolution(
@@ -2130,7 +2129,7 @@ const unknownResolutionLifecycle = conformanceCase(
         ),
       );
       yield* ensure(
-        late instanceof SettlementConflict,
+        isSettlementConflict(late),
         "A resolution must never land on a settled Submission",
       );
     }),
@@ -2160,7 +2159,7 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
           }),
         ),
       );
-      yield* ensure(foreign instanceof OwnershipLost, "suspend must be fenced by the owning token");
+      yield* ensure(isOwnershipLost(foreign), "suspend must be fenced by the owning token");
 
       // The decision raced ahead of the suspend transaction (plan §2.6).
       yield* ledger.recordApprovalDecision(
@@ -2233,7 +2232,7 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
         ),
       );
       yield* ensure(
-        ended instanceof OwnershipLost,
+        isOwnershipLost(ended),
         "Suspension must end the ownership period without settling",
       );
 
@@ -2276,7 +2275,7 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
         ),
       );
       yield* ensure(
-        terminal instanceof SettlementConflict && terminal.existingOutcome === "completed",
+        isSettlementConflict(terminal) && terminal.existingOutcome === "completed",
         "Suspension must never land on a settled Submission",
       );
     }),
@@ -2321,7 +2320,7 @@ const joinedSettlementLinkageAuthority = conformanceCase(
         ledger.reserveSettlement(joiningReservation),
       );
       yield* ensure(
-        fenced instanceof OwnershipLost,
+        isOwnershipLost(fenced),
         "A joining Submission's settlement reservation must stay ownership-fenced",
       );
 
@@ -2394,16 +2393,21 @@ const childReservationIdempotency = conformanceCase(
           first.reservation.status === "reserved" &&
           first.reservation.allocationDigest === allocationDigest &&
           first.reservation.childSubmissionId === undefined &&
-          sameJson(first.reservation.allocation, allocation),
+          persistedJsonEquivalent(first.reservation.allocation, allocation),
         "The first reservation must create a reserved row carrying the exact allocation",
       );
 
       yield* TestClock.adjust("1 second");
-      const replayed = yield* ledger.reserveChildBudget(request);
+      const replayed = yield* ledger.reserveChildBudget(
+        ChildBudgetReservationRequest.make({
+          ...requestFields,
+          allocation: { toolCalls: 8, turns: 4 },
+        }),
+      );
       yield* ensure(
         replayed.replayed &&
           replayed.reservation.status === "reserved" &&
-          sameJson(replayed.reservation.allocation, allocation) &&
+          persistedJsonEquivalent(replayed.reservation.allocation, allocation) &&
           sameInstant(replayed.reservation.reservedAt, first.reservation.reservedAt),
         "An identical reservation must replay the stored row unchanged",
       );
@@ -2420,7 +2424,7 @@ const childReservationIdempotency = conformanceCase(
         ),
       );
       yield* ensure(
-        divergent instanceof ChildReservationConflict && divergent.status === "reserved",
+        isChildReservationConflict(divergent) && divergent.status === "reserved",
         "A divergent allocation must conflict with the recorded reservation",
       );
 
@@ -2434,7 +2438,7 @@ const childReservationIdempotency = conformanceCase(
         ),
       );
       yield* ensure(
-        secondId instanceof ChildReservationConflict,
+        isChildReservationConflict(secondId),
         "One parent Tool Call must never own two reservations",
       );
 
@@ -2479,7 +2483,7 @@ const childReservationFencing = conformanceCase(
         ledger.reserveChildBudget(request),
       );
       yield* ensure(
-        foreign instanceof OwnershipLost,
+        isOwnershipLost(foreign),
         "Reservation creation must be fenced by the parent's live ownership token",
       );
       const afterForeign = yield* recoverySnapshot(parent.submissionId);
@@ -2522,7 +2526,7 @@ const childReservationFencing = conformanceCase(
         ),
       );
       yield* ensure(
-        staleAttach instanceof OwnershipLost,
+        isOwnershipLost(staleAttach),
         "A superseded parent token must not attach a child",
       );
 
@@ -2538,7 +2542,7 @@ const childReservationFencing = conformanceCase(
         ),
       );
       yield* ensure(
-        staleCreate instanceof OwnershipLost,
+        isOwnershipLost(staleCreate),
         "A superseded parent token must not create new reservation state",
       );
 
@@ -2608,7 +2612,7 @@ const attachChildIdempotency = conformanceCase(
         ),
       );
       yield* ensure(
-        unknownReservation instanceof LedgerError,
+        isLedgerError(unknownReservation),
         "Attaching to an unknown reservation must fail as a ledger error",
       );
 
@@ -2647,7 +2651,7 @@ const attachChildIdempotency = conformanceCase(
         ),
       );
       yield* ensure(
-        divergent instanceof ChildReservationConflict,
+        isChildReservationConflict(divergent),
         "A divergent child attachment must conflict with the recorded child",
       );
 
@@ -2694,14 +2698,18 @@ const beginReleaseFreezesAccountingOnce = conformanceCase(
       );
       yield* ensure(
         frozen.status === "releasePending" &&
-          sameJson(frozen.accounting, accounting) &&
+          frozen.accounting !== undefined &&
+          persistedJsonEquivalent(frozen.accounting, accounting) &&
           frozen.releaseBeganAt !== undefined,
         "The first beginRelease must freeze the accounting and move to releasePending",
       );
 
       yield* TestClock.adjust("1 second");
       const replayed = yield* ledger.beginChildBudgetRelease(
-        BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
+        BeginChildBudgetReleaseRequest.make({
+          reservationId,
+          accounting: { released: { turns: 3 }, consumed: { turns: 1 } },
+        }),
       );
       yield* ensure(
         replayed.status === "releasePending" &&
@@ -2721,7 +2729,7 @@ const beginReleaseFreezesAccountingOnce = conformanceCase(
         ),
       );
       yield* ensure(
-        divergent instanceof ChildReservationConflict && divergent.status === "releasePending",
+        isChildReservationConflict(divergent) && divergent.status === "releasePending",
         "A divergent accounting freeze must conflict with the frozen decision",
       );
 
@@ -2730,7 +2738,9 @@ const beginReleaseFreezesAccountingOnce = conformanceCase(
         BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
       );
       yield* ensure(
-        afterRelease.status === "released" && sameJson(afterRelease.accounting, accounting),
+        afterRelease.status === "released" &&
+          afterRelease.accounting !== undefined &&
+          persistedJsonEquivalent(afterRelease.accounting, accounting),
         "Replaying the identical accounting after release must return the released row",
       );
       const divergentAfterRelease = yield* expectFailure(
@@ -2743,7 +2753,7 @@ const beginReleaseFreezesAccountingOnce = conformanceCase(
         ),
       );
       yield* ensure(
-        divergentAfterRelease instanceof ChildReservationConflict &&
+        isChildReservationConflict(divergentAfterRelease) &&
           divergentAfterRelease.status === "released",
         "The frozen decision must stay immutable after release",
       );
@@ -2780,7 +2790,7 @@ const releaseAppliedExactlyOnce = conformanceCase(
         ledger.releaseChildBudget(ReleaseChildBudgetRequest.make({ reservationId })),
       );
       yield* ensure(
-        early instanceof ChildReservationConflict && early.status === "reserved",
+        isChildReservationConflict(early) && early.status === "reserved",
         "Release must never skip the releasePending freeze",
       );
 
@@ -2868,7 +2878,7 @@ const recordChildSettledWake = conformanceCase(
         ),
       );
       yield* ensure(
-        ended instanceof OwnershipLost,
+        isOwnershipLost(ended),
         "waitingForChild must end the ownership period without settling (SUB-030)",
       );
       yield* ensure(
@@ -3141,7 +3151,7 @@ const admissionParentLinkage = conformanceCase(
         ),
       );
       yield* ensure(
-        divergentLinkage instanceof AdmissionConflict,
+        isAdmissionConflict(divergentLinkage),
         "A divergent parent linkage must conflict even when the input digest matches",
       );
 
@@ -3150,7 +3160,7 @@ const admissionParentLinkage = conformanceCase(
         ledger.admit(yield* admissionRequest(childLane, "linkage-child-key", { task: "research" })),
       );
       yield* ensure(
-        droppedLinkage instanceof AdmissionConflict,
+        isAdmissionConflict(droppedLinkage),
         "Dropping the recorded linkage on replay must conflict",
       );
 
@@ -3164,7 +3174,7 @@ const admissionParentLinkage = conformanceCase(
         ),
       );
       yield* ensure(
-        addedLinkage instanceof AdmissionConflict,
+        isAdmissionConflict(addedLinkage),
         "Adding a linkage to an unlinked admission on replay must conflict",
       );
       const plainSnapshot = yield* expectSome(
@@ -3271,7 +3281,7 @@ const queuedAbortSettlementAuthority = conformanceCase(
         }).pipe(Effect.flatMap((reservation) => ledger.reserveSettlement(reservation))),
       );
       yield* ensure(
-        unaborted instanceof OwnershipLost,
+        isOwnershipLost(unaborted),
         "A queued reservation without a durable abort intent must stay fenced (OwnershipLost)",
       );
 
@@ -3287,7 +3297,7 @@ const queuedAbortSettlementAuthority = conformanceCase(
         }).pipe(Effect.flatMap((reservation) => ledger.reserveSettlement(reservation))),
       );
       yield* ensure(
-        wrongOutcome instanceof OwnershipLost,
+        isOwnershipLost(wrongOutcome),
         "An abort intent must never authorize a non-aborted settlement outcome",
       );
 

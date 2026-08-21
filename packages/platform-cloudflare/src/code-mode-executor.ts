@@ -18,8 +18,11 @@ import {
   type CodeExecutorExecute,
   type CodeExecutionRequest,
 } from "@effect-agent/sandbox";
+import { BrowserCrypto } from "@effect/platform-browser";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schema } from "effect";
+import { Clock, Crypto, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schema } from "effect";
+
+import { safeCauseDiagnostic, safeCauseMessage } from "./boundary.ts";
 
 /**
  * The Cloudflare Dynamic Worker `CodeExecutor` adapter (C4 of ADR-0017;
@@ -43,6 +46,10 @@ export interface CodeModeHostStub {
   readonly call: (passId: string, hostCall: unknown) => Promise<unknown>;
 }
 
+interface CodeModeHarnessEntrypoint extends Rpc.WorkerEntrypointBranded {
+  readonly run: () => Promise<unknown>;
+}
+
 interface RegisteredPass {
   readonly dispatch: (hostCall: unknown) => Promise<unknown>;
 }
@@ -63,7 +70,10 @@ const passRegistry = new Map<string, RegisteredPass>();
  */
 export class CodeModeHostEntrypoint extends WorkerEntrypoint {
   async call(passId: unknown, hostCall: unknown): Promise<unknown> {
-    const pass = passRegistry.get(String(passId));
+    if (typeof passId !== "string") {
+      throw new TypeError("Code Mode pass identities must be strings");
+    }
+    const pass = passRegistry.get(passId);
     if (pass === undefined) {
       throw new Error("Unknown Code Mode pass");
     }
@@ -104,7 +114,7 @@ const safeJson = (value) => {
 
 export default class CodeModeHarness extends WorkerEntrypoint {
   async run() {
-    const config = JSON.parse(this.env.CODE_MODE_PASS);
+    const config = this.env.CODE_MODE_PASS;
     const host = this.env.CODE_MODE_HOST;
     const limits = config.limits;
     const logs = [];
@@ -227,50 +237,41 @@ const BoundedLogs = Schema.Array(Schema.String.check(Schema.isMaxLength(16 * 102
   Schema.isMaxLength(4_096),
 );
 
-const HarnessCompleted = Schema.Struct({
-  _tag: Schema.Literal("completed"),
+const HarnessCompleted = Schema.TaggedStruct("completed", {
   value: Schema.Json,
   logs: BoundedLogs,
   hostCalls: Schema.Natural,
   logBytes: Schema.Natural,
   resultBytes: Schema.Natural,
 });
-const HarnessSourceInvalid = Schema.Struct({
-  _tag: Schema.Literal("source-invalid"),
+const HarnessSourceInvalid = Schema.TaggedStruct("source-invalid", {
   message: Schema.String,
 });
-const HarnessNotAFunction = Schema.Struct({
-  _tag: Schema.Literal("source-not-a-function"),
+const HarnessNotAFunction = Schema.TaggedStruct("source-not-a-function", {
   actual: Schema.String,
 });
-const HarnessProgramFailed = Schema.Struct({
-  _tag: Schema.Literal("program-failed"),
+const HarnessProgramFailed = Schema.TaggedStruct("program-failed", {
   reason: Schema.Literals(["threw", "rejected", "non-json-result"]),
   thrown: Schema.Json,
   message: Schema.String,
   logs: BoundedLogs,
 });
-const HarnessLogLimit = Schema.Struct({
-  _tag: Schema.Literal("log-limit"),
+const HarnessLogLimit = Schema.TaggedStruct("log-limit", {
   observed: Schema.Natural,
   logs: BoundedLogs,
 });
-const HarnessArgumentLimit = Schema.Struct({
-  _tag: Schema.Literal("argument-limit"),
+const HarnessArgumentLimit = Schema.TaggedStruct("argument-limit", {
   observed: Schema.Natural,
   logs: BoundedLogs,
 });
-const HarnessResultLimit = Schema.Struct({
-  _tag: Schema.Literal("result-limit"),
+const HarnessResultLimit = Schema.TaggedStruct("result-limit", {
   observed: Schema.Natural,
   logs: BoundedLogs,
 });
-const HarnessHostCallLimit = Schema.Struct({
-  _tag: Schema.Literal("host-call-limit"),
+const HarnessHostCallLimit = Schema.TaggedStruct("host-call-limit", {
   logs: BoundedLogs,
 });
-const HarnessProtocol = Schema.Struct({
-  _tag: Schema.Literal("protocol"),
+const HarnessProtocol = Schema.TaggedStruct("protocol", {
   message: Schema.String,
 });
 const HarnessOutcome = Schema.Union([
@@ -284,6 +285,26 @@ const HarnessOutcome = Schema.Union([
   HarnessHostCallLimit,
   HarnessProtocol,
 ]);
+
+const HarnessPassConfig = Schema.Struct({
+  passId: Schema.NonEmptyString,
+  namespaces: Schema.Array(
+    Schema.Struct({
+      name: Schema.NonEmptyString,
+      methods: Schema.Array(Schema.NonEmptyString).check(Schema.isMaxLength(64)),
+    }),
+  ).check(Schema.isMaxLength(32)),
+  limits: Schema.Struct({
+    maxLogBytes: Schema.Natural,
+    maxResultBytes: Schema.Natural,
+    maxHostCalls: Schema.Natural,
+    maxHostCallArgumentBytes: Schema.Natural,
+  }),
+});
+
+const encodeHarnessPassConfig = Schema.encodeSync(HarnessPassConfig);
+const encodeJsonPayload = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+const decodeJsonPayload = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
 
 const decodeHarnessOutcome = (value: unknown) => {
   try {
@@ -309,6 +330,27 @@ const decodeHostCallResult = (value: unknown) => {
   }
 };
 
+/** Dispose a Cloudflare RPC handle when the runtime supplies its untyped disposal hook. @internal */
+export const disposeRpcHandle = (handle: unknown): Effect.Effect<void> =>
+  Effect.try({
+    try: () => {
+      if ((typeof handle !== "object" && typeof handle !== "function") || handle === null) return;
+      if (!(Symbol.dispose in handle)) return;
+      const dispose = Reflect.get(handle, Symbol.dispose);
+      if (typeof dispose === "function") {
+        Reflect.apply(dispose, handle, []);
+      }
+    },
+    catch: (cause) =>
+      safeCauseDiagnostic(cause, "The Cloudflare RPC disposal hook failed without a diagnostic"),
+  }).pipe(
+    Effect.catch((diagnostic) =>
+      Effect.logWarning(`Cloudflare RPC handle disposal failed: ${diagnostic}`).pipe(
+        Effect.ignoreCause,
+      ),
+    ),
+  );
+
 /**
  * Project a host outcome to the plain JSON envelope the harness reads. A
  * `CodeExecutionHost` may return either real `CodeHostCallResult` instances
@@ -326,8 +368,7 @@ const encodeHostResultPayload = (
 ): EncodedHostResultPayload | undefined => {
   try {
     const payload = outcome._tag === "CodeHostCallSuccess" ? outcome.value : outcome.error;
-    const encodedPayload = JSON.stringify(payload);
-    if (encodedPayload === undefined) return undefined;
+    const encodedPayload = encodeJsonPayload(payload);
     return {
       encodedPayload,
       resultBytes: utf8ByteLength(encodedPayload),
@@ -378,9 +419,11 @@ export interface DynamicWorkerCodeExecutorOptions {
   readonly compatibilityDate?: string | undefined;
 }
 
-const passCounterState = { next: 0 };
-
-const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExecute =>
+const makeExecute = (
+  options: DynamicWorkerCodeExecutorOptions,
+  crypto: Crypto.Crypto,
+  clock: Clock.Clock,
+): CodeExecutorExecute =>
   Effect.fn("DynamicWorkerCodeExecutor.execute")(function* (request: CodeExecutionRequest) {
     if (request.network._tag !== "NetworkDisabled") {
       return yield* CodeExecutorUnsupportedError.make({
@@ -409,18 +452,32 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
     }
 
     const host = yield* CodeExecutionHost;
-    passCounterState.next += 1;
     // The pass id is the only credential a loaded program presents to reach
     // its host authority, so it must be unguessable: a program cannot forge
     // another pass's id even if two passes were ever concurrent (the broker
-    // keeps them sequential, but the id must not rely on that). The counter
-    // prefix keeps ids debuggable; the random suffix makes them unforgeable.
-    const passId = `code-mode-pass-${passCounterState.next}-${crypto.randomUUID()}`;
+    // keeps them sequential, but the id must not rely on that).
+    const passId = yield* crypto.randomUUIDv4.pipe(
+      Effect.mapError((cause) =>
+        CodeExecutorStartError.make({
+          implementation: dynamicWorkerImplementation,
+          message: `Could not mint the Code Mode pass identity: ${safeCauseMessage(
+            cause,
+            "the crypto service failed without a diagnostic",
+          )}`.slice(0, 8_000),
+          cause,
+        }),
+      ),
+      Effect.map((uuid) => `code-mode-pass-${uuid}`),
+    );
 
-    const startedAt = performance.now();
-    const passDeadline = startedAt + Duration.toMillis(request.limits.maxWallTime);
-    const remainingPassWallTime = (): Duration.Duration =>
-      Duration.millis(Math.max(0, passDeadline - performance.now()));
+    // This synchronous clock access is confined to callbacks that must compute a timeout
+    // immediately. The Clock service remains the authority, so tests and hosts can replace it.
+    const startedAt = clock.monotonicTimeNanosUnsafe();
+    const passDeadline = startedAt + Duration.toNanosUnsafe(request.limits.maxWallTime);
+    const remainingPassWallTime = (): Duration.Duration => {
+      const now = clock.monotonicTimeNanosUnsafe();
+      return Duration.nanos(passDeadline > now ? passDeadline - now : 0n);
+    };
     let issuedHostCalls = 0;
     let passOpen = true;
     const queuedHostCalls: Array<QueuedHostCall> = [];
@@ -461,11 +518,19 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
           failPass(error);
           return yield* error;
         }
-        const normalizedPayload: unknown = JSON.parse(encoded.encodedPayload);
+        const normalizedPayload = decodeJsonPayload(encoded.encodedPayload);
+        if (Option.isNone(normalizedPayload)) {
+          const error = CodeExecutionProtocolError.make({
+            implementation: dynamicWorkerImplementation,
+            message: "The execution host returned a result that could not cross the JSON boundary",
+          });
+          failPass(error);
+          return yield* error;
+        }
         queued.resolve(
           decoded.value._tag === "CodeHostCallSuccess"
-            ? { _tag: "CodeHostCallSuccess", value: normalizedPayload }
-            : { _tag: "CodeHostCallFailure", error: normalizedPayload },
+            ? { _tag: "CodeHostCallSuccess", value: normalizedPayload.value }
+            : { _tag: "CodeHostCallFailure", error: normalizedPayload.value },
         );
       });
 
@@ -554,7 +619,7 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
     // worker carries the `experimental` compatibility flag, which deployed
     // consumers cannot set — the option would reject every pass in
     // production. The harness needs no experimental runtime features.
-    const workerCode = {
+    const workerCode: WorkerLoaderWorkerCode = {
       compatibilityDate: options.compatibilityDate ?? "2025-05-01",
       mainModule: "harness.js",
       modules: {
@@ -563,7 +628,7 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
       },
       env: {
         CODE_MODE_HOST: options.hostStub,
-        CODE_MODE_PASS: JSON.stringify({
+        CODE_MODE_PASS: encodeHarnessPassConfig({
           passId,
           namespaces: request.namespaces.map((namespace) => ({
             name: namespace.name,
@@ -590,9 +655,9 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
 
     const worker = yield* Effect.acquireRelease(
       Effect.try({
-        try: () => options.loader.load(workerCode as never),
+        try: () => options.loader.load(workerCode),
         catch: (cause) => {
-          const text = cause instanceof Error ? cause.message : String(cause);
+          const text = safeCauseMessage(cause, "The Worker Loader failed without a diagnostic");
           // Blame the program's source ONLY on a genuine compile diagnostic;
           // any other load rejection is an infrastructure start failure, not
           // the model's fault (see classifyWorkerFailure for the same split).
@@ -610,19 +675,19 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
           });
         },
       }),
-      (stub) =>
-        Effect.sync(() => {
-          (stub as Partial<Record<typeof Symbol.dispose, () => void>>)[Symbol.dispose]?.();
-        }),
+      disposeRpcHandle,
+    );
+
+    const entrypoint = yield* Effect.acquireRelease(
+      Effect.try({
+        try: () => worker.getEntrypoint<CodeModeHarnessEntrypoint>(),
+        catch: (cause) => classifyWorkerFailure(cause, request.limits.maxWallTime),
+      }),
+      disposeRpcHandle,
     );
 
     const rpc = Effect.tryPromise({
-      try: async () => {
-        const entrypoint = worker.getEntrypoint() as unknown as {
-          run(): Promise<unknown>;
-        };
-        return await entrypoint.run();
-      },
+      try: () => entrypoint.run(),
       catch: (cause) => classifyWorkerFailure(cause, request.limits.maxWallTime),
     });
 
@@ -650,7 +715,7 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
       return yield* Effect.failCause(exit.cause);
     }
     const raw = exit.value;
-    const finishedAt = performance.now();
+    const finishedAt = clock.monotonicTimeNanosUnsafe();
 
     const outcome = decodeHarnessOutcome(raw);
     if (Option.isNone(outcome)) {
@@ -666,7 +731,7 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
           value: outcome.value.value,
           logs: outcome.value.logs,
           resourceUse: CodeExecutionResourceUse.make({
-            wallTime: Duration.millis(Math.max(0, finishedAt - startedAt)),
+            wallTime: Duration.nanos(finishedAt > startedAt ? finishedAt - startedAt : 0n),
             hostCalls: outcome.value.hostCalls,
             logBytes: outcome.value.logBytes,
             resultBytes: outcome.value.resultBytes,
@@ -752,13 +817,7 @@ const classifyWorkerFailure = (
   | CodeExecutorTerminatedError
   | CodeExecutorStartError
   | CodeSourceError => {
-  const text = (() => {
-    try {
-      return cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
-    } catch {
-      return "[unserializable worker failure]";
-    }
-  })();
+  const text = safeCauseDiagnostic(cause, "[unserializable worker failure]");
   // `WorkerLoader.load()` is lazy, so a module-compile error in the generated
   // program surfaces here at first use. Blame the program's source ONLY on a
   // genuine compile diagnostic (a `SyntaxError` or an explicit compile
@@ -798,4 +857,11 @@ const classifyWorkerFailure = (
 export const dynamicWorkerCodeExecutorLayer = (
   options: DynamicWorkerCodeExecutorOptions,
 ): Layer.Layer<CodeExecutor> =>
-  Layer.succeed(CodeExecutor)(CodeExecutor.of({ execute: makeExecute(options) }));
+  Layer.effect(
+    CodeExecutor,
+    Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto;
+      const clock = yield* Clock.Clock;
+      return CodeExecutor.of({ execute: makeExecute(options, crypto, clock) });
+    }),
+  ).pipe(Layer.provide(BrowserCrypto.layer));

@@ -92,6 +92,7 @@ import {
   type DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
 } from "./durable-failpoint.ts";
+import { inspectForeignDiagnostic, safeUnknownString } from "./foreign-diagnostic.ts";
 import { verifyConversationInvariants } from "./invariants.ts";
 import {
   type AbortIntent,
@@ -167,6 +168,7 @@ import {
   AbortRequested,
   BatchId,
   CanonicalBatch,
+  CanonicalRecordPayload,
   CanonicalSequence,
   CompactionCreated,
   ConversationCreated,
@@ -193,7 +195,6 @@ import {
   ToolStepSettled,
   UserInputRecorded,
   type ApprovalDecision,
-  type CanonicalRecordPayload,
   type SettlementOutcome,
   type ToolCallResolution,
 } from "./records.ts";
@@ -668,6 +669,18 @@ type RunPhaseOutcome =
   | { readonly _tag: "suspended"; readonly toolCallId: ToolCallId }
   | { readonly _tag: "suspendedChild"; readonly children: AgentChildPending["children"] };
 
+const approvalSuspension = (toolCallId: ToolCallId): RunPhaseOutcome => ({
+  _tag: "suspended",
+  toolCallId,
+});
+
+const childSuspension = (children: AgentChildPending["children"]): RunPhaseOutcome => ({
+  _tag: "suspendedChild",
+  children,
+});
+
+const abortedRunPhase: RunPhaseOutcome = { _tag: "aborted" };
+
 /**
  * Internal marker separating coordinator infrastructure failures (fencing, storage, failpoints —
  * the Attempt aborts cleanly and the accepted work stays owed) from Agent Run failures (typed
@@ -679,27 +692,44 @@ class CoordinatorHalt {
   constructor(readonly failure: DurableWorkerFailure) {}
 }
 
-const ErrorMessage = Schema.Struct({ message: Schema.String });
-const ErrorTag = Schema.Struct({ _tag: Schema.NonEmptyString });
-const PolicyFailure = Schema.Struct({
-  _tag: Schema.Literal("AgentPolicyError"),
+const PolicyFailure = Schema.TaggedStruct("AgentPolicyError", {
   limit: PolicyLimit,
 });
-const decodeErrorMessage = Schema.decodeUnknownOption(ErrorMessage);
-const decodeErrorTag = Schema.decodeUnknownOption(ErrorTag);
 const decodePolicyFailure = Schema.decodeUnknownOption(PolicyFailure);
 
-const errorMessageOf = (error: unknown): string =>
-  Option.match(decodeErrorMessage(error), {
-    onNone: () => String(error),
-    onSome: ({ message }) => message,
-  });
+const decodePolicyFailureSafely = (error: unknown) => {
+  try {
+    return decodePolicyFailure(error);
+  } catch {
+    return Option.none();
+  }
+};
+
+const agentApprovalPendingOption = (error: unknown): Option.Option<AgentApprovalPending> => {
+  try {
+    // Suspension authority is nominal. Schema.is/decode would accept a forged tagged object.
+    return error instanceof AgentApprovalPending ? Option.some(error) : Option.none();
+  } catch {
+    return Option.none();
+  }
+};
+
+const agentChildPendingOption = (error: unknown): Option.Option<AgentChildPending> => {
+  try {
+    // Suspension authority is nominal. Schema.is/decode would accept a forged tagged object.
+    return error instanceof AgentChildPending ? Option.some(error) : Option.none();
+  } catch {
+    return Option.none();
+  }
+};
+
+const errorMessageOf = (error: unknown): string => {
+  const diagnostic = inspectForeignDiagnostic(error);
+  return diagnostic.message ?? safeUnknownString(error, "Unknown failure");
+};
 
 const errorTagOf = (error: unknown): string =>
-  Option.match(decodeErrorTag(error), {
-    onNone: () => "UnknownError",
-    onSome: ({ _tag }) => _tag,
-  });
+  inspectForeignDiagnostic(error).tag ?? "UnknownError";
 
 const nowUtc: Effect.Effect<DateTime.Utc> = Effect.map(Clock.currentTimeMillis, (millis) =>
   DateTime.toUtc(DateTime.makeUnsafe(millis)),
@@ -707,6 +737,18 @@ const nowUtc: Effect.Effect<DateTime.Utc> = Effect.map(Clock.currentTimeMillis, 
 
 const decodePrompt = Schema.decodeUnknownEffect(Prompt.Prompt);
 const decodePersisted = Schema.decodeUnknownEffect(PersistedJson);
+const encodePersistedJsonString = Schema.encodeEffect(Schema.fromJsonString(PersistedJson));
+const encodeCanonicalPayloadJson = Schema.encodeSync(Schema.fromJsonString(CanonicalRecordPayload));
+
+const encodeRunInput = (input: PersistedJson): Effect.Effect<string, RunJournalError> =>
+  encodePersistedJsonString(input).pipe(
+    Effect.mapError((cause) =>
+      RunJournalError.make({
+        message: "Canonical joined input failed to encode as JSON text",
+        cause,
+      }),
+    ),
+  );
 
 /** One application Tool Call declared inside a canonical `ModelResponseRecorded`'s messages. */
 interface DeclaredApplicationCall {
@@ -2826,8 +2868,10 @@ const make = Effect.gen(function* () {
           .pipe(
             // The child settled concurrently: the one winning Settlement joins on the next
             // pass of this loop (spec §13 "child terminal races abort").
-            Effect.catchTag("SettlementConflict", () => Effect.void),
-            Effect.catchTag("JoinedToHost", conflictToLedgerError("abortAttachedChildren")),
+            Effect.catchTags({
+              SettlementConflict: () => Effect.void,
+              JoinedToHost: conflictToLedgerError("abortAttachedChildren"),
+            }),
             Effect.asVoid,
           );
         yield* hit("subagent:after-child-abort-intent");
@@ -2863,7 +2907,7 @@ const make = Effect.gen(function* () {
         result,
         // A hard-rail policy failure keeps its typed limit durable (RUN-011):
         // the bounded message stays diagnostic, never the dimension authority.
-        ...Option.match(decodePolicyFailure(error), {
+        ...Option.match(decodePolicyFailureSafely(error), {
           onNone: () => ({}),
           onSome: ({ limit }) => ({ policyLimit: limit }),
         }),
@@ -3071,7 +3115,7 @@ const make = Effect.gen(function* () {
       const estimateRecordTokens = (envelope: CanonicalRecordEnvelope): number => {
         let text: string | undefined;
         try {
-          text = JSON.stringify(envelope.record.payload);
+          text = encodeCanonicalPayloadJson(envelope.record.payload);
         } catch {
           text = undefined;
         }
@@ -3731,7 +3775,7 @@ const make = Effect.gen(function* () {
                 }
                 const payload = existing.record.payload;
                 if (payload._tag !== "UserInputRecorded") continue;
-                commands.push({ kind: "steering", input: JSON.stringify(payload.input) });
+                commands.push({ kind: "steering", input: yield* encodeRunInput(payload.input) });
               }
               if (commands.length < limit) {
                 const ownershipToken = yield* Ref.get(tokenRef);
@@ -3799,7 +3843,10 @@ const make = Effect.gen(function* () {
                     }),
                   );
                   deliveredJoinInputs.add(claim.submissionId);
-                  commands.push({ kind: "steering", input: JSON.stringify(claim.inputPayload) });
+                  commands.push({
+                    kind: "steering",
+                    input: yield* encodeRunInput(claim.inputPayload),
+                  });
                 }
               }
               return commands;
@@ -4534,24 +4581,26 @@ const make = Effect.gen(function* () {
             if (error instanceof CoordinatorHalt) {
               return Effect.fail(error.failure);
             }
-            if (error instanceof AgentApprovalPending) {
+            const approvalPending = agentApprovalPendingOption(error);
+            if (Option.isSome(approvalPending)) {
               // Durable approval suspension (plan §2.6): the approval hook already made the
               // request canonical; `runAttempt` owns the ledger transition. The engine decoded
               // the declared call id before raising the suspension, so a failure is a defect.
-              return decodeToolCallIdUnknown(error.toolCallId).pipe(
+              return decodeToolCallIdUnknown(approvalPending.value.toolCallId).pipe(
                 Effect.orDie,
                 Effect.map((toolCallId) => ({ _tag: "suspendedRun" as const, toolCallId })),
               );
             }
-            if (error instanceof AgentChildPending) {
+            const childPending = agentChildPendingOption(error);
+            if (Option.isSome(childPending)) {
               // Durable waitingForChild suspension (spec §12 step 10): every non-waiting
               // sibling settled before the Run terminated; commit their results as per-call
               // late-settle batches FIRST so no sibling effect is lost, then let `runAttempt`
               // own the ledger transition.
-              return commitSiblingLateSettles(error.children).pipe(
+              return commitSiblingLateSettles(childPending.value.children).pipe(
                 Effect.map(() => ({
                   _tag: "suspendedChildRun" as const,
-                  children: error.children,
+                  children: childPending.value.children,
                 })),
               );
             }
@@ -4572,18 +4621,10 @@ const make = Effect.gen(function* () {
         ),
       );
 
-      if (result._tag === "suspendedRun") {
-        return { _tag: "suspended", toolCallId: result.toolCallId } as RunPhaseOutcome;
-      }
-      if (result._tag === "suspendedChildRun") {
-        return { _tag: "suspendedChild", children: result.children } as RunPhaseOutcome;
-      }
-      if (result._tag === "aborted") {
-        return { _tag: "aborted" } as RunPhaseOutcome;
-      }
-      if (result._tag === "failedRun") {
-        return result.outcome as RunPhaseOutcome;
-      }
+      if (result._tag === "suspendedRun") return approvalSuspension(result.toolCallId);
+      if (result._tag === "suspendedChildRun") return childSuspension(result.children);
+      if (result._tag === "aborted") return abortedRunPhase;
+      if (result._tag === "failedRun") return result.outcome;
       const state = yield* Ref.get(stateRef);
       if (state.completedOutput === undefined) {
         return yield* LedgerError.make({
@@ -4591,7 +4632,7 @@ const make = Effect.gen(function* () {
           message: "Agent Run stream ended without RunCompleted",
         });
       }
-      return {
+      const completed: RunPhaseOutcome = {
         _tag: "completed",
         result: state.completedOutput,
         ...(state.completedRunDisposition === undefined
@@ -4603,7 +4644,8 @@ const make = Effect.gen(function* () {
         ...(state.completedFinishReason === undefined || state.completedExhausted === undefined
           ? {}
           : { exhausted: state.completedExhausted }),
-      } as RunPhaseOutcome;
+      };
+      return completed;
     });
 
   /**
@@ -4933,7 +4975,7 @@ const make = Effect.gen(function* () {
         const claimed = yield* ledger.claim(
           ClaimRequest.make({ conversationId, producerId: config.producerId }),
         );
-        if (Option.isNone(claimed)) return settlements as ReadonlyArray<Settlement>;
+        if (Option.isNone(claimed)) return settlements;
         yield* hit("claim:after-claim");
         const claim = claimed.value;
         const found = yield* ledger.lookup(
@@ -4974,7 +5016,7 @@ const make = Effect.gen(function* () {
             if (Option.isSome(parent)) {
               yield* wake.notify(parent.value.conversationId);
             }
-            return settlements as ReadonlyArray<Settlement>;
+            return settlements;
           }
         }
         const resolution = yield* resolve(submission).pipe(
@@ -5029,7 +5071,7 @@ const make = Effect.gen(function* () {
           // The head is durably blocked (Unknown Outcome, approval suspension, or a
           // waitingForChild suspension): the lane frees its worker permit while the settlement
           // obligation stays visible (durability §16, plan §2.6, SUB-030).
-          return settlements as ReadonlyArray<Settlement>;
+          return settlements;
         }
         settlements.push(settlement.value);
       }
@@ -5861,8 +5903,10 @@ const make = Effect.gen(function* () {
               )
               .pipe(
                 // The child settled concurrently: its one winning Settlement joins next pass.
-                Effect.catchTag("SettlementConflict", () => Effect.void),
-                Effect.catchTag("JoinedToHost", conflictToLedgerError("PropagateChildAbort")),
+                Effect.catchTags({
+                  SettlementConflict: () => Effect.void,
+                  JoinedToHost: conflictToLedgerError("PropagateChildAbort"),
+                }),
                 Effect.asVoid,
               );
             yield* hit("subagent:after-child-abort-intent");

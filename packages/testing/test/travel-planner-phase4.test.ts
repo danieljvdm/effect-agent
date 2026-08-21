@@ -25,17 +25,8 @@ import {
 } from "@effect-agent/storage-memory";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  Cause,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Option,
-  PlatformError,
-  Schema,
-  Stream,
-} from "effect";
+import type { PlatformError } from "effect";
+import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 
 import {
   expectedTravelPlan,
