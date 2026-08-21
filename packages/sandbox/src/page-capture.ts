@@ -578,6 +578,7 @@ export class PageCaptureProtocolError extends Schema.TaggedError<PageCaptureProt
   {
     implementation: SandboxImplementation,
     message: BoundedMessage,
+    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
 

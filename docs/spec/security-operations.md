@@ -184,8 +184,9 @@ the request rejects malformed or unsupported root and nested keywords, excessive
 excessive depth, oversized collections, and cycles before any provider can run. Browser RPC
 authority is an explicit host-owned service. Extraction additionally requires an explicit
 host authorization and accounting service for any platform-selected model provider, and results
-are decoded through the caller's service-aware Effect Schema before use. A page that instructs
-the model is data, never authority.
+are decoded through the caller's service-aware Effect Schema before use. Foreign provider failure
+causes remain host-only diagnostics; model-visible failures carry only bounded tags and messages.
+A page that instructs the model is data, never authority.
 
 The read-only SQL reference Tool's guarantee is database authority, not SQL text inspection: a
 database identity without mutation, DDL, administrative, or extension privileges; denial of

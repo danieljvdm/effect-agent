@@ -6,6 +6,7 @@ import {
   PageCaptureError,
   PageCaptureInferenceUse,
   PageCaptureOutput,
+  PageCaptureProtocolError,
   PageCaptureRateLimitedError,
   PageCaptureRequest,
   PageCaptureResult,
@@ -83,6 +84,12 @@ describe("PageCapture schemas", () => {
       retryAfterMillis: 7_000,
       message: "429 Too many requests",
     });
+    const foreignCause = new Error("browser RPC failed");
+    const protocolFailure = PageCaptureProtocolError.make({
+      implementation,
+      message: "The browser RPC failed",
+      cause: foreignCause,
+    });
 
     expect(
       Schema.decodeSync(PageCaptureOutput)({ _tag: "PageLinksCaptured", links: ["https://a"] }),
@@ -93,6 +100,13 @@ describe("PageCapture schemas", () => {
     expect(
       Schema.decodeSync(PageCaptureError)(Schema.encodeSync(PageCaptureError)(failure)),
     ).toEqual(failure);
+    expect(
+      Schema.decodeSync(PageCaptureError)(Schema.encodeSync(PageCaptureError)(protocolFailure)),
+    ).toMatchObject({
+      _tag: "PageCaptureProtocolError",
+      message: "The browser RPC failed",
+      cause: expect.objectContaining({ message: "browser RPC failed" }),
+    });
   });
 
   it("accepts only credential-free HTTPS targets and credential-free absolute web links", () => {

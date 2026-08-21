@@ -40449,7 +40449,8 @@ class PageCaptureOutputLimitError extends exports_Schema.TaggedError()("PageCapt
 
 class PageCaptureProtocolError extends exports_Schema.TaggedError()("PageCaptureProtocolError", {
   implementation: SandboxImplementation,
-  message: BoundedMessage2
+  message: BoundedMessage2,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
 var PageCaptureError = exports_Schema.Union([

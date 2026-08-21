@@ -189,10 +189,11 @@ const quickActionOptions = (request: PageCaptureRequest): Record<string, unknown
   return options;
 };
 
-const protocolError = (message: string): PageCaptureProtocolError =>
+const protocolError = (message: string, cause?: unknown): PageCaptureProtocolError =>
   PageCaptureProtocolError.make({
     implementation: browserQuickActionImplementation,
     message: boundedDiagnostic(message),
+    ...(cause === undefined ? {} : { cause }),
   });
 
 const navigationError = (message: string): PageCaptureNavigationError =>
@@ -209,6 +210,7 @@ const releaseResponseReader = (
     catch: (cause) =>
       protocolError(
         `Canceling the Quick Action response failed: ${safeCauseMessage(cause, "no diagnostic")}`,
+        cause,
       ),
   }).pipe(
     Effect.catch((error) => Effect.logWarning(error.message)),
@@ -218,6 +220,7 @@ const releaseResponseReader = (
         catch: (cause) =>
           protocolError(
             `Releasing the Quick Action response failed: ${safeCauseMessage(cause, "no diagnostic")}`,
+            cause,
           ),
       }).pipe(Effect.catch((error) => Effect.logWarning(error.message))),
     ),
@@ -236,6 +239,7 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
       catch: (cause) =>
         protocolError(
           `Opening the Quick Action response failed: ${safeCauseMessage(cause, "no diagnostic")}`,
+          cause,
         ),
     }),
     releaseResponseReader,
@@ -250,6 +254,7 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
       catch: (cause) =>
         protocolError(
           `Reading the Quick Action response failed: ${safeCauseMessage(cause, "no diagnostic")}`,
+          cause,
         ),
     });
     if (chunk.done) break;
@@ -268,6 +273,7 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
       catch: (cause) =>
         protocolError(
           `Decoding the Quick Action response failed: ${safeCauseMessage(cause, "no diagnostic")}`,
+          cause,
         ),
     });
   }
@@ -279,6 +285,7 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
       catch: (cause) =>
         protocolError(
           `Decoding the Quick Action response failed: ${safeCauseMessage(cause, "no diagnostic")}`,
+          cause,
         ),
     }))
   );
@@ -416,6 +423,7 @@ const makeCapture = (
       catch: (cause) =>
         protocolError(
           `The browser binding rejected the Quick Action: ${safeCauseMessage(cause, "no diagnostic")}`,
+          cause,
         ),
     });
     const bodyText = yield* readBoundedResponse(response, request);

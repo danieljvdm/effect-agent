@@ -2,12 +2,14 @@ import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "
 import { AgentRuntime, ToolExecutionClass } from "@effect-agent/engine";
 import {
   PageCapture,
+  PageCaptureProtocolError,
   PageCaptureRateLimitedError,
   PageCaptureResult,
   PageLinksCaptured,
   PageMarkdownCaptured,
   PageStructuredCaptured,
   SandboxImplementation,
+  type PageCaptureError,
   type PageCaptureRequest,
 } from "@effect-agent/sandbox";
 import { describe, expect, it, layer } from "@effect/vitest";
@@ -172,7 +174,7 @@ const makeScriptedPort = Effect.gen(function* () {
     PageCapture.of({
       capture: (request) =>
         Ref.update(requests, (all) => [...all, request]).pipe(
-          Effect.flatMap(() => {
+          Effect.flatMap((): Effect.Effect<PageCaptureResult, PageCaptureError> => {
             const url = request.target._tag === "PageUrlTarget" ? request.target.url : "";
             if (url.includes("/rate-limited")) {
               return Effect.fail(
@@ -181,6 +183,15 @@ const makeScriptedPort = Effect.gen(function* () {
                   reason: "rate",
                   retryAfterMillis: 7_000,
                   message: "429 Too many requests",
+                }),
+              );
+            }
+            if (url.includes("/protocol-failure")) {
+              return Effect.fail(
+                PageCaptureProtocolError.make({
+                  implementation: scriptedImplementation,
+                  message: "The browser RPC failed",
+                  cause: new Error("secret-token=host-only-diagnostic"),
                 }),
               );
             }
@@ -474,6 +485,24 @@ layer(identifiers)("WebCapture handlers through a scripted port", (it) => {
         errorTag: "PageCaptureRateLimitedError",
         retryAfterMillis: 7_000,
       });
+    }),
+  );
+
+  it.effect("keeps foreign protocol failure causes out of the model-visible result", () =>
+    Effect.gen(function* () {
+      const outcome = yield* runCapture({
+        url: "https://docs.example.com/protocol-failure",
+        action: "markdown",
+      });
+
+      expect(outcome.toolResults[0].isFailure).toBe(true);
+      expect(outcome.toolResults[0].result).toMatchObject({
+        _tag: "WebCaptureFailure",
+        errorTag: "PageCaptureProtocolError",
+        message: "The browser RPC failed",
+      });
+      expect(outcome.toolResults[0].result).not.toHaveProperty("cause");
+      expect(JSON.stringify(outcome.toolResults[0].result)).not.toContain("secret-token");
     }),
   );
 

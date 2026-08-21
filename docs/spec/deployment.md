@@ -387,7 +387,9 @@ Cloudflare JSON response envelope. Every returned link must satisfy the canonica
 credential-free HTTP(S) link Schema; malformed entries, unsupported schemes, embedded credentials,
 and over-limit collections fail typed instead of being discarded.
 HTTP 429 becomes a typed rate/quota failure; `Retry-After` is included only when conversion to
-milliseconds remains a safe integer.
+milliseconds remains a safe integer. Foreign browser RPC and response-stream failures retain
+their original cause inside the typed protocol error without exposing that cause to model-visible
+failure envelopes.
 
 The `json` Quick Action uses Cloudflare's separately billed Workers AI provider. It fails closed
 unless the host selects `browserQuickActionWorkersAiCaptureLayer` and supplies its visible

@@ -350,7 +350,9 @@ Malformed keywords, unsupported keywords, cycles, and over-budget documents fail
 Schema boundary.
 Adapters reuse the `SandboxImplementation` posture idiom (CAP-010), reject any feature or engine
 they cannot honor, and surface platform rate and quota refusals as one typed failure carrying
-the platform's own backoff hint. Capture resource use records browser time and, when an adapter
+the platform's own backoff hint. Foreign browser or transport failures retain their original live
+cause inside the concrete typed protocol error; model-visible failure envelopes receive only the
+bounded error tag and message. Capture resource use records browser time and, when an adapter
 performs separately authorized model inference, its provider and model-call count. Everything a
 capture returns is untrusted, attacker-influenced content
 ([security §9](./security-operations.md)).

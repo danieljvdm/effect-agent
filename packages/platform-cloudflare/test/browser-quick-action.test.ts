@@ -407,7 +407,8 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
   });
 
   it("rejects kitesurf typed without calling the binding and types binding rejections", async () => {
-    const { binding, calls } = makeBinding([new Error("binding exploded")]);
+    const foreignCause = new Error("binding exploded");
+    const { binding, calls } = makeBinding([foreignCause]);
     const unsupported = await captureError(
       binding,
       request(CapturePageMarkdown.make({}), { engine: "kitesurf" }),
@@ -415,9 +416,30 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     expect(unsupported).toMatchObject({ _tag: "PageCaptureUnsupportedError", feature: "engine" });
     expect(calls).toHaveLength(0);
 
-    expect(await captureError(binding, request(CapturePageMarkdown.make({})))).toMatchObject({
+    const failure = await captureError(binding, request(CapturePageMarkdown.make({})));
+    expect(failure).toMatchObject({
       _tag: "PageCaptureProtocolError",
       message: expect.stringContaining("binding exploded"),
     });
+    expect(failure._tag === "PageCaptureProtocolError" && failure.cause).toBe(foreignCause);
+  });
+
+  it("preserves foreign stream-read failures inside the typed protocol error", async () => {
+    const foreignCause = new Error("response stream exploded");
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          throw foreignCause;
+        },
+      }),
+    );
+    const { binding } = makeBinding([response]);
+
+    const failure = await captureError(binding, request(CapturePageMarkdown.make({})));
+    expect(failure).toMatchObject({
+      _tag: "PageCaptureProtocolError",
+      message: expect.stringContaining("response stream exploded"),
+    });
+    expect(failure._tag === "PageCaptureProtocolError" && failure.cause).toBe(foreignCause);
   });
 });
