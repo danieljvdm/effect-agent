@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 import { anchorViolation } from "./anchors.ts";
 export { anchorViolation } from "./anchors.ts";
+import { splitCarriedScope } from "./coverage.ts";
 import type { ReviewAssurance, ReviewInputCoverage } from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
 import { renderFingerprintMarker } from "./fingerprint.ts";
@@ -287,16 +288,28 @@ const renderVerdictCallout = (
   if (counts.total.blocking > 0) {
     return `> [!CAUTION]\n> ${renderSeverityItems(counts, "blocking")}. Do not merge before addressing ${counts.total.blocking === 1 ? "it" : "them"}.`;
   }
-  const carried = options.unreviewedPaths?.length ?? 0;
   if (
     options.inputCoverage?.status === "incomplete" ||
     options.assurance?.status === "incomplete"
   ) {
-    const carriedNote =
-      carried > 0
-        ? ` ${countNoun(carried, "affected path")} ${carried === 1 ? "is" : "are"} carried forward and retried automatically on the next run.`
+    const scope = splitCarriedScope(options);
+    const undiffableCount = scope.undiffablePaths.length;
+    const undiffableNote =
+      undiffableCount > 0
+        ? ` ${countNoun(undiffableCount, "unreviewable file")} (binary or oversized) ${undiffableCount === 1 ? "has" : "have"} no diff a retry could settle — remove ${undiffableCount === 1 ? "it" : "them"} from the pull request or exclude ${undiffableCount === 1 ? "it" : "them"} with ignore globs.`
         : "";
-    return `> [!WARNING]\n> Review infrastructure did not settle. This is a reviewer-side gap, NOT a request to change code.${carriedNote} The check reports "incomplete" until a run settles.`;
+    // Undiffable-only gaps are NOT reviewer-side and DO ask for a change (to
+    // the changeset or the ignore configuration), so they get their own
+    // banner instead of the carried-forward retry promise.
+    if (!scope.retryableGap) {
+      return `> [!WARNING]\n>${undiffableNote} The check reports "incomplete" while ${undiffableCount === 1 ? "it remains" : "they remain"} part of the pull request.`;
+    }
+    const retryableCount = scope.retryablePaths.length;
+    const carriedNote =
+      retryableCount > 0
+        ? ` ${countNoun(retryableCount, "affected path")} ${retryableCount === 1 ? "is" : "are"} carried forward and retried automatically on the next run.`
+        : "";
+    return `> [!WARNING]\n> Review infrastructure did not settle. This is a reviewer-side gap, NOT a request to change code.${carriedNote}${undiffableNote} The check reports "incomplete" until a run settles.`;
   }
   if (counts.total.important > 0) {
     return `> [!IMPORTANT]\n> ${renderSeverityItems(counts, "important")} to address before merging.`;

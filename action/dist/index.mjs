@@ -41704,44 +41704,6 @@ var fetch = /* @__PURE__ */ make58((request3, url2, signal, fiber3) => {
   return send(undefined);
 });
 var layer15 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
-// packages/pr-review/src/internal/effort.ts
-var EFFORT_ALIASES = {
-  low: 0,
-  medium: 0.25,
-  high: 0.5,
-  xhigh: 0.75,
-  max: 1
-};
-var aliasPosition = EFFORT_ALIASES;
-
-class InvalidEffortInput extends exports_Schema.TaggedError()("InvalidEffortInput", {
-  input: exports_Schema.String
-}) {
-  get message() {
-    return `Invalid effort '${this.input}': expected one of ` + `${Object.keys(EFFORT_ALIASES).join(", ")} or a number between 0 and 1.`;
-  }
-}
-var isEffortPosition = (value4) => Number.isFinite(value4) && value4 >= 0 && value4 <= 1;
-var parseEffortPosition = (raw2) => {
-  const normalized = raw2.trim().toLowerCase();
-  const named = aliasPosition[normalized];
-  if (named !== undefined)
-    return named;
-  if (normalized === "")
-    return;
-  const numeric = Number(normalized);
-  return isEffortPosition(numeric) ? numeric : undefined;
-};
-var resolveEffortRung = (position, rungs) => {
-  const clamped = Math.min(1, Math.max(0, position));
-  let selected = rungs[0];
-  for (const rung of rungs) {
-    if (EFFORT_ALIASES[rung] <= clamped)
-      selected = rung;
-  }
-  return selected;
-};
-
 // packages/pr-review/src/internal/diff.ts
 var ChangedPath = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512));
 var ChangedFileStatus = exports_Schema.Literals([
@@ -41887,25 +41849,6 @@ var annotatePatch = (patch3) => {
   }
   return output.join(`
 `);
-};
-
-// packages/pr-review/src/internal/anchors.ts
-var anchorViolation = (finding, files) => {
-  const file2 = files.find((candidate) => candidate.path === finding.path);
-  if (file2 === undefined)
-    return "path is not part of the changeset";
-  if (file2.patch === undefined)
-    return "file has no anchorable textual diff";
-  if (finding.endLine < finding.startLine)
-    return "endLine precedes startLine";
-  if (finding.endLine - finding.startLine + 1 > 100)
-    return "range is implausibly large";
-  const anchors = commentableLines(file2.patch);
-  for (let line = finding.startLine;line <= finding.endLine; line += 1) {
-    if (!anchors.has(line))
-      return `line ${line} is not part of the diff`;
-  }
-  return;
 };
 
 // packages/pr-review/src/internal/source.ts
@@ -42337,6 +42280,17 @@ var boundedListReason = (label, values3) => {
   }
   return rendered;
 };
+var splitCarriedScope = (input) => {
+  const undiffable = new Set(input.inputCoverage?.undiffablePaths ?? []);
+  const retryablePaths = (input.unreviewedPaths ?? []).filter((path) => !undiffable.has(path));
+  const undiffablePaths = sortedUnique(undiffable);
+  const coverageGapBeyondUndiffable = input.inputCoverage?.status === "incomplete" && input.inputCoverage.reasons.length > (undiffablePaths.length > 0 ? 1 : 0);
+  return {
+    retryablePaths,
+    undiffablePaths,
+    retryableGap: input.assurance?.status === "incomplete" || retryablePaths.length > 0 || coverageGapBeyondUndiffable
+  };
+};
 var anchorSurfaceAdjusted = (inputCoverage, anchorFiles, totalAnchorFiles) => anchorFiles.length >= totalAnchorFiles ? inputCoverage : ReviewInputCoverage.make({
   ...inputCoverage,
   status: "incomplete",
@@ -42447,6 +42401,63 @@ var fanOutInputCoverage = (input) => {
     undiffablePaths: sortedUnique(plan.undiffablePaths),
     reasons
   }), input.anchorFiles, input.totalAnchorFiles);
+};
+
+// packages/pr-review/src/internal/effort.ts
+var EFFORT_ALIASES = {
+  low: 0,
+  medium: 0.25,
+  high: 0.5,
+  xhigh: 0.75,
+  max: 1
+};
+var aliasPosition = EFFORT_ALIASES;
+
+class InvalidEffortInput extends exports_Schema.TaggedError()("InvalidEffortInput", {
+  input: exports_Schema.String
+}) {
+  get message() {
+    return `Invalid effort '${this.input}': expected one of ` + `${Object.keys(EFFORT_ALIASES).join(", ")} or a number between 0 and 1.`;
+  }
+}
+var isEffortPosition = (value4) => Number.isFinite(value4) && value4 >= 0 && value4 <= 1;
+var parseEffortPosition = (raw2) => {
+  const normalized = raw2.trim().toLowerCase();
+  const named = aliasPosition[normalized];
+  if (named !== undefined)
+    return named;
+  if (normalized === "")
+    return;
+  const numeric = Number(normalized);
+  return isEffortPosition(numeric) ? numeric : undefined;
+};
+var resolveEffortRung = (position, rungs) => {
+  const clamped = Math.min(1, Math.max(0, position));
+  let selected = rungs[0];
+  for (const rung of rungs) {
+    if (EFFORT_ALIASES[rung] <= clamped)
+      selected = rung;
+  }
+  return selected;
+};
+
+// packages/pr-review/src/internal/anchors.ts
+var anchorViolation = (finding, files) => {
+  const file2 = files.find((candidate) => candidate.path === finding.path);
+  if (file2 === undefined)
+    return "path is not part of the changeset";
+  if (file2.patch === undefined)
+    return "file has no anchorable textual diff";
+  if (finding.endLine < finding.startLine)
+    return "endLine precedes startLine";
+  if (finding.endLine - finding.startLine + 1 > 100)
+    return "range is implausibly large";
+  const anchors = commentableLines(file2.patch);
+  for (let line = finding.startLine;line <= finding.endLine; line += 1) {
+    if (!anchors.has(line))
+      return `line ${line} is not part of the diff`;
+  }
+  return;
 };
 
 // packages/pr-review/src/internal/review-units.ts
@@ -44517,11 +44528,18 @@ var renderVerdictCallout = (review, options3) => {
     return `> [!CAUTION]
 > ${renderSeverityItems(counts, "blocking")}. Do not merge before addressing ${counts.total.blocking === 1 ? "it" : "them"}.`;
   }
-  const carried = options3.unreviewedPaths?.length ?? 0;
   if (options3.inputCoverage?.status === "incomplete" || options3.assurance?.status === "incomplete") {
-    const carriedNote = carried > 0 ? ` ${countNoun2(carried, "affected path")} ${carried === 1 ? "is" : "are"} carried forward and retried automatically on the next run.` : "";
+    const scope3 = splitCarriedScope(options3);
+    const undiffableCount = scope3.undiffablePaths.length;
+    const undiffableNote = undiffableCount > 0 ? ` ${countNoun2(undiffableCount, "unreviewable file")} (binary or oversized) ${undiffableCount === 1 ? "has" : "have"} no diff a retry could settle — remove ${undiffableCount === 1 ? "it" : "them"} from the pull request or exclude ${undiffableCount === 1 ? "it" : "them"} with ignore globs.` : "";
+    if (!scope3.retryableGap) {
+      return `> [!WARNING]
+>${undiffableNote} The check reports "incomplete" while ${undiffableCount === 1 ? "it remains" : "they remain"} part of the pull request.`;
+    }
+    const retryableCount = scope3.retryablePaths.length;
+    const carriedNote = retryableCount > 0 ? ` ${countNoun2(retryableCount, "affected path")} ${retryableCount === 1 ? "is" : "are"} carried forward and retried automatically on the next run.` : "";
     return `> [!WARNING]
-> Review infrastructure did not settle. This is a reviewer-side gap, NOT a request to change code.${carriedNote} The check reports "incomplete" until a run settles.`;
+> Review infrastructure did not settle. This is a reviewer-side gap, NOT a request to change code.${carriedNote}${undiffableNote} The check reports "incomplete" until a run settles.`;
   }
   if (counts.total.important > 0) {
     return `> [!IMPORTANT]
@@ -56200,20 +56218,26 @@ var outcomeOutputs = (outcome, conclusion) => [
   ],
   ["review-url", outcome.published?.url ?? ""]
 ];
-var outcomeSummary = (outcome, modelLabel, conclusion) => [
-  "### Pull-request review",
-  `- Check conclusion: **${conclusion}**`,
-  `- Verdict: **${outcome.review.verdict}**`,
-  `- Input coverage: **${outcome.inputCoverage.status}** · scope: ${outcome.reviewMode ?? "full"}`,
-  `- Review assurance: **${outcome.assurance.status}** · general discovery ${outcome.assurance.completedGeneralDiscoveryPasses}/${outcome.assurance.requiredGeneralDiscoveryPasses} · specialist ${outcome.assurance.completedSpecialistPasses}/${outcome.assurance.requiredSpecialistPasses} · verification ${outcome.assurance.completedVerificationPasses}/${outcome.assurance.requiredVerificationPasses}`,
-  `- Inline comments: ${outcome.plan.comments.length} · demoted findings: ${outcome.plan.demoted.length} · concerns: ${outcome.review.concerns?.length ?? 0}`,
-  ...outcome.unreviewedPaths.length === 0 ? [] : [
-    `- Carried forward: ${outcome.unreviewedPaths.length} unreviewed path(s) retried automatically on the next run (reviewer-side gap, not a code defect)`
-  ],
-  ...modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``],
-  ...outcome.usage === undefined ? [] : [`- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out`],
-  ...outcome.published === undefined ? ["- Dry run: nothing posted"] : [`- Posted: ${outcome.published.url}`]
-];
+var outcomeSummary = (outcome, modelLabel, conclusion) => {
+  const scope3 = splitCarriedScope(outcome);
+  return [
+    "### Pull-request review",
+    `- Check conclusion: **${conclusion}**`,
+    `- Verdict: **${outcome.review.verdict}**`,
+    `- Input coverage: **${outcome.inputCoverage.status}** · scope: ${outcome.reviewMode ?? "full"}`,
+    `- Review assurance: **${outcome.assurance.status}** · general discovery ${outcome.assurance.completedGeneralDiscoveryPasses}/${outcome.assurance.requiredGeneralDiscoveryPasses} · specialist ${outcome.assurance.completedSpecialistPasses}/${outcome.assurance.requiredSpecialistPasses} · verification ${outcome.assurance.completedVerificationPasses}/${outcome.assurance.requiredVerificationPasses}`,
+    `- Inline comments: ${outcome.plan.comments.length} · demoted findings: ${outcome.plan.demoted.length} · concerns: ${outcome.review.concerns?.length ?? 0}`,
+    ...scope3.retryablePaths.length === 0 ? [] : [
+      `- Carried forward: ${scope3.retryablePaths.length} unreviewed path(s) retried automatically on the next run (reviewer-side gap, not a code defect)`
+    ],
+    ...scope3.undiffablePaths.length === 0 ? [] : [
+      `- Unreviewable: ${scope3.undiffablePaths.length} path(s) with no reviewable diff (binary or oversized) — remove them from the pull request or exclude them with ignore globs`
+    ],
+    ...modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``],
+    ...outcome.usage === undefined ? [] : [`- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out`],
+    ...outcome.published === undefined ? ["- Dry run: nothing posted"] : [`- Posted: ${outcome.published.url}`]
+  ];
+};
 var skip = (reason) => exports_Effect.gen(function* () {
   yield* exports_Console.log(`Skipping review: ${reason}`);
   yield* writeActionOutputs([
@@ -56238,7 +56262,13 @@ var blockingReasons = (input) => [
 var concludeReviewOutcome = (outcome) => {
   const machinery = [];
   if (outcome.inputCoverage.status === "incomplete" || outcome.assurance.status === "incomplete") {
-    machinery.push(outcome.unreviewedPaths.length > 0 ? `review infrastructure did not settle — a reviewer-side gap, not a code defect; ${outcome.unreviewedPaths.length} path(s) are carried forward and retried automatically on the next run` : "review infrastructure did not settle — a reviewer-side gap, not a code defect");
+    const scope3 = splitCarriedScope(outcome);
+    if (scope3.retryableGap) {
+      machinery.push(scope3.retryablePaths.length > 0 ? `review infrastructure did not settle — a reviewer-side gap, not a code defect; ${scope3.retryablePaths.length} path(s) are carried forward and retried automatically on the next run` : "review infrastructure did not settle — a reviewer-side gap, not a code defect");
+    }
+    if (scope3.undiffablePaths.length > 0) {
+      machinery.push(`${scope3.undiffablePaths.length} path(s) have no reviewable diff (binary or oversized) and no retry can settle them — remove them from the pull request or exclude them with ignore globs`);
+    }
     if (outcome.inputCoverage.status === "incomplete") {
       machinery.push(...outcome.inputCoverage.reasons);
     }
