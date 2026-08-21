@@ -57595,11 +57595,15 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
         });
       }
     }
-    const executionContext = selection ?? fullReviewSelection({
-      reason: "explicit custom-reviewer full review without continuity selection",
-      files: [],
-      totalFiles: 0
-    });
+    const executionContext = selection ?? (yield* exports_Effect.gen(function* () {
+      const source = yield* PullRequestSource;
+      const [metadata, files] = yield* exports_Effect.all([source.metadata, source.changedFiles]);
+      return fullReviewSelection({
+        reason: "explicit custom-reviewer full review without continuity selection",
+        files,
+        totalFiles: metadata.totalChangedFiles
+      });
+    }));
     yield* exports_Console.log(`Reviewing ${target.repository}#${target.number} (${options3.post === false ? "dry run" : "posting"})...`);
     const runUrl = yield* resolveRunUrl();
     const progress = options3.progressComment === true && options3.post !== false ? exports_Option.some(yield* ReviewProgressReporter) : exports_Option.none();
@@ -57623,7 +57627,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       runUrl,
       modelLabel: options3.modelLabel
     }))) : runReview;
-    const executionLayer = selection === undefined ? exports_Layer.succeed(ReviewExecutionContext)(executionContext) : exports_Layer.merge(exports_Layer.succeed(ReviewExecutionContext)(executionContext), selectedPullRequestSourceLayer(executionContext));
+    const executionLayer = exports_Layer.merge(exports_Layer.succeed(ReviewExecutionContext)(executionContext), selectedPullRequestSourceLayer(executionContext));
     const outcome = yield* reviewEffect.pipe(exports_Effect.provide(executionLayer));
     yield* exports_Console.log(`Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` + `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`);
     if (outcome.published !== undefined) {

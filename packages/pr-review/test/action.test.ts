@@ -273,6 +273,7 @@ const actionHarness = (
   } = {},
 ) =>
   Effect.gen(function* () {
+    const changedFiles = options.changedFiles ?? [];
     const written = yield* Ref.make("");
     const requests = yield* Ref.make<ReadonlyArray<string>>([]);
     const fs = FileSystem.makeNoop({
@@ -297,14 +298,13 @@ const actionHarness = (
             request,
             new Response(
               url.pathname.endsWith("/files")
-                ? JSON.stringify(options.changedFiles ?? [])
-                : options.changedFiles !== undefined &&
-                    url.pathname === "/repos/acme/widgets/pulls/5"
+                ? JSON.stringify(changedFiles)
+                : url.pathname === "/repos/acme/widgets/pulls/5"
                   ? JSON.stringify({
                       number: 5,
                       title: "Review target",
                       body: "",
-                      changed_files: options.changedFiles.length,
+                      changed_files: changedFiles.length,
                       base: { ref: "main", sha: "1".repeat(40) },
                       head: { ref: "fix/review", sha: "2".repeat(40) },
                     })
@@ -399,7 +399,7 @@ describe("runReviewAction", () => {
           ],
         },
       );
-      const reviewedPaths = yield* Ref.make<ReadonlyArray<string>>([]);
+      const reviewedScope = yield* Ref.make({ paths: [] as ReadonlyArray<string>, totalFiles: 0 });
 
       const result = yield* runReviewAction(
         {
@@ -407,10 +407,11 @@ describe("runReviewAction", () => {
             Effect.gen(function* () {
               const source = yield* PullRequestSource;
               const files = yield* source.changedFiles;
-              yield* Ref.set(
-                reviewedPaths,
-                files.map((file) => file.path),
-              );
+              const context = yield* ReviewExecutionContext;
+              yield* Ref.set(reviewedScope, {
+                paths: files.map((file) => file.path),
+                totalFiles: context.totalFiles,
+              });
               return fakeOutcome("comment");
             }),
         },
@@ -418,7 +419,10 @@ describe("runReviewAction", () => {
       ).pipe(Effect.provide(harness.layer));
 
       expect(result._tag).toBe("Completed");
-      expect(yield* Ref.get(reviewedPaths)).toEqual(["src/full-source.ts"]);
+      expect(yield* Ref.get(reviewedScope)).toEqual({
+        paths: ["src/full-source.ts"],
+        totalFiles: 1,
+      });
     }),
   );
 
@@ -454,7 +458,9 @@ describe("runReviewAction", () => {
         yield* runReviewAction({
           run: () => Effect.succeed(fakeOutcome("comment", { state })),
         }).pipe(Effect.provide(harness.layer));
-        expect(yield* Ref.get(harness.requests)).toEqual([
+        expect(
+          (yield* Ref.get(harness.requests)).filter((request) => request.includes("/reviews")),
+        ).toEqual([
           "GET https://api.github.com/repos/acme/widgets/pulls/5/reviews?per_page=100&page=1",
         ]);
 
@@ -462,7 +468,9 @@ describe("runReviewAction", () => {
           { run: () => Effect.succeed(fakeOutcome("comment", { state })) },
           { retireStaleReviews: false },
         ).pipe(Effect.provide(harness.layer));
-        expect((yield* Ref.get(harness.requests)).length).toBe(1);
+        expect(
+          (yield* Ref.get(harness.requests)).filter((request) => request.includes("/reviews")),
+        ).toHaveLength(1);
 
         const incompleteReceipt = fakeOutcome("comment", { state });
         const completeReceipt = incompleteReceipt.published;
@@ -485,7 +493,9 @@ describe("runReviewAction", () => {
               }),
             ),
         }).pipe(Effect.provide(harness.layer));
-        expect((yield* Ref.get(harness.requests)).length).toBe(1);
+        expect(
+          (yield* Ref.get(harness.requests)).filter((request) => request.includes("/reviews")),
+        ).toHaveLength(1);
       }),
   );
 

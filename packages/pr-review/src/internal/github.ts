@@ -701,7 +701,8 @@ const toAdjudicationComment = (
 };
 
 /**
- * GitHub-backed host reads for maintainer adjudication: this action's own
+ * GitHub-backed host reads for maintainer adjudication, installed by
+ * `gitHubReviewLayers` at the public GitHub composition root: this action's own
  * inline finding threads (roots authored by the configured review author)
  * with their replies, and the pull request's top-level conversation comments.
  * Both listings are creation-ordered.

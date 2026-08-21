@@ -678,14 +678,15 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
       }
       const executionContext =
         selection ??
-        fullReviewSelection({
-          reason: "explicit custom-reviewer full review without continuity selection",
-          // The legacy harness shape owns its review scope and exposes no
-          // snapshot. Standard PrReview factories take the profiled branch
-          // above, where the exact filtered files and total stay visible.
-          files: [],
-          totalFiles: 0,
-        });
+        (yield* Effect.gen(function* () {
+          const source = yield* PullRequestSource;
+          const [metadata, files] = yield* Effect.all([source.metadata, source.changedFiles]);
+          return fullReviewSelection({
+            reason: "explicit custom-reviewer full review without continuity selection",
+            files,
+            totalFiles: metadata.totalChangedFiles,
+          });
+        }));
       yield* Console.log(
         `Reviewing ${target.repository}#${target.number} (${options.post === false ? "dry run" : "posting"})...`,
       );
@@ -721,13 +722,10 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             ),
           )
         : runReview;
-      const executionLayer =
-        selection === undefined
-          ? Layer.succeed(ReviewExecutionContext)(executionContext)
-          : Layer.merge(
-              Layer.succeed(ReviewExecutionContext)(executionContext),
-              selectedPullRequestSourceLayer(executionContext),
-            );
+      const executionLayer = Layer.merge(
+        Layer.succeed(ReviewExecutionContext)(executionContext),
+        selectedPullRequestSourceLayer(executionContext),
+      );
       const outcome = yield* reviewEffect.pipe(Effect.provide(executionLayer));
       yield* Console.log(
         `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
