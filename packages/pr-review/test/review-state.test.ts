@@ -11,6 +11,7 @@ import {
   ReviewHeadComparison,
   ReviewState,
   ReviewStateAuthenticator,
+  ReviewTreeComparison,
   selectReviewRange,
   StoredAdjudication,
   StoredReviewConcern,
@@ -455,20 +456,79 @@ describe("review state", () => {
       files: [acceptedFile, correctiveFile],
       truncated: false,
     });
-    const contentComparison = ReviewHeadComparison.make({
-      status: "ahead",
+    const contentComparison = ReviewTreeComparison.make({
       baseSha: REVIEWED_HEAD_SHA,
       headSha: CURRENT_HEAD_SHA,
-      mergeBaseSha: REVIEWED_HEAD_SHA,
-      files: [correctiveFile],
+      changedPaths: [correctiveFile.path],
       truncated: false,
     });
     const selection = select({ comparison: rewritten, contentComparison });
 
     expect(selection.mode).toBe("incremental");
-    expect(selection.files.map((file) => file.path)).toEqual(["src/corrective.ts"]);
+    expect(selection.files).toEqual([correctiveFile]);
+    expect(selection.files[0]?.patch).toBe(correctiveFile.patch);
     expect(selection.reason).toContain("rewritten history");
     expect(selection.affectedPaths).toEqual(["src/corrective.ts"]);
+  });
+
+  it("hydrates renamed snapshot paths from the current PR record", () => {
+    const renamedFile = ChangedFile.make({
+      path: "src/current.ts",
+      previousPath: "src/previous.ts",
+      status: "renamed",
+      additions: 2,
+      deletions: 1,
+      patch: "@@ -1 +1,2 @@\n-old\n+new\n+line",
+    });
+    const selection = select({
+      comparison: ReviewHeadComparison.make({
+        ...comparison,
+        status: "diverged",
+        mergeBaseSha: "5".repeat(40),
+      }),
+      fullFiles: [renamedFile, correctiveFile],
+      contentComparison: ReviewTreeComparison.make({
+        baseSha: REVIEWED_HEAD_SHA,
+        headSha: CURRENT_HEAD_SHA,
+        changedPaths: ["src/previous.ts"],
+        truncated: false,
+      }),
+    });
+
+    expect(selection.mode).toBe("incremental");
+    expect(selection.files).toEqual([renamedFile]);
+    expect(selection.files[0]?.previousPath).toBe("src/previous.ts");
+    expect(selection.files[0]?.patch).toBe(renamedFile.patch);
+  });
+
+  it("falls back to the full PR for truncated or failed tree snapshots", () => {
+    const rewritten = ReviewHeadComparison.make({
+      ...comparison,
+      status: "diverged",
+      mergeBaseSha: "5".repeat(40),
+    });
+    const truncated = select({
+      comparison: rewritten,
+      contentComparison: ReviewTreeComparison.make({
+        baseSha: REVIEWED_HEAD_SHA,
+        headSha: CURRENT_HEAD_SHA,
+        changedPaths: [],
+        truncated: true,
+      }),
+    });
+    expect(truncated.mode).toBe("full");
+    expect(truncated.files).toEqual([acceptedFile, correctiveFile]);
+    expect(truncated.reason).toContain("tree snapshot comparison was truncated");
+
+    const failed = select({
+      comparison: rewritten,
+      contentComparison: undefined,
+      contentComparisonFailure: "ResponseError: status 404",
+    });
+    expect(failed.mode).toBe("full");
+    expect(failed.files).toEqual([acceptedFile, correctiveFile]);
+    expect(failed.reason).toContain("tree snapshot comparison failed");
+    expect(failed.reason).toContain("status 404");
   });
 
   it("keeps a carried unreviewed path in scope across a rename", () => {

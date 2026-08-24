@@ -191,6 +191,11 @@ not persisted. See its [setup and behavior guide](../../action/README.md) and
 [input reference](../../action/action.yml). Custom hosts can import `runReviewAction` from
 `@effect-agent/pr-review/action`.
 
+For an amended or force-pushed head, the GitHub adapter compares complete commit tree snapshots
+across a bounded PR and continuity path set. Selection then uses the current full PR records, so
+patches and rename metadata remain intact. An unavailable, malformed, or truncated tree falls back
+to the full PR and records the cause in the review reason.
+
 Run the CLI with
 `bun src/cli.ts --repo owner/name --pr 123 [--post] [--provider anthropic] [--service-tier fast] [--fan-out]`.
 

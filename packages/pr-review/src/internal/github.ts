@@ -11,7 +11,7 @@ import {
   ReviewAdjudicationFailure,
   ReviewAdjudicationHost,
 } from "./adjudication.ts";
-import { ChangedFile } from "./diff.ts";
+import { ChangedFile, ChangedPath } from "./diff.ts";
 import { extractFingerprint } from "./fingerprint.ts";
 import type { ReviewPublicationPlan } from "./render.ts";
 import {
@@ -21,8 +21,11 @@ import {
   ReviewRetirementHost,
 } from "./retirement.ts";
 import {
+  GitCommitSha,
+  MAX_TREE_COMPARISON_PATHS,
   ReviewHeadComparison,
   ReviewStateAuthenticator,
+  ReviewTreeComparison,
   type ReviewState,
 } from "./review-state.ts";
 import {
@@ -884,14 +887,15 @@ export class PriorReviews extends Context.Service<
       headSha: string,
     ) => Effect.Effect<ReviewHeadComparison, PriorReviewLookupFailure>;
     /**
-     * Two-dot tree comparison (`base..head`). Used when the reviewed head is
-     * not a git ancestor so a rebase or amend can still name the paths whose
-     * blob contents actually changed.
+     * Compare complete commit tree snapshots for a bounded path allowlist.
+     * Used when the reviewed head is not a git ancestor after a rebase,
+     * amend, or force-push.
      */
     readonly compareTrees: (
       baseSha: string,
       headSha: string,
-    ) => Effect.Effect<ReviewHeadComparison, PriorReviewLookupFailure>;
+      paths: ReadonlyArray<string>,
+    ) => Effect.Effect<ReviewTreeComparison, PriorReviewLookupFailure>;
   }
 >()("@effect-agent/pr-review/PriorReviews") {}
 
@@ -916,6 +920,29 @@ const GitHubCompareWire = Schema.Struct({
   files: GitHubFilesPageWire,
 });
 
+const GitHubGitCommitWire = Schema.Struct({
+  sha: GitCommitSha,
+  tree: Schema.Struct({ sha: GitCommitSha }),
+});
+
+const GitHubTreeEntryWire = Schema.Struct({
+  path: Schema.String.check(Schema.isMaxLength(4_096)),
+  mode: Schema.String.check(Schema.isMaxLength(6)),
+  type: Schema.Literals(["blob", "tree", "commit"]),
+  sha: GitCommitSha,
+});
+
+const MAX_RECURSIVE_TREE_ENTRIES = 100_000;
+const GitHubTreeWire = Schema.Struct({
+  sha: GitCommitSha,
+  tree: Schema.Array(GitHubTreeEntryWire).check(Schema.isMaxLength(MAX_RECURSIVE_TREE_ENTRIES)),
+  truncated: Schema.Boolean,
+});
+
+const TreeComparisonPaths = Schema.Array(ChangedPath).check(
+  Schema.isMaxLength(MAX_TREE_COMPARISON_PATHS),
+);
+
 /** Reviews are paged chronologically; scanning stays bounded. */
 const MAX_PRIOR_REVIEW_PAGES = 5;
 
@@ -935,6 +962,24 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
       PriorReviewLookupFailure.make({
         reason: `${error._tag}: ${error.message ?? "request failed"}`.slice(0, 2_048),
       });
+    const asTreeLookupFailure =
+      (operation: string) => (error: { readonly _tag: string; readonly message?: string }) =>
+        PriorReviewLookupFailure.make({
+          reason: `${operation}: ${error._tag}: ${error.message ?? "request failed"}`.slice(
+            0,
+            2_048,
+          ),
+        });
+    const decodeLookupJson = <S extends Schema.Top>(schema: S, operation: string) => {
+      const decode = Schema.decodeUnknownEffect(schema);
+      return (response: HttpClientResponse.HttpClientResponse) =>
+        response.json.pipe(
+          Effect.mapError(asTreeLookupFailure(operation)),
+          Effect.flatMap((body) =>
+            decode(body).pipe(Effect.mapError(asTreeLookupFailure(operation))),
+          ),
+        );
+    };
     const readMarkers = (authenticator: Option.Option<ReviewStateAuthenticator["Service"]>) =>
       Effect.gen(function* () {
         const perPage = 100;
@@ -995,12 +1040,12 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
         }
         return { latestFingerprint: latest, latestState };
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
-    const compareCommits = (baseSha: string, headSha: string, separator: "..." | "..") =>
+    const compareCommits = (baseSha: string, headSha: string) =>
       Effect.gen(function* () {
         const response = yield* HttpClient.execute(
           withCommonHeaders(
             HttpClientRequest.get(
-              `${target.apiUrl}/repos/${target.repository}/compare/${encodeURIComponent(baseSha)}${separator}${encodeURIComponent(headSha)}`,
+              `${target.apiUrl}/repos/${target.repository}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}`,
             ).pipe(HttpClientRequest.acceptJson),
             target.token,
           ),
@@ -1023,21 +1068,107 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
           truncated: files.length >= MAX_CHANGED_FILES,
         });
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
-    const compareTrees = (baseSha: string, headSha: string) =>
-      compareCommits(baseSha, headSha, "..").pipe(
-        Effect.map((comparison) =>
-          ReviewHeadComparison.make({
-            // This is a content snapshot, not a lineage claim. Selection
-            // intersects these files with the current PR path set.
-            status: comparison.status === "identical" ? "identical" : "ahead",
-            baseSha,
-            headSha,
-            mergeBaseSha: baseSha,
-            files: comparison.files,
-            truncated: comparison.truncated,
-          }),
-        ),
+    const readTreeSnapshot = Effect.fn("PriorReviews.readTreeSnapshot")(function* (
+      commitSha: string,
+    ) {
+      const commitResponse = yield* client
+        .execute(
+          withCommonHeaders(
+            HttpClientRequest.get(
+              `${target.apiUrl}/repos/${target.repository}/git/commits/${encodeURIComponent(commitSha)}`,
+            ).pipe(HttpClientRequest.acceptJson),
+            target.token,
+          ),
+        )
+        .pipe(
+          Effect.flatMap(HttpClientResponse.filterStatusOk),
+          Effect.mapError(asTreeLookupFailure("get Git commit")),
+        );
+      const commit = yield* decodeLookupJson(
+        GitHubGitCommitWire,
+        "decode Git commit",
+      )(commitResponse);
+      if (commit.sha !== commitSha) {
+        return yield* PriorReviewLookupFailure.make({
+          reason: `GitHub returned commit ${commit.sha} for requested snapshot ${commitSha}`,
+        });
+      }
+      const treeResponse = yield* client
+        .execute(
+          withCommonHeaders(
+            HttpClientRequest.get(
+              `${target.apiUrl}/repos/${target.repository}/git/trees/${encodeURIComponent(commit.tree.sha)}`,
+            ).pipe(
+              HttpClientRequest.acceptJson,
+              HttpClientRequest.setUrlParams({ recursive: "1" }),
+            ),
+            target.token,
+          ),
+        )
+        .pipe(
+          Effect.flatMap(HttpClientResponse.filterStatusOk),
+          Effect.mapError(asTreeLookupFailure("get recursive Git tree")),
+        );
+      const tree = yield* decodeLookupJson(
+        GitHubTreeWire,
+        "decode recursive Git tree",
+      )(treeResponse);
+      if (tree.sha !== commit.tree.sha) {
+        return yield* PriorReviewLookupFailure.make({
+          reason: `GitHub returned tree ${tree.sha} for requested tree ${commit.tree.sha}`,
+        });
+      }
+      const entries = new Map<string, typeof GitHubTreeEntryWire.Type>();
+      for (const entry of tree.tree) {
+        if (entries.has(entry.path)) {
+          return yield* PriorReviewLookupFailure.make({
+            reason: `GitHub returned duplicate path '${entry.path}' in tree ${tree.sha}`,
+          });
+        }
+        entries.set(entry.path, entry);
+      }
+      return { entries, truncated: tree.truncated } as const;
+    });
+    const compareTrees = Effect.fn("PriorReviews.compareTrees")(function* (
+      baseSha: string,
+      headSha: string,
+      paths: ReadonlyArray<string>,
+    ) {
+      const decodeSha = Schema.decodeUnknownEffect(GitCommitSha);
+      const [validatedBaseSha, validatedHeadSha, validatedPaths] = yield* Effect.all([
+        decodeSha(baseSha),
+        decodeSha(headSha),
+        Schema.decodeUnknownEffect(TreeComparisonPaths)(paths),
+      ]).pipe(Effect.mapError(asTreeLookupFailure("validate tree comparison request")));
+      const uniquePaths = [...new Set(validatedPaths)].sort();
+      const { base, head } = yield* Effect.all(
+        {
+          base: readTreeSnapshot(validatedBaseSha),
+          head: readTreeSnapshot(validatedHeadSha),
+        },
+        { concurrency: 2 },
       );
+      if (base.truncated || head.truncated) {
+        return ReviewTreeComparison.make({
+          baseSha: validatedBaseSha,
+          headSha: validatedHeadSha,
+          changedPaths: [],
+          truncated: true,
+        });
+      }
+      const changedPaths = uniquePaths.filter((path) => {
+        const before = base.entries.get(path);
+        const after = head.entries.get(path);
+        if (before === undefined || after === undefined) return before !== after;
+        return before.sha !== after.sha || before.mode !== after.mode || before.type !== after.type;
+      });
+      return ReviewTreeComparison.make({
+        baseSha: validatedBaseSha,
+        headSha: validatedHeadSha,
+        changedPaths,
+        truncated: false,
+      });
+    });
     return PriorReviews.of({
       latestFingerprint: readMarkers(Option.none()).pipe(
         Effect.map((markers) => markers.latestFingerprint),
@@ -1048,7 +1179,7 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
           Effect.map((markers) => markers.latestState),
         );
       }),
-      compareHeads: (baseSha, headSha) => compareCommits(baseSha, headSha, "..."),
+      compareHeads: compareCommits,
       compareTrees,
     });
   }),

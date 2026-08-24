@@ -32,6 +32,7 @@ import {
   ReviewExecutionContext,
   ReviewHeadComparison,
   ReviewStateAuthenticator,
+  type ReviewTreeComparison,
   isLineageAncestor,
   type ReviewMode,
   type ReviewState,
@@ -604,7 +605,8 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         }
         let comparison: ReviewHeadComparison | undefined;
         let baseComparison: ReviewHeadComparison | undefined;
-        let contentComparison: ReviewHeadComparison | undefined;
+        let contentComparison: ReviewTreeComparison | undefined;
+        let contentComparisonFailure: string | undefined;
         if (
           (options.reviewMode ?? "incremental") === "incremental" &&
           recovered.state !== undefined
@@ -645,15 +647,34 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             (comparison === undefined ||
               !isLineageAncestor(comparison, recovered.state, metadata.headSha))
           ) {
-            contentComparison = yield* history
-              .compareTrees(recovered.state.reviewedHeadSha, metadata.headSha)
-              .pipe(Effect.orElseSucceed(() => undefined));
-            if (contentComparison !== undefined && reviewer.filterFiles !== undefined) {
-              contentComparison = ReviewHeadComparison.make({
-                ...contentComparison,
-                files: reviewer.filterFiles(contentComparison.files),
-              });
+            const comparisonPaths = new Set(
+              fullFiles.flatMap((file) =>
+                file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
+              ),
+            );
+            for (const finding of recovered.state.unresolvedFindings) {
+              comparisonPaths.add(finding.path);
             }
+            for (const concern of recovered.state.unresolvedConcerns) {
+              for (const path of concern.evidencePaths ?? []) comparisonPaths.add(path);
+            }
+            for (const path of recovered.state.unreviewedPaths) comparisonPaths.add(path);
+            const treeResult = yield* history
+              .compareTrees(recovered.state.reviewedHeadSha, metadata.headSha, [...comparisonPaths])
+              .pipe(
+                Effect.match({
+                  onFailure: (failure) => ({
+                    comparison: undefined,
+                    failure: failure.reason,
+                  }),
+                  onSuccess: (treeComparison) => ({
+                    comparison: treeComparison,
+                    failure: undefined,
+                  }),
+                }),
+              );
+            contentComparison = treeResult.comparison;
+            contentComparisonFailure = treeResult.failure;
           }
         }
         selection = {
@@ -666,6 +687,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             comparison,
             baseComparison,
             contentComparison,
+            contentComparisonFailure,
             lookupFailure: recovered.failure,
           }),
           stateAuthenticator,

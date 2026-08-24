@@ -39,6 +39,7 @@ import {
   ReviewInputCoverage,
   ReviewRunOutcome,
   ReviewState,
+  ReviewTreeComparison,
   PullRequestSource,
   StoredReviewFinding,
   UnsupportedServiceTierProvider,
@@ -1037,12 +1038,10 @@ describe("runReviewAction", () => {
               files: [changed, untouched],
               truncated: false,
             }),
-            treeComparison: ReviewHeadComparison.make({
-              status: "ahead",
+            treeComparison: ReviewTreeComparison.make({
               baseSha: reviewedHeadSha,
               headSha: currentHeadSha,
-              mergeBaseSha: reviewedHeadSha,
-              files: [changed],
+              changedPaths: [changed.path],
               truncated: false,
             }),
           }),
@@ -1054,7 +1053,7 @@ describe("runReviewAction", () => {
     }),
   );
 
-  it.effect("reviews a rebased head when the effective patch changed", () =>
+  it.effect("makes an unavailable rewritten-head snapshot visible in full-review scope", () =>
     Effect.gen(function* () {
       const harness = yield* actionHarness(
         JSON.stringify({
@@ -1093,12 +1092,16 @@ describe("runReviewAction", () => {
         lastReviewMode: "full",
       });
       const invoked = yield* Ref.make(0);
+      const reviewReasons = yield* Ref.make<ReadonlyArray<string>>([]);
       const result = yield* runReviewAction(
         {
           run: () =>
-            Ref.update(invoked, (count) => count + 1).pipe(
-              Effect.map(() => fakeOutcome("comment")),
-            ),
+            Effect.gen(function* () {
+              const selection = yield* ReviewExecutionContext;
+              yield* Ref.update(invoked, (count) => count + 1);
+              yield* Ref.update(reviewReasons, (reasons) => [...reasons, selection.reason]);
+              return fakeOutcome("comment");
+            }),
           fingerprint: Effect.succeed("c".repeat(64)),
           profileFingerprint: Effect.succeed(profileFingerprint),
           snapshot: Effect.succeed({ metadata, files: [] }),
@@ -1111,6 +1114,9 @@ describe("runReviewAction", () => {
 
       expect(result._tag).toBe("Completed");
       expect(yield* Ref.get(invoked)).toBe(1);
+      expect(yield* Ref.get(reviewReasons)).toEqual([
+        "the rewritten-head tree snapshot comparison failed: no fixture tree comparison",
+      ]);
       expect(yield* Ref.get(harness.written)).toContain("skipped=false");
     }),
   );

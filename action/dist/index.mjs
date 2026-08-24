@@ -43548,6 +43548,15 @@ class ReviewHeadComparison extends exports_Schema.Class("@effect-agent/pr-review
   truncated: exports_Schema.Boolean
 }) {
 }
+var MAX_TREE_COMPARISON_PATHS = 750;
+
+class ReviewTreeComparison extends exports_Schema.Class("@effect-agent/pr-review/ReviewTreeComparison")({
+  baseSha: GitCommitSha,
+  headSha: GitCommitSha,
+  changedPaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(MAX_TREE_COMPARISON_PATHS)),
+  truncated: exports_Schema.Boolean
+}) {
+}
 var fullReviewSelection = (input) => ({
   mode: "full",
   reason: input.reason,
@@ -43583,10 +43592,7 @@ var validateReviewState = (state, current, profileFingerprint) => {
 var filePaths = (file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath];
 var incrementalFromDelta = (input) => {
   const currentPaths = new Set(input.fullFiles.flatMap(filePaths));
-  const affectedPaths = new Set([
-    ...input.deltaFiles.flatMap(filePaths),
-    ...input.extraAffectedPaths ?? []
-  ]);
+  const affectedPaths = new Set([...input.deltaPaths, ...input.extraAffectedPaths ?? []]);
   const initialAffectedCount = affectedPaths.size;
   let expanded = true;
   while (expanded) {
@@ -43604,11 +43610,6 @@ var incrementalFromDelta = (input) => {
     }
   }
   const selectedByPath = new Map;
-  for (const file2 of input.deltaFiles) {
-    if (currentPaths.has(file2.path) || file2.previousPath !== undefined && currentPaths.has(file2.previousPath)) {
-      selectedByPath.set(file2.path, file2);
-    }
-  }
   const carriedPaths = input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path));
   const retryOnly = new Set;
   for (const path of carriedPaths) {
@@ -43701,25 +43702,32 @@ var selectReviewRange = (input) => {
       baseReason = `; base advanced from ${input.priorState.baseSha.slice(0, 7)} and overlapping PR paths were included`;
     }
     return incrementalFromDelta({
-      current: input.current,
       fullFiles: input.fullFiles,
       profileFingerprint: input.profileFingerprint,
       priorState: input.priorState,
-      deltaFiles: comparison.files,
+      deltaPaths: comparison.files.flatMap(filePaths),
       extraAffectedPaths: extraAffected,
       reason: `changes since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`
     });
   }
   const contentComparison = input.contentComparison;
-  if (contentComparison !== undefined && !contentComparison.truncated) {
+  if (contentComparison !== undefined) {
+    if (contentComparison.baseSha !== input.priorState.reviewedHeadSha || contentComparison.headSha !== input.current.headSha) {
+      return full("the rewritten-head tree snapshot comparison did not match the requested heads");
+    }
+    if (contentComparison.truncated) {
+      return full("the rewritten-head tree snapshot comparison was truncated");
+    }
     return incrementalFromDelta({
-      current: input.current,
       fullFiles: input.fullFiles,
       profileFingerprint: input.profileFingerprint,
       priorState: input.priorState,
-      deltaFiles: contentComparison.files,
+      deltaPaths: contentComparison.changedPaths,
       reason: `rewritten history; contents changed since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}`
     });
+  }
+  if (input.contentComparisonFailure !== undefined) {
+    return full(`the rewritten-head tree snapshot comparison failed: ${input.contentComparisonFailure.slice(0, 2048)}`);
   }
   if (comparison === undefined)
     return full("the incremental head comparison was unavailable");
@@ -45904,6 +45912,23 @@ var GitHubCompareWire = exports_Schema.Struct({
   merge_base_commit: exports_Schema.Struct({ sha: exports_Schema.String }),
   files: GitHubFilesPageWire
 });
+var GitHubGitCommitWire = exports_Schema.Struct({
+  sha: GitCommitSha,
+  tree: exports_Schema.Struct({ sha: GitCommitSha })
+});
+var GitHubTreeEntryWire = exports_Schema.Struct({
+  path: exports_Schema.String.check(exports_Schema.isMaxLength(4096)),
+  mode: exports_Schema.String.check(exports_Schema.isMaxLength(6)),
+  type: exports_Schema.Literals(["blob", "tree", "commit"]),
+  sha: GitCommitSha
+});
+var MAX_RECURSIVE_TREE_ENTRIES = 1e5;
+var GitHubTreeWire = exports_Schema.Struct({
+  sha: GitCommitSha,
+  tree: exports_Schema.Array(GitHubTreeEntryWire).check(exports_Schema.isMaxLength(MAX_RECURSIVE_TREE_ENTRIES)),
+  truncated: exports_Schema.Boolean
+});
+var TreeComparisonPaths = exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(MAX_TREE_COMPARISON_PATHS));
 var MAX_PRIOR_REVIEW_PAGES = 5;
 var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.gen(function* () {
   const target = yield* GitHubReviewTarget;
@@ -45914,6 +45939,13 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
   const asLookupFailure = (error2) => PriorReviewLookupFailure.make({
     reason: `${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
   });
+  const asTreeLookupFailure = (operation) => (error2) => PriorReviewLookupFailure.make({
+    reason: `${operation}: ${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
+  });
+  const decodeLookupJson = (schema3, operation) => {
+    const decode2 = exports_Schema.decodeUnknownEffect(schema3);
+    return (response) => response.json.pipe(exports_Effect.mapError(asTreeLookupFailure(operation)), exports_Effect.flatMap((body) => decode2(body).pipe(exports_Effect.mapError(asTreeLookupFailure(operation)))));
+  };
   const readMarkers = (authenticator) => exports_Effect.gen(function* () {
     const perPage = 100;
     let latest = exports_Option.none();
@@ -45950,8 +45982,8 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
     }
     return { latestFingerprint: latest, latestState };
   }).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
-  const compareCommits = (baseSha, headSha, separator) => exports_Effect.gen(function* () {
-    const response = yield* exports_HttpClient.execute(withCommonHeaders(exports_HttpClientRequest.get(`${target.apiUrl}/repos/${target.repository}/compare/${encodeURIComponent(baseSha)}${separator}${encodeURIComponent(headSha)}`).pipe(exports_HttpClientRequest.acceptJson), target.token)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asLookupFailure));
+  const compareCommits = (baseSha, headSha) => exports_Effect.gen(function* () {
+    const response = yield* exports_HttpClient.execute(withCommonHeaders(exports_HttpClientRequest.get(`${target.apiUrl}/repos/${target.repository}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}`).pipe(exports_HttpClientRequest.acceptJson), target.token)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asLookupFailure));
     const wire = yield* response.json.pipe(exports_Effect.mapError(asLookupFailure), exports_Effect.flatMap((body) => exports_Schema.decodeUnknownEffect(GitHubCompareWire)(body).pipe(exports_Effect.mapError(asLookupFailure))));
     const files = wire.files.map(toChangedFile);
     return ReviewHeadComparison.make({
@@ -45963,21 +45995,73 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
       truncated: files.length >= MAX_CHANGED_FILES
     });
   }).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
-  const compareTrees = (baseSha, headSha) => compareCommits(baseSha, headSha, "..").pipe(exports_Effect.map((comparison) => ReviewHeadComparison.make({
-    status: comparison.status === "identical" ? "identical" : "ahead",
-    baseSha,
-    headSha,
-    mergeBaseSha: baseSha,
-    files: comparison.files,
-    truncated: comparison.truncated
-  })));
+  const readTreeSnapshot = exports_Effect.fn("PriorReviews.readTreeSnapshot")(function* (commitSha) {
+    const commitResponse = yield* client.execute(withCommonHeaders(exports_HttpClientRequest.get(`${target.apiUrl}/repos/${target.repository}/git/commits/${encodeURIComponent(commitSha)}`).pipe(exports_HttpClientRequest.acceptJson), target.token)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asTreeLookupFailure("get Git commit")));
+    const commit = yield* decodeLookupJson(GitHubGitCommitWire, "decode Git commit")(commitResponse);
+    if (commit.sha !== commitSha) {
+      return yield* PriorReviewLookupFailure.make({
+        reason: `GitHub returned commit ${commit.sha} for requested snapshot ${commitSha}`
+      });
+    }
+    const treeResponse = yield* client.execute(withCommonHeaders(exports_HttpClientRequest.get(`${target.apiUrl}/repos/${target.repository}/git/trees/${encodeURIComponent(commit.tree.sha)}`).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.setUrlParams({ recursive: "1" })), target.token)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asTreeLookupFailure("get recursive Git tree")));
+    const tree = yield* decodeLookupJson(GitHubTreeWire, "decode recursive Git tree")(treeResponse);
+    if (tree.sha !== commit.tree.sha) {
+      return yield* PriorReviewLookupFailure.make({
+        reason: `GitHub returned tree ${tree.sha} for requested tree ${commit.tree.sha}`
+      });
+    }
+    const entries3 = new Map;
+    for (const entry of tree.tree) {
+      if (entries3.has(entry.path)) {
+        return yield* PriorReviewLookupFailure.make({
+          reason: `GitHub returned duplicate path '${entry.path}' in tree ${tree.sha}`
+        });
+      }
+      entries3.set(entry.path, entry);
+    }
+    return { entries: entries3, truncated: tree.truncated };
+  });
+  const compareTrees = exports_Effect.fn("PriorReviews.compareTrees")(function* (baseSha, headSha, paths) {
+    const decodeSha = exports_Schema.decodeUnknownEffect(GitCommitSha);
+    const [validatedBaseSha, validatedHeadSha, validatedPaths] = yield* exports_Effect.all([
+      decodeSha(baseSha),
+      decodeSha(headSha),
+      exports_Schema.decodeUnknownEffect(TreeComparisonPaths)(paths)
+    ]).pipe(exports_Effect.mapError(asTreeLookupFailure("validate tree comparison request")));
+    const uniquePaths2 = [...new Set(validatedPaths)].sort();
+    const { base: base2, head: head5 } = yield* exports_Effect.all({
+      base: readTreeSnapshot(validatedBaseSha),
+      head: readTreeSnapshot(validatedHeadSha)
+    }, { concurrency: 2 });
+    if (base2.truncated || head5.truncated) {
+      return ReviewTreeComparison.make({
+        baseSha: validatedBaseSha,
+        headSha: validatedHeadSha,
+        changedPaths: [],
+        truncated: true
+      });
+    }
+    const changedPaths = uniquePaths2.filter((path) => {
+      const before = base2.entries.get(path);
+      const after = head5.entries.get(path);
+      if (before === undefined || after === undefined)
+        return before !== after;
+      return before.sha !== after.sha || before.mode !== after.mode || before.type !== after.type;
+    });
+    return ReviewTreeComparison.make({
+      baseSha: validatedBaseSha,
+      headSha: validatedHeadSha,
+      changedPaths,
+      truncated: false
+    });
+  });
   return PriorReviews.of({
     latestFingerprint: readMarkers(exports_Option.none()).pipe(exports_Effect.map((markers) => markers.latestFingerprint)),
     latestState: exports_Effect.gen(function* () {
       const authenticator = yield* ReviewStateAuthenticator;
       return yield* readMarkers(exports_Option.some(authenticator)).pipe(exports_Effect.map((markers) => markers.latestState));
     }),
-    compareHeads: (baseSha, headSha) => compareCommits(baseSha, headSha, "..."),
+    compareHeads: compareCommits,
     compareTrees
   });
 }));
@@ -58041,6 +58125,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       let comparison;
       let baseComparison;
       let contentComparison;
+      let contentComparisonFailure;
       if ((options3.reviewMode ?? "incremental") === "incremental" && recovered.state !== undefined) {
         if (recovered.state.reviewedHeadSha === metadata.headSha) {
           comparison = ReviewHeadComparison.make({
@@ -58074,15 +58159,28 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
           }
         }
         if (recovered.state.reviewedHeadSha !== metadata.headSha && (comparison === undefined || !isLineageAncestor(comparison, recovered.state, metadata.headSha))) {
-          contentComparison = yield* history.compareTrees(recovered.state.reviewedHeadSha, metadata.headSha).pipe(exports_Effect.orElseSucceed(() => {
-            return;
-          }));
-          if (contentComparison !== undefined && reviewer.filterFiles !== undefined) {
-            contentComparison = ReviewHeadComparison.make({
-              ...contentComparison,
-              files: reviewer.filterFiles(contentComparison.files)
-            });
+          const comparisonPaths = new Set(fullFiles.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]));
+          for (const finding of recovered.state.unresolvedFindings) {
+            comparisonPaths.add(finding.path);
           }
+          for (const concern of recovered.state.unresolvedConcerns) {
+            for (const path of concern.evidencePaths ?? [])
+              comparisonPaths.add(path);
+          }
+          for (const path of recovered.state.unreviewedPaths)
+            comparisonPaths.add(path);
+          const treeResult = yield* history.compareTrees(recovered.state.reviewedHeadSha, metadata.headSha, [...comparisonPaths]).pipe(exports_Effect.match({
+            onFailure: (failure) => ({
+              comparison: undefined,
+              failure: failure.reason
+            }),
+            onSuccess: (treeComparison) => ({
+              comparison: treeComparison,
+              failure: undefined
+            })
+          }));
+          contentComparison = treeResult.comparison;
+          contentComparisonFailure = treeResult.failure;
         }
       }
       selection = {
@@ -58095,6 +58193,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
           comparison,
           baseComparison,
           contentComparison,
+          contentComparisonFailure,
           lookupFailure: recovered.failure
         }),
         stateAuthenticator

@@ -75,8 +75,15 @@ Only a terminal marker from `review-author`, pinned to the reviewed commit and s
 secret, may narrow scope. The default author is `github-actions[bot]`; custom GitHub App tokens
 require `<app-slug>[bot]`. The marker is capped at 24,000 characters. Missing, invalid, or oversized
 state and incompatible PR or profile identity force a full review. After state passes those checks,
-an unavailable, truncated, or non-ancestor three-dot comparison may use a two-dot content
-comparison to identify changed PR paths. `skip-unchanged: "true"` is the default.
+an unavailable, truncated, or non-ancestor three-dot lineage comparison may use direct Git commit
+tree snapshots. The action compares blob identity, path presence, file mode, and object type only
+for the bounded current-PR and stored-continuity path set, then hydrates selected paths from the
+current full PR file records. Missing, malformed, or truncated snapshots force a full review and
+appear in `review-reason`. `skip-unchanged: "true"` is the default.
+
+The rewritten-head path does not use GitHub's three-dot comparison as a content delta: that route
+starts at the merge base and can expand an amended pull request back to its full diff. GitHub REST
+does not provide the two-dot comparison spelling as an alternative.
 
 The workflow needs `contents: read` and `pull-requests: write`, but not `checks: write`.
 Fingerprints compare text, not runtime meaning, so use `review-mode: final` when a base change needs
