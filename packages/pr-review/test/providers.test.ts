@@ -5,7 +5,7 @@ import { Effect, Layer, Ref } from "effect";
 import { LanguageModel } from "effect/unstable/ai";
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
-import { EFFORT_ALIASES, makeOpenAiReviewModel } from "../src/index.ts";
+import { describeReviewModel, EFFORT_ALIASES, makeOpenAiReviewModel } from "../src/index.ts";
 
 const makeResponse = (): OpenAiSchema.Response => ({
   id: "resp_test123",
@@ -19,7 +19,7 @@ const makeResponse = (): OpenAiSchema.Response => ({
 });
 
 describe("makeOpenAiReviewModel", () => {
-  it.effect("reserves reasoning headroom for high-effort reviews", () =>
+  it.effect("applies reasoning headroom and Fast mode to OpenAI requests", () =>
     Effect.gen(function* () {
       const requests = yield* Ref.make<ReadonlyArray<typeof OpenAiSchema.CreateResponse.Encoded>>(
         [],
@@ -41,13 +41,22 @@ describe("makeOpenAiReviewModel", () => {
 
       yield* LanguageModel.generateText({ prompt: "Review this change." }).pipe(
         Effect.provide(
-          makeOpenAiReviewModel(undefined, EFFORT_ALIASES.high).pipe(Layer.provide(clientLayer)),
+          makeOpenAiReviewModel(undefined, EFFORT_ALIASES.high, "fast").pipe(
+            Layer.provide(clientLayer),
+          ),
         ),
       );
 
       const [captured] = yield* Ref.get(requests);
       expect(captured?.max_output_tokens).toBe(32_000);
       expect(captured?.reasoning).toEqual({ effort: "high" });
+      expect(captured?.service_tier).toBe("fast");
     }),
   );
+
+  it("includes Fast mode in the fingerprint-bearing model description", () => {
+    expect(describeReviewModel("openai", undefined, EFFORT_ALIASES.high, "fast")).toBe(
+      "openai/gpt-5.6-sol (effort high, service tier fast)",
+    );
+  });
 });

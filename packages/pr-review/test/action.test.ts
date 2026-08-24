@@ -41,6 +41,7 @@ import {
   ReviewState,
   PullRequestSource,
   StoredReviewFinding,
+  UnsupportedServiceTierProvider,
   webCryptoReviewStateAuthenticatorLayer,
   type ReviewVerdict,
 } from "../src/index.ts";
@@ -74,6 +75,7 @@ describe("resolveActionInputs", () => {
         provider: "openai",
         model: undefined,
         effort: undefined,
+        serviceTier: undefined,
         post: true,
         applyVerdict: false,
         fanOut: true,
@@ -115,6 +117,7 @@ describe("resolveActionInputs", () => {
         provider: "anthropic",
         model: "claude-sonnet-5",
         effort: 0.75,
+        serviceTier: undefined,
         post: false,
         applyVerdict: true,
         fanOut: false,
@@ -135,6 +138,37 @@ describe("resolveActionInputs", () => {
     Effect.gen(function* () {
       const inputs = yield* resolveActionInputs().pipe(withEnv({ PR_REVIEW_EFFORT: "0.6" }));
       expect(inputs.effort).toBe(0.6);
+    }),
+  );
+
+  it.effect("accepts Fast mode for OpenAI", () =>
+    Effect.gen(function* () {
+      const inputs = yield* resolveActionInputs().pipe(
+        withEnv({ PR_REVIEW_PROVIDER: "openai", PR_REVIEW_SERVICE_TIER: "fast" }),
+      );
+      expect(inputs.serviceTier).toBe("fast");
+    }),
+  );
+
+  it.effect("rejects unsupported service-tier values", () =>
+    Effect.gen(function* () {
+      const exit = yield* resolveActionInputs().pipe(
+        withEnv({ PR_REVIEW_SERVICE_TIER: "priority" }),
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      expect(failure).toHaveProperty("_tag", "ConfigError");
+    }),
+  );
+
+  it.effect("fails typed when a service tier is configured for Anthropic", () =>
+    Effect.gen(function* () {
+      const exit = yield* resolveActionInputs().pipe(
+        withEnv({ PR_REVIEW_PROVIDER: "anthropic", PR_REVIEW_SERVICE_TIER: "fast" }),
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      expect(Schema.is(UnsupportedServiceTierProvider)(failure)).toBe(true);
     }),
   );
 

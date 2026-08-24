@@ -1,6 +1,6 @@
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { Config, Layer } from "effect";
+import { Config, Effect, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { resolveEffortRung, type EffortAliasName, type EffortPosition } from "./effort.ts";
@@ -14,7 +14,36 @@ import { resolveEffortRung, type EffortAliasName, type EffortPosition } from "./
 // application supplies them at the edge (D-027).
 // ---------------------------------------------------------------------------
 
-export type ReviewProvider = "openai" | "anthropic";
+export const ReviewProvider = Schema.Literals(["openai", "anthropic"]);
+export type ReviewProvider = typeof ReviewProvider.Type;
+
+/** OpenAI Responses service tiers supported by the packaged reviewer. */
+export const OpenAiServiceTier = Schema.Literal("fast");
+export type OpenAiServiceTier = typeof OpenAiServiceTier.Type;
+
+/** A provider-specific OpenAI tier was configured for another provider. */
+export class UnsupportedServiceTierProvider extends Schema.TaggedError<UnsupportedServiceTierProvider>()(
+  "UnsupportedServiceTierProvider",
+  {
+    provider: ReviewProvider,
+    serviceTier: OpenAiServiceTier,
+  },
+) {
+  override get message() {
+    return `Service tier '${this.serviceTier}' requires provider 'openai'; received '${this.provider}'.`;
+  }
+}
+
+/** Reject an OpenAI-only service tier before constructing another provider's model. */
+export const validateReviewServiceTier = Effect.fn("validateReviewServiceTier")(function* (
+  provider: ReviewProvider,
+  serviceTier: OpenAiServiceTier | undefined,
+): Effect.fn.Return<OpenAiServiceTier | undefined, UnsupportedServiceTierProvider> {
+  if (serviceTier !== undefined && provider !== "openai") {
+    return yield* UnsupportedServiceTierProvider.make({ provider, serviceTier });
+  }
+  return serviceTier;
+});
 
 export const DEFAULT_PROVIDER: ReviewProvider = "openai";
 
@@ -44,7 +73,11 @@ export const PROVIDER_EFFORT_RUNGS = {
 >;
 
 /** One OpenAI review model binding with the package's structured-output settings. */
-export const makeOpenAiReviewModel = (model?: string, effort?: EffortPosition) =>
+export const makeOpenAiReviewModel = (
+  model?: string,
+  effort?: EffortPosition,
+  serviceTier?: OpenAiServiceTier,
+) =>
   OpenAiLanguageModel.model(model ?? DEFAULT_MODEL.openai, {
     // OpenAI counts hidden reasoning tokens and visible answer tokens against
     // this same ceiling. High-effort reviews can exhaust an 8k allowance
@@ -52,6 +85,7 @@ export const makeOpenAiReviewModel = (model?: string, effort?: EffortPosition) =
     max_output_tokens: 32_000,
     store: false,
     strictJsonSchema: true,
+    ...(serviceTier === undefined ? {} : { service_tier: serviceTier }),
     ...(effort === undefined
       ? {}
       : { reasoning: { effort: resolveEffortRung(effort, PROVIDER_EFFORT_RUNGS.openai) } }),
@@ -68,19 +102,24 @@ export const makeAnthropicReviewModel = (model?: string, effort?: EffortPosition
 
 /**
  * The human-readable descriptor of one provider binding, e.g.
- * `openai/gpt-5.6-sol (effort high)`. Rendered into the review footer and
+ * `openai/gpt-5.6-sol (effort high, service tier fast)`. Rendered into the review footer and
  * included in the changeset-fingerprint signature, so a provider, model, or
- * effort change re-reviews instead of skipping.
+ * request-profile change re-reviews instead of skipping.
  */
 export const describeReviewModel = (
   provider: ReviewProvider,
   model?: string,
   effort?: EffortPosition,
+  serviceTier?: OpenAiServiceTier,
 ): string => {
   const base = `${provider}/${model ?? DEFAULT_MODEL[provider]}`;
-  return effort === undefined
-    ? base
-    : `${base} (effort ${resolveEffortRung(effort, PROVIDER_EFFORT_RUNGS[provider])})`;
+  const details = [
+    ...(effort === undefined
+      ? []
+      : [`effort ${resolveEffortRung(effort, PROVIDER_EFFORT_RUNGS[provider])}`]),
+    ...(serviceTier === undefined ? [] : [`service tier ${serviceTier}`]),
+  ];
+  return details.length === 0 ? base : `${base} (${details.join(", ")})`;
 };
 
 /** The OpenAI client Layer, credential from `OPENAI_API_KEY`. */

@@ -61,7 +61,8 @@ export interface PrReviewSharedOptions {
   /** Run-level usage bounds; defaults to the shape's packaged limits. */
   readonly budget?: UsageBudgetLimits | undefined;
   /**
-   * Human-readable descriptor of the bound model (provider, model id, effort)
+   * Human-readable descriptor of the bound model (provider, model id, effort,
+   * and request profile such as service tier)
    * rendered into the review footer and included in the fingerprint
    * signature, so changing the binding re-reviews instead of skipping.
    */

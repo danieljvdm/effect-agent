@@ -19,6 +19,8 @@ import {
   makeAnthropicReviewModel,
   makeOpenAiReviewModel,
   openAiClientLayer,
+  validateReviewServiceTier,
+  type OpenAiServiceTier,
   type ReviewProvider,
 } from "./internal/providers.ts";
 import { retireStaleReviews } from "./internal/retirement.ts";
@@ -90,6 +92,7 @@ export interface ResolvedActionInputs {
   readonly provider: ReviewProvider;
   readonly model: string | undefined;
   readonly effort: EffortPosition | undefined;
+  readonly serviceTier: OpenAiServiceTier | undefined;
   readonly post: boolean;
   readonly applyVerdict: boolean;
   readonly fanOut: boolean;
@@ -118,6 +121,12 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
       return yield* InvalidEffortInput.make({ input: effortRaw.value });
     }
   }
+  const serviceTier = yield* validateReviewServiceTier(
+    provider,
+    Option.getOrUndefined(
+      yield* Config.option(Config.literals(["fast"], "PR_REVIEW_SERVICE_TIER")),
+    ),
+  );
   const maxDurationMinutes = Option.getOrUndefined(
     yield* Config.option(Config.int("PR_REVIEW_MAX_DURATION_MINUTES")),
   );
@@ -149,6 +158,7 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
     provider,
     model: Option.getOrUndefined(model),
     effort,
+    serviceTier,
     post,
     applyVerdict,
     fanOut,
@@ -798,7 +808,12 @@ export const reviewActionProgram = Effect.gen(function* () {
     onSome: webCryptoReviewStateAuthenticatorLayer,
   });
   const guidance = yield* resolveGuidance(inputs);
-  const modelLabel = describeReviewModel(inputs.provider, inputs.model, inputs.effort);
+  const modelLabel = describeReviewModel(
+    inputs.provider,
+    inputs.model,
+    inputs.effort,
+    inputs.serviceTier,
+  );
   const defaults = inputs.fanOut ? fanOutReviewBudgetLimits : reviewBudgetLimits;
   const budget =
     inputs.maxDurationMinutes === undefined
@@ -832,7 +847,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       Effect.provide(Layer.merge(stateAuthenticatorLayer, anthropicClientLayer)),
     );
   }
-  const model = makeOpenAiReviewModel(inputs.model, inputs.effort);
+  const model = makeOpenAiReviewModel(inputs.model, inputs.effort, inputs.serviceTier);
   const reviewer = inputs.fanOut
     ? PrReview.makeFanOut({ ...shared, model })
     : PrReview.make({ ...shared, model });

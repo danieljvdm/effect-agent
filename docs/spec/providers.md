@@ -119,6 +119,11 @@ The framework does not ship a global mutable provider registry. Tenant policy,
 availability, cost, and data residency are application Effects and Layers. Dynamic selection
 occurs before creating the Binding; the runtime never silently chooses an ambient Model.
 
+A packaged host that exposes provider-specific request settings validates them against the
+selected provider before constructing the Binding. It fails configuration when another provider
+cannot apply a setting, rather than silently dropping it. If the host reuses prior model work, its
+binding or profile identity includes every request setting that can change model behavior.
+
 ## 5. Capability checks
 
 Providers and Models differ in Tool calling, structured output, reasoning, media,

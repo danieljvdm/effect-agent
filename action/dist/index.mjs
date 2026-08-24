@@ -57616,6 +57616,23 @@ var transformToolCallParams2 = /* @__PURE__ */ fnUntraced2(function* (tools, too
   })));
 });
 // packages/pr-review/src/internal/providers.ts
+var ReviewProvider = exports_Schema.Literals(["openai", "anthropic"]);
+var OpenAiServiceTier = exports_Schema.Literal("fast");
+
+class UnsupportedServiceTierProvider extends exports_Schema.TaggedError()("UnsupportedServiceTierProvider", {
+  provider: ReviewProvider,
+  serviceTier: OpenAiServiceTier
+}) {
+  get message() {
+    return `Service tier '${this.serviceTier}' requires provider 'openai'; received '${this.provider}'.`;
+  }
+}
+var validateReviewServiceTier = exports_Effect.fn("validateReviewServiceTier")(function* (provider, serviceTier) {
+  if (serviceTier !== undefined && provider !== "openai") {
+    return yield* UnsupportedServiceTierProvider.make({ provider, serviceTier });
+  }
+  return serviceTier;
+});
 var DEFAULT_PROVIDER = "openai";
 var DEFAULT_MODEL = {
   openai: "gpt-5.6-sol",
@@ -57629,19 +57646,24 @@ var PROVIDER_EFFORT_RUNGS = {
   openai: ["low", "medium", "high", "xhigh"],
   anthropic: ["low", "medium", "high"]
 };
-var makeOpenAiReviewModel = (model3, effort) => exports_OpenAiLanguageModel.model(model3 ?? DEFAULT_MODEL.openai, {
+var makeOpenAiReviewModel = (model3, effort, serviceTier) => exports_OpenAiLanguageModel.model(model3 ?? DEFAULT_MODEL.openai, {
   max_output_tokens: 32000,
   store: false,
   strictJsonSchema: true,
+  ...serviceTier === undefined ? {} : { service_tier: serviceTier },
   ...effort === undefined ? {} : { reasoning: { effort: resolveEffortRung(effort, PROVIDER_EFFORT_RUNGS.openai) } }
 });
 var makeAnthropicReviewModel = (model3, effort) => exports_AnthropicLanguageModel.model(model3 ?? DEFAULT_MODEL.anthropic, {
   max_tokens: 8000,
   ...effort === undefined ? {} : { output_config: { effort: resolveEffortRung(effort, PROVIDER_EFFORT_RUNGS.anthropic) } }
 });
-var describeReviewModel = (provider, model3, effort) => {
+var describeReviewModel = (provider, model3, effort, serviceTier) => {
   const base2 = `${provider}/${model3 ?? DEFAULT_MODEL[provider]}`;
-  return effort === undefined ? base2 : `${base2} (effort ${resolveEffortRung(effort, PROVIDER_EFFORT_RUNGS[provider])})`;
+  const details = [
+    ...effort === undefined ? [] : [`effort ${resolveEffortRung(effort, PROVIDER_EFFORT_RUNGS[provider])}`],
+    ...serviceTier === undefined ? [] : [`service tier ${serviceTier}`]
+  ];
+  return details.length === 0 ? base2 : `${base2} (${details.join(", ")})`;
 };
 var openAiClientLayer = exports_OpenAiClient.layerConfig({
   apiKey: exports_Config.redacted(PROVIDER_CREDENTIAL_ENV.openai)
@@ -57680,6 +57702,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
       return yield* InvalidEffortInput.make({ input: effortRaw.value });
     }
   }
+  const serviceTier = yield* validateReviewServiceTier(provider, exports_Option.getOrUndefined(yield* exports_Config.option(exports_Config.literals(["fast"], "PR_REVIEW_SERVICE_TIER"))));
   const maxDurationMinutes = exports_Option.getOrUndefined(yield* exports_Config.option(exports_Config.int("PR_REVIEW_MAX_DURATION_MINUTES")));
   if (maxDurationMinutes !== undefined && maxDurationMinutes <= 0) {
     return yield* InvalidMaxDurationInput.make({ minutes: maxDurationMinutes });
@@ -57699,6 +57722,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
     provider,
     model: exports_Option.getOrUndefined(model3),
     effort,
+    serviceTier,
     post: post3,
     applyVerdict,
     fanOut,
@@ -58086,7 +58110,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     onSome: webCryptoReviewStateAuthenticatorLayer
   });
   const guidance = yield* resolveGuidance2(inputs);
-  const modelLabel = describeReviewModel(inputs.provider, inputs.model, inputs.effort);
+  const modelLabel = describeReviewModel(inputs.provider, inputs.model, inputs.effort, inputs.serviceTier);
   const defaults = inputs.fanOut ? fanOutReviewBudgetLimits : reviewBudgetLimits;
   const budget2 = inputs.maxDurationMinutes === undefined ? defaults : UsageBudgetLimits.make({
     ...defaults,
@@ -58113,7 +58137,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     const reviewer2 = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model4 }) : PrReview.make({ ...shared, model: model4 });
     return yield* runReviewAction(reviewer2, harness).pipe(exports_Effect.provide(exports_Layer.merge(stateAuthenticatorLayer, anthropicClientLayer)));
   }
-  const model3 = makeOpenAiReviewModel(inputs.model, inputs.effort);
+  const model3 = makeOpenAiReviewModel(inputs.model, inputs.effort, inputs.serviceTier);
   const reviewer = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model3 }) : PrReview.make({ ...shared, model: model3 });
   return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(exports_Layer.merge(stateAuthenticatorLayer, openAiClientLayer)));
 });
@@ -58124,6 +58148,7 @@ var INPUT_TO_ENV = [
   ["INPUT_PROVIDER", "PR_REVIEW_PROVIDER"],
   ["INPUT_MODEL", "PR_REVIEW_MODEL"],
   ["INPUT_EFFORT", "PR_REVIEW_EFFORT"],
+  ["INPUT_SERVICE-TIER", "PR_REVIEW_SERVICE_TIER"],
   ["INPUT_MAX-DURATION-MINUTES", "PR_REVIEW_MAX_DURATION_MINUTES"],
   ["INPUT_POST", "PR_REVIEW_POST"],
   ["INPUT_APPLY-VERDICT", "PR_REVIEW_APPLY_VERDICT"],

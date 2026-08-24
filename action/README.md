@@ -30,6 +30,7 @@ jobs:
           # review-author: kommunikasie[bot]
           # or: provider: anthropic + anthropic-api-key
           effort: high # low..max or a number in [0,1], per-provider ladder
+          service-tier: fast # OpenAI only; omit to use the project default
           guidance-file: .github/review-guidance.md # committed review profile
           guidance: |
             This is an Effect codebase. Flag naked Promises in public APIs.
@@ -38,6 +39,13 @@ jobs:
           review-mode: incremental
           retire-stale-reviews: true
 ```
+
+`service-tier` accepts only `fast`. The Action sends it as
+`service_tier: "fast"` on every OpenAI Responses request. Omitting the input
+leaves the tier unset so the OpenAI project default applies. Setting a tier
+with `provider: anthropic` fails configuration before review work starts.
+The model description includes the selected tier, so changing it forces a new
+review instead of reusing skip-unchanged state.
 
 No `actions/checkout` is required: the reviewer reads the pull request
 through the GitHub API and never checks out or executes untrusted PR code.
