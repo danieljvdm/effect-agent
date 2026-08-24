@@ -2375,10 +2375,23 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     // Gross token accounting never discounts cache activity. An omitted
     // aggregate is derived from present components; an omitted component may
     // receive the aggregate remainder. Explicitly contradictory fields fail.
-    const reportedInputComponents = yield* decodeProviderUsageTotal(
-      reportedUncached + cacheRead + cacheWrite,
-    );
+    // Some providers include cache writes in `uncached` while also reporting
+    // them separately. Separate that overlap before constructing the canonical,
+    // additive input components, but retain the raw provider usage for pricing.
     const reportedInputTotal = providerUsage.inputTokens.total;
+    const reportedInputWithoutWrite = yield* decodeProviderUsageTotal(reportedUncached + cacheRead);
+    const cacheWriteOverlapsUncached =
+      reportedInputTotal !== undefined &&
+      providerUsage.inputTokens.uncached !== undefined &&
+      providerUsage.inputTokens.cacheWrite !== undefined &&
+      cacheWrite <= reportedUncached &&
+      reportedInputWithoutWrite <= reportedInputTotal &&
+      cacheWrite > reportedInputTotal - reportedInputWithoutWrite;
+    const disjointReportedUncached =
+      reportedUncached - (cacheWriteOverlapsUncached ? cacheWrite : 0);
+    const reportedInputComponents = yield* decodeProviderUsageTotal(
+      disjointReportedUncached + cacheRead + cacheWrite,
+    );
     const allInputComponentsReported =
       providerUsage.inputTokens.uncached !== undefined &&
       providerUsage.inputTokens.cacheRead !== undefined &&
@@ -2411,7 +2424,8 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     const inputRemainder = inputTokens - reportedInputComponents;
     const outputRemainder = outputTokens - reportedOutputComponents;
     const uncached =
-      reportedUncached + (providerUsage.inputTokens.uncached === undefined ? inputRemainder : 0);
+      disjointReportedUncached +
+      (providerUsage.inputTokens.uncached === undefined ? inputRemainder : 0);
     const normalizedCacheRead =
       cacheRead +
       (providerUsage.inputTokens.uncached !== undefined &&

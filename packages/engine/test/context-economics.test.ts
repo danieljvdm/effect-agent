@@ -354,6 +354,52 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
       }),
   );
 
+  it.effect("RUN-023: separates cache writes already included in provider uncached input", () =>
+    Effect.gen(function* () {
+      const deltas = yield* Ref.make<ReadonlyArray<RunUsageDelta>>([]);
+      const definition = Agent.define("overlapping-cache-write", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const rawUsage: FinishUsage = {
+        inputTokens: { total: 100, uncached: 90, cacheRead: 10, cacheWrite: 40 },
+        outputTokens: { total: 5, text: 5, reasoning: 0 },
+      };
+      const { model } = scriptedModel([finalParts('{"answer":"done"}', rawUsage)]);
+
+      yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "q" },
+        {
+          budget: {
+            guard: (effect) => effect,
+            consume: (delta) => Ref.update(deltas, (all) => [...all, delta]),
+          },
+        },
+      );
+
+      const observed = (yield* Ref.get(deltas))[0];
+      if (observed === undefined) throw new Error("expected one usage delta");
+      expect(observed.inputTokens).toBe(100);
+      expect(observed.usage).toEqual(rawUsage);
+      if (observed.modelUsage === undefined) throw new Error("expected canonical model usage");
+      expect(observed.modelUsage.inputTokens).toEqual({
+        total: 100,
+        uncached: 50,
+        cacheRead: 10,
+        cacheWrite: 40,
+      });
+    }),
+  );
+
   it.effect("RUN-023: rejects malformed provider token usage instead of counting it as zero", () =>
     Effect.gen(function* () {
       const estimatorCalls = yield* Ref.make(0);
