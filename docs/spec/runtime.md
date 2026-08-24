@@ -657,7 +657,10 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   the same integer bound, with last-call token counts no greater than cumulative totals; invalid
   seeds fail before Run input hooks or external execution. A reported provider total must not be
   smaller than its explicit components and must equal them when every component is present;
-  only genuinely omitted components may receive an inferred remainder.
+  only genuinely omitted components may receive an inferred remainder. When a provider reports
+  cache-write tokens both separately and inside uncached input, the engine separates that overlap
+  before validating and persisting the canonical additive components while preserving the raw
+  provider usage for cost estimation.
 - **RUN-024:** With policy `runStatus: "appended"`, every outgoing model request carries a
   derived run-status message showing Turns, Tool Calls, tokens, and elapsed time; the
   message is never persisted as canonical history.

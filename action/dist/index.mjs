@@ -36250,8 +36250,11 @@ var consumeUsage = (agent2, context3, usage2, toolCallCount, turn, options) => e
   const cacheWrite = providerUsage.inputTokens.cacheWrite ?? 0;
   const reportedText = providerUsage.outputTokens.text ?? 0;
   const reasoning = providerUsage.outputTokens.reasoning ?? 0;
-  const reportedInputComponents = yield* decodeProviderUsageTotal(reportedUncached + cacheRead + cacheWrite);
   const reportedInputTotal = providerUsage.inputTokens.total;
+  const reportedInputWithoutWrite = yield* decodeProviderUsageTotal(reportedUncached + cacheRead);
+  const cacheWriteOverlapsUncached = reportedInputTotal !== undefined && providerUsage.inputTokens.uncached !== undefined && providerUsage.inputTokens.cacheWrite !== undefined && cacheWrite <= reportedUncached && reportedInputWithoutWrite <= reportedInputTotal && cacheWrite > reportedInputTotal - reportedInputWithoutWrite;
+  const disjointReportedUncached = reportedUncached - (cacheWriteOverlapsUncached ? cacheWrite : 0);
+  const reportedInputComponents = yield* decodeProviderUsageTotal(disjointReportedUncached + cacheRead + cacheWrite);
   const allInputComponentsReported = providerUsage.inputTokens.uncached !== undefined && providerUsage.inputTokens.cacheRead !== undefined && providerUsage.inputTokens.cacheWrite !== undefined;
   if (reportedInputTotal !== undefined && (reportedInputTotal < reportedInputComponents || allInputComponentsReported && reportedInputTotal !== reportedInputComponents)) {
     return yield* invalidProviderUsage();
@@ -36266,7 +36269,7 @@ var consumeUsage = (agent2, context3, usage2, toolCallCount, turn, options) => e
   const outputTokens = reportedOutputTotal ?? reportedOutputComponents;
   const inputRemainder = inputTokens - reportedInputComponents;
   const outputRemainder = outputTokens - reportedOutputComponents;
-  const uncached = reportedUncached + (providerUsage.inputTokens.uncached === undefined ? inputRemainder : 0);
+  const uncached = disjointReportedUncached + (providerUsage.inputTokens.uncached === undefined ? inputRemainder : 0);
   const normalizedCacheRead = cacheRead + (providerUsage.inputTokens.uncached !== undefined && providerUsage.inputTokens.cacheRead === undefined ? inputRemainder : 0);
   const normalizedCacheWrite = cacheWrite + (providerUsage.inputTokens.uncached !== undefined && providerUsage.inputTokens.cacheRead !== undefined && providerUsage.inputTokens.cacheWrite === undefined ? inputRemainder : 0);
   const text = reportedText + (providerUsage.outputTokens.text === undefined ? outputRemainder : 0);
