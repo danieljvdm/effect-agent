@@ -205,6 +205,7 @@ export namespace Agent {
     | EffectServices<InstructionEffect<DefinitionValue["instructions"], Input<DefinitionValue>>>
     | Tool.HandlersFor<Tools<DefinitionValue>>
     | Tool.HandlerServices<Tools<DefinitionValue>[keyof Tools<DefinitionValue>]>
+    | Tool.SuccessSchema<Tools<DefinitionValue>[keyof Tools<DefinitionValue>]>["DecodingServices"]
     | DefinitionValue["input"]["DecodingServices"]
     | DefinitionValue["input"]["EncodingServices"]
     | DefinitionValue["output"]["DecodingServices"]

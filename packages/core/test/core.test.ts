@@ -37,6 +37,7 @@ import {
   ReceiptId,
   RunCompleted,
   RunEvent,
+  RunUsageSummary,
   RunId,
   RunStarted,
   SettlementId,
@@ -75,6 +76,68 @@ describe("core schemas", () => {
         costMicrousd: 0,
       })._tag,
     ).toBe("Success");
+
+    const group = {
+      provider: "test",
+      model: "test-model",
+      modelCalls: 1,
+      inputTokens: { total: 3, uncached: 1, cacheRead: 1, cacheWrite: 1 },
+      outputTokens: { total: 3, text: 2, reasoning: 1 },
+      costMicrousd: 5,
+    } as const;
+    const summary = {
+      modelCalls: 1,
+      inputTokens: group.inputTokens,
+      outputTokens: group.outputTokens,
+      costMicrousd: group.costMicrousd,
+      byModel: [group],
+    } as const;
+    expect(Schema.decodeUnknownExit(RunUsageSummary)(summary)._tag).toBe("Success");
+    expect(Schema.decodeUnknownExit(RunUsageSummary)({ ...summary, modelCalls: 0 })._tag).toBe(
+      "Failure",
+    );
+    expect(
+      Schema.decodeUnknownExit(RunUsageSummary)({
+        ...summary,
+        inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(RunUsageSummary)({
+        ...summary,
+        outputTokens: { total: 0, text: 0, reasoning: 0 },
+      })._tag,
+    ).toBe("Failure");
+    expect(Schema.decodeUnknownExit(RunUsageSummary)({ ...summary, costMicrousd: 0 })._tag).toBe(
+      "Failure",
+    );
+    expect(
+      Schema.decodeUnknownExit(RunUsageSummary)({ ...summary, byModel: [group, group] })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(RunUsageSummary)({
+        modelCalls: 2,
+        inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 0, text: 0, reasoning: 0 },
+        costMicrousd: Number.MAX_SAFE_INTEGER,
+        byModel: [
+          {
+            ...group,
+            model: "large-cost",
+            inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 0, text: 0, reasoning: 0 },
+            costMicrousd: Number.MAX_SAFE_INTEGER,
+          },
+          {
+            ...group,
+            model: "overflow-cost",
+            inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 0, text: 0, reasoning: 0 },
+            costMicrousd: 1,
+          },
+        ],
+      })._tag,
+    ).toBe("Failure");
   });
 
   it("RUN-035: aggregates usage through a typed safe-integer overflow boundary", () => {

@@ -16,6 +16,7 @@ import {
   TurnId,
 } from "@effect-agent/core";
 import { Encoding, Schema } from "effect";
+import { Prompt } from "effect/unstable/ai";
 
 const identifier = <const Name extends string>(name: Name) =>
   Schema.NonEmptyString.pipe(Schema.brand(`@effect-agent/session/${name}`));
@@ -218,9 +219,7 @@ export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
  * Turn boundary so a recovering Attempt can rebuild the next Prompt from canonical records alone.
  * `messagesDigest` pins the exact encoded content.
  */
-const PersistedPromptMessages = Schema.Struct({
-  content: Schema.Array(Schema.Json),
-});
+const PersistedPromptMessages = Schema.toEncoded(Prompt.Prompt);
 const isPersistedPromptMessages = Schema.is(PersistedPromptMessages);
 
 const ModelResponseRecordedFields = Schema.Struct({
@@ -251,8 +250,14 @@ const ModelResponseRecordedFields = Schema.Struct({
     (response) =>
       response.runScopedPrefixLength === undefined ||
       (isPersistedPromptMessages(response.messages) &&
-        response.runScopedPrefixLength < response.messages.content.length),
-    { title: "Run-scoped Prompt prefix leaves at least one recorded response message" },
+        response.runScopedPrefixLength < response.messages.content.length &&
+        response.messages.content
+          .slice(0, response.runScopedPrefixLength)
+          .every((message) => message.role === "system" || message.role === "user")),
+    {
+      title:
+        "Run-scoped Prompt prefix contains only instruction/wake messages and leaves one response",
+    },
   ),
 );
 

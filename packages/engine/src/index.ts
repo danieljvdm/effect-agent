@@ -297,12 +297,20 @@ export type EngineProvidedToolServices =
   | ToolBroker
   | ToolSpanTelemetry;
 
+/** Schema services needed to reconstruct a completion Tool's canonical Agent output. */
+export type AgentCompletionProjectionRequirements<AgentValue extends Agent.Any> =
+  | AgentValue["definition"]["output"]["DecodingServices"]
+  | AgentValue["definition"]["output"]["EncodingServices"]
+  | Tool.ParametersSchema<Agent.ToolUnion<AgentValue>>["DecodingServices"]
+  | Tool.SuccessSchema<Agent.ToolUnion<AgentValue>>["DecodingServices"];
+
 /**
  * Inferred agent services plus the runtime's identity-generation authority.
  * Engine-provided Tool handler services are excluded because the interpreter
  * supplies them itself, bound to the current Run's identity. Output decoding
- * services stay listed unexcluded: `run`/`start` re-decode the terminal
- * output outside the Run stream's provision boundary.
+ * and completion-projection Schema services stay listed unexcluded:
+ * `run`/`start` re-decode terminal output and durable recovery re-decodes
+ * canonical completion Tool parameters/results outside the handler boundary.
  */
 export type AgentRuntimeRequirements<
   AgentValue extends Agent.Any,
@@ -310,6 +318,7 @@ export type AgentRuntimeRequirements<
   InstructionRequirements = never,
 > =
   | Exclude<Agent.Requirements<AgentValue>, EngineProvidedToolServices>
+  | AgentCompletionProjectionRequirements<AgentValue>
   | AgentValue["definition"]["output"]["DecodingServices"]
   | IdGenerator
   | HookRequirements
@@ -2363,20 +2372,67 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     const cacheWrite = providerUsage.inputTokens.cacheWrite ?? 0;
     const reportedText = providerUsage.outputTokens.text ?? 0;
     const reasoning = providerUsage.outputTokens.reasoning ?? 0;
-    // Gross token accounting never discounts cache activity. A provider's
-    // aggregate may be absent or narrower than its reported components.
+    // Gross token accounting never discounts cache activity. An omitted
+    // aggregate is derived from present components; an omitted component may
+    // receive the aggregate remainder. Explicitly contradictory fields fail.
     const reportedInputComponents = yield* decodeProviderUsageTotal(
       reportedUncached + cacheRead + cacheWrite,
     );
-    const inputTokens = Math.max(providerUsage.inputTokens.total ?? 0, reportedInputComponents);
+    const reportedInputTotal = providerUsage.inputTokens.total;
+    const allInputComponentsReported =
+      providerUsage.inputTokens.uncached !== undefined &&
+      providerUsage.inputTokens.cacheRead !== undefined &&
+      providerUsage.inputTokens.cacheWrite !== undefined;
+    if (
+      reportedInputTotal !== undefined &&
+      (reportedInputTotal < reportedInputComponents ||
+        (allInputComponentsReported && reportedInputTotal !== reportedInputComponents))
+    ) {
+      return yield* invalidProviderUsage();
+    }
+    const inputTokens = reportedInputTotal ?? reportedInputComponents;
     const reportedOutputComponents = yield* decodeProviderUsageTotal(reportedText + reasoning);
-    const outputTokens = Math.max(providerUsage.outputTokens.total ?? 0, reportedOutputComponents);
+    const reportedOutputTotal = providerUsage.outputTokens.total;
+    const allOutputComponentsReported =
+      providerUsage.outputTokens.text !== undefined &&
+      providerUsage.outputTokens.reasoning !== undefined;
+    if (
+      reportedOutputTotal !== undefined &&
+      (reportedOutputTotal < reportedOutputComponents ||
+        (allOutputComponentsReported && reportedOutputTotal !== reportedOutputComponents))
+    ) {
+      return yield* invalidProviderUsage();
+    }
+    const outputTokens = reportedOutputTotal ?? reportedOutputComponents;
     // When a provider reports only aggregates, classify the unexplained input
-    // conservatively as uncached and non-reasoning output as text. This keeps
-    // each persisted breakdown additive instead of silently inventing a free,
-    // unclassified token bucket.
-    const uncached = Math.max(reportedUncached, inputTokens - cacheRead - cacheWrite);
-    const text = Math.max(reportedText, outputTokens - reasoning);
+    // conservatively as uncached and non-reasoning output as text when those
+    // fields are absent. If either was explicit, assign the remainder to the
+    // first genuinely omitted component so no provider-supplied value changes.
+    const inputRemainder = inputTokens - reportedInputComponents;
+    const outputRemainder = outputTokens - reportedOutputComponents;
+    const uncached =
+      reportedUncached + (providerUsage.inputTokens.uncached === undefined ? inputRemainder : 0);
+    const normalizedCacheRead =
+      cacheRead +
+      (providerUsage.inputTokens.uncached !== undefined &&
+      providerUsage.inputTokens.cacheRead === undefined
+        ? inputRemainder
+        : 0);
+    const normalizedCacheWrite =
+      cacheWrite +
+      (providerUsage.inputTokens.uncached !== undefined &&
+      providerUsage.inputTokens.cacheRead !== undefined &&
+      providerUsage.inputTokens.cacheWrite === undefined
+        ? inputRemainder
+        : 0);
+    const text =
+      reportedText + (providerUsage.outputTokens.text === undefined ? outputRemainder : 0);
+    const normalizedReasoning =
+      reasoning +
+      (providerUsage.outputTokens.text !== undefined &&
+      providerUsage.outputTokens.reasoning === undefined
+        ? outputRemainder
+        : 0);
     const totalTokens = yield* decodeProviderUsageTotal(inputTokens + outputTokens);
     const provider = yield* Model.ProviderName;
     const model = yield* Model.ModelName;
@@ -2409,10 +2465,14 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
       inputTokens: InputTokenUsage.make({
         total: inputTokens,
         uncached,
-        cacheRead,
-        cacheWrite,
+        cacheRead: normalizedCacheRead,
+        cacheWrite: normalizedCacheWrite,
       }),
-      outputTokens: OutputTokenUsage.make({ total: outputTokens, text, reasoning }),
+      outputTokens: OutputTokenUsage.make({
+        total: outputTokens,
+        text,
+        reasoning: normalizedReasoning,
+      }),
       costMicrousd,
     });
     const modelCalls = yield* decodeProviderUsageTotal(context.modelCalls + 1);
@@ -3410,7 +3470,16 @@ const encodeOutputCandidate = Effect.fn("AgentRuntime.encodeOutputCandidate")(fu
 
 const projectCompletionOutput = Effect.fn("AgentRuntime.projectCompletionOutput")(function* <
   AgentValue extends Agent.Any,
->(agent: AgentValue, declaration: CompletionToolDeclaration, parameters: unknown, result: unknown) {
+>(
+  agent: AgentValue,
+  declaration: CompletionToolDeclaration,
+  parameters: unknown,
+  result: unknown,
+): Effect.fn.Return<
+  { readonly encoded: Schema.Json; readonly decoded: Agent.Output<AgentValue> },
+  AgentOutputError | ModelProtocolError,
+  AgentCompletionProjectionRequirements<AgentValue>
+> {
   const tool = agent.definition.toolkit.tools[declaration.tool];
   if (tool === undefined) {
     return yield* ModelProtocolError.make({
@@ -6435,9 +6504,13 @@ export const withTerminalDefectEvent = <E, R>(
  *
  * The bound Model is provided locally; all remaining requirements stay visible
  * in the returned Effect or Stream. The interpreter owns no shared service or
- * Layer state.
+ * Layer state. The two output helpers are the canonical revalidation seams for
+ * durable session adapters; they apply the same Schemas and projector as live
+ * execution without invoking a Model or Tool Handler.
  */
 export const AgentRuntime = {
+  decodeFinalOutput,
+  projectCompletionOutput,
   run,
   start,
   stream,

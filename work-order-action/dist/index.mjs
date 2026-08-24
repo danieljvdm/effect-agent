@@ -35307,14 +35307,25 @@ class ModelUsageGroup extends exports_Schema.Class("@effect-agent/core/ModelUsag
   costMicrousd: exports_Schema.Natural
 }) {
 }
-
-class RunUsageSummary extends exports_Schema.Class("@effect-agent/core/RunUsageSummary")({
+var RunUsageSummaryFields = exports_Schema.Struct({
   modelCalls: exports_Schema.Natural,
   inputTokens: InputTokenUsage,
   outputTokens: OutputTokenUsage,
   costMicrousd: exports_Schema.Natural,
   byModel: exports_Schema.Array(ModelUsageGroup)
-}) {
+}).check(exports_Schema.makeFilter((summary2) => {
+  const identities = summary2.byModel.map((group2) => JSON.stringify([
+    group2.provider,
+    group2.model,
+    group2.serviceTier ?? null,
+    group2.pricingVersion ?? null
+  ]));
+  return new Set(identities).size === identities.length && hasAdditiveTotal(summary2.modelCalls, summary2.byModel.map((group2) => group2.modelCalls)) && hasAdditiveTotal(summary2.inputTokens.total, summary2.byModel.map((group2) => group2.inputTokens.total)) && hasAdditiveTotal(summary2.inputTokens.uncached, summary2.byModel.map((group2) => group2.inputTokens.uncached)) && hasAdditiveTotal(summary2.inputTokens.cacheRead, summary2.byModel.map((group2) => group2.inputTokens.cacheRead)) && hasAdditiveTotal(summary2.inputTokens.cacheWrite, summary2.byModel.map((group2) => group2.inputTokens.cacheWrite)) && hasAdditiveTotal(summary2.outputTokens.total, summary2.byModel.map((group2) => group2.outputTokens.total)) && hasAdditiveTotal(summary2.outputTokens.text, summary2.byModel.map((group2) => group2.outputTokens.text)) && hasAdditiveTotal(summary2.outputTokens.reasoning, summary2.byModel.map((group2) => group2.outputTokens.reasoning)) && hasAdditiveTotal(summary2.costMicrousd, summary2.byModel.map((group2) => group2.costMicrousd));
+}, {
+  title: "Run usage totals equal unique per-model pricing groups within safe-integer accounting"
+}));
+
+class RunUsageSummary extends exports_Schema.Class("@effect-agent/core/RunUsageSummary")(RunUsageSummaryFields) {
 }
 var emptyInputTokens = () => ({ total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 });
 var emptyOutputTokens = () => ({ total: 0, text: 0, reasoning: 0 });
@@ -38091,11 +38102,26 @@ var consumeUsage = (agent2, context3, usage2, toolCallCount, turn, options3) => 
   const reportedText = providerUsage.outputTokens.text ?? 0;
   const reasoning = providerUsage.outputTokens.reasoning ?? 0;
   const reportedInputComponents = yield* decodeProviderUsageTotal(reportedUncached + cacheRead + cacheWrite);
-  const inputTokens = Math.max(providerUsage.inputTokens.total ?? 0, reportedInputComponents);
+  const reportedInputTotal = providerUsage.inputTokens.total;
+  const allInputComponentsReported = providerUsage.inputTokens.uncached !== undefined && providerUsage.inputTokens.cacheRead !== undefined && providerUsage.inputTokens.cacheWrite !== undefined;
+  if (reportedInputTotal !== undefined && (reportedInputTotal < reportedInputComponents || allInputComponentsReported && reportedInputTotal !== reportedInputComponents)) {
+    return yield* invalidProviderUsage();
+  }
+  const inputTokens = reportedInputTotal ?? reportedInputComponents;
   const reportedOutputComponents = yield* decodeProviderUsageTotal(reportedText + reasoning);
-  const outputTokens = Math.max(providerUsage.outputTokens.total ?? 0, reportedOutputComponents);
-  const uncached = Math.max(reportedUncached, inputTokens - cacheRead - cacheWrite);
-  const text2 = Math.max(reportedText, outputTokens - reasoning);
+  const reportedOutputTotal = providerUsage.outputTokens.total;
+  const allOutputComponentsReported = providerUsage.outputTokens.text !== undefined && providerUsage.outputTokens.reasoning !== undefined;
+  if (reportedOutputTotal !== undefined && (reportedOutputTotal < reportedOutputComponents || allOutputComponentsReported && reportedOutputTotal !== reportedOutputComponents)) {
+    return yield* invalidProviderUsage();
+  }
+  const outputTokens = reportedOutputTotal ?? reportedOutputComponents;
+  const inputRemainder = inputTokens - reportedInputComponents;
+  const outputRemainder = outputTokens - reportedOutputComponents;
+  const uncached = reportedUncached + (providerUsage.inputTokens.uncached === undefined ? inputRemainder : 0);
+  const normalizedCacheRead = cacheRead + (providerUsage.inputTokens.uncached !== undefined && providerUsage.inputTokens.cacheRead === undefined ? inputRemainder : 0);
+  const normalizedCacheWrite = cacheWrite + (providerUsage.inputTokens.uncached !== undefined && providerUsage.inputTokens.cacheRead !== undefined && providerUsage.inputTokens.cacheWrite === undefined ? inputRemainder : 0);
+  const text2 = reportedText + (providerUsage.outputTokens.text === undefined ? outputRemainder : 0);
+  const normalizedReasoning = reasoning + (providerUsage.outputTokens.text !== undefined && providerUsage.outputTokens.reasoning === undefined ? outputRemainder : 0);
   const totalTokens = yield* decodeProviderUsageTotal(inputTokens + outputTokens);
   const provider = yield* exports_Model.ProviderName;
   const model = yield* exports_Model.ModelName;
@@ -38124,10 +38150,14 @@ var consumeUsage = (agent2, context3, usage2, toolCallCount, turn, options3) => 
     inputTokens: InputTokenUsage.make({
       total: inputTokens,
       uncached,
-      cacheRead,
-      cacheWrite
+      cacheRead: normalizedCacheRead,
+      cacheWrite: normalizedCacheWrite
     }),
-    outputTokens: OutputTokenUsage.make({ total: outputTokens, text: text2, reasoning }),
+    outputTokens: OutputTokenUsage.make({
+      total: outputTokens,
+      text: text2,
+      reasoning: normalizedReasoning
+    }),
     costMicrousd
   });
   const modelCalls = yield* decodeProviderUsageTotal(context3.modelCalls + 1);
@@ -40063,6 +40093,8 @@ var makeAgentSpawner = (parent, depth) => ({
   spawn: spawnWithParent(parent, depth)
 });
 var AgentRuntime = {
+  decodeFinalOutput,
+  projectCompletionOutput,
   run: run4,
   start,
   stream: stream3

@@ -255,11 +255,19 @@ The first response of each Run also records the length of its evaluated instruct
 That prefix remains canonical and visible to owner-Run recovery, but later Runs omit it from model
 input while preserving the conversational response and results (RUN-033).
 
+A successful no-tool final response and its `RunCompleted` marker commit in one atomic Turn batch.
+Recovery that observes the marker validates the matching response and proceeds directly to
+terminalization without invoking the model again. It re-decodes the canonical response through
+the Agent output Schema and requires the resulting durable output to match the marker; disagreement
+fails closed. Histories written before this additive marker remain valid and recover through the
+legacy response projection.
+
 A Definition-owned completion Tool uses the same authorization, preparation, and settlement
 protocol as any external side effect. Its successful singleton result and a `RunCompleted` marker
 containing the Schema-projected output and exhaustion metadata commit in one atomic result batch.
-Recovery that observes that marker validates the matching declaration/result and proceeds directly
-to terminalization; it never invokes the model or Handler again (RUN-032). A budget-exhausted
+Recovery that observes that marker re-decodes the canonical parameters/result, reapplies the
+Definition projector and Agent output Schema, and requires the durable output to match before
+terminalization; it never invokes the model or Handler again (RUN-032). A budget-exhausted
 marker carries both `finishReason: "budget-exhausted"` and the `exhausted` dimension; a marker with
 only one fails Schema decoding.
 
@@ -345,7 +353,8 @@ summary is reserved and replayed with the exact settlement record and materializ
 `awaitSettlement`; it is not reconstructed from the ledger's cached outcome. Joined Submissions
 omit an independent summary so one host Run's usage is not counted twice. Each canonical token
 total equals its recorded components, and cumulative token, model-call, and cost arithmetic is
-checked; an overflow fails typed before an invalid summary can be reserved.
+checked; an overflow fails typed before an invalid summary can be reserved. Per-model pricing
+identities are unique, and their checked component sums exactly match every top-level total.
 
 Result-less cases are explicit by settlement family. A joined `completed` Submission has no
 independent output and may omit `result`; an `aborted` Submission always omits it because abort

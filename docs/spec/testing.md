@@ -97,8 +97,10 @@ Generated command sequences cover:
 - malformed or non-additive provider usage rejection before cost estimation or budget consumption;
 - Run-scoped prompt provenance across owner recovery and later Runs, including prefix bounds;
 - durable cache-split/model/tier/cost usage and settlement aggregation, including checked token and
-  cost overflow;
+  cost overflow, unique pricing groups, and exact group-to-summary agreement;
 - paired budget-exhaustion metadata on live completion markers and durable settlements;
+- recovered no-Tool and completion-Tool markers revalidated against their canonical response or
+  Tool result under hostile-store substitution;
 - child-agent completion/interruption;
 - budget exhaustion;
 - subscriber backpressure;

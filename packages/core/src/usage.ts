@@ -66,16 +66,74 @@ export class ModelUsageGroup extends Schema.Class<ModelUsageGroup>(
   costMicrousd: Schema.Natural,
 }) {}
 
-/** Settlement aggregate included with a terminal Run settlement. */
-export class RunUsageSummary extends Schema.Class<RunUsageSummary>(
-  "@effect-agent/core/RunUsageSummary",
-)({
+const RunUsageSummaryFields = Schema.Struct({
   modelCalls: Schema.Natural,
   inputTokens: InputTokenUsage,
   outputTokens: OutputTokenUsage,
   costMicrousd: Schema.Natural,
   byModel: Schema.Array(ModelUsageGroup),
-}) {}
+}).check(
+  Schema.makeFilter(
+    (summary) => {
+      const identities = summary.byModel.map((group) =>
+        JSON.stringify([
+          group.provider,
+          group.model,
+          group.serviceTier ?? null,
+          group.pricingVersion ?? null,
+        ]),
+      );
+      return (
+        new Set(identities).size === identities.length &&
+        hasAdditiveTotal(
+          summary.modelCalls,
+          summary.byModel.map((group) => group.modelCalls),
+        ) &&
+        hasAdditiveTotal(
+          summary.inputTokens.total,
+          summary.byModel.map((group) => group.inputTokens.total),
+        ) &&
+        hasAdditiveTotal(
+          summary.inputTokens.uncached,
+          summary.byModel.map((group) => group.inputTokens.uncached),
+        ) &&
+        hasAdditiveTotal(
+          summary.inputTokens.cacheRead,
+          summary.byModel.map((group) => group.inputTokens.cacheRead),
+        ) &&
+        hasAdditiveTotal(
+          summary.inputTokens.cacheWrite,
+          summary.byModel.map((group) => group.inputTokens.cacheWrite),
+        ) &&
+        hasAdditiveTotal(
+          summary.outputTokens.total,
+          summary.byModel.map((group) => group.outputTokens.total),
+        ) &&
+        hasAdditiveTotal(
+          summary.outputTokens.text,
+          summary.byModel.map((group) => group.outputTokens.text),
+        ) &&
+        hasAdditiveTotal(
+          summary.outputTokens.reasoning,
+          summary.byModel.map((group) => group.outputTokens.reasoning),
+        ) &&
+        hasAdditiveTotal(
+          summary.costMicrousd,
+          summary.byModel.map((group) => group.costMicrousd),
+        )
+      );
+    },
+    {
+      title:
+        "Run usage totals equal unique per-model pricing groups within safe-integer accounting",
+    },
+  ),
+);
+
+/** Settlement aggregate included with a terminal Run settlement. */
+export class RunUsageSummary extends Schema.Class<RunUsageSummary>(
+  "@effect-agent/core/RunUsageSummary",
+)(RunUsageSummaryFields) {}
 
 interface MutableUsageGroup {
   readonly provider: string;

@@ -407,15 +407,31 @@ describe("phase 4 durable canonical payloads", () => {
       messages: {
         content: [
           { role: "system", content: "Run instructions" },
+          { role: "user", content: "Run wake input" },
           { role: "assistant", content: "Answer" },
         ],
       },
     } as const;
 
     expect(
-      Schema.decodeUnknownExit(RecordEnvelope)(envelope({ ...response, runScopedPrefixLength: 1 }))
+      Schema.decodeUnknownExit(RecordEnvelope)(envelope({ ...response, runScopedPrefixLength: 2 }))
         ._tag,
     ).toBe("Success");
+    expect(
+      Schema.decodeUnknownExit(RecordEnvelope)(
+        envelope({
+          ...response,
+          messages: {
+            content: [
+              { role: "system", content: "Run instructions" },
+              { role: "assistant", content: "Not wake input" },
+              { role: "assistant", content: "Answer" },
+            ],
+          },
+          runScopedPrefixLength: 2,
+        }),
+      )._tag,
+    ).toBe("Failure");
     expect(
       Schema.decodeUnknownExit(RecordEnvelope)(
         envelope({ ...response, runScopedPrefixLength: response.messages.content.length }),

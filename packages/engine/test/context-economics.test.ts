@@ -387,6 +387,14 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
           },
           outputTokens: {},
         },
+        // Reported totals cannot contradict explicitly reported components.
+        { inputTokens: { total: 0, cacheRead: 100 }, outputTokens: {} },
+        {
+          inputTokens: { total: 200, uncached: 50, cacheRead: 50, cacheWrite: 0 },
+          outputTokens: {},
+        },
+        { inputTokens: {}, outputTokens: { total: 0, text: 100 } },
+        { inputTokens: {}, outputTokens: { total: 200, text: 50, reasoning: 50 } },
       ];
 
       for (const usage of malformed) {
@@ -404,6 +412,46 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         expect(requests).toHaveLength(1);
       }
       expect(yield* Ref.get(estimatorCalls)).toBe(0);
+    }),
+  );
+
+  it.effect("RUN-023: assigns aggregate remainders only to omitted provider components", () =>
+    Effect.gen(function* () {
+      const deltas = yield* Ref.make<ReadonlyArray<RunUsageDelta>>([]);
+      const definition = Agent.define("provider-usage-remainder", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const { model } = scriptedModel([
+        finalParts('{"answer":"done"}', {
+          inputTokens: { total: 100, uncached: 20, cacheRead: 30 },
+          outputTokens: { total: 20, text: 5 },
+        }),
+      ]);
+
+      yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "q" },
+        {
+          budget: {
+            guard: (effect) => effect,
+            consume: (delta) => Ref.update(deltas, (all) => [...all, delta]),
+          },
+        },
+      );
+
+      expect((yield* Ref.get(deltas))[0]?.modelUsage).toMatchObject({
+        inputTokens: { total: 100, uncached: 20, cacheRead: 30, cacheWrite: 50 },
+        outputTokens: { total: 20, text: 5, reasoning: 15 },
+      });
     }),
   );
 

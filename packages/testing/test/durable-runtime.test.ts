@@ -33,7 +33,9 @@ import {
   ProducerId,
   QueueSequence,
   Receipt,
+  RecordEnvelope,
   RecoverySnapshotRequest,
+  RunCompleted,
   Settlement,
   SubmissionLedger,
   SubmissionLookupById,
@@ -262,6 +264,64 @@ const baseLayer = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
+
+const AnswerCompletionOutput = Schema.Struct({ answer: Schema.String });
+const DeliveryCompletionOutput = Schema.Struct({
+  messageId: Schema.String,
+  delivered: Schema.Boolean,
+});
+const isAnswerCompletionOutput = Schema.is(AnswerCompletionOutput);
+const isDeliveryCompletionOutput = Schema.is(DeliveryCompletionOutput);
+
+const corruptCompletionOutput = (output: Schema.Json): Schema.Json => {
+  if (isAnswerCompletionOutput(output)) return { answer: "hostile replacement" };
+  if (isDeliveryCompletionOutput(output)) {
+    return { messageId: "hostile-replacement", delivered: output.delivered };
+  }
+  return output;
+};
+
+const corruptCompletionEnvelope = (envelope: CanonicalRecordEnvelope): CanonicalRecordEnvelope => {
+  const payload = envelope.record.payload;
+  if (payload._tag !== "RunCompleted") return envelope;
+  return CanonicalRecordEnvelope.make({
+    ...envelope,
+    record: RecordEnvelope.make({
+      ...envelope.record,
+      payload: RunCompleted.make({
+        runId: payload.runId,
+        output: corruptCompletionOutput(payload.output),
+        ...(payload.runDisposition === undefined ? {} : { runDisposition: payload.runDisposition }),
+        ...(payload.finishReason === undefined ? {} : { finishReason: payload.finishReason }),
+        ...(payload.exhausted === undefined ? {} : { exhausted: payload.exhausted }),
+      }),
+    }),
+  });
+};
+
+const corruptedCompletionStoreLayer = Layer.effect(
+  ConversationStore,
+  Effect.gen(function* () {
+    const inner = yield* ConversationStore;
+    return ConversationStore.of({
+      ...inner,
+      read: (request) => inner.read(request).pipe(Stream.map(corruptCompletionEnvelope)),
+    });
+  }),
+).pipe(Layer.provide(MemoryConversationStoreLive));
+
+const corruptedCompletionBaseLayer = Layer.mergeAll(
+  MemorySubmissionLedgerLive,
+  corruptedCompletionStoreLayer,
+  WakeScheduler.layerNoop,
+  DurableRuntimeFailpoint.layerTest,
+  ToolReconciler.uncertain,
+  configLayer,
+).pipe(Layer.provideMerge(NodeCrypto.layer));
+
+const corruptedCompletionTestLayer = DurableAgentRuntime.layer.pipe(
+  Layer.provideMerge(corruptedCompletionBaseLayer),
+);
 
 const pricedConfigLayer = DurableRuntimeConfig.layer({
   deploymentId: Schema.decodeSync(DeploymentId)("deployment-priced"),
@@ -2423,6 +2483,105 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       }),
     );
   });
+});
+
+layer(corruptedCompletionTestLayer)("RUN-032 recovered completion validation", (it) => {
+  it.effect("rejects a no-Tool marker whose output disagrees with its canonical response", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"canonical"}'));
+      const agent = Agent.withModel(plannerDefinition, scripted.model);
+      const conversation = "conversation-hostile-no-tool-completion";
+
+      yield* runtime.submit(
+        agent,
+        { question: "validate recovery" },
+        submitOptions(conversation, "hostile-no-tool-completion-1"),
+      );
+      yield* armFailpoint("turn:after-canonical-append");
+      const crashed = yield* Effect.exit(
+        runtime.processConversation(agent, decodeConversationId(conversation)),
+      );
+      expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+      yield* clearFailpoint;
+
+      const recovered = yield* Effect.exit(
+        runtime.processConversation(agent, decodeConversationId(conversation)),
+      );
+      expect(failureTag(recovered)).toBe("RunJournalError");
+      expect(scripted.prompts).toHaveLength(1);
+    }),
+  );
+
+  it.effect("rejects a completion-Tool marker that disagrees with its canonical result", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const PostMessage = Tool.make("post_message", {
+        parameters: Schema.Struct({ message: Schema.String }),
+        success: Schema.Struct({ messageId: Schema.String }),
+      });
+      const tools = Toolkit.make(PostMessage);
+      const definition = Agent.define("hostile-terminal-delivery", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: DeliveryCompletionOutput,
+        instructions: "Deliver through post_message.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+        completion: {
+          tool: "post_message",
+          project: ({ result }) => ({ messageId: result.messageId, delivered: true }),
+        },
+      });
+      const scripted = yield* makeScriptedModel(() => [
+        {
+          type: "tool-call",
+          id: "hostile-delivery-1",
+          name: "post_message",
+          params: { message: "canonical delivery" },
+          providerExecuted: false,
+        },
+        { type: "finish", reason: "tool-calls", usage },
+      ]);
+      const handlerCalls = yield* Ref.make(0);
+      const toolLayer = tools.toLayer({
+        post_message: () =>
+          Ref.updateAndGet(handlerCalls, (count) => count + 1).pipe(
+            Effect.as({ messageId: "canonical-message" }),
+          ),
+      });
+      const agent = Agent.withModel(definition, scripted.model);
+      const conversation = "conversation-hostile-tool-completion";
+
+      yield* runtime.submit(
+        agent,
+        { question: "validate delivery recovery" },
+        submitOptions(conversation, "hostile-tool-completion-1"),
+      );
+      yield* armFailpoint("turn:after-results-append");
+      const crashed = yield* Effect.exit(
+        runtime
+          .processConversation(agent, decodeConversationId(conversation))
+          .pipe(Effect.provide(toolLayer)),
+      );
+      expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+      expect(yield* Ref.get(handlerCalls)).toBe(1);
+      yield* clearFailpoint;
+
+      const recovered = yield* Effect.exit(
+        runtime
+          .processConversation(agent, decodeConversationId(conversation))
+          .pipe(Effect.provide(toolLayer)),
+      );
+      expect(failureTag(recovered)).toBe("RunJournalError");
+      expect(yield* Ref.get(handlerCalls)).toBe(1);
+      expect(scripted.prompts).toHaveLength(1);
+    }),
+  );
 });
 
 layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {

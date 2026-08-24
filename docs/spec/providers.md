@@ -181,7 +181,9 @@ response identity, returned reasoning content, encrypted/signature fields, and p
 markers when Effect AI exposes them. Cached input remains billable gross usage; cache accounting is
 never interpreted as free tokens. Canonical input and output totals must equal the sums of their
 recorded components. Contradictory breakdowns and any aggregate that exceeds safe-integer
-accounting fail typed instead of being coerced or persisted.
+accounting fail typed instead of being coerced or persisted. A provider total below its explicit
+components rejects, as does any difference when all components were supplied; the framework
+classifies a remainder conservatively only when a component was genuinely omitted.
 
 The framework does not request or invent hidden reasoning. Partial Tool-argument
 deltas are live-only; the completed Tool Call is persisted.

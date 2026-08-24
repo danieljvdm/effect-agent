@@ -650,7 +650,9 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   aggregation overflow fails with
   `ModelProtocolError` before cost estimation or budget consumption. A recovery usage seed obeys
   the same integer bound, with last-call token counts no greater than cumulative totals; invalid
-  seeds fail before Run input hooks or external execution.
+  seeds fail before Run input hooks or external execution. A reported provider total must not be
+  smaller than its explicit components and must equal them when every component is present;
+  only genuinely omitted components may receive an inferred remainder.
 - **RUN-024:** With policy `runStatus: "appended"`, every outgoing model request carries a
   derived run-status message showing Turns, Tool Calls, tokens, and elapsed time; the
   message is never persisted as canonical history.
@@ -702,14 +704,17 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   including after budget exhaustion under `onExhaustion: "final-answer"`, without a
   private-summary model turn. Fail mode rejects exhausted delivery before its Handler starts,
   mixed completion batches fail before any Handler, and durable recovery never repeats a
-  canonically settled call.
+  canonically settled call. Recovery re-decodes the canonical parameters/result, reapplies the
+  projector and output Schema, and requires the reconstructed durable output to match its marker.
   Durable no-tool completion likewise commits its final response and completion marker atomically,
-  so recovery terminalizes without issuing a duplicate model request.
+  so recovery re-decodes and matches that response before terminalizing without a duplicate model
+  request.
 - **RUN-033:** A first response marks its evaluated instruction/wake prefix as Run-scoped.
   Recovery of that Run retains it, while later Runs omit only that marked prefix and preserve the
   remaining assistant/tool conversation. The recorded prefix length must be smaller than the
-  recorded message count so at least the response remains; out-of-bounds provenance fails Schema
-  decoding, while unmarked legacy records retain their full projection.
+  recorded message count, every prefixed message must be system or user input, and at least the
+  response must remain. Invalid provenance fails Schema decoding, while unmarked legacy records
+  retain their full projection.
 - **RUN-034:** Before provider I/O the engine reserves `completionReserveTokens` and admits a
   research call only when its estimated complete prompt plus that reserve fits the remaining gross
   token budget. Context or token pressure invokes target-aware compaction; an unreachable target
@@ -721,3 +726,5 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   `costBudgetMicrousd` is enforced across Attempts, and every Run settlement carries an aggregate
   usage summary without double-counting joined Submissions. Any component, token, model-call, or
   cost aggregation that would exceed safe-integer accounting fails typed before settlement.
+  Summary pricing identities are unique, and every top-level total exactly equals the checked sum
+  of its per-model groups.

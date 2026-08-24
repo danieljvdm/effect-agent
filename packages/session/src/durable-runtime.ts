@@ -33,6 +33,7 @@ import {
   RunContextPreparationPassthrough,
   type RunContextPreparationError,
   type AgentRuntimeRequirements,
+  type AgentCompletionProjectionRequirements,
   type ChildEstablishStatus,
   type RunApprovalHook,
   type RunContextHook,
@@ -605,7 +606,9 @@ export const DurableApprovalResolver: Context.Reference<RunApprovalHook<never, n
 export type DurableWorkerRequirements<
   AgentValue extends Agent.Any,
   InstructionRequirements = never,
-> = Exclude<AgentRuntimeRequirements<AgentValue, never, InstructionRequirements>, IdGenerator>;
+> =
+  | Exclude<AgentRuntimeRequirements<AgentValue, never, InstructionRequirements>, IdGenerator>
+  | AgentCompletionProjectionRequirements<AgentValue>;
 
 export interface DurableRuntimeConfigOptions {
   readonly deploymentId: DeploymentId;
@@ -798,6 +801,29 @@ const declaredApplicationCalls = Effect.fn("DurableAgentRuntime.declaredApplicat
           }
         }
         return calls;
+      }),
+    ),
+);
+
+/** Rebuild the exact JSON text that the engine decoded from one terminal no-Tool response. */
+const terminalAssistantText = Effect.fn("DurableAgentRuntime.terminalAssistantText")(
+  (messages: PersistedJson): Effect.Effect<string, RunJournalError> =>
+    decodePrompt(messages).pipe(
+      Effect.mapError((cause) =>
+        RunJournalError.make({
+          message: "ModelResponseRecorded messages are not Schema-encoded Prompt messages",
+          cause,
+        }),
+      ),
+      Effect.map((prompt) => {
+        let text = "";
+        for (const message of prompt.content) {
+          if (message.role !== "assistant") continue;
+          for (const part of message.content) {
+            if (part.type === "text") text += part.text;
+          }
+        }
+        return text;
       }),
     ),
 );
@@ -3187,28 +3213,60 @@ const make = Effect.gen(function* () {
               message: "Run aggregate usage has legacy totals without a legacy model call",
             });
           }
-          const legacyGroup =
-            legacyCalls === 0
-              ? []
-              : [
-                  ModelUsageGroup.make({
-                    provider: "unknown",
-                    model: "legacy-record",
-                    modelCalls: legacyCalls,
-                    inputTokens: InputTokenUsage.make({
-                      total: legacyInput,
-                      uncached: legacyInput,
-                      cacheRead: 0,
-                      cacheWrite: 0,
-                    }),
-                    outputTokens: OutputTokenUsage.make({
-                      total: legacyOutput,
-                      text: legacyOutput,
-                      reasoning: 0,
-                    }),
-                    costMicrousd: legacyCost,
-                  }),
-                ];
+          const byModel = [...detailed.byModel];
+          if (legacyCalls > 0) {
+            const existingIndex = byModel.findIndex(
+              (group) =>
+                group.provider === "unknown" &&
+                group.model === "legacy-record" &&
+                group.serviceTier === undefined &&
+                group.pricingVersion === undefined,
+            );
+            const existing = existingIndex < 0 ? undefined : byModel[existingIndex];
+            const legacyGroup = ModelUsageGroup.make({
+              provider: "unknown",
+              model: "legacy-record",
+              modelCalls: yield* addUsageTotal(
+                "byModel.modelCalls",
+                existing?.modelCalls ?? 0,
+                legacyCalls,
+              ),
+              inputTokens: InputTokenUsage.make({
+                total: yield* addUsageTotal(
+                  "byModel.inputTokens.total",
+                  existing?.inputTokens.total ?? 0,
+                  legacyInput,
+                ),
+                uncached: yield* addUsageTotal(
+                  "byModel.inputTokens.uncached",
+                  existing?.inputTokens.uncached ?? 0,
+                  legacyInput,
+                ),
+                cacheRead: existing?.inputTokens.cacheRead ?? 0,
+                cacheWrite: existing?.inputTokens.cacheWrite ?? 0,
+              }),
+              outputTokens: OutputTokenUsage.make({
+                total: yield* addUsageTotal(
+                  "byModel.outputTokens.total",
+                  existing?.outputTokens.total ?? 0,
+                  legacyOutput,
+                ),
+                text: yield* addUsageTotal(
+                  "byModel.outputTokens.text",
+                  existing?.outputTokens.text ?? 0,
+                  legacyOutput,
+                ),
+                reasoning: existing?.outputTokens.reasoning ?? 0,
+              }),
+              costMicrousd: yield* addUsageTotal(
+                "byModel.costMicrousd",
+                existing?.costMicrousd ?? 0,
+                legacyCost,
+              ),
+            });
+            if (existingIndex < 0) byModel.push(legacyGroup);
+            else byModel[existingIndex] = legacyGroup;
+          }
           const uncached = yield* addUsageTotal(
             "inputTokens.uncached",
             detailed.inputTokens.uncached,
@@ -3234,7 +3292,7 @@ const make = Effect.gen(function* () {
               reasoning: detailed.outputTokens.reasoning,
             }),
             costMicrousd,
-            byModel: [...detailed.byModel, ...legacyGroup],
+            byModel,
           });
         });
       const recordedCompletion = records.find(
@@ -3246,7 +3304,6 @@ const make = Effect.gen(function* () {
             message: `Run ${runId} has an invalid terminal completion marker`,
           });
         }
-        const completion = agent.definition.completion;
         const response = [...records]
           .reverse()
           .find(
@@ -3254,31 +3311,83 @@ const make = Effect.gen(function* () {
               envelope.record.payload._tag === "ModelResponseRecorded" &&
               envelope.record.payload.runId === runId,
           )?.record.payload;
-        if (completion === undefined || response?._tag !== "ModelResponseRecorded") {
+        if (response?._tag !== "ModelResponseRecorded") {
           return yield* RunJournalError.make({
-            message: `Run ${runId} has a terminal completion marker without a completion declaration and response`,
+            message: `Run ${runId} has a terminal completion marker without a response`,
           });
         }
         const calls = yield* declaredApplicationCalls(response.messages);
-        const call = calls[0];
-        const settled =
-          call === undefined
-            ? undefined
-            : records.find(
-                (envelope) =>
-                  envelope.record.payload._tag === "ToolCallSettled" &&
-                  envelope.record.payload.runId === runId &&
-                  envelope.record.payload.toolCallId === call.id,
-              )?.record.payload;
-        if (
-          calls.length !== 1 ||
-          call?.name !== completion.tool ||
-          settled?._tag !== "ToolCallSettled" ||
-          settled.toolName !== completion.tool ||
-          settled.isFailure
-        ) {
+        let expectedOutput: Schema.Json;
+        if (calls.length > 0) {
+          const completion = agent.definition.completion;
+          const call = calls[0];
+          const settled =
+            call === undefined
+              ? undefined
+              : records.find(
+                  (envelope) =>
+                    envelope.record.payload._tag === "ToolCallSettled" &&
+                    envelope.record.payload.runId === runId &&
+                    envelope.record.payload.toolCallId === call.id,
+                )?.record.payload;
+          if (
+            completion === undefined ||
+            calls.length !== 1 ||
+            call?.name !== completion.tool ||
+            settled?._tag !== "ToolCallSettled" ||
+            settled.toolName !== completion.tool ||
+            settled.isFailure
+          ) {
+            return yield* RunJournalError.make({
+              message: `Run ${runId} has a terminal completion marker without one successful declared completion Tool result`,
+            });
+          }
+          expectedOutput = (yield* AgentRuntime.projectCompletionOutput(
+            agent,
+            completion,
+            call.params,
+            settled.result,
+          ).pipe(
+            Effect.mapError((cause) =>
+              RunJournalError.make({
+                message: `Run ${runId} completion Tool output failed recovery projection`,
+                cause,
+              }),
+            ),
+          )).encoded;
+        } else {
+          const responseText = yield* terminalAssistantText(response.messages);
+          expectedOutput = (yield* AgentRuntime.decodeFinalOutput(agent, responseText).pipe(
+            Effect.mapError((cause) =>
+              RunJournalError.make({
+                message: `Run ${runId} final response output failed recovery decoding`,
+                cause,
+              }),
+            ),
+          )).encoded;
+        }
+        const boundedExpectedOutput = yield* decodePersisted(expectedOutput).pipe(
+          Effect.mapError((cause) =>
+            RunJournalError.make({
+              message: `Run ${runId} reconstructed output exceeds canonical persistence bounds`,
+              cause,
+            }),
+          ),
+        );
+        const [expectedOutputDigest, recordedOutputDigest] = yield* Effect.all([
+          withCrypto(digestJson(boundedExpectedOutput)),
+          withCrypto(digestJson(recordedCompletion.output)),
+        ]).pipe(
+          Effect.mapError((cause) =>
+            RunJournalError.make({
+              message: `Run ${runId} completion output comparison failed`,
+              cause,
+            }),
+          ),
+        );
+        if (expectedOutputDigest !== recordedOutputDigest) {
           return yield* RunJournalError.make({
-            message: `Run ${runId} has a terminal completion marker without one successful declared completion Tool result`,
+            message: `Run ${runId} terminal completion output disagrees with its canonical response or Tool result`,
           });
         }
         return {
