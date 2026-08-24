@@ -1,5 +1,21 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.27
+
+### Patch Changes
+
+- [#158](https://github.com/danieljvdm/effect-agent/pull/158) [`3bb8632`](https://github.com/danieljvdm/effect-agent/commit/3bb8632e04b7517b4a896df0e393436d84a55ff7) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep incremental reviews scoped after amended or force-pushed heads by comparing complete Git tree
+  snapshots across bounded PR paths, then hydrating changed paths from the current full PR records.
+  Fall back to a full review with an observable reason when either snapshot is unavailable, malformed,
+  or truncated.
+
+- [#156](https://github.com/danieljvdm/effect-agent/pull/156) [`c210275`](https://github.com/danieljvdm/effect-agent/commit/c2102759a41ea392fc6493d11696debc22f9cf80) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Let Action and CLI users opt each OpenAI review into Fast processing with `service-tier: fast`, and reject the provider-specific setting when Anthropic is selected.
+
+- [#157](https://github.com/danieljvdm/effect-agent/pull/157) [`03dccae`](https://github.com/danieljvdm/effect-agent/commit/03dccae48585e9571af8f38095927f41b05cbba5) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep each failed incremental review stage attached to its own unchanged paths so unrelated leftovers no longer widen model scope. Reopen discovery only for paths whose candidate verification must be regenerated.
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.27
+
 ## 0.1.0-beta.26
 
 ### Patch Changes
