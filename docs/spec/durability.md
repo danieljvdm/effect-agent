@@ -313,7 +313,8 @@ a `completed` soft landing persists `finishReason: "budget-exhausted"` with the
 `{errorTag, message}` failure projection in `result`. Because the metadata rides the
 exact reserved record, it survives reservation replay, canonical append, recovery,
 and every later read unchanged. Decode is family-bound fail-closed: metadata on the
-wrong settlement family rejects. A `policyLimit` whose `result` does not carry the
+wrong settlement family rejects, and `finishReason: "budget-exhausted"` and `exhausted` must be
+present together or absent together. A `policyLimit` whose `result` does not carry the
 `AgentPolicyError` projection also rejects instead of becoming trusted audit history,
 and records persisted before the metadata existed decode with it absent (additive,
 schemaVersion 1).
@@ -342,7 +343,9 @@ Every Run settlement may carry its canonical `usageSummary`: model-call count, g
 breakdowns, total estimated microdollars, and deterministic per-model/tier groups (RUN-035). The
 summary is reserved and replayed with the exact settlement record and materialized by
 `awaitSettlement`; it is not reconstructed from the ledger's cached outcome. Joined Submissions
-omit an independent summary so one host Run's usage is not counted twice.
+omit an independent summary so one host Run's usage is not counted twice. Each canonical token
+total equals its recorded components, and cumulative token, model-call, and cost arithmetic is
+checked; an overflow fails typed before an invalid summary can be reserved.
 
 Result-less cases are explicit by settlement family. A joined `completed` Submission has no
 independent output and may omit `result`; an `aborted` Submission always omits it because abort

@@ -35261,20 +35261,28 @@ class IdGenerator2 extends exports_Context.Service()("@effect-agent/core/IdGener
 }
 // packages/core/src/usage.ts
 var UsageIdentity = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
-
-class InputTokenUsage extends exports_Schema.Class("@effect-agent/core/InputTokenUsage")({
+var hasAdditiveTotal = (total, components) => {
+  const sum3 = components.reduce((accumulator, component) => accumulator + component, 0);
+  return Number.isSafeInteger(sum3) && total === sum3;
+};
+var InputTokenUsageFields = exports_Schema.Struct({
   total: exports_Schema.Natural,
   uncached: exports_Schema.Natural,
   cacheRead: exports_Schema.Natural,
   cacheWrite: exports_Schema.Natural
-}) {
-}
+}).check(exports_Schema.makeFilter((usage) => hasAdditiveTotal(usage.total, [usage.uncached, usage.cacheRead, usage.cacheWrite]), { title: "Input token total equals uncached, cache-read, and cache-write components" }));
 
-class OutputTokenUsage extends exports_Schema.Class("@effect-agent/core/OutputTokenUsage")({
+class InputTokenUsage extends exports_Schema.Class("@effect-agent/core/InputTokenUsage")(InputTokenUsageFields) {
+}
+var OutputTokenUsageFields = exports_Schema.Struct({
   total: exports_Schema.Natural,
   text: exports_Schema.Natural,
   reasoning: exports_Schema.Natural
-}) {
+}).check(exports_Schema.makeFilter((usage) => hasAdditiveTotal(usage.total, [usage.text, usage.reasoning]), {
+  title: "Output token total equals text and reasoning components"
+}));
+
+class OutputTokenUsage extends exports_Schema.Class("@effect-agent/core/OutputTokenUsage")(OutputTokenUsageFields) {
 }
 
 class ModelCallUsage extends exports_Schema.Class("@effect-agent/core/ModelCallUsage")({
@@ -35308,6 +35316,84 @@ class RunUsageSummary extends exports_Schema.Class("@effect-agent/core/RunUsageS
   byModel: exports_Schema.Array(ModelUsageGroup)
 }) {
 }
+var emptyInputTokens = () => ({ total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 });
+var emptyOutputTokens = () => ({ total: 0, text: 0, reasoning: 0 });
+
+class UsageAggregationError extends exports_Schema.TaggedError()("UsageAggregationError", {
+  field: exports_Schema.NonEmptyString,
+  message: exports_Schema.String
+}) {
+}
+var checkedAdd = (field, left, right) => {
+  const total = left + right;
+  return Number.isSafeInteger(left) && left >= 0 && Number.isSafeInteger(right) && right >= 0 && Number.isSafeInteger(total) ? exports_Effect.succeed(total) : exports_Effect.fail(UsageAggregationError.make({
+    field,
+    message: `Canonical usage aggregation exceeded the safe-integer range at ${field}`
+  }));
+};
+var summarizeModelUsage = exports_Effect.fn("summarizeModelUsage")(function* (calls) {
+  const inputTokens = emptyInputTokens();
+  const outputTokens = emptyOutputTokens();
+  const groups = new Map;
+  let modelCalls = 0;
+  let costMicrousd = 0;
+  for (const call of calls) {
+    modelCalls = yield* checkedAdd("modelCalls", modelCalls, 1);
+    inputTokens.total = yield* checkedAdd("inputTokens.total", inputTokens.total, call.inputTokens.total);
+    inputTokens.uncached = yield* checkedAdd("inputTokens.uncached", inputTokens.uncached, call.inputTokens.uncached);
+    inputTokens.cacheRead = yield* checkedAdd("inputTokens.cacheRead", inputTokens.cacheRead, call.inputTokens.cacheRead);
+    inputTokens.cacheWrite = yield* checkedAdd("inputTokens.cacheWrite", inputTokens.cacheWrite, call.inputTokens.cacheWrite);
+    outputTokens.total = yield* checkedAdd("outputTokens.total", outputTokens.total, call.outputTokens.total);
+    outputTokens.text = yield* checkedAdd("outputTokens.text", outputTokens.text, call.outputTokens.text);
+    outputTokens.reasoning = yield* checkedAdd("outputTokens.reasoning", outputTokens.reasoning, call.outputTokens.reasoning);
+    costMicrousd = yield* checkedAdd("costMicrousd", costMicrousd, call.costMicrousd);
+    const key = JSON.stringify([
+      call.provider,
+      call.model,
+      call.serviceTier ?? null,
+      call.pricingVersion ?? null
+    ]);
+    let group2 = groups.get(key);
+    if (group2 === undefined) {
+      group2 = {
+        provider: call.provider,
+        model: call.model,
+        ...call.serviceTier === undefined ? {} : { serviceTier: call.serviceTier },
+        ...call.pricingVersion === undefined ? {} : { pricingVersion: call.pricingVersion },
+        modelCalls: 0,
+        inputTokens: emptyInputTokens(),
+        outputTokens: emptyOutputTokens(),
+        costMicrousd: 0
+      };
+      groups.set(key, group2);
+    }
+    group2.modelCalls = yield* checkedAdd("byModel.modelCalls", group2.modelCalls, 1);
+    group2.inputTokens.total = yield* checkedAdd("byModel.inputTokens.total", group2.inputTokens.total, call.inputTokens.total);
+    group2.inputTokens.uncached = yield* checkedAdd("byModel.inputTokens.uncached", group2.inputTokens.uncached, call.inputTokens.uncached);
+    group2.inputTokens.cacheRead = yield* checkedAdd("byModel.inputTokens.cacheRead", group2.inputTokens.cacheRead, call.inputTokens.cacheRead);
+    group2.inputTokens.cacheWrite = yield* checkedAdd("byModel.inputTokens.cacheWrite", group2.inputTokens.cacheWrite, call.inputTokens.cacheWrite);
+    group2.outputTokens.total = yield* checkedAdd("byModel.outputTokens.total", group2.outputTokens.total, call.outputTokens.total);
+    group2.outputTokens.text = yield* checkedAdd("byModel.outputTokens.text", group2.outputTokens.text, call.outputTokens.text);
+    group2.outputTokens.reasoning = yield* checkedAdd("byModel.outputTokens.reasoning", group2.outputTokens.reasoning, call.outputTokens.reasoning);
+    group2.costMicrousd = yield* checkedAdd("byModel.costMicrousd", group2.costMicrousd, call.costMicrousd);
+  }
+  return RunUsageSummary.make({
+    modelCalls,
+    inputTokens: InputTokenUsage.make(inputTokens),
+    outputTokens: OutputTokenUsage.make(outputTokens),
+    costMicrousd,
+    byModel: [...groups.values()].map((group2) => ModelUsageGroup.make({
+      provider: group2.provider,
+      model: group2.model,
+      ...group2.serviceTier === undefined ? {} : { serviceTier: group2.serviceTier },
+      ...group2.pricingVersion === undefined ? {} : { pricingVersion: group2.pricingVersion },
+      modelCalls: group2.modelCalls,
+      inputTokens: InputTokenUsage.make(group2.inputTokens),
+      outputTokens: OutputTokenUsage.make(group2.outputTokens),
+      costMicrousd: group2.costMicrousd
+    }))
+  });
+});
 // packages/capabilities/src/redaction.ts
 var MAX_REDACTED_PREVIEW_BYTES = 8 * 1024;
 var MAX_REDACTION_NODES = 4096;
@@ -38047,12 +38133,19 @@ var consumeUsage = (agent2, context3, usage2, toolCallCount, turn, options3) => 
   const modelCalls = yield* decodeProviderUsageTotal(context3.modelCalls + 1);
   const cumulativeInputTokens = yield* decodeProviderUsageTotal(context3.inputTokens + inputTokens);
   const cumulativeOutputTokens = yield* decodeProviderUsageTotal(context3.outputTokens + outputTokens);
+  const cumulativeCostMicrousd = context3.costMicrousd + costMicrousd;
+  if (!Number.isSafeInteger(cumulativeCostMicrousd)) {
+    return yield* AgentPolicyError.make({
+      limit: "cost",
+      message: "Cumulative model cost exceeds safe-integer accounting capacity"
+    });
+  }
   context3.modelCalls = modelCalls;
   context3.inputTokens = cumulativeInputTokens;
   context3.outputTokens = cumulativeOutputTokens;
   context3.lastInputTokens = inputTokens;
   context3.lastOutputTokens = outputTokens;
-  context3.costMicrousd += costMicrousd;
+  context3.costMicrousd = cumulativeCostMicrousd;
   context3.lastCostMicrousd = costMicrousd;
   if (options3.durability !== undefined) {
     yield* options3.durability.noteTurnUsage({ turn, usage: modelUsage });

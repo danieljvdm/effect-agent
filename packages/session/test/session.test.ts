@@ -393,7 +393,42 @@ describe("phase 4 durable canonical payloads", () => {
     }
   });
 
-  it("RUN-011: requires both budget fields on a RunCompleted marker", () => {
+  it("RUN-033: bounds a Run-scoped prefix to the recorded Prompt messages", () => {
+    const envelope = (payload: unknown): unknown => ({
+      recordId: "record-run-scoped-prefix",
+      family: "conversation",
+      schemaVersion: 1,
+      createdAt: "2026-07-29T12:00:00.000Z",
+      deploymentId: "test-deployment",
+      payload,
+    });
+    const response = {
+      ...encodedModelResponseRecorded,
+      messages: {
+        content: [
+          { role: "system", content: "Run instructions" },
+          { role: "assistant", content: "Answer" },
+        ],
+      },
+    } as const;
+
+    expect(
+      Schema.decodeUnknownExit(RecordEnvelope)(envelope({ ...response, runScopedPrefixLength: 1 }))
+        ._tag,
+    ).toBe("Success");
+    expect(
+      Schema.decodeUnknownExit(RecordEnvelope)(
+        envelope({ ...response, runScopedPrefixLength: response.messages.content.length }),
+      )._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(RecordEnvelope)(
+        envelope({ ...response, runScopedPrefixLength: response.messages.content.length + 1 }),
+      )._tag,
+    ).toBe("Failure");
+  });
+
+  it("RUN-011: requires both budget fields on completion markers and settlements", () => {
     const envelope = (payload: unknown): unknown => ({
       recordId: "record-run-completed-budget",
       family: "conversation",
@@ -426,9 +461,29 @@ describe("phase 4 durable canonical payloads", () => {
       Schema.decodeUnknownExit(RecordEnvelope)(envelope({ ...completed, exhausted: "tokens" }))
         ._tag,
     ).toBe("Failure");
+
+    expect(
+      Schema.decodeUnknownExit(RecordEnvelope)(
+        envelope({
+          ...encodedSubmissionSettled,
+          finishReason: "budget-exhausted",
+          exhausted: "tokens",
+        }),
+      )._tag,
+    ).toBe("Success");
+    expect(
+      Schema.decodeUnknownExit(RecordEnvelope)(
+        envelope({ ...encodedSubmissionSettled, finishReason: "budget-exhausted" }),
+      )._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(RecordEnvelope)(
+        envelope({ ...encodedSubmissionSettled, exhausted: "tokens" }),
+      )._tag,
+    ).toBe("Failure");
   });
 
-  it("RUN-011: round-trips typed budget metadata and decodes legacy settlements without it", () => {
+  it("RUN-011: round-trips typed budget metadata and settlements without budget metadata", () => {
     const payloads = [
       // A completed soft landing persists the finishReason with its typed dimension.
       {
@@ -443,8 +498,8 @@ describe("phase 4 durable canonical payloads", () => {
         result: { errorTag: "AgentPolicyError", message: "Agent exceeded its 100 token budget" },
         policyLimit: "tokens",
       } as const,
-      // Histories persisted before the dimension became durable carry the finishReason alone.
-      { ...encodedSubmissionSettled, finishReason: "budget-exhausted" } as const,
+      // Histories persisted before budget metadata retain both fields as absent.
+      encodedSubmissionSettled,
     ];
     for (const [index, payload] of payloads.entries()) {
       const record = decodeRecord(`record-run011-${index}`, payload);

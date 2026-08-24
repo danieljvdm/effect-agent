@@ -218,9 +218,12 @@ export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
  * Turn boundary so a recovering Attempt can rebuild the next Prompt from canonical records alone.
  * `messagesDigest` pins the exact encoded content.
  */
-export class ModelResponseRecorded extends Schema.TaggedClass<ModelResponseRecorded>(
-  "@effect-agent/session/ModelResponseRecorded",
-)("ModelResponseRecorded", {
+const PersistedPromptMessages = Schema.Struct({
+  content: Schema.Array(Schema.Json),
+});
+const isPersistedPromptMessages = Schema.is(PersistedPromptMessages);
+
+const ModelResponseRecordedFields = Schema.Struct({
   runId: RunId,
   turnId: TurnId,
   turn: TurnNumber,
@@ -243,7 +246,19 @@ export class ModelResponseRecorded extends Schema.TaggedClass<ModelResponseRecor
   outputTokens: Schema.optionalKey(Schema.Natural),
   /** Estimated spend staged with the usage; recovery re-seeds the cost budget (RUN-023). */
   costMicrousd: Schema.optionalKey(Schema.Natural),
-}) {}
+}).check(
+  Schema.makeFilter(
+    (response) =>
+      response.runScopedPrefixLength === undefined ||
+      (isPersistedPromptMessages(response.messages) &&
+        response.runScopedPrefixLength < response.messages.content.length),
+    { title: "Run-scoped Prompt prefix leaves at least one recorded response message" },
+  ),
+);
+
+export class ModelResponseRecorded extends Schema.TaggedClass<ModelResponseRecorded>(
+  "@effect-agent/session/ModelResponseRecorded",
+)("ModelResponseRecorded", ModelResponseRecordedFields) {}
 
 /**
  * One approved uncertain/idempotent ordinary Tool Call made durable BEFORE any handler starts
@@ -499,7 +514,7 @@ const isSettlementFailureDiagnostic = Schema.is(SettlementFailureDiagnostic);
 
 const hasValidSettlementFamily = (settled: typeof RawSubmissionSettled.Type): boolean =>
   (settled.finishReason === undefined || settled.outcome === "completed") &&
-  (settled.exhausted === undefined || settled.finishReason === "budget-exhausted") &&
+  (settled.finishReason === undefined) === (settled.exhausted === undefined) &&
   (settled.usageSummary === undefined || settled.runId !== undefined) &&
   (settled.runDisposition === undefined ||
     (settled.outcome === "completed" &&

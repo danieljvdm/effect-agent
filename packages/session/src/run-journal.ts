@@ -369,36 +369,53 @@ interface ProjectedResponseUsage {
 
 const projectedResponseUsage = (
   response: ModelResponseRecorded,
-): Effect.Effect<ProjectedResponseUsage, RunJournalError> => {
-  const calls = response.modelUsage;
-  if (calls === undefined) {
-    return Effect.succeed({
-      modelCalls: 1,
-      inputTokens: response.inputTokens ?? 0,
-      outputTokens: response.outputTokens ?? 0,
-      costMicrousd: response.costMicrousd ?? 0,
-      modelUsage: [],
-    });
-  }
-  if (calls.length === 0) {
-    return Effect.fail(journalError("A canonical modelUsage list must not be empty"));
-  }
-  const summary = summarizeModelUsage(calls);
-  if (
-    (response.inputTokens !== undefined && response.inputTokens !== summary.inputTokens.total) ||
-    (response.outputTokens !== undefined && response.outputTokens !== summary.outputTokens.total) ||
-    (response.costMicrousd !== undefined && response.costMicrousd !== summary.costMicrousd)
-  ) {
-    return Effect.fail(journalError("Canonical detailed and aggregate model usage disagree"));
-  }
-  return Effect.succeed({
-    modelCalls: summary.modelCalls,
-    inputTokens: summary.inputTokens.total,
-    outputTokens: summary.outputTokens.total,
-    costMicrousd: summary.costMicrousd,
-    modelUsage: calls,
+): Effect.Effect<ProjectedResponseUsage, RunJournalError> =>
+  Effect.gen(function* () {
+    const calls = response.modelUsage;
+    if (calls === undefined) {
+      return {
+        modelCalls: 1,
+        inputTokens: response.inputTokens ?? 0,
+        outputTokens: response.outputTokens ?? 0,
+        costMicrousd: response.costMicrousd ?? 0,
+        modelUsage: [],
+      };
+    }
+    if (calls.length === 0) {
+      return yield* journalError("A canonical modelUsage list must not be empty");
+    }
+    const summary = yield* summarizeModelUsage(calls).pipe(
+      Effect.mapError((cause) =>
+        journalError("Canonical model usage exceeds accounting bounds", cause),
+      ),
+    );
+    if (
+      (response.inputTokens !== undefined && response.inputTokens !== summary.inputTokens.total) ||
+      (response.outputTokens !== undefined &&
+        response.outputTokens !== summary.outputTokens.total) ||
+      (response.costMicrousd !== undefined && response.costMicrousd !== summary.costMicrousd)
+    ) {
+      return yield* journalError("Canonical detailed and aggregate model usage disagree");
+    }
+    return {
+      modelCalls: summary.modelCalls,
+      inputTokens: summary.inputTokens.total,
+      outputTokens: summary.outputTokens.total,
+      costMicrousd: summary.costMicrousd,
+      modelUsage: calls,
+    };
   });
-};
+
+const addProjectedUsage = (
+  field: string,
+  left: number,
+  right: number,
+): Effect.Effect<number, RunJournalError> =>
+  Schema.decodeUnknownEffect(Schema.Natural)(left + right).pipe(
+    Effect.mapError((cause) =>
+      journalError(`Canonical projected usage exceeds safe-integer bounds at ${field}`, cause),
+    ),
+  );
 
 interface FoldState {
   readonly all: Array<Prompt.Message>;
@@ -630,10 +647,26 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
       // fail-safe if it ever did).
       if (payload._tag === "ModelResponseRecorded" && payload.runId === ownerRunId) {
         const responseUsage = yield* projectedResponseUsage(payload);
-        usage.modelCalls += responseUsage.modelCalls;
-        usage.inputTokens += responseUsage.inputTokens;
-        usage.outputTokens += responseUsage.outputTokens;
-        usage.costMicrousd += responseUsage.costMicrousd;
+        usage.modelCalls = yield* addProjectedUsage(
+          "modelCalls",
+          usage.modelCalls,
+          responseUsage.modelCalls,
+        );
+        usage.inputTokens = yield* addProjectedUsage(
+          "inputTokens",
+          usage.inputTokens,
+          responseUsage.inputTokens,
+        );
+        usage.outputTokens = yield* addProjectedUsage(
+          "outputTokens",
+          usage.outputTokens,
+          responseUsage.outputTokens,
+        );
+        usage.costMicrousd = yield* addProjectedUsage(
+          "costMicrousd",
+          usage.costMicrousd,
+          responseUsage.costMicrousd,
+        );
         usage.modelUsage.push(...responseUsage.modelUsage);
         if (payload.turn > usageTurn) {
           usageTurn = payload.turn;
@@ -673,10 +706,26 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
     const forRun = payload.runId === ownerRunId;
     if (forRun) {
       const responseUsage = yield* projectedResponseUsage(payload);
-      usage.modelCalls += responseUsage.modelCalls;
-      usage.inputTokens += responseUsage.inputTokens;
-      usage.outputTokens += responseUsage.outputTokens;
-      usage.costMicrousd += responseUsage.costMicrousd;
+      usage.modelCalls = yield* addProjectedUsage(
+        "modelCalls",
+        usage.modelCalls,
+        responseUsage.modelCalls,
+      );
+      usage.inputTokens = yield* addProjectedUsage(
+        "inputTokens",
+        usage.inputTokens,
+        responseUsage.inputTokens,
+      );
+      usage.outputTokens = yield* addProjectedUsage(
+        "outputTokens",
+        usage.outputTokens,
+        responseUsage.outputTokens,
+      );
+      usage.costMicrousd = yield* addProjectedUsage(
+        "costMicrousd",
+        usage.costMicrousd,
+        responseUsage.costMicrousd,
+      );
       usage.modelUsage.push(...responseUsage.modelUsage);
       if (payload.turn > usageTurn) {
         usageTurn = payload.turn;
@@ -853,7 +902,9 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
     if (modelUsage.length === 0) {
       return yield* journalError("Turn model usage must contain at least one completed call");
     }
-    const summary = summarizeModelUsage(modelUsage);
+    const summary = yield* summarizeModelUsage(modelUsage).pipe(
+      Effect.mapError((cause) => journalError("Turn model usage exceeds accounting bounds", cause)),
+    );
     if (
       input.usage === undefined ||
       input.usage.inputTokens !== summary.inputTokens.total ||

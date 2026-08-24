@@ -2422,12 +2422,19 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     const cumulativeOutputTokens = yield* decodeProviderUsageTotal(
       context.outputTokens + outputTokens,
     );
+    const cumulativeCostMicrousd = context.costMicrousd + costMicrousd;
+    if (!Number.isSafeInteger(cumulativeCostMicrousd)) {
+      return yield* AgentPolicyError.make({
+        limit: "cost",
+        message: "Cumulative model cost exceeds safe-integer accounting capacity",
+      });
+    }
     context.modelCalls = modelCalls;
     context.inputTokens = cumulativeInputTokens;
     context.outputTokens = cumulativeOutputTokens;
     context.lastInputTokens = inputTokens;
     context.lastOutputTokens = outputTokens;
-    context.costMicrousd += costMicrousd;
+    context.costMicrousd = cumulativeCostMicrousd;
     context.lastCostMicrousd = costMicrousd;
 
     if (options.durability !== undefined) {

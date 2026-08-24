@@ -30,7 +30,10 @@ import {
   ConversationId,
   DelegationId,
   IdGenerator,
+  InputTokenUsage,
+  ModelCallUsage,
   ModelProtocolError,
+  OutputTokenUsage,
   ReceiptId,
   RunCompleted,
   RunEvent,
@@ -38,17 +41,78 @@ import {
   RunStarted,
   SettlementId,
   SubagentParentLink,
+  summarizeModelUsage,
   ToolCallDeclared,
   ToolCallId,
   ToolResultBounds,
   TruncatedToolResult,
   TurnId,
+  UsageAggregationError,
 } from "../src/index.ts";
 
 // Core is platform-neutral: no TextEncoder in its lib; hex length halves to UTF-8 bytes.
 const utf8Bytes = (value: string): number => Encoding.encodeHex(value).length / 2;
 
 describe("core schemas", () => {
+  it("RUN-035: rejects non-additive canonical token breakdowns", () => {
+    expect(
+      Schema.decodeUnknownExit(InputTokenUsage)({
+        total: 0,
+        uncached: 0,
+        cacheRead: 100,
+        cacheWrite: 0,
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(OutputTokenUsage)({ total: 1, text: 1, reasoning: 1 })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(ModelCallUsage)({
+        provider: "test",
+        model: "test-model",
+        inputTokens: { total: 3, uncached: 1, cacheRead: 1, cacheWrite: 1 },
+        outputTokens: { total: 3, text: 2, reasoning: 1 },
+        costMicrousd: 0,
+      })._tag,
+    ).toBe("Success");
+  });
+
+  it("RUN-035: aggregates usage through a typed safe-integer overflow boundary", () => {
+    const call = (inputTokens: number, costMicrousd: number) =>
+      ModelCallUsage.make({
+        provider: "test",
+        model: "test-model",
+        inputTokens: InputTokenUsage.make({
+          total: inputTokens,
+          uncached: inputTokens,
+          cacheRead: 0,
+          cacheWrite: 0,
+        }),
+        outputTokens: OutputTokenUsage.make({ total: 0, text: 0, reasoning: 0 }),
+        costMicrousd,
+      });
+
+    const inputOverflow = Effect.runSync(
+      Effect.flip(summarizeModelUsage([call(Number.MAX_SAFE_INTEGER, 0), call(1, 0)])),
+    );
+    expect(inputOverflow).toBeInstanceOf(UsageAggregationError);
+    expect(inputOverflow.field).toBe("inputTokens.total");
+
+    const costOverflow = Effect.runSync(
+      Effect.flip(summarizeModelUsage([call(0, Number.MAX_SAFE_INTEGER), call(0, 1)])),
+    );
+    expect(costOverflow).toBeInstanceOf(UsageAggregationError);
+    expect(costOverflow.field).toBe("costMicrousd");
+
+    const summary = Effect.runSync(summarizeModelUsage([call(2, 3), call(5, 7)]));
+    expect(summary).toMatchObject({
+      modelCalls: 2,
+      inputTokens: { total: 7, uncached: 7, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 0, text: 0, reasoning: 0 },
+      costMicrousd: 10,
+    });
+  });
+
   it("decodes distinct non-empty branded identifiers", () => {
     expect(Schema.decodeSync(AgentId)("travel-planner")).toBe("travel-planner");
     expect(Schema.decodeSync(DelegationId)("delegate-research")).toBe("delegate-research");

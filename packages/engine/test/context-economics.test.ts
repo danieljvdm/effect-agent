@@ -1412,6 +1412,46 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
     }),
   );
 
+  it.effect("RUN-035: cumulative model cost fails typed before safe-integer overflow", () =>
+    Effect.gen(function* () {
+      const estimatorCalls = yield* Ref.make(0);
+      const definition = Agent.define("cost-overflow", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Search, then answer.",
+        toolkit: searchToolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const { model } = scriptedModel([
+        toolCallParts("cost-search", "search", {}),
+        finalParts('{"answer":"done"}'),
+      ]);
+      const toolLayer = searchToolkit.toLayer({ search: () => Effect.succeed("found") });
+
+      const exit = yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "q" },
+        {
+          estimateCostMicrousd: () =>
+            Ref.modify(estimatorCalls, (count) => [
+              count === 0 ? Number.MAX_SAFE_INTEGER : 1,
+              count + 1,
+            ]),
+        },
+      ).pipe(Effect.provide(toolLayer), Effect.exit);
+      const failure = failureFrom(exit);
+
+      expect(failure).toBeInstanceOf(AgentPolicyError);
+      expect((failure as AgentPolicyError).limit).toBe("cost");
+      expect(yield* Ref.get(estimatorCalls)).toBe(2);
+    }),
+  );
+
   it.effect("RUN-022: an unserializable Tool result becomes the fail-closed sentinel", () =>
     Effect.gen(function* () {
       const UnknownTool = Tool.make("emitUnknown", {

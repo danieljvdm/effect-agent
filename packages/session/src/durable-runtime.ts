@@ -3121,64 +3121,122 @@ const make = Effect.gen(function* () {
           readonly modelUsage: ReadonlyArray<ModelCallUsage>;
         }
       >();
-      const currentUsageSummary = (): RunUsageSummary => {
-        const stagedCalls = [...stagedUsage.values()].flatMap((usage) => usage.modelUsage);
-        const detailedCalls = [...journal.usage.modelUsage, ...stagedCalls];
-        const detailed = summarizeModelUsage(detailedCalls);
-        const inputTokens =
-          journal.usage.inputTokens +
-          [...stagedUsage.values()].reduce((total, usage) => total + usage.inputTokens, 0);
-        const outputTokens =
-          journal.usage.outputTokens +
-          [...stagedUsage.values()].reduce((total, usage) => total + usage.outputTokens, 0);
-        const costMicrousd =
-          journal.usage.costMicrousd +
-          [...stagedUsage.values()].reduce((total, usage) => total + usage.costMicrousd, 0);
-        const modelCalls = journal.usage.modelCalls + stagedCalls.length;
-        const legacyCalls = modelCalls - detailed.modelCalls;
-        const legacyInput = inputTokens - detailed.inputTokens.total;
-        const legacyOutput = outputTokens - detailed.outputTokens.total;
-        const legacyCost = costMicrousd - detailed.costMicrousd;
-        const legacyGroup =
-          legacyCalls <= 0
-            ? []
-            : [
-                ModelUsageGroup.make({
-                  provider: "unknown",
-                  model: "legacy-record",
-                  modelCalls: legacyCalls,
-                  inputTokens: InputTokenUsage.make({
-                    total: Math.max(0, legacyInput),
-                    uncached: Math.max(0, legacyInput),
-                    cacheRead: 0,
-                    cacheWrite: 0,
+      const checkedUsageTotal = (
+        field: string,
+        value: number,
+      ): Effect.Effect<number, RunJournalError> =>
+        Schema.decodeUnknownEffect(Schema.Natural)(value).pipe(
+          Effect.mapError((cause) =>
+            RunJournalError.make({
+              message: `Run usage summary exceeds safe-integer bounds at ${field}`,
+              cause,
+            }),
+          ),
+        );
+      const addUsageTotal = (field: string, left: number, right: number) =>
+        checkedUsageTotal(field, left + right);
+      const subtractUsageTotal = (field: string, left: number, right: number) =>
+        checkedUsageTotal(field, left - right);
+      const currentUsageSummary = (): Effect.Effect<RunUsageSummary, RunJournalError> =>
+        Effect.gen(function* () {
+          const stagedCalls = [...stagedUsage.values()].flatMap((usage) => usage.modelUsage);
+          const detailedCalls = [...journal.usage.modelUsage, ...stagedCalls];
+          const detailed = yield* summarizeModelUsage(detailedCalls).pipe(
+            Effect.mapError((cause) =>
+              RunJournalError.make({
+                message: "Run detailed usage exceeds safe-integer accounting bounds",
+                cause,
+              }),
+            ),
+          );
+          let inputTokens = journal.usage.inputTokens;
+          let outputTokens = journal.usage.outputTokens;
+          let costMicrousd = journal.usage.costMicrousd;
+          for (const usage of stagedUsage.values()) {
+            inputTokens = yield* addUsageTotal("inputTokens", inputTokens, usage.inputTokens);
+            outputTokens = yield* addUsageTotal("outputTokens", outputTokens, usage.outputTokens);
+            costMicrousd = yield* addUsageTotal("costMicrousd", costMicrousd, usage.costMicrousd);
+          }
+          const modelCalls = yield* addUsageTotal(
+            "modelCalls",
+            journal.usage.modelCalls,
+            stagedCalls.length,
+          );
+          const legacyCalls = yield* subtractUsageTotal(
+            "legacy.modelCalls",
+            modelCalls,
+            detailed.modelCalls,
+          );
+          const legacyInput = yield* subtractUsageTotal(
+            "legacy.inputTokens",
+            inputTokens,
+            detailed.inputTokens.total,
+          );
+          const legacyOutput = yield* subtractUsageTotal(
+            "legacy.outputTokens",
+            outputTokens,
+            detailed.outputTokens.total,
+          );
+          const legacyCost = yield* subtractUsageTotal(
+            "legacy.costMicrousd",
+            costMicrousd,
+            detailed.costMicrousd,
+          );
+          if (legacyCalls === 0 && (legacyInput !== 0 || legacyOutput !== 0 || legacyCost !== 0)) {
+            return yield* RunJournalError.make({
+              message: "Run aggregate usage has legacy totals without a legacy model call",
+            });
+          }
+          const legacyGroup =
+            legacyCalls === 0
+              ? []
+              : [
+                  ModelUsageGroup.make({
+                    provider: "unknown",
+                    model: "legacy-record",
+                    modelCalls: legacyCalls,
+                    inputTokens: InputTokenUsage.make({
+                      total: legacyInput,
+                      uncached: legacyInput,
+                      cacheRead: 0,
+                      cacheWrite: 0,
+                    }),
+                    outputTokens: OutputTokenUsage.make({
+                      total: legacyOutput,
+                      text: legacyOutput,
+                      reasoning: 0,
+                    }),
+                    costMicrousd: legacyCost,
                   }),
-                  outputTokens: OutputTokenUsage.make({
-                    total: Math.max(0, legacyOutput),
-                    text: Math.max(0, legacyOutput),
-                    reasoning: 0,
-                  }),
-                  costMicrousd: Math.max(0, legacyCost),
-                }),
-              ];
-        return RunUsageSummary.make({
-          modelCalls,
-          inputTokens: InputTokenUsage.make({
-            total: inputTokens,
-            // Legacy aggregate inputs are conservatively classified as uncached.
-            uncached: detailed.inputTokens.uncached + Math.max(0, legacyInput),
-            cacheRead: detailed.inputTokens.cacheRead,
-            cacheWrite: detailed.inputTokens.cacheWrite,
-          }),
-          outputTokens: OutputTokenUsage.make({
-            total: outputTokens,
-            text: detailed.outputTokens.text + Math.max(0, legacyOutput),
-            reasoning: detailed.outputTokens.reasoning,
-          }),
-          costMicrousd,
-          byModel: [...detailed.byModel, ...legacyGroup],
+                ];
+          const uncached = yield* addUsageTotal(
+            "inputTokens.uncached",
+            detailed.inputTokens.uncached,
+            legacyInput,
+          );
+          const text = yield* addUsageTotal(
+            "outputTokens.text",
+            detailed.outputTokens.text,
+            legacyOutput,
+          );
+          return RunUsageSummary.make({
+            modelCalls,
+            inputTokens: InputTokenUsage.make({
+              total: inputTokens,
+              // Legacy aggregate inputs are conservatively classified as uncached.
+              uncached,
+              cacheRead: detailed.inputTokens.cacheRead,
+              cacheWrite: detailed.inputTokens.cacheWrite,
+            }),
+            outputTokens: OutputTokenUsage.make({
+              total: outputTokens,
+              text,
+              reasoning: detailed.outputTokens.reasoning,
+            }),
+            costMicrousd,
+            byModel: [...detailed.byModel, ...legacyGroup],
+          });
         });
-      };
       const recordedCompletion = records.find(
         (envelope) => envelope.record.recordId === runCompletedRecordId(runId),
       )?.record.payload;
@@ -3235,7 +3293,7 @@ const make = Effect.gen(function* () {
           ...(recordedCompletion.exhausted === undefined
             ? {}
             : { exhausted: recordedCompletion.exhausted }),
-          usageSummary: currentUsageSummary(),
+          usageSummary: yield* currentUsageSummary(),
         };
       }
       // RUN-026: durable compaction covers only records of PRIOR Runs — never

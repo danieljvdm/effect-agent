@@ -646,7 +646,8 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
 - **RUN-023:** The engine accounts cache-read and cache-write input tokens distinctly from
   uncached input and tracks the most recent call's input/output tokens as the live-context
   estimate, both visible through the budget hook. Every present provider token field and each
-  derived total must be a non-negative safe integer; malformed usage fails with
+  derived or cumulative total must be a non-negative safe integer; malformed usage or live
+  aggregation overflow fails with
   `ModelProtocolError` before cost estimation or budget consumption. A recovery usage seed obeys
   the same integer bound, with last-call token counts no greater than cumulative totals; invalid
   seeds fail before Run input hooks or external execution.
@@ -706,13 +707,17 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   so recovery terminalizes without issuing a duplicate model request.
 - **RUN-033:** A first response marks its evaluated instruction/wake prefix as Run-scoped.
   Recovery of that Run retains it, while later Runs omit only that marked prefix and preserve the
-  remaining assistant/tool conversation; unmarked legacy records retain their full projection.
+  remaining assistant/tool conversation. The recorded prefix length must be smaller than the
+  recorded message count so at least the response remains; out-of-bounds provenance fails Schema
+  decoding, while unmarked legacy records retain their full projection.
 - **RUN-034:** Before provider I/O the engine reserves `completionReserveTokens` and admits a
   research call only when its estimated complete prompt plus that reserve fits the remaining gross
   token budget. Context or token pressure invokes target-aware compaction; an unreachable target
   fails locally with `ContextBudgetError`, and token pressure otherwise enters finalization early.
 - **RUN-035:** Each completed model call normalizes and durably records provider, model, optional
   service tier/pricing version, uncached/cache-read/cache-write input, text/reasoning output, and
-  estimated microdollar cost. Cached tokens remain part of gross token budgeting, durable hosts
-  expose the estimator, `costBudgetMicrousd` is enforced across Attempts, and every Run settlement
-  carries an aggregate usage summary without double-counting joined Submissions.
+  estimated microdollar cost. Every canonical input or output total exactly equals its component
+  sum. Cached tokens remain part of gross token budgeting, durable hosts expose the estimator,
+  `costBudgetMicrousd` is enforced across Attempts, and every Run settlement carries an aggregate
+  usage summary without double-counting joined Submissions. Any component, token, model-call, or
+  cost aggregation that would exceed safe-integer accounting fails typed before settlement.

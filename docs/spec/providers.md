@@ -179,7 +179,9 @@ identity, optional host-supplied service tier and pricing version, uncached/cach
 input, text/reasoning output, and estimated microdollar cost (RUN-035). It may additionally retain
 response identity, returned reasoning content, encrypted/signature fields, and provider redaction
 markers when Effect AI exposes them. Cached input remains billable gross usage; cache accounting is
-never interpreted as free tokens.
+never interpreted as free tokens. Canonical input and output totals must equal the sums of their
+recorded components. Contradictory breakdowns and any aggregate that exceeds safe-integer
+accounting fail typed instead of being coerced or persisted.
 
 The framework does not request or invent hidden reasoning. Partial Tool-argument
 deltas are live-only; the completed Tool Call is persisted.
