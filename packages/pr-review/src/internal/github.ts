@@ -925,12 +925,28 @@ const GitHubGitCommitWire = Schema.Struct({
   tree: Schema.Struct({ sha: GitCommitSha }),
 });
 
-const GitHubTreeEntryWire = Schema.Struct({
+const GitHubTreeEntryFields = {
   path: Schema.String.check(Schema.isMaxLength(4_096)),
-  mode: Schema.String.check(Schema.isMaxLength(6)),
-  type: Schema.Literals(["blob", "tree", "commit"]),
   sha: GitCommitSha,
-});
+} as const;
+
+const GitHubTreeEntryWire = Schema.Union([
+  Schema.Struct({
+    ...GitHubTreeEntryFields,
+    mode: Schema.Literals(["100644", "100755", "120000"]),
+    type: Schema.Literal("blob"),
+  }),
+  Schema.Struct({
+    ...GitHubTreeEntryFields,
+    mode: Schema.Literal("040000"),
+    type: Schema.Literal("tree"),
+  }),
+  Schema.Struct({
+    ...GitHubTreeEntryFields,
+    mode: Schema.Literal("160000"),
+    type: Schema.Literal("commit"),
+  }),
+]);
 
 const MAX_RECURSIVE_TREE_ENTRIES = 100_000;
 const GitHubTreeWire = Schema.Struct({

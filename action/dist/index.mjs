@@ -45916,12 +45916,27 @@ var GitHubGitCommitWire = exports_Schema.Struct({
   sha: GitCommitSha,
   tree: exports_Schema.Struct({ sha: GitCommitSha })
 });
-var GitHubTreeEntryWire = exports_Schema.Struct({
+var GitHubTreeEntryFields = {
   path: exports_Schema.String.check(exports_Schema.isMaxLength(4096)),
-  mode: exports_Schema.String.check(exports_Schema.isMaxLength(6)),
-  type: exports_Schema.Literals(["blob", "tree", "commit"]),
   sha: GitCommitSha
-});
+};
+var GitHubTreeEntryWire = exports_Schema.Union([
+  exports_Schema.Struct({
+    ...GitHubTreeEntryFields,
+    mode: exports_Schema.Literals(["100644", "100755", "120000"]),
+    type: exports_Schema.Literal("blob")
+  }),
+  exports_Schema.Struct({
+    ...GitHubTreeEntryFields,
+    mode: exports_Schema.Literal("040000"),
+    type: exports_Schema.Literal("tree")
+  }),
+  exports_Schema.Struct({
+    ...GitHubTreeEntryFields,
+    mode: exports_Schema.Literal("160000"),
+    type: exports_Schema.Literal("commit")
+  })
+]);
 var MAX_RECURSIVE_TREE_ENTRIES = 1e5;
 var GitHubTreeWire = exports_Schema.Struct({
   sha: GitCommitSha,

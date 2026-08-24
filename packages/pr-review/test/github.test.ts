@@ -142,6 +142,8 @@ describe("GitHub prior reviews", () => {
                 entry("src/previous.ts", "e".repeat(40)),
                 entry("src/type.ts", "6".repeat(40)),
                 entry("src/base-drift.ts", "7".repeat(40)),
+                entry("src/link", "1".repeat(40), "120000"),
+                entry("src/subdir", "2".repeat(40), "040000", "tree"),
               ],
             };
           }
@@ -157,6 +159,8 @@ describe("GitHub prior reviews", () => {
                 entry("src/current.ts", "e".repeat(40)),
                 entry("src/type.ts", "f".repeat(40), "160000", "commit"),
                 entry("src/base-drift.ts", "0".repeat(40)),
+                entry("src/link", "1".repeat(40), "120000"),
+                entry("src/subdir", "2".repeat(40), "040000", "tree"),
               ],
             };
           }
@@ -233,14 +237,14 @@ describe("GitHub prior reviews", () => {
       const currentHeadSha = "3".repeat(40);
       const baseTreeSha = "4".repeat(40);
       const headTreeSha = "5".repeat(40);
-      const runComparison = (headTree: unknown) => {
+      const runComparison = (baseTree: unknown, headTree: unknown) => {
         const client = HttpClient.make((request, url) => {
           const body = url.pathname.endsWith(`/git/commits/${REVIEWED_HEAD_SHA}`)
             ? { sha: REVIEWED_HEAD_SHA, tree: { sha: baseTreeSha } }
             : url.pathname.endsWith(`/git/commits/${currentHeadSha}`)
               ? { sha: currentHeadSha, tree: { sha: headTreeSha } }
               : url.pathname.endsWith(`/git/trees/${baseTreeSha}`)
-                ? { sha: baseTreeSha, truncated: false, tree: [] }
+                ? baseTree
                 : headTree;
           return Effect.succeed(
             HttpClientResponse.fromWeb(
@@ -276,7 +280,8 @@ describe("GitHub prior reviews", () => {
         );
       };
 
-      const truncated = yield* runComparison({
+      const emptyBaseTree = { sha: baseTreeSha, truncated: false, tree: [] };
+      const truncated = yield* runComparison(emptyBaseTree, {
         sha: headTreeSha,
         truncated: true,
         tree: [],
@@ -284,7 +289,7 @@ describe("GitHub prior reviews", () => {
       expect(truncated.truncated).toBe(true);
       expect(truncated.changedPaths).toEqual([]);
 
-      const malformed = yield* runComparison({
+      const malformed = yield* runComparison(emptyBaseTree, {
         sha: headTreeSha,
         truncated: false,
         tree: [{ path: "src/fix.ts", type: "blob", sha: "6".repeat(40) }],
@@ -292,6 +297,19 @@ describe("GitHub prior reviews", () => {
       expect(malformed._tag).toBe("PriorReviewLookupFailure");
       expect(malformed.reason).toContain("SchemaError");
       expect(malformed.reason).toContain('["tree"][0]["mode"]');
+
+      for (const entry of [
+        { path: "src/fix.ts", mode: "", type: "blob", sha: "6".repeat(40) },
+        { path: "src/fix.ts", mode: "160000", type: "blob", sha: "6".repeat(40) },
+      ]) {
+        const invalidPairing = yield* runComparison(
+          { sha: baseTreeSha, truncated: false, tree: [entry] },
+          { sha: headTreeSha, truncated: false, tree: [entry] },
+        ).pipe(Effect.flip);
+        expect(invalidPairing._tag).toBe("PriorReviewLookupFailure");
+        expect(invalidPairing.reason).toContain("SchemaError");
+        expect(invalidPairing.reason).toContain('["tree"][0]');
+      }
     }),
   );
 });
