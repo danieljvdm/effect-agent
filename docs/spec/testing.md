@@ -91,6 +91,10 @@ Generated command sequences cover:
 - steering and follow-up races;
 - approval timing;
 - compaction success/failure;
+- completion-reserve admission and unreachable compaction targets;
+- singleton completion Tool success, mixed-batch rejection, and crash recovery after result commit;
+- Run-scoped prompt provenance across owner recovery and later Runs;
+- durable cache-split/model/tier/cost usage and settlement aggregation;
 - child-agent completion/interruption;
 - budget exhaustion;
 - subscriber backpressure;

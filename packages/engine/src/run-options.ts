@@ -5,6 +5,7 @@ import type {
   DelegationId,
   ReceiptId,
   RunId,
+  ModelCallUsage,
   SubagentParentLink,
   SubmissionId,
   ToolCallId,
@@ -128,7 +129,35 @@ export interface RunUsageDelta {
   readonly toolCalls: number;
   readonly costMicrousd: number;
   readonly usage: Response.Usage;
+  /** Present for model-call deltas; absent for programmatic Tool-only charges. */
+  readonly modelUsage?: ModelCallUsage | undefined;
 }
+
+/** Stable pricing identity returned alongside a host's microdollar estimate. */
+export interface RunCostEstimate {
+  readonly costMicrousd: number;
+  readonly serviceTier?: string | undefined;
+  readonly pricingVersion?: string | undefined;
+}
+
+/** A number preserves the original estimator API; the object form adds pricing provenance. */
+export type RunCostEstimateValue = number | RunCostEstimate;
+
+/** Model identity presented beside the legacy raw-usage estimator argument. */
+export interface RunCostEstimateRequest {
+  readonly provider: string;
+  readonly model: string;
+  readonly usage: Response.Usage;
+}
+
+/**
+ * Host-owned price lookup; durable hosts close every dependency before installing it. Raw usage
+ * remains the first argument for source and runtime compatibility with the original estimator API.
+ */
+export type RunCostEstimator<Error = never, Requirements = never> = (
+  usage: Response.Usage,
+  request: RunCostEstimateRequest,
+) => Effect.Effect<RunCostEstimateValue, Error, Requirements>;
 
 /**
  * Dependency-neutral hierarchical budget hook. A typed failure at a Turn-seam
@@ -247,10 +276,7 @@ export interface RunCompactionCommit {
 /** One completed model call's provider-reported usage, staged for the Turn's canonical commit. */
 export interface RunTurnUsage {
   readonly turn: number;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  /** Estimated spend of the staged call; recovery re-seeds the cost budget from it. */
-  readonly costMicrousd: number;
+  readonly usage: ModelCallUsage;
 }
 
 /**
@@ -633,9 +659,7 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    */
   readonly turnAllowance?: number | undefined;
   /** Required when the core policy declares `costBudgetMicrousd`. */
-  readonly estimateCostMicrousd?:
-    | ((usage: Response.Usage) => Effect.Effect<number, HookError, HookRequirements>)
-    | undefined;
+  readonly estimateCostMicrousd?: RunCostEstimator<HookError, HookRequirements> | undefined;
   readonly scheduling?: RunSchedulingHook | undefined;
   /** Optional tightening-only overrides for the engine's finite in-memory buffer ceilings. */
   readonly bufferLimits?: RunBufferLimits | undefined;

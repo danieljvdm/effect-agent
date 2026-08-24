@@ -50,6 +50,12 @@ const SearchAvailability = Tool.make("search_availability", {
 });
 const TravelTools = Toolkit.make(SearchAvailability);
 
+const PostMessage = Tool.make("post_message", {
+  parameters: Schema.Struct({ message: Schema.String }),
+  success: Schema.Struct({ messageId: Schema.String }),
+});
+const DeliveryTools = Toolkit.make(PostMessage);
+
 const model = Model.make(
   "scripted",
   "type-proof",
@@ -106,6 +112,26 @@ const dispositionDefinition = Agent.define("disposition-type-proof", {
   runDisposition: {
     schema: RunDisposition,
     fromOutput: (output) => output.runDisposition,
+  },
+});
+
+const terminalDefinition = Agent.define("terminal-type-proof", {
+  input: Schema.Struct({ destination: Schema.String }),
+  output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
+  instructions: "Deliver the final message.",
+  toolkit: DeliveryTools,
+  policy: AgentPolicy.make({
+    maxTurns: 1,
+    maxToolCalls: 1,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+  completion: {
+    tool: "post_message",
+    project: ({ parameters, result }) => ({
+      message: parameters.message,
+      messageId: result.messageId,
+    }),
   },
 });
 
@@ -213,6 +239,7 @@ describe("Agent type inference", () => {
     expect(declaredRunDispositionFailureProof).toBe(true);
     expect(runDispositionFailureProof).toBe(true);
     expect(Object.isFrozen(dispositionDefinition.runDisposition)).toBe(true);
+    expect(Object.isFrozen(terminalDefinition.completion)).toBe(true);
     expect(agent.definition).toBe(definition);
     expect(agent.model).toBe(model);
     expect(Object.isFrozen(definition)).toBe(true);

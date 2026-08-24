@@ -18,6 +18,7 @@ import {
   modelResponseRecordId,
   promptFromCanonicalRecords,
   projectRunJournal,
+  runCompletedRecordId,
   runIdForSubmission,
   subagentJoinBatchId,
   subagentJoinedRecordId,
@@ -92,6 +93,30 @@ const toolTurnAppended: ReadonlyArray<Prompt.Message> = [
   }),
 ];
 
+const completionTurnAppended: ReadonlyArray<Prompt.Message> = [
+  Prompt.makeMessage("assistant", {
+    content: [
+      Prompt.makePart("tool-call", {
+        id: "call-1",
+        name: "post_message",
+        params: { message: "Your flight is booked." },
+        providerExecuted: false,
+      }),
+    ],
+  }),
+  Prompt.makeMessage("tool", {
+    content: [
+      Prompt.makePart("tool-result", {
+        id: "call-1",
+        name: "post_message",
+        result: { messageId: "message-42" },
+        isFailure: false,
+        providerExecuted: false,
+      }),
+    ],
+  }),
+];
+
 const turnInput = (
   appended: ReadonlyArray<Prompt.Message>,
   turn = 1,
@@ -126,6 +151,22 @@ const envelopesOf = (batches: ReadonlyArray<CanonicalBatch>): Array<CanonicalRec
   }
   return envelopes;
 };
+
+const textOfPrompt = (prompt: Prompt.Prompt): string =>
+  prompt.content
+    .map((message) =>
+      typeof message.content === "string"
+        ? message.content
+        : message.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+    )
+    .join("\n");
+
+const resultsOfPrompt = (prompt: Prompt.Prompt): ReadonlyArray<unknown> =>
+  prompt.content.flatMap((message) =>
+    message.role === "tool"
+      ? message.content.filter((part) => part.type === "tool-result").map((part) => part.result)
+      : [],
+  );
 
 const auditRecord = (
   recordId: string,
@@ -185,6 +226,29 @@ describe("run journal batch split (plan §2.1)", () => {
         expect(splitProjection.committedTurns).toBe(singleProjection.committedTurns);
         expect(splitProjection.prompt).toEqual(singleProjection.prompt);
         expect(splitProjection.historyBefore).toEqual(singleProjection.historyBefore);
+      }),
+    );
+
+    it.effect("commits a terminal Tool result and Run completion marker atomically", () =>
+      Effect.gen(function* () {
+        const results = yield* turnResultsBatch({
+          ...turnInput(completionTurnAppended),
+          runCompletion: {
+            output: { deliveredMessageId: "message-42" },
+            runDisposition: { channel: "support" },
+          },
+        });
+
+        expect(results.records.map((record) => record.recordId)).toEqual([
+          toolCallSettledRecordId(RUN_ID, 1, CALL_ONE),
+          runCompletedRecordId(RUN_ID),
+        ]);
+        expect(results.records[1]?.payload).toMatchObject({
+          _tag: "RunCompleted",
+          runId: RUN_ID,
+          output: { deliveredMessageId: "message-42" },
+          runDisposition: { channel: "support" },
+        });
       }),
     );
 
@@ -396,6 +460,47 @@ describe("run journal batch split (plan §2.1)", () => {
           ),
         ).toEqual([CALL_ONE]);
       }),
+    );
+
+    it.effect(
+      "RUN-033: keeps run-scoped instructions canonical while excluding them from later model prompts",
+      () =>
+        Effect.gen(function* () {
+          const firstResponse = yield* turnResponseBatch({
+            ...turnInput(toolTurnAppended),
+            runScopedPrefixLength: 2,
+          });
+          const firstResults = yield* turnResultsBatch(turnInput(toolTurnAppended));
+          const conversationalTurn: ReadonlyArray<Prompt.Message> = [
+            Prompt.makeMessage("user", {
+              content: [
+                Prompt.makePart("text", { text: "Please mention the cancellation terms." }),
+              ],
+            }),
+            Prompt.makeMessage("assistant", {
+              content: [
+                Prompt.makePart("text", { text: '{"answer":"Cancellation terms added."}' }),
+              ],
+            }),
+          ];
+          const secondResponse = yield* turnResponseBatch(turnInput(conversationalTurn, 2));
+          const records = envelopesOf([firstResponse, firstResults, secondResponse]);
+
+          const recovering = yield* projectRunJournal(records, RUN_ID);
+          expect(textOfPrompt(recovering.prompt)).toContain("Answer as JSON.");
+          expect(textOfPrompt(recovering.prompt)).toContain("book?");
+
+          const later = yield* projectRunJournal(records, LATER_RUN_ID);
+          const laterText = textOfPrompt(later.historyBefore);
+          expect(laterText).not.toContain("Answer as JSON.");
+          expect(laterText).not.toContain("book?");
+          expect(laterText).toContain("Please mention the cancellation terms.");
+          expect(laterText).toContain("Cancellation terms added.");
+          expect(resultsOfPrompt(later.historyBefore)).toEqual([
+            { bookingRef: "flight-42" },
+            { bookingRef: "lodging-7" },
+          ]);
+        }),
     );
 
     it.effect("projects prepared/unknown/step/approval/resolution records transparently", () =>
@@ -943,6 +1048,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
           lastInputTokens: 250,
           lastOutputTokens: 20,
           costMicrousd: 0,
+          modelUsage: [],
         });
       }),
     );

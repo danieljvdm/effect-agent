@@ -1,6 +1,16 @@
-import { ConversationId, RunId, ToolCallId, TurnId, type SubmissionId } from "@effect-agent/core";
+import {
+  ConversationId,
+  ModelCallUsage,
+  RunId,
+  summarizeModelUsage,
+  ToolCallId,
+  TurnId,
+  type ExhaustedLimit,
+  type SubmissionId,
+} from "@effect-agent/core";
 import { CLEARED_TOOL_RESULT, COMPACTION_SUMMARY_PREFIX } from "@effect-agent/engine";
-import { Crypto, Effect, Schema, type DateTime } from "effect";
+import type { Crypto } from "effect";
+import { Effect, Schema, type DateTime } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
 import { digestJson, type DigestError } from "./digest.ts";
@@ -12,6 +22,7 @@ import {
   PersistedJson,
   RecordEnvelope,
   RecordId,
+  RunCompleted,
   ToolCallSettled,
   type CanonicalRecordEnvelope,
   type DeploymentId,
@@ -103,6 +114,10 @@ export const compactionBatchId = (
 /** Deterministic canonical record identity of one Turn's `ModelResponseRecorded` record. */
 export const modelResponseRecordId = (runId: RunId, turn: number): RecordId =>
   decodeRecordId(`model-response:${runId}:${turn}`);
+
+/** Terminal Tool completion marker committed atomically with its settled Tool result. */
+export const runCompletedRecordId = (runId: RunId): RecordId =>
+  decodeRecordId(`run-completed:${runId}`);
 
 /** Deterministic canonical record identity of one Turn's `ToolCallSettled` record. */
 export const toolCallSettledRecordId = (
@@ -329,6 +344,8 @@ export interface RunJournalUsage {
   readonly lastOutputTokens: number;
   /** Cumulative persisted spend of the projected Run's committed calls (RUN-023). */
   readonly costMicrousd: number;
+  /** Canonical per-call detail used for settlement aggregation and recovery. */
+  readonly modelUsage: ReadonlyArray<ModelCallUsage>;
 }
 
 export interface RunJournalProjection {
@@ -341,6 +358,47 @@ export interface RunJournalProjection {
   /** Summed per-call usage of the projected Run's committed responses; zeros for records predating usage capture. */
   readonly usage: RunJournalUsage;
 }
+
+interface ProjectedResponseUsage {
+  readonly modelCalls: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly costMicrousd: number;
+  readonly modelUsage: ReadonlyArray<ModelCallUsage>;
+}
+
+const projectedResponseUsage = (
+  response: ModelResponseRecorded,
+): Effect.Effect<ProjectedResponseUsage, RunJournalError> => {
+  const calls = response.modelUsage;
+  if (calls === undefined) {
+    return Effect.succeed({
+      modelCalls: 1,
+      inputTokens: response.inputTokens ?? 0,
+      outputTokens: response.outputTokens ?? 0,
+      costMicrousd: response.costMicrousd ?? 0,
+      modelUsage: [],
+    });
+  }
+  if (calls.length === 0) {
+    return Effect.fail(journalError("A canonical modelUsage list must not be empty"));
+  }
+  const summary = summarizeModelUsage(calls);
+  if (
+    (response.inputTokens !== undefined && response.inputTokens !== summary.inputTokens.total) ||
+    (response.outputTokens !== undefined && response.outputTokens !== summary.outputTokens.total) ||
+    (response.costMicrousd !== undefined && response.costMicrousd !== summary.costMicrousd)
+  ) {
+    return Effect.fail(journalError("Canonical detailed and aggregate model usage disagree"));
+  }
+  return Effect.succeed({
+    modelCalls: summary.modelCalls,
+    inputTokens: summary.inputTokens.total,
+    outputTokens: summary.outputTokens.total,
+    costMicrousd: summary.costMicrousd,
+    modelUsage: calls,
+  });
+};
 
 interface FoldState {
   readonly all: Array<Prompt.Message>;
@@ -503,6 +561,7 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
     state = { ...state, all: [...state.all, message], before: [...state.before, message] };
   };
 
+  const modelUsage: Array<ModelCallUsage> = [];
   const usage = {
     modelCalls: 0,
     inputTokens: 0,
@@ -510,6 +569,7 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
     lastInputTokens: 0,
     lastOutputTokens: 0,
     costMicrousd: 0,
+    modelUsage,
   };
   let usageTurn = 0;
 
@@ -569,14 +629,16 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
       // into the summary (the append side never covers the owner, but stay
       // fail-safe if it ever did).
       if (payload._tag === "ModelResponseRecorded" && payload.runId === ownerRunId) {
-        usage.modelCalls += 1;
-        usage.inputTokens += payload.inputTokens ?? 0;
-        usage.outputTokens += payload.outputTokens ?? 0;
-        usage.costMicrousd += payload.costMicrousd ?? 0;
+        const responseUsage = yield* projectedResponseUsage(payload);
+        usage.modelCalls += responseUsage.modelCalls;
+        usage.inputTokens += responseUsage.inputTokens;
+        usage.outputTokens += responseUsage.outputTokens;
+        usage.costMicrousd += responseUsage.costMicrousd;
+        usage.modelUsage.push(...responseUsage.modelUsage);
         if (payload.turn > usageTurn) {
           usageTurn = payload.turn;
-          usage.lastInputTokens = payload.inputTokens ?? 0;
-          usage.lastOutputTokens = payload.outputTokens ?? 0;
+          usage.lastInputTokens = responseUsage.inputTokens;
+          usage.lastOutputTokens = responseUsage.outputTokens;
         }
       }
       continue;
@@ -610,20 +672,26 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
     }
     const forRun = payload.runId === ownerRunId;
     if (forRun) {
-      usage.modelCalls += 1;
-      usage.inputTokens += payload.inputTokens ?? 0;
-      usage.outputTokens += payload.outputTokens ?? 0;
-      usage.costMicrousd += payload.costMicrousd ?? 0;
+      const responseUsage = yield* projectedResponseUsage(payload);
+      usage.modelCalls += responseUsage.modelCalls;
+      usage.inputTokens += responseUsage.inputTokens;
+      usage.outputTokens += responseUsage.outputTokens;
+      usage.costMicrousd += responseUsage.costMicrousd;
+      usage.modelUsage.push(...responseUsage.modelUsage);
       if (payload.turn > usageTurn) {
         usageTurn = payload.turn;
-        usage.lastInputTokens = payload.inputTokens ?? 0;
-        usage.lastOutputTokens = payload.outputTokens ?? 0;
+        usage.lastInputTokens = responseUsage.inputTokens;
+        usage.lastOutputTokens = responseUsage.outputTokens;
       }
     }
+    const modelVisible =
+      !forRun && payload.runScopedPrefixLength !== undefined
+        ? Prompt.fromMessages(messages.content.slice(payload.runScopedPrefixLength))
+        : messages;
     const visibleMessages =
       !forRun && incompleteToolTurns.has(envelope.record.recordId)
-        ? withoutApplicationToolCallMessages(messages)
-        : messages.content;
+        ? withoutApplicationToolCallMessages(modelVisible)
+        : modelVisible.content;
     state = {
       ...state,
       all: [...state.all, ...visibleMessages],
@@ -692,18 +760,31 @@ export interface TurnCommitInput {
   readonly producerId: ProducerId;
   readonly deploymentId: DeploymentId;
   readonly createdAt: DateTime.Utc;
+  /** Leading instruction/wake messages that stay canonical but are hidden from later Runs. */
+  readonly runScopedPrefixLength?: number | undefined;
+  /** Terminal Tool output committed atomically with this Turn's result batch. */
+  readonly runCompletion?:
+    | {
+        readonly output: PersistedJson;
+        readonly runDisposition?: PersistedJson | undefined;
+        readonly finishReason?: "budget-exhausted" | undefined;
+        readonly exhausted?: ExhaustedLimit | undefined;
+      }
+    | undefined;
   /** Per-call provider usage staged by the engine's `noteTurnUsage` (RUN-023). */
   readonly usage?:
     | {
         readonly inputTokens: number;
         readonly outputTokens: number;
         readonly costMicrousd?: number | undefined;
+        readonly modelUsage?: ReadonlyArray<ModelCallUsage> | undefined;
       }
     | undefined;
 }
 
 const decodePersistedJson = Schema.decodeUnknownEffect(PersistedJson);
 const encodePrompt = Schema.encodeEffect(Prompt.Prompt);
+const decodeModelUsage = Schema.decodeUnknownEffect(Schema.Array(ModelCallUsage));
 
 const requireCanonicalTurn = (turn: number): Effect.Effect<void, RunJournalError> =>
   !Number.isInteger(turn) || turn <= 0
@@ -738,6 +819,21 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
   if (promptMessages.length === 0) {
     return yield* journalError(`Turn ${input.turn} appended no model-visible Prompt messages`);
   }
+  const runScopedPrefixLength = input.runScopedPrefixLength;
+  if (
+    runScopedPrefixLength !== undefined &&
+    (input.turn !== 1 ||
+      !Number.isSafeInteger(runScopedPrefixLength) ||
+      runScopedPrefixLength <= 0 ||
+      runScopedPrefixLength >= promptMessages.length ||
+      promptMessages
+        .slice(0, runScopedPrefixLength)
+        .some((message) => message.role !== "system" && message.role !== "user"))
+  ) {
+    return yield* journalError(
+      "Run-scoped Prompt provenance must identify a non-empty system/user prefix of Turn 1 before its assistant response",
+    );
+  }
   const encodedMessages = yield* encodePrompt(Prompt.fromMessages([...promptMessages])).pipe(
     Effect.mapError((cause) => journalError("Turn Prompt messages failed to encode", cause)),
   );
@@ -747,6 +843,26 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
     ),
   );
   const messagesDigest = yield* digestJson(messages);
+  const modelUsage =
+    input.usage?.modelUsage === undefined
+      ? undefined
+      : yield* decodeModelUsage(input.usage.modelUsage).pipe(
+          Effect.mapError((cause) => journalError("Turn model usage failed to decode", cause)),
+        );
+  if (modelUsage !== undefined) {
+    if (modelUsage.length === 0) {
+      return yield* journalError("Turn model usage must contain at least one completed call");
+    }
+    const summary = summarizeModelUsage(modelUsage);
+    if (
+      input.usage === undefined ||
+      input.usage.inputTokens !== summary.inputTokens.total ||
+      input.usage.outputTokens !== summary.outputTokens.total ||
+      (input.usage.costMicrousd ?? 0) !== summary.costMicrousd
+    ) {
+      return yield* journalError("Turn detailed and aggregate model usage disagree");
+    }
+  }
   return RecordEnvelope.make({
     recordId: modelResponseRecordId(input.runId, input.turn),
     family: "conversation",
@@ -759,6 +875,8 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
       turn: input.turn,
       messages,
       messagesDigest,
+      ...(runScopedPrefixLength === undefined ? {} : { runScopedPrefixLength }),
+      ...(modelUsage === undefined ? {} : { modelUsage }),
       ...(input.usage === undefined
         ? {}
         : {
@@ -874,9 +992,37 @@ export const turnResultsBatch = Effect.fn("RunJournal.turnResultsBatch")(functio
   if (first === undefined) {
     return yield* journalError(`Turn ${input.turn} has no terminal Tool results to commit`);
   }
+  if (input.runCompletion !== undefined && toolRecords.length !== 1) {
+    return yield* journalError("A terminal Tool completion requires exactly one settled result");
+  }
+  const completionRecord =
+    input.runCompletion === undefined
+      ? []
+      : [
+          RecordEnvelope.make({
+            recordId: runCompletedRecordId(input.runId),
+            family: "conversation",
+            schemaVersion: 1,
+            createdAt: input.createdAt,
+            deploymentId: input.deploymentId,
+            payload: RunCompleted.make({
+              runId: input.runId,
+              output: input.runCompletion.output,
+              ...(input.runCompletion.runDisposition === undefined
+                ? {}
+                : { runDisposition: input.runCompletion.runDisposition }),
+              ...(input.runCompletion.finishReason === undefined
+                ? {}
+                : { finishReason: input.runCompletion.finishReason }),
+              ...(input.runCompletion.exhausted === undefined
+                ? {}
+                : { exhausted: input.runCompletion.exhausted }),
+            }),
+          }),
+        ];
   return CanonicalBatch.make({
     batchId: turnResultsBatchId(input.runId, input.turn),
     producerId: input.producerId,
-    records: [first, ...toolRecords.slice(1)],
+    records: [first, ...toolRecords.slice(1), ...completionRecord],
   });
 });

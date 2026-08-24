@@ -122,6 +122,17 @@ export class ContextOverflowError extends Schema.TaggedError<ContextOverflowErro
   },
 ) {}
 
+/** Local context preparation could not fit a legal prompt inside its target before provider I/O. */
+export class ContextBudgetError extends Schema.TaggedError<ContextBudgetError>()(
+  "ContextBudgetError",
+  {
+    message: Schema.String,
+    estimatedTokens: Schema.Natural,
+    targetTokens: Schema.Natural,
+    completionReserveTokens: Schema.Natural,
+  },
+) {}
+
 /** Schema for framework-owned agent errors; application and Effect AI failures remain separate. */
 export const AgentError = Schema.Union([
   AgentInputError,
@@ -134,5 +145,6 @@ export const AgentError = Schema.Union([
   ModelProtocolError,
   AgentInterrupted,
   ContextOverflowError,
+  ContextBudgetError,
 ]);
 export type AgentError = typeof AgentError.Type;

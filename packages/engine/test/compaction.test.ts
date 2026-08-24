@@ -2,6 +2,7 @@ import {
   Agent,
   AgentPolicy,
   CompactionPolicy,
+  ContextBudgetError,
   ContextOverflowError,
   ConversationId,
   IdGenerator,
@@ -69,6 +70,7 @@ const toolCallParts = (
 interface CapturedRequest {
   readonly prompt: Prompt.Prompt;
   readonly toolCount: number;
+  readonly toolChoice: unknown;
 }
 
 type ScriptEntry = ReadonlyArray<Response.StreamPartEncoded> | { readonly fail: string };
@@ -92,7 +94,11 @@ const scriptedModel = (script: ReadonlyArray<ScriptEntry>) => {
         generateText: () => Effect.succeed([]),
         streamText: (request) => {
           const index = Math.min(requests.length, script.length - 1);
-          requests.push({ prompt: request.prompt, toolCount: request.tools.length });
+          requests.push({
+            prompt: request.prompt,
+            toolCount: request.tools.length,
+            toolChoice: request.toolChoice,
+          });
           const entry = script[index];
           if (entry === undefined) return Stream.empty;
           if ("fail" in entry) return Stream.fail(overflowFailure(entry.fail));
@@ -228,11 +234,11 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
         "maximum context window reached",
       ];
       for (const text of positives) {
-        expect(isContextOverflowMessage(text), text).toBe(true);
+        expect(isContextOverflowMessage(text)).toBe(true);
       }
       const negatives = ["rate limit exceeded", "invalid api key", "content filtered", ""];
       for (const text of negatives) {
-        expect(isContextOverflowMessage(text), text).toBe(false);
+        expect(isContextOverflowMessage(text)).toBe(false);
       }
     }),
   );
@@ -317,6 +323,69 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
           performed[0]?.tokensBeforeEstimate ?? 0,
         );
       }),
+  );
+
+  it.effect(
+    "RUN-034: cumulative token pressure compacts before it spends the completion reserve",
+    () =>
+      Effect.gen(function* () {
+        const policy = AgentPolicy.make({
+          ...basePolicy,
+          tokenBudget: 2_000,
+          completionReserveTokens: 500,
+          compaction: CompactionPolicy.make({ keepRecentTokens: 200, mode: "prune" }),
+        });
+        const { exit, requests, events } = yield* driveRun({
+          policy,
+          script: [
+            toolCallParts("s1", "search", {}, usageOf(100, 5)),
+            toolCallParts("s2", "search", {}, usageOf(700, 5)),
+            finalParts('{"answer":"done"}', usageOf(200, 5)),
+          ],
+          results: ["old".repeat(1_000), "recent"],
+        });
+
+        expect(Exit.isSuccess(exit)).toBe(true);
+        expect(requests).toHaveLength(3);
+        const finalRequest = requests[2];
+        if (finalRequest === undefined) throw new Error("expected a final request");
+        expect(toolResultValues(finalRequest.prompt)).toEqual([CLEARED_TOOL_RESULT, "recent"]);
+        expect(compactionEvents(events).map((event) => event.kind)).toContain("clear-tool-results");
+      }),
+  );
+
+  it.effect("RUN-034: summarizer usage is charged before admitting the post-compaction call", () =>
+    Effect.gen(function* () {
+      const policy = AgentPolicy.make({
+        ...basePolicy,
+        tokenBudget: 12_000,
+        completionReserveTokens: 1_000,
+        contextTokenLimit: 1_500,
+        compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
+      });
+      const { exit, requests, events } = yield* driveRun({
+        policy,
+        script: [
+          toolCallParts("s1", "search", {}, usageOf(100, 5)),
+          toolCallParts("s2", "search", {}, usageOf(1_300, 5)),
+          finalParts("Goal: preserve delivery capacity", usageOf(9_600, 100)),
+          finalParts('{"answer":"delivered"}', usageOf(50, 10)),
+        ],
+        results: ["a".repeat(4_000), "b".repeat(4_000)],
+      });
+
+      expect(requests).toHaveLength(4);
+      expect(Exit.isSuccess(exit)).toBe(true);
+      expect(requests[3]?.toolChoice).toBe("none");
+      expect(
+        events.some(
+          (event) =>
+            event._tag === "RunCompleted" &&
+            event.finishReason === "budget-exhausted" &&
+            event.exhausted === "tokens",
+        ),
+      ).toBe(true);
+    }),
   );
 
   // -------------------------------------------------------- RUN-026 summarize
@@ -414,7 +483,7 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
       }),
   );
 
-  it.effect("RUN-026: mode prune proceeds past the limit without a summarizer call", () =>
+  it.effect("RUN-034: mode prune fails typed when protected context cannot reach the target", () =>
     Effect.gen(function* () {
       const policy = AgentPolicy.make({
         ...basePolicy,
@@ -430,24 +499,23 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
         results: ["small"],
       });
 
-      expect(Exit.isSuccess(exit)).toBe(true);
-      expect(requests).toHaveLength(2);
-      const second = requests[1];
-      if (second === undefined) throw new Error("expected a second model request");
-      expect(toolResultValues(second.prompt)).toEqual(["small"]);
+      expect(Exit.isFailure(exit)).toBe(true);
+      const failure = failureFrom(exit);
+      expect(failure).toBeInstanceOf(ContextBudgetError);
+      expect(requests).toHaveLength(1);
       expect(compactionEvents(events)).toHaveLength(0);
     }),
   );
 
   it.effect(
-    "RUN-028: the window reserves the output contract's size — the same view compacts with a large contract and stays whole without one",
+    "RUN-028: the context target includes the output contract and fails before provider I/O when the protected tail cannot fit",
     () =>
       Effect.gen(function* () {
         // The contract is appended to every outgoing request AFTER the window
         // check, so the estimate must reserve its size: a view comfortably
         // under the limit still compacts when view + contract crosses it.
         const paddedOutput = Schema.Struct({ answer: Schema.String }).annotate({
-          description: "p".repeat(32_000),
+          description: "p".repeat(12_000),
         });
         const policy = AgentPolicy.make({
           ...basePolicy,
@@ -455,6 +523,7 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
           compaction: CompactionPolicy.make({ keepRecentTokens: 200, mode: "prune" }),
         });
         const bigResult = "r".repeat(6_000);
+        const recentResult = "s".repeat(8_000);
 
         const reserved = yield* driveRunWith(paddedOutput, {
           policy,
@@ -463,16 +532,13 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
             toolCallParts("s2", "search", {}, usageOf(200, 5)),
             finalParts('{"answer":"done"}', usageOf(300, 5)),
           ],
-          results: [bigResult, "small"],
+          results: [bigResult, recentResult],
         });
-        expect(Exit.isSuccess(reserved.exit)).toBe(true);
-        // The big first-turn result was cleared before the final request even
-        // though the view alone (~2k tokens) is far below the 5k limit.
-        expect(compactionEvents(reserved.events).length).toBeGreaterThanOrEqual(1);
-        const finalRequest = reserved.requests.at(-1);
-        if (finalRequest === undefined) throw new Error("expected a final model request");
-        expect(toolResultValues(finalRequest.prompt)).toContain(CLEARED_TOOL_RESULT);
-        expect(toolResultValues(finalRequest.prompt)).not.toContain(bigResult);
+        expect(Exit.isFailure(reserved.exit)).toBe(true);
+        expect(failureFrom(reserved.exit)).toBeInstanceOf(ContextBudgetError);
+        // The contract plus the protected newest result cannot reach the
+        // target, so the next provider request never starts.
+        expect(reserved.requests.length).toBeLessThan(3);
 
         // Control: an unrenderable output Schema produces no contract, so the
         // identical view under the identical limit never compacts.
@@ -485,7 +551,7 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
               toolCallParts("s2", "search", {}, usageOf(200, 5)),
               finalParts('["first",1,"last"]', usageOf(300, 5)),
             ],
-            results: [bigResult, "small"],
+            results: [bigResult, recentResult],
           },
         );
         expect(Exit.isSuccess(control.exit)).toBe(true);
@@ -576,6 +642,31 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
       if (failure instanceof ContextOverflowError) {
         expect(failure.retried).toBe(true);
       }
+    }),
+  );
+
+  it.effect("RUN-034: overflow compaction fails locally when its summary cannot reach target", () =>
+    Effect.gen(function* () {
+      const policy = AgentPolicy.make({
+        ...basePolicy,
+        contextTokenLimit: 20_000,
+        compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
+      });
+      const { exit, requests } = yield* driveRun({
+        policy,
+        script: [
+          toolCallParts("s1", "search", {}, usageOf(100, 5)),
+          toolCallParts("s2", "search", {}, usageOf(200, 5)),
+          { fail: "maximum context length exceeded" },
+          finalParts(`Goal: ${"summary".repeat(20_000)}`, usageOf(20, 10)),
+        ],
+        results: ["a".repeat(4_000), "b".repeat(4_000)],
+      });
+
+      expect(failureFrom(exit)).toBeInstanceOf(ContextBudgetError);
+      // Two research calls, the rejected call, and one summarizer call. The
+      // engine never sends a retry it already knows exceeds the target.
+      expect(requests).toHaveLength(4);
     }),
   );
 

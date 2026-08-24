@@ -14,16 +14,20 @@ import {
   BudgetWarning,
   unserializableToolResult,
   CompactionPerformed,
+  ContextBudgetError,
   ContextOverflowError,
+  type CompletionToolDeclaration,
   ConversationId,
   type Definition,
   DelegationDepth,
   type DelegationId,
   IdGenerator,
+  InputTokenUsage,
   type InstructionSource,
   isDelegationToolName,
   type RunDispositionDeclaration,
   ModelStarted,
+  ModelCallUsage,
   ModelProtocolError,
   ReasoningDelta,
   ReceiptId,
@@ -52,6 +56,7 @@ import {
   type ToolResultBounds,
   TurnCompleted,
   TurnStarted,
+  OutputTokenUsage,
   type TurnId,
 } from "@effect-agent/core";
 import type { Take } from "effect";
@@ -77,7 +82,7 @@ import {
   type Tool,
   AiError,
   LanguageModel,
-  type Model,
+  Model,
   Prompt,
   Response,
   Toolkit,
@@ -266,6 +271,7 @@ export type AgentRuntimeFailure<
 > =
   | Agent.Failure<AgentValue>
   | AgentPolicyError
+  | ContextBudgetError
   | ContextOverflowError
   | ModelProtocolError
   | AgentApprovalDenied
@@ -2300,9 +2306,14 @@ const outgoingModelPrompt = (
 
 /** Usage accounting outcome of one completed model response (RUN-025). */
 interface ConsumedUsage {
-  /** A finalize-eligible budget breach; fail-fast breaches never reach the caller. */
+  /**
+   * A finalize-eligible budget breach. Fail-fast breaches do not reach the
+   * caller unless this response declared the singleton completion Tool: that
+   * already-paid delivery response is allowed to finish RUN-032.
+   */
   readonly breach: AgentPolicyError | undefined;
   readonly warnings: ReadonlyArray<RunEvent>;
+  readonly modelUsage: ModelCallUsage;
 }
 
 const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>(
@@ -2310,11 +2321,12 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
   context: RunContext,
   usage: Response.Usage | undefined,
   toolCallCount: number,
+  turn: number,
   options: RunOptions<HookError, HookRequirements>,
 ): Effect.Effect<
   ConsumedUsage,
   AgentPolicyError | ModelProtocolError | HookError,
-  HookRequirements
+  HookRequirements | Model.ProviderName | Model.ModelName
 > =>
   Effect.gen(function* () {
     if (usage === undefined) {
@@ -2323,27 +2335,64 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
         message: "A completed model response did not report usage",
       });
     }
+    const natural = (value: number | undefined): number =>
+      value === undefined || !Number.isSafeInteger(value) ? 0 : Math.max(0, value);
+    const reportedUncached = natural(usage.inputTokens.uncached);
+    const cacheRead = natural(usage.inputTokens.cacheRead);
+    const cacheWrite = natural(usage.inputTokens.cacheWrite);
+    const reportedText = natural(usage.outputTokens.text);
+    const reasoning = natural(usage.outputTokens.reasoning);
+    // Gross token accounting never discounts cache activity. A provider's
+    // aggregate may be absent or narrower than its reported components.
     const inputTokens = Math.max(
-      0,
-      usage.inputTokens.total ??
-        (usage.inputTokens.uncached ?? 0) +
-          (usage.inputTokens.cacheRead ?? 0) +
-          (usage.inputTokens.cacheWrite ?? 0),
+      natural(usage.inputTokens.total),
+      reportedUncached + cacheRead + cacheWrite,
     );
-    const outputTokens = Math.max(
-      0,
-      usage.outputTokens.total ??
-        (usage.outputTokens.text ?? 0) + (usage.outputTokens.reasoning ?? 0),
-    );
+    const outputTokens = Math.max(natural(usage.outputTokens.total), reportedText + reasoning);
+    // When a provider reports only aggregates, classify the unexplained input
+    // conservatively as uncached and non-reasoning output as text. This keeps
+    // each persisted breakdown additive instead of silently inventing a free,
+    // unclassified token bucket.
+    const uncached = Math.max(reportedUncached, inputTokens - cacheRead - cacheWrite);
+    const text = Math.max(reportedText, outputTokens - reasoning);
     const totalTokens = inputTokens + outputTokens;
-    const costMicrousd =
-      options.estimateCostMicrousd === undefined ? 0 : yield* options.estimateCostMicrousd(usage);
+    const provider = yield* Model.ProviderName;
+    const model = yield* Model.ModelName;
+    const estimate =
+      options.estimateCostMicrousd === undefined
+        ? 0
+        : yield* options.estimateCostMicrousd(usage, { provider, model, usage });
+    const costMicrousd = typeof estimate === "number" ? estimate : estimate.costMicrousd;
     if (!Number.isInteger(costMicrousd) || costMicrousd < 0) {
       return yield* AgentPolicyError.make({
         limit: "cost",
         message: "Model cost estimation must produce a non-negative integer number of microdollars",
       });
     }
+    const serviceTier = typeof estimate === "number" ? undefined : estimate.serviceTier;
+    const pricingVersion = typeof estimate === "number" ? undefined : estimate.pricingVersion;
+    const validPricingIdentity = (value: string | undefined): boolean =>
+      value === undefined || (value.length > 0 && value.length <= 256);
+    if (!validPricingIdentity(serviceTier) || !validPricingIdentity(pricingVersion)) {
+      return yield* AgentPolicyError.make({
+        limit: "cost",
+        message: "Model cost estimation returned an invalid service tier or pricing version",
+      });
+    }
+    const modelUsage = ModelCallUsage.make({
+      provider,
+      model,
+      ...(serviceTier === undefined ? {} : { serviceTier }),
+      ...(pricingVersion === undefined ? {} : { pricingVersion }),
+      inputTokens: InputTokenUsage.make({
+        total: inputTokens,
+        uncached,
+        cacheRead,
+        cacheWrite,
+      }),
+      outputTokens: OutputTokenUsage.make({ total: outputTokens, text, reasoning }),
+      costMicrousd,
+    });
     context.modelCalls += 1;
     context.inputTokens += inputTokens;
     context.outputTokens += outputTokens;
@@ -2351,6 +2400,13 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     context.lastOutputTokens = outputTokens;
     context.costMicrousd += costMicrousd;
     context.lastCostMicrousd = costMicrousd;
+
+    if (options.durability !== undefined) {
+      // Stage before enforcing hard rails: a response that spends past the
+      // cost/token budget still becomes auditable in its canonical Turn and
+      // terminal settlement.
+      yield* options.durability.noteTurnUsage({ turn, usage: modelUsage });
+    }
 
     const policy = agent.definition.policy;
     const consumedTokens = context.inputTokens + context.outputTokens;
@@ -2366,8 +2422,8 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
         limit: "tokens",
         message: `Agent exceeded its ${tokenBudget} token budget`,
       });
-      // Fail-fast token breaches keep the pre-soft-landing contract exactly: no
-      // budget-hook charge and no warning event on the failing response.
+      // Fail-fast token breaches keep the pre-soft-landing contract: no
+      // budget-hook charge, warning event, or application Handler.
       if (policy.onExhaustion === "fail") {
         return yield* breach;
       }
@@ -2404,6 +2460,7 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
         toolCalls: toolCallCount,
         costMicrousd,
         usage,
+        modelUsage,
       };
       yield* options.budget.consume(delta);
     }
@@ -2423,7 +2480,7 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
         }),
       );
     }
-    return { breach, warnings };
+    return { breach, warnings, modelUsage };
   });
 
 // `Effect.fnUntraced`: this helper runs for every streamed Response Part, so a
@@ -2605,8 +2662,8 @@ interface CompactionOutcome {
  * summarizer call's usage is consumed like any other model call, with
  * `context.finalizing` held during its accounting so a budget breach
  * surfaces at the next response's check instead of recursing into finalize
- * mid-compaction; its usage is deliberately not staged for resume re-seed
- * (only canonical response records carry usage).
+ * mid-compaction. Durable coordinators stage it as a distinct call in the
+ * same canonical Turn as the response that follows.
  */
 const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirements>(
   agent: AgentValue,
@@ -2614,11 +2671,13 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
   source: Prompt.Prompt,
   turn: number,
   options: RunOptions<HookError, HookRequirements>,
+  targetTokens: number | undefined,
   forceSummarize: boolean,
+  allowSummarize = true,
 ): Effect.Effect<
   CompactionOutcome,
   AgentPolicyError | ModelProtocolError | AiError.AiError | HookError,
-  HookRequirements | LanguageModel.LanguageModel
+  HookRequirements | LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName
 > =>
   Effect.gen(function* () {
     const policy = agent.definition.policy;
@@ -2626,14 +2685,17 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
     const events: Array<RunEvent> = [];
     const messages = source.content;
     const before = estimatePromptTokens(buildCompactedView(messages, state));
-    const limit = policy.contextTokenLimit;
     const mode = policy.compaction.mode;
+    const keepRecentTokens =
+      targetTokens === undefined
+        ? policy.compaction.keepRecentTokens
+        : Math.max(1, Math.min(policy.compaction.keepRecentTokens, targetTokens));
 
     const commitDurable = (commit: RunCompactionCommit) =>
       options.durability === undefined ? Effect.void : options.durability.commitCompaction(commit);
 
     if (!forceSummarize && mode !== "summarize") {
-      const bound = choosePruneBound(messages, state, policy.compaction.keepRecentTokens);
+      const bound = choosePruneBound(messages, state, keepRecentTokens);
       if (bound > state.clearedThrough) {
         state.clearedThrough = bound;
         state.lastViewLength = -1;
@@ -2653,19 +2715,20 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
           tokensBeforeEstimate: before,
           tokensAfterEstimate: after,
         });
-        if (limit !== undefined && after <= limit) {
+        if (targetTokens !== undefined && after <= targetTokens) {
           return { events };
         }
       }
     }
-    if (mode === "prune" && !forceSummarize) {
-      // Pruning may legitimately reclaim nothing (a single protected result):
-      // the Turn proceeds anyway — the provider may still accept, and the
-      // RUN-027 overflow path is the typed backstop when it does not.
+    if ((!allowSummarize || mode === "prune") && !forceSummarize) {
+      // Pruning may legitimately reclaim nothing (for example, one protected
+      // result). The caller re-estimates the rebuilt prompt and either enters
+      // finalization or fails locally; known-over-target work never reaches
+      // the provider.
       return { events };
     }
 
-    const cut = chooseSummarizeCut(messages, state, policy.compaction.keepRecentTokens);
+    const cut = chooseSummarizeCut(messages, state, keepRecentTokens);
     const covered = collectCoveredMessages(messages, state, cut);
     if (covered.length === 0) {
       return { events };
@@ -2710,24 +2773,20 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
     );
     const wasFinalizing = context.finalizing;
     context.finalizing = true;
-    const consumed = yield* consumeUsage(agent, context, summaryUsage, 0, options).pipe(
+    const consumed = yield* consumeUsage(
+      agent,
+      context,
+      summaryUsage,
+      0,
+      turn,
+      options,
+    ).pipe(
       Effect.ensuring(
         Effect.sync(() => {
           context.finalizing = wasFinalizing;
         }),
       ),
     );
-    if (options.durability !== undefined) {
-      // The summarizer's spend must survive ownership changes: it stages into
-      // the same canonical Turn as the Turn's own response, and the session
-      // accumulates both (RUN-023).
-      yield* options.durability.noteTurnUsage({
-        turn,
-        inputTokens: context.lastInputTokens,
-        outputTokens: context.lastOutputTokens,
-        costMicrousd: context.lastCostMicrousd,
-      });
-    }
     events.push(...consumed.warnings);
     const summaryText = pieces.join("").trim();
     const summary = summaryText.length === 0 ? "(no summary produced)" : summaryText;
@@ -3286,6 +3345,68 @@ const decodeFinalOutput = Effect.fn("AgentRuntime.decodeFinalOutput")(function* 
   return { encoded: eventJson, decoded };
 });
 
+const encodeOutputCandidate = Effect.fn("AgentRuntime.encodeOutputCandidate")(function* <
+  AgentValue extends Agent.Any,
+>(agent: AgentValue, candidate: unknown) {
+  const decoded = yield* Schema.decodeUnknownEffect(agent.definition.output)(candidate).pipe(
+    Effect.mapError((cause) =>
+      AgentOutputError.make({
+        message: cause.message,
+      }),
+    ),
+  );
+  const encoded = yield* Schema.encodeUnknownEffect(agent.definition.output)(decoded).pipe(
+    Effect.mapError((cause) =>
+      AgentOutputError.make({
+        message: `Completion Tool output failed Schema encoding: ${cause.message}`,
+      }),
+    ),
+  );
+  const json = yield* Schema.decodeUnknownEffect(Schema.Json)(encoded).pipe(
+    Effect.mapError((cause) =>
+      AgentOutputError.make({
+        message: `Completion Tool output did not encode as durable JSON: ${cause.message}`,
+      }),
+    ),
+  );
+  return { encoded: json, decoded };
+});
+
+const projectCompletionOutput = Effect.fn("AgentRuntime.projectCompletionOutput")(function* <
+  AgentValue extends Agent.Any,
+>(agent: AgentValue, declaration: CompletionToolDeclaration, parameters: unknown, result: unknown) {
+  const tool = agent.definition.toolkit.tools[declaration.tool];
+  if (tool === undefined) {
+    return yield* ModelProtocolError.make({
+      message: `Agent completion declaration references unknown Tool ${declaration.tool}`,
+    });
+  }
+  const decodedParameters = yield* Schema.decodeUnknownEffect(tool.parametersSchema)(
+    parameters,
+  ).pipe(
+    Effect.mapError((cause) =>
+      AgentOutputError.make({
+        message: `Completion Tool parameters failed canonical decoding: ${cause.message}`,
+      }),
+    ),
+  );
+  const decodedResult = yield* Schema.decodeUnknownEffect(tool.successSchema)(result).pipe(
+    Effect.mapError((cause) =>
+      AgentOutputError.make({
+        message: `Completion Tool result failed canonical decoding: ${cause.message}`,
+      }),
+    ),
+  );
+  const projected = yield* Effect.try({
+    try: () => declaration.project({ parameters: decodedParameters, result: decodedResult }),
+    catch: (cause) =>
+      AgentOutputError.make({
+        message: `Completion Tool projector failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }),
+  });
+  return yield* encodeOutputCandidate(agent, projected);
+});
+
 const encodeRunDispositionCandidate = Effect.fn("AgentRuntime.encodeRunDisposition")(function* <
   Output,
   DispositionSchema extends Schema.Top,
@@ -3518,8 +3639,8 @@ const makeTurn = <
         }).pipe(Effect.withLogSpan("AgentRuntime.model")),
       ).pipe(Stream.flatMap(Stream.fromIterable));
 
-      // Final-answer mode (RUN-018/RUN-019, extended to the token dimension
-      // by RUN-025 to the token dimension): once the Turn, Tool Call, or token budget is
+      // Final-answer mode (RUN-018/RUN-019, extended to tokens by RUN-025):
+      // once the Turn, Tool Call, or token budget is
       // exhausted, the model keeps its toolkit declaration but may not call
       // it. Turn and Tool Call conditions are pure derivations of committed
       // state (`turn`, `priorToolCalls`, `programmaticToolCalls`); the token
@@ -3530,7 +3651,7 @@ const makeTurn = <
       // path byte-for-byte.
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
-      const finalAnswerOnly =
+      let finalAnswerOnly =
         policy.onExhaustion !== "fail" &&
         (turn > bounds.maxTurns ||
           priorToolCalls + context.programmaticToolCalls > bounds.maxToolCalls ||
@@ -3556,27 +3677,52 @@ const makeTurn = <
         );
       }
       // The output contract (RUN-028) rides every outgoing request after
-      // compaction, so the window calculation reserves its estimated size the
-      // same way Tool-schema overhead is provider-side reality: the view must
-      // fit the limit WITH the contract the engine will append.
+      // compaction, so the view must fit the limit with the contract the
+      // engine will append.
       const outputContractTokens =
         outputContractMessage === undefined
           ? 0
           : estimatePromptTokens([
               Prompt.makeMessage("system", { content: outputContractMessage }),
             ]);
+      const derivedPrompt = yield* outgoingModelPrompt(
+        policy,
+        context,
+        Prompt.fromMessages([]),
+        turn,
+        priorToolCalls,
+      );
+      const derivedPromptTokens =
+        outputContractTokens + estimatePromptTokens(derivedPrompt.content);
       let preEvents: ReadonlyArray<RunEvent> = [];
-      if (policy.contextTokenLimit !== undefined && !context.finalizing) {
+      if (!context.finalizing) {
+        const consumedTokens = context.inputTokens + context.outputTokens;
+        const tokenCallTarget =
+          policy.tokenBudget === undefined || finalAnswerOnly
+            ? undefined
+            : Math.max(0, policy.tokenBudget - consumedTokens - policy.completionReserveTokens);
+        const contextCallTarget = policy.contextTokenLimit;
+        const fullTarget =
+          tokenCallTarget === undefined
+            ? contextCallTarget
+            : contextCallTarget === undefined
+              ? tokenCallTarget
+              : Math.min(tokenCallTarget, contextCallTarget);
+        const sourceTarget =
+          fullTarget === undefined ? undefined : Math.max(0, fullTarget - derivedPromptTokens);
         const view = buildCompactedView(modelContext.prompt.content, context.compaction);
-        const estimate = nextContextEstimate(context, view);
+        const estimate = nextContextEstimate(context, view) + derivedPromptTokens;
+        const contextPressure = contextCallTarget !== undefined && estimate > contextCallTarget;
+        const tokenPressure = tokenCallTarget !== undefined && estimate > tokenCallTarget;
         if (
-          estimate + outputContractTokens > policy.contextTokenLimit &&
+          (contextPressure || tokenPressure) &&
+          sourceTarget !== undefined &&
+          sourceTarget > 0 &&
           context.compaction.lastCompactionTurn !== turn
         ) {
-          // Loop guard: at most one threshold compaction per Turn. If the
-          // post-compaction estimate still exceeds the limit the Turn
-          // proceeds anyway — the provider may accept, and RUN-027 overflow
-          // recovery is the typed backstop when it does not.
+          // Loop guard: at most one threshold compaction per Turn. The target
+          // is checked below before provider I/O, so a non-progressing pass
+          // fails typed rather than relying on a provider rejection.
           context.compaction.lastCompactionTurn = turn;
           const outcome = yield* compactContext(
             agent,
@@ -3584,9 +3730,48 @@ const makeTurn = <
             modelContext.prompt,
             turn,
             options,
+            sourceTarget,
             false,
+            !tokenPressure,
           );
           preEvents = outcome.events;
+        }
+        const prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
+        const preparedEstimate = nextContextEstimate(context, prepared) + derivedPromptTokens;
+        // A summarizing compaction is itself a priced model call. Recompute
+        // admission from its reported usage instead of carrying the stale
+        // pre-compaction balance into the research call that follows.
+        if (context.tokenExhausted) {
+          finalAnswerOnly = true;
+        }
+        const preparedTokenCallTarget =
+          policy.tokenBudget === undefined || finalAnswerOnly
+            ? undefined
+            : Math.max(
+                0,
+                policy.tokenBudget -
+                  (context.inputTokens + context.outputTokens) -
+                  policy.completionReserveTokens,
+              );
+        if (contextCallTarget !== undefined && preparedEstimate > contextCallTarget) {
+          return yield* ContextBudgetError.make({
+            message: `Compaction could not fit the next model prompt inside the ${contextCallTarget} token context target`,
+            estimatedTokens: preparedEstimate,
+            targetTokens: contextCallTarget,
+            completionReserveTokens: policy.completionReserveTokens,
+          });
+        }
+        if (preparedTokenCallTarget !== undefined && preparedEstimate > preparedTokenCallTarget) {
+          const error = AgentPolicyError.make({
+            limit: "tokens",
+            message: `The next research call would consume this Run's ${policy.completionReserveTokens} token completion reserve`,
+          });
+          if (policy.onExhaustion === "fail") {
+            return yield* error;
+          }
+          context.tokenExhausted = true;
+          context.exhaustedDimension ??= "tokens";
+          finalAnswerOnly = true;
         }
       }
       /** The model-visible view of the Turn basis under current compaction state. */
@@ -3611,7 +3796,16 @@ const makeTurn = <
                       : insertOutputContract(outgoing, outputContractMessage),
                   toolkit: agent.definition.toolkit,
                   disableToolCallResolution: true,
-                  ...(finalAnswerOnly ? { toolChoice: "none" as const } : {}),
+                  ...(finalAnswerOnly
+                    ? agent.definition.completion === undefined
+                      ? { toolChoice: "none" as const }
+                      : {
+                          toolChoice: {
+                            mode: "auto" as const,
+                            oneOf: [agent.definition.completion.tool],
+                          },
+                        }
+                    : {}),
                 }),
                 options.budget,
               ).pipe(
@@ -3660,7 +3854,8 @@ const makeTurn = <
               return Stream.fail(error);
             }
             const message = overflowText(error);
-            if (trace.parts.length > 0 || policy.contextTokenLimit === undefined) {
+            const contextTokenLimit = policy.contextTokenLimit;
+            if (trace.parts.length > 0 || contextTokenLimit === undefined) {
               return Stream.fail(ContextOverflowError.make({ message, retried: false }));
             }
             if (context.compaction.overflowRetryTurn === turn) {
@@ -3681,6 +3876,7 @@ const makeTurn = <
                   modelContext.prompt,
                   turn,
                   options,
+                  Math.max(0, contextTokenLimit - derivedPromptTokens),
                   true,
                 ).pipe(
                   Effect.mapError(
@@ -3694,6 +3890,19 @@ const makeTurn = <
                         : inner,
                   ),
                 );
+                const retryView = buildCompactedView(
+                  modelContext.prompt.content,
+                  context.compaction,
+                );
+                const retryEstimate = nextContextEstimate(context, retryView) + derivedPromptTokens;
+                if (retryEstimate > contextTokenLimit) {
+                  return yield* ContextBudgetError.make({
+                    message: `Overflow compaction could not fit the retry inside the ${contextTokenLimit} token context target`,
+                    estimatedTokens: retryEstimate,
+                    targetTokens: contextTokenLimit,
+                    completionReserveTokens: policy.completionReserveTokens,
+                  });
+                }
                 // The retried call is outside the outer catch: a second
                 // classified overflow converts here, typed, no retry.
                 const retried: TurnStream = attempt(compactedOutgoing()).pipe(
@@ -3743,14 +3952,32 @@ const makeTurn = <
               ModelProtocolError.make({ message: "Model response omitted staged Turn completion" }),
             );
           }
-          // Fail-closed (RUN-020): a final-answer Turn requested with
-          // `toolChoice: "none"`, so any declared call — application or
-          // provider-executed — is a protocol violation, never another
-          // rejection round.
-          if (finalAnswerOnly && trace.toolCalls.size > 0) {
+          const completionTool = agent.definition.completion?.tool;
+          const declaresCompletion =
+            completionTool !== undefined &&
+            trace.applicationToolCalls.some((call) => call.name === completionTool);
+          if (declaresCompletion && trace.toolCalls.size !== 1) {
             return failRunEventStream(
               ModelProtocolError.make({
-                message: `Model declared ${trace.toolCalls.size} Tool Call(s) under toolChoice "none" after budget exhaustion`,
+                message: `Completion Tool ${completionTool} must be the only Tool Call in its batch`,
+              }),
+            );
+          }
+          const completionBatch =
+            declaresCompletion &&
+            trace.toolCalls.size === 1 &&
+            trace.applicationToolCalls.length === 1;
+          // Fail-closed (RUN-020): final-answer mode advertises either no
+          // Tool or exactly the Definition-owned completion Tool. Any other
+          // declaration is a protocol violation, never another rejection
+          // round.
+          if (finalAnswerOnly && trace.toolCalls.size > 0 && !completionBatch) {
+            return failRunEventStream(
+              ModelProtocolError.make({
+                message:
+                  completionTool === undefined
+                    ? `Model declared ${trace.toolCalls.size} Tool Call(s) under toolChoice "none" after budget exhaustion`
+                    : `Model declared ${trace.toolCalls.size} non-completion Tool Call(s) after budget exhaustion`,
               }),
             );
           }
@@ -3769,7 +3996,7 @@ const makeTurn = <
           }
           const toolCalls = priorToolCalls + trace.toolCalls.size;
           const overToolBudget = toolCalls + context.programmaticToolCalls > bounds.maxToolCalls;
-          if (overToolBudget && policy.onExhaustion === "fail") {
+          if (overToolBudget && policy.onExhaustion === "fail" && !completionBatch) {
             return failRunEventStream(
               AgentPolicyError.make({
                 limit: "tool-calls",
@@ -3837,16 +4064,9 @@ const makeTurn = <
                       context,
                       trace.usage,
                       trace.toolCalls.size,
+                      turn,
                       options,
                     );
-                    if (options.durability !== undefined) {
-                      yield* options.durability.noteTurnUsage({
-                        turn,
-                        inputTokens: context.lastInputTokens,
-                        outputTokens: context.lastOutputTokens,
-                        costMicrousd: context.lastCostMicrousd,
-                      });
-                    }
                     const pre: Array<RunEvent> = [...consumed.warnings];
                     if (
                       !context.warnedLimits.has("tool-calls") &&
@@ -3908,7 +4128,7 @@ const makeTurn = <
                           );
                         }
                       }
-                      if (trace.applicationToolCalls.length > 0) {
+                      if (trace.applicationToolCalls.length > 0 && !completionBatch) {
                         // RUN-025 joins the RUN-018 synthetic-settlement path:
                         // the token-breaching batch never executes a handler,
                         // and `tokenExhausted` (stamped by `consumeUsage`)
@@ -4037,7 +4257,8 @@ const makeTurn = <
             }
             const turnsBlocked =
               policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
-            if (turnsBlocked) {
+            const completionTurnAllowed = completionBatch;
+            if (turnsBlocked && !completionTurnAllowed) {
               return failRunEventStream(
                 AgentPolicyError.make({
                   limit: "turns",
@@ -4054,7 +4275,7 @@ const makeTurn = <
             // commit shape and recovery replays it like any no-tool Turn. The
             // rejected Turn's usage is still charged via
             // `afterValidatedResponse` because the Run continues.
-            if (overToolBudget && trace.applicationToolCalls.length > 0) {
+            if (overToolBudget && trace.applicationToolCalls.length > 0 && !completionBatch) {
               return afterValidatedResponse(
                 Effect.gen(function* () {
                   const rejection = yield* settleRejectedBatch(
@@ -4246,6 +4467,60 @@ const toolBatchContinuation = <
         ...promptFromTurnParts(trace).content,
         toolMessage,
       ]);
+      const completion = agent.definition.completion;
+      const completionResult =
+        completion !== undefined &&
+        trace.applicationToolCalls.length === 1 &&
+        orderedResults.length === 1 &&
+        orderedResults[0]?.name === completion.tool &&
+        orderedResults[0].isFailure === false
+          ? orderedResults[0]
+          : undefined;
+      if (completion !== undefined && completionResult !== undefined) {
+        const call = trace.applicationCallDescriptors[0];
+        if (call === undefined) {
+          return failRunEventStream(
+            ModelProtocolError.make({
+              message: `Completion Tool ${completion.tool} has no canonical call descriptor`,
+            }),
+          );
+        }
+        const output = yield* projectCompletionOutput(
+          agent,
+          completion,
+          call.parameters,
+          completionResult.encodedResult,
+        );
+        yield* advanceHistory(context, history, options);
+        const bounds = effectiveRunBounds(agent.definition.policy, options);
+        const exhausted = context.tokenExhausted
+          ? "tokens"
+          : turn > bounds.maxTurns
+            ? "turns"
+            : toolCalls + context.programmaticToolCalls > bounds.maxToolCalls
+              ? "tool-calls"
+              : context.exhaustedDimension;
+        if (exhausted !== undefined && context.exhaustedDimension === undefined) {
+          context.exhaustedDimension = exhausted;
+        }
+        const declaration = agent.definition.runDisposition;
+        const runDisposition =
+          exhausted !== undefined || declaration === undefined
+            ? undefined
+            : yield* encodeRunDisposition(agent, output.decoded);
+        return Stream.fromEffect(
+          Effect.map(eventBase(context), (base) =>
+            RunCompleted.make({
+              ...base,
+              output: output.encoded,
+              ...(runDisposition === undefined ? {} : { runDisposition }),
+              turns: turn,
+              finishReason: exhausted === undefined ? "completed" : "budget-exhausted",
+              ...(exhausted === undefined ? {} : { exhausted }),
+            }),
+          ),
+        );
+      }
       yield* advanceHistory(context, history, options);
       const steering = yield* drainInputs(context, options);
       const nextPrompt = yield* appendInputs(context, history, steering, options);
@@ -4389,6 +4664,22 @@ const makeResumeTurn = <
           executionClass: getToolExecutionClass(tool),
         });
       }
+      const completionTool = agent.definition.completion?.tool;
+      if (
+        completionTool !== undefined &&
+        trace.applicationToolCalls.some((call) => call.name === completionTool) &&
+        trace.toolCalls.size !== 1
+      ) {
+        return failRunEventStream(
+          ModelProtocolError.make({
+            message: `Completion Tool ${completionTool} must be the only Tool Call in its batch`,
+          }),
+        );
+      }
+      const completionBatch =
+        completionTool !== undefined &&
+        trace.toolCalls.size === 1 &&
+        trace.applicationToolCalls[0]?.name === completionTool;
       const settledIds = new Set<string>();
       const settledInputs = yield* snapshotResumedSettledCalls(resume, declarationByCallId.size);
       for (const settledInput of settledInputs) {
@@ -4442,7 +4733,7 @@ const makeResumeTurn = <
       const bounds = effectiveRunBounds(policy, options);
       const toolCalls = trace.toolCalls.size;
       const overToolBudget = toolCalls + context.programmaticToolCalls > bounds.maxToolCalls;
-      if (overToolBudget && policy.onExhaustion === "fail") {
+      if (overToolBudget && policy.onExhaustion === "fail" && !completionBatch) {
         return failRunEventStream(
           AgentPolicyError.make({
             limit: "tool-calls",
@@ -4452,7 +4743,8 @@ const makeResumeTurn = <
       }
       const turnsBlocked =
         policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
-      if (turnsBlocked) {
+      const completionTurnAllowed = completionBatch;
+      if (turnsBlocked && !completionTurnAllowed) {
         return failRunEventStream(
           AgentPolicyError.make({
             limit: "turns",
@@ -4534,7 +4826,7 @@ const makeResumeTurn = <
       // results stand verbatim, only open calls get the synthetic failure,
       // and no handler starts. Once the synthetic settlements commit, the
       // pending batch is complete and recovery offers no further resume.
-      if (overToolBudget) {
+      if (overToolBudget && !completionBatch) {
         const rejection = yield* settleRejectedBatch(
           context,
           turnId,
@@ -4700,8 +4992,7 @@ const stream = <
       };
       // Restored totals can already breach the token budget (runtime spec §9):
       // the resumed Attempt must never issue an unconstrained external call.
-      // "fail" rejects before any model call or resumed handler runs;
-      // "final-answer" starts already constrained via the one-shot flag.
+      // "fail" rejects before any model call or resumed handler runs.
       if (resumeUsage !== undefined) {
         // Cost is an unconditional hard rail with no grace call in either
         // exhaustion mode (runtime spec §3): a resume whose seeded spend

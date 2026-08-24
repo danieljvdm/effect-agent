@@ -1,15 +1,21 @@
+import type { ModelCallUsage } from "@effect-agent/core";
 import {
   AgentApprovalPending,
   AgentInputError,
   ConversationId,
   DelegationDepth,
   IdGenerator,
+  InputTokenUsage,
+  ModelUsageGroup,
   isDelegationToolName,
   PolicyLimit,
   ReceiptId,
+  RunUsageSummary,
   SubagentParentLink,
   SubmissionId,
+  summarizeModelUsage,
   ToolCallId,
+  OutputTokenUsage,
   type Agent,
   type AgentId,
   type AttemptId,
@@ -30,6 +36,7 @@ import {
   type ChildEstablishStatus,
   type RunApprovalHook,
   type RunContextHook,
+  type RunCostEstimator,
   type RunDurabilityHook,
   type RunInputCommand,
   type RunInputHook,
@@ -222,6 +229,7 @@ import {
   modelResponseInterruptedRecordId,
   modelResponseRecordId,
   projectRunJournal,
+  runCompletedRecordId,
   runIdForSubmission,
   subagentJoinBatchId,
   subagentJoinedRecordId,
@@ -608,6 +616,8 @@ export interface DurableRuntimeConfigOptions {
   readonly leaseRenewalInterval?: Duration.Duration | undefined;
   /** Active-Run abort-intent poll cadence (default 500ms). */
   readonly abortPollInterval?: Duration.Duration | undefined;
+  /** Deployment-owned model pricing authority, captured for every recoverable Run. */
+  readonly estimateCostMicrousd?: RunCostEstimator | undefined;
 }
 
 /** Deployment-scoped identity and liveness cadences for the durable coordinator. */
@@ -619,6 +629,7 @@ export class DurableRuntimeConfig extends Context.Service<
     readonly settlementPollInterval: Duration.Duration;
     readonly leaseRenewalInterval: Duration.Duration;
     readonly abortPollInterval: Duration.Duration;
+    readonly estimateCostMicrousd?: RunCostEstimator | undefined;
   }
 >()("@effect-agent/session/DurableRuntimeConfig") {
   static make(options: DurableRuntimeConfigOptions): (typeof DurableRuntimeConfig)["Service"] {
@@ -628,6 +639,9 @@ export class DurableRuntimeConfig extends Context.Service<
       settlementPollInterval: options.settlementPollInterval ?? Duration.millis(500),
       leaseRenewalInterval: options.leaseRenewalInterval ?? Duration.seconds(10),
       abortPollInterval: options.abortPollInterval ?? Duration.millis(500),
+      ...(options.estimateCostMicrousd === undefined
+        ? {}
+        : { estimateCostMicrousd: options.estimateCostMicrousd }),
     };
   }
 
@@ -647,14 +661,16 @@ type AttemptOutcome =
       readonly finishReason?: "budget-exhausted";
       /** The dimension that bound; set exactly alongside `finishReason` (RUN-011). */
       readonly exhausted?: ExhaustedLimit;
+      readonly usageSummary?: RunUsageSummary;
     }
   | {
       readonly _tag: "failed";
       readonly result: SettlementFailureDiagnostic;
       /** The typed limit of an `AgentPolicyError` failure; absent otherwise (RUN-011). */
       readonly policyLimit?: PolicyLimit;
+      readonly usageSummary?: RunUsageSummary;
     }
-  | { readonly _tag: "aborted" };
+  | { readonly _tag: "aborted"; readonly usageSummary?: RunUsageSummary };
 
 /**
  * What one `runModel` pass produced: a terminal `AttemptOutcome` for terminalization, a
@@ -895,14 +911,19 @@ const make = Effect.gen(function* () {
       payload.submissionId !== settlement.submissionId ||
       payload.settlementId !== settlement.settlementId ||
       payload.receiptId !== settlement.receiptId ||
-      payload.outcome !== settlement.outcome ||
-      settlement.outcome !== "completed" ||
-      payload.runDisposition === undefined
+      payload.outcome !== settlement.outcome
     ) {
       return Settlement.make(common);
     }
-    return Settlement.make({
+    const canonical = {
       ...common,
+      ...(payload.usageSummary === undefined ? {} : { usageSummary: payload.usageSummary }),
+    };
+    if (settlement.outcome !== "completed" || payload.runDisposition === undefined) {
+      return Settlement.make(canonical);
+    }
+    return Settlement.make({
+      ...canonical,
       runDisposition: payload.runDisposition,
     });
   };
@@ -2108,6 +2129,7 @@ const make = Effect.gen(function* () {
         ...(outcome._tag === "failed" && outcome.policyLimit !== undefined
           ? { policyLimit: outcome.policyLimit }
           : {}),
+        ...(outcome.usageSummary === undefined ? {} : { usageSummary: outcome.usageSummary }),
       }),
     ).pipe(Effect.orDie);
     const record = yield* makeEnvelope(submissionSettlementRecordId(submissionId), payload);
@@ -3096,8 +3118,126 @@ const make = Effect.gen(function* () {
           readonly inputTokens: number;
           readonly outputTokens: number;
           readonly costMicrousd: number;
+          readonly modelUsage: ReadonlyArray<ModelCallUsage>;
         }
       >();
+      const currentUsageSummary = (): RunUsageSummary => {
+        const stagedCalls = [...stagedUsage.values()].flatMap((usage) => usage.modelUsage);
+        const detailedCalls = [...journal.usage.modelUsage, ...stagedCalls];
+        const detailed = summarizeModelUsage(detailedCalls);
+        const inputTokens =
+          journal.usage.inputTokens +
+          [...stagedUsage.values()].reduce((total, usage) => total + usage.inputTokens, 0);
+        const outputTokens =
+          journal.usage.outputTokens +
+          [...stagedUsage.values()].reduce((total, usage) => total + usage.outputTokens, 0);
+        const costMicrousd =
+          journal.usage.costMicrousd +
+          [...stagedUsage.values()].reduce((total, usage) => total + usage.costMicrousd, 0);
+        const modelCalls = journal.usage.modelCalls + stagedCalls.length;
+        const legacyCalls = modelCalls - detailed.modelCalls;
+        const legacyInput = inputTokens - detailed.inputTokens.total;
+        const legacyOutput = outputTokens - detailed.outputTokens.total;
+        const legacyCost = costMicrousd - detailed.costMicrousd;
+        const legacyGroup =
+          legacyCalls <= 0
+            ? []
+            : [
+                ModelUsageGroup.make({
+                  provider: "unknown",
+                  model: "legacy-record",
+                  modelCalls: legacyCalls,
+                  inputTokens: InputTokenUsage.make({
+                    total: Math.max(0, legacyInput),
+                    uncached: Math.max(0, legacyInput),
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                  }),
+                  outputTokens: OutputTokenUsage.make({
+                    total: Math.max(0, legacyOutput),
+                    text: Math.max(0, legacyOutput),
+                    reasoning: 0,
+                  }),
+                  costMicrousd: Math.max(0, legacyCost),
+                }),
+              ];
+        return RunUsageSummary.make({
+          modelCalls,
+          inputTokens: InputTokenUsage.make({
+            total: inputTokens,
+            // Legacy aggregate inputs are conservatively classified as uncached.
+            uncached: detailed.inputTokens.uncached + Math.max(0, legacyInput),
+            cacheRead: detailed.inputTokens.cacheRead,
+            cacheWrite: detailed.inputTokens.cacheWrite,
+          }),
+          outputTokens: OutputTokenUsage.make({
+            total: outputTokens,
+            text: detailed.outputTokens.text + Math.max(0, legacyOutput),
+            reasoning: detailed.outputTokens.reasoning,
+          }),
+          costMicrousd,
+          byModel: [...detailed.byModel, ...legacyGroup],
+        });
+      };
+      const recordedCompletion = records.find(
+        (envelope) => envelope.record.recordId === runCompletedRecordId(runId),
+      )?.record.payload;
+      if (recordedCompletion !== undefined) {
+        if (recordedCompletion._tag !== "RunCompleted" || recordedCompletion.runId !== runId) {
+          return yield* RunJournalError.make({
+            message: `Run ${runId} has an invalid terminal completion marker`,
+          });
+        }
+        const completion = agent.definition.completion;
+        const response = [...records]
+          .reverse()
+          .find(
+            (envelope) =>
+              envelope.record.payload._tag === "ModelResponseRecorded" &&
+              envelope.record.payload.runId === runId,
+          )?.record.payload;
+        if (completion === undefined || response?._tag !== "ModelResponseRecorded") {
+          return yield* RunJournalError.make({
+            message: `Run ${runId} has a terminal completion marker without a completion declaration and response`,
+          });
+        }
+        const calls = yield* declaredApplicationCalls(response.messages);
+        const call = calls[0];
+        const settled =
+          call === undefined
+            ? undefined
+            : records.find(
+                (envelope) =>
+                  envelope.record.payload._tag === "ToolCallSettled" &&
+                  envelope.record.payload.runId === runId &&
+                  envelope.record.payload.toolCallId === call.id,
+              )?.record.payload;
+        if (
+          calls.length !== 1 ||
+          call?.name !== completion.tool ||
+          settled?._tag !== "ToolCallSettled" ||
+          settled.toolName !== completion.tool ||
+          settled.isFailure
+        ) {
+          return yield* RunJournalError.make({
+            message: `Run ${runId} has a terminal completion marker without one successful declared completion Tool result`,
+          });
+        }
+        return {
+          _tag: "completed" as const,
+          result: recordedCompletion.output,
+          ...(recordedCompletion.runDisposition === undefined
+            ? {}
+            : { runDisposition: recordedCompletion.runDisposition }),
+          ...(recordedCompletion.finishReason === undefined
+            ? {}
+            : { finishReason: recordedCompletion.finishReason }),
+          ...(recordedCompletion.exhausted === undefined
+            ? {}
+            : { exhausted: recordedCompletion.exhausted }),
+          usageSummary: currentUsageSummary(),
+        };
+      }
       // RUN-026: durable compaction covers only records of PRIOR Runs — never
       // the appending Run's own records — so the owner's instruction/input
       // messages survive every projection and the resume-splice arithmetic
@@ -3335,6 +3475,9 @@ const make = Effect.gen(function* () {
                   producerId: config.producerId,
                   deploymentId: config.deploymentId,
                   createdAt,
+                  ...(canonicalTurn === 1 && pendingSlice.length > 0
+                    ? { runScopedPrefixLength: pendingSlice.length }
+                    : {}),
                   usage: stagedUsage.get(canonicalTurn),
                 }),
               );
@@ -3452,9 +3595,10 @@ const make = Effect.gen(function* () {
             const key = turnOffset + usage.turn;
             const prior = stagedUsage.get(key);
             stagedUsage.set(key, {
-              inputTokens: (prior?.inputTokens ?? 0) + usage.inputTokens,
-              outputTokens: (prior?.outputTokens ?? 0) + usage.outputTokens,
-              costMicrousd: (prior?.costMicrousd ?? 0) + usage.costMicrousd,
+              inputTokens: (prior?.inputTokens ?? 0) + usage.usage.inputTokens.total,
+              outputTokens: (prior?.outputTokens ?? 0) + usage.usage.outputTokens.total,
+              costMicrousd: (prior?.costMicrousd ?? 0) + usage.usage.costMicrousd,
+              modelUsage: [...(prior?.modelUsage ?? []), usage.usage],
             });
           }),
         commitCompaction: (commit) =>
@@ -4256,6 +4400,9 @@ const make = Effect.gen(function* () {
               },
             }),
         ...(preparedContext === undefined ? {} : { context: preparedContext }),
+        ...(config.estimateCostMicrousd === undefined
+          ? {}
+          : { estimateCostMicrousd: config.estimateCostMicrousd }),
         ...(journal.committedTurns === 0 ? {} : { resumeUsage: journal.usage }),
       };
 
@@ -4284,6 +4431,7 @@ const make = Effect.gen(function* () {
           // Already-canonical per-call settles (late settles from the resolution path, or
           // resume-injected results) are excluded by record identity.
           const remaining: Array<Prompt.Message> = [];
+          const resultParts: Array<Prompt.ToolResultPart> = [];
           let toolParts = 0;
           for (const message of appended) {
             if (message.role !== "tool") {
@@ -4297,9 +4445,31 @@ const make = Effect.gen(function* () {
             );
             if (parts.length === 0) continue;
             toolParts += parts.length;
+            resultParts.push(...parts);
             remaining.push(Prompt.makeMessage("tool", { content: parts }));
           }
           if (toolParts > 0) {
+            const completion = agent.definition.completion;
+            const completionPart = resultParts[0];
+            const runCompletion =
+              completion !== undefined &&
+              resultParts.length === 1 &&
+              completionPart?.name === completion.tool &&
+              completionPart.isFailure !== true &&
+              state.completedOutput !== undefined
+                ? {
+                    output: state.completedOutput,
+                    ...(state.completedRunDisposition === undefined
+                      ? {}
+                      : { runDisposition: state.completedRunDisposition }),
+                    ...(state.completedFinishReason === undefined
+                      ? {}
+                      : { finishReason: state.completedFinishReason }),
+                    ...(state.completedExhausted === undefined
+                      ? {}
+                      : { exhausted: state.completedExhausted }),
+                  }
+                : undefined;
             const batch = yield* turnResultsBatch({
               runId,
               turn: canonicalTurn,
@@ -4308,6 +4478,7 @@ const make = Effect.gen(function* () {
               producerId: config.producerId,
               deploymentId: config.deploymentId,
               createdAt,
+              ...(runCompletion === undefined ? {} : { runCompletion }),
             });
             yield* appendBatch(ctx, batch);
             for (const record of batch.records) knownIds.add(record.recordId);
@@ -4315,6 +4486,10 @@ const make = Effect.gen(function* () {
           }
         } else {
           // No durable response commit: the P4 single-batch shape (no-tool Turns).
+          const runScopedPrefixLength =
+            canonicalTurn === 1
+              ? appended.findIndex((message) => message.role === "assistant")
+              : -1;
           const batch = yield* withCrypto(
             turnCanonicalBatch({
               runId,
@@ -4324,6 +4499,7 @@ const make = Effect.gen(function* () {
               producerId: config.producerId,
               deploymentId: config.deploymentId,
               createdAt,
+              ...(runScopedPrefixLength > 0 ? { runScopedPrefixLength } : {}),
               usage: stagedUsage.get(canonicalTurn),
             }),
           );
@@ -4398,15 +4574,16 @@ const make = Effect.gen(function* () {
             }));
           }
           case "RunCompleted": {
-            return commitPendingTurn.pipe(
-              Effect.andThen(
-                recordCompleted(
-                  event.output,
-                  event.finishReason,
-                  event.exhausted,
-                  event.runDisposition,
-                ),
-              ),
+            return recordCompleted(
+              event.output,
+              event.finishReason,
+              event.exhausted,
+              event.runDisposition,
+            ).pipe(
+              // The terminal state is available while the result batch is
+              // built, so its RunCompleted marker commits atomically with the
+              // successful completion Tool result.
+              Effect.andThen(commitPendingTurn),
             );
           }
           case "RunFailed": {
@@ -4623,8 +4800,16 @@ const make = Effect.gen(function* () {
 
       if (result._tag === "suspendedRun") return approvalSuspension(result.toolCallId);
       if (result._tag === "suspendedChildRun") return childSuspension(result.children);
-      if (result._tag === "aborted") return abortedRunPhase;
-      if (result._tag === "failedRun") return result.outcome;
+      if (result._tag === "aborted") {
+        return abortedRunPhase(yield* currentUsageSummary());
+      }
+      if (result._tag === "failedRun") {
+        const failed: RunPhaseOutcome = {
+          ...result.outcome,
+          usageSummary: yield* currentUsageSummary(),
+        };
+        return failed;
+      }
       const state = yield* Ref.get(stateRef);
       if (state.completedOutput === undefined) {
         return yield* LedgerError.make({
@@ -4644,6 +4829,7 @@ const make = Effect.gen(function* () {
         ...(state.completedFinishReason === undefined || state.completedExhausted === undefined
           ? {}
           : { exhausted: state.completedExhausted }),
+        usageSummary: yield* currentUsageSummary(),
       };
       return completed;
     });

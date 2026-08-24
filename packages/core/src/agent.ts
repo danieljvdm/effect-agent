@@ -30,6 +30,30 @@ export interface RunDispositionDeclaration<Output, DispositionSchema extends Sch
   readonly fromOutput: (output: Output) => unknown;
 }
 
+/** Values available to a Definition-owned completion Tool projector after canonical decoding. */
+export interface CompletionProjectionInput<Parameters = unknown, Result = unknown> {
+  readonly parameters: Parameters;
+  readonly result: Result;
+}
+
+/** One application Tool whose successful canonical result can complete its owning Agent. */
+export interface CompletionToolDeclaration<
+  Parameters = unknown,
+  Result = unknown,
+  Output = unknown,
+> {
+  readonly tool: string;
+  readonly project: (input: CompletionProjectionInput<Parameters, Result>) => Output;
+}
+
+type CompletionToolFor<ToolkitValue extends Toolkit.Any, Output> = {
+  readonly [Name in keyof ToolkitValue["tools"] & string]: CompletionToolDeclaration<
+    Tool.Parameters<ToolkitValue["tools"][Name]>,
+    Tool.Success<ToolkitValue["tools"][Name]>,
+    Output
+  > & { readonly tool: Name };
+}[keyof ToolkitValue["tools"] & string];
+
 /** Immutable, model-agnostic schemas, behavior, tools, and bounds for an agent. */
 export interface Definition<
   InputSchema extends Schema.Top,
@@ -50,6 +74,8 @@ export interface Definition<
   readonly toolkit: ToolkitValue;
   /** Finite execution bounds enforced by the runtime. */
   readonly policy: AgentPolicy;
+  /** Optional successful Tool result that projects directly to the Agent output and settles. */
+  readonly completion?: CompletionToolDeclaration | undefined;
   readonly runDisposition?: RunDispositionValue | undefined;
   readonly description?: string | undefined;
   readonly metadata?: Readonly<Record<string, string>> | undefined;
@@ -70,6 +96,7 @@ export interface DefinitionOptions<
   readonly instructions: Instructions;
   readonly toolkit: ToolkitValue;
   readonly policy: AgentPolicy;
+  readonly completion?: CompletionToolFor<ToolkitValue, OutputSchema["Type"]> | undefined;
   readonly runDisposition?: RunDispositionValue | undefined;
   readonly description?: string | undefined;
   readonly metadata?: Readonly<Record<string, string>> | undefined;
@@ -181,6 +208,7 @@ export namespace Agent {
     | DefinitionValue["input"]["DecodingServices"]
     | DefinitionValue["input"]["EncodingServices"]
     | DefinitionValue["output"]["DecodingServices"]
+    | DefinitionValue["output"]["EncodingServices"]
     | RunDispositionSchemaOf<DefinitionValue>["DecodingServices"]
     | RunDispositionSchemaOf<DefinitionValue>["EncodingServices"];
 
@@ -240,6 +268,7 @@ export namespace Agent {
       readonly instructions: unknown;
       readonly toolkit: Toolkit.Any;
       readonly policy: AgentPolicy;
+      readonly completion?: CompletionToolDeclaration | undefined;
       readonly runDisposition?: RunDispositionDeclaration<never, Schema.Top> | undefined;
       readonly description?: string | undefined;
       readonly metadata?: Readonly<Record<string, string>> | undefined;
@@ -249,6 +278,8 @@ export namespace Agent {
       ...options,
       id: S.decodeSync(AgentId)(id),
       metadata: options.metadata === undefined ? undefined : Object.freeze({ ...options.metadata }),
+      completion:
+        options.completion === undefined ? undefined : Object.freeze({ ...options.completion }),
       runDisposition:
         options.runDisposition === undefined
           ? undefined

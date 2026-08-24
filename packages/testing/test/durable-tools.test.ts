@@ -39,6 +39,7 @@ import {
   runIdForSubmission,
   toolCallPreparedRecordId,
   toolStepSettledRecordId,
+  type CanonicalRecordEnvelope,
   type DurableRuntimeFailpointLocation,
   type DurableSubmitOptions,
   type PreparedToolCallEvidence,
@@ -488,11 +489,10 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(prepared.toolName).toBe("book");
       }
 
-      // The canonical journal alone still rebuilds the exact model-visible prompt.
+      // The canonical journal rebuilds the next-Run prompt without replaying the prior Run's
+      // instruction and wake prefix.
       const prompt = yield* promptFromCanonicalRecords(records);
       expect(prompt.content.map((message) => message.role)).toEqual([
-        "system",
-        "user",
         "assistant",
         "tool",
         "assistant",
@@ -1082,11 +1082,10 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         ).toHaveLength(2);
 
         // The audit tags stay prompt-transparent: the journal replays one contiguous tool
-        // message for the Turn regardless of the late per-call settles.
+        // message for the Turn regardless of the late per-call settles, while omitting the
+        // prior Run's instruction and wake prefix.
         const prompt = yield* promptFromCanonicalRecords(records);
         expect(prompt.content.map((message) => message.role)).toEqual([
-          "system",
-          "user",
           "assistant",
           "tool",
           "assistant",
@@ -1455,8 +1454,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       ).toHaveLength(1);
       const prompt = yield* promptFromCanonicalRecords(records);
       expect(prompt.content.map((message) => message.role)).toEqual([
-        "system",
-        "user",
         "assistant",
         "tool",
         "assistant",

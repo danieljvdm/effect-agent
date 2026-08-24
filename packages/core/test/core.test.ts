@@ -81,6 +81,7 @@ describe("core schemas", () => {
     expect(policy.maxDuration).toEqual(Duration.seconds(30));
     expect(policy.repeatedFailureLimit).toBe(3);
     expect(policy.tokenBudget).toBe(1_000);
+    expect(policy.completionReserveTokens).toBe(200);
     expect(policy.costBudgetMicrousd).toBe(10_000);
     expect(() =>
       AgentPolicy.make({
@@ -439,6 +440,7 @@ describe("context-economics policy", () => {
     expect(policy.compaction.keepRecentTokens).toBe(20_000);
     expect(policy.compaction.mode).toBe("prune-then-summarize");
     expect(policy.contextTokenLimit).toBeUndefined();
+    expect(policy.completionReserveTokens).toBe(4_096);
 
     const custom = AgentPolicy.make({
       maxTurns: 2,
@@ -473,6 +475,16 @@ describe("context-economics policy", () => {
     expect(() => ToolResultBounds.make({ maxBytes: 0 })).toThrow();
     expect(() => CompactionPolicy.make({ keepRecentTokens: 0 })).toThrow();
     expect(() => CompactionPolicy.make({ keepRecentTokens: 2.5 })).toThrow();
+    expect(() =>
+      AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 1,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+        tokenBudget: 100,
+        completionReserveTokens: 101,
+      }),
+    ).toThrow();
   });
 });
 

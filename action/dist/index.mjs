@@ -30073,6 +30073,7 @@ var Agent;
       ...options,
       id: exports_Schema.decodeSync(AgentId)(id2),
       metadata: options.metadata === undefined ? undefined : Object.freeze({ ...options.metadata }),
+      completion: options.completion === undefined ? undefined : Object.freeze({ ...options.completion }),
       runDisposition: options.runDisposition === undefined ? undefined : Object.freeze({ ...options.runDisposition })
     });
   }
@@ -30163,6 +30164,14 @@ class ContextOverflowError extends exports_Schema.TaggedError()("ContextOverflow
   retried: exports_Schema.Boolean
 }) {
 }
+
+class ContextBudgetError extends exports_Schema.TaggedError()("ContextBudgetError", {
+  message: exports_Schema.String,
+  estimatedTokens: exports_Schema.Natural,
+  targetTokens: exports_Schema.Natural,
+  completionReserveTokens: exports_Schema.Natural
+}) {
+}
 var AgentError = exports_Schema.Union([
   AgentInputError,
   AgentOutputError,
@@ -30173,7 +30182,8 @@ var AgentError = exports_Schema.Union([
   AgentApprovalPending,
   ModelProtocolError,
   AgentInterrupted,
-  ContextOverflowError
+  ContextOverflowError,
+  ContextBudgetError
 ]);
 // packages/core/src/subagent.ts
 var DelegationDepth = exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(1));
@@ -30570,6 +30580,7 @@ var AgentPolicyFields = exports_Schema.Struct({
   repeatedFailureLimit: NonNegativeInt,
   onExhaustion: OnExhaustion,
   tokenBudget: exports_Schema.optionalKey(PositiveInt),
+  completionReserveTokens: NonNegativeInt,
   costBudgetMicrousd: exports_Schema.optionalKey(NonNegativeInt),
   contextTokenLimit: exports_Schema.optionalKey(PositiveInt),
   toolResultBounds: ToolResultBounds,
@@ -30579,6 +30590,10 @@ var AgentPolicyFields = exports_Schema.Struct({
 
 class AgentPolicy extends exports_Schema.Class("AgentPolicy")(AgentPolicyFields) {
   static make(input) {
+    const completionReserveTokens = input.completionReserveTokens ?? (input.tokenBudget === undefined ? 4096 : Math.min(4096, Math.floor(input.tokenBudget / 5)));
+    if (input.tokenBudget !== undefined && completionReserveTokens > input.tokenBudget) {
+      throw new Error("completionReserveTokens cannot exceed tokenBudget");
+    }
     return super.make({
       ...input,
       maxDuration: exports_Duration.fromInputUnsafe(input.maxDuration),
@@ -30586,6 +30601,7 @@ class AgentPolicy extends exports_Schema.Class("AgentPolicy")(AgentPolicyFields)
       onExhaustion: input.onExhaustion ?? "final-answer",
       toolResultBounds: input.toolResultBounds ?? ToolResultBounds.make({ maxBytes: 50 * 1024 }),
       runStatus: input.runStatus ?? "appended",
+      completionReserveTokens,
       compaction: input.compaction ?? CompactionPolicy.make()
     });
   }
@@ -33071,12 +33087,48 @@ var applySpanTransformer = (transformer, response, options) => {
     });
   }
 };
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Model.js
+var exports_Model = {};
+__export(exports_Model, {
+  make: () => make53,
+  ProviderName: () => ProviderName,
+  ModelName: () => ModelName
+});
+var TypeId49 = "~effect/ai/Model";
+
+class ProviderName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ProviderName")) {
+}
+
+class ModelName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ModelName")) {
+}
+var Proto11 = {
+  [TypeId49]: TypeId49,
+  ["~effect/Layer"]: {
+    _ROut: identity,
+    _E: identity,
+    _RIn: identity
+  },
+  get captureRequirements() {
+    const self = this;
+    return contextWith2((context3) => succeed6(provide2(self, succeedContext(context3))));
+  },
+  ...PipeInspectableProto,
+  toJSON() {
+    return {
+      _id: "effect/ai/Model",
+      provider: this.provider
+    };
+  }
+};
+var make53 = (provider, modelName, layer16) => Object.assign(Object.create(Proto11), {
+  provider
+}, merge3(layer16, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Tool.js
 var exports_Tool = {};
 __export(exports_Tool, {
   unsafeSecureJsonParse: () => unsafeSecureJsonParse,
   providerDefined: () => providerDefined,
-  make: () => make53,
+  make: () => make54,
   isUserDefined: () => isUserDefined,
   isProviderDefined: () => isProviderDefined,
   isEmptyParamsRecord: () => isEmptyParamsRecord,
@@ -33086,7 +33138,7 @@ __export(exports_Tool, {
   getJsonSchema: () => getJsonSchema,
   getDescription: () => getDescription,
   dynamic: () => dynamic,
-  TypeId: () => TypeId49,
+  TypeId: () => TypeId50,
   Title: () => Title,
   Strict: () => Strict,
   Readonly: () => Readonly,
@@ -33099,15 +33151,15 @@ __export(exports_Tool, {
   DynamicTypeId: () => DynamicTypeId,
   Destructive: () => Destructive
 });
-var TypeId49 = "~effect/ai/Tool";
+var TypeId50 = "~effect/ai/Tool";
 var ProviderDefinedTypeId = "~effect/ai/Tool/ProviderDefined";
 var DynamicTypeId = "~effect/ai/Tool/Dynamic";
-var isUserDefined = (u) => hasProperty(u, TypeId49) && !isProviderDefined(u) && !isDynamic(u);
+var isUserDefined = (u) => hasProperty(u, TypeId50) && !isProviderDefined(u) && !isDynamic(u);
 var isProviderDefined = (u) => hasProperty(u, ProviderDefinedTypeId);
 var isDynamic = (u) => hasProperty(u, DynamicTypeId);
 var clone2 = (self, overrides) => Object.assign(Object.create(Object.getPrototypeOf(self)), self, overrides);
-var Proto11 = {
-  [TypeId49]: {
+var Proto12 = {
+  [TypeId50]: {
     _Requirements: identity
   },
   pipe() {
@@ -33148,15 +33200,15 @@ var Proto11 = {
   }
 };
 var ProviderDefinedProto = {
-  ...Proto11,
+  ...Proto12,
   [ProviderDefinedTypeId]: ProviderDefinedTypeId
 };
 var DynamicProto = {
-  ...Proto11,
+  ...Proto12,
   [DynamicTypeId]: DynamicTypeId
 };
 var userDefinedProto = (options) => {
-  const self = Object.assign(Object.create(Proto11), options);
+  const self = Object.assign(Object.create(Proto12), options);
   self.id = `effect/ai/Tool/${options.name}`;
   return self;
 };
@@ -33169,7 +33221,7 @@ var dynamicProto = (options) => {
   self.id = `effect/ai/Tool/${options.name}`;
   return self;
 };
-var make53 = (name, options) => {
+var make54 = (name, options) => {
   const successSchema = options?.success ?? Void2;
   const failureSchema = options?.failure ?? Never2;
   return userDefinedProto({
@@ -33350,6 +33402,55 @@ class IdGenerator2 extends exports_Context.Service()("@effect-agent/core/IdGener
     nextRunId: exports_IdGenerator.defaultIdGenerator.generateId().pipe(exports_Effect.map((id2) => exports_Schema.decodeSync(RunId)(`run-${id2}`))),
     nextTurnId: exports_IdGenerator.defaultIdGenerator.generateId().pipe(exports_Effect.map((id2) => exports_Schema.decodeSync(TurnId)(`turn-${id2}`)))
   });
+}
+// packages/core/src/usage.ts
+var UsageIdentity = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
+
+class InputTokenUsage extends exports_Schema.Class("@effect-agent/core/InputTokenUsage")({
+  total: exports_Schema.Natural,
+  uncached: exports_Schema.Natural,
+  cacheRead: exports_Schema.Natural,
+  cacheWrite: exports_Schema.Natural
+}) {
+}
+
+class OutputTokenUsage extends exports_Schema.Class("@effect-agent/core/OutputTokenUsage")({
+  total: exports_Schema.Natural,
+  text: exports_Schema.Natural,
+  reasoning: exports_Schema.Natural
+}) {
+}
+
+class ModelCallUsage extends exports_Schema.Class("@effect-agent/core/ModelCallUsage")({
+  provider: UsageIdentity,
+  model: UsageIdentity,
+  serviceTier: exports_Schema.optionalKey(UsageIdentity),
+  pricingVersion: exports_Schema.optionalKey(UsageIdentity),
+  inputTokens: InputTokenUsage,
+  outputTokens: OutputTokenUsage,
+  costMicrousd: exports_Schema.Natural
+}) {
+}
+
+class ModelUsageGroup extends exports_Schema.Class("@effect-agent/core/ModelUsageGroup")({
+  provider: UsageIdentity,
+  model: UsageIdentity,
+  serviceTier: exports_Schema.optionalKey(UsageIdentity),
+  pricingVersion: exports_Schema.optionalKey(UsageIdentity),
+  modelCalls: exports_Schema.Natural,
+  inputTokens: InputTokenUsage,
+  outputTokens: OutputTokenUsage,
+  costMicrousd: exports_Schema.Natural
+}) {
+}
+
+class RunUsageSummary extends exports_Schema.Class("@effect-agent/core/RunUsageSummary")({
+  modelCalls: exports_Schema.Natural,
+  inputTokens: InputTokenUsage,
+  outputTokens: OutputTokenUsage,
+  costMicrousd: exports_Schema.Natural,
+  byModel: exports_Schema.Array(ModelUsageGroup)
+}) {
 }
 // packages/capabilities/src/redaction.ts
 var MAX_REDACTED_PREVIEW_BYTES = 8 * 1024;
@@ -35087,7 +35188,7 @@ var RunResumeUsageSchema = exports_Schema.Struct({
   lastInputTokens: exports_Schema.Natural,
   lastOutputTokens: exports_Schema.Natural,
   costMicrousd: exports_Schema.Natural
-}).check(exports_Schema.makeFilter((usage) => usage.lastInputTokens <= usage.inputTokens && usage.lastOutputTokens <= usage.outputTokens, {
+}).check(exports_Schema.makeFilter((usage2) => usage2.lastInputTokens <= usage2.inputTokens && usage2.lastOutputTokens <= usage2.outputTokens, {
   expected: "last-call token usage no greater than cumulative token usage"
 }));
 // packages/engine/src/run-events.ts
@@ -35189,31 +35290,31 @@ var schemaClassToolPartPreflight = (part, toolkit) => {
     return;
   }
 };
-var inspectModelResponsePartCapacity = (usage, part, limits, knownSafePrototypes = knownSafeModelResponsePrototypes) => exports_Effect.suspend(() => {
-  if (usage.responsePartCount >= limits.maxModelResponseParts) {
+var inspectModelResponsePartCapacity = (usage2, part, limits, knownSafePrototypes = knownSafeModelResponsePrototypes) => exports_Effect.suspend(() => {
+  if (usage2.responsePartCount >= limits.maxModelResponseParts) {
     return exports_Effect.fail(ModelProtocolError.make({
       message: `Model response exceeded the ${limits.maxModelResponseParts}-part response limit`
     }));
   }
-  const bytes = boundedValueFootprint(part, limits.maxModelResponseBytes - usage.responsePartBytes, knownSafePrototypes);
+  const bytes = boundedValueFootprint(part, limits.maxModelResponseBytes - usage2.responsePartBytes, knownSafePrototypes);
   return bytes === undefined ? exports_Effect.fail(ModelProtocolError.make({
     message: `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`
   })) : exports_Effect.succeed(bytes);
 });
-var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart")(function* (part, toolkit, usage, limits) {
-  const directInputBytes = boundedValueFootprint(part, limits.maxModelResponseBytes - usage.responsePartBytes, knownSafeModelResponsePrototypes);
+var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart")(function* (part, toolkit, usage2, limits) {
+  const directInputBytes = boundedValueFootprint(part, limits.maxModelResponseBytes - usage2.responsePartBytes, knownSafeModelResponsePrototypes);
   if (directInputBytes === undefined) {
     const preflight = schemaClassToolPartPreflight(part, toolkit);
-    yield* inspectModelResponsePartCapacity(usage, preflight ?? part, limits);
+    yield* inspectModelResponsePartCapacity(usage2, preflight ?? part, limits);
   } else {
-    yield* inspectModelResponsePartCapacity(usage, part, limits);
+    yield* inspectModelResponsePartCapacity(usage2, part, limits);
   }
   const codec = exports_Schema.toCodecJson(exports_Response.StreamPart(toolkit));
   const encodingFailure = ModelProtocolError.make({
     message: "Model response part failed canonical encoding"
   });
   const encoded = yield* exports_Schema.encodeUnknownEffect(codec)(part).pipe(exports_Effect.mapError(() => encodingFailure));
-  const retainedBytes = yield* inspectModelResponsePartCapacity(usage, encoded, limits);
+  const retainedBytes = yield* inspectModelResponsePartCapacity(usage2, encoded, limits);
   const ownedEncoded = yield* exports_Effect.try({
     try: () => {
       if (typeof structuredCloneFunction !== "function") {
@@ -35232,15 +35333,15 @@ var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart"
   const ownedPart = yield* exports_Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(exports_Effect.mapError(() => decodingFailure));
   return { ownedPart, retainedBytes };
 });
-var consumeModelResponsePart = (usage, retainedBytes, limits) => exports_Effect.suspend(() => {
-  if (usage.responsePartCount >= limits.maxModelResponseParts || !Number.isSafeInteger(retainedBytes) || retainedBytes < 0 || retainedBytes > limits.maxModelResponseBytes - usage.responsePartBytes) {
+var consumeModelResponsePart = (usage2, retainedBytes, limits) => exports_Effect.suspend(() => {
+  if (usage2.responsePartCount >= limits.maxModelResponseParts || !Number.isSafeInteger(retainedBytes) || retainedBytes < 0 || retainedBytes > limits.maxModelResponseBytes - usage2.responsePartBytes) {
     return exports_Effect.fail(ModelProtocolError.make({
-      message: usage.responsePartCount >= limits.maxModelResponseParts ? `Model response exceeded the ${limits.maxModelResponseParts}-part response limit` : `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`
+      message: usage2.responsePartCount >= limits.maxModelResponseParts ? `Model response exceeded the ${limits.maxModelResponseParts}-part response limit` : `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`
     }));
   }
   return exports_Effect.sync(() => {
-    usage.responsePartCount += 1;
-    usage.responsePartBytes += retainedBytes;
+    usage2.responsePartCount += 1;
+    usage2.responsePartBytes += retainedBytes;
   });
 });
 var withSemaphorePermit = (semaphore, stream) => exports_Stream.scoped(exports_Stream.fromEffect(exports_Effect.acquireRelease(semaphore.take(1), (permits) => semaphore.release(permits).pipe(exports_Effect.asVoid))).pipe(exports_Stream.flatMap(() => stream)));
@@ -36022,23 +36123,57 @@ var outgoingModelPrompt = (policy2, context3, prepared, turn, declaredToolCalls)
     })
   ]);
 });
-var consumeUsage = (agent2, context3, usage, toolCallCount, options) => exports_Effect.gen(function* () {
-  if (usage === undefined) {
+var consumeUsage = (agent2, context3, usage2, toolCallCount, turn, options) => exports_Effect.gen(function* () {
+  if (usage2 === undefined) {
     return yield* AgentPolicyError.make({
       limit: "usage",
       message: "A completed model response did not report usage"
     });
   }
-  const inputTokens = Math.max(0, usage.inputTokens.total ?? (usage.inputTokens.uncached ?? 0) + (usage.inputTokens.cacheRead ?? 0) + (usage.inputTokens.cacheWrite ?? 0));
-  const outputTokens = Math.max(0, usage.outputTokens.total ?? (usage.outputTokens.text ?? 0) + (usage.outputTokens.reasoning ?? 0));
+  const natural = (value4) => value4 === undefined || !Number.isSafeInteger(value4) ? 0 : Math.max(0, value4);
+  const reportedUncached = natural(usage2.inputTokens.uncached);
+  const cacheRead = natural(usage2.inputTokens.cacheRead);
+  const cacheWrite = natural(usage2.inputTokens.cacheWrite);
+  const reportedText = natural(usage2.outputTokens.text);
+  const reasoning = natural(usage2.outputTokens.reasoning);
+  const inputTokens = Math.max(natural(usage2.inputTokens.total), reportedUncached + cacheRead + cacheWrite);
+  const outputTokens = Math.max(natural(usage2.outputTokens.total), reportedText + reasoning);
+  const uncached = Math.max(reportedUncached, inputTokens - cacheRead - cacheWrite);
+  const text = Math.max(reportedText, outputTokens - reasoning);
   const totalTokens = inputTokens + outputTokens;
-  const costMicrousd = options.estimateCostMicrousd === undefined ? 0 : yield* options.estimateCostMicrousd(usage);
+  const provider = yield* exports_Model.ProviderName;
+  const model = yield* exports_Model.ModelName;
+  const estimate = options.estimateCostMicrousd === undefined ? 0 : yield* options.estimateCostMicrousd(usage2, { provider, model, usage: usage2 });
+  const costMicrousd = typeof estimate === "number" ? estimate : estimate.costMicrousd;
   if (!Number.isInteger(costMicrousd) || costMicrousd < 0) {
     return yield* AgentPolicyError.make({
       limit: "cost",
       message: "Model cost estimation must produce a non-negative integer number of microdollars"
     });
   }
+  const serviceTier = typeof estimate === "number" ? undefined : estimate.serviceTier;
+  const pricingVersion = typeof estimate === "number" ? undefined : estimate.pricingVersion;
+  const validPricingIdentity = (value4) => value4 === undefined || value4.length > 0 && value4.length <= 256;
+  if (!validPricingIdentity(serviceTier) || !validPricingIdentity(pricingVersion)) {
+    return yield* AgentPolicyError.make({
+      limit: "cost",
+      message: "Model cost estimation returned an invalid service tier or pricing version"
+    });
+  }
+  const modelUsage = ModelCallUsage.make({
+    provider,
+    model,
+    ...serviceTier === undefined ? {} : { serviceTier },
+    ...pricingVersion === undefined ? {} : { pricingVersion },
+    inputTokens: InputTokenUsage.make({
+      total: inputTokens,
+      uncached,
+      cacheRead,
+      cacheWrite
+    }),
+    outputTokens: OutputTokenUsage.make({ total: outputTokens, text, reasoning }),
+    costMicrousd
+  });
   context3.modelCalls += 1;
   context3.inputTokens += inputTokens;
   context3.outputTokens += outputTokens;
@@ -36046,6 +36181,9 @@ var consumeUsage = (agent2, context3, usage, toolCallCount, options) => exports_
   context3.lastOutputTokens = outputTokens;
   context3.costMicrousd += costMicrousd;
   context3.lastCostMicrousd = costMicrousd;
+  if (options.durability !== undefined) {
+    yield* options.durability.noteTurnUsage({ turn, usage: modelUsage });
+  }
   const policy2 = agent2.definition.policy;
   const consumedTokens = context3.inputTokens + context3.outputTokens;
   const tokenBudget = policy2.tokenBudget;
@@ -36084,7 +36222,8 @@ var consumeUsage = (agent2, context3, usage, toolCallCount, options) => exports_
       totalTokens,
       toolCalls: toolCallCount,
       costMicrousd,
-      usage
+      usage: usage2,
+      modelUsage
     };
     yield* options.budget.consume(delta);
   }
@@ -36098,7 +36237,7 @@ var consumeUsage = (agent2, context3, usage, toolCallCount, options) => exports_
       limitValue: tokenBudget
     }));
   }
-  return { breach, warnings };
+  return { breach, warnings, modelUsage };
 });
 var eventBaseFor = exports_Effect.fnUntraced(function* (context3, terminal) {
   const ceiling = terminal ? context3.bufferLimits.maxRunEvents : context3.bufferLimits.maxRunEvents - 1;
@@ -36190,17 +36329,17 @@ var nextContextEstimate = (context3, view) => {
   return estimatePromptTokens(view);
 };
 var overflowText = (error2) => `${error2.message} ${error2.reason.message}`;
-var compactContext = (agent2, context3, source, turn, options, forceSummarize) => exports_Effect.gen(function* () {
+var compactContext = (agent2, context3, source, turn, options, targetTokens, forceSummarize, allowSummarize = true) => exports_Effect.gen(function* () {
   const policy2 = agent2.definition.policy;
   const state = context3.compaction;
   const events2 = [];
   const messages = source.content;
   const before = estimatePromptTokens(buildCompactedView(messages, state));
-  const limit = policy2.contextTokenLimit;
   const mode = policy2.compaction.mode;
+  const keepRecentTokens = targetTokens === undefined ? policy2.compaction.keepRecentTokens : Math.max(1, Math.min(policy2.compaction.keepRecentTokens, targetTokens));
   const commitDurable = (commit) => options.durability === undefined ? exports_Effect.void : options.durability.commitCompaction(commit);
   if (!forceSummarize && mode !== "summarize") {
-    const bound = choosePruneBound(messages, state, policy2.compaction.keepRecentTokens);
+    const bound = choosePruneBound(messages, state, keepRecentTokens);
     if (bound > state.clearedThrough) {
       state.clearedThrough = bound;
       state.lastViewLength = -1;
@@ -36218,15 +36357,15 @@ var compactContext = (agent2, context3, source, turn, options, forceSummarize) =
         tokensBeforeEstimate: before,
         tokensAfterEstimate: after2
       });
-      if (limit !== undefined && after2 <= limit) {
+      if (targetTokens !== undefined && after2 <= targetTokens) {
         return { events: events2 };
       }
     }
   }
-  if (mode === "prune" && !forceSummarize) {
+  if ((!allowSummarize || mode === "prune") && !forceSummarize) {
     return { events: events2 };
   }
-  const cut = chooseSummarizeCut(messages, state, policy2.compaction.keepRecentTokens);
+  const cut = chooseSummarizeCut(messages, state, keepRecentTokens);
   const covered = collectCoveredMessages(messages, state, cut);
   if (covered.length === 0) {
     return { events: events2 };
@@ -36263,17 +36402,9 @@ ${transcript}
   })));
   const wasFinalizing = context3.finalizing;
   context3.finalizing = true;
-  const consumed = yield* consumeUsage(agent2, context3, summaryUsage, 0, options).pipe(exports_Effect.ensuring(exports_Effect.sync(() => {
+  const consumed = yield* consumeUsage(agent2, context3, summaryUsage, 0, turn, options).pipe(exports_Effect.ensuring(exports_Effect.sync(() => {
     context3.finalizing = wasFinalizing;
   })));
-  if (options.durability !== undefined) {
-    yield* options.durability.noteTurnUsage({
-      turn,
-      inputTokens: context3.lastInputTokens,
-      outputTokens: context3.lastOutputTokens,
-      costMicrousd: context3.lastCostMicrousd
-    });
-  }
   events2.push(...consumed.warnings);
   const summaryText = pieces.join("").trim();
   const summary2 = summaryText.length === 0 ? "(no summary produced)" : summaryText;
@@ -36683,6 +36814,39 @@ var decodeFinalOutput = exports_Effect.fn("AgentRuntime.decodeFinalOutput")(func
   })));
   return { encoded: eventJson, decoded };
 });
+var encodeOutputCandidate = exports_Effect.fn("AgentRuntime.encodeOutputCandidate")(function* (agent2, candidate) {
+  const decoded = yield* exports_Schema.decodeUnknownEffect(agent2.definition.output)(candidate).pipe(exports_Effect.mapError((cause) => AgentOutputError.make({
+    message: cause.message
+  })));
+  const encoded = yield* exports_Schema.encodeUnknownEffect(agent2.definition.output)(decoded).pipe(exports_Effect.mapError((cause) => AgentOutputError.make({
+    message: `Completion Tool output failed Schema encoding: ${cause.message}`
+  })));
+  const json = yield* exports_Schema.decodeUnknownEffect(exports_Schema.Json)(encoded).pipe(exports_Effect.mapError((cause) => AgentOutputError.make({
+    message: `Completion Tool output did not encode as durable JSON: ${cause.message}`
+  })));
+  return { encoded: json, decoded };
+});
+var projectCompletionOutput = exports_Effect.fn("AgentRuntime.projectCompletionOutput")(function* (agent2, declaration, parameters, result4) {
+  const tool = agent2.definition.toolkit.tools[declaration.tool];
+  if (tool === undefined) {
+    return yield* ModelProtocolError.make({
+      message: `Agent completion declaration references unknown Tool ${declaration.tool}`
+    });
+  }
+  const decodedParameters = yield* exports_Schema.decodeUnknownEffect(tool.parametersSchema)(parameters).pipe(exports_Effect.mapError((cause) => AgentOutputError.make({
+    message: `Completion Tool parameters failed canonical decoding: ${cause.message}`
+  })));
+  const decodedResult = yield* exports_Schema.decodeUnknownEffect(tool.successSchema)(result4).pipe(exports_Effect.mapError((cause) => AgentOutputError.make({
+    message: `Completion Tool result failed canonical decoding: ${cause.message}`
+  })));
+  const projected = yield* exports_Effect.try({
+    try: () => declaration.project({ parameters: decodedParameters, result: decodedResult }),
+    catch: (cause) => AgentOutputError.make({
+      message: `Completion Tool projector failed: ${cause instanceof Error ? cause.message : String(cause)}`
+    })
+  });
+  return yield* encodeOutputCandidate(agent2, projected);
+});
 var encodeRunDispositionCandidate = exports_Effect.fn("AgentRuntime.encodeRunDisposition")(function* (declaration, output) {
   const selected = yield* exports_Effect.try({
     try: () => declaration.fromOutput(output),
@@ -36777,7 +36941,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
   }).pipe(exports_Effect.withLogSpan("AgentRuntime.model"))).pipe(exports_Stream.flatMap(exports_Stream.fromIterable));
   const policy2 = agent2.definition.policy;
   const bounds = effectiveRunBounds(policy2, options);
-  const finalAnswerOnly = policy2.onExhaustion !== "fail" && (turn > bounds.maxTurns || priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls || context3.tokenExhausted);
+  let finalAnswerOnly = policy2.onExhaustion !== "fail" && (turn > bounds.maxTurns || priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls || context3.tokenExhausted);
   if (finalAnswerOnly && context3.exhaustedDimension === undefined) {
     context3.exhaustedDimension = turn > bounds.maxTurns ? "turns" : priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls ? "tool-calls" : "tokens";
   }
@@ -36791,14 +36955,49 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
   const outputContractTokens = outputContractMessage === undefined ? 0 : estimatePromptTokens([
     exports_Prompt.makeMessage("system", { content: outputContractMessage })
   ]);
+  const derivedPrompt = yield* outgoingModelPrompt(policy2, context3, exports_Prompt.fromMessages([]), turn, priorToolCalls);
+  const derivedPromptTokens = outputContractTokens + estimatePromptTokens(derivedPrompt.content);
   let preEvents = [];
-  if (policy2.contextTokenLimit !== undefined && !context3.finalizing) {
+  if (!context3.finalizing) {
+    const consumedTokens = context3.inputTokens + context3.outputTokens;
+    const tokenCallTarget = policy2.tokenBudget === undefined || finalAnswerOnly ? undefined : Math.max(0, policy2.tokenBudget - consumedTokens - policy2.completionReserveTokens);
+    const contextCallTarget = policy2.contextTokenLimit;
+    const fullTarget = tokenCallTarget === undefined ? contextCallTarget : contextCallTarget === undefined ? tokenCallTarget : Math.min(tokenCallTarget, contextCallTarget);
+    const sourceTarget = fullTarget === undefined ? undefined : Math.max(0, fullTarget - derivedPromptTokens);
     const view = buildCompactedView(modelContext.prompt.content, context3.compaction);
-    const estimate = nextContextEstimate(context3, view);
-    if (estimate + outputContractTokens > policy2.contextTokenLimit && context3.compaction.lastCompactionTurn !== turn) {
+    const estimate = nextContextEstimate(context3, view) + derivedPromptTokens;
+    const contextPressure = contextCallTarget !== undefined && estimate > contextCallTarget;
+    const tokenPressure = tokenCallTarget !== undefined && estimate > tokenCallTarget;
+    if ((contextPressure || tokenPressure) && sourceTarget !== undefined && sourceTarget > 0 && context3.compaction.lastCompactionTurn !== turn) {
       context3.compaction.lastCompactionTurn = turn;
-      const outcome = yield* compactContext(agent2, context3, modelContext.prompt, turn, options, false);
+      const outcome = yield* compactContext(agent2, context3, modelContext.prompt, turn, options, sourceTarget, false, !tokenPressure);
       preEvents = outcome.events;
+    }
+    const prepared = buildCompactedView(modelContext.prompt.content, context3.compaction);
+    const preparedEstimate = nextContextEstimate(context3, prepared) + derivedPromptTokens;
+    if (context3.tokenExhausted) {
+      finalAnswerOnly = true;
+    }
+    const preparedTokenCallTarget = policy2.tokenBudget === undefined || finalAnswerOnly ? undefined : Math.max(0, policy2.tokenBudget - (context3.inputTokens + context3.outputTokens) - policy2.completionReserveTokens);
+    if (contextCallTarget !== undefined && preparedEstimate > contextCallTarget) {
+      return yield* ContextBudgetError.make({
+        message: `Compaction could not fit the next model prompt inside the ${contextCallTarget} token context target`,
+        estimatedTokens: preparedEstimate,
+        targetTokens: contextCallTarget,
+        completionReserveTokens: policy2.completionReserveTokens
+      });
+    }
+    if (preparedTokenCallTarget !== undefined && preparedEstimate > preparedTokenCallTarget) {
+      const error2 = AgentPolicyError.make({
+        limit: "tokens",
+        message: `The next research call would consume this Run's ${policy2.completionReserveTokens} token completion reserve`
+      });
+      if (policy2.onExhaustion === "fail") {
+        return yield* error2;
+      }
+      context3.tokenExhausted = true;
+      context3.exhaustedDimension ??= "tokens";
+      finalAnswerOnly = true;
     }
   }
   const compactedOutgoing = () => {
@@ -36810,14 +37009,20 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     prompt: outputContractMessage === undefined ? outgoing : insertOutputContract(outgoing, outputContractMessage),
     toolkit: agent2.definition.toolkit,
     disableToolCallResolution: true,
-    ...finalAnswerOnly ? { toolChoice: "none" } : {}
+    ...finalAnswerOnly ? agent2.definition.completion === undefined ? { toolChoice: "none" } : {
+      toolChoice: {
+        mode: "auto",
+        oneOf: [agent2.definition.completion.tool]
+      }
+    } : {}
   }), options.budget).pipe(exports_Stream.mapEffect((part) => ownModelResponsePart(part, agent2.definition.toolkit, trace2, context3.bufferLimits).pipe(exports_Effect.flatMap((owned) => eventsForPart(context3, turnId, turn, agent2.definition.toolkit.tools, trace2, owned.ownedPart, owned.retainedBytes)))), exports_Stream.flatMap(exports_Stream.fromIterable)))));
   const response = attempt(compactedOutgoing()).pipe(exports_Stream.catch((error2) => {
     if (!(error2 instanceof exports_AiError.AiError) || !isContextOverflowMessage(overflowText(error2))) {
       return exports_Stream.fail(error2);
     }
     const message = overflowText(error2);
-    if (trace2.parts.length > 0 || policy2.contextTokenLimit === undefined) {
+    const contextTokenLimit = policy2.contextTokenLimit;
+    if (trace2.parts.length > 0 || contextTokenLimit === undefined) {
       return exports_Stream.fail(ContextOverflowError.make({ message, retried: false }));
     }
     if (context3.compaction.overflowRetryTurn === turn) {
@@ -36826,10 +37031,20 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     context3.compaction.overflowRetryTurn = turn;
     context3.compaction.lastCompactionTurn = turn;
     return exports_Stream.unwrap(exports_Effect.gen(function* () {
-      const outcome = yield* compactContext(agent2, context3, modelContext.prompt, turn, options, true).pipe(exports_Effect.mapError((inner) => inner instanceof exports_AiError.AiError && isContextOverflowMessage(overflowText(inner)) ? ContextOverflowError.make({
+      const outcome = yield* compactContext(agent2, context3, modelContext.prompt, turn, options, Math.max(0, contextTokenLimit - derivedPromptTokens), true).pipe(exports_Effect.mapError((inner) => inner instanceof exports_AiError.AiError && isContextOverflowMessage(overflowText(inner)) ? ContextOverflowError.make({
         message: overflowText(inner),
         retried: true
       }) : inner));
+      const retryView = buildCompactedView(modelContext.prompt.content, context3.compaction);
+      const retryEstimate = nextContextEstimate(context3, retryView) + derivedPromptTokens;
+      if (retryEstimate > contextTokenLimit) {
+        return yield* ContextBudgetError.make({
+          message: `Overflow compaction could not fit the retry inside the ${contextTokenLimit} token context target`,
+          estimatedTokens: retryEstimate,
+          targetTokens: contextTokenLimit,
+          completionReserveTokens: policy2.completionReserveTokens
+        });
+      }
       const retried = attempt(compactedOutgoing()).pipe(exports_Stream.catch((again) => again instanceof exports_AiError.AiError && isContextOverflowMessage(overflowText(again)) ? exports_Stream.fail(ContextOverflowError.make({
         message: overflowText(again),
         retried: true
@@ -36855,9 +37070,17 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     if (hasProviderCalls && turnCompletion === undefined) {
       return failRunEventStream(ModelProtocolError.make({ message: "Model response omitted staged Turn completion" }));
     }
-    if (finalAnswerOnly && trace2.toolCalls.size > 0) {
+    const completionTool = agent2.definition.completion?.tool;
+    const declaresCompletion = completionTool !== undefined && trace2.applicationToolCalls.some((call) => call.name === completionTool);
+    if (declaresCompletion && trace2.toolCalls.size !== 1) {
       return failRunEventStream(ModelProtocolError.make({
-        message: `Model declared ${trace2.toolCalls.size} Tool Call(s) under toolChoice "none" after budget exhaustion`
+        message: `Completion Tool ${completionTool} must be the only Tool Call in its batch`
+      }));
+    }
+    const completionBatch = declaresCompletion && trace2.toolCalls.size === 1 && trace2.applicationToolCalls.length === 1;
+    if (finalAnswerOnly && trace2.toolCalls.size > 0 && !completionBatch) {
+      return failRunEventStream(ModelProtocolError.make({
+        message: completionTool === undefined ? `Model declared ${trace2.toolCalls.size} Tool Call(s) under toolChoice "none" after budget exhaustion` : `Model declared ${trace2.toolCalls.size} non-completion Tool Call(s) after budget exhaustion`
       }));
     }
     const providerOnly = trace2.toolCalls.size > 0 && Array.from(trace2.toolCalls.values()).every(({ providerExecuted }) => providerExecuted);
@@ -36869,7 +37092,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     }
     const toolCalls = priorToolCalls + trace2.toolCalls.size;
     const overToolBudget = toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls;
-    if (overToolBudget && policy2.onExhaustion === "fail") {
+    if (overToolBudget && policy2.onExhaustion === "fail" && !completionBatch) {
       return failRunEventStream(AgentPolicyError.make({
         limit: "tool-calls",
         message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
@@ -36887,15 +37110,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
       ...additions
     ]);
     const afterValidatedResponse = (next2) => stagedResponse.pipe(exports_Stream.concat(exports_Stream.unwrap(exports_Effect.gen(function* () {
-      const consumed = yield* consumeUsage(agent2, context3, trace2.usage, trace2.toolCalls.size, options);
-      if (options.durability !== undefined) {
-        yield* options.durability.noteTurnUsage({
-          turn,
-          inputTokens: context3.lastInputTokens,
-          outputTokens: context3.lastOutputTokens,
-          costMicrousd: context3.lastCostMicrousd
-        });
-      }
+      const consumed = yield* consumeUsage(agent2, context3, trace2.usage, trace2.toolCalls.size, turn, options);
       const pre = [...consumed.warnings];
       if (!context3.warnedLimits.has("tool-calls") && nearingLimit(toolCalls + context3.programmaticToolCalls, bounds.maxToolCalls)) {
         context3.warnedLimits.add("tool-calls");
@@ -36930,7 +37145,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
             }))));
           }
         }
-        if (trace2.applicationToolCalls.length > 0) {
+        if (trace2.applicationToolCalls.length > 0 && !completionBatch) {
           const rejection = yield* settleRejectedBatch(context3, turnId, trace2, AgentPolicyError.make({
             limit: "tokens",
             message: `Token budget exhausted: this Run's ${policy2.tokenBudget ?? 0} token budget was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`
@@ -36984,13 +37199,14 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
         }));
       }
       const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
-      if (turnsBlocked) {
+      const completionTurnAllowed = completionBatch;
+      if (turnsBlocked && !completionTurnAllowed) {
         return failRunEventStream(AgentPolicyError.make({
           limit: "turns",
           message: `Agent exceeded its ${bounds.maxTurns} Turn limit`
         }));
       }
-      if (overToolBudget && trace2.applicationToolCalls.length > 0) {
+      if (overToolBudget && trace2.applicationToolCalls.length > 0 && !completionBatch) {
         return afterValidatedResponse(exports_Effect.gen(function* () {
           const rejection = yield* settleRejectedBatch(context3, turnId, trace2, AgentPolicyError.make({
             limit: "tool-calls",
@@ -37061,6 +37277,33 @@ var toolBatchContinuation = (agent2, context3, trace2, prompt, turn, toolCalls, 
     ...promptFromTurnParts(trace2).content,
     toolMessage2
   ]);
+  const completion = agent2.definition.completion;
+  const completionResult = completion !== undefined && trace2.applicationToolCalls.length === 1 && orderedResults.length === 1 && orderedResults[0]?.name === completion.tool && orderedResults[0].isFailure === false ? orderedResults[0] : undefined;
+  if (completion !== undefined && completionResult !== undefined) {
+    const call = trace2.applicationCallDescriptors[0];
+    if (call === undefined) {
+      return failRunEventStream(ModelProtocolError.make({
+        message: `Completion Tool ${completion.tool} has no canonical call descriptor`
+      }));
+    }
+    const output = yield* projectCompletionOutput(agent2, completion, call.parameters, completionResult.encodedResult);
+    yield* advanceHistory(context3, history, options);
+    const bounds = effectiveRunBounds(agent2.definition.policy, options);
+    const exhausted = context3.tokenExhausted ? "tokens" : turn > bounds.maxTurns ? "turns" : toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls ? "tool-calls" : context3.exhaustedDimension;
+    if (exhausted !== undefined && context3.exhaustedDimension === undefined) {
+      context3.exhaustedDimension = exhausted;
+    }
+    const declaration = agent2.definition.runDisposition;
+    const runDisposition = exhausted !== undefined || declaration === undefined ? undefined : yield* encodeRunDisposition(agent2, output.decoded);
+    return exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => RunCompleted.make({
+      ...base2,
+      output: output.encoded,
+      ...runDisposition === undefined ? {} : { runDisposition },
+      turns: turn,
+      finishReason: exhausted === undefined ? "completed" : "budget-exhausted",
+      ...exhausted === undefined ? {} : { exhausted }
+    })));
+  }
   yield* advanceHistory(context3, history, options);
   const steering = yield* drainInputs(context3, options);
   const nextPrompt = yield* appendInputs(context3, history, steering, options);
@@ -37136,6 +37379,13 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
       executionClass: getToolExecutionClass(tool)
     });
   }
+  const completionTool = agent2.definition.completion?.tool;
+  if (completionTool !== undefined && trace2.applicationToolCalls.some((call) => call.name === completionTool) && trace2.toolCalls.size !== 1) {
+    return failRunEventStream(ModelProtocolError.make({
+      message: `Completion Tool ${completionTool} must be the only Tool Call in its batch`
+    }));
+  }
+  const completionBatch = completionTool !== undefined && trace2.toolCalls.size === 1 && trace2.applicationToolCalls[0]?.name === completionTool;
   const settledIds = new Set;
   const settledInputs = yield* snapshotResumedSettledCalls(resume, declarationByCallId.size);
   for (const settledInput of settledInputs) {
@@ -37174,14 +37424,15 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
   const bounds = effectiveRunBounds(policy2, options);
   const toolCalls = trace2.toolCalls.size;
   const overToolBudget = toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls;
-  if (overToolBudget && policy2.onExhaustion === "fail") {
+  if (overToolBudget && policy2.onExhaustion === "fail" && !completionBatch) {
     return failRunEventStream(AgentPolicyError.make({
       limit: "tool-calls",
       message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
     }));
   }
   const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
-  if (turnsBlocked) {
+  const completionTurnAllowed = completionBatch;
+  if (turnsBlocked && !completionTurnAllowed) {
     return failRunEventStream(AgentPolicyError.make({
       limit: "turns",
       message: `Agent exceeded its ${bounds.maxTurns} Turn limit`
@@ -37218,7 +37469,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
     const continuation = toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options);
     return settledChildJoinCallIds === undefined ? continuation : enforceDurationDeadline(continuation, context3.durationDeadlineMillis, durationLimitError(policy2));
   };
-  if (overToolBudget) {
+  if (overToolBudget && !completionBatch) {
     const rejection = yield* settleRejectedBatch(context3, turnId, trace2, AgentPolicyError.make({
       limit: "tool-calls",
       message: `Tool Call budget exhausted: this Run's ${bounds.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`
@@ -39199,7 +39450,7 @@ var toRunBudgetHook = (budget) => ({
     costMicrousd: delta.costMicrousd
   }).pipe(exports_Effect.mapError((error2) => BudgetAdapterError.make({
     message: `Engine usage delta is invalid: ${error2.message}`
-  })), exports_Effect.flatMap((usage) => budget.consume(usage)), exports_Effect.asVoid)
+  })), exports_Effect.flatMap((usage2) => budget.consume(usage2)), exports_Effect.asVoid)
 });
 var toRunConversationOptions = exports_Effect.fn("toRunConversationOptions")(function* (conversations, conversationId, runId) {
   const snapshot3 = yield* conversations.snapshot(conversationId);
@@ -39329,9 +39580,9 @@ function Stream(success, error2) {
 }
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/rpc/Rpc.js
-var TypeId50 = "~effect/rpc/Rpc";
-var Proto12 = {
-  [TypeId50]: TypeId50,
+var TypeId51 = "~effect/rpc/Rpc";
+var Proto13 = {
+  [TypeId51]: TypeId51,
   pipe() {
     return pipeArguments(this, arguments);
   },
@@ -39415,12 +39666,12 @@ var Proto12 = {
 };
 var makeProto3 = (options) => {
   function Rpc() {}
-  Object.setPrototypeOf(Rpc, Proto12);
+  Object.setPrototypeOf(Rpc, Proto13);
   Object.assign(Rpc, options);
   Rpc.key = `effect/rpc/Rpc/${options._tag}`;
   return Rpc;
 };
-var make54 = (tag2, options) => {
+var make55 = (tag2, options) => {
   const successSchema = options?.success ?? Void2;
   const errorSchema = options?.error ?? Never2;
   const defectSchema = options?.defect ?? Defect();
@@ -39613,7 +39864,7 @@ class InitializeResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2
 }))) {
 }
 
-class Initialize extends (/* @__PURE__ */ make54("initialize", {
+class Initialize extends (/* @__PURE__ */ make55("initialize", {
   success: InitializeResult,
   error: McpError,
   payload: {
@@ -39624,7 +39875,7 @@ class Initialize extends (/* @__PURE__ */ make54("initialize", {
   }
 })) {
 }
-class CancelledNotification extends (/* @__PURE__ */ make54("notifications/cancelled", {
+class CancelledNotification extends (/* @__PURE__ */ make55("notifications/cancelled", {
   payload: {
     ...NotificationMeta.fields,
     requestId: RequestId,
@@ -39633,7 +39884,7 @@ class CancelledNotification extends (/* @__PURE__ */ make54("notifications/cance
 })) {
 }
 
-class ProgressNotification extends (/* @__PURE__ */ make54("notifications/progress", {
+class ProgressNotification extends (/* @__PURE__ */ make55("notifications/progress", {
   payload: {
     ...NotificationMeta.fields,
     progressToken: ProgressToken,
@@ -39704,7 +39955,7 @@ class ReadResourceResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struc
 }))) {
 }
 
-class ReadResource extends (/* @__PURE__ */ make54("resources/read", {
+class ReadResource extends (/* @__PURE__ */ make55("resources/read", {
   success: ReadResourceResult,
   error: McpError,
   payload: {
@@ -39713,7 +39964,7 @@ class ReadResource extends (/* @__PURE__ */ make54("resources/read", {
   }
 })) {
 }
-class Subscribe extends (/* @__PURE__ */ make54("resources/subscribe", {
+class Subscribe extends (/* @__PURE__ */ make55("resources/subscribe", {
   success: /* @__PURE__ */ Struct2({}),
   error: McpError,
   payload: {
@@ -39723,7 +39974,7 @@ class Subscribe extends (/* @__PURE__ */ make54("resources/subscribe", {
 })) {
 }
 
-class Unsubscribe extends (/* @__PURE__ */ make54("resources/unsubscribe", {
+class Unsubscribe extends (/* @__PURE__ */ make55("resources/unsubscribe", {
   success: /* @__PURE__ */ Struct2({}),
   error: McpError,
   payload: {
@@ -39733,7 +39984,7 @@ class Unsubscribe extends (/* @__PURE__ */ make54("resources/unsubscribe", {
 })) {
 }
 
-class ResourceUpdatedNotification extends (/* @__PURE__ */ make54("notifications/resources/updated", {
+class ResourceUpdatedNotification extends (/* @__PURE__ */ make55("notifications/resources/updated", {
   payload: {
     ...NotificationMeta.fields,
     uri: String6
@@ -39818,7 +40069,7 @@ class GetPromptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/GetP
 })) {
 }
 
-class GetPrompt extends (/* @__PURE__ */ make54("prompts/get", {
+class GetPrompt extends (/* @__PURE__ */ make55("prompts/get", {
   success: GetPromptResult,
   error: McpError,
   payload: {
@@ -39868,7 +40119,7 @@ class CallToolResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CallT
 })) {
 }
 
-class CallTool extends (/* @__PURE__ */ make54("tools/call", {
+class CallTool extends (/* @__PURE__ */ make55("tools/call", {
   success: CallToolResult,
   error: McpError,
   payload: {
@@ -39880,7 +40131,7 @@ class CallTool extends (/* @__PURE__ */ make54("tools/call", {
 }
 var LoggingLevel = /* @__PURE__ */ Literals(["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]);
 
-class SetLevel extends (/* @__PURE__ */ make54("logging/setLevel", {
+class SetLevel extends (/* @__PURE__ */ make55("logging/setLevel", {
   payload: {
     ...RequestMeta.fields,
     level: LoggingLevel
@@ -39890,7 +40141,7 @@ class SetLevel extends (/* @__PURE__ */ make54("logging/setLevel", {
 })) {
 }
 
-class LoggingMessageNotification extends (/* @__PURE__ */ make54("notifications/message", {
+class LoggingMessageNotification extends (/* @__PURE__ */ make55("notifications/message", {
   payload: /* @__PURE__ */ Struct2({
     ...NotificationMeta.fields,
     level: LoggingLevel,
@@ -39963,7 +40214,7 @@ class CreateMessageResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/
 })) {
 }
 
-class CreateMessage extends (/* @__PURE__ */ make54("sampling/createMessage", {
+class CreateMessage extends (/* @__PURE__ */ make55("sampling/createMessage", {
   success: CreateMessageResult,
   error: McpError,
   payload: {
@@ -40128,7 +40379,7 @@ class ElicitDeclineResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/
 }
 var ElicitResult = /* @__PURE__ */ Union2([ElicitAcceptResult, ElicitDeclineResult]);
 
-class Elicit extends (/* @__PURE__ */ make54("elicitation/create", {
+class Elicit extends (/* @__PURE__ */ make55("elicitation/create", {
   success: ElicitResult,
   error: McpError,
   payload: ElicitRequestParams
@@ -40674,7 +40925,7 @@ var reserveTransition = (ledger, request3) => {
   };
   return [ok(reservationView(reservationId, reservation)), next2];
 };
-var observeTransition = (ledger, reservationId, usage) => {
+var observeTransition = (ledger, reservationId, usage2) => {
   const reservation = ledger.reservations.get(reservationId);
   if (reservation === undefined) {
     return [fail13(SubagentReservationUnknown.make({ reservationId })), ledger];
@@ -40690,7 +40941,7 @@ var observeTransition = (ledger, reservationId, usage) => {
     ...parent.cumulativeOverrun
   };
   for (const spec of dimensionSpecs) {
-    const delta = usage[spec.key];
+    const delta = usage2[spec.key];
     if (delta === undefined) {
       continue;
     }
@@ -40804,8 +41055,8 @@ var SubagentReservationsMemoryLive = exports_Layer.effect(SubagentReservations, 
       const result4 = yield* exports_Ref.modify(state, (ledger) => reserveTransition(ledger, request3));
       return yield* resolve4(result4);
     }),
-    observe: exports_Effect.fn("SubagentReservations.observe")(function* (reservationId, usage) {
-      const result4 = yield* exports_Ref.modify(state, (ledger) => observeTransition(ledger, reservationId, usage));
+    observe: exports_Effect.fn("SubagentReservations.observe")(function* (reservationId, usage2) {
+      const result4 = yield* exports_Ref.modify(state, (ledger) => observeTransition(ledger, reservationId, usage2));
       return yield* resolve4(result4);
     }),
     beginRelease: exports_Effect.fn("SubagentReservations.beginRelease")(function* (reservationId) {
@@ -41001,10 +41252,10 @@ __export(exports_FetchHttpClient, {
 });
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/Headers.js
-var TypeId51 = /* @__PURE__ */ Symbol.for("~effect/http/Headers");
-var Proto13 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.create(null), {
-  [TypeId51]: {
-    value: TypeId51
+var TypeId52 = /* @__PURE__ */ Symbol.for("~effect/http/Headers");
+var Proto14 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.create(null), {
+  [TypeId52]: {
+    value: TypeId52
   },
   [symbolRedactable]: {
     value(context4) {
@@ -41033,20 +41284,20 @@ var Proto13 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.cre
     value: BaseProto[NodeInspectSymbol]
   }
 });
-var make55 = (input) => Object.assign(Object.create(Proto13), input);
+var make56 = (input) => Object.assign(Object.create(Proto14), input);
 var Equivalence6 = /* @__PURE__ */ makeEquivalence4(/* @__PURE__ */ strictEqual());
-var empty14 = /* @__PURE__ */ Object.create(Proto13);
+var empty14 = /* @__PURE__ */ Object.create(Proto14);
 var fromInput2 = (input) => {
   if (input === undefined) {
     return empty14;
   } else if (Symbol.iterator in input) {
-    const out2 = Object.create(Proto13);
+    const out2 = Object.create(Proto14);
     for (const [k, v] of input) {
       out2[k.toLowerCase()] = v;
     }
     return out2;
   }
-  const out = Object.create(Proto13);
+  const out = Object.create(Proto14);
   for (const [k, v] of Object.entries(input)) {
     if (Array.isArray(v)) {
       out[k.toLowerCase()] = v.join(", ");
@@ -41056,23 +41307,23 @@ var fromInput2 = (input) => {
   }
   return out;
 };
-var fromRecordUnsafe = (input) => Object.setPrototypeOf(input, Proto13);
+var fromRecordUnsafe = (input) => Object.setPrototypeOf(input, Proto14);
 var set5 = /* @__PURE__ */ dual(3, (self, key, value4) => {
-  const out = make55(self);
+  const out = make56(self);
   out[key.toLowerCase()] = value4;
   return out;
 });
-var setAll = /* @__PURE__ */ dual(2, (self, headers) => make55({
+var setAll = /* @__PURE__ */ dual(2, (self, headers) => make56({
   ...self,
   ...fromInput2(headers)
 }));
 var merge7 = /* @__PURE__ */ dual(2, (self, headers) => {
-  const out = make55(self);
+  const out = make56(self);
   Object.assign(out, headers);
   return out;
 });
 var remove7 = /* @__PURE__ */ dual(2, (self, key) => {
-  const out = make55(self);
+  const out = make56(self);
   delete out[key.toLowerCase()];
   return out;
 });
@@ -41142,7 +41393,7 @@ __export(exports_HttpClient, {
   mapRequestEffect: () => mapRequestEffect,
   mapRequest: () => mapRequest,
   makeWith: () => makeWith2,
-  make: () => make59,
+  make: () => make60,
   layerMergedContext: () => layerMergedContext,
   isHttpClient: () => isHttpClient,
   head: () => head4,
@@ -41165,10 +41416,10 @@ __export(exports_HttpClient, {
 });
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/Cookies.js
-var TypeId52 = "~effect/http/Cookies";
+var TypeId53 = "~effect/http/Cookies";
 var CookieTypeId = "~effect/http/Cookies/Cookie";
-var Proto14 = {
-  [TypeId52]: TypeId52,
+var Proto15 = {
+  [TypeId53]: TypeId53,
   ...BaseProto,
   toJSON() {
     return {
@@ -41181,7 +41432,7 @@ var Proto14 = {
   }
 };
 var fromReadonlyRecord = (cookies) => {
-  const self = Object.create(Proto14);
+  const self = Object.create(Proto15);
   self.cookies = cookies;
   return self;
 };
@@ -41354,11 +41605,11 @@ var tryDecodeURIComponent = (str) => {
 };
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/UrlParams.js
-var TypeId53 = "~effect/http/UrlParams";
-var isUrlParams = (u) => hasProperty(u, TypeId53);
-var Proto15 = {
+var TypeId54 = "~effect/http/UrlParams";
+var isUrlParams = (u) => hasProperty(u, TypeId54);
+var Proto16 = {
   ...PipeInspectableProto,
-  [TypeId53]: TypeId53,
+  [TypeId54]: TypeId54,
   [Symbol.iterator]() {
     return this.params[Symbol.iterator]();
   },
@@ -41375,8 +41626,8 @@ var Proto15 = {
     return array(this.params.flat());
   }
 };
-var make56 = (params) => {
-  const self = Object.create(Proto15);
+var make57 = (params) => {
+  const self = Object.create(Proto16);
   self.params = params;
   return self;
 };
@@ -41394,7 +41645,7 @@ var fromInput3 = (input) => {
       out.push(parsed[i]);
     }
   }
-  return make56(out);
+  return make57(out);
 };
 var fromInputNested = (input) => {
   const entries3 = typeof input[Symbol.iterator] === "function" ? fromIterable2(input) : Object.entries(input);
@@ -41432,13 +41683,13 @@ var UrlParamsSchema = /* @__PURE__ */ declare(isUrlParams, {
   expected: "UrlParams",
   toEquivalence: () => Equivalence7,
   toCodec: () => link3()(ArraySchema(Tuple3([String6, String6])), transform2({
-    decode: make56,
+    decode: make57,
     encode: (self) => self.params
   }))
 });
-var empty15 = /* @__PURE__ */ make56([]);
-var set7 = /* @__PURE__ */ dual(3, (self, key, value4) => make56(append(filter3(self.params, ([k]) => k !== key), [key, String(value4)])));
-var transform3 = /* @__PURE__ */ dual(2, (self, f) => make56(f(self.params)));
+var empty15 = /* @__PURE__ */ make57([]);
+var set7 = /* @__PURE__ */ dual(3, (self, key, value4) => make57(append(filter3(self.params, ([k]) => k !== key), [key, String(value4)])));
+var transform3 = /* @__PURE__ */ dual(2, (self, f) => make57(f(self.params)));
 var setAll2 = /* @__PURE__ */ dual(2, (self, input) => {
   const out = fromInput3(input);
   const params = out.params;
@@ -41453,7 +41704,7 @@ var setAll2 = /* @__PURE__ */ dual(2, (self, input) => {
   }
   return out;
 });
-var append3 = /* @__PURE__ */ dual(3, (self, key, value4) => make56(append(self.params, [key, String(value4)])));
+var append3 = /* @__PURE__ */ dual(3, (self, key, value4) => make57(append(self.params, [key, String(value4)])));
 var appendAll3 = /* @__PURE__ */ dual(2, (self, input) => transform3(self, appendAll(fromInput3(input).params)));
 var toString = (input) => new URLSearchParams(fromInput3(input).params).toString();
 var toRecord = (self) => {
@@ -41479,17 +41730,17 @@ var schemaRecord = /* @__PURE__ */ UrlParamsSchema.pipe(/* @__PURE__ */ decodeTo
 })));
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpBody.js
-var TypeId54 = "~effect/http/HttpBody";
+var TypeId55 = "~effect/http/HttpBody";
 var HttpBodyErrorTypeId = "~effect/http/HttpBody/HttpBodyError";
 
 class HttpBodyError extends (/* @__PURE__ */ TaggedError2("HttpBodyError")) {
   [HttpBodyErrorTypeId] = HttpBodyErrorTypeId;
 }
 
-class Proto16 {
-  [TypeId54];
+class Proto17 {
+  [TypeId55];
   constructor() {
-    this[TypeId54] = TypeId54;
+    this[TypeId55] = TypeId55;
   }
   [NodeInspectSymbol]() {
     return this.toJSON();
@@ -41501,7 +41752,7 @@ class Proto16 {
   }
 }
 
-class Empty2 extends Proto16 {
+class Empty2 extends Proto17 {
   _tag = "Empty";
   toJSON() {
     return {
@@ -41512,7 +41763,7 @@ class Empty2 extends Proto16 {
 }
 var empty16 = /* @__PURE__ */ new Empty2;
 
-class Raw extends Proto16 {
+class Raw extends Proto17 {
   _tag = "Raw";
   body;
   contentType;
@@ -41535,7 +41786,7 @@ class Raw extends Proto16 {
 }
 var raw = (body, options) => new Raw(body, options?.contentType, options?.contentLength);
 
-class Uint8Array3 extends Proto16 {
+class Uint8Array3 extends Proto17 {
   _tag = "Uint8Array";
   body;
   contentType;
@@ -41582,7 +41833,7 @@ var jsonSchema = (schema3, options) => {
 };
 var urlParams = (urlParams2, contentType) => text(toString(fromInput3(urlParams2)), contentType ?? "application/x-www-form-urlencoded");
 
-class FormData3 extends Proto16 {
+class FormData3 extends Proto17 {
   _tag = "FormData";
   contentType = undefined;
   contentLength = undefined;
@@ -41624,7 +41875,7 @@ var formDataRecord = (entries3) => {
   return formData(data);
 };
 
-class Stream2 extends Proto16 {
+class Stream2 extends Proto17 {
   _tag = "Stream";
   stream;
   contentType;
@@ -41652,8 +41903,8 @@ var fileContentLength = (size9, options) => {
 var file = (path, options) => flatMap5(FileSystem, (fs) => map8(fs.stat(path), (info2) => stream2(fs.stream(path, options), options?.contentType, fileContentLength(info2.size, options))));
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientError.js
-var TypeId55 = "~effect/http/HttpClientError";
-var isHttpClientError = (u) => hasProperty(u, TypeId55);
+var TypeId56 = "~effect/http/HttpClientError";
+var isHttpClientError = (u) => hasProperty(u, TypeId56);
 
 class HttpClientError extends (/* @__PURE__ */ TaggedError2("HttpClientError")) {
   constructor(props) {
@@ -41666,7 +41917,7 @@ class HttpClientError extends (/* @__PURE__ */ TaggedError2("HttpClientError")) 
       super(props);
     }
   }
-  [TypeId55] = TypeId55;
+  [TypeId56] = TypeId56;
   get request() {
     return this.reason.request;
   }
@@ -41754,7 +42005,7 @@ __export(exports_HttpClientRequest, {
   options: () => options,
   modify: () => modify5,
   makeWith: () => makeWith,
-  make: () => make58,
+  make: () => make59,
   isHttpClientRequest: () => isHttpClientRequest,
   head: () => head3,
   get: () => get10,
@@ -41795,7 +42046,7 @@ var updateHeaders = (headers, body) => {
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/Url.js
 class UrlError extends (/* @__PURE__ */ TaggedError2("UrlError")) {
 }
-var make57 = (url2, params, hash2) => try_({
+var make58 = (url2, params, hash2) => try_({
   try: () => {
     const urlInstance = new URL(url2, baseUrl());
     for (let i = 0;i < params.params.length; i++) {
@@ -41821,10 +42072,10 @@ var baseUrl = () => {
 };
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientRequest.js
-var TypeId56 = "~effect/http/HttpClientRequest";
-var isHttpClientRequest = (u) => hasProperty(u, TypeId56);
-var Proto17 = {
-  [TypeId56]: TypeId56,
+var TypeId57 = "~effect/http/HttpClientRequest";
+var isHttpClientRequest = (u) => hasProperty(u, TypeId57);
+var Proto18 = {
+  [TypeId57]: TypeId57,
   ...BaseProto,
   toJSON() {
     return {
@@ -41842,7 +42093,7 @@ var Proto17 = {
   }
 };
 function makeWith(method, url2, urlParams2, hash2, headers, body) {
-  const self = Object.create(Proto17);
+  const self = Object.create(Proto18);
   self.method = method;
   self.url = url2;
   self.urlParams = urlParams2;
@@ -41852,19 +42103,19 @@ function makeWith(method, url2, urlParams2, hash2, headers, body) {
   return self;
 }
 var empty17 = /* @__PURE__ */ makeWith("GET", "", empty15, /* @__PURE__ */ none2(), empty14, empty16);
-var make58 = (method) => (url2, options) => modify5(empty17, {
+var make59 = (method) => (url2, options) => modify5(empty17, {
   method,
   url: url2,
   ...options ?? undefined
 });
-var get10 = /* @__PURE__ */ make58("GET");
-var post = /* @__PURE__ */ make58("POST");
-var patch = /* @__PURE__ */ make58("PATCH");
-var put = /* @__PURE__ */ make58("PUT");
-var del = /* @__PURE__ */ make58("DELETE");
-var head3 = /* @__PURE__ */ make58("HEAD");
-var options = /* @__PURE__ */ make58("OPTIONS");
-var trace2 = /* @__PURE__ */ make58("TRACE");
+var get10 = /* @__PURE__ */ make59("GET");
+var post = /* @__PURE__ */ make59("POST");
+var patch = /* @__PURE__ */ make59("PATCH");
+var put = /* @__PURE__ */ make59("PUT");
+var del = /* @__PURE__ */ make59("DELETE");
+var head3 = /* @__PURE__ */ make59("HEAD");
+var options = /* @__PURE__ */ make59("OPTIONS");
+var trace2 = /* @__PURE__ */ make59("TRACE");
 var modify5 = /* @__PURE__ */ dual(2, (self, options2) => {
   let result4 = self;
   if (options2.method) {
@@ -41954,7 +42205,7 @@ var bodyFormDataRecord = /* @__PURE__ */ dual(2, (self, entries3) => setBody(sel
 var bodyStream = /* @__PURE__ */ dual((args2) => isHttpClientRequest(args2[0]), (self, body, options2) => setBody(self, stream2(body, options2?.contentType, options2?.contentLength)));
 var bodyFile = /* @__PURE__ */ dual((args2) => isHttpClientRequest(args2[0]), (self, path, options2) => map8(file(path, options2), (body) => setBody(self, body)));
 function toUrl(self) {
-  const r = make57(self.url, self.urlParams, getOrUndefined(self.hash));
+  const r = make58(self.url, self.urlParams, getOrUndefined(self.hash));
   if (isSuccess2(r)) {
     return some3(r.success);
   }
@@ -41986,7 +42237,7 @@ var parseContentLength = (contentLength) => {
   return Number.isNaN(parsed) ? undefined : parsed;
 };
 var toWebResult = (self, options2) => {
-  const url2 = make57(self.url, self.urlParams, getOrUndefined(self.hash));
+  const url2 = make58(self.url, self.urlParams, getOrUndefined(self.hash));
   if (isFailure2(url2)) {
     return fail2(url2.failure);
   }
@@ -42050,11 +42301,11 @@ __export(exports_HttpClientResponse, {
   fromWeb: () => fromWeb2,
   filterStatusOk: () => filterStatusOk,
   filterStatus: () => filterStatus,
-  TypeId: () => TypeId58
+  TypeId: () => TypeId59
 });
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpIncomingMessage.js
-var TypeId57 = "~effect/http/HttpIncomingMessage";
+var TypeId58 = "~effect/http/HttpIncomingMessage";
 var schemaBodyJson2 = (schema3, options2) => {
   const decode2 = decodeEffect2(toCodecJson(schema3));
   const decodeJson = options2?.reviver === undefined ? undefined : decodeEffect2(fromJsonString2(toCodecJson(schema3), options2));
@@ -42092,7 +42343,7 @@ var inspect = (self, that) => {
 };
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientResponse.js
-var TypeId58 = "~effect/http/HttpClientResponse";
+var TypeId59 = "~effect/http/HttpClientResponse";
 var fromWeb2 = (request3, source) => new WebHttpClientResponse(request3, source);
 var schemaJson = (schema3, options2) => {
   const decode2 = decodeEffect2(toCodecJson(schema3).annotate({
@@ -42146,16 +42397,16 @@ var filterStatusOk = (self) => self.status >= 200 && self.status < 300 ? succeed
 }));
 
 class WebHttpClientResponse extends Class2 {
-  [TypeId57];
   [TypeId58];
+  [TypeId59];
   request;
   source;
   constructor(request3, source) {
     super();
     this.request = request3;
     this.source = source;
-    this[TypeId57] = TypeId57;
     this[TypeId58] = TypeId58;
+    this[TypeId59] = TypeId59;
   }
   toJSON() {
     return inspect(this, {
@@ -42271,8 +42522,8 @@ var toHeaders = (span2) => fromRecordUnsafe({
 });
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClient.js
-var TypeId59 = "~effect/http/HttpClient";
-var isHttpClient = (u) => hasProperty(u, TypeId59);
+var TypeId60 = "~effect/http/HttpClient";
+var isHttpClient = (u) => hasProperty(u, TypeId60);
 var HttpClient = /* @__PURE__ */ Service("effect/HttpClient");
 var accessor = (method) => (...args2) => flatMap5(HttpClient, (client) => client[method](...args2));
 var execute = /* @__PURE__ */ accessor("execute");
@@ -42293,7 +42544,7 @@ var filterOrFail4 = /* @__PURE__ */ dual(3, (self, f, orFailWith) => transformRe
 var filterStatus2 = /* @__PURE__ */ dual(2, (self, f) => transformResponse(self, flatMap5(filterStatus(f))));
 var filterStatusOk2 = /* @__PURE__ */ transformResponse(/* @__PURE__ */ flatMap5(filterStatusOk));
 var makeWith2 = (postprocess, preprocess) => {
-  const self = Object.create(Proto18);
+  const self = Object.create(Proto19);
   self.preprocess = preprocess;
   self.postprocess = postprocess;
   self.execute = function(request3) {
@@ -42301,8 +42552,8 @@ var makeWith2 = (postprocess, preprocess) => {
   };
   return self;
 };
-var Proto18 = {
-  [TypeId59]: TypeId59,
+var Proto19 = {
+  [TypeId60]: TypeId60,
   pipe() {
     return pipeArguments(this, arguments);
   },
@@ -42313,13 +42564,13 @@ var Proto18 = {
     };
   },
   .../* @__PURE__ */ Object.fromEntries(/* @__PURE__ */ allShort.map(([fullMethod, method]) => [method, function(url2, options3) {
-    return this.execute(make58(fullMethod)(url2, options3));
+    return this.execute(make59(fullMethod)(url2, options3));
   }]))
 };
-var make59 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withFiber2((fiber3) => {
+var make60 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withFiber2((fiber3) => {
   const scopedController = scopedRequests.get(request3);
   const controller = scopedController ?? new AbortController;
-  const urlResult = make57(request3.url, request3.urlParams, getOrUndefined(request3.hash));
+  const urlResult = make58(request3.url, request3.urlParams, getOrUndefined(request3.hash));
   if (isFailure2(urlResult)) {
     return fail6(new HttpClientError({
       reason: new InvalidUrlError({
@@ -42703,8 +42954,8 @@ class InterruptibleResponse {
     this.original = original;
     this.controller = controller;
   }
+  [TypeId59] = TypeId59;
   [TypeId58] = TypeId58;
-  [TypeId57] = TypeId57;
   applyInterrupt(effect2) {
     return suspend3(() => {
       responseRegistry.unregister(this.original);
@@ -42773,7 +43024,7 @@ var Fetch = /* @__PURE__ */ Reference("effect/http/FetchHttpClient/Fetch", {
 
 class RequestInit extends (/* @__PURE__ */ Service()("effect/http/FetchHttpClient/RequestInit")) {
 }
-var fetch = /* @__PURE__ */ make59((request3, url2, signal, fiber3) => {
+var fetch = /* @__PURE__ */ make60((request3, url2, signal, fiber3) => {
   const fetch2 = fiber3.getRef(Fetch);
   const options3 = getOrUndefined2(fiber3.context, RequestInit) ?? {};
   let headers = options3.headers ? merge7(fromInput2(options3.headers), request3.headers) : request3.headers;
@@ -46523,7 +46774,7 @@ var resolveReviewContinuityContext = exports_Effect.fn("resolveReviewContinuityC
   return { adjudications, priorFindingsOnScope };
 });
 var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function* () {
-  const { metadata, files, anchorFiles, fingerprint, usage } = context4;
+  const { metadata, files, anchorFiles, fingerprint, usage: usage2 } = context4;
   const executionContext = yield* ReviewExecutionContext;
   const adjudications = context4.adjudications ?? [];
   const adjudicatedIdentities = new Set(adjudications.map(adjudicationIdentity));
@@ -46625,7 +46876,7 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
     headRef: metadata.headRef,
     modelLabel: options3.modelLabel,
     runUrl: options3.runUrl,
-    usage,
+    usage: usage2,
     fingerprint: skipFingerprint,
     inputCoverage,
     assurance,
@@ -46650,7 +46901,7 @@ var settleReviewRun = (core2, context4, options3) => exports_Effect.gen(function
     unreviewedPaths,
     plan,
     turns: core2.turns,
-    ...usage === undefined ? {} : { usage },
+    ...usage2 === undefined ? {} : { usage: usage2 },
     reviewMode: executionContext.mode,
     reviewReason: executionContext.reason,
     ...continuity.state === undefined ? {} : { state: continuity.state },
@@ -46690,14 +46941,14 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     totalAnchorFiles: metadata.totalChangedFiles,
     events: events2
   });
-  const usage = yield* budget2.snapshot;
+  const usage2 = yield* budget2.snapshot;
   return yield* settleReviewRun({
     review,
     inputCoverage: assessment.inputCoverage,
     assurance: assessment.assurance,
     unreviewedPaths: assessment.unreviewedPaths,
     turns: result4.turns
-  }, { metadata, files, anchorFiles, fingerprint, usage, adjudications: continuity.adjudications }, options3);
+  }, { metadata, files, anchorFiles, fingerprint, usage: usage2, adjudications: continuity.adjudications }, options3);
 });
 var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
@@ -46736,7 +46987,7 @@ var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* ()
     anchorFiles,
     totalAnchorFiles: metadata.totalChangedFiles
   });
-  const usage = yield* budget2.snapshot;
+  const usage2 = yield* budget2.snapshot;
   return yield* settleReviewRun({
     review: pipeline.review,
     inputCoverage,
@@ -46747,7 +46998,7 @@ var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* ()
       paths: pass.paths.slice(0, 12)
     })),
     turns: pipeline.turns
-  }, { metadata, files, anchorFiles, fingerprint, usage, adjudications: continuity.adjudications }, options3);
+  }, { metadata, files, anchorFiles, fingerprint, usage: usage2, adjudications: continuity.adjudications }, options3);
 });
 
 // packages/pr-review/src/internal/factory.ts
@@ -46780,7 +47031,7 @@ var makeReviewSnapshot = (ignore6) => provideIgnore(exports_Effect.gen(function*
     files: yield* source.anchorFiles
   };
 }), ignore6);
-var make60 = (options3) => {
+var make61 = (options3) => {
   const extraTools = options3.extraTools ?? EMPTY_TOOLS;
   requireReadonly(extraTools);
   const definition = Agent.define("pr-reviewer", {
@@ -46875,7 +47126,7 @@ var makeFanOut = (options3) => {
     }
   };
 };
-var PrReview = { make: make60, makeFanOut };
+var PrReview = { make: make61, makeFanOut };
 
 // packages/pr-review/src/internal/progress.ts
 var PROGRESS_COMMENT_MARKER_PREFIX = "<!-- effect-agent-pr-review progress";
@@ -47194,7 +47445,7 @@ var compactReviewLoggingLayer = exports_Layer.unwrap(exports_Effect.gen(function
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
 var exports_AnthropicClient = {};
 __export(exports_AnthropicClient, {
-  make: () => make62,
+  make: () => make63,
   layerConfig: () => layerConfig,
   layer: () => layer17,
   AnthropicClient: () => AnthropicClient
@@ -49540,7 +49791,7 @@ var WebSearchToolResultErrorCode = /* @__PURE__ */ Literals(["invalid_tool_input
 });
 var StopReason = /* @__PURE__ */ Literals(["end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal"]);
 var BetaStopReason = /* @__PURE__ */ Literals(["end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "compaction", "refusal", "model_context_window_exceeded"]);
-var Model2 = /* @__PURE__ */ Union2([String6, Literals(["claude-sonnet-5", "claude-fable-5", "claude-mythos-5", "claude-opus-4-8", "claude-opus-4-7", "claude-mythos-preview", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-opus-4-5", "claude-opus-4-5-20251101", "claude-sonnet-4-5", "claude-sonnet-4-5-20250929", "claude-opus-4-1", "claude-opus-4-1-20250805"])]).annotate({
+var Model = /* @__PURE__ */ Union2([String6, Literals(["claude-sonnet-5", "claude-fable-5", "claude-mythos-5", "claude-opus-4-8", "claude-opus-4-7", "claude-mythos-preview", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-opus-4-5", "claude-opus-4-5-20251101", "claude-sonnet-4-5", "claude-sonnet-4-5-20250929", "claude-opus-4-1", "claude-opus-4-1-20250805"])]).annotate({
   title: "Model",
   description: `The model that will complete your prompt.
 
@@ -50369,7 +50620,7 @@ var CompletionResponse = /* @__PURE__ */ Struct2({
 
 The format and length of IDs may change over time.`
   }),
-  model: Model2,
+  model: Model,
   stop_reason: Union2([String6, Null2]).annotate({
     title: "Stop Reason",
     description: 'The reason that we stopped.\n\nThis may be one the following values:\n* `"stop_sequence"`: we reached a stop sequence — either provided by you via the `stop_sequences` parameter, or a stop sequence built into the model\n* `"max_tokens"`: we exceeded `max_tokens_to_sample` or the model\'s maximum'
@@ -50741,7 +50992,7 @@ The format and length of IDs may change over time.`
     title: "Content",
     description: 'Content generated by the model.\n\nThis is an array of content blocks, each of which has a `type` that determines its shape.\n\nExample:\n\n```json\n[{"type": "text", "text": "Hi, I\'m Claude."}]\n```\n\nIf the request input `messages` ended with an `assistant` turn, then the response `content` will continue directly from that last turn. You can use this to constrain the model\'s output.\n\nFor example, if the input `messages` were:\n```json\n[\n  {"role": "user", "content": "What\'s the Greek name for Sun? (A) Sol (B) Helios (C) Sun"},\n  {"role": "assistant", "content": "The best answer is ("}\n]\n```\n\nThen the response `content` might be:\n\n```json\n[{"type": "text", "text": "B)"}]\n```'
   }),
-  model: Model2,
+  model: Model,
   stop_reason: Union2([BetaStopReason, Null2]).annotate({
     title: "Stop Reason",
     description: 'The reason that we stopped.\n\nThis may be one the following values:\n* `"end_turn"`: the model reached a natural stopping point\n* `"max_tokens"`: we exceeded the requested `max_tokens` or the model\'s maximum\n* `"stop_sequence"`: one of your provided custom `stop_sequences` was generated\n* `"tool_use"`: the model invoked one or more tools\n* `"pause_turn"`: we paused a long-running turn. You may provide the response back as-is in a subsequent request to let the model continue.\n* `"refusal"`: when streaming classifiers intervene to handle potential policy violations\n\nIn non-streaming mode this value is always non-null. In streaming mode, it is null in the `message_start` event and non-null otherwise.'
@@ -50835,7 +51086,7 @@ The format and length of IDs may change over time.`
     title: "Content",
     description: 'Content generated by the model.\n\nThis is an array of content blocks, each of which has a `type` that determines its shape.\n\nExample:\n\n```json\n[{"type": "text", "text": "Hi, I\'m Claude."}]\n```\n\nIf the request input `messages` ended with an `assistant` turn, then the response `content` will continue directly from that last turn. You can use this to constrain the model\'s output.\n\nFor example, if the input `messages` were:\n```json\n[\n  {"role": "user", "content": "What\'s the Greek name for Sun? (A) Sol (B) Helios (C) Sun"},\n  {"role": "assistant", "content": "The best answer is ("}\n]\n```\n\nThen the response `content` might be:\n\n```json\n[{"type": "text", "text": "B)"}]\n```'
   }),
-  model: Model2,
+  model: Model,
   stop_reason: Union2([StopReason, Null2]).annotate({
     title: "Stop Reason",
     description: 'The reason that we stopped.\n\nThis may be one the following values:\n* `"end_turn"`: the model reached a natural stopping point\n* `"max_tokens"`: we exceeded the requested `max_tokens` or the model\'s maximum\n* `"stop_sequence"`: one of your provided custom `stop_sequences` was generated\n* `"tool_use"`: the model invoked one or more tools\n* `"pause_turn"`: we paused a long-running turn. You may provide the response back as-is in a subsequent request to let the model continue.\n* `"refusal"`: when streaming classifiers intervene to handle potential policy violations\n\nIn non-streaming mode this value is always non-null. In streaming mode, it is null in the `message_start` event and non-null otherwise.'
@@ -50994,7 +51245,7 @@ var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet200 = BetaGetSkillVersio
 var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet4XX = BetaErrorResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete200 = BetaDeleteSkillVersionResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete4XX = BetaErrorResponse;
-var make61 = (httpClient, options3 = {}) => {
+var make62 = (httpClient, options3 = {}) => {
   const unexpectedStatus = (response) => flatMap5(orElseSucceed2(response.json, () => "Unexpected status code"), (description) => fail6(new HttpClientError({
     reason: new StatusCodeError({
       request: response.request,
@@ -51783,11 +52034,11 @@ var RedactedAnthropicHeaders = {
   AnthropicApiKey: "x-api-key"
 };
 var withRedactedHeaders = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedAnthropicHeaders)));
-var make62 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make63 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiVersion = options3.apiVersion ?? "2023-06-01";
   const httpClient = baseClient.pipe(mapRequest((request3) => request3.pipe(prependUrl(options3.apiUrl ?? "https://api.anthropic.com"), isNotUndefined(options3.apiKey) ? setHeader(RedactedAnthropicHeaders.AnthropicApiKey, value3(options3.apiKey)) : identity, setHeader("anthropic-version", apiVersion), acceptJson)), isNotUndefined(options3.transformClient) ? options3.transformClient : identity);
-  const client = make61(httpClient, {
+  const client = make62(httpClient, {
     transformClient: fnUntraced2(function* (client2) {
       const config = yield* AnthropicConfig.getOrUndefined;
       if (isNotUndefined(config?.transformClient)) {
@@ -51841,12 +52092,12 @@ var make62 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createMessageStream
   });
 }, withRedactedHeaders);
-var layer17 = (options3) => effect(AnthropicClient, make62(options3));
+var layer17 = (options3) => effect(AnthropicClient, make63(options3));
 var layerConfig = (options3) => effect(AnthropicClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const apiVersion = isNotUndefined(options3?.apiVersion) ? yield* options3.apiVersion : undefined;
-  return yield* make62({
+  return yield* make63({
     apiKey,
     apiUrl,
     apiVersion,
@@ -52497,37 +52748,6 @@ function hoistAllOfDescriptions(schema3) {
 var supportedKeywords2 = /* @__PURE__ */ new Set(["$ref", "type", "title", "description", "enum", "const", "anyOf", "allOf", "properties", "required", "additionalProperties", "items", "pattern"]);
 var formats2 = /* @__PURE__ */ new Set(["date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid"]);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Model.js
-var TypeId60 = "~effect/ai/Model";
-
-class ProviderName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ProviderName")) {
-}
-
-class ModelName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ModelName")) {
-}
-var Proto19 = {
-  [TypeId60]: TypeId60,
-  ["~effect/Layer"]: {
-    _ROut: identity,
-    _E: identity,
-    _RIn: identity
-  },
-  get captureRequirements() {
-    const self = this;
-    return contextWith2((context4) => succeed6(provide2(self, succeedContext(context4))));
-  },
-  ...PipeInspectableProto,
-  toJSON() {
-    return {
-      _id: "effect/ai/Model",
-      provider: this.provider
-    };
-  }
-};
-var make63 = (provider, modelName, layer18) => Object.assign(Object.create(Proto19), {
-  provider
-}, merge3(layer18, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
-
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicTelemetry.js
 var addAnthropicRequestAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.anthropic.request", camelToSnake);
 var addAnthropicResponseAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.anthropic.response", camelToSnake);
@@ -52568,7 +52788,7 @@ var formatIssue2 = /* @__PURE__ */ makeFormatterDefault();
 
 class Config extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicLanguageModel/Config")) {
 }
-var model = (model2, config) => make63("anthropic", model2, layer18({
+var model = (model2, config) => make53("anthropic", model2, layer18({
   model: model2,
   config
 }));
@@ -53623,7 +53843,7 @@ var makeStreamResponse = /* @__PURE__ */ fnUntraced2(function* ({
   const mcpToolCalls = new Map;
   const serverToolCalls = new Map;
   const contentBlocks = new Map;
-  const usage = {
+  const usage2 = {
     inputTokens: 0,
     outputTokens: 0,
     cacheReadInputTokens: 0,
@@ -53637,9 +53857,9 @@ var makeStreamResponse = /* @__PURE__ */ fnUntraced2(function* ({
         rawUsage = {
           ...event.message.usage
         };
-        usage.inputTokens = event.message.usage.input_tokens;
-        usage.cacheReadInputTokens = event.message.usage.cache_read_input_tokens ?? 0;
-        usage.cacheWriteInputTokens = event.message.usage.cache_creation_input_tokens ?? 0;
+        usage2.inputTokens = event.message.usage.input_tokens;
+        usage2.cacheReadInputTokens = event.message.usage.cache_read_input_tokens ?? 0;
+        usage2.cacheWriteInputTokens = event.message.usage.cache_creation_input_tokens ?? 0;
         if (isNotNullish(event.message.container)) {
           container = event.message.container;
         }
@@ -53703,15 +53923,15 @@ var makeStreamResponse = /* @__PURE__ */ fnUntraced2(function* ({
           ...rawUsage,
           ...event.usage
         };
-        if (isNotNull(event.usage.input_tokens) && usage.inputTokens !== event.usage.input_tokens) {
-          usage.inputTokens = event.usage.input_tokens;
+        if (isNotNull(event.usage.input_tokens) && usage2.inputTokens !== event.usage.input_tokens) {
+          usage2.inputTokens = event.usage.input_tokens;
         }
-        usage.outputTokens = event.usage.output_tokens;
-        if (isNotNull(event.usage.cache_read_input_tokens) && usage.cacheReadInputTokens !== event.usage.cache_read_input_tokens) {
-          usage.cacheReadInputTokens = event.usage.cache_read_input_tokens;
+        usage2.outputTokens = event.usage.output_tokens;
+        if (isNotNull(event.usage.cache_read_input_tokens) && usage2.cacheReadInputTokens !== event.usage.cache_read_input_tokens) {
+          usage2.cacheReadInputTokens = event.usage.cache_read_input_tokens;
         }
-        if (isNotNull(event.usage.cache_creation_input_tokens) && usage.cacheWriteInputTokens !== event.usage.cache_creation_input_tokens) {
-          usage.cacheWriteInputTokens = event.usage.cache_creation_input_tokens;
+        if (isNotNull(event.usage.cache_creation_input_tokens) && usage2.cacheWriteInputTokens !== event.usage.cache_creation_input_tokens) {
+          usage2.cacheWriteInputTokens = event.usage.cache_creation_input_tokens;
         }
         if (isNotNullish(event.delta.container)) {
           container = event.delta.container;
@@ -53741,13 +53961,13 @@ var makeStreamResponse = /* @__PURE__ */ fnUntraced2(function* ({
           reason: finishReason,
           usage: {
             inputTokens: {
-              uncached: usage.inputTokens,
-              total: usage.inputTokens + usage.cacheWriteInputTokens + usage.cacheReadInputTokens,
-              cacheRead: usage.cacheReadInputTokens,
-              cacheWrite: usage.cacheWriteInputTokens
+              uncached: usage2.inputTokens,
+              total: usage2.inputTokens + usage2.cacheWriteInputTokens + usage2.cacheReadInputTokens,
+              cacheRead: usage2.cacheReadInputTokens,
+              cacheWrite: usage2.cacheWriteInputTokens
             },
             outputTokens: {
-              total: usage.outputTokens,
+              total: usage2.outputTokens,
               text: undefined,
               reasoning: undefined
             }
@@ -55610,7 +55830,7 @@ var SharedModelIds = ModelIdsShared.members[1];
 
 class Config2 extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiLanguageModel/Config")) {
 }
-var model2 = (model3, config) => make63("openai", model3, layer20({
+var model2 = (model3, config) => make53("openai", model3, layer20({
   model: model3,
   config
 }));
@@ -57716,8 +57936,8 @@ var normalizeMcpToolCall = /* @__PURE__ */ fnUntraced2(function* ({
     params
   };
 });
-var getUsage = (usage) => {
-  if (isNullish(usage)) {
+var getUsage = (usage2) => {
+  if (isNullish(usage2)) {
     return {
       inputTokens: {
         uncached: undefined,
@@ -57732,11 +57952,11 @@ var getUsage = (usage) => {
       }
     };
   }
-  const inputTokens = usage.input_tokens;
-  const outputTokens = usage.output_tokens;
-  const cachedTokens = getUsageTokenDetail(usage.input_tokens_details, "cached_tokens") ?? 0;
-  const cacheWriteTokens = getUsageTokenDetail(usage.input_tokens_details, "cache_write_tokens");
-  const reasoningTokens = getUsageTokenDetail(usage.output_tokens_details, "reasoning_tokens") ?? 0;
+  const inputTokens = usage2.input_tokens;
+  const outputTokens = usage2.output_tokens;
+  const cachedTokens = getUsageTokenDetail(usage2.input_tokens_details, "cached_tokens") ?? 0;
+  const cacheWriteTokens = getUsageTokenDetail(usage2.input_tokens_details, "cache_write_tokens");
+  const reasoningTokens = getUsageTokenDetail(usage2.output_tokens_details, "reasoning_tokens") ?? 0;
   return {
     inputTokens: {
       uncached: inputTokens - cachedTokens,

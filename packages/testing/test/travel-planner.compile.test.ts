@@ -4,6 +4,7 @@ import {
   type AgentInputError,
   type AgentOutputError,
   type AgentPolicyError,
+  type ContextBudgetError,
   type ContextOverflowError,
   type IdGenerator,
   type ModelProtocolError,
@@ -62,6 +63,7 @@ type ExpectedFailure =
   | AgentInputError
   | AgentOutputError
   | AgentPolicyError
+  | ContextBudgetError
   | ContextOverflowError
   | ModelProtocolError
   | AgentApprovalDenied

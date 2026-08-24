@@ -202,7 +202,9 @@ The scheduler must classify recovery rather than blindly retry when failure occu
 
 Provider requests use a stable attempt operation ID when the provider supports it.
 Provider-returned text and reasoning deltas, signatures, redaction markers, usage,
-and metadata may be appended canonically as they arrive. A response becomes eligible
+and metadata may be appended canonically as they arrive. Every committed response records each
+completed model call separately, including compaction calls: provider, model, optional service
+tier/pricing version, cache splits, output splits, and estimated cost (RUN-035). A response becomes eligible
 for Tool execution or the next Prompt only after its completion record commits.
 
 If a worker dies mid-stream:
@@ -248,6 +250,16 @@ of its owning Run even before every call settles. If that Run instead terminates
 aborted without completing the batch, a later Run MUST NOT replay the orphan assistant Tool
 declaration or partial Tool results from that incomplete batch as model history. Instruction and
 user messages committed before the declaration remain visible.
+
+The first response of each Run also records the length of its evaluated instruction/wake prefix.
+That prefix remains canonical and visible to owner-Run recovery, but later Runs omit it from model
+input while preserving the conversational response and results (RUN-033).
+
+A Definition-owned completion Tool uses the same authorization, preparation, and settlement
+protocol as any external side effect. Its successful singleton result and a `RunCompleted` marker
+containing the Schema-projected output and exhaustion metadata commit in one atomic result batch.
+Recovery that observes that marker validates the matching declaration/result and proceeds directly
+to terminalization; it never invokes the model or Handler again (RUN-032).
 
 ## 11. Durable steps
 
@@ -323,6 +335,12 @@ from the already-classified Run failure; joined Submissions copy the host's cano
 byte-for-byte in both the live and recovery paths rather than rebuilding it from a Cause or
 message. The `SubmissionLedger` returns the same diagnostic as `Settlement.failure` on first
 finalization and every idempotent replay.
+
+Every Run settlement may carry its canonical `usageSummary`: model-call count, gross input/output
+breakdowns, total estimated microdollars, and deterministic per-model/tier groups (RUN-035). The
+summary is reserved and replayed with the exact settlement record and materialized by
+`awaitSettlement`; it is not reconstructed from the ledger's cached outcome. Joined Submissions
+omit an independent summary so one host Run's usage is not counted twice.
 
 Result-less cases are explicit by settlement family. A joined `completed` Submission has no
 independent output and may omit `result`; an `aborted` Submission always omits it because abort

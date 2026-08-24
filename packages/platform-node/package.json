@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@effect-agent/core": "workspace:*",
+    "@effect-agent/engine": "workspace:*",
     "@effect-agent/session": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",
     "@effect/platform-node": "catalog:",
@@ -34,7 +35,6 @@
   },
   "devDependencies": {
     "@effect-agent/capabilities": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"

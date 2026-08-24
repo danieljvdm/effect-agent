@@ -27,20 +27,22 @@ AgentPolicy.make({
   toolConcurrency: 4,
   repeatedFailureLimit: 3,
   tokenBudget: 80_000,
+  completionReserveTokens: 8_000,
   costBudgetMicrousd: 2_000_000,
   onExhaustion: "final-answer",
 });
 ```
 
-| Bound                  | What it limits                                       | On exhaustion                     |
-| ---------------------- | ---------------------------------------------------- | --------------------------------- |
-| `maxTurns`             | model requests per Run                               | `onExhaustion` resolves           |
-| `maxToolCalls`         | declared Tool Calls per Run (programmatic included)  | `onExhaustion` resolves           |
-| `maxDuration`          | logical-Run wall clock, including durable suspension | always fails typed                |
-| `tokenBudget`          | input + output tokens per Run                        | `onExhaustion` resolves (RUN-025) |
-| `costBudgetMicrousd`   | estimated cost per Run (needs a cost estimator)      | always fails typed                |
-| `repeatedFailureLimit` | consecutive terminal Tool failures                   | always fails typed                |
-| `toolConcurrency`      | parallel Tool Handlers per batch                     | concurrency gate                  |
+| Bound                     | What it limits                                       | On exhaustion                     |
+| ------------------------- | ---------------------------------------------------- | --------------------------------- |
+| `maxTurns`                | model requests per Run                               | `onExhaustion` resolves           |
+| `maxToolCalls`            | declared Tool Calls per Run (programmatic included)  | `onExhaustion` resolves           |
+| `maxDuration`             | logical-Run wall clock, including durable suspension | always fails typed                |
+| `tokenBudget`             | input + output tokens per Run                        | `onExhaustion` resolves (RUN-025) |
+| `completionReserveTokens` | capacity withheld from research for delivery         | enters finalization before spend  |
+| `costBudgetMicrousd`      | estimated cost per Run (needs a cost estimator)      | always fails typed                |
+| `repeatedFailureLimit`    | consecutive terminal Tool failures                   | always fails typed                |
+| `toolConcurrency`         | parallel Tool Handlers per batch                     | concurrency gate                  |
 
 A typed exhaustion failure is `AgentPolicyError` with a `limit` literal naming the exhausted limit.
 In the DN and DC assemblies a Run failed this way settles with that literal preserved as the
@@ -57,7 +59,8 @@ also applies once to the token budget under RUN-025.
 1. An over-budget declared Tool batch **never executes**. Every call settles as a synthetic
    failed result telling the model the budget is exhausted and to answer from what it already
    has. No handler runs; in the DN and DC assemblies the batch is never durably declared.
-2. Every subsequent model request forbids tool use (Effect AI `toolChoice: "none"`).
+2. Every subsequent model request forbids tool use (Effect AI `toolChoice: "none"`) unless the
+   Definition owns a completion Tool, in which case only that Tool remains available.
 3. Turn exhaustion admits exactly **one grace Turn** past `maxTurns`, under the same constraint.
    A second grace is structurally impossible.
 4. The Run settles _completed_ with `finishReason: "budget-exhausted"`, never a plain
@@ -67,17 +70,18 @@ also applies once to the token budget under RUN-025.
    distinguishes a truncated answer from an ordinary one and names the exhausted limit without
    the live event stream or message parsing.
 5. A model that declares a Tool Call under the constraint fails the Run typed
-   with `ModelProtocolError` under RUN-020. The Run does not enter a rejection loop.
+   with `ModelProtocolError` under RUN-020, except for the singleton Definition-owned completion
+   Tool in RUN-032. That Tool delivers and settles immediately without another summary turn.
 
 Synthetic rejections are exempt from `repeatedFailureLimit` folding: no handler ran, so a
 rejected four-call batch cannot trip a limit of three.
 
-**`"fail"`.** Exhaustion fails the Run before the exceeding work starts. Choose it for pipelines
-that must never accept a truncated answer. The repository's own PR reviewer pins it for review
-_children_, because every configured discovery
-and verification pass must settle exactly; a partial result would launder exhaustion into settled
-review assurance. Its separate input-coverage claim is host-derived and does not imply defect
-recall.
+**`"fail"`.** Exhaustion fails the Run typed before any declared application Handler starts,
+including a completion Tool. Choose fail mode for pipelines that must never accept a truncated
+answer or start a delivery side effect after a policy breach. The repository's own PR reviewer
+pins it for review _children_, because every configured discovery and verification pass must
+settle exactly; a partial result would launder exhaustion into settled review assurance. Its
+separate input-coverage claim is host-derived and does not imply defect recall.
 
 Duration, cost, and repeated-failure limits always fail the Run. Token exhaustion allows only one
 constrained final answer under RUN-025, so it cannot loop or spend without a bound.

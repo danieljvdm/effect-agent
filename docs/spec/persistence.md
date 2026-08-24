@@ -149,14 +149,14 @@ The canonical log supports, at minimum:
 
 - conversation created/closed;
 - user, steering, and follow-up input;
-- model request metadata;
+- model request metadata and per-call normalized provider/model/tier/token/cost usage;
 - model text/reasoning deltas, completion, signature/redaction metadata, or structured item;
 - tool call requested, prepared, approved/rejected, settled, unknown;
 - compaction created/selected;
 - subagent requested/started/joined and child Parent Link;
-- run warning/failure;
+- run warning/failure and atomic terminal-Tool completion marker;
 - abort requested;
-- terminal outcome;
+- terminal outcome with aggregate Run usage;
 - repair annotations.
 
 Partial Tool-argument deltas, queue depth changes, heartbeats, and debug spans are

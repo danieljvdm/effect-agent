@@ -6,6 +6,8 @@ import {
   ExhaustedLimit,
   PolicyLimit,
   ReceiptId,
+  ModelCallUsage,
+  RunUsageSummary,
   RunId,
   SettlementId,
   SubagentParentLink,
@@ -225,12 +227,18 @@ export class ModelResponseRecorded extends Schema.TaggedClass<ModelResponseRecor
   messages: PersistedJson,
   messagesDigest: Digest,
   /**
-   * Per-call provider usage (RUN-023), present for records committed after
-   * the context-economics arc. Totals are what budget re-seeding needs; cache splits are
-   * deliberately not persisted — snapshot fidelity is host-side, and the
-   * canonical log stays minimal. Absent fields re-seed as zero (dev-data
-   * policy: old records under-count rather than fail).
+   * Number of leading messages that belong only to this Run's evaluated instructions and wake
+   * input. They remain canonical and are visible while recovering this Run, but later Runs omit
+   * them from their model-facing history. Records without this field retain their full history.
    */
+  runScopedPrefixLength: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  /**
+   * Exact normalized usage for every model call staged into this Turn. A
+   * summarizer and the Turn response are distinct entries. Absent on legacy
+   * records, whose aggregate totals below retain the old resume behavior.
+   */
+  modelUsage: Schema.optionalKey(Schema.Array(ModelCallUsage)),
+  /** Aggregate compatibility fields used by older projections. */
   inputTokens: Schema.optionalKey(Schema.Natural),
   outputTokens: Schema.optionalKey(Schema.Natural),
   /** Estimated spend staged with the usage; recovery re-seeds the cost budget (RUN-023). */
@@ -393,12 +401,26 @@ export class RunFailed extends Schema.TaggedClass<RunFailed>("@effect-agent/sess
   },
 ) {}
 
-export class RunCompleted extends Schema.TaggedClass<RunCompleted>(
-  "@effect-agent/session/RunCompleted",
-)("RunCompleted", {
+const RunCompletedFields = Schema.Struct({
   runId: RunId,
   output: PersistedJson,
-}) {}
+  /** Application disposition captured with an ordinary terminal Tool completion. */
+  runDisposition: Schema.optionalKey(PersistedJson),
+  /** Honest soft-landing marker captured atomically with the terminal Tool result. */
+  finishReason: Schema.optionalKey(Schema.Literal("budget-exhausted")),
+  exhausted: Schema.optionalKey(ExhaustedLimit),
+}).check(
+  Schema.makeFilter(
+    (completed) =>
+      (completed.exhausted === undefined || completed.finishReason === "budget-exhausted") &&
+      (completed.runDisposition === undefined || completed.finishReason === undefined),
+    { title: "Run completion metadata matches its terminal family" },
+  ),
+);
+
+export class RunCompleted extends Schema.TaggedClass<RunCompleted>(
+  "@effect-agent/session/RunCompleted",
+)("RunCompleted", RunCompletedFields) {}
 
 export class RepairAnnotated extends Schema.TaggedClass<RepairAnnotated>(
   "@effect-agent/session/RepairAnnotated",
@@ -465,6 +487,8 @@ const RawSubmissionSettled = Schema.Struct({
    * before the limit became durable (additive, schemaVersion 1).
    */
   policyLimit: Schema.optionalKey(PolicyLimit),
+  /** Canonical aggregate of all priced model calls made by this Run. */
+  usageSummary: Schema.optionalKey(RunUsageSummary),
 });
 
 const isPolicyFailureProjection = Schema.is(
@@ -475,6 +499,7 @@ const isSettlementFailureDiagnostic = Schema.is(SettlementFailureDiagnostic);
 const hasValidSettlementFamily = (settled: typeof RawSubmissionSettled.Type): boolean =>
   (settled.finishReason === undefined || settled.outcome === "completed") &&
   (settled.exhausted === undefined || settled.finishReason === "budget-exhausted") &&
+  (settled.usageSummary === undefined || settled.runId !== undefined) &&
   (settled.runDisposition === undefined ||
     (settled.outcome === "completed" &&
       settled.finishReason === undefined &&

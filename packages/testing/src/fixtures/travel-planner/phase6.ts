@@ -719,6 +719,25 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
         turn: 1,
         inputTokens: 128,
         outputTokens: 96,
+        runScopedPrefixLength: 2,
+        modelUsage: [
+          {
+            provider: "scripted",
+            model: "travel-planner-phase-4",
+            inputTokens: {
+              total: 128,
+              uncached: 128,
+              cacheRead: 0,
+              cacheWrite: 0,
+            },
+            outputTokens: {
+              total: 96,
+              text: 96,
+              reasoning: 0,
+            },
+            costMicrousd: 0,
+          },
+        ],
         messages: {
           content: [
             {
@@ -868,6 +887,24 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
         turn: 2,
         inputTokens: 128,
         outputTokens: 96,
+        modelUsage: [
+          {
+            provider: "scripted",
+            model: "travel-planner-phase-4",
+            inputTokens: {
+              total: 128,
+              uncached: 128,
+              cacheRead: 0,
+              cacheWrite: 0,
+            },
+            outputTokens: {
+              total: 96,
+              text: 96,
+              reasoning: 0,
+            },
+            costMicrousd: 0,
+          },
+        ],
         messages: {
           content: [
             {
@@ -918,6 +955,40 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
                 "Traveler names and accessibility requests are intentionally omitted",
               ],
               nextAction: "review",
+            },
+          ],
+        },
+        usageSummary: {
+          modelCalls: 2,
+          inputTokens: {
+            total: 256,
+            uncached: 256,
+            cacheRead: 0,
+            cacheWrite: 0,
+          },
+          outputTokens: {
+            total: 192,
+            text: 192,
+            reasoning: 0,
+          },
+          costMicrousd: 0,
+          byModel: [
+            {
+              provider: "scripted",
+              model: "travel-planner-phase-4",
+              modelCalls: 2,
+              inputTokens: {
+                total: 256,
+                uncached: 256,
+                cacheRead: 0,
+                cacheWrite: 0,
+              },
+              outputTokens: {
+                total: 192,
+                text: 192,
+                reasoning: 0,
+              },
+              costMicrousd: 0,
             },
           ],
         },

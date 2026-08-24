@@ -143,6 +143,12 @@ const SearchTool = Tool.make("search", {
 });
 const searchToolkit = Toolkit.make(SearchTool);
 
+const PostMessageTool = Tool.make("post_message", {
+  parameters: Schema.Struct({ message: Schema.String }),
+  success: Schema.Struct({ messageId: Schema.String }),
+});
+const postMessageToolkit = Toolkit.make(PostMessageTool);
+
 const answerOutput = Schema.Struct({ answer: Schema.String });
 
 layer(identifiers)("context economics — bounding, tracking, status, exhaustion", (it) => {
@@ -326,7 +332,16 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         expect(observed[0]?.inputTokens).toBe(9);
         expect(observed[0]?.usage.inputTokens.cacheRead).toBe(3);
         expect(observed[0]?.usage.inputTokens.cacheWrite).toBe(4);
+        expect(observed[0]?.modelUsage).toMatchObject({
+          provider: "scripted",
+          model: "context-economics",
+          inputTokens: { total: 9, uncached: 2, cacheRead: 3, cacheWrite: 4 },
+        });
         expect(observed[1]?.inputTokens).toBe(150);
+        expect(observed[1]?.modelUsage).toMatchObject({
+          inputTokens: { total: 150, uncached: 150, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 5, text: 5, reasoning: 0 },
+        });
 
         // The second request's status message reflects the FIRST call's input,
         // not the cumulative total.
@@ -436,11 +451,11 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             maxToolCalls: 10,
             maxDuration: "30 seconds",
             toolConcurrency: 1,
-            tokenBudget: 100,
+            tokenBudget: 10_000,
           }),
         });
         const { model, requests } = scriptedModel([
-          toolCallParts("s1", "search", {}, usageOf(70, 15)),
+          toolCallParts("s1", "search", {}, usageOf(7_000, 1_500)),
           finalParts('{"answer":"done"}', usageOf(1, 1)),
         ]);
         const toolLayer = searchToolkit.toLayer({ search: () => Effect.succeed("found") });
@@ -454,7 +469,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         if (first === undefined || second === undefined) throw new Error("expected two requests");
         expect(promptText(first.prompt)).not.toContain("WARNING:");
         expect(messageText(second.prompt.content.at(-1)!)).toBe(
-          "<run-status>turn 2/10 · tool-calls 1/10 · tokens 85/100 · last-context 70 · elapsed 0s/30s · WARNING: approaching limits — converge and deliver your final result now.</run-status>",
+          "<run-status>turn 2/10 · tool-calls 1/10 · tokens 8500/10000 · last-context 7000 · elapsed 0s/30s · WARNING: approaching limits — converge and deliver your final result now.</run-status>",
         );
       }),
   );
@@ -496,13 +511,13 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             maxToolCalls: 10,
             maxDuration: "30 seconds",
             toolConcurrency: 1,
-            tokenBudget: 100,
+            tokenBudget: 10_000,
           }),
         });
         const { model } = scriptedModel([
-          toolCallParts("s1", "search", {}, usageOf(50, 10)),
-          toolCallParts("s2", "search", {}, usageOf(25, 0)),
-          finalParts('{"answer":"done"}', usageOf(5, 0)),
+          toolCallParts("s1", "search", {}, usageOf(800, 200)),
+          toolCallParts("s2", "search", {}, usageOf(7_500, 0)),
+          finalParts('{"answer":"done"}', usageOf(500, 0)),
         ]);
         const toolLayer = searchToolkit.toLayer({ search: () => Effect.succeed("found") });
 
@@ -514,7 +529,11 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
 
         const warnings = (yield* Ref.get(events)).filter((event) => event._tag === "BudgetWarning");
         expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toMatchObject({ limit: "tokens", consumed: 85, limitValue: 100 });
+        expect(warnings[0]).toMatchObject({
+          limit: "tokens",
+          consumed: 8_500,
+          limitValue: 10_000,
+        });
       }),
   );
 
@@ -617,12 +636,12 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             maxToolCalls: 5,
             maxDuration: "30 seconds",
             toolConcurrency: 1,
-            tokenBudget: 10,
+            tokenBudget: 10_000,
           }),
         });
         const { model, requests } = scriptedModel([
-          toolCallParts("s1", "search", {}, usageOf(9, 4)),
-          finalParts('{"answer":"partial"}', usageOf(3, 1)),
+          toolCallParts("s1", "search", {}, usageOf(9_000, 4_000)),
+          finalParts('{"answer":"partial"}', usageOf(3_000, 1_000)),
         ]);
         const toolLayer = searchToolkit.toLayer({
           search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
@@ -674,6 +693,169 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         const completed = observed.find((event) => event._tag === "RunCompleted");
         expect(completed).toMatchObject({
           output: { answer: "partial" },
+          finishReason: "budget-exhausted",
+          exhausted: "tokens",
+        });
+      }),
+  );
+
+  it.effect(
+    "RUN-032: an authorized completion Tool settles immediately when its response crosses the token budget",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const definition = Agent.define("token-exhausted-terminal-tool", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
+          instructions: "Deliver the final answer with post_message.",
+          toolkit: postMessageToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 5,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 10_000,
+            onExhaustion: "fail",
+          }),
+          completion: {
+            tool: "post_message",
+            project: ({ parameters, result }) => ({
+              message: parameters.message,
+              messageId: result.messageId,
+            }),
+          },
+        });
+        const { model, requests } = scriptedModel([
+          toolCallParts(
+            "delivery-1",
+            "post_message",
+            { message: "delivered" },
+            usageOf(9_000, 4_000),
+          ),
+          finalParts('{"message":"private summary","messageId":"wrong"}'),
+        ]);
+        const toolLayer = postMessageToolkit.toLayer({
+          post_message: () =>
+            Ref.update(handlerStarts, (count) => count + 1).pipe(
+              Effect.as({ messageId: "message-1" }),
+            ),
+        });
+
+        const result = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+          question: "deliver",
+        }).pipe(Effect.provide(toolLayer));
+
+        expect(requests).toHaveLength(1);
+        expect(yield* Ref.get(handlerStarts)).toBe(1);
+        expect(result).toMatchObject({
+          output: { message: "delivered", messageId: "message-1" },
+          finishReason: "budget-exhausted",
+          exhausted: "tokens",
+        });
+      }),
+  );
+
+  it.effect("RUN-032: a completion Tool must be the singleton declared batch", () =>
+    Effect.gen(function* () {
+      const mixedToolkit = Toolkit.make(PostMessageTool, SearchTool);
+      const handlerStarts = yield* Ref.make(0);
+      const definition = Agent.define("mixed-terminal-tool-batch", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
+        instructions: "Deliver exactly once.",
+        toolkit: mixedToolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 5,
+          maxToolCalls: 5,
+          maxDuration: "30 seconds",
+          toolConcurrency: 2,
+        }),
+        completion: {
+          tool: "post_message",
+          project: ({ parameters, result }) => ({
+            message: parameters.message,
+            messageId: result.messageId,
+          }),
+        },
+      });
+      const { model, requests } = scriptedModel([
+        [
+          {
+            type: "tool-call",
+            id: "delivery-mixed",
+            name: "post_message",
+            params: { message: "must not send" },
+            providerExecuted: false,
+          },
+          {
+            type: "tool-call",
+            id: "search-mixed",
+            name: "search",
+            params: {},
+            providerExecuted: false,
+          },
+          { type: "finish", reason: "tool-calls", usage: usageOf(10, 5) },
+        ],
+      ]);
+      const toolLayer = mixedToolkit.toLayer({
+        post_message: () =>
+          Ref.update(handlerStarts, (count) => count + 1).pipe(
+            Effect.as({ messageId: "must-not-exist" }),
+          ),
+        search: () =>
+          Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("must-not-run")),
+      });
+
+      const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+        question: "deliver",
+      }).pipe(Effect.provide(toolLayer), Effect.exit);
+
+      expect(failureFrom(exit)).toBeInstanceOf(ModelProtocolError);
+      expect(requests).toHaveLength(1);
+      expect(yield* Ref.get(handlerStarts)).toBe(0);
+    }),
+  );
+
+  it.effect(
+    "RUN-034: completion reserve enters delivery mode before a research call can consume it",
+    () =>
+      Effect.gen(function* () {
+        const definition = Agent.define("completion-reserve-terminal-tool", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
+          instructions: `Research only while delivery capacity remains. ${"context ".repeat(100)}`,
+          toolkit: postMessageToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 5,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 10_000,
+            completionReserveTokens: 9_800,
+          }),
+          completion: {
+            tool: "post_message",
+            project: ({ parameters, result }) => ({
+              message: parameters.message,
+              messageId: result.messageId,
+            }),
+          },
+        });
+        const { model, requests } = scriptedModel([
+          toolCallParts("delivery-1", "post_message", { message: "reserved" }, usageOf(50, 10)),
+        ]);
+        const toolLayer = postMessageToolkit.toLayer({
+          post_message: () => Effect.succeed({ messageId: "message-reserved" }),
+        });
+
+        const result = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+          question: "deliver",
+        }).pipe(Effect.provide(toolLayer));
+
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.toolChoice).toEqual({ mode: "auto", oneOf: ["post_message"] });
+        expect(result).toMatchObject({
+          output: { message: "reserved", messageId: "message-reserved" },
           finishReason: "budget-exhausted",
           exhausted: "tokens",
         });
@@ -839,7 +1021,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             maxToolCalls: 5,
             maxDuration: "30 seconds",
             toolConcurrency: 1,
-            tokenBudget: 10,
+            tokenBudget: 10_000,
           }),
         });
         const { model } = scriptedModel([
@@ -872,12 +1054,12 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             maxToolCalls: 5,
             maxDuration: "30 seconds",
             toolConcurrency: 1,
-            tokenBudget: 10,
+            tokenBudget: 10_000,
           }),
         });
         const { model } = scriptedModel([
-          toolCallParts("s1", "search", {}, usageOf(9, 4)),
-          finalParts("not json", usageOf(1, 1)),
+          toolCallParts("s1", "search", {}, usageOf(9_000, 4_000)),
+          finalParts("not json", usageOf(1_000, 1_000)),
         ]);
         const toolLayer = searchToolkit.toLayer({ search: () => Effect.succeed("found") });
 
@@ -925,6 +1107,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
 
   it.effect("RUN-025: a simultaneous token and cost breach fails typed on the cost rail", () =>
     Effect.gen(function* () {
+      const estimatedInputTokens = yield* Ref.make<number | undefined>(undefined);
       const definition = Agent.define("both-breach", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
@@ -943,11 +1126,15 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
       const exit = yield* AgentRuntime.run(
         Agent.withModel(definition, model),
         { question: "q" },
-        { estimateCostMicrousd: () => Effect.succeed(2_000) },
+        {
+          estimateCostMicrousd: (usage) =>
+            Ref.set(estimatedInputTokens, usage.inputTokens.total).pipe(Effect.as(2_000)),
+        },
       ).pipe(Effect.exit);
       const failure = failureFrom(exit);
       expect(failure).toBeInstanceOf(AgentPolicyError);
       expect((failure as AgentPolicyError).limit).toBe("cost");
+      expect(yield* Ref.get(estimatedInputTokens)).toBe(150);
     }),
   );
 
@@ -1380,7 +1567,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             maxToolCalls: 2,
             maxDuration: "30 seconds",
             toolConcurrency: 1,
-            tokenBudget: 100,
+            tokenBudget: 10_000,
           }),
         });
         const { model } = scriptedModel([
@@ -1403,7 +1590,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             { type: "text-start", id: "answer" },
             { type: "text-delta", id: "answer", delta: '{"answer":"hosted"}' },
             { type: "text-end", id: "answer" },
-            { type: "finish", reason: "stop", usage: usageOf(150, 10) },
+            { type: "finish", reason: "stop", usage: usageOf(15_000, 1_000) },
           ],
         ]);
         const result = yield* AgentRuntime.run(Agent.withModel(definition, model), {

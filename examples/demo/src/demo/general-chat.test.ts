@@ -4,11 +4,12 @@ import type {
   AgentInputError,
   AgentOutputError,
   AgentPolicyError,
+  AgentToolAuthorizationDenied,
+  ContextBudgetError,
   ContextOverflowError,
   IdGenerator,
   ModelProtocolError,
 } from "@effect-agent/core";
-import { type AgentToolAuthorizationDenied } from "@effect-agent/core";
 import {
   AgentRuntime,
   type AgentChildPending,
@@ -51,6 +52,7 @@ type ExpectedFailure =
   | AgentInputError
   | AgentOutputError
   | AgentPolicyError
+  | ContextBudgetError
   | ContextOverflowError
   | ModelProtocolError
   | AgentApprovalDenied
