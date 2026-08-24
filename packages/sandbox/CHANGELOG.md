@@ -1,5 +1,21 @@
 # @effect-agent/sandbox
 
+## 0.1.0-beta.27
+
+### Patch Changes
+
+- [#148](https://github.com/danieljvdm/effect-agent/pull/148) [`47e9a53`](https://github.com/danieljvdm/effect-agent/commit/47e9a53d99555af3b0ac993b5c9c55ad266e327b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add the schema-first `PageCapture` port and conservative `WebCapture.make`/`WebCapture.makeExtract` Tools over an immutable, deny-by-default browser-request allowlist. Add native `BrowserRun` Quick Action Layers with bounded response streaming and a typed Workers AI authorization and accounting failure for structured extraction.
+
+  ```ts
+  const readDocs = WebCapture.make("read_webpage", {
+    description: "Read documentation pages.",
+    urls: ["docs.example.com", "*.effect.website"],
+  });
+  // worker: browserQuickActionCaptureLayer().pipe(
+  //   Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: env.BROWSER })),
+  // )
+  ```
+
 ## 0.1.0-beta.26
 
 ## 0.1.0-beta.25

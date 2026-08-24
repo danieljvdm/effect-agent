@@ -1,5 +1,17 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.27
+
+### Minor Changes
+
+- [#155](https://github.com/danieljvdm/effect-agent/pull/155) [`773264b`](https://github.com/danieljvdm/effect-agent/commit/773264b75759c4456e1e549d2172bbe39610a8c1) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add crash-safe terminal delivery Tools and final model responses, completion-capacity reservation, Run-scoped prompt provenance, and target-aware compaction.
+  Persist priced per-call model usage in the DN and DC assemblies and expose aggregate usage on Run settlements.
+
+### Patch Changes
+
+- Updated dependencies [[`773264b`](https://github.com/danieljvdm/effect-agent/commit/773264b75759c4456e1e549d2172bbe39610a8c1)]:
+  - @effect-agent/core@0.1.0-beta.27
+
 ## 0.1.0-beta.26
 
 ### Patch Changes
