@@ -3,11 +3,13 @@ import {
   AttemptId,
   ConversationId,
   ReceiptId,
+  RunUsageSummary,
   SettlementId,
   SubmissionId,
   ToolCallId,
 } from "@effect-agent/core";
-import { Context, Duration, Effect, Option, Schema, Stream } from "effect";
+import type { Option, Stream } from "effect";
+import { Context, Duration, Effect, Schema } from "effect";
 
 import {
   AbortRequested,
@@ -348,6 +350,8 @@ const SettlementFields = Schema.Struct({
   outcome: SettlementOutcome,
   /** Schema-encoded application disposition materialized from the exact canonical reservation. */
   runDisposition: Schema.optionalKey(PersistedJson),
+  /** Canonical aggregate of model usage and estimated spend for this Run. */
+  usageSummary: Schema.optionalKey(RunUsageSummary),
   /** Present exactly for `failed`; its Schema rejects excess keys before canonical projection. */
   failure: Schema.optionalKey(SettlementFailureDiagnostic),
   settledAt: Schema.DateTimeUtcFromString,

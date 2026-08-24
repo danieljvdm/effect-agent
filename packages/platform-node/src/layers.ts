@@ -1,6 +1,8 @@
 import type { SubmissionId } from "@effect-agent/core";
-import type { ConversationStore, WakeScheduler } from "@effect-agent/session";
+import type { RunCostEstimator } from "@effect-agent/engine";
 import {
+  type ConversationStore,
+  type WakeScheduler,
   AgentBindingResolver,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   DeploymentId,
@@ -105,6 +107,8 @@ export interface NodeDurableRuntimeOptions {
   readonly leaseRenewalInterval?: number | undefined;
   /** Milliseconds; default 500. */
   readonly abortPollInterval?: number | undefined;
+  /** Deployment-owned pricing authority used by durable cost budgets and settlements. */
+  readonly estimateCostMicrousd?: RunCostEstimator | undefined;
   /** Milliseconds; default 5000. */
   readonly busyTimeout?: number | undefined;
   /** Milliseconds; default 25. */
@@ -191,22 +195,22 @@ const sqliteStorageConfigLayer: Layer.Layer<SqliteStorageConfig, never, NodeDura
   );
 
 /** Session coordinator configuration derived from the single validated Node configuration. */
-const durableRuntimeConfigLayer: Layer.Layer<
-  DurableRuntimeConfig,
-  never,
-  NodeDurableRuntimeConfig
-> = Layer.effect(DurableRuntimeConfig)(
-  Effect.gen(function* () {
-    const config = yield* NodeDurableRuntimeConfig;
-    return DurableRuntimeConfig.make({
-      deploymentId: config.deploymentId,
-      producerId: config.producerId,
-      settlementPollInterval: Duration.millis(config.settlementPollInterval),
-      leaseRenewalInterval: Duration.millis(config.leaseRenewalInterval),
-      abortPollInterval: Duration.millis(config.abortPollInterval),
-    });
-  }),
-);
+const durableRuntimeConfigLayer = (
+  estimateCostMicrousd: RunCostEstimator | undefined,
+): Layer.Layer<DurableRuntimeConfig, never, NodeDurableRuntimeConfig> =>
+  Layer.effect(DurableRuntimeConfig)(
+    Effect.gen(function* () {
+      const config = yield* NodeDurableRuntimeConfig;
+      return DurableRuntimeConfig.make({
+        deploymentId: config.deploymentId,
+        producerId: config.producerId,
+        settlementPollInterval: Duration.millis(config.settlementPollInterval),
+        leaseRenewalInterval: Duration.millis(config.leaseRenewalInterval),
+        abortPollInterval: Duration.millis(config.abortPollInterval),
+        ...(estimateCostMicrousd === undefined ? {} : { estimateCostMicrousd }),
+      });
+    }),
+  );
 
 /** Wake fallback-scan cadence derived from the single validated Node configuration. */
 const wakeSchedulerConfigLayer: Layer.Layer<
@@ -376,7 +380,11 @@ export class NodeDurableRuntime {
         );
         return DurableAgentRuntime.layer.pipe(
           Layer.provideMerge(
-            Layer.mergeAll(ports, durableRuntimeConfigLayer, bindingResolverLayer),
+            Layer.mergeAll(
+              ports,
+              durableRuntimeConfigLayer(options.estimateCostMicrousd),
+              bindingResolverLayer,
+            ),
           ),
           Layer.provide(
             Layer.mergeAll(wakeSchedulerConfigLayer, runtimeFailpointLayer, reconcilerLayer),

@@ -719,6 +719,25 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
         turn: 1,
         inputTokens: 128,
         outputTokens: 96,
+        runScopedPrefixLength: 2,
+        modelUsage: [
+          {
+            provider: "scripted",
+            model: "travel-planner-phase-4",
+            inputTokens: {
+              total: 128,
+              uncached: 128,
+              cacheRead: 0,
+              cacheWrite: 0,
+            },
+            outputTokens: {
+              total: 96,
+              text: 96,
+              reasoning: 0,
+            },
+            costMicrousd: 0,
+          },
+        ],
         messages: {
           content: [
             {
@@ -868,6 +887,24 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
         turn: 2,
         inputTokens: 128,
         outputTokens: 96,
+        modelUsage: [
+          {
+            provider: "scripted",
+            model: "travel-planner-phase-4",
+            inputTokens: {
+              total: 128,
+              uncached: 128,
+              cacheRead: 0,
+              cacheWrite: 0,
+            },
+            outputTokens: {
+              total: 96,
+              text: 96,
+              reasoning: 0,
+            },
+            costMicrousd: 0,
+          },
+        ],
         messages: {
           content: [
             {
@@ -883,8 +920,46 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
     },
   },
   {
-    batchId: "submission-settlement:{submissionId}",
+    batchId: "turn:run:{submissionId}:2",
     sequence: 8,
+    record: {
+      recordId: "run-completed:run:{submissionId}",
+      family: "conversation",
+      schemaVersion: 1,
+      createdAt: "{timestamp}",
+      deploymentId: "{deploymentId}",
+      payload: {
+        _tag: "RunCompleted",
+        runId: "run:{submissionId}",
+        output: {
+          itineraries: [
+            {
+              title: "Westward light, eastbound overnight",
+              route: "San Francisco → London",
+              dates: "14–19 September 2026",
+              flight: "EA 218 · nonstop · SFO 18:40 → LHR 13:05+1",
+              lodging: "Bloomsbury House · refundable studio · 4 nights",
+              activities: ["British Museum timed entry", "Thames evening walk"],
+              estimatedTotalCents: 284000,
+              currency: "USD",
+              quoteId: "quote-sfo-lhr-001",
+              assumptions: [
+                "Two travelers sharing one studio",
+                "Quote is read-only availability, not a reservation",
+              ],
+              unresolvedConstraints: [
+                "Traveler names and accessibility requests are intentionally omitted",
+              ],
+              nextAction: "review",
+            },
+          ],
+        },
+      },
+    },
+  },
+  {
+    batchId: "submission-settlement:{submissionId}",
+    sequence: 9,
     record: {
       recordId: "settlement:{submissionId}",
       family: "conversation",
@@ -918,6 +993,40 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
                 "Traveler names and accessibility requests are intentionally omitted",
               ],
               nextAction: "review",
+            },
+          ],
+        },
+        usageSummary: {
+          modelCalls: 2,
+          inputTokens: {
+            total: 256,
+            uncached: 256,
+            cacheRead: 0,
+            cacheWrite: 0,
+          },
+          outputTokens: {
+            total: 192,
+            text: 192,
+            reasoning: 0,
+          },
+          costMicrousd: 0,
+          byModel: [
+            {
+              provider: "scripted",
+              model: "travel-planner-phase-4",
+              modelCalls: 2,
+              inputTokens: {
+                total: 256,
+                uncached: 256,
+                cacheRead: 0,
+                cacheWrite: 0,
+              },
+              outputTokens: {
+                total: 192,
+                text: 192,
+                reasoning: 0,
+              },
+              costMicrousd: 0,
             },
           ],
         },

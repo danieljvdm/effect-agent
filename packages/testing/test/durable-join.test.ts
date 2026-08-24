@@ -236,6 +236,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         "UserInputRecorded",
         "UserInputRecorded",
         "ModelResponseRecorded",
+        "RunCompleted",
         "SubmissionSettled",
         "SubmissionSettled",
       ]);

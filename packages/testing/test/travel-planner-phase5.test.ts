@@ -1156,6 +1156,7 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
             "ToolStepSettled",
             "ToolCallSettled",
             "ModelResponseRecorded",
+            "RunCompleted",
             "SubmissionSettled",
           ]);
 
@@ -1177,12 +1178,10 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
             ).toBe(1);
           }
 
-          // The canonical journal alone rebuilds the model-visible prompt (encoded params are
-          // Prompt-valid, the P4 Struct workaround is unnecessary).
+          // The canonical journal rebuilds the next-Run prompt without the prior instruction/wake
+          // prefix (encoded params remain Prompt-valid; the P4 Struct workaround is unnecessary).
           const prompt = yield* promptFromCanonicalRecords(records);
           expect(prompt.content.map((message) => message.role)).toEqual([
-            "system",
-            "user",
             "assistant",
             "tool",
             "assistant",

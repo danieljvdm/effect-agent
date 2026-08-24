@@ -202,7 +202,9 @@ The scheduler must classify recovery rather than blindly retry when failure occu
 
 Provider requests use a stable attempt operation ID when the provider supports it.
 Provider-returned text and reasoning deltas, signatures, redaction markers, usage,
-and metadata may be appended canonically as they arrive. A response becomes eligible
+and metadata may be appended canonically as they arrive. Every committed response records each
+completed model call separately, including compaction calls: provider, model, optional service
+tier/pricing version, cache splits, output splits, and estimated cost (RUN-035). A response becomes eligible
 for Tool execution or the next Prompt only after its completion record commits.
 
 If a worker dies mid-stream:
@@ -248,6 +250,28 @@ of its owning Run even before every call settles. If that Run instead terminates
 aborted without completing the batch, a later Run MUST NOT replay the orphan assistant Tool
 declaration or partial Tool results from that incomplete batch as model history. Instruction and
 user messages committed before the declaration remain visible.
+
+The first response of each Run also records the length of its evaluated instruction/wake prefix.
+That prefix remains canonical and visible to owner-Run recovery, but later Runs omit it from model
+input while preserving the conversational response and results (RUN-033).
+
+A successful no-tool final response and its `RunCompleted` marker commit in one atomic Turn batch.
+Recovery that observes the marker validates the matching response and proceeds directly to
+terminalization without invoking the model again. It re-decodes the canonical response through
+the Agent output Schema and requires the resulting durable output to match the marker; disagreement
+fails closed. Histories written before this additive marker remain valid and recover through the
+legacy response projection.
+
+A Definition-owned completion Tool uses the same authorization, preparation, and settlement
+protocol as any external side effect. Its successful singleton result and a `RunCompleted` marker
+containing the Schema-projected output and exhaustion metadata commit in one atomic result batch.
+Recovery that observes that marker re-decodes the canonical parameters/result, reapplies the
+Definition projector and Agent output Schema, and requires the durable output to match before
+terminalization. It counts every declared Tool Call, including provider-executed calls, before
+accepting the application completion Tool as the singleton batch; it never invokes the model or
+Handler again (RUN-032). A budget-exhausted
+marker carries both `finishReason: "budget-exhausted"` and the `exhausted` dimension; a marker with
+only one fails Schema decoding.
 
 ## 11. Durable steps
 
@@ -299,7 +323,8 @@ a `completed` soft landing persists `finishReason: "budget-exhausted"` with the
 `{errorTag, message}` failure projection in `result`. Because the metadata rides the
 exact reserved record, it survives reservation replay, canonical append, recovery,
 and every later read unchanged. Decode is family-bound fail-closed: metadata on the
-wrong settlement family rejects. A `policyLimit` whose `result` does not carry the
+wrong settlement family rejects, and `finishReason: "budget-exhausted"` and `exhausted` must be
+present together or absent together. A `policyLimit` whose `result` does not carry the
 `AgentPolicyError` projection also rejects instead of becoming trusted audit history,
 and records persisted before the metadata existed decode with it absent (additive,
 schemaVersion 1).
@@ -313,7 +338,9 @@ recovery; it does not derive it from cached outcome metadata. Decode is fail-clo
 valid only on a `completed` settlement with a `runId` and without
 `finishReason: "budget-exhausted"`. Failed, aborted, budget-exhausted, run-less joined,
 incomplete, and recovery-only outcomes cannot acquire one. The durable runtime never reconstructs
-this value from result prose or Tool records.
+this value from result prose or Tool records. When recovering the owning Run's canonical completion
+marker, however, it re-applies the Definition selector and Schema to the reconstructed typed output
+and requires that encoding to match the marker before terminalizing.
 
 Every `failed` canonical settlement carries exactly one generic failure diagnostic in `result`:
 `errorTag` is non-empty and at most 256 characters, and `message` is at most 16 KiB. No other
@@ -323,6 +350,15 @@ from the already-classified Run failure; joined Submissions copy the host's cano
 byte-for-byte in both the live and recovery paths rather than rebuilding it from a Cause or
 message. The `SubmissionLedger` returns the same diagnostic as `Settlement.failure` on first
 finalization and every idempotent replay.
+
+Every Run settlement may carry its canonical `usageSummary`: model-call count, gross input/output
+breakdowns, total estimated microdollars, and deterministic per-model/tier groups (RUN-035). The
+summary is reserved and replayed with the exact settlement record and materialized by
+`awaitSettlement`; it is not reconstructed from the ledger's cached outcome. Joined Submissions
+omit an independent summary so one host Run's usage is not counted twice. Each canonical token
+total equals its recorded components, and cumulative token, model-call, and cost arithmetic is
+checked; an overflow fails typed before an invalid summary can be reserved. Per-model pricing
+identities are unique, and their checked component sums exactly match every top-level total.
 
 Result-less cases are explicit by settlement family. A joined `completed` Submission has no
 independent output and may omit `result`; an `aborted` Submission always omits it because abort

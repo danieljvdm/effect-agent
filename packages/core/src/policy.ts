@@ -56,6 +56,8 @@ const AgentPolicyFields = Schema.Struct({
   repeatedFailureLimit: NonNegativeInt,
   onExhaustion: OnExhaustion,
   tokenBudget: Schema.optionalKey(PositiveInt),
+  /** Tokens withheld from research calls so one final delivery call remains admissible. */
+  completionReserveTokens: NonNegativeInt,
   costBudgetMicrousd: Schema.optionalKey(NonNegativeInt),
   /** Per-model-call live-context bound; crossing it triggers compaction rather than failure. */
   contextTokenLimit: Schema.optionalKey(PositiveInt),
@@ -75,6 +77,7 @@ export type AgentPolicyInput = Readonly<
     | "toolResultBounds"
     | "runStatus"
     | "compaction"
+    | "completionReserveTokens"
   > & {
     /** Finite, positive wall-clock duration accepted in any Effect Duration input form. */
     readonly maxDuration: Duration.Input;
@@ -86,6 +89,8 @@ export type AgentPolicyInput = Readonly<
     readonly toolResultBounds?: ToolResultBounds;
     /** Whether a derived run-status message is appended to each model call; defaults to `"appended"`. */
     readonly runStatus?: AgentPolicyFields["runStatus"];
+    /** Tokens reserved for final delivery; defaults to 20% of tokenBudget, capped at 4,096. */
+    readonly completionReserveTokens?: number;
     /** Compaction strategy applied when `contextTokenLimit` is crossed; defaults documented on `CompactionPolicy`. */
     readonly compaction?: CompactionPolicy;
   }
@@ -95,6 +100,14 @@ export type AgentPolicyInput = Readonly<
 export class AgentPolicy extends Schema.Class<AgentPolicy>("AgentPolicy")(AgentPolicyFields) {
   /** Normalize and validate finite policy bounds, throwing on invalid input. */
   static override make(input: AgentPolicyInput): AgentPolicy {
+    const completionReserveTokens =
+      input.completionReserveTokens ??
+      (input.tokenBudget === undefined
+        ? 4_096
+        : Math.min(4_096, Math.floor(input.tokenBudget / 5)));
+    if (input.tokenBudget !== undefined && completionReserveTokens > input.tokenBudget) {
+      throw new Error("completionReserveTokens cannot exceed tokenBudget");
+    }
     return super.make({
       ...input,
       maxDuration: Duration.fromInputUnsafe(input.maxDuration),
@@ -102,6 +115,7 @@ export class AgentPolicy extends Schema.Class<AgentPolicy>("AgentPolicy")(AgentP
       onExhaustion: input.onExhaustion ?? "final-answer",
       toolResultBounds: input.toolResultBounds ?? ToolResultBounds.make({ maxBytes: 50 * 1024 }),
       runStatus: input.runStatus ?? "appended",
+      completionReserveTokens,
       compaction: input.compaction ?? CompactionPolicy.make(),
     });
   }

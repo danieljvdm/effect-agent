@@ -34,12 +34,12 @@ callers receive the same value from `DurableAgentRuntime.awaitSettlement` and ca
 `AgentResultSchema` enforces the same boundary and rejects a `runDisposition` paired with
 `finishReason: "budget-exhausted"`.
 
-Under the default `onExhaustion: "final-answer"` policy, a Run that exhausts its Turn or Tool
-Call budget settles with one constrained final-answer Turn and reports it honestly as
+Under the default `onExhaustion: "final-answer"` policy, a Run that exhausts its Turn, Tool Call,
+or token budget settles with one constrained final-answer Turn and reports it honestly as
 `finishReason: "budget-exhausted"` (its `turns` count may exceed `maxTurns` by that one grace
-Turn). Duration, token, and cost exhaustion, pending approval, interruption, and failed output
-decoding are never successful finish reasons; with `onExhaustion: "fail"`, Turn and Tool Call
-exhaustion fail typed as well.
+Turn). Duration and cost exhaustion, pending approval, interruption, and failed output decoding
+are never successful finish reasons. With `onExhaustion: "fail"`, Turn, Tool Call, and token
+exhaustion fail typed before any declared application Handler starts.
 
 ## Observe semantic events
 

@@ -1,5 +1,5 @@
 import { ConversationId } from "@effect-agent/core";
-import type { RunContextPreparation } from "@effect-agent/engine";
+import type { RunContextPreparation, RunCostEstimator } from "@effect-agent/engine";
 import { RunContextPreparationPassthrough } from "@effect-agent/engine";
 import {
   AgentBindingResolver,
@@ -80,6 +80,8 @@ export interface CloudflareDurableRuntimeOptions {
   readonly leaseRenewalInterval?: number | undefined;
   /** Milliseconds; default 500. */
   readonly abortPollInterval?: number | undefined;
+  /** Deployment-owned pricing authority used by durable cost budgets and settlements. */
+  readonly estimateCostMicrousd?: RunCostEstimator | undefined;
   /** Milliseconds; default 25. */
   readonly observationPollInterval?: number | undefined;
   /** Bytes; default just under the 2 MB platform value limit. */
@@ -359,6 +361,9 @@ export class CloudflareDurableRuntime {
             settlementPollInterval: Duration.millis(config.settlementPollInterval),
             leaseRenewalInterval: Duration.millis(config.leaseRenewalInterval),
             abortPollInterval: Duration.millis(config.abortPollInterval),
+            ...(options.estimateCostMicrousd === undefined
+              ? {}
+              : { estimateCostMicrousd: options.estimateCostMicrousd }),
           }),
         );
 

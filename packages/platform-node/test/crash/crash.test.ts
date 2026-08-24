@@ -600,7 +600,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "kill before settlement reservation: the outcome is recomputed and settles exactly once",
+      "kill before settlement reservation: canonical completion avoids another model call and settles once",
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
@@ -632,11 +632,13 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
 
-                // D6: the model was re-invoked (a visible duplicate Turn), never re-settled.
+                // The response and Run completion committed atomically before
+                // reservation, so recovery terminalizes without another model call.
                 const records = yield* readLog(conversation);
                 expect(
                   logTags(records).filter((tag) => tag === "ModelResponseRecorded"),
-                ).toHaveLength(2);
+                ).toHaveLength(1);
+                expect(logTags(records).filter((tag) => tag === "RunCompleted")).toHaveLength(1);
                 expect(logTags(records).filter((tag) => tag === "SubmissionSettled")).toHaveLength(
                   1,
                 );

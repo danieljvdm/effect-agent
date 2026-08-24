@@ -86,7 +86,7 @@ export const TravelPlannerPhase2 = Agent.define("travel-planner-phase-2", {
     maxToolCalls: 4,
     maxDuration: "30 seconds",
     toolConcurrency: 3,
-    tokenBudget: 2_048,
+    tokenBudget: 4_096,
   }),
   description:
     "Build a review-only itinerary and require approval before creating a temporary hold.",

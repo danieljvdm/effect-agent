@@ -292,6 +292,13 @@ non-serializable Layer option and is deliberately outside `CloudflareDurableRunt
 That Schema continues to decode only scalar identities, cadences, limits, and storage gates before
 resources open.
 
+`NodeDurableRuntimeOptions.estimateCostMicrousd` and
+`CloudflareDurableRuntimeOptions.estimateCostMicrousd` install the deployment's closed pricing
+authority (RUN-035). It receives provider, model, and raw Effect AI usage and returns a
+non-negative microdollar estimate plus optional service-tier/pricing-version identity. The host
+captures it in `DurableRuntimeConfig`, so every replacement Attempt applies the same authority;
+configured `costBudgetMicrousd` policies fail typed when no estimator exists.
+
 Durable Object storage is the only correctness-critical store for that Conversation. In-memory
 object state is a cache because objects may stop unexpectedly. Alarm work is idempotent because
 alarms execute at least once.

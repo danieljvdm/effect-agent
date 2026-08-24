@@ -56,8 +56,8 @@ import {
   DoStorageConfigValue,
 } from "./do-storage-config.ts";
 import { DoStorageFailpoint, type DoStorageFailpointHandler } from "./do-storage-failpoint.ts";
-import type { DoStorageCompatibilityError } from "./errors.ts";
 import {
+  type DoStorageCompatibilityError,
   DoAppendConflict,
   DoCheckpointConflict,
   DoFenceRejected,

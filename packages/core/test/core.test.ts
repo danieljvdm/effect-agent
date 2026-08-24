@@ -30,25 +30,167 @@ import {
   ConversationId,
   DelegationId,
   IdGenerator,
+  InputTokenUsage,
+  ModelCallUsage,
   ModelProtocolError,
+  OutputTokenUsage,
   ReceiptId,
   RunCompleted,
   RunEvent,
+  RunUsageSummary,
   RunId,
   RunStarted,
   SettlementId,
   SubagentParentLink,
+  summarizeModelUsage,
   ToolCallDeclared,
   ToolCallId,
   ToolResultBounds,
   TruncatedToolResult,
   TurnId,
+  UsageAggregationError,
 } from "../src/index.ts";
 
 // Core is platform-neutral: no TextEncoder in its lib; hex length halves to UTF-8 bytes.
 const utf8Bytes = (value: string): number => Encoding.encodeHex(value).length / 2;
 
 describe("core schemas", () => {
+  it("RUN-035: rejects non-additive canonical token breakdowns", () => {
+    expect(
+      Schema.decodeUnknownExit(InputTokenUsage)({
+        total: 0,
+        uncached: 0,
+        cacheRead: 100,
+        cacheWrite: 0,
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(OutputTokenUsage)({ total: 1, text: 1, reasoning: 1 })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(ModelCallUsage)({
+        provider: "test",
+        model: "test-model",
+        inputTokens: { total: 3, uncached: 1, cacheRead: 1, cacheWrite: 1 },
+        outputTokens: { total: 3, text: 2, reasoning: 1 },
+        costMicrousd: 0,
+      })._tag,
+    ).toBe("Success");
+
+    const group = {
+      provider: "test",
+      model: "test-model",
+      modelCalls: 1,
+      inputTokens: { total: 3, uncached: 1, cacheRead: 1, cacheWrite: 1 },
+      outputTokens: { total: 3, text: 2, reasoning: 1 },
+      costMicrousd: 5,
+    } as const;
+    const summary = {
+      modelCalls: 1,
+      inputTokens: group.inputTokens,
+      outputTokens: group.outputTokens,
+      costMicrousd: group.costMicrousd,
+      byModel: [group],
+    } as const;
+    expect(Schema.decodeUnknownExit(RunUsageSummary)(summary)._tag).toBe("Success");
+    expect(Schema.decodeUnknownExit(RunUsageSummary)({ ...summary, modelCalls: 0 })._tag).toBe(
+      "Failure",
+    );
+    expect(
+      Schema.decodeUnknownExit(RunUsageSummary)({
+        ...summary,
+        inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(RunUsageSummary)({
+        ...summary,
+        outputTokens: { total: 0, text: 0, reasoning: 0 },
+      })._tag,
+    ).toBe("Failure");
+    expect(Schema.decodeUnknownExit(RunUsageSummary)({ ...summary, costMicrousd: 0 })._tag).toBe(
+      "Failure",
+    );
+    expect(
+      Schema.decodeUnknownExit(RunUsageSummary)({ ...summary, byModel: [group, group] })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(RunUsageSummary)({
+        ...summary,
+        byModel: [
+          { ...group, costMicrousd: 0 },
+          {
+            ...group,
+            model: "zero-call-cost",
+            modelCalls: 0,
+            inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 0, text: 0, reasoning: 0 },
+          },
+        ],
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(RunUsageSummary)({
+        modelCalls: 2,
+        inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 0, text: 0, reasoning: 0 },
+        costMicrousd: Number.MAX_SAFE_INTEGER,
+        byModel: [
+          {
+            ...group,
+            model: "large-cost",
+            inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 0, text: 0, reasoning: 0 },
+            costMicrousd: Number.MAX_SAFE_INTEGER,
+          },
+          {
+            ...group,
+            model: "overflow-cost",
+            inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 0, text: 0, reasoning: 0 },
+            costMicrousd: 1,
+          },
+        ],
+      })._tag,
+    ).toBe("Failure");
+  });
+
+  it("RUN-035: aggregates usage through a typed safe-integer overflow boundary", () => {
+    const call = (inputTokens: number, costMicrousd: number) =>
+      ModelCallUsage.make({
+        provider: "test",
+        model: "test-model",
+        inputTokens: InputTokenUsage.make({
+          total: inputTokens,
+          uncached: inputTokens,
+          cacheRead: 0,
+          cacheWrite: 0,
+        }),
+        outputTokens: OutputTokenUsage.make({ total: 0, text: 0, reasoning: 0 }),
+        costMicrousd,
+      });
+
+    const inputOverflow = Effect.runSync(
+      Effect.flip(summarizeModelUsage([call(Number.MAX_SAFE_INTEGER, 0), call(1, 0)])),
+    );
+    expect(inputOverflow).toBeInstanceOf(UsageAggregationError);
+    expect(inputOverflow.field).toBe("inputTokens.total");
+
+    const costOverflow = Effect.runSync(
+      Effect.flip(summarizeModelUsage([call(0, Number.MAX_SAFE_INTEGER), call(0, 1)])),
+    );
+    expect(costOverflow).toBeInstanceOf(UsageAggregationError);
+    expect(costOverflow.field).toBe("costMicrousd");
+
+    const summary = Effect.runSync(summarizeModelUsage([call(2, 3), call(5, 7)]));
+    expect(summary).toMatchObject({
+      modelCalls: 2,
+      inputTokens: { total: 7, uncached: 7, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 0, text: 0, reasoning: 0 },
+      costMicrousd: 10,
+    });
+  });
+
   it("decodes distinct non-empty branded identifiers", () => {
     expect(Schema.decodeSync(AgentId)("travel-planner")).toBe("travel-planner");
     expect(Schema.decodeSync(DelegationId)("delegate-research")).toBe("delegate-research");
@@ -81,6 +223,7 @@ describe("core schemas", () => {
     expect(policy.maxDuration).toEqual(Duration.seconds(30));
     expect(policy.repeatedFailureLimit).toBe(3);
     expect(policy.tokenBudget).toBe(1_000);
+    expect(policy.completionReserveTokens).toBe(200);
     expect(policy.costBudgetMicrousd).toBe(10_000);
     expect(() =>
       AgentPolicy.make({
@@ -439,6 +582,7 @@ describe("context-economics policy", () => {
     expect(policy.compaction.keepRecentTokens).toBe(20_000);
     expect(policy.compaction.mode).toBe("prune-then-summarize");
     expect(policy.contextTokenLimit).toBeUndefined();
+    expect(policy.completionReserveTokens).toBe(4_096);
 
     const custom = AgentPolicy.make({
       maxTurns: 2,
@@ -473,6 +617,16 @@ describe("context-economics policy", () => {
     expect(() => ToolResultBounds.make({ maxBytes: 0 })).toThrow();
     expect(() => CompactionPolicy.make({ keepRecentTokens: 0 })).toThrow();
     expect(() => CompactionPolicy.make({ keepRecentTokens: 2.5 })).toThrow();
+    expect(() =>
+      AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 1,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+        tokenBudget: 100,
+        completionReserveTokens: 101,
+      }),
+    ).toThrow();
   });
 });
 

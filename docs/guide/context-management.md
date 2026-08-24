@@ -78,8 +78,9 @@ described in [Agent definitions](/guide/agents): the over-budget batch settles s
 tool use is forbidden, and one grace Turn produces the final answer. The token dimension joins
 the same resolution: when cumulative usage crosses `tokenBudget`, a breaching response that
 already carries a decodable answer completes the Run directly, and otherwise the Run takes at
-most one constrained grace Turn (`toolChoice: "none"`; its usage is charged once and cannot
-re-trigger the breach). Either way the Run completes honestly:
+most one constrained grace Turn (`toolChoice: "none"`, or only the Definition-owned completion
+Tool; its usage is charged once and cannot re-trigger the breach). Either way the Run completes
+honestly:
 
 ```ts
 RunCompleted {
@@ -95,8 +96,9 @@ the budget-extension grant flow consumes when an orchestrator decides to re-dele
 larger allowance.
 
 `onExhaustion: "fail"` keeps every dimension fail-fast for pipelines that must never accept a
-truncated answer. Duration and cost breaches always fail typed because a grace call would extend
-the wall-clock limit or increase the bill.
+truncated answer. No declared application Handler, including a completion Tool, starts after the
+breach. Duration and cost breaches always fail typed because a grace call would extend the
+wall-clock limit or increase the bill.
 
 ## Compaction
 

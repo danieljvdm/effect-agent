@@ -136,6 +136,7 @@ const RUN_TAGS = [
   "ToolCallSettled",
   "ToolCallSettled",
   "ModelResponseRecorded",
+  "RunCompleted",
 ] as const;
 
 describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking is NOT claimed safely replayable (P5 scope)", () => {

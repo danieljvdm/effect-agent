@@ -58,7 +58,8 @@ The single durable terminal outcome owed to an accepted Submission: `completed`,
 `aborted`. A failed Settlement always carries the framework's bounded generic diagnostic;
 completed joined work and every aborted Settlement may legitimately have no result. An ordinary
 completed Settlement may materialize the Definition-validated, Schema-encoded application run
-disposition stored in its exact canonical record.
+disposition stored in its exact canonical record. A Run Settlement may also carry its canonical
+aggregate model-usage and estimated-cost summary; joined Submissions do not duplicate it.
 
 ## Agent capabilities
 
@@ -96,6 +97,12 @@ but before an outcome is recorded, recovery records an unknown outcome and does 
 **Durable Tool**  
 An Effect AI Tool whose handler requires the framework's Durable Step service and divides external
 effects into named Steps. The handler may be re-entered after interruption.
+
+**Completion Tool**
+
+The single Definition-designated Tool whose successful singleton call projects through the Agent
+output Schema and completes the Run immediately. It remains an ordinary external side effect for
+authorization and durability; the designation adds terminal semantics, not exactly-once execution.
 
 **Step**  
 A deterministically named sub-operation within one Durable Tool Call. Its result is
@@ -169,7 +176,8 @@ and acceptable final output.
 Creation of a model-context summary or branch that reduces future prompt size without erasing
 canonical evidence. Physical record deletion is a separate retention operation. The engine
 compacts natively at the pre-Turn seam when the estimated next context exceeds the Context Token
-Limit. It prunes old Tool results, summarizes through one metered model call, and records
+Limit or would consume the Completion Reserve. It prunes old Tool results, summarizes through one
+metered model call, and records
 each compaction in the DN and DC assemblies as a canonical `CompactionCreated` record that
 projections fold
 (RUN-026). Host-supplied, digest-bound compaction artifacts remain a separate capability.
@@ -181,6 +189,11 @@ model-visible prompt, so eviction rebuilds it without making its artifact author
 The optional `AgentPolicy.contextTokenLimit` bound on one model call's live context, supplied by
 the host from its model choice. Distinct from `tokenBudget` (the cumulative runaway stop) and
 `costBudgetMicrousd` (spend).
+
+**Completion Reserve**
+
+The `AgentPolicy.completionReserveTokens` capacity withheld from research when a cumulative token
+budget is configured, so the Run can enter finalization before delivery becomes unaffordable.
 
 **Tool Result Bounds**  
 The `AgentPolicy.toolResultBounds` byte bound (default 50 KiB) applied once to every application

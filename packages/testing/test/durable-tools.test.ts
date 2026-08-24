@@ -467,6 +467,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         "ToolCallPrepared",
         "ToolCallSettled",
         "ModelResponseRecorded",
+        "RunCompleted",
         "SubmissionSettled",
       ]);
       const byId = new Map(
@@ -488,11 +489,10 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(prepared.toolName).toBe("book");
       }
 
-      // The canonical journal alone still rebuilds the exact model-visible prompt.
+      // The canonical journal rebuilds the next-Run prompt without replaying the prior Run's
+      // instruction and wake prefix.
       const prompt = yield* promptFromCanonicalRecords(records);
       expect(prompt.content.map((message) => message.role)).toEqual([
-        "system",
-        "user",
         "assistant",
         "tool",
         "assistant",
@@ -530,6 +530,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         "ModelResponseRecorded",
         "ToolCallSettled",
         "ModelResponseRecorded",
+        "RunCompleted",
         "SubmissionSettled",
       ]);
       // The response/results split still applies (application calls exist), only preparation
@@ -1082,11 +1083,10 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         ).toHaveLength(2);
 
         // The audit tags stay prompt-transparent: the journal replays one contiguous tool
-        // message for the Turn regardless of the late per-call settles.
+        // message for the Turn regardless of the late per-call settles, while omitting the
+        // prior Run's instruction and wake prefix.
         const prompt = yield* promptFromCanonicalRecords(records);
         expect(prompt.content.map((message) => message.role)).toEqual([
-          "system",
-          "user",
           "assistant",
           "tool",
           "assistant",
@@ -1455,8 +1455,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       ).toHaveLength(1);
       const prompt = yield* promptFromCanonicalRecords(records);
       expect(prompt.content.map((message) => message.role)).toEqual([
-        "system",
-        "user",
         "assistant",
         "tool",
         "assistant",
