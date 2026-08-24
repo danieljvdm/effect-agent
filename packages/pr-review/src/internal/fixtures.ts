@@ -8,7 +8,7 @@ import {
   ReviewPublisher,
 } from "./github.ts";
 import type { ReviewPublicationPlan } from "./render.ts";
-import type { ReviewHeadComparison, ReviewState } from "./review-state.ts";
+import type { ReviewHeadComparison, ReviewState, ReviewTreeComparison } from "./review-state.ts";
 import {
   MAX_CHANGED_FILES,
   MAX_FILE_CHARS,
@@ -120,7 +120,7 @@ export const staticPriorReviews = (
   options: {
     readonly state?: Option.Option<ReviewState> | undefined;
     readonly comparison?: ReviewHeadComparison | undefined;
-    readonly treeComparison?: ReviewHeadComparison | undefined;
+    readonly treeComparison?: ReviewTreeComparison | undefined;
   } = {},
 ): PriorReviews["Service"] =>
   PriorReviews.of({
@@ -142,7 +142,7 @@ export const staticPriorReviewsLayer = (
   options: {
     readonly state?: Option.Option<ReviewState> | undefined;
     readonly comparison?: ReviewHeadComparison | undefined;
-    readonly treeComparison?: ReviewHeadComparison | undefined;
+    readonly treeComparison?: ReviewTreeComparison | undefined;
   } = {},
 ): Layer.Layer<PriorReviews> =>
   Layer.succeed(PriorReviews)(staticPriorReviews(fingerprint, options));

@@ -395,6 +395,23 @@ export class ReviewHeadComparison extends Schema.Class<ReviewHeadComparison>(
   truncated: Schema.Boolean,
 }) {}
 
+/**
+ * Current and previous paths for 300 PR files plus bounded stored continuity
+ * paths. The live adapter refuses a larger snapshot-comparison request.
+ */
+export const MAX_TREE_COMPARISON_PATHS = 750;
+
+/** A direct comparison of two complete commit tree snapshots. */
+export class ReviewTreeComparison extends Schema.Class<ReviewTreeComparison>(
+  "@effect-agent/pr-review/ReviewTreeComparison",
+)({
+  baseSha: GitCommitSha,
+  headSha: GitCommitSha,
+  changedPaths: Schema.Array(ChangedPath).check(Schema.isMaxLength(MAX_TREE_COMPARISON_PATHS)),
+  /** True when GitHub returned either recursive tree incompletely. */
+  truncated: Schema.Boolean,
+}) {}
+
 /** Internal review selection applied as a decorator over the full PR source. */
 export interface ReviewSelection {
   readonly mode: ReviewScopeMode;
@@ -482,19 +499,15 @@ const filePaths = (file: ChangedFile): ReadonlyArray<string> =>
   file.previousPath === undefined ? [file.path] : [file.path, file.previousPath];
 
 const incrementalFromDelta = (input: {
-  readonly current: PullRequestMetadata;
   readonly fullFiles: ReadonlyArray<ChangedFile>;
   readonly profileFingerprint: string;
   readonly priorState: ReviewState;
-  readonly deltaFiles: ReadonlyArray<ChangedFile>;
+  readonly deltaPaths: ReadonlyArray<string>;
   readonly extraAffectedPaths?: ReadonlyArray<string> | undefined;
   readonly reason: string;
 }): ReviewSelection => {
   const currentPaths = new Set(input.fullFiles.flatMap(filePaths));
-  const affectedPaths = new Set([
-    ...input.deltaFiles.flatMap(filePaths),
-    ...(input.extraAffectedPaths ?? []),
-  ]);
+  const affectedPaths = new Set([...input.deltaPaths, ...(input.extraAffectedPaths ?? [])]);
   const initialAffectedCount = affectedPaths.size;
   // Reopen every current path needed to reassess a concern touched by this
   // delta. Repeat to a fixed point because two concerns may overlap on a path.
@@ -513,14 +526,6 @@ const incrementalFromDelta = (input: {
     }
   }
   const selectedByPath = new Map<string, ChangedFile>();
-  for (const file of input.deltaFiles) {
-    if (
-      currentPaths.has(file.path) ||
-      (file.previousPath !== undefined && currentPaths.has(file.previousPath))
-    ) {
-      selectedByPath.set(file.path, file);
-    }
-  }
   const carriedPaths = input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path));
   const retryOnly = new Set<string>();
   for (const path of carriedPaths) {
@@ -608,11 +613,12 @@ export const selectReviewRange = (input: {
   readonly comparison: ReviewHeadComparison | undefined;
   readonly baseComparison?: ReviewHeadComparison | undefined;
   /**
-   * Two-dot tree comparison used when the reviewed head is not a git ancestor
-   * (rebase, amend, force-push). Intersected with the current PR path set so
-   * main-drift outside the pull request never re-enters scope.
+   * Direct commit-tree snapshot comparison used when the reviewed head is not
+   * a git ancestor. Selection hydrates these paths from the current PR files.
    */
-  readonly contentComparison?: ReviewHeadComparison | undefined;
+  readonly contentComparison?: ReviewTreeComparison | undefined;
+  /** Why the direct snapshot comparison could not produce complete evidence. */
+  readonly contentComparisonFailure?: string | undefined;
   readonly lookupFailure?: string | undefined;
 }): ReviewSelection => {
   const full = (reason: string) =>
@@ -654,25 +660,37 @@ export const selectReviewRange = (input: {
       baseReason = `; base advanced from ${input.priorState.baseSha.slice(0, 7)} and overlapping PR paths were included`;
     }
     return incrementalFromDelta({
-      current: input.current,
       fullFiles: input.fullFiles,
       profileFingerprint: input.profileFingerprint,
       priorState: input.priorState,
-      deltaFiles: comparison.files,
+      deltaPaths: comparison.files.flatMap(filePaths),
       extraAffectedPaths: extraAffected,
       reason: `changes since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
     });
   }
   const contentComparison = input.contentComparison;
-  if (contentComparison !== undefined && !contentComparison.truncated) {
+  if (contentComparison !== undefined) {
+    if (
+      contentComparison.baseSha !== input.priorState.reviewedHeadSha ||
+      contentComparison.headSha !== input.current.headSha
+    ) {
+      return full("the rewritten-head tree snapshot comparison did not match the requested heads");
+    }
+    if (contentComparison.truncated) {
+      return full("the rewritten-head tree snapshot comparison was truncated");
+    }
     return incrementalFromDelta({
-      current: input.current,
       fullFiles: input.fullFiles,
       profileFingerprint: input.profileFingerprint,
       priorState: input.priorState,
-      deltaFiles: contentComparison.files,
+      deltaPaths: contentComparison.changedPaths,
       reason: `rewritten history; contents changed since reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}`,
     });
+  }
+  if (input.contentComparisonFailure !== undefined) {
+    return full(
+      `the rewritten-head tree snapshot comparison failed: ${input.contentComparisonFailure.slice(0, 2_048)}`,
+    );
   }
   if (comparison === undefined) return full("the incremental head comparison was unavailable");
   if (comparison.truncated) return full("the incremental comparison exceeded GitHub's file bound");
