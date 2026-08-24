@@ -172,6 +172,26 @@ least-authority bindings, and enforced limits are. No raw secret may be returned
 or included in an executor binding, and the deterministic test substitute identifies itself as
 `unisolated` rather than masquerading as a boundary.
 
+Page capture output is a rendered web page and therefore untrusted, attacker-influenced input.
+The capture capability is deny-by-default: an immutable construction-time HTTPS host allowlist
+governs navigation, redirects, and every browser subrequest. The request Schema rejects malformed
+URLs, non-HTTPS targets, and embedded credentials; discovered links must be absolute,
+credential-free HTTP(S) URLs and grant no navigation authority. Responses are byte-bounded before
+buffering. Rendered JavaScript may mutate
+remote state, so capture Tools remain `uncertain`, are not automatically replayed, and cannot
+enter readonly-only Code Mode. Structured extraction accepts only a bounded object JSON Schema;
+the request rejects malformed or unsupported root and nested keywords, excessive encoded bytes,
+excessive depth, oversized collections, and cycles before any provider can run. Browser RPC
+authority is an explicit host-owned service. Extraction additionally requires an explicit
+host authorization and accounting service for any platform-selected model provider, and results
+are decoded through the caller's service-aware Effect Schema before use. Foreign provider failure
+causes and inference-policy diagnostics remain host-only; the typed public policy error identifies
+the provider and authorization or accounting step without copying the host's message.
+Model-visible failures and cleanup logs carry only bounded,
+fixed operation or HTTP-status descriptions and never interpolate foreign exception text,
+rate-limit bodies, provider envelopes, or other remote error bodies.
+A page that instructs the model is data, never authority.
+
 The read-only SQL reference Tool's guarantee is database authority, not SQL text inspection: a
 database identity without mutation, DDL, administrative, or extension privileges; denial of
 side-effecting functions reachable from a `SELECT`, including installed extensions and

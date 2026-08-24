@@ -10,3 +10,4 @@ export * from "./redaction.ts";
 export * from "./scheduling.ts";
 export * from "./subagent.ts";
 export * from "./subagent-reservation.ts";
+export * from "./web-capture.ts";
