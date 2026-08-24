@@ -16,6 +16,7 @@ import {
   makeAnthropicReviewModel,
   makeOpenAiReviewModel,
   openAiClientLayer,
+  validateReviewServiceTier,
   type ReviewProvider,
 } from "./internal/providers.ts";
 import { ReviewPublicationPlan } from "./internal/render.ts";
@@ -51,6 +52,12 @@ const effortFlag = Flag.string("effort").pipe(
   Flag.optional,
   Flag.withDescription(
     'Reasoning effort: "low", "medium", "high", "xhigh", "max", or a number in [0, 1] resolved onto the provider\'s own ladder.',
+  ),
+);
+const serviceTierFlag = Flag.choice("service-tier", ["fast"]).pipe(
+  Flag.optional,
+  Flag.withDescription(
+    'OpenAI Responses service tier. The only supported value is "fast"; omit it to use the OpenAI project default.',
   ),
 );
 const postFlag = Flag.boolean("post").pipe(
@@ -108,6 +115,7 @@ const command = CliCommand.make(
     provider: providerFlag,
     model: modelFlag,
     effort: effortFlag,
+    serviceTier: serviceTierFlag,
     post: postFlag,
     applyVerdict: applyVerdictFlag,
     fanOut: fanOutFlag,
@@ -118,6 +126,10 @@ const command = CliCommand.make(
   (flags) =>
     Effect.gen(function* () {
       const provider = yield* decodeProvider(flags.provider);
+      const serviceTier = yield* validateReviewServiceTier(
+        provider,
+        Option.getOrUndefined(flags.serviceTier),
+      );
       const target = yield* resolveReviewTarget({
         repository: Option.getOrUndefined(flags.repo),
         number: Option.getOrUndefined(flags.pr),
@@ -138,7 +150,7 @@ const command = CliCommand.make(
           .map((pattern) => pattern.trim())
           .filter((pattern) => pattern.length > 0),
         maxFindings: Option.getOrUndefined(flags.maxFindings),
-        modelLabel: describeReviewModel(provider, model, effort),
+        modelLabel: describeReviewModel(provider, model, effort, serviceTier),
       };
 
       yield* Console.log(
@@ -176,7 +188,7 @@ const command = CliCommand.make(
           Effect.provide(Layer.merge(githubLayers, anthropicClientLayer)),
         );
       } else {
-        const boundModel = makeOpenAiReviewModel(model, effort);
+        const boundModel = makeOpenAiReviewModel(model, effort, serviceTier);
         const reviewer = flags.fanOut
           ? PrReview.makeFanOut({ ...shared, model: boundModel })
           : PrReview.make({ ...shared, model: boundModel });

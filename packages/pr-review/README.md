@@ -15,6 +15,7 @@ truncated run posts nothing.
 import { Effect, Layer } from "effect";
 import {
   PrReview,
+  describeReviewModel,
   fullReviewExecutionContextLayer,
   gitHubReviewLayers,
   resolveReviewTarget,
@@ -46,6 +47,21 @@ as above; the packaged action supplies its selected incremental or full range.
 Anthropic is equally supported
 (`makeAnthropicReviewModel`, `anthropicClientLayer`), and the factory accepts
 any Effect AI Model.
+
+The built-in OpenAI binding can opt each request into Fast mode:
+
+```ts
+const reviewer = PrReview.make({
+  model: makeOpenAiReviewModel("gpt-5.6-sol", undefined, "fast"),
+  modelLabel: describeReviewModel("openai", "gpt-5.6-sol", undefined, "fast"),
+});
+```
+
+`fast` is the only packaged service-tier value. The helper sends it as the
+OpenAI Responses `service_tier`; omitting it leaves the request unset so the
+OpenAI project default applies. The Action and CLI reject a service tier when
+the selected provider is not OpenAI. The model label includes the tier and
+therefore changes both ordinary and profile fingerprints.
 
 ## Adapt
 
@@ -174,7 +190,7 @@ and [input reference](../../action/action.yml). Custom hosts can import `runRevi
 `@effect-agent/pr-review/action`.
 
 Run the CLI with
-`bun src/cli.ts --repo owner/name --pr 123 [--post] [--provider anthropic] [--fan-out]`.
+`bun src/cli.ts --repo owner/name --pr 123 [--post] [--provider anthropic] [--service-tier fast] [--fan-out]`.
 
 ## Bounds, spelled out
 

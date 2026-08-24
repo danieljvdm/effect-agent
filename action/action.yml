@@ -44,6 +44,12 @@ inputs:
       effort ladder, so the same value survives a provider or model change.
       Unset uses the provider default.
     required: false
+  service-tier:
+    description: >-
+      OpenAI Responses service tier. The only supported value is "fast".
+      Omitting it uses the OpenAI project's configured default. Setting it
+      with a non-OpenAI provider fails configuration.
+    required: false
   max-duration-minutes:
     description: >-
       Run duration budget in minutes (defaults: 8 flat, 20 fan-out). Keep the
