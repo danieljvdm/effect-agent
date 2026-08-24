@@ -553,17 +553,22 @@ export const executeFanOutReview = <Provider, ModelProvides, ModelRequires>(
     const budget = yield* makeUsageBudget(options.limits ?? fanOutReviewBudgetLimits);
     const totalFiles = executionContext.totalFiles;
     const continuity = yield* resolveReviewContinuityContext();
+    const retryPasses =
+      executionContext.retryPasses ??
+      executionContext.retryStages.map((stage) => ({
+        stage,
+        paths: executionContext.retryPaths,
+      }));
     const pipeline = yield* runFanOutReview(binding, {
       files,
       anchorFiles,
       totalChangedFiles: totalFiles,
       maxFindings: options.maxFindings,
       budget: toRunBudgetHook(budget),
-      ...(executionContext.retryPaths.length > 0
+      ...(retryPasses.length > 0
         ? {
             retry: {
-              paths: executionContext.retryPaths,
-              stages: executionContext.retryStages,
+              passes: retryPasses,
             },
           }
         : {}),

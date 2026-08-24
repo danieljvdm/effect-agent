@@ -43553,6 +43553,7 @@ var fullReviewSelection = (input) => ({
   reason: input.reason,
   files: input.files,
   affectedPaths: input.files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]),
+  retryPasses: [],
   retryPaths: [],
   retryStages: [],
   totalFiles: input.totalFiles,
@@ -43610,35 +43611,46 @@ var incrementalFromDelta = (input) => {
   }
   const carriedPaths = input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path));
   const retryOnly = new Set;
-  const retryStages = new Set;
   for (const path of carriedPaths) {
     if (affectedPaths.has(path))
       continue;
     retryOnly.add(path);
-    for (const pass of input.priorState.unreviewedPasses) {
-      if (pass.paths.includes(path))
-        retryStages.add(pass.stage);
+  }
+  const retryPathsByStage = new Map;
+  const representedRetryPaths = new Set;
+  for (const pass of input.priorState.unreviewedPasses) {
+    for (const path of pass.paths) {
+      if (!retryOnly.has(path))
+        continue;
+      const paths = retryPathsByStage.get(pass.stage) ?? new Set;
+      paths.add(path);
+      retryPathsByStage.set(pass.stage, paths);
+      representedRetryPaths.add(path);
     }
   }
-  if (retryStages.has("verification") && !retryStages.has("discovery") && !retryStages.has("specialist")) {
-    retryStages.add("discovery");
-    retryStages.add("specialist");
+  for (const path of retryOnly) {
+    if (representedRetryPaths.has(path))
+      continue;
+    retryOnly.delete(path);
+    affectedPaths.add(path);
   }
-  if (retryOnly.size > 0 && retryStages.size === 0) {
-    for (const path of retryOnly)
-      affectedPaths.add(path);
-    retryStages.add("discovery");
-    retryStages.add("specialist");
-    retryStages.add("verification");
-  }
+  const retryPasses = ["discovery", "specialist", "verification"].flatMap((stage) => {
+    const paths = [...retryPathsByStage.get(stage) ?? []].filter((path) => retryOnly.has(path)).sort();
+    return Array.from({ length: Math.ceil(paths.length / 12) }, (_, index2) => StoredUnreviewedPass.make({
+      stage,
+      paths: paths.slice(index2 * 12, (index2 + 1) * 12)
+    }));
+  });
+  const retryPaths = [...retryOnly].sort();
+  const retryStages = [...new Set(retryPasses.map((pass) => pass.stage))];
   for (const file2 of input.fullFiles) {
     const needed = affectedPaths.has(file2.path) || file2.previousPath !== undefined && affectedPaths.has(file2.previousPath) || retryOnly.has(file2.path) || file2.previousPath !== undefined && retryOnly.has(file2.previousPath);
     if (needed)
       selectedByPath.set(file2.path, file2);
   }
   const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  const leftoverCount = [...retryOnly].filter((path) => !affectedPaths.has(path)).length;
-  const carriedReason = leftoverCount > 0 ? `; retrying ${leftoverCount} unchanged leftover path(s) without rediscovery` : carriedPaths.length > 0 ? `; retrying ${carriedPaths.length} carried unreviewed path(s)` : "";
+  const leftoverCount = retryPaths.length;
+  const carriedReason = leftoverCount > 0 ? `; retrying ${leftoverCount} unchanged leftover path(s) by recorded failed stage` : carriedPaths.length > 0 ? `; retrying ${carriedPaths.length} carried unreviewed path(s)` : "";
   const concernPathCount = affectedPaths.size - initialAffectedCount;
   const concernReason = concernPathCount === 0 ? "" : `; reopening ${concernPathCount} related concern path(s) for context`;
   return {
@@ -43646,8 +43658,9 @@ var incrementalFromDelta = (input) => {
     reason: `${input.reason}${carriedReason}${concernReason}`,
     files: selectedFiles,
     affectedPaths: [...affectedPaths].sort(),
-    retryPaths: [...retryOnly].filter((path) => !affectedPaths.has(path)).sort(),
-    retryStages: [...retryStages].sort(),
+    retryPasses,
+    retryPaths,
+    retryStages,
     totalFiles: selectedFiles.length,
     baselineSha: input.priorState.reviewedHeadSha,
     priorState: input.priorState,
@@ -45150,9 +45163,31 @@ var remapPlanUnitIds = (plan, offset) => {
   });
 };
 var scheduleFanOutWork = (input) => {
-  const retryPathSet = new Set(input.retry?.paths ?? []);
-  const retryStages = new Set(input.retry?.stages ?? []);
-  if (retryPathSet.size === 0) {
+  const requestedRetryPasses = input.retry?.passes ?? input.retry?.stages?.map((stage) => ({ stage, paths: input.retry?.paths ?? [] })) ?? [];
+  const requestedStagesByPath = new Map;
+  for (const pass of requestedRetryPasses) {
+    for (const path of pass.paths) {
+      const stages = requestedStagesByPath.get(path) ?? new Set;
+      stages.add(pass.stage);
+      requestedStagesByPath.set(path, stages);
+    }
+  }
+  const canonicalPathByKnownPath = new Map;
+  const retryStagesByPath = new Map;
+  for (const file2 of input.files) {
+    canonicalPathByKnownPath.set(file2.path, file2.path);
+    if (file2.previousPath !== undefined) {
+      canonicalPathByKnownPath.set(file2.previousPath, file2.path);
+    }
+    const requested = [
+      requestedStagesByPath.get(file2.path),
+      ...file2.previousPath === undefined ? [] : [requestedStagesByPath.get(file2.previousPath)]
+    ];
+    const stages = new Set(requested.flatMap((entry) => [...entry ?? []]));
+    if (stages.size > 0)
+      retryStagesByPath.set(file2.path, stages);
+  }
+  if (retryStagesByPath.size === 0) {
     const plan2 = planReviewUnits(input.files, { totalChangedFiles: input.totalChangedFiles });
     const passesByUnit2 = new Map;
     for (const pass of plan2.discoveryPasses) {
@@ -45160,50 +45195,71 @@ var scheduleFanOutWork = (input) => {
       passes.push(pass);
       passesByUnit2.set(pass.unitId, passes);
     }
-    return { plan: plan2, passesByUnit: passesByUnit2, overflowRetryPaths: [] };
+    return { plan: plan2, passesByUnit: passesByUnit2, overflowRetryPasses: [] };
   }
-  const freshFiles = input.files.filter((file2) => !retryPathSet.has(file2.path));
-  const retryFiles = input.files.filter((file2) => retryPathSet.has(file2.path));
-  const freshPlan = planReviewUnits(freshFiles, { totalChangedFiles: input.totalChangedFiles });
-  const retryPlan = remapPlanUnitIds(planReviewUnits(retryFiles, { totalChangedFiles: input.totalChangedFiles }), freshPlan.units.length);
-  const acceptedFresh = freshPlan.units.slice(0, MAX_REVIEW_UNITS);
-  const acceptedRetry = retryPlan.units.slice(0, Math.max(0, MAX_REVIEW_UNITS - acceptedFresh.length));
-  const overflowRetryPaths = retryPlan.units.slice(acceptedRetry.length).flatMap((unit) => [...unit.paths]);
-  const retryPassFilter = (pass) => {
-    const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
-    return retryStages.has(stage);
+  const discoveryStagesFor = (stages) => {
+    if (stages.has("verification"))
+      return ["discovery", "specialist"];
+    return [
+      ...stages.has("discovery") ? ["discovery"] : [],
+      ...stages.has("specialist") ? ["specialist"] : []
+    ];
   };
-  const acceptedRetryIds = new Set(acceptedRetry.map((unit) => unit.unitId));
-  let retryPasses = retryPlan.discoveryPasses.filter((pass) => acceptedRetryIds.has(pass.unitId) && retryPassFilter(pass));
-  if (retryStages.has("verification") && !retryStages.has("discovery") && !retryStages.has("specialist")) {
-    retryPasses = retryPlan.discoveryPasses.filter((pass) => acceptedRetryIds.has(pass.unitId));
+  const freshFiles = input.files.filter((file2) => !retryStagesByPath.has(file2.path));
+  const retryGroups = new Map;
+  for (const file2 of input.files) {
+    const retryStages = retryStagesByPath.get(file2.path);
+    if (retryStages === undefined)
+      continue;
+    const stages = discoveryStagesFor(retryStages);
+    const key = stages.join("|");
+    const group2 = retryGroups.get(key) ?? { stages, files: [] };
+    group2.files.push(file2);
+    retryGroups.set(key, group2);
   }
-  const acceptedFreshIds = new Set(acceptedFresh.map((unit) => unit.unitId));
-  const freshPasses = freshPlan.discoveryPasses.filter((pass) => acceptedFreshIds.has(pass.unitId));
-  const discoveryPasses = [...freshPasses, ...retryPasses];
+  const batches = [
+    ...freshFiles.length === 0 ? [] : [{ stages: ["discovery", "specialist"], files: freshFiles }],
+    ...[...retryGroups.entries()].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([, group2]) => group2)
+  ];
+  const subplans = [];
+  const acceptedUnits = [];
+  const rejectedUnits = [];
+  const discoveryPasses = [];
+  for (const batch of batches) {
+    const batchPlan = remapPlanUnitIds(planReviewUnits(batch.files, { totalChangedFiles: batch.files.length }), acceptedUnits.length);
+    subplans.push(batchPlan);
+    const accepted = batchPlan.units.slice(0, Math.max(0, MAX_REVIEW_UNITS - acceptedUnits.length));
+    acceptedUnits.push(...accepted);
+    rejectedUnits.push(...batchPlan.units.slice(accepted.length));
+    const acceptedIds = new Set(accepted.map((unit) => unit.unitId));
+    discoveryPasses.push(...batchPlan.discoveryPasses.filter((pass) => {
+      const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
+      return acceptedIds.has(pass.unitId) && batch.stages.includes(stage);
+    }));
+  }
+  const acceptedPaths = new Set(acceptedUnits.flatMap((unit) => unit.paths));
+  const incompletePlannedPaths = new Set([
+    ...subplans.flatMap((plan2) => plan2.partialEvidencePaths),
+    ...subplans.flatMap((plan2) => plan2.unassignedPaths),
+    ...rejectedUnits.flatMap((unit) => unit.paths)
+  ]);
+  const partialEvidencePaths = [...incompletePlannedPaths].filter((path) => acceptedPaths.has(path)).sort();
+  const unassignedPaths = [...incompletePlannedPaths].filter((path) => !acceptedPaths.has(path)).sort();
+  const rejectedEvidenceShards = rejectedUnits.flatMap((unit) => unit.evidenceShards);
+  const undiffablePaths = [...new Set(subplans.flatMap((plan2) => plan2.undiffablePaths))].sort();
   const plan = ReviewUnitPlan.make({
     totalFiles: input.files.length,
-    truncated: freshPlan.truncated || retryPlan.truncated,
-    units: [...acceptedFresh, ...acceptedRetry],
+    truncated: input.files.length < input.totalChangedFiles,
+    units: acceptedUnits,
     discoveryPasses,
-    undiffablePaths: [
-      ...new Set([...freshPlan.undiffablePaths, ...retryPlan.undiffablePaths])
-    ].sort(),
-    partialEvidencePaths: [
-      ...new Set([...freshPlan.partialEvidencePaths, ...retryPlan.partialEvidencePaths])
-    ].sort(),
-    unassignedEvidenceShardCount: freshPlan.unassignedEvidenceShardCount + retryPlan.unassignedEvidenceShardCount,
+    undiffablePaths,
+    partialEvidencePaths,
+    unassignedEvidenceShardCount: subplans.reduce((total, item) => total + item.unassignedEvidenceShardCount, 0) + rejectedEvidenceShards.length,
     unassignedEvidenceShardIds: [
-      ...freshPlan.unassignedEvidenceShardIds,
-      ...retryPlan.unassignedEvidenceShardIds
+      ...subplans.flatMap((item) => item.unassignedEvidenceShardIds),
+      ...rejectedEvidenceShards.map((shard) => shard.shardId)
     ].slice(0, MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS),
-    unassignedPaths: [
-      ...new Set([
-        ...freshPlan.unassignedPaths,
-        ...retryPlan.unassignedPaths,
-        ...overflowRetryPaths
-      ])
-    ].sort()
+    unassignedPaths
   });
   const passesByUnit = new Map;
   for (const pass of discoveryPasses) {
@@ -45211,10 +45267,33 @@ var scheduleFanOutWork = (input) => {
     passes.push(pass);
     passesByUnit.set(pass.unitId, passes);
   }
-  return { plan, passesByUnit, overflowRetryPaths };
+  const incompletePaths = new Set([
+    ...partialEvidencePaths,
+    ...unassignedPaths,
+    ...undiffablePaths
+  ]);
+  const overflowRetryPathsByStage = new Map;
+  for (const pass of requestedRetryPasses) {
+    for (const path of pass.paths) {
+      const canonicalPath = canonicalPathByKnownPath.get(path);
+      if (canonicalPath === undefined || !incompletePaths.has(canonicalPath))
+        continue;
+      const paths = overflowRetryPathsByStage.get(pass.stage) ?? new Set;
+      paths.add(canonicalPath);
+      overflowRetryPathsByStage.set(pass.stage, paths);
+    }
+  }
+  const overflowRetryPasses = ["discovery", "specialist", "verification"].flatMap((stage) => {
+    const paths = [...overflowRetryPathsByStage.get(stage) ?? []].sort();
+    return Array.from({ length: Math.ceil(paths.length / MAX_UNIT_FILES) }, (_, index2) => ({
+      stage,
+      paths: paths.slice(index2 * MAX_UNIT_FILES, (index2 + 1) * MAX_UNIT_FILES)
+    }));
+  });
+  return { plan, passesByUnit, overflowRetryPasses };
 };
 var runFanOutReview = (binding, input) => exports_Effect.gen(function* () {
-  const { plan, passesByUnit, overflowRetryPaths } = scheduleFanOutWork(input);
+  const { plan, passesByUnit, overflowRetryPasses } = scheduleFanOutWork(input);
   const outcomes = yield* exports_Effect.forEach(plan.units, (unit) => reviewUnit(binding, unit, passesByUnit.get(unit.unitId) ?? [], input), { concurrency: REVIEW_UNIT_CONCURRENCY });
   const failedPasses = outcomes.flatMap((outcome) => outcome.failedPasses);
   const unsettledCandidates = outcomes.reduce((total, outcome) => total + outcome.unsettledCandidates, 0);
@@ -45273,7 +45352,7 @@ var runFanOutReview = (binding, input) => exports_Effect.gen(function* () {
     ].sort(),
     unreviewedPasses: [
       ...outcomes.flatMap((outcome) => outcome.unreviewedPasses),
-      ...overflowRetryPaths.length === 0 ? [] : ((input.retry?.stages.length) ? input.retry.stages : ["discovery", "specialist", "verification"]).map((stage) => ({ stage, paths: overflowRetryPaths }))
+      ...overflowRetryPasses
     ],
     turns: outcomes.reduce((total, outcome) => total + outcome.turns, 0)
   };
@@ -46532,16 +46611,19 @@ var executeFanOutReview = (binding, options3) => exports_Effect.gen(function* ()
   const budget2 = yield* makeUsageBudget(options3.limits ?? fanOutReviewBudgetLimits);
   const totalFiles = executionContext.totalFiles;
   const continuity = yield* resolveReviewContinuityContext();
+  const retryPasses = executionContext.retryPasses ?? executionContext.retryStages.map((stage) => ({
+    stage,
+    paths: executionContext.retryPaths
+  }));
   const pipeline = yield* runFanOutReview(binding, {
     files,
     anchorFiles,
     totalChangedFiles: totalFiles,
     maxFindings: options3.maxFindings,
     budget: toRunBudgetHook(budget2),
-    ...executionContext.retryPaths.length > 0 ? {
+    ...retryPasses.length > 0 ? {
       retry: {
-        paths: executionContext.retryPaths,
-        stages: executionContext.retryStages
+        passes: retryPasses
       }
     } : {},
     ...continuity.adjudications.length > 0 || continuity.priorFindingsOnScope.length > 0 ? {
