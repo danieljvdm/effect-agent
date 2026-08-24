@@ -63,6 +63,7 @@
     "model-visible-output-contract",
     "monotone-review-continuity",
     "native-tool-observability",
+    "normalize-overlapping-cache-writes",
     "path-bound-review-concerns",
     "path-bound-review-retries",
     "pin-internal-dependency-versions",
