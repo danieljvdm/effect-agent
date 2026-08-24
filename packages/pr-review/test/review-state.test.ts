@@ -409,9 +409,41 @@ describe("review state", () => {
       "src/corrective.ts",
     ]);
     expect(selection.affectedPaths).not.toContain("src/accepted.ts");
+    expect(selection.retryPasses).toEqual([
+      StoredUnreviewedPass.make({ stage: "specialist", paths: ["src/accepted.ts"] }),
+    ]);
     expect(selection.retryPaths).toEqual(["src/accepted.ts"]);
     expect(selection.retryStages).toEqual(["specialist"]);
-    expect(selection.reason).toContain("without rediscovery");
+    expect(selection.reason).toContain("by recorded failed stage");
+  });
+
+  it("preserves different failed stages for different unchanged paths", () => {
+    const queuedFile = ChangedFile.make({
+      path: "src/queued.ts",
+      status: "modified",
+      additions: 1,
+      deletions: 1,
+      patch: "@@ -1 +1 @@\n-old\n+queued",
+    });
+    const carryingState = ReviewState.make({
+      ...priorState,
+      unreviewedPaths: ["src/accepted.ts", "src/queued.ts"],
+      unreviewedPasses: [
+        StoredUnreviewedPass.make({ stage: "discovery", paths: ["src/accepted.ts"] }),
+        StoredUnreviewedPass.make({ stage: "specialist", paths: ["src/queued.ts"] }),
+      ],
+      settled: false,
+    });
+    const selection = select({
+      current: PullRequestMetadata.make({ ...metadata, totalChangedFiles: 3 }),
+      fullFiles: [acceptedFile, correctiveFile, queuedFile],
+      priorState: carryingState,
+    });
+
+    expect(selection.retryPasses).toEqual([
+      StoredUnreviewedPass.make({ stage: "discovery", paths: ["src/accepted.ts"] }),
+      StoredUnreviewedPass.make({ stage: "specialist", paths: ["src/queued.ts"] }),
+    ]);
   });
 
   it("reviews only content-changed PR paths after a rewritten head", () => {

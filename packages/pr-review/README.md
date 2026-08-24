@@ -185,8 +185,10 @@ gate.
 ## Action and CLI
 
 The prebuilt GitHub Action handles signed incremental state, fail-closed scope selection, sticky
-progress, stale-review retirement, and final audits. See its [setup and behavior guide](../../action/README.md)
-and [input reference](../../action/action.yml). Custom hosts can import `runReviewAction` from
+progress, stale-review retirement, and final audits. Failed stages remain attached to their exact
+unchanged paths; failed verification reopens discovery only for its paths because candidates are
+not persisted. See its [setup and behavior guide](../../action/README.md) and
+[input reference](../../action/action.yml). Custom hosts can import `runReviewAction` from
 `@effect-agent/pr-review/action`.
 
 Run the CLI with

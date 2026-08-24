@@ -131,11 +131,11 @@ export const MAX_STORED_UNREVIEWED_PATHS = 100;
 /** Failed-pass records stored beside the leftover paths; one per unit stage. */
 export const MAX_STORED_UNREVIEWED_PASSES = 24;
 
-/** Stages a leftover path may need retried without a second general discovery. */
+/** Stages a leftover path may need retried on the next incremental run. */
 export const UnreviewedStage = Schema.Literals(["discovery", "specialist", "verification"]);
 export type UnreviewedStage = typeof UnreviewedStage.Type;
 
-/** One failed fan-out pass whose paths should be retried, not rediscovered. */
+/** One failed fan-out pass whose stage remains attached to its exact paths. */
 export class StoredUnreviewedPass extends Schema.Class<StoredUnreviewedPass>(
   "@effect-agent/pr-review/StoredUnreviewedPass",
 )({
@@ -403,9 +403,12 @@ export interface ReviewSelection {
   /** Paths whose changes invalidate prior findings, including paths reverted out of the PR. */
   readonly affectedPaths: ReadonlyArray<string>;
   /**
-   * Leftover paths whose contents did not change. Fan-out retries only the
-   * recorded failed stages on these paths and keeps their stored findings.
+   * Failed stages attached to the unchanged paths that own them. Verification
+   * retries reopen discovery for only their paths because candidates are not
+   * persisted in review state.
    */
+  readonly retryPasses?: ReadonlyArray<StoredUnreviewedPass>;
+  /** Flattened summaries retained for diagnostics and compatibility. */
   readonly retryPaths: ReadonlyArray<string>;
   readonly retryStages: ReadonlyArray<UnreviewedStage>;
   readonly totalFiles: number;
@@ -429,6 +432,7 @@ export const fullReviewSelection = (input: {
   affectedPaths: input.files.flatMap((file) =>
     file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
   ),
+  retryPasses: [],
   retryPaths: [],
   retryStages: [],
   totalFiles: input.totalFiles,
@@ -519,28 +523,43 @@ const incrementalFromDelta = (input: {
   }
   const carriedPaths = input.priorState.unreviewedPaths.filter((path) => currentPaths.has(path));
   const retryOnly = new Set<string>();
-  const retryStages = new Set<UnreviewedStage>();
   for (const path of carriedPaths) {
     if (affectedPaths.has(path)) continue;
     retryOnly.add(path);
-    for (const pass of input.priorState.unreviewedPasses) {
-      if (pass.paths.includes(path)) retryStages.add(pass.stage);
+  }
+
+  const retryPathsByStage = new Map<UnreviewedStage, Set<string>>();
+  const representedRetryPaths = new Set<string>();
+  for (const pass of input.priorState.unreviewedPasses) {
+    for (const path of pass.paths) {
+      if (!retryOnly.has(path)) continue;
+      const paths = retryPathsByStage.get(pass.stage) ?? new Set<string>();
+      paths.add(path);
+      retryPathsByStage.set(pass.stage, paths);
+      representedRetryPaths.add(path);
     }
   }
-  if (
-    retryStages.has("verification") &&
-    !retryStages.has("discovery") &&
-    !retryStages.has("specialist")
-  ) {
-    retryStages.add("discovery");
-    retryStages.add("specialist");
+  // Some continuity gaps (capacity overflow, partial evidence, legacy state)
+  // have no failed-pass record. They conservatively re-enter fresh discovery
+  // instead of inheriting another path's unrelated failed stage.
+  for (const path of retryOnly) {
+    if (representedRetryPaths.has(path)) continue;
+    retryOnly.delete(path);
+    affectedPaths.add(path);
   }
-  if (retryOnly.size > 0 && retryStages.size === 0) {
-    for (const path of retryOnly) affectedPaths.add(path);
-    retryStages.add("discovery");
-    retryStages.add("specialist");
-    retryStages.add("verification");
-  }
+  const retryPasses = (["discovery", "specialist", "verification"] as const).flatMap((stage) => {
+    const paths = [...(retryPathsByStage.get(stage) ?? [])]
+      .filter((path) => retryOnly.has(path))
+      .sort();
+    return Array.from({ length: Math.ceil(paths.length / 12) }, (_, index) =>
+      StoredUnreviewedPass.make({
+        stage,
+        paths: paths.slice(index * 12, (index + 1) * 12),
+      }),
+    );
+  });
+  const retryPaths = [...retryOnly].sort();
+  const retryStages = [...new Set(retryPasses.map((pass) => pass.stage))];
   for (const file of input.fullFiles) {
     const needed =
       affectedPaths.has(file.path) ||
@@ -552,10 +571,10 @@ const incrementalFromDelta = (input: {
   const selectedFiles = [...selectedByPath.values()].sort((left, right) =>
     left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
   );
-  const leftoverCount = [...retryOnly].filter((path) => !affectedPaths.has(path)).length;
+  const leftoverCount = retryPaths.length;
   const carriedReason =
     leftoverCount > 0
-      ? `; retrying ${leftoverCount} unchanged leftover path(s) without rediscovery`
+      ? `; retrying ${leftoverCount} unchanged leftover path(s) by recorded failed stage`
       : carriedPaths.length > 0
         ? `; retrying ${carriedPaths.length} carried unreviewed path(s)`
         : "";
@@ -569,8 +588,9 @@ const incrementalFromDelta = (input: {
     reason: `${input.reason}${carriedReason}${concernReason}`,
     files: selectedFiles,
     affectedPaths: [...affectedPaths].sort(),
-    retryPaths: [...retryOnly].filter((path) => !affectedPaths.has(path)).sort(),
-    retryStages: [...retryStages].sort(),
+    retryPasses,
+    retryPaths,
+    retryStages,
     totalFiles: selectedFiles.length,
     baselineSha: input.priorState.reviewedHeadSha,
     priorState: input.priorState,

@@ -140,13 +140,14 @@ completed run that can be signed advances the authenticated incremental baseline
 that stays failed carries its paths forward as retryable scope inside the state instead of
 freezing the baseline, and only a fully settled state authorizes skip-unchanged. A rewritten
 head that is no longer a git ancestor stays incremental when a two-dot tree comparison can
-name the current PR paths whose contents changed. Unchanged leftovers retry only the failed
-pass and keep their stored findings. The package exports `./testing` for fixture sources, a collecting
-publisher, and prompt-keyed scripted models. It exports `./action` and `./cli` as platform-node host
-entrypoints. It consumes the `effect-agent` umbrella as the first package-level consumer. Deployment class E
-only; review posting is never claimed exactly-once. Its built-in OpenAI host configuration accepts
-the single explicit service tier `fast`, includes it in the model profile fingerprint, and rejects
-that provider-specific setting when Anthropic is selected.
+name the current PR paths whose contents changed; unchanged leftovers keep failed stages bound
+to their exact paths and retain stored findings. Failed verification reopens discovery only for
+its owning paths because candidate payloads are not persisted. The package exports `./testing` for
+fixture sources, a collecting publisher, and prompt-keyed scripted models. It exports `./action`
+and `./cli` as platform-node host entrypoints. It consumes the `effect-agent` umbrella as the first
+package-level consumer. Deployment class E only; review posting is never claimed exactly-once. Its
+built-in OpenAI host configuration accepts the single explicit service tier `fast`, includes it in
+the model profile fingerprint, and rejects that provider-specific setting when Anthropic is selected.
 
 ### `@effect-agent/testing`
 

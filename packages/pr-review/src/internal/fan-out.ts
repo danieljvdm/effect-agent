@@ -403,13 +403,20 @@ export interface FanOutPipelineInput {
   /** Shared run budget observed by every child pass. */
   readonly budget?: RunBudgetHook<BudgetExceeded | BudgetAdapterError> | undefined;
   /**
-   * Unchanged leftover paths from a prior failed pass. Those units retry only
-   * the recorded stages — no second general discovery on files nobody touched.
+   * Unchanged leftovers from prior failed passes. Every stage stays attached
+   * to its own paths; failed verification reopens both discovery perspectives
+   * for only those paths because candidate payloads are not persisted.
    */
   readonly retry?:
     | {
-        readonly paths: ReadonlyArray<string>;
-        readonly stages: ReadonlyArray<FailedReviewPass["stage"]>;
+        readonly passes?: ReadonlyArray<{
+          readonly stage: FailedReviewPass["stage"];
+          readonly paths: ReadonlyArray<string>;
+        }>;
+        /** @deprecated Pass path-bound `passes`; this flat form cannot preserve ownership. */
+        readonly paths?: ReadonlyArray<string>;
+        /** @deprecated Pass path-bound `passes`; this flat form cannot preserve ownership. */
+        readonly stages?: ReadonlyArray<FailedReviewPass["stage"]>;
       }
     | undefined;
   /**
@@ -840,11 +847,38 @@ const scheduleFanOutWork = (
 ): {
   readonly plan: ReviewUnitPlan;
   readonly passesByUnit: Map<string, ReadonlyArray<ReviewDiscoveryPass>>;
-  readonly overflowRetryPaths: ReadonlyArray<string>;
+  readonly overflowRetryPasses: ReadonlyArray<{
+    readonly stage: FailedReviewPass["stage"];
+    readonly paths: ReadonlyArray<string>;
+  }>;
 } => {
-  const retryPathSet = new Set(input.retry?.paths ?? []);
-  const retryStages = new Set(input.retry?.stages ?? []);
-  if (retryPathSet.size === 0) {
+  const requestedRetryPasses =
+    input.retry?.passes ??
+    input.retry?.stages?.map((stage) => ({ stage, paths: input.retry?.paths ?? [] })) ??
+    [];
+  const requestedStagesByPath = new Map<string, Set<FailedReviewPass["stage"]>>();
+  for (const pass of requestedRetryPasses) {
+    for (const path of pass.paths) {
+      const stages = requestedStagesByPath.get(path) ?? new Set<FailedReviewPass["stage"]>();
+      stages.add(pass.stage);
+      requestedStagesByPath.set(path, stages);
+    }
+  }
+  const canonicalPathByKnownPath = new Map<string, string>();
+  const retryStagesByPath = new Map<string, Set<FailedReviewPass["stage"]>>();
+  for (const file of input.files) {
+    canonicalPathByKnownPath.set(file.path, file.path);
+    if (file.previousPath !== undefined) {
+      canonicalPathByKnownPath.set(file.previousPath, file.path);
+    }
+    const requested = [
+      requestedStagesByPath.get(file.path),
+      ...(file.previousPath === undefined ? [] : [requestedStagesByPath.get(file.previousPath)]),
+    ];
+    const stages = new Set(requested.flatMap((entry) => [...(entry ?? [])]));
+    if (stages.size > 0) retryStagesByPath.set(file.path, stages);
+  }
+  if (retryStagesByPath.size === 0) {
     const plan = planReviewUnits(input.files, { totalChangedFiles: input.totalChangedFiles });
     const passesByUnit = new Map<string, Array<ReviewDiscoveryPass>>();
     for (const pass of plan.discoveryPasses) {
@@ -852,65 +886,96 @@ const scheduleFanOutWork = (
       passes.push(pass);
       passesByUnit.set(pass.unitId, passes);
     }
-    return { plan, passesByUnit, overflowRetryPaths: [] };
+    return { plan, passesByUnit, overflowRetryPasses: [] };
   }
-  const freshFiles = input.files.filter((file) => !retryPathSet.has(file.path));
-  const retryFiles = input.files.filter((file) => retryPathSet.has(file.path));
-  const freshPlan = planReviewUnits(freshFiles, { totalChangedFiles: input.totalChangedFiles });
-  const retryPlan = remapPlanUnitIds(
-    planReviewUnits(retryFiles, { totalChangedFiles: input.totalChangedFiles }),
-    freshPlan.units.length,
-  );
-  const acceptedFresh = freshPlan.units.slice(0, MAX_REVIEW_UNITS);
-  const acceptedRetry = retryPlan.units.slice(
-    0,
-    Math.max(0, MAX_REVIEW_UNITS - acceptedFresh.length),
-  );
-  const overflowRetryPaths = retryPlan.units
-    .slice(acceptedRetry.length)
-    .flatMap((unit) => [...unit.paths]);
-  const retryPassFilter = (pass: ReviewDiscoveryPass): boolean => {
-    const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
-    return retryStages.has(stage);
+
+  type DiscoveryStage = "discovery" | "specialist";
+  const discoveryStagesFor = (
+    stages: ReadonlySet<FailedReviewPass["stage"]>,
+  ): ReadonlyArray<DiscoveryStage> => {
+    if (stages.has("verification")) return ["discovery", "specialist"];
+    return [
+      ...(stages.has("discovery") ? (["discovery"] as const) : []),
+      ...(stages.has("specialist") ? (["specialist"] as const) : []),
+    ];
   };
-  const acceptedRetryIds = new Set(acceptedRetry.map((unit) => unit.unitId));
-  let retryPasses = retryPlan.discoveryPasses.filter(
-    (pass) => acceptedRetryIds.has(pass.unitId) && retryPassFilter(pass),
-  );
-  if (
-    retryStages.has("verification") &&
-    !retryStages.has("discovery") &&
-    !retryStages.has("specialist")
-  ) {
-    retryPasses = retryPlan.discoveryPasses.filter((pass) => acceptedRetryIds.has(pass.unitId));
+  const freshFiles = input.files.filter((file) => !retryStagesByPath.has(file.path));
+  const retryGroups = new Map<
+    string,
+    { readonly stages: ReadonlyArray<DiscoveryStage>; readonly files: Array<ChangedFile> }
+  >();
+  for (const file of input.files) {
+    const retryStages = retryStagesByPath.get(file.path);
+    if (retryStages === undefined) continue;
+    const stages = discoveryStagesFor(retryStages);
+    const key = stages.join("|");
+    const group = retryGroups.get(key) ?? { stages, files: [] };
+    group.files.push(file);
+    retryGroups.set(key, group);
   }
-  const acceptedFreshIds = new Set(acceptedFresh.map((unit) => unit.unitId));
-  const freshPasses = freshPlan.discoveryPasses.filter((pass) => acceptedFreshIds.has(pass.unitId));
-  const discoveryPasses = [...freshPasses, ...retryPasses];
+
+  const batches: ReadonlyArray<{
+    readonly stages: ReadonlyArray<DiscoveryStage>;
+    readonly files: ReadonlyArray<ChangedFile>;
+  }> = [
+    ...(freshFiles.length === 0
+      ? []
+      : [{ stages: ["discovery", "specialist"] as const, files: freshFiles }]),
+    ...[...retryGroups.entries()]
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([, group]) => group),
+  ];
+  const subplans: Array<ReviewUnitPlan> = [];
+  const acceptedUnits: Array<ReviewUnit> = [];
+  const rejectedUnits: Array<ReviewUnit> = [];
+  const discoveryPasses: Array<ReviewDiscoveryPass> = [];
+  for (const batch of batches) {
+    const batchPlan = remapPlanUnitIds(
+      planReviewUnits(batch.files, { totalChangedFiles: batch.files.length }),
+      acceptedUnits.length,
+    );
+    subplans.push(batchPlan);
+    const accepted = batchPlan.units.slice(0, Math.max(0, MAX_REVIEW_UNITS - acceptedUnits.length));
+    acceptedUnits.push(...accepted);
+    rejectedUnits.push(...batchPlan.units.slice(accepted.length));
+    const acceptedIds = new Set(accepted.map((unit) => unit.unitId));
+    discoveryPasses.push(
+      ...batchPlan.discoveryPasses.filter((pass) => {
+        const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
+        return acceptedIds.has(pass.unitId) && batch.stages.includes(stage);
+      }),
+    );
+  }
+
+  const acceptedPaths = new Set(acceptedUnits.flatMap((unit) => unit.paths));
+  const incompletePlannedPaths = new Set([
+    ...subplans.flatMap((plan) => plan.partialEvidencePaths),
+    ...subplans.flatMap((plan) => plan.unassignedPaths),
+    ...rejectedUnits.flatMap((unit) => unit.paths),
+  ]);
+  const partialEvidencePaths = [...incompletePlannedPaths]
+    .filter((path) => acceptedPaths.has(path))
+    .sort();
+  const unassignedPaths = [...incompletePlannedPaths]
+    .filter((path) => !acceptedPaths.has(path))
+    .sort();
+  const rejectedEvidenceShards = rejectedUnits.flatMap((unit) => unit.evidenceShards);
+  const undiffablePaths = [...new Set(subplans.flatMap((plan) => plan.undiffablePaths))].sort();
   const plan = ReviewUnitPlan.make({
     totalFiles: input.files.length,
-    truncated: freshPlan.truncated || retryPlan.truncated,
-    units: [...acceptedFresh, ...acceptedRetry],
+    truncated: input.files.length < input.totalChangedFiles,
+    units: acceptedUnits,
     discoveryPasses,
-    undiffablePaths: [
-      ...new Set([...freshPlan.undiffablePaths, ...retryPlan.undiffablePaths]),
-    ].sort(),
-    partialEvidencePaths: [
-      ...new Set([...freshPlan.partialEvidencePaths, ...retryPlan.partialEvidencePaths]),
-    ].sort(),
+    undiffablePaths,
+    partialEvidencePaths,
     unassignedEvidenceShardCount:
-      freshPlan.unassignedEvidenceShardCount + retryPlan.unassignedEvidenceShardCount,
+      subplans.reduce((total, item) => total + item.unassignedEvidenceShardCount, 0) +
+      rejectedEvidenceShards.length,
     unassignedEvidenceShardIds: [
-      ...freshPlan.unassignedEvidenceShardIds,
-      ...retryPlan.unassignedEvidenceShardIds,
+      ...subplans.flatMap((item) => item.unassignedEvidenceShardIds),
+      ...rejectedEvidenceShards.map((shard) => shard.shardId),
     ].slice(0, MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS),
-    unassignedPaths: [
-      ...new Set([
-        ...freshPlan.unassignedPaths,
-        ...retryPlan.unassignedPaths,
-        ...overflowRetryPaths,
-      ]),
-    ].sort(),
+    unassignedPaths,
   });
   const passesByUnit = new Map<string, Array<ReviewDiscoveryPass>>();
   for (const pass of discoveryPasses) {
@@ -918,7 +983,31 @@ const scheduleFanOutWork = (
     passes.push(pass);
     passesByUnit.set(pass.unitId, passes);
   }
-  return { plan, passesByUnit, overflowRetryPaths };
+  const incompletePaths = new Set([
+    ...partialEvidencePaths,
+    ...unassignedPaths,
+    ...undiffablePaths,
+  ]);
+  const overflowRetryPathsByStage = new Map<FailedReviewPass["stage"], Set<string>>();
+  for (const pass of requestedRetryPasses) {
+    for (const path of pass.paths) {
+      const canonicalPath = canonicalPathByKnownPath.get(path);
+      if (canonicalPath === undefined || !incompletePaths.has(canonicalPath)) continue;
+      const paths = overflowRetryPathsByStage.get(pass.stage) ?? new Set<string>();
+      paths.add(canonicalPath);
+      overflowRetryPathsByStage.set(pass.stage, paths);
+    }
+  }
+  const overflowRetryPasses = (["discovery", "specialist", "verification"] as const).flatMap(
+    (stage) => {
+      const paths = [...(overflowRetryPathsByStage.get(stage) ?? [])].sort();
+      return Array.from({ length: Math.ceil(paths.length / MAX_UNIT_FILES) }, (_, index) => ({
+        stage,
+        paths: paths.slice(index * MAX_UNIT_FILES, (index + 1) * MAX_UNIT_FILES),
+      }));
+    },
+  );
+  return { plan, passesByUnit, overflowRetryPasses };
 };
 
 /**
@@ -932,7 +1021,7 @@ export const runFanOutReview = <Provider, ModelProvides, ModelRequires>(
   input: FanOutPipelineInput,
 ) =>
   Effect.gen(function* () {
-    const { plan, passesByUnit, overflowRetryPaths } = scheduleFanOutWork(input);
+    const { plan, passesByUnit, overflowRetryPasses } = scheduleFanOutWork(input);
     const outcomes = yield* Effect.forEach(
       plan.units,
       (unit) => reviewUnit(binding, unit, passesByUnit.get(unit.unitId) ?? [], input),
@@ -1052,12 +1141,7 @@ export const runFanOutReview = <Provider, ModelProvides, ModelRequires>(
       ].sort(),
       unreviewedPasses: [
         ...outcomes.flatMap((outcome) => outcome.unreviewedPasses),
-        ...(overflowRetryPaths.length === 0
-          ? []
-          : (input.retry?.stages.length
-              ? input.retry.stages
-              : (["discovery", "specialist", "verification"] as const)
-            ).map((stage) => ({ stage, paths: overflowRetryPaths }))),
+        ...overflowRetryPasses,
       ],
       turns: outcomes.reduce((total, outcome) => total + outcome.turns, 0),
     } satisfies FanOutPipelineOutcome;

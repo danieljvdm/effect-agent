@@ -194,6 +194,17 @@ const report = (workId: string, value: FileReviewReport): OfflineUnitScript => (
   outcomes: [{ _tag: "report", report: value }],
 });
 
+const emptyDiscoveryReport = (workId: string, unitId: string): FileReviewReport =>
+  FileReviewReport.make({
+    phase: "discovery",
+    workId,
+    unitId,
+    findings: [],
+    concerns: [],
+    fileSummaries: [],
+    assessments: [],
+  });
+
 /** Run the host-scheduled pipeline offline over the fixture pull request. */
 const runOfflineFanOut = (script: {
   readonly children: ReadonlyArray<OfflineUnitScript>;
@@ -206,6 +217,10 @@ const runOfflineFanOut = (script: {
         readonly stages: ReadonlyArray<"discovery" | "specialist" | "verification">;
       }
     | undefined;
+  readonly retryPasses?: ReadonlyArray<{
+    readonly stage: "discovery" | "specialist" | "verification";
+    readonly paths: ReadonlyArray<string>;
+  }>;
 }) =>
   Effect.gen(function* () {
     const fixture = script.fixture ?? highRiskFixture;
@@ -220,6 +235,13 @@ const runOfflineFanOut = (script: {
         webCryptoReviewStateAuthenticatorLayer(Redacted.make("offline-assurance-secret")),
       ),
     );
+    const retryPasses =
+      script.retryPasses ??
+      script.retry?.stages.map((stage) => ({ stage, paths: script.retry?.paths ?? [] })) ??
+      [];
+    const retryPaths = [...new Set(retryPasses.flatMap((pass) => pass.paths))];
+    const retryStages = [...new Set(retryPasses.map((pass) => pass.stage))];
+    const isIncremental = retryPasses.length > 0;
     const program = executeFanOutReview(childBinding, {
       post: true,
       applyVerdict: false,
@@ -237,15 +259,15 @@ const runOfflineFanOut = (script: {
         ),
       ),
       Effect.provideService(ReviewExecutionContext, {
-        mode: script.retry === undefined ? "full" : "incremental",
-        reason:
-          script.retry === undefined
-            ? "offline full-diff assurance fixture"
-            : "offline leftover-pass retry fixture",
+        mode: isIncremental ? "incremental" : "full",
+        reason: isIncremental
+          ? "offline leftover-pass retry fixture"
+          : "offline full-diff assurance fixture",
         files: reviewFiles,
-        affectedPaths: script.retry === undefined ? reviewFiles.map((file) => file.path) : [],
-        retryPaths: script.retry?.paths ?? [],
-        retryStages: script.retry?.stages ?? [],
+        affectedPaths: isIncremental ? [] : reviewFiles.map((file) => file.path),
+        retryPasses,
+        retryPaths,
+        retryStages,
         totalFiles: reviewFiles.length,
         baselineSha: undefined,
         priorState: undefined,
@@ -975,6 +997,85 @@ describe("host-scheduled discovery and verification pipeline", () => {
       expect(result.outcome.review.findings).toEqual([supportedFinding]);
       expect(result.outcome.unreviewedPaths).toEqual([]);
       expect(result.outcome.state?.unreviewedPasses).toEqual([]);
+    }),
+  );
+
+  it.effect("keeps failed retry stages attached to their own unchanged paths", () =>
+    Effect.gen(function* () {
+      const authenticationPath = highRiskFiles[0]!.path;
+      const eventPath = highRiskFiles[1]!.path;
+      const result = yield* runOfflineFanOut({
+        retryPasses: [
+          { stage: "discovery", paths: [authenticationPath] },
+          { stage: "specialist", paths: [eventPath] },
+        ],
+        children: [
+          report("unit-001-general", emptyDiscoveryReport("unit-001-general", "unit-001")),
+          report("unit-001-specialist", emptyDiscoveryReport("unit-001-specialist", "unit-001")),
+          report("unit-002-specialist", emptyDiscoveryReport("unit-002-specialist", "unit-002")),
+        ],
+      });
+
+      const generalPrompt = result.childPrompts.find((prompt) =>
+        prompt.includes("for unit-001-general in host-planned unit"),
+      );
+      const specialistPrompt = result.childPrompts.find((prompt) =>
+        prompt.includes("for unit-002-specialist in host-planned unit"),
+      );
+
+      expect(result.childCalls).toBe(2);
+      expect(generalPrompt).toContain(authenticationPath);
+      expect(generalPrompt).not.toContain(eventPath);
+      expect(specialistPrompt).toContain(eventPath);
+      expect(specialistPrompt).not.toContain(authenticationPath);
+      expect(result.outcome.assurance).toMatchObject({
+        status: "settled",
+        requiredGeneralDiscoveryPasses: 1,
+        completedGeneralDiscoveryPasses: 1,
+        requiredSpecialistPasses: 1,
+        completedSpecialistPasses: 1,
+      });
+    }),
+  );
+
+  it.effect("regenerates candidates only for the paths whose verification failed", () =>
+    Effect.gen(function* () {
+      const authenticationPath = highRiskFiles[0]!.path;
+      const eventPath = highRiskFiles[1]!.path;
+      const result = yield* runOfflineFanOut({
+        retryPasses: [
+          { stage: "verification", paths: [authenticationPath] },
+          { stage: "specialist", paths: [eventPath] },
+        ],
+        children: [
+          report("unit-001-general", emptyDiscoveryReport("unit-001-general", "unit-001")),
+          report("unit-001-specialist", emptyDiscoveryReport("unit-001-specialist", "unit-001")),
+          report("unit-002-specialist", emptyDiscoveryReport("unit-002-specialist", "unit-002")),
+        ],
+      });
+
+      const verificationRetryPrompts = result.childPrompts.filter((prompt) =>
+        prompt.includes("in host-planned unit unit-001"),
+      );
+      const specialistRetryPrompt = result.childPrompts.find((prompt) =>
+        prompt.includes("for unit-002-specialist in host-planned unit"),
+      );
+
+      expect(result.childCalls).toBe(3);
+      expect(verificationRetryPrompts).toHaveLength(2);
+      for (const prompt of verificationRetryPrompts) {
+        expect(prompt).toContain(authenticationPath);
+        expect(prompt).not.toContain(eventPath);
+      }
+      expect(specialistRetryPrompt).toContain(eventPath);
+      expect(specialistRetryPrompt).not.toContain(authenticationPath);
+      expect(result.outcome.assurance).toMatchObject({
+        status: "settled",
+        requiredGeneralDiscoveryPasses: 1,
+        completedGeneralDiscoveryPasses: 1,
+        requiredSpecialistPasses: 2,
+        completedSpecialistPasses: 2,
+      });
     }),
   );
 
