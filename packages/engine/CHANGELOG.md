@@ -1,5 +1,14 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.28
+
+### Patch Changes
+
+- [#159](https://github.com/danieljvdm/effect-agent/pull/159) [`374771d`](https://github.com/danieljvdm/effect-agent/commit/374771d90afa26ce7e1832f76715aa7b9eea3741) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Normalize provider cache-write usage when the provider also includes those tokens in uncached
+  input. Preserve additive canonical usage totals without rejecting valid model responses.
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.28
+
 ## 0.1.0-beta.27
 
 ### Minor Changes
