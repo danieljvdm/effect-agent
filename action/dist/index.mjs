@@ -38264,6 +38264,7 @@ var BoundedPrompt = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLeng
 var BoundedSelector = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
 var BoundedPattern = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
 var BoundedMessage2 = exports_Schema.String.check(exports_Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
+var BoundedInferenceProvider = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
 var BoundedSchemaProperty = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
 var BoundedSchemaText = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
 var BoundedSchemaReference = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
@@ -38543,7 +38544,7 @@ var PageCaptureOutput = exports_Schema.Union([
 ]);
 
 class PageCaptureInferenceUse extends exports_Schema.Class("PageCaptureInferenceUse")({
-  provider: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256)),
+  provider: BoundedInferenceProvider,
   modelCalls: PositiveInt4
 }) {
 }
@@ -38572,6 +38573,15 @@ class PageCaptureRateLimitedError extends exports_Schema.TaggedError()("PageCapt
 
 class PageCaptureNavigationError extends exports_Schema.TaggedError()("PageCaptureNavigationError", {
   implementation: SandboxImplementation,
+  message: BoundedMessage2,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class PageCaptureInferencePolicyError extends exports_Schema.TaggedError()("PageCaptureInferencePolicyError", {
+  implementation: SandboxImplementation,
+  provider: BoundedInferenceProvider,
+  reason: exports_Schema.Literals(["authorization", "accounting"]),
   message: BoundedMessage2,
   cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
@@ -38607,6 +38617,7 @@ class PageCaptureProtocolError extends exports_Schema.TaggedError()("PageCapture
 var PageCaptureError = exports_Schema.Union([
   PageCaptureRateLimitedError,
   PageCaptureNavigationError,
+  PageCaptureInferencePolicyError,
   PageCaptureUnsupportedError,
   PageCaptureOutputLimitError,
   PageCaptureProtocolError

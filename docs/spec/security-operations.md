@@ -185,7 +185,9 @@ excessive depth, oversized collections, and cycles before any provider can run. 
 authority is an explicit host-owned service. Extraction additionally requires an explicit
 host authorization and accounting service for any platform-selected model provider, and results
 are decoded through the caller's service-aware Effect Schema before use. Foreign provider failure
-causes remain host-only diagnostics; model-visible failures and cleanup logs carry only bounded,
+causes and inference-policy diagnostics remain host-only; the typed public policy error identifies
+the provider and authorization or accounting step without copying the host's message.
+Model-visible failures and cleanup logs carry only bounded,
 fixed operation or HTTP-status descriptions and never interpolate foreign exception text,
 rate-limit bodies, provider envelopes, or other remote error bodies.
 A page that instructs the model is data, never authority.

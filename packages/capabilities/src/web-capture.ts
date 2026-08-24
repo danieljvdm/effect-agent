@@ -331,6 +331,7 @@ const portFailure = (error: PageCaptureError): WebCaptureFailure => {
       );
     }
     case "PageCaptureNavigationError":
+    case "PageCaptureInferencePolicyError":
     case "PageCaptureProtocolError":
     case "PageCaptureUnsupportedError": {
       return failure(error._tag, error.message);

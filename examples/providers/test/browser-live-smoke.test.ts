@@ -3,8 +3,9 @@ import { Agent, AgentPolicy, IdGenerator } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
 import {
   BrowserQuickActionBrowserBinding,
+  BrowserQuickActionRpcError,
   browserQuickActionCaptureLayer,
-  type BrowserQuickActionBinding,
+  type BrowserQuickActionClient,
 } from "@effect-agent/platform-cloudflare/browser-quick-action";
 import { PHASE7_LIVE_CREDENTIAL_ENV, phase7LiveProfileEnabled } from "@effect-agent/testing";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
@@ -28,35 +29,54 @@ const liveEnabled =
   (process.env[CLOUDFLARE_TOKEN_ENV] ?? "") !== "";
 
 interface RecordedQuickAction {
-  readonly action: string;
+  readonly action: "content" | "markdown" | "links" | "json";
   readonly options: Record<string, unknown>;
 }
 
-/** The platform binding is Promise-shaped; keep that boundary outside the Effect HTTP workflow. */
+/** Map the REST smoke transport onto the Effect-native binding client. */
 const makeLiveBrowserBinding = Effect.gen(function* () {
   const accountId = yield* Config.nonEmptyString(CLOUDFLARE_ACCOUNT_ENV);
   const apiToken = yield* Config.redacted(CLOUDFLARE_TOKEN_ENV);
   const client = yield* HttpClient.HttpClient;
   const calls = yield* Ref.make<ReadonlyArray<RecordedQuickAction>>([]);
 
-  const binding: BrowserQuickActionBinding = {
-    quickAction: (action, options) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          yield* Ref.update(calls, (previous) => [...previous, { action, options }]);
+  const runQuickAction = Effect.fn("BrowserLiveSmoke.runQuickAction")(function* (
+    action: RecordedQuickAction["action"],
+    options: object,
+  ): Effect.fn.Return<Response, BrowserQuickActionRpcError> {
+    const rpcError = (cause: unknown) => BrowserQuickActionRpcError.make({ action, cause });
+    yield* Ref.update(calls, (previous) => [...previous, { action, options: { ...options } }]);
 
-          const request = yield* HttpClientRequest.post(
-            `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/browser-rendering/${encodeURIComponent(action)}`,
-          ).pipe(HttpClientRequest.bearerToken(apiToken), HttpClientRequest.bodyJson(options));
-          const response = yield* client.execute(request);
-          const body = yield* Stream.toReadableStreamEffect(response.stream);
+    const request = yield* HttpClientRequest.post(
+      `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/browser-rendering/${encodeURIComponent(action)}`,
+    ).pipe(
+      HttpClientRequest.bearerToken(apiToken),
+      HttpClientRequest.bodyJson(options),
+      Effect.mapError(rpcError),
+    );
+    const response = yield* client.execute(request).pipe(Effect.mapError(rpcError));
+    const rawBody = yield* response.text.pipe(Effect.mapError(rpcError));
+    const contentType = response.headers["content-type"]?.toLowerCase() ?? "";
+    const wrapTextResult =
+      response.status >= 200 &&
+      response.status < 300 &&
+      (action === "content" || action === "markdown") &&
+      !contentType.includes("application/json");
+    const body = wrapTextResult ? JSON.stringify({ success: true, result: rawBody }) : rawBody;
 
-          return new Response(body, {
-            status: response.status,
-            headers: response.headers,
-          });
-        }),
-      ),
+    return new Response(body, {
+      status: response.status,
+      headers: {
+        ...response.headers,
+        ...(wrapTextResult ? { "content-type": "application/json" } : {}),
+      },
+    });
+  });
+  const binding: BrowserQuickActionClient = {
+    content: (options) => runQuickAction("content", options),
+    markdown: (options) => runQuickAction("markdown", options),
+    links: (options) => runQuickAction("links", options),
+    json: (options) => runQuickAction("json", options),
   };
 
   return { binding, calls };
@@ -133,7 +153,7 @@ describe.skipIf(!liveEnabled)("Browser Run live smoke (opt-in)", () => {
           const browserHandlers = readWebpage.handlers.pipe(
             Layer.provide(
               browserQuickActionCaptureLayer().pipe(
-                Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: browser.binding })),
+                Layer.provide(Layer.succeed(BrowserQuickActionBrowserBinding)(browser.binding)),
               ),
             ),
           );

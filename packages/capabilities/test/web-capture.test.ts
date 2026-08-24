@@ -2,6 +2,7 @@ import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "
 import { AgentRuntime, ToolExecutionClass } from "@effect-agent/engine";
 import {
   PageCapture,
+  PageCaptureInferencePolicyError,
   PageCaptureProtocolError,
   PageCaptureRateLimitedError,
   PageCaptureResult,
@@ -192,6 +193,17 @@ const makeScriptedPort = Effect.gen(function* () {
                   implementation: scriptedImplementation,
                   message: "The browser RPC failed",
                   cause: new Error("secret-token=host-only-diagnostic"),
+                }),
+              );
+            }
+            if (url.includes("/inference-policy")) {
+              return Effect.fail(
+                PageCaptureInferencePolicyError.make({
+                  implementation: scriptedImplementation,
+                  provider: "cloudflare-workers-ai",
+                  reason: "authorization",
+                  message: "Workers AI extraction was not authorized",
+                  cause: new Error("secret tenant budget detail"),
                 }),
               );
             }
@@ -503,6 +515,23 @@ layer(identifiers)("WebCapture handlers through a scripted port", (it) => {
       });
       expect(outcome.toolResults[0].result).not.toHaveProperty("cause");
       expect(JSON.stringify(outcome.toolResults[0].result)).not.toContain("secret-token");
+    }),
+  );
+
+  it.effect("returns inference policy failures without their host-only cause", () =>
+    Effect.gen(function* () {
+      const outcome = yield* runCapture({
+        url: "https://docs.example.com/inference-policy",
+        action: "markdown",
+      });
+
+      expect(outcome.toolResults[0].result).toMatchObject({
+        _tag: "WebCaptureFailure",
+        errorTag: "PageCaptureInferencePolicyError",
+        message: "Workers AI extraction was not authorized",
+      });
+      expect(outcome.toolResults[0].result).not.toHaveProperty("cause");
+      expect(JSON.stringify(outcome.toolResults[0].result)).not.toContain("secret tenant");
     }),
   );
 

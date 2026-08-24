@@ -5,6 +5,7 @@ import {
   CapturePageStructured,
   PageCaptureError,
   PageCaptureInferenceUse,
+  PageCaptureInferencePolicyError,
   PageCaptureOutput,
   PageCaptureProtocolError,
   PageCaptureRateLimitedError,
@@ -90,6 +91,13 @@ describe("PageCapture schemas", () => {
       message: "The browser RPC failed",
       cause: foreignCause,
     });
+    const inferenceFailure = PageCaptureInferencePolicyError.make({
+      implementation,
+      provider: "cloudflare-workers-ai",
+      reason: "authorization",
+      message: "The capture provider was not authorized",
+      cause: new Error("tenant budget denied the provider"),
+    });
 
     expect(
       Schema.decodeSync(PageCaptureOutput)({ _tag: "PageLinksCaptured", links: ["https://a"] }),
@@ -106,6 +114,14 @@ describe("PageCapture schemas", () => {
       _tag: "PageCaptureProtocolError",
       message: "The browser RPC failed",
       cause: expect.objectContaining({ message: "browser RPC failed" }),
+    });
+    expect(
+      Schema.decodeSync(PageCaptureError)(Schema.encodeSync(PageCaptureError)(inferenceFailure)),
+    ).toMatchObject({
+      _tag: "PageCaptureInferencePolicyError",
+      provider: "cloudflare-workers-ai",
+      reason: "authorization",
+      cause: expect.objectContaining({ message: "tenant budget denied the provider" }),
     });
   });
 

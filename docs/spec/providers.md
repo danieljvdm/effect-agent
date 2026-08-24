@@ -63,7 +63,9 @@ Platform capabilities that invoke a different provider remain explicit too. Brow
 structured extraction must not silently select Workers AI or bypass the host's provider policy:
 both browser adapters require the visible `BrowserQuickActionBrowserBinding` service, and the
 opt-in extraction adapter additionally requires `BrowserQuickActionWorkersAi` for host-owned
-authorization and accounting before inference. Successful extraction records the provider and
+authorization and accounting before inference. A policy refusal remains a typed
+`PageCaptureInferencePolicyError`, distinct from browser navigation and protocol failures.
+Successful extraction records the provider and
 model-call count in its capture result.
 
 ## 3. Prompt and Response

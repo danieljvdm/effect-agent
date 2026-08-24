@@ -378,12 +378,17 @@ Action Layer in `@effect-agent/platform-cloudflare` (`browserQuickActionCaptureL
 capture is one stateless `quickAction()` RPC on the Wrangler `browser` binding. The host resolves
 that binding explicitly and supplies it through `BrowserQuickActionBrowserBinding.layer`; both
 capture Layers visibly require the resulting Effect service (DEPLOY-010) and never read ambiently.
+The Layer accepts Cloudflare's pinned native `BrowserRun` and exposes the four supported actions
+as Effect methods using the native option types, so incompatible Quick Action options fail
+compilation. Native Promise rejection becomes a typed binding RPC error before the capture adapter
+maps it into the `PageCapture` error union.
 Construction-time host patterns reach the binding as `allowRequestPattern`, restricting navigation,
 redirects, and subrequests alike. A capture-owned Scope reads response bytes incrementally and
 stops at the first chunk exceeding the request budget. It cancels and unlocks its reader on
 success, failure, or interruption. Response `Content-Type`, not attacker-controlled page text,
-identifies the
-Cloudflare JSON response envelope. Every returned link must satisfy the canonical bounded,
+identifies the Cloudflare JSON response envelope. A successful native binding response without
+that documented envelope fails typed instead of being reinterpreted as a REST payload. Every
+returned link must satisfy the canonical bounded,
 credential-free HTTP(S) link Schema; malformed entries, unsupported schemes, embedded credentials,
 and over-limit collections fail typed instead of being discarded.
 HTTP 429 becomes a typed rate/quota failure; `Retry-After` is included only when conversion to
@@ -395,7 +400,9 @@ operation, quota, or HTTP-status descriptions and never expose foreign diagnosti
 The `json` Quick Action uses Cloudflare's separately billed Workers AI provider. It fails closed
 unless the host selects `browserQuickActionWorkersAiCaptureLayer` and supplies its visible
 `BrowserQuickActionWorkersAi` service. That service's `authorizeAndAccount` Effect runs before
-the browser RPC, and successful results report `cloudflare-workers-ai` plus one model call
+the browser RPC. Its narrow policy error maps to `PageCaptureInferencePolicyError` with a fixed
+public message; the host diagnostic remains only in the live cause. Successful results report
+`cloudflare-workers-ai` plus one model call
 alongside any `X-Browser-Ms-Used` observation. The ordinary
 `browserQuickActionCaptureLayer` has no Workers AI authority. The host-owned binding service
 keeps browser RPC authority visible in both adapter requirement channels, while the opt-in Layer

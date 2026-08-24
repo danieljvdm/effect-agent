@@ -33,6 +33,7 @@ const BoundedPrompt = Schema.NonEmptyString.check(Schema.isMaxLength(8 * 1024));
 const BoundedSelector = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 const BoundedPattern = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 const BoundedMessage = Schema.String.check(Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
+const BoundedInferenceProvider = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 const BoundedSchemaProperty = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 const BoundedSchemaText = Schema.String.check(Schema.isMaxLength(8 * 1024));
 const BoundedSchemaReference = Schema.NonEmptyString.check(Schema.isMaxLength(8 * 1024));
@@ -502,7 +503,7 @@ export type PageCaptureOutput = typeof PageCaptureOutput.Type;
 export class PageCaptureInferenceUse extends Schema.Class<PageCaptureInferenceUse>(
   "PageCaptureInferenceUse",
 )({
-  provider: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
+  provider: BoundedInferenceProvider,
   modelCalls: PositiveInt,
 }) {}
 
@@ -542,6 +543,18 @@ export class PageCaptureNavigationError extends Schema.TaggedError<PageCaptureNa
   "PageCaptureNavigationError",
   {
     implementation: SandboxImplementation,
+    message: BoundedMessage,
+    cause: Schema.optionalKey(Schema.Defect()),
+  },
+) {}
+
+/** Host authorization or accounting blocked provider inference before capture. */
+export class PageCaptureInferencePolicyError extends Schema.TaggedError<PageCaptureInferencePolicyError>()(
+  "PageCaptureInferencePolicyError",
+  {
+    implementation: SandboxImplementation,
+    provider: BoundedInferenceProvider,
+    reason: Schema.Literals(["authorization", "accounting"]),
     message: BoundedMessage,
     cause: Schema.optionalKey(Schema.Defect()),
   },
@@ -588,6 +601,7 @@ export class PageCaptureProtocolError extends Schema.TaggedError<PageCaptureProt
 export const PageCaptureError = Schema.Union([
   PageCaptureRateLimitedError,
   PageCaptureNavigationError,
+  PageCaptureInferencePolicyError,
   PageCaptureUnsupportedError,
   PageCaptureOutputLimitError,
   PageCaptureProtocolError,

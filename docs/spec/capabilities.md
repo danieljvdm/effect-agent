@@ -372,7 +372,9 @@ its own requirement channel.
 Both builders return ordinary Tools with `failureMode: "return"` and execution class
 `uncertain`: page JavaScript can mutate remote state, so captures are neither safely replayable
 nor eligible for readonly-only Code Mode. Platform-side model inference is never implicit; the
-host must authorize and account for its provider before extraction starts. Construction fails
+host must authorize and account for its provider before extraction starts. Authorization and
+accounting refusals fail as `PageCaptureInferencePolicyError`, identifying the provider and which
+policy step failed while retaining host diagnostics only as the live cause. Construction fails
 closed on an empty or malformed host pattern, an invalid response byte budget, an empty action
 set, and an extraction Schema the deriver cannot express. Stateful browser sessions,
 screenshots, PDFs, snapshot bundles, crawling, and accessibility trees were considered and

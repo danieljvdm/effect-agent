@@ -4,8 +4,8 @@ import {
   CapturePageMarkdown,
   CapturePageStructured,
   PageCapture,
+  PageCaptureInferencePolicyError,
   PageCaptureLimits,
-  PageCaptureNavigationError,
   PageCaptureRequest,
   PageUrlTarget,
   type PageCaptureError,
@@ -16,33 +16,49 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   BrowserQuickActionBrowserBinding,
+  BrowserQuickActionRpcError,
   BrowserQuickActionWorkersAi,
-  browserQuickActionImplementation,
+  BrowserQuickActionWorkersAiPolicyError,
   browserQuickActionCaptureLayer,
   browserQuickActionWorkersAiCaptureLayer,
-  type BrowserQuickActionBinding,
+  type BrowserQuickActionCaptureOptions,
+  type BrowserQuickActionClient,
   type BrowserQuickActionWorkersAiPolicy,
 } from "../src/browser-quick-action.ts";
 
 interface RecordedCall {
-  readonly action: string;
-  readonly options: Record<string, unknown>;
+  readonly action: "content" | "markdown" | "links" | "json";
+  readonly options: unknown;
 }
 
 /** A scripted binding: hands back the queued responses in order. */
 const makeBinding = (responses: ReadonlyArray<Response | Error>) => {
   const calls: Array<RecordedCall> = [];
   let index = 0;
-  const binding: BrowserQuickActionBinding = {
-    quickAction: (action, options) => {
-      calls.push({ action, options });
-      const next = responses[index];
-      index += 1;
-      if (next === undefined) {
-        return Promise.reject(new Error("no scripted response left"));
-      }
-      return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
-    },
+  const respond = (
+    action: RecordedCall["action"],
+    options: unknown,
+  ): Effect.Effect<Response, BrowserQuickActionRpcError> => {
+    calls.push({ action, options });
+    const next = responses[index];
+    index += 1;
+    if (next === undefined) {
+      return Effect.fail(
+        BrowserQuickActionRpcError.make({
+          action,
+          cause: new Error("no scripted response left"),
+        }),
+      );
+    }
+    return next instanceof Error
+      ? Effect.fail(BrowserQuickActionRpcError.make({ action, cause: next }))
+      : Effect.succeed(next);
+  };
+  const binding: BrowserQuickActionClient = {
+    content: (options) => respond("content", options),
+    markdown: (options) => respond("markdown", options),
+    links: (options) => respond("links", options),
+    json: (options) => respond("json", options),
   };
   return { binding, calls };
 };
@@ -70,7 +86,7 @@ const request = (
   });
 
 const capture = (
-  binding: BrowserQuickActionBinding,
+  binding: BrowserQuickActionClient,
   input: PageCaptureRequest,
   workersAi?: BrowserQuickActionWorkersAiPolicy,
 ): Promise<PageCaptureResult> =>
@@ -82,7 +98,7 @@ const capture = (
   );
 
 const captureError = (
-  binding: BrowserQuickActionBinding,
+  binding: BrowserQuickActionClient,
   input: PageCaptureRequest,
   workersAi?: BrowserQuickActionWorkersAiPolicy,
 ): Promise<PageCaptureError> =>
@@ -94,17 +110,17 @@ const captureError = (
   );
 
 const captureLayer = (
-  binding: BrowserQuickActionBinding,
+  binding: BrowserQuickActionClient,
   workersAi?: BrowserQuickActionWorkersAiPolicy,
 ): Layer.Layer<PageCapture> =>
   workersAi === undefined
     ? browserQuickActionCaptureLayer().pipe(
-        Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: binding })),
+        Layer.provide(Layer.succeed(BrowserQuickActionBrowserBinding)(binding)),
       )
     : browserQuickActionWorkersAiCaptureLayer().pipe(
         Layer.provide(
           Layer.merge(
-            BrowserQuickActionBrowserBinding.layer({ browser: binding }),
+            Layer.succeed(BrowserQuickActionBrowserBinding)(binding),
             BrowserQuickActionWorkersAi.layer(workersAi),
           ),
         ),
@@ -130,13 +146,16 @@ type WorkersAiAuthorityIsVisible = Equal<
   LayerRequirements<ReturnType<typeof browserQuickActionWorkersAiCaptureLayer>>,
   BrowserQuickActionBrowserBinding | BrowserQuickActionWorkersAi
 >;
+type NativeBrowserRunIsLayerInput = Equal<BrowserQuickActionCaptureOptions["browser"], BrowserRun>;
 
 describe("Browser Run Quick Action PageCapture adapter", () => {
   it("keeps browser RPC and separately billed Workers AI authority visible in adapter Layers", () => {
     const browserProof: BrowserBindingAuthorityIsVisible = true;
     const workersAiProof: WorkersAiAuthorityIsVisible = true;
+    const nativeBindingProof: NativeBrowserRunIsLayerInput = true;
     expect(browserProof).toBe(true);
     expect(workersAiProof).toBe(true);
+    expect(nativeBindingProof).toBe(true);
   });
 
   it("projects the request onto the wire options and unwraps the envelope", async () => {
@@ -176,10 +195,10 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     expect(result.implementation.identity).toBe("cloudflare-browser-quick-action");
   });
 
-  it("accepts a raw text body, bounded links, and explicitly authorized structured envelopes", async () => {
+  it("decodes native content, links, and explicitly authorized structured envelopes", async () => {
     const rawHtml = "<!doctype html><h1>Pricing</h1>";
     const { binding, calls } = makeBinding([
-      new Response(rawHtml, { headers: { "Content-Type": "text/html" } }),
+      jsonResponse({ success: true, result: rawHtml }),
       jsonResponse({
         success: true,
         result: ["https://docs.example.com/a", "https://docs.example.com/b"],
@@ -240,7 +259,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     }
   });
 
-  it("preserves JSON-shaped page text when response metadata identifies a raw payload", async () => {
+  it("rejects success bodies outside the native BrowserRun response envelope", async () => {
     const rawFailure = JSON.stringify({ success: false, errors: "page content" });
     const rawSuccess = JSON.stringify({ success: true, result: "page content" });
     const { binding } = makeBinding([
@@ -248,13 +267,13 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       new Response(rawSuccess, { headers: { "Content-Type": "text/plain" } }),
     ]);
 
-    expect((await capture(binding, request(CapturePageMarkdown.make({})))).output).toMatchObject({
-      _tag: "PageMarkdownCaptured",
-      markdown: rawFailure,
+    expect(await captureError(binding, request(CapturePageMarkdown.make({})))).toMatchObject({
+      _tag: "PageCaptureProtocolError",
+      message: expect.stringContaining("JSON response envelope"),
     });
-    expect((await capture(binding, request(CapturePageContent.make({})))).output).toMatchObject({
-      _tag: "PageContentCaptured",
-      html: rawSuccess,
+    expect(await captureError(binding, request(CapturePageContent.make({})))).toMatchObject({
+      _tag: "PageCaptureProtocolError",
+      message: expect.stringContaining("JSON response envelope"),
     });
   });
 
@@ -269,15 +288,21 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     });
     expect(calls).toHaveLength(0);
 
-    const denial = PageCaptureNavigationError.make({
-      implementation: browserQuickActionImplementation,
+    const denial = BrowserQuickActionWorkersAiPolicyError.make({
+      reason: "authorization",
       message: "Workers AI is outside this tenant's provider budget",
     });
-    expect(
-      await captureError(binding, structured, {
-        authorizeAndAccount: () => Effect.fail(denial),
-      }),
-    ).toEqual(denial);
+    const refused = await captureError(binding, structured, {
+      authorizeAndAccount: () => Effect.fail(denial),
+    });
+    expect(refused).toMatchObject({
+      _tag: "PageCaptureInferencePolicyError",
+      provider: "cloudflare-workers-ai",
+      reason: "authorization",
+      message: "Workers AI extraction was not authorized",
+    });
+    expect(refused).toBeInstanceOf(PageCaptureInferencePolicyError);
+    expect(refused._tag === "PageCaptureInferencePolicyError" && refused.cause).toBe(denial);
     expect(calls).toHaveLength(0);
   });
 

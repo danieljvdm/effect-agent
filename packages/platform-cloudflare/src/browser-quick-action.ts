@@ -1,6 +1,9 @@
+/// <reference types="@cloudflare/workers-types" />
+
 import {
   PageCapture,
   PageCaptureInferenceUse,
+  PageCaptureInferencePolicyError,
   PageCaptureNavigationError,
   PageCaptureOutputLimitError,
   PageCaptureProtocolError,
@@ -40,29 +43,62 @@ export const browserQuickActionImplementation = SandboxImplementation.make({
 });
 
 /**
- * The structural surface this adapter needs from the Wrangler `browser`
- * binding. Typed here rather than through a platform global so the adapter
- * compiles against the pinned `@cloudflare/workers-types` regardless of when
- * that package ships a `quickAction` declaration.
+ * Effect-native client captured by the binding service. Its option types come
+ * directly from the pinned Workers declarations rather than a local copy.
  */
-export interface BrowserQuickActionBinding {
-  quickAction(action: string, options: Record<string, unknown>): Promise<Response>;
+export interface BrowserQuickActionClient {
+  readonly content: (
+    options: BrowserRunContentOptions,
+  ) => Effect.Effect<Response, BrowserQuickActionRpcError>;
+  readonly markdown: (
+    options: BrowserRunMarkdownOptions,
+  ) => Effect.Effect<Response, BrowserQuickActionRpcError>;
+  readonly links: (
+    options: BrowserRunLinksOptions,
+  ) => Effect.Effect<Response, BrowserQuickActionRpcError>;
+  readonly json: (
+    options: BrowserRunJsonOptions,
+  ) => Effect.Effect<Response, BrowserQuickActionRpcError>;
 }
+
+/** A native binding RPC rejected before it returned an HTTP response. */
+export class BrowserQuickActionRpcError extends Schema.TaggedError<BrowserQuickActionRpcError>()(
+  "BrowserQuickActionRpcError",
+  {
+    action: Schema.Literals(["content", "markdown", "links", "json"]),
+    cause: Schema.Defect(),
+  },
+) {}
 
 export interface BrowserQuickActionCaptureOptions {
   /** The resolved Wrangler `browser` binding (DEPLOY-014: supplied, never ambient). */
-  readonly browser: BrowserQuickActionBinding;
+  readonly browser: BrowserRun;
 }
 
 /** Host-owned browser binding authority, supplied explicitly at the composition root. */
 export class BrowserQuickActionBrowserBinding extends Context.Service<
   BrowserQuickActionBrowserBinding,
-  BrowserQuickActionBinding
+  BrowserQuickActionClient
 >()("@effect-agent/platform-cloudflare/BrowserQuickActionBrowserBinding") {
   static layer(
     options: BrowserQuickActionCaptureOptions,
   ): Layer.Layer<BrowserQuickActionBrowserBinding> {
-    return Layer.succeed(BrowserQuickActionBrowserBinding)(options.browser);
+    const browser = options.browser;
+    const invoke = Effect.fn("BrowserQuickActionBrowserBinding.invoke")(function* (
+      action: "content" | "markdown" | "links" | "json",
+      evaluate: () => Promise<Response>,
+    ): Effect.fn.Return<Response, BrowserQuickActionRpcError> {
+      return yield* Effect.tryPromise({
+        try: evaluate,
+        catch: (cause) => BrowserQuickActionRpcError.make({ action, cause }),
+      });
+    });
+    return Layer.succeed(BrowserQuickActionBrowserBinding)({
+      content: (request) => invoke("content", () => browser.quickAction("content", request)),
+      markdown: (request) => invoke("markdown", () => browser.quickAction("markdown", request)),
+      links: (request) => invoke("links", () => browser.quickAction("links", request)),
+      json: (request) => invoke("json", () => browser.quickAction("json", request)),
+    });
   }
 }
 
@@ -70,8 +106,18 @@ export class BrowserQuickActionBrowserBinding extends Context.Service<
 export interface BrowserQuickActionWorkersAiPolicy {
   readonly authorizeAndAccount: (
     request: PageCaptureRequest,
-  ) => Effect.Effect<void, PageCaptureError>;
+  ) => Effect.Effect<void, BrowserQuickActionWorkersAiPolicyError>;
 }
+
+/** Host-only diagnostic for a denied or unaccounted Workers AI extraction. */
+export class BrowserQuickActionWorkersAiPolicyError extends Schema.TaggedError<BrowserQuickActionWorkersAiPolicyError>()(
+  "BrowserQuickActionWorkersAiPolicyError",
+  {
+    reason: Schema.Literals(["authorization", "accounting"]),
+    message: Schema.String.check(Schema.isMaxLength(8_000)),
+    cause: Schema.optionalKey(Schema.Defect()),
+  },
+) {}
 
 /** Explicit host-owned authority and accounting for separately billed Workers AI extraction. */
 export class BrowserQuickActionWorkersAi extends Context.Service<
@@ -88,57 +134,33 @@ export class BrowserQuickActionWorkersAi extends Context.Service<
 const MAX_DIAGNOSTIC_LENGTH = 8_000;
 const boundedDiagnostic = (message: string): string => message.slice(0, MAX_DIAGNOSTIC_LENGTH);
 
-/** The REST-shaped Quick Action response envelope; raw payloads also occur. */
-const QuickActionEnvelope = Schema.Struct({
-  success: Schema.Boolean,
-  result: Schema.optionalKey(Schema.Json),
-  errors: Schema.optionalKey(Schema.Json),
+const QuickActionSuccessEnvelope = Schema.Struct({
+  success: Schema.Literal(true),
+  result: Schema.Json,
 });
 
-const decodeEnvelope = (text: string): Option.Option<typeof QuickActionEnvelope.Type> => {
-  try {
-    return Schema.decodeUnknownOption(QuickActionEnvelope)(JSON.parse(text));
-  } catch {
-    return Option.none();
-  }
-};
+const QuickActionErrorEnvelope = Schema.Struct({
+  success: Schema.Literal(false),
+  errors: Schema.Array(
+    Schema.Struct({
+      message: Schema.String,
+      code: Schema.optionalKey(Schema.Number),
+      detail: Schema.optionalKey(Schema.String),
+      path: Schema.optionalKey(Schema.String),
+    }),
+  ),
+  rawAiResponse: Schema.optionalKey(Schema.String),
+});
 
-const decodeJson = (text: string): Option.Option<Schema.Json> => {
-  try {
-    return Schema.decodeUnknownOption(Schema.Json)(JSON.parse(text));
-  } catch {
-    return Option.none();
-  }
-};
+const QuickActionEnvelope = Schema.Union([QuickActionSuccessEnvelope, QuickActionErrorEnvelope]);
+const decodeEnvelope = Schema.decodeUnknownOption(Schema.fromJsonString(QuickActionEnvelope));
 
-const quickActionName = (action: PageCaptureAction): string => {
-  switch (action._tag) {
-    case "CapturePageContent": {
-      return "content";
-    }
-    case "CapturePageMarkdown": {
-      return "markdown";
-    }
-    case "CapturePageLinks": {
-      return "links";
-    }
-    case "CapturePageStructured": {
-      return "json";
-    }
-  }
-};
-
-/** Project the schema-validated request onto the Quick Action wire options. */
-const quickActionOptions = (request: PageCaptureRequest): Record<string, unknown> => {
-  const options: Record<string, unknown> = {};
-  if (request.target._tag === "PageUrlTarget") {
-    options.url = request.target.url;
-  } else {
-    options.html = request.target.html;
-  }
+/** Project the schema-validated request onto Cloudflare's native common options. */
+const quickActionCommonOptions = (request: PageCaptureRequest): BrowserRunCommonOptions => {
+  const options: BrowserRunBaseOptions = {};
   const navigation = request.navigation;
   if (navigation !== undefined) {
-    const goto: Record<string, unknown> = {};
+    const goto: NonNullable<BrowserRunBaseOptions["gotoOptions"]> = {};
     if (navigation.waitUntil !== undefined) goto.waitUntil = navigation.waitUntil;
     if (navigation.timeoutMillis !== undefined) goto.timeout = navigation.timeoutMillis;
     if (Object.keys(goto).length > 0) options.gotoOptions = goto;
@@ -156,35 +178,49 @@ const quickActionOptions = (request: PageCaptureRequest): Record<string, unknown
   }
   if (request.resourcePolicy !== undefined) {
     if (request.resourcePolicy.rejectResourceTypes !== undefined) {
-      options.rejectResourceTypes = request.resourcePolicy.rejectResourceTypes;
+      options.rejectResourceTypes = [...request.resourcePolicy.rejectResourceTypes];
     }
     if (request.resourcePolicy.allowRequestPatterns !== undefined) {
-      options.allowRequestPattern = request.resourcePolicy.allowRequestPatterns;
+      options.allowRequestPattern = [...request.resourcePolicy.allowRequestPatterns];
     }
   }
+  return request.target._tag === "PageUrlTarget"
+    ? { ...options, url: request.target.url }
+    : { ...options, html: request.target.html };
+};
+
+/** Dispatch through Cloudflare's native action-specific overloads. */
+const executeQuickAction = (
+  browser: BrowserQuickActionClient,
+  request: PageCaptureRequest,
+): Effect.Effect<Response, BrowserQuickActionRpcError> => {
+  const options = quickActionCommonOptions(request);
   switch (request.action._tag) {
+    case "CapturePageContent": {
+      return browser.content(options);
+    }
+    case "CapturePageMarkdown": {
+      return browser.markdown(options);
+    }
     case "CapturePageLinks": {
-      if (request.action.visibleLinksOnly !== undefined) {
-        options.visibleLinksOnly = request.action.visibleLinksOnly;
-      }
-      break;
+      return browser.links({
+        ...options,
+        ...(request.action.visibleLinksOnly === undefined
+          ? {}
+          : { visibleLinksOnly: request.action.visibleLinksOnly }),
+      });
     }
     case "CapturePageStructured": {
-      options.response_format = {
-        type: "json_schema",
-        json_schema: request.action.responseFormat,
-      };
-      if (request.action.prompt !== undefined) {
-        options.prompt = request.action.prompt;
-      }
-      break;
-    }
-    case "CapturePageContent":
-    case "CapturePageMarkdown": {
-      break;
+      return browser.json({
+        ...options,
+        response_format: {
+          type: "json_schema",
+          json_schema: request.action.responseFormat,
+        },
+        ...(request.action.prompt === undefined ? {} : { prompt: request.action.prompt }),
+      });
     }
   }
-  return options;
 };
 
 const protocolError = (message: string, cause?: unknown): PageCaptureProtocolError =>
@@ -303,15 +339,20 @@ const parseOutput = (
   bodyText: string,
   response: Response,
 ): PageCaptureOutput | PageCaptureNavigationError | PageCaptureProtocolError => {
-  const expectsEnvelope = isJsonResponse(response);
-  const envelope = expectsEnvelope ? decodeEnvelope(bodyText) : Option.none();
-  if (expectsEnvelope && Option.isNone(envelope)) {
+  if (!isJsonResponse(response)) {
+    return protocolError(
+      "The Quick Action success response was not a JSON response envelope",
+      privateResponseCause(bodyText),
+    );
+  }
+  const envelope = decodeEnvelope(bodyText);
+  if (Option.isNone(envelope)) {
     return protocolError(
       "The JSON Quick Action response did not carry a valid response envelope",
       privateResponseCause(bodyText),
     );
   }
-  if (Option.isSome(envelope) && !envelope.value.success) {
+  if (!envelope.value.success) {
     return navigationError(
       "The Quick Action reported a navigation failure",
       privateResponseCause(bodyText),
@@ -320,27 +361,17 @@ const parseOutput = (
   switch (action._tag) {
     case "CapturePageContent":
     case "CapturePageMarkdown": {
-      // The envelope wraps the text on the REST shape; a raw text body is the
-      // payload itself. An envelope whose result is not text is a protocol
-      // violation rather than something to coerce.
-      let text = bodyText;
-      if (Option.isSome(envelope)) {
-        if (typeof envelope.value.result !== "string") {
-          return protocolError("The Quick Action envelope carried a non-text result");
-        }
-        text = envelope.value.result;
+      if (typeof envelope.value.result !== "string") {
+        return protocolError("The Quick Action envelope carried a non-text result");
       }
       return action._tag === "CapturePageContent"
-        ? PageContentCaptured.make({ html: text })
-        : PageMarkdownCaptured.make({ markdown: text });
+        ? PageContentCaptured.make({ html: envelope.value.result })
+        : PageMarkdownCaptured.make({ markdown: envelope.value.result });
     }
     case "CapturePageLinks": {
-      const values = Option.isSome(envelope)
-        ? envelope.value.result
-        : Option.getOrUndefined(decodeJson(bodyText));
       const decoded = Schema.decodeUnknownOption(PageLinksCaptured)({
         _tag: "PageLinksCaptured",
-        links: values,
+        links: envelope.value.result,
       });
       if (Option.isNone(decoded)) {
         return protocolError("The links Quick Action did not return a bounded array of valid URLs");
@@ -348,17 +379,7 @@ const parseOutput = (
       return decoded.value;
     }
     case "CapturePageStructured": {
-      if (Option.isSome(envelope)) {
-        if (envelope.value.result === undefined) {
-          return protocolError("The json Quick Action envelope carried no result");
-        }
-        return PageStructuredCaptured.make({ value: envelope.value.result });
-      }
-      const value = decodeJson(bodyText);
-      if (Option.isNone(value)) {
-        return protocolError("The json Quick Action did not return a JSON value");
-      }
-      return PageStructuredCaptured.make({ value: value.value });
+      return PageStructuredCaptured.make({ value: envelope.value.result });
     }
   }
 };
@@ -366,7 +387,7 @@ const parseOutput = (
 const isQuotaMessage = (text: string): boolean => /time limit|daily|quota/i.test(text);
 
 const makeCapture = (
-  browser: BrowserQuickActionBinding,
+  browser: BrowserQuickActionClient,
   workersAi?: BrowserQuickActionWorkersAiPolicy,
 ): PageCaptureCapture =>
   Effect.fn("BrowserQuickActionCapture.capture")(function* (
@@ -391,13 +412,27 @@ const makeCapture = (
             "Structured capture invokes separately billed Workers AI and requires an explicit authorization and accounting policy",
         });
       }
-      yield* workersAi.authorizeAndAccount(request);
+      yield* workersAi.authorizeAndAccount(request).pipe(
+        Effect.mapError((cause) =>
+          PageCaptureInferencePolicyError.make({
+            implementation: browserQuickActionImplementation,
+            provider: "cloudflare-workers-ai",
+            reason: cause.reason,
+            message:
+              cause.reason === "authorization"
+                ? "Workers AI extraction was not authorized"
+                : "Workers AI extraction could not be accounted for",
+            cause,
+          }),
+        ),
+      );
     }
 
-    const response = yield* Effect.tryPromise({
-      try: () => browser.quickAction(quickActionName(request.action), quickActionOptions(request)),
-      catch: (cause) => protocolError("The browser binding rejected the Quick Action", cause),
-    });
+    const response = yield* executeQuickAction(browser, request).pipe(
+      Effect.mapError((error) =>
+        protocolError("The browser binding rejected the Quick Action", error.cause),
+      ),
+    );
     const bodyText = yield* readBoundedResponse(response, request);
     if (response.status === 429) {
       const retryAfter = retryAfterMillis(response);
