@@ -48,7 +48,7 @@ export class ModelUsageGroup extends Schema.Class<ModelUsageGroup>(
   costMicrousd: Schema.Natural,
 }) {}
 
-/** Durable aggregate included with a terminal Run settlement. */
+/** Settlement aggregate included with a terminal Run settlement. */
 export class RunUsageSummary extends Schema.Class<RunUsageSummary>(
   "@effect-agent/core/RunUsageSummary",
 )({

@@ -2306,15 +2306,35 @@ const outgoingModelPrompt = (
 
 /** Usage accounting outcome of one completed model response (RUN-025). */
 interface ConsumedUsage {
-  /**
-   * A finalize-eligible budget breach. Fail-fast breaches do not reach the
-   * caller unless this response declared the singleton completion Tool: that
-   * already-paid delivery response is allowed to finish RUN-032.
-   */
+  /** A finalize-eligible budget breach under `onExhaustion: "final-answer"`. */
   readonly breach: AgentPolicyError | undefined;
   readonly warnings: ReadonlyArray<RunEvent>;
   readonly modelUsage: ModelCallUsage;
 }
+
+const ProviderUsage = Schema.Struct({
+  inputTokens: Schema.Struct({
+    uncached: Schema.optional(Schema.Natural),
+    total: Schema.optional(Schema.Natural),
+    cacheRead: Schema.optional(Schema.Natural),
+    cacheWrite: Schema.optional(Schema.Natural),
+  }),
+  outputTokens: Schema.Struct({
+    total: Schema.optional(Schema.Natural),
+    text: Schema.optional(Schema.Natural),
+    reasoning: Schema.optional(Schema.Natural),
+  }),
+});
+
+const invalidProviderUsage = () =>
+  ModelProtocolError.make({
+    message: "Model response usage fields and derived totals must be non-negative safe integers",
+  });
+
+const decodeProviderUsageTotal = (value: number): Effect.Effect<number, ModelProtocolError> =>
+  Schema.decodeUnknownEffect(Schema.Natural)(value).pipe(
+    Effect.mapError(() => invalidProviderUsage()),
+  );
 
 const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>(
   agent: AgentValue,
@@ -2335,27 +2355,29 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
         message: "A completed model response did not report usage",
       });
     }
-    const natural = (value: number | undefined): number =>
-      value === undefined || !Number.isSafeInteger(value) ? 0 : Math.max(0, value);
-    const reportedUncached = natural(usage.inputTokens.uncached);
-    const cacheRead = natural(usage.inputTokens.cacheRead);
-    const cacheWrite = natural(usage.inputTokens.cacheWrite);
-    const reportedText = natural(usage.outputTokens.text);
-    const reasoning = natural(usage.outputTokens.reasoning);
+    const providerUsage = yield* Schema.decodeUnknownEffect(ProviderUsage)(usage).pipe(
+      Effect.mapError(() => invalidProviderUsage()),
+    );
+    const reportedUncached = providerUsage.inputTokens.uncached ?? 0;
+    const cacheRead = providerUsage.inputTokens.cacheRead ?? 0;
+    const cacheWrite = providerUsage.inputTokens.cacheWrite ?? 0;
+    const reportedText = providerUsage.outputTokens.text ?? 0;
+    const reasoning = providerUsage.outputTokens.reasoning ?? 0;
     // Gross token accounting never discounts cache activity. A provider's
     // aggregate may be absent or narrower than its reported components.
-    const inputTokens = Math.max(
-      natural(usage.inputTokens.total),
+    const reportedInputComponents = yield* decodeProviderUsageTotal(
       reportedUncached + cacheRead + cacheWrite,
     );
-    const outputTokens = Math.max(natural(usage.outputTokens.total), reportedText + reasoning);
+    const inputTokens = Math.max(providerUsage.inputTokens.total ?? 0, reportedInputComponents);
+    const reportedOutputComponents = yield* decodeProviderUsageTotal(reportedText + reasoning);
+    const outputTokens = Math.max(providerUsage.outputTokens.total ?? 0, reportedOutputComponents);
     // When a provider reports only aggregates, classify the unexplained input
     // conservatively as uncached and non-reasoning output as text. This keeps
     // each persisted breakdown additive instead of silently inventing a free,
     // unclassified token bucket.
     const uncached = Math.max(reportedUncached, inputTokens - cacheRead - cacheWrite);
     const text = Math.max(reportedText, outputTokens - reasoning);
-    const totalTokens = inputTokens + outputTokens;
+    const totalTokens = yield* decodeProviderUsageTotal(inputTokens + outputTokens);
     const provider = yield* Model.ProviderName;
     const model = yield* Model.ModelName;
     const estimate =
@@ -2363,7 +2385,7 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
         ? 0
         : yield* options.estimateCostMicrousd(usage, { provider, model, usage });
     const costMicrousd = typeof estimate === "number" ? estimate : estimate.costMicrousd;
-    if (!Number.isInteger(costMicrousd) || costMicrousd < 0) {
+    if (!Number.isSafeInteger(costMicrousd) || costMicrousd < 0) {
       return yield* AgentPolicyError.make({
         limit: "cost",
         message: "Model cost estimation must produce a non-negative integer number of microdollars",
@@ -2393,9 +2415,16 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
       outputTokens: OutputTokenUsage.make({ total: outputTokens, text, reasoning }),
       costMicrousd,
     });
-    context.modelCalls += 1;
-    context.inputTokens += inputTokens;
-    context.outputTokens += outputTokens;
+    const modelCalls = yield* decodeProviderUsageTotal(context.modelCalls + 1);
+    const cumulativeInputTokens = yield* decodeProviderUsageTotal(
+      context.inputTokens + inputTokens,
+    );
+    const cumulativeOutputTokens = yield* decodeProviderUsageTotal(
+      context.outputTokens + outputTokens,
+    );
+    context.modelCalls = modelCalls;
+    context.inputTokens = cumulativeInputTokens;
+    context.outputTokens = cumulativeOutputTokens;
     context.lastInputTokens = inputTokens;
     context.lastOutputTokens = outputTokens;
     context.costMicrousd += costMicrousd;
@@ -3996,7 +4025,7 @@ const makeTurn = <
           }
           const toolCalls = priorToolCalls + trace.toolCalls.size;
           const overToolBudget = toolCalls + context.programmaticToolCalls > bounds.maxToolCalls;
-          if (overToolBudget && policy.onExhaustion === "fail" && !completionBatch) {
+          if (overToolBudget && policy.onExhaustion === "fail") {
             return failRunEventStream(
               AgentPolicyError.make({
                 limit: "tool-calls",
@@ -4257,8 +4286,7 @@ const makeTurn = <
             }
             const turnsBlocked =
               policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
-            const completionTurnAllowed = completionBatch;
-            if (turnsBlocked && !completionTurnAllowed) {
+            if (turnsBlocked) {
               return failRunEventStream(
                 AgentPolicyError.make({
                   limit: "turns",
@@ -4733,7 +4761,7 @@ const makeResumeTurn = <
       const bounds = effectiveRunBounds(policy, options);
       const toolCalls = trace.toolCalls.size;
       const overToolBudget = toolCalls + context.programmaticToolCalls > bounds.maxToolCalls;
-      if (overToolBudget && policy.onExhaustion === "fail" && !completionBatch) {
+      if (overToolBudget && policy.onExhaustion === "fail") {
         return failRunEventStream(
           AgentPolicyError.make({
             limit: "tool-calls",
@@ -4743,8 +4771,7 @@ const makeResumeTurn = <
       }
       const turnsBlocked =
         policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
-      const completionTurnAllowed = completionBatch;
-      if (turnsBlocked && !completionTurnAllowed) {
+      if (turnsBlocked) {
         return failRunEventStream(
           AgentPolicyError.make({
             limit: "turns",

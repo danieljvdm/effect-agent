@@ -67,9 +67,8 @@ Stop Policy evaluation (step 16) enforces the finite Agent Policy at the Turn se
 next model request. Turn and Tool Call limits bound the work itself: work that would exceed them
 never starts. How exhaustion resolves is policy-selected via `onExhaustion`:
 
-- `"fail"` fails the Run typed (`AgentPolicyError`) at the seam. Its sole delivery exception is
-  an already-declared, authorized singleton completion Tool (RUN-032): discarding that call would
-  lose the typed terminal result after the model response has already spent the budget.
+- `"fail"` fails the Run typed (`AgentPolicyError`) at the seam before any declared application
+  Handler starts.
 - `"final-answer"` (the default) gives the model one constrained settlement opportunity. An
   over-budget declared Tool batch never executes a handler and is never durably declared as a
   pending batch; every open call settles synthetically as a model-visible failed result carrying
@@ -100,10 +99,9 @@ typed projector from the Tool's decoded parameters and successful result to the 
 (RUN-032). The completion call must be the only call in its batch. After authorization and the
 ordinary durable Tool protocol succeed, the engine Schema-validates the projected output and
 completes immediately: it does not ask the model for a private summary. A completion batch may run
-after a token, Turn, or Tool-call limit is crossed, including under `onExhaustion: "fail"`, and its
-completion preserves the honest `budget-exhausted` metadata. This exception applies only to the
-already-declared delivery batch; it does not grant another research or model Turn. Mixed batches
-fail before any Handler starts.
+after a token, Turn, or Tool-call limit is crossed under `onExhaustion: "final-answer"`, and its
+completion preserves the honest `budget-exhausted` metadata. Fail mode rejects the batch before
+its Handler starts. Mixed batches fail before any Handler starts.
 
 `maxDuration` bounds wall clock for one logical Run, not one process Attempt and not cumulative
 worker-active time. In the durable assemblies the clock starts when the Submission's initial
@@ -632,12 +630,10 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   batch never executes a handler and is never durably declared: every open call settles
   synthetically as a model-visible failed result exempt from repeated-failure folding,
   subsequent model requests forbid tool use, and the Run completes with
-  `finishReason: "budget-exhausted"`. Under `"fail"` the Run fails typed before the batch starts,
-  except for the already-declared singleton completion Tool defined by RUN-032.
+  `finishReason: "budget-exhausted"`. Under `"fail"` the Run fails typed before the batch starts.
 - **RUN-019:** Turn exhaustion under `"final-answer"` admits exactly one grace Turn past
   `maxTurns`, with tool use forbidden; the pending batch at the final permitted Turn executes
-  normally, and no second grace Turn exists. Under `"fail"` the Run fails typed at the seam unless
-  that Turn already declared the singleton completion Tool defined by RUN-032.
+  normally, and no second grace Turn exists. Under `"fail"` the Run fails typed at the seam.
 - **RUN-020:** Final-answer Turns are fail-closed: a model that declares any Tool Call under a
   `toolChoice: "none"` request fails the Run typed.
 - **RUN-021:** Per-Run allowances are tightening-only: the effective Turn/Tool-Call limit is the
@@ -649,9 +645,11 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   original byte size, and provider-executed results are exempt.
 - **RUN-023:** The engine accounts cache-read and cache-write input tokens distinctly from
   uncached input and tracks the most recent call's input/output tokens as the live-context
-  estimate, both visible through the budget hook. A recovery usage seed must contain non-negative
-  safe integers with last-call token counts no greater than cumulative totals; invalid seeds fail
-  before Run input hooks or external execution.
+  estimate, both visible through the budget hook. Every present provider token field and each
+  derived total must be a non-negative safe integer; malformed usage fails with
+  `ModelProtocolError` before cost estimation or budget consumption. A recovery usage seed obeys
+  the same integer bound, with last-call token counts no greater than cumulative totals; invalid
+  seeds fail before Run input hooks or external execution.
 - **RUN-024:** With policy `runStatus: "appended"`, every outgoing model request carries a
   derived run-status message showing Turns, Tool Calls, tokens, and elapsed time; the
   message is never persisted as canonical history.
@@ -700,8 +698,12 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   resumed denial writes no new preparation.
 - **RUN-032:** An Agent Definition may designate one singleton completion Tool and a typed output
   projector. A successful authorized call Schema-validates and completes the Run immediately,
-  including after budget exhaustion, without a private-summary model turn; mixed completion
-  batches fail before any Handler, and durable recovery never repeats a canonically settled call.
+  including after budget exhaustion under `onExhaustion: "final-answer"`, without a
+  private-summary model turn. Fail mode rejects exhausted delivery before its Handler starts,
+  mixed completion batches fail before any Handler, and durable recovery never repeats a
+  canonically settled call.
+  Durable no-tool completion likewise commits its final response and completion marker atomically,
+  so recovery terminalizes without issuing a duplicate model request.
 - **RUN-033:** A first response marks its evaluated instruction/wake prefix as Run-scoped.
   Recovery of that Run retains it, while later Runs omit only that marked prefix and preserve the
   remaining assistant/tool conversation; unmarked legacy records retain their full projection.

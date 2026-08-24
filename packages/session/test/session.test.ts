@@ -393,6 +393,41 @@ describe("phase 4 durable canonical payloads", () => {
     }
   });
 
+  it("RUN-011: requires both budget fields on a RunCompleted marker", () => {
+    const envelope = (payload: unknown): unknown => ({
+      recordId: "record-run-completed-budget",
+      family: "conversation",
+      schemaVersion: 1,
+      createdAt: "2026-07-29T12:00:00.000Z",
+      deploymentId: "test-deployment",
+      payload,
+    });
+    const completed = {
+      _tag: "RunCompleted",
+      runId: "run-budget-completed",
+      output: { answer: "partial" },
+    } as const;
+
+    expect(
+      Schema.decodeUnknownExit(RecordEnvelope)(
+        envelope({
+          ...completed,
+          finishReason: "budget-exhausted",
+          exhausted: "tokens",
+        }),
+      )._tag,
+    ).toBe("Success");
+    expect(
+      Schema.decodeUnknownExit(RecordEnvelope)(
+        envelope({ ...completed, finishReason: "budget-exhausted" }),
+      )._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(RecordEnvelope)(envelope({ ...completed, exhausted: "tokens" }))
+        ._tag,
+    ).toBe("Failure");
+  });
+
   it("RUN-011: round-trips typed budget metadata and decodes legacy settlements without it", () => {
     const payloads = [
       // A completed soft landing persists the finishReason with its typed dimension.

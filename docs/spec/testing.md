@@ -92,7 +92,9 @@ Generated command sequences cover:
 - approval timing;
 - compaction success/failure;
 - completion-reserve admission and unreachable compaction targets;
-- singleton completion Tool success, mixed-batch rejection, and crash recovery after result commit;
+- singleton completion Tool success, mixed-batch rejection, strict fail-mode admission, and crash
+  recovery after result commit;
+- malformed provider usage rejection before cost estimation or budget consumption;
 - Run-scoped prompt provenance across owner recovery and later Runs;
 - durable cache-split/model/tier/cost usage and settlement aggregation;
 - child-agent completion/interruption;

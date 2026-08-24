@@ -28,6 +28,7 @@ import {
   AgentRuntime,
   formatRunStatus,
   type RunDurabilityHook,
+  type RunTurnResume,
   type RunUsageDelta,
 } from "../src/index.ts";
 
@@ -37,16 +38,18 @@ const identifiers = Layer.succeed(IdGenerator, {
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-1")),
 });
 
-const emptyUsage = { inputTokens: {}, outputTokens: {} };
+type FinishUsage = Extract<Response.StreamPartEncoded, { readonly type: "finish" }>["usage"];
 
-const usageOf = (input: number, output: number) => ({
+const emptyUsage: FinishUsage = { inputTokens: {}, outputTokens: {} };
+
+const usageOf = (input: number, output: number): FinishUsage => ({
   inputTokens: { total: input },
   outputTokens: { total: output },
 });
 
 const finalParts = (
   text: string,
-  usage: typeof emptyUsage | ReturnType<typeof usageOf> = emptyUsage,
+  usage: FinishUsage = emptyUsage,
 ): ReadonlyArray<Response.StreamPartEncoded> => [
   { type: "text-start", id: "answer" },
   { type: "text-delta", id: "answer", delta: text },
@@ -58,7 +61,7 @@ const toolCallParts = (
   id: string,
   name: string,
   params: Record<string, unknown>,
-  usage: typeof emptyUsage | ReturnType<typeof usageOf> = emptyUsage,
+  usage: FinishUsage = emptyUsage,
 ): ReadonlyArray<Response.StreamPartEncoded> => [
   { type: "tool-call", id, name, params, providerExecuted: false },
   { type: "finish", reason: "tool-calls", usage },
@@ -349,6 +352,59 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         if (second === undefined) throw new Error("expected a second model request");
         expect(promptText(second.prompt)).toContain("last-context 9");
       }),
+  );
+
+  it.effect("RUN-023: rejects malformed provider token usage instead of counting it as zero", () =>
+    Effect.gen(function* () {
+      const estimatorCalls = yield* Ref.make(0);
+      const definition = Agent.define("invalid-provider-usage", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const malformed: ReadonlyArray<FinishUsage> = [
+        { inputTokens: { total: -1 }, outputTokens: {} },
+        { inputTokens: { uncached: -1 }, outputTokens: {} },
+        { inputTokens: { cacheRead: -1 }, outputTokens: {} },
+        { inputTokens: { cacheWrite: -1 }, outputTokens: {} },
+        { inputTokens: {}, outputTokens: { total: -1 } },
+        { inputTokens: {}, outputTokens: { text: -1 } },
+        { inputTokens: {}, outputTokens: { reasoning: -1 } },
+        // Effect AI rejects non-integers and unsafe integers before this seam.
+        // This pair proves that individually valid fields cannot overflow a
+        // derived total and escape accounting.
+        {
+          inputTokens: {
+            uncached: Number.MAX_SAFE_INTEGER,
+            cacheRead: Number.MAX_SAFE_INTEGER,
+          },
+          outputTokens: {},
+        },
+      ];
+
+      for (const usage of malformed) {
+        const { model, requests } = scriptedModel([finalParts('{"answer":"invalid"}', usage)]);
+        const exit = yield* AgentRuntime.run(
+          Agent.withModel(definition, model),
+          { question: "q" },
+          {
+            estimateCostMicrousd: () =>
+              Ref.update(estimatorCalls, (count) => count + 1).pipe(Effect.as(0)),
+          },
+        ).pipe(Effect.exit);
+
+        expect(failureFrom(exit)).toBeInstanceOf(ModelProtocolError);
+        expect(requests).toHaveLength(1);
+      }
+      expect(yield* Ref.get(estimatorCalls)).toBe(0);
+    }),
   );
 
   // ---------------------------------------------------------------- RUN-024
@@ -700,7 +756,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
   );
 
   it.effect(
-    "RUN-032: an authorized completion Tool settles immediately when its response crosses the token budget",
+    "RUN-032: final-answer mode lets an authorized completion Tool settle when its response crosses the token budget",
     () =>
       Effect.gen(function* () {
         const handlerStarts = yield* Ref.make(0);
@@ -715,7 +771,6 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             maxDuration: "30 seconds",
             toolConcurrency: 1,
             tokenBudget: 10_000,
-            onExhaustion: "fail",
           }),
           completion: {
             tool: "post_message",
@@ -755,6 +810,225 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
       }),
   );
 
+  it.effect(
+    "RUN-032: fail mode rejects a token-breaching completion Tool before its handler starts",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const definition = Agent.define("token-exhausted-terminal-tool-fail", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
+          instructions: "Deliver the final answer with post_message.",
+          toolkit: postMessageToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 5,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 10_000,
+            onExhaustion: "fail",
+          }),
+          completion: {
+            tool: "post_message",
+            project: ({ parameters, result }) => ({
+              message: parameters.message,
+              messageId: result.messageId,
+            }),
+          },
+        });
+        const { model, requests } = scriptedModel([
+          toolCallParts(
+            "delivery-fail",
+            "post_message",
+            { message: "must not deliver" },
+            usageOf(9_000, 4_000),
+          ),
+        ]);
+        const toolLayer = postMessageToolkit.toLayer({
+          post_message: () =>
+            Ref.update(handlerStarts, (count) => count + 1).pipe(
+              Effect.as({ messageId: "must-not-exist" }),
+            ),
+        });
+
+        const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+          question: "deliver",
+        }).pipe(Effect.provide(toolLayer), Effect.exit);
+        const failure = failureFrom(exit);
+
+        expect(failure).toBeInstanceOf(AgentPolicyError);
+        expect((failure as AgentPolicyError).limit).toBe("tokens");
+        expect(requests).toHaveLength(1);
+        expect(yield* Ref.get(handlerStarts)).toBe(0);
+      }),
+  );
+
+  it.effect("RUN-032: fail mode does not exempt a completion Tool from the Turn limit", () =>
+    Effect.gen(function* () {
+      const handlerStarts = yield* Ref.make(0);
+      const definition = Agent.define("turn-exhausted-terminal-tool-fail", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
+        instructions: "Deliver the final answer with post_message.",
+        toolkit: postMessageToolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 1,
+          maxToolCalls: 5,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          onExhaustion: "fail",
+        }),
+        completion: {
+          tool: "post_message",
+          project: ({ parameters, result }) => ({
+            message: parameters.message,
+            messageId: result.messageId,
+          }),
+        },
+      });
+      const { model } = scriptedModel([
+        toolCallParts("delivery-turn-fail", "post_message", { message: "must not deliver" }),
+      ]);
+      const toolLayer = postMessageToolkit.toLayer({
+        post_message: () =>
+          Ref.update(handlerStarts, (count) => count + 1).pipe(
+            Effect.as({ messageId: "must-not-exist" }),
+          ),
+      });
+
+      const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+        question: "deliver",
+      }).pipe(Effect.provide(toolLayer), Effect.exit);
+      const failure = failureFrom(exit);
+
+      expect(failure).toBeInstanceOf(AgentPolicyError);
+      expect((failure as AgentPolicyError).limit).toBe("turns");
+      expect(yield* Ref.get(handlerStarts)).toBe(0);
+    }),
+  );
+
+  it.effect("RUN-032: fail mode does not exempt a completion Tool from the Tool Call limit", () =>
+    Effect.gen(function* () {
+      const SearchThenPost = Toolkit.make(SearchTool, PostMessageTool);
+      const searchStarts = yield* Ref.make(0);
+      const deliveryStarts = yield* Ref.make(0);
+      const definition = Agent.define("tool-exhausted-terminal-tool-fail", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
+        instructions: "Research, then deliver the final answer with post_message.",
+        toolkit: SearchThenPost,
+        policy: AgentPolicy.make({
+          maxTurns: 5,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          onExhaustion: "fail",
+        }),
+        completion: {
+          tool: "post_message",
+          project: ({ parameters, result }) => ({
+            message: parameters.message,
+            messageId: result.messageId,
+          }),
+        },
+      });
+      const { model, requests } = scriptedModel([
+        toolCallParts("search-before-delivery", "search", {}),
+        toolCallParts("delivery-tool-fail", "post_message", {
+          message: "must not deliver",
+        }),
+      ]);
+      const toolLayer = SearchThenPost.toLayer({
+        search: () => Ref.update(searchStarts, (count) => count + 1).pipe(Effect.as("found")),
+        post_message: () =>
+          Ref.update(deliveryStarts, (count) => count + 1).pipe(
+            Effect.as({ messageId: "must-not-exist" }),
+          ),
+      });
+
+      const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+        question: "deliver",
+      }).pipe(Effect.provide(toolLayer), Effect.exit);
+      const failure = failureFrom(exit);
+
+      expect(failure).toBeInstanceOf(AgentPolicyError);
+      expect((failure as AgentPolicyError).limit).toBe("tool-calls");
+      expect(requests).toHaveLength(2);
+      expect(yield* Ref.get(searchStarts)).toBe(1);
+      expect(yield* Ref.get(deliveryStarts)).toBe(0);
+    }),
+  );
+
+  it.effect(
+    "RUN-032: fail mode rejects an over-budget resumed completion Tool before its handler starts",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const definition = Agent.define("resume-token-exhausted-terminal-tool-fail", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
+          instructions: "Deliver the final answer with post_message.",
+          toolkit: postMessageToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 5,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 100,
+            onExhaustion: "fail",
+          }),
+          completion: {
+            tool: "post_message",
+            project: ({ parameters, result }) => ({
+              message: parameters.message,
+              messageId: result.messageId,
+            }),
+          },
+        });
+        const { model, requests } = scriptedModel([finalParts('{"message":"never"}')]);
+        const toolLayer = postMessageToolkit.toLayer({
+          post_message: () =>
+            Ref.update(handlerStarts, (count) => count + 1).pipe(
+              Effect.as({ messageId: "must-not-exist" }),
+            ),
+        });
+        const resume: RunTurnResume = {
+          turn: 1,
+          turnId: Schema.decodeSync(TurnId)("turn-resumed-delivery"),
+          calls: [
+            {
+              id: "delivery-resumed-fail",
+              name: "post_message",
+              params: { message: "must not deliver" },
+            },
+          ],
+          settled: [],
+        };
+
+        const exit = yield* AgentRuntime.run(
+          Agent.withModel(definition, model),
+          { question: "deliver" },
+          {
+            resume,
+            resumeUsage: {
+              modelCalls: 1,
+              inputTokens: 90,
+              outputTokens: 20,
+              lastInputTokens: 90,
+              lastOutputTokens: 20,
+              costMicrousd: 0,
+            },
+          },
+        ).pipe(Effect.provide(toolLayer), Effect.exit);
+        const failure = failureFrom(exit);
+
+        expect(failure).toBeInstanceOf(AgentPolicyError);
+        expect((failure as AgentPolicyError).limit).toBe("tokens");
+        expect(requests).toHaveLength(0);
+        expect(yield* Ref.get(handlerStarts)).toBe(0);
+      }),
+  );
+
   it.effect("RUN-032: a completion Tool must be the singleton declared batch", () =>
     Effect.gen(function* () {
       const mixedToolkit = Toolkit.make(PostMessageTool, SearchTool);
@@ -762,7 +1036,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
       const definition = Agent.define("mixed-terminal-tool-batch", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
-        instructions: "Deliver exactly once.",
+        instructions: "Deliver the final message.",
         toolkit: mixedToolkit,
         policy: AgentPolicy.make({
           maxTurns: 5,

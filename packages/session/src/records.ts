@@ -406,13 +406,14 @@ const RunCompletedFields = Schema.Struct({
   output: PersistedJson,
   /** Application disposition captured with an ordinary terminal Tool completion. */
   runDisposition: Schema.optionalKey(PersistedJson),
-  /** Honest soft-landing marker captured atomically with the terminal Tool result. */
+  /** Honest soft-landing marker, present exactly when `exhausted` is present. */
   finishReason: Schema.optionalKey(Schema.Literal("budget-exhausted")),
+  /** Budget dimension paired with `finishReason` on a soft landing. */
   exhausted: Schema.optionalKey(ExhaustedLimit),
 }).check(
   Schema.makeFilter(
     (completed) =>
-      (completed.exhausted === undefined || completed.finishReason === "budget-exhausted") &&
+      (completed.finishReason === undefined) === (completed.exhausted === undefined) &&
       (completed.runDisposition === undefined || completed.finishReason === undefined),
     { title: "Run completion metadata matches its terminal family" },
   ),

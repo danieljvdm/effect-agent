@@ -1147,7 +1147,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
   );
 
   it.effect(
-    "RUN-032 resumes an over-token completion delivery under fail mode after the response commit",
+    "RUN-032 resumes an over-token completion delivery under final-answer mode after the response commit",
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
@@ -1168,7 +1168,6 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             toolConcurrency: 1,
             tokenBudget: 1_000,
             completionReserveTokens: 100,
-            onExhaustion: "fail",
           }),
           completion: {
             tool: "post_message",

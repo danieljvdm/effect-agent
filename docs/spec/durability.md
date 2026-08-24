@@ -259,7 +259,9 @@ A Definition-owned completion Tool uses the same authorization, preparation, and
 protocol as any external side effect. Its successful singleton result and a `RunCompleted` marker
 containing the Schema-projected output and exhaustion metadata commit in one atomic result batch.
 Recovery that observes that marker validates the matching declaration/result and proceeds directly
-to terminalization; it never invokes the model or Handler again (RUN-032).
+to terminalization; it never invokes the model or Handler again (RUN-032). A budget-exhausted
+marker carries both `finishReason: "budget-exhausted"` and the `exhausted` dimension; a marker with
+only one fails Schema decoding.
 
 ## 11. Durable steps
 

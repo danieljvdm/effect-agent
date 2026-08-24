@@ -37974,6 +37974,23 @@ var outgoingModelPrompt = (policy2, context3, prepared, turn, declaredToolCalls)
     })
   ]);
 });
+var ProviderUsage = exports_Schema.Struct({
+  inputTokens: exports_Schema.Struct({
+    uncached: exports_Schema.optional(exports_Schema.Natural),
+    total: exports_Schema.optional(exports_Schema.Natural),
+    cacheRead: exports_Schema.optional(exports_Schema.Natural),
+    cacheWrite: exports_Schema.optional(exports_Schema.Natural)
+  }),
+  outputTokens: exports_Schema.Struct({
+    total: exports_Schema.optional(exports_Schema.Natural),
+    text: exports_Schema.optional(exports_Schema.Natural),
+    reasoning: exports_Schema.optional(exports_Schema.Natural)
+  })
+});
+var invalidProviderUsage = () => ModelProtocolError.make({
+  message: "Model response usage fields and derived totals must be non-negative safe integers"
+});
+var decodeProviderUsageTotal = (value4) => exports_Schema.decodeUnknownEffect(exports_Schema.Natural)(value4).pipe(exports_Effect.mapError(() => invalidProviderUsage()));
 var consumeUsage = (agent2, context3, usage2, toolCallCount, turn, options3) => exports_Effect.gen(function* () {
   if (usage2 === undefined) {
     return yield* AgentPolicyError.make({
@@ -37981,22 +37998,24 @@ var consumeUsage = (agent2, context3, usage2, toolCallCount, turn, options3) => 
       message: "A completed model response did not report usage"
     });
   }
-  const natural = (value4) => value4 === undefined || !Number.isSafeInteger(value4) ? 0 : Math.max(0, value4);
-  const reportedUncached = natural(usage2.inputTokens.uncached);
-  const cacheRead = natural(usage2.inputTokens.cacheRead);
-  const cacheWrite = natural(usage2.inputTokens.cacheWrite);
-  const reportedText = natural(usage2.outputTokens.text);
-  const reasoning = natural(usage2.outputTokens.reasoning);
-  const inputTokens = Math.max(natural(usage2.inputTokens.total), reportedUncached + cacheRead + cacheWrite);
-  const outputTokens = Math.max(natural(usage2.outputTokens.total), reportedText + reasoning);
+  const providerUsage = yield* exports_Schema.decodeUnknownEffect(ProviderUsage)(usage2).pipe(exports_Effect.mapError(() => invalidProviderUsage()));
+  const reportedUncached = providerUsage.inputTokens.uncached ?? 0;
+  const cacheRead = providerUsage.inputTokens.cacheRead ?? 0;
+  const cacheWrite = providerUsage.inputTokens.cacheWrite ?? 0;
+  const reportedText = providerUsage.outputTokens.text ?? 0;
+  const reasoning = providerUsage.outputTokens.reasoning ?? 0;
+  const reportedInputComponents = yield* decodeProviderUsageTotal(reportedUncached + cacheRead + cacheWrite);
+  const inputTokens = Math.max(providerUsage.inputTokens.total ?? 0, reportedInputComponents);
+  const reportedOutputComponents = yield* decodeProviderUsageTotal(reportedText + reasoning);
+  const outputTokens = Math.max(providerUsage.outputTokens.total ?? 0, reportedOutputComponents);
   const uncached = Math.max(reportedUncached, inputTokens - cacheRead - cacheWrite);
   const text2 = Math.max(reportedText, outputTokens - reasoning);
-  const totalTokens = inputTokens + outputTokens;
+  const totalTokens = yield* decodeProviderUsageTotal(inputTokens + outputTokens);
   const provider = yield* exports_Model.ProviderName;
   const model = yield* exports_Model.ModelName;
   const estimate = options3.estimateCostMicrousd === undefined ? 0 : yield* options3.estimateCostMicrousd(usage2, { provider, model, usage: usage2 });
   const costMicrousd = typeof estimate === "number" ? estimate : estimate.costMicrousd;
-  if (!Number.isInteger(costMicrousd) || costMicrousd < 0) {
+  if (!Number.isSafeInteger(costMicrousd) || costMicrousd < 0) {
     return yield* AgentPolicyError.make({
       limit: "cost",
       message: "Model cost estimation must produce a non-negative integer number of microdollars"
@@ -38025,9 +38044,12 @@ var consumeUsage = (agent2, context3, usage2, toolCallCount, turn, options3) => 
     outputTokens: OutputTokenUsage.make({ total: outputTokens, text: text2, reasoning }),
     costMicrousd
   });
-  context3.modelCalls += 1;
-  context3.inputTokens += inputTokens;
-  context3.outputTokens += outputTokens;
+  const modelCalls = yield* decodeProviderUsageTotal(context3.modelCalls + 1);
+  const cumulativeInputTokens = yield* decodeProviderUsageTotal(context3.inputTokens + inputTokens);
+  const cumulativeOutputTokens = yield* decodeProviderUsageTotal(context3.outputTokens + outputTokens);
+  context3.modelCalls = modelCalls;
+  context3.inputTokens = cumulativeInputTokens;
+  context3.outputTokens = cumulativeOutputTokens;
   context3.lastInputTokens = inputTokens;
   context3.lastOutputTokens = outputTokens;
   context3.costMicrousd += costMicrousd;
@@ -38943,7 +38965,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
     }
     const toolCalls = priorToolCalls + trace3.toolCalls.size;
     const overToolBudget = toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls;
-    if (overToolBudget && policy2.onExhaustion === "fail" && !completionBatch) {
+    if (overToolBudget && policy2.onExhaustion === "fail") {
       return failRunEventStream(AgentPolicyError.make({
         limit: "tool-calls",
         message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
@@ -39050,8 +39072,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
         }));
       }
       const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
-      const completionTurnAllowed = completionBatch;
-      if (turnsBlocked && !completionTurnAllowed) {
+      if (turnsBlocked) {
         return failRunEventStream(AgentPolicyError.make({
           limit: "turns",
           message: `Agent exceeded its ${bounds.maxTurns} Turn limit`
@@ -39275,15 +39296,14 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
   const bounds = effectiveRunBounds(policy2, options3);
   const toolCalls = trace3.toolCalls.size;
   const overToolBudget = toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls;
-  if (overToolBudget && policy2.onExhaustion === "fail" && !completionBatch) {
+  if (overToolBudget && policy2.onExhaustion === "fail") {
     return failRunEventStream(AgentPolicyError.make({
       limit: "tool-calls",
       message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
     }));
   }
   const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
-  const completionTurnAllowed = completionBatch;
-  if (turnsBlocked && !completionTurnAllowed) {
+  if (turnsBlocked) {
     return failRunEventStream(AgentPolicyError.make({
       limit: "turns",
       message: `Agent exceeded its ${bounds.maxTurns} Turn limit`

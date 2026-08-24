@@ -7,5 +7,5 @@
 "@effect-agent/testing": patch
 ---
 
-Add crash-safe terminal delivery Tools, completion-capacity reservation, Run-scoped prompt provenance, and target-aware compaction.
-Persist priced per-call model usage through durable hosts and expose aggregate usage on Run settlements.
+Add crash-safe terminal delivery Tools and final model responses, completion-capacity reservation, Run-scoped prompt provenance, and target-aware compaction.
+Persist priced per-call model usage in the DN and DC assemblies and expose aggregate usage on Run settlements.
