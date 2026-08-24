@@ -267,7 +267,9 @@ protocol as any external side effect. Its successful singleton result and a `Run
 containing the Schema-projected output and exhaustion metadata commit in one atomic result batch.
 Recovery that observes that marker re-decodes the canonical parameters/result, reapplies the
 Definition projector and Agent output Schema, and requires the durable output to match before
-terminalization; it never invokes the model or Handler again (RUN-032). A budget-exhausted
+terminalization. It counts every declared Tool Call, including provider-executed calls, before
+accepting the application completion Tool as the singleton batch; it never invokes the model or
+Handler again (RUN-032). A budget-exhausted
 marker carries both `finishReason: "budget-exhausted"` and the `exhausted` dimension; a marker with
 only one fails Schema decoding.
 

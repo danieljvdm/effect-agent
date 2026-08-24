@@ -780,13 +780,18 @@ interface DeclaredApplicationCall {
   readonly params: unknown;
 }
 
+interface DeclaredToolCalls {
+  readonly total: number;
+  readonly application: Array<DeclaredApplicationCall>;
+}
+
 /**
- * Pure extraction of a Turn's declared application Tool Calls from the canonical (encoded)
- * `ModelResponseRecorded.messages` value. Provider-executed calls are the provider's own
- * responsibility and never enter the durable prepared/settled protocol.
+ * Pure inspection of every Tool Call declared in one canonical response. Provider-executed calls
+ * count toward the batch singleton invariant even though only application calls enter the durable
+ * prepared/settled protocol.
  */
-const declaredApplicationCalls = Effect.fn("DurableAgentRuntime.declaredApplicationCalls")(
-  (messages: PersistedJson): Effect.Effect<Array<DeclaredApplicationCall>, RunJournalError> =>
+const declaredToolCalls = Effect.fn("DurableAgentRuntime.declaredToolCalls")(
+  (messages: PersistedJson): Effect.Effect<DeclaredToolCalls, RunJournalError> =>
     decodePrompt(messages).pipe(
       Effect.mapError((cause) =>
         RunJournalError.make({
@@ -795,17 +800,27 @@ const declaredApplicationCalls = Effect.fn("DurableAgentRuntime.declaredApplicat
         }),
       ),
       Effect.map((prompt) => {
-        const calls: Array<DeclaredApplicationCall> = [];
+        let total = 0;
+        const application: Array<DeclaredApplicationCall> = [];
         for (const message of prompt.content) {
           if (message.role !== "assistant") continue;
           for (const part of message.content) {
-            if (part.type !== "tool-call" || part.providerExecuted) continue;
-            calls.push({ id: part.id, name: part.name, params: part.params });
+            if (part.type !== "tool-call") continue;
+            total += 1;
+            if (!part.providerExecuted) {
+              application.push({ id: part.id, name: part.name, params: part.params });
+            }
           }
         }
-        return calls;
+        return { total, application };
       }),
     ),
+);
+
+/** Application calls alone drive durable preparation, settlement, and batch resume. */
+const declaredApplicationCalls = Effect.fn("DurableAgentRuntime.declaredApplicationCalls")(
+  (messages: PersistedJson): Effect.Effect<Array<DeclaredApplicationCall>, RunJournalError> =>
+    declaredToolCalls(messages).pipe(Effect.map(({ application }) => application)),
 );
 
 /** Rebuild the exact JSON text that the engine decoded from one terminal no-Tool response. */
@@ -3320,7 +3335,8 @@ const make = Effect.gen(function* () {
             message: `Run ${runId} has a terminal completion marker without a response`,
           });
         }
-        const calls = yield* declaredApplicationCalls(response.messages);
+        const declared = yield* declaredToolCalls(response.messages);
+        const calls = declared.application;
         let expectedOutput: {
           readonly encoded: Schema.Json;
           readonly decoded: OutputSchema["Type"];
@@ -3339,6 +3355,7 @@ const make = Effect.gen(function* () {
                 )?.record.payload;
           if (
             completion === undefined ||
+            declared.total !== 1 ||
             calls.length !== 1 ||
             call?.name !== completion.tool ||
             settled?._tag !== "ToolCallSettled" ||

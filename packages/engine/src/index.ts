@@ -4371,7 +4371,11 @@ const makeTurn = <
             // commit shape and recovery replays it like any no-tool Turn. The
             // rejected Turn's usage is still charged via
             // `afterValidatedResponse` because the Run continues.
-            if (overToolBudget && trace.applicationToolCalls.length > 0 && !completionBatch) {
+            if (
+              overToolBudget &&
+              trace.applicationToolCalls.length > 0 &&
+              !(completionBatch && policy.onExhaustion === "final-answer")
+            ) {
               return afterValidatedResponse(
                 Effect.gen(function* () {
                   const rejection = yield* settleRejectedBatch(
@@ -4921,7 +4925,7 @@ const makeResumeTurn = <
       // results stand verbatim, only open calls get the synthetic failure,
       // and no handler starts. Once the synthetic settlements commit, the
       // pending batch is complete and recovery offers no further resume.
-      if (overToolBudget && !completionBatch) {
+      if (overToolBudget && !(completionBatch && policy.onExhaustion === "final-answer")) {
         const rejection = yield* settleRejectedBatch(
           context,
           turnId,

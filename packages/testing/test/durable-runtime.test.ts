@@ -26,7 +26,9 @@ import {
   DurableRuntimeFailpointError,
   DurableRuntimeFailpointTestControl,
   IdempotencyKey,
+  ModelResponseRecorded,
   ObservationOffset,
+  PersistedJson,
   Principal,
   ProducerId,
   QueueSequence,
@@ -320,6 +322,76 @@ const corruptedCompletionBaseLayer = Layer.mergeAll(
 
 const corruptedCompletionTestLayer = DurableAgentRuntime.layer.pipe(
   Layer.provideMerge(corruptedCompletionBaseLayer),
+);
+
+const injectProviderExecutedCall = (messages: Schema.Json): Schema.Json => {
+  const prompt = Schema.decodeUnknownSync(Prompt.Prompt)(messages);
+  return Schema.decodeUnknownSync(PersistedJson)(
+    Schema.encodeSync(Prompt.Prompt)(
+      Prompt.fromMessages([
+        ...prompt.content,
+        Prompt.makeMessage("assistant", {
+          content: [
+            Prompt.makePart("tool-call", {
+              id: "hostile-provider-call",
+              name: "HostedSearch",
+              params: { query: "hidden" },
+              providerExecuted: true,
+            }),
+          ],
+        }),
+      ]),
+    ),
+  );
+};
+
+const injectProviderCallEnvelope = (envelope: CanonicalRecordEnvelope): CanonicalRecordEnvelope => {
+  const payload = envelope.record.payload;
+  if (payload._tag !== "ModelResponseRecorded") return envelope;
+  return CanonicalRecordEnvelope.make({
+    ...envelope,
+    record: RecordEnvelope.make({
+      ...envelope.record,
+      payload: ModelResponseRecorded.make({
+        runId: payload.runId,
+        turnId: payload.turnId,
+        turn: payload.turn,
+        messages: injectProviderExecutedCall(payload.messages),
+        messagesDigest: payload.messagesDigest,
+        ...(payload.runScopedPrefixLength === undefined
+          ? {}
+          : { runScopedPrefixLength: payload.runScopedPrefixLength }),
+        ...(payload.modelUsage === undefined ? {} : { modelUsage: payload.modelUsage }),
+        ...(payload.inputTokens === undefined ? {} : { inputTokens: payload.inputTokens }),
+        ...(payload.outputTokens === undefined ? {} : { outputTokens: payload.outputTokens }),
+        ...(payload.costMicrousd === undefined ? {} : { costMicrousd: payload.costMicrousd }),
+      }),
+    }),
+  });
+};
+
+const injectedProviderCallStoreLayer = Layer.effect(
+  ConversationStore,
+  Effect.gen(function* () {
+    const inner = yield* ConversationStore;
+    return ConversationStore.of({
+      ...inner,
+      read: (request) => inner.read(request).pipe(Stream.map(injectProviderCallEnvelope)),
+    });
+  }),
+).pipe(Layer.provide(MemoryConversationStoreLive));
+
+const injectedProviderCallTestLayer = DurableAgentRuntime.layer.pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      MemorySubmissionLedgerLive,
+      injectedProviderCallStoreLayer,
+      WakeScheduler.layerNoop,
+      DurableRuntimeFailpoint.layerTest,
+      ToolReconciler.uncertain,
+      configLayer,
+    ).pipe(Layer.provideMerge(NodeCrypto.layer)),
+  ),
 );
 
 const corruptRunDispositionEnvelope = (
@@ -2650,6 +2722,78 @@ layer(corruptedCompletionTestLayer)("RUN-032 recovered completion validation", (
         agent,
         { question: "validate delivery recovery" },
         submitOptions(conversation, "hostile-tool-completion-1"),
+      );
+      yield* armFailpoint("turn:after-results-append");
+      const crashed = yield* Effect.exit(
+        runtime
+          .processConversation(agent, decodeConversationId(conversation))
+          .pipe(Effect.provide(toolLayer)),
+      );
+      expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+      expect(yield* Ref.get(handlerCalls)).toBe(1);
+      yield* clearFailpoint;
+
+      const recovered = yield* Effect.exit(
+        runtime
+          .processConversation(agent, decodeConversationId(conversation))
+          .pipe(Effect.provide(toolLayer)),
+      );
+      expect(failureTag(recovered)).toBe("RunJournalError");
+      expect(yield* Ref.get(handlerCalls)).toBe(1);
+      expect(scripted.prompts).toHaveLength(1);
+    }),
+  );
+});
+
+layer(injectedProviderCallTestLayer)("RUN-032 recovered completion singleton validation", (it) => {
+  it.effect("rejects a completion marker mixed with a provider-executed Tool Call", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const PostMessage = Tool.make("post_message", {
+        parameters: Schema.Struct({ message: Schema.String }),
+        success: Schema.Struct({ messageId: Schema.String }),
+      });
+      const tools = Toolkit.make(PostMessage);
+      const definition = Agent.define("hostile-mixed-terminal-delivery", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: DeliveryCompletionOutput,
+        instructions: "Deliver through post_message.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+        completion: {
+          tool: "post_message",
+          project: ({ result }) => ({ messageId: result.messageId, delivered: true }),
+        },
+      });
+      const scripted = yield* makeScriptedModel(() => [
+        {
+          type: "tool-call",
+          id: "mixed-delivery-1",
+          name: "post_message",
+          params: { message: "canonical delivery" },
+          providerExecuted: false,
+        },
+        { type: "finish", reason: "tool-calls", usage },
+      ]);
+      const handlerCalls = yield* Ref.make(0);
+      const toolLayer = tools.toLayer({
+        post_message: () =>
+          Ref.updateAndGet(handlerCalls, (count) => count + 1).pipe(
+            Effect.as({ messageId: "canonical-message" }),
+          ),
+      });
+      const agent = Agent.withModel(definition, scripted.model);
+      const conversation = "conversation-hostile-mixed-tool-completion";
+
+      yield* runtime.submit(
+        agent,
+        { question: "validate singleton recovery" },
+        submitOptions(conversation, "hostile-mixed-tool-completion-1"),
       );
       yield* armFailpoint("turn:after-results-append");
       const crashed = yield* Effect.exit(

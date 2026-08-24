@@ -37350,7 +37350,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
           message: `Agent exceeded its ${bounds.maxTurns} Turn limit`
         }));
       }
-      if (overToolBudget && trace2.applicationToolCalls.length > 0 && !completionBatch) {
+      if (overToolBudget && trace2.applicationToolCalls.length > 0 && !(completionBatch && policy2.onExhaustion === "final-answer")) {
         return afterValidatedResponse(exports_Effect.gen(function* () {
           const rejection = yield* settleRejectedBatch(context3, turnId, trace2, AgentPolicyError.make({
             limit: "tool-calls",
@@ -37612,7 +37612,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
     const continuation = toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options);
     return settledChildJoinCallIds === undefined ? continuation : enforceDurationDeadline(continuation, context3.durationDeadlineMillis, durationLimitError(policy2));
   };
-  if (overToolBudget && !completionBatch) {
+  if (overToolBudget && !(completionBatch && policy2.onExhaustion === "final-answer")) {
     const rejection = yield* settleRejectedBatch(context3, turnId, trace2, AgentPolicyError.make({
       limit: "tool-calls",
       message: `Tool Call budget exhausted: this Run's ${bounds.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`

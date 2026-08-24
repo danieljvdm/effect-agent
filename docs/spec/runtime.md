@@ -710,8 +710,9 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   private-summary model turn. Fail mode rejects exhausted delivery before its Handler starts,
   mixed completion batches fail before any Handler, and durable recovery never repeats a
   canonically settled call. Recovery re-decodes the canonical parameters/result, reapplies the
-  projector, output Schema, and any ordinary run-disposition selector, and requires the
-  reconstructed durable values to match their marker.
+  projector, output Schema, and any ordinary run-disposition selector, counts provider-executed
+  calls when enforcing the singleton batch, and requires the reconstructed durable values to
+  match their marker.
   Durable no-tool completion likewise commits its final response and completion marker atomically,
   so recovery re-decodes and matches that response before terminalizing without a duplicate model
   request.
