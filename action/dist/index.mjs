@@ -33445,7 +33445,7 @@ class ModelUsageGroup extends exports_Schema.Class("@effect-agent/core/ModelUsag
   model: UsageIdentity,
   serviceTier: exports_Schema.optionalKey(UsageIdentity),
   pricingVersion: exports_Schema.optionalKey(UsageIdentity),
-  modelCalls: exports_Schema.Natural,
+  modelCalls: exports_Schema.Natural.check(exports_Schema.isGreaterThan(0)),
   inputTokens: InputTokenUsage,
   outputTokens: OutputTokenUsage,
   costMicrousd: exports_Schema.Natural
@@ -38243,6 +38243,7 @@ var makeAgentSpawner = (parent, depth) => ({
 });
 var AgentRuntime = {
   decodeFinalOutput,
+  encodeRunDisposition,
   projectCompletionOutput,
   run: run4,
   start,

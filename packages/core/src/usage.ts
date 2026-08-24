@@ -60,7 +60,7 @@ export class ModelUsageGroup extends Schema.Class<ModelUsageGroup>(
   model: UsageIdentity,
   serviceTier: Schema.optionalKey(UsageIdentity),
   pricingVersion: Schema.optionalKey(UsageIdentity),
-  modelCalls: Schema.Natural,
+  modelCalls: Schema.Natural.check(Schema.isGreaterThan(0)),
   inputTokens: InputTokenUsage,
   outputTokens: OutputTokenUsage,
   costMicrousd: Schema.Natural,

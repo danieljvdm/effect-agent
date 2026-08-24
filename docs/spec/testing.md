@@ -99,8 +99,8 @@ Generated command sequences cover:
 - durable cache-split/model/tier/cost usage and settlement aggregation, including checked token and
   cost overflow, unique pricing groups, and exact group-to-summary agreement;
 - paired budget-exhaustion metadata on live completion markers and durable settlements;
-- recovered no-Tool and completion-Tool markers revalidated against their canonical response or
-  Tool result under hostile-store substitution;
+- recovered no-Tool and completion-Tool markers revalidated against their canonical response,
+  Tool result, and output-derived run disposition under hostile-store substitution;
 - child-agent completion/interruption;
 - budget exhaustion;
 - subscriber backpressure;

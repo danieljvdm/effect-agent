@@ -39,7 +39,6 @@ import {
   runIdForSubmission,
   toolCallPreparedRecordId,
   toolStepSettledRecordId,
-  type CanonicalRecordEnvelope,
   type DurableRuntimeFailpointLocation,
   type DurableSubmitOptions,
   type PreparedToolCallEvidence,
@@ -468,6 +467,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         "ToolCallPrepared",
         "ToolCallSettled",
         "ModelResponseRecorded",
+        "RunCompleted",
         "SubmissionSettled",
       ]);
       const byId = new Map(
@@ -530,6 +530,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         "ModelResponseRecorded",
         "ToolCallSettled",
         "ModelResponseRecorded",
+        "RunCompleted",
         "SubmissionSettled",
       ]);
       // The response/results split still applies (application calls exist), only preparation

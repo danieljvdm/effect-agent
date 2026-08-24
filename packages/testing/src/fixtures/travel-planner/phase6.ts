@@ -920,8 +920,46 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
     },
   },
   {
-    batchId: "submission-settlement:{submissionId}",
+    batchId: "turn:run:{submissionId}:2",
     sequence: 8,
+    record: {
+      recordId: "run-completed:run:{submissionId}",
+      family: "conversation",
+      schemaVersion: 1,
+      createdAt: "{timestamp}",
+      deploymentId: "{deploymentId}",
+      payload: {
+        _tag: "RunCompleted",
+        runId: "run:{submissionId}",
+        output: {
+          itineraries: [
+            {
+              title: "Westward light, eastbound overnight",
+              route: "San Francisco → London",
+              dates: "14–19 September 2026",
+              flight: "EA 218 · nonstop · SFO 18:40 → LHR 13:05+1",
+              lodging: "Bloomsbury House · refundable studio · 4 nights",
+              activities: ["British Museum timed entry", "Thames evening walk"],
+              estimatedTotalCents: 284000,
+              currency: "USD",
+              quoteId: "quote-sfo-lhr-001",
+              assumptions: [
+                "Two travelers sharing one studio",
+                "Quote is read-only availability, not a reservation",
+              ],
+              unresolvedConstraints: [
+                "Traveler names and accessibility requests are intentionally omitted",
+              ],
+              nextAction: "review",
+            },
+          ],
+        },
+      },
+    },
+  },
+  {
+    batchId: "submission-settlement:{submissionId}",
+    sequence: 9,
     record: {
       recordId: "settlement:{submissionId}",
       family: "conversation",

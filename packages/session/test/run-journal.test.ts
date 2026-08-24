@@ -117,6 +117,12 @@ const completionTurnAppended: ReadonlyArray<Prompt.Message> = [
   }),
 ];
 
+const finalTurnAppended: ReadonlyArray<Prompt.Message> = [
+  Prompt.makeMessage("assistant", {
+    content: [Prompt.makePart("text", { text: '{"answer":"Booked."}' })],
+  }),
+];
+
 const turnInput = (
   appended: ReadonlyArray<Prompt.Message>,
   turn = 1,
@@ -226,6 +232,27 @@ describe("run journal batch split (plan §2.1)", () => {
         expect(splitProjection.committedTurns).toBe(singleProjection.committedTurns);
         expect(splitProjection.prompt).toEqual(singleProjection.prompt);
         expect(splitProjection.historyBefore).toEqual(singleProjection.historyBefore);
+      }),
+    );
+
+    it.effect("commits a no-tool final response and Run completion marker atomically", () =>
+      Effect.gen(function* () {
+        const batch = yield* turnCanonicalBatch({
+          ...turnInput(finalTurnAppended),
+          runCompletion: {
+            output: { answer: "Booked." },
+          },
+        });
+
+        expect(batch.records.map((record) => record.recordId)).toEqual([
+          modelResponseRecordId(RUN_ID, 1),
+          runCompletedRecordId(RUN_ID),
+        ]);
+        expect(batch.records[1]?.payload).toMatchObject({
+          _tag: "RunCompleted",
+          runId: RUN_ID,
+          output: { answer: "Booked." },
+        });
       }),
     );
 

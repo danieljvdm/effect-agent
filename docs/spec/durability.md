@@ -336,7 +336,9 @@ recovery; it does not derive it from cached outcome metadata. Decode is fail-clo
 valid only on a `completed` settlement with a `runId` and without
 `finishReason: "budget-exhausted"`. Failed, aborted, budget-exhausted, run-less joined,
 incomplete, and recovery-only outcomes cannot acquire one. The durable runtime never reconstructs
-this value from result prose or Tool records.
+this value from result prose or Tool records. When recovering the owning Run's canonical completion
+marker, however, it re-applies the Definition selector and Schema to the reconstructed typed output
+and requires that encoding to match the marker before terminalizing.
 
 Every `failed` canonical settlement carries exactly one generic failure diagnostic in `result`:
 `errorTag` is non-empty and at most 256 characters, and `message` is at most 16 KiB. No other

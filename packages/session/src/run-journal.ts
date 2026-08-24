@@ -9,8 +9,7 @@ import {
   type SubmissionId,
 } from "@effect-agent/core";
 import { CLEARED_TOOL_RESULT, COMPACTION_SUMMARY_PREFIX } from "@effect-agent/engine";
-import type { Crypto } from "effect";
-import { Effect, Schema, type DateTime } from "effect";
+import { type Crypto, Effect, Schema, type DateTime } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
 import { digestJson, type DigestError } from "./digest.ts";
@@ -811,7 +810,7 @@ export interface TurnCommitInput {
   readonly createdAt: DateTime.Utc;
   /** Leading instruction/wake messages that stay canonical but are hidden from later Runs. */
   readonly runScopedPrefixLength?: number | undefined;
-  /** Terminal Tool output committed atomically with this Turn's result batch. */
+  /** Terminal output committed atomically with this Turn's final canonical batch. */
   readonly runCompletion?:
     | {
         readonly output: PersistedJson;
@@ -980,15 +979,39 @@ const toolSettledRecords = Effect.fn("RunJournal.toolSettledRecords")(function* 
   return toolRecords;
 });
 
+const runCompletionRecord = (input: TurnCommitInput): RecordEnvelope | undefined =>
+  input.runCompletion === undefined
+    ? undefined
+    : RecordEnvelope.make({
+        recordId: runCompletedRecordId(input.runId),
+        family: "conversation",
+        schemaVersion: 1,
+        createdAt: input.createdAt,
+        deploymentId: input.deploymentId,
+        payload: RunCompleted.make({
+          runId: input.runId,
+          output: input.runCompletion.output,
+          ...(input.runCompletion.runDisposition === undefined
+            ? {}
+            : { runDisposition: input.runCompletion.runDisposition }),
+          ...(input.runCompletion.finishReason === undefined
+            ? {}
+            : { finishReason: input.runCompletion.finishReason }),
+          ...(input.runCompletion.exhausted === undefined
+            ? {}
+            : { exhausted: input.runCompletion.exhausted }),
+        }),
+      });
+
 /**
  * Pure per-Turn canonical batch builder (TurnCompleted seam fold, D6/D8): one
  * `ModelResponseRecorded` record plus one `ToolCallSettled` record per terminal Tool result, all
  * under the WP0-style deterministic identities, committed as ONE atomic batch. The same input
  * always yields byte-identical content, so an in-Attempt append retry is an honest batch replay.
  *
- * Phase 5 keeps this exact shape for Turns that declare no application Tool calls (decision
- * point 6: P4 histories replay byte-identically); tool-declaring Turns split into
- * `turnResponseBatch` + `turnResultsBatch`.
+ * Phase 5 keeps this shape for Turns that declare no application Tool calls; their terminal
+ * `RunCompleted` marker joins the response in this same atomic batch. Tool-declaring Turns split
+ * into `turnResponseBatch` + `turnResultsBatch`.
  */
 export const turnCanonicalBatch = Effect.fn("RunJournal.turnCanonicalBatch")(function* (
   input: TurnCommitInput,
@@ -997,10 +1020,14 @@ export const turnCanonicalBatch = Effect.fn("RunJournal.turnCanonicalBatch")(fun
   const { promptMessages, toolParts } = splitTurnMessages(input.appended);
   const modelResponse = yield* modelResponseRecord(input, promptMessages);
   const toolRecords = yield* toolSettledRecords(input, toolParts);
+  const completionRecord = runCompletionRecord(input);
   return CanonicalBatch.make({
     batchId: turnBatchId(input.runId, input.turn),
     producerId: input.producerId,
-    records: [modelResponse, ...toolRecords],
+    records:
+      completionRecord === undefined
+        ? [modelResponse, ...toolRecords]
+        : [modelResponse, ...toolRecords, completionRecord],
   });
 });
 
@@ -1046,34 +1073,13 @@ export const turnResultsBatch = Effect.fn("RunJournal.turnResultsBatch")(functio
   if (input.runCompletion !== undefined && toolRecords.length !== 1) {
     return yield* journalError("A terminal Tool completion requires exactly one settled result");
   }
-  const completionRecord =
-    input.runCompletion === undefined
-      ? []
-      : [
-          RecordEnvelope.make({
-            recordId: runCompletedRecordId(input.runId),
-            family: "conversation",
-            schemaVersion: 1,
-            createdAt: input.createdAt,
-            deploymentId: input.deploymentId,
-            payload: RunCompleted.make({
-              runId: input.runId,
-              output: input.runCompletion.output,
-              ...(input.runCompletion.runDisposition === undefined
-                ? {}
-                : { runDisposition: input.runCompletion.runDisposition }),
-              ...(input.runCompletion.finishReason === undefined
-                ? {}
-                : { finishReason: input.runCompletion.finishReason }),
-              ...(input.runCompletion.exhausted === undefined
-                ? {}
-                : { exhausted: input.runCompletion.exhausted }),
-            }),
-          }),
-        ];
+  const completionRecord = runCompletionRecord(input);
   return CanonicalBatch.make({
     batchId: turnResultsBatchId(input.runId, input.turn),
     producerId: input.producerId,
-    records: [first, ...toolRecords.slice(1), ...completionRecord],
+    records:
+      completionRecord === undefined
+        ? [first, ...toolRecords.slice(1)]
+        : [first, ...toolRecords.slice(1), completionRecord],
   });
 });

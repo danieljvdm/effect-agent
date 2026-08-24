@@ -1156,6 +1156,7 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
             "ToolStepSettled",
             "ToolCallSettled",
             "ModelResponseRecorded",
+            "RunCompleted",
             "SubmissionSettled",
           ]);
 

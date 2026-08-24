@@ -424,7 +424,7 @@ export class RunFailed extends Schema.TaggedClass<RunFailed>("@effect-agent/sess
 const RunCompletedFields = Schema.Struct({
   runId: RunId,
   output: PersistedJson,
-  /** Application disposition captured with an ordinary terminal Tool completion. */
+  /** Application disposition captured with an ordinary completion. */
   runDisposition: Schema.optionalKey(PersistedJson),
   /** Honest soft-landing marker, present exactly when `exhausted` is present. */
   finishReason: Schema.optionalKey(Schema.Literal("budget-exhausted")),

@@ -1,7 +1,7 @@
 import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
 import type { SubmissionId } from "@effect-agent/core";
-import type { AgentBindingResolver } from "@effect-agent/session";
 import {
+  type AgentBindingResolver,
   AdmissionRequest,
   ClaimRequest,
   ConversationRead,
@@ -359,6 +359,7 @@ describe("NodeDurableRuntime", () => {
               "ConversationCreated",
               "UserInputRecorded",
               "ModelResponseRecorded",
+              "RunCompleted",
               "SubmissionSettled",
               "RepairAnnotated",
             ]);

@@ -4,8 +4,8 @@ import { Effect, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlError } from "effect/unstable/sql/SqlError";
 
-import type { DoStorageFailpointError } from "./errors.ts";
 import {
+  type DoStorageFailpointError,
   DoAppendConflict,
   DoCheckpointConflict,
   DoFenceRejected,

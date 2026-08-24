@@ -43,8 +43,8 @@ import {
 } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
-import type { SqliteStorageCompatibilityError } from "./errors.ts";
 import {
+  type SqliteStorageCompatibilityError,
   SqliteAppendConflict,
   SqliteCheckpointConflict,
   SqliteFenceRejected,

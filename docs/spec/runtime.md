@@ -407,8 +407,9 @@ and exempt from re-triggering breach). Either
 way the Run settles as `RunCompleted` with `finishReason: "budget-exhausted"` and
 `exhausted: "tokens"`. A grace-Turn response that declares any Tool call other than the permitted
 singleton completion Tool fails typed (`ModelProtocolError`, RUN-020). Under
-`onExhaustion: "fail"`, a token breach remains fatal and no declared application Handler starts.
-A `maxDuration` breach always fails because a grace call would extend wall clock past the contract.
+`onExhaustion: "fail"`, a token breach remains fatal and no
+declared application Handler starts. A `maxDuration` breach always fails because a grace call
+would extend wall clock past the contract.
 
 After these steps the engine appends the model-visible final-output contract to the produced
 Model Input (RUN-028): one framework-owned system message carrying the JSON Schema derived from
@@ -454,7 +455,9 @@ output prose or infers disposition from Tool events. When the application select
 typed error retains the original value in its Schema-safe diagnostic `cause`; the terminal event
 uses a fixed non-sensitive message and never serializes that foreign cause. The public
 `AgentResultSchema` independently rejects a disposition on `finishReason: "budget-exhausted"`, so
-untrusted serialized results cannot bypass the event-reducer invariant.
+untrusted serialized results cannot bypass the event-reducer invariant. Durable recovery re-applies
+the selector and Schema to the reconstructed output and rejects a completion marker whose encoded
+disposition differs or appears where the live seam would omit it.
 
 Raw provider chunks are never mixed into the stable event union.
 
@@ -632,10 +635,12 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   subsequent model requests forbid tool use, and the Run completes with
   `finishReason: "budget-exhausted"`. Under `"fail"` the Run fails typed before the batch starts.
 - **RUN-019:** Turn exhaustion under `"final-answer"` admits exactly one grace Turn past
-  `maxTurns`, with tool use forbidden; the pending batch at the final permitted Turn executes
-  normally, and no second grace Turn exists. Under `"fail"` the Run fails typed at the seam.
+  `maxTurns`, with Tool use limited to the permitted singleton completion Tool; the pending batch
+  at the final permitted Turn executes normally, and no second grace Turn exists. Under `"fail"`
+  the Run fails typed at the seam.
 - **RUN-020:** Final-answer Turns are fail-closed: a model that declares any Tool Call under a
-  `toolChoice: "none"` request fails the Run typed.
+  `toolChoice: "none"` request, or any call other than the permitted singleton completion Tool
+  when that Tool is constrained, fails the Run typed.
 - **RUN-021:** Per-Run allowances are tightening-only: the effective Turn/Tool-Call limit is the
   minimum of the Agent Policy bound and the normalized allowance, never more, and the
   `onExhaustion` resolution applies at the effective limit.
@@ -705,7 +710,8 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   private-summary model turn. Fail mode rejects exhausted delivery before its Handler starts,
   mixed completion batches fail before any Handler, and durable recovery never repeats a
   canonically settled call. Recovery re-decodes the canonical parameters/result, reapplies the
-  projector and output Schema, and requires the reconstructed durable output to match its marker.
+  projector, output Schema, and any ordinary run-disposition selector, and requires the
+  reconstructed durable values to match their marker.
   Durable no-tool completion likewise commits its final response and completion marker atomically,
   so recovery re-decodes and matches that response before terminalizing without a duplicate model
   request.

@@ -1,7 +1,8 @@
 import type { SubmissionId } from "@effect-agent/core";
 import type { RunCostEstimator } from "@effect-agent/engine";
-import type { ConversationStore, WakeScheduler } from "@effect-agent/session";
 import {
+  type ConversationStore,
+  type WakeScheduler,
   AgentBindingResolver,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   DeploymentId,

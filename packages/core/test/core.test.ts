@@ -116,6 +116,21 @@ describe("core schemas", () => {
     ).toBe("Failure");
     expect(
       Schema.decodeUnknownExit(RunUsageSummary)({
+        ...summary,
+        byModel: [
+          { ...group, costMicrousd: 0 },
+          {
+            ...group,
+            model: "zero-call-cost",
+            modelCalls: 0,
+            inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 0, text: 0, reasoning: 0 },
+          },
+        ],
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(RunUsageSummary)({
         modelCalls: 2,
         inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
         outputTokens: { total: 0, text: 0, reasoning: 0 },

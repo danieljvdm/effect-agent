@@ -2518,8 +2518,7 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
         limit: "tokens",
         message: `Agent exceeded its ${tokenBudget} token budget`,
       });
-      // Fail-fast token breaches keep the pre-soft-landing contract: no
-      // budget-hook charge, warning event, or application Handler.
+      // Fail mode rejects before any declared application Handler starts.
       if (policy.onExhaustion === "fail") {
         return yield* breach;
       }
@@ -2869,14 +2868,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
     );
     const wasFinalizing = context.finalizing;
     context.finalizing = true;
-    const consumed = yield* consumeUsage(
-      agent,
-      context,
-      summaryUsage,
-      0,
-      turn,
-      options,
-    ).pipe(
+    const consumed = yield* consumeUsage(agent, context, summaryUsage, 0, turn, options).pipe(
       Effect.ensuring(
         Effect.sync(() => {
           context.finalizing = wasFinalizing;
@@ -6506,10 +6498,12 @@ export const withTerminalDefectEvent = <E, R>(
  * in the returned Effect or Stream. The interpreter owns no shared service or
  * Layer state. The two output helpers are the canonical revalidation seams for
  * durable session adapters; they apply the same Schemas and projector as live
- * execution without invoking a Model or Tool Handler.
+ * execution without invoking a Model or Tool Handler. The disposition helper
+ * likewise reapplies the Definition selector and Schema.
  */
 export const AgentRuntime = {
   decodeFinalOutput,
+  encodeRunDisposition,
   projectCompletionOutput,
   run,
   start,

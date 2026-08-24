@@ -1,5 +1,5 @@
-import type { ModelCallUsage } from "@effect-agent/core";
 import {
+  type ModelCallUsage,
   AgentApprovalPending,
   AgentInputError,
   ConversationId,
@@ -698,7 +698,10 @@ const childSuspension = (children: AgentChildPending["children"]): RunPhaseOutco
   children,
 });
 
-const abortedRunPhase: RunPhaseOutcome = { _tag: "aborted" };
+const abortedRunPhase = (usageSummary: RunUsageSummary): RunPhaseOutcome => ({
+  _tag: "aborted",
+  usageSummary,
+});
 
 /**
  * Internal marker separating coordinator infrastructure failures (fencing, storage, failpoints —
@@ -3017,8 +3020,9 @@ const make = Effect.gen(function* () {
    * the response messages, creating the durability §15 provably-safe window), the durable
    * approval preflight (§2.6 — recorded decisions replay deterministically, unresolved requests
    * become canonical and suspend the Attempt), an optional PREPARED batch (before any handler
-   * starts), and a RESULTS batch at the next TurnStarted/RunCompleted/RunFailed seam. No-tool
-   * Turns keep the exact P4 single-batch shape. When the journal ends mid-batch,
+   * starts), and a RESULTS batch at the next TurnStarted/RunCompleted/RunFailed seam. A completed
+   * no-tool Turn atomically adds its `RunCompleted` marker to the P4 single-batch shape. When the
+   * journal ends mid-batch,
    * `RunOptions.resume` replays the declared batch without re-invoking the model (§2.4).
    */
   const runModel = <
@@ -3317,7 +3321,10 @@ const make = Effect.gen(function* () {
           });
         }
         const calls = yield* declaredApplicationCalls(response.messages);
-        let expectedOutput: Schema.Json;
+        let expectedOutput: {
+          readonly encoded: Schema.Json;
+          readonly decoded: OutputSchema["Type"];
+        };
         if (calls.length > 0) {
           const completion = agent.definition.completion;
           const call = calls[0];
@@ -3342,7 +3349,7 @@ const make = Effect.gen(function* () {
               message: `Run ${runId} has a terminal completion marker without one successful declared completion Tool result`,
             });
           }
-          expectedOutput = (yield* AgentRuntime.projectCompletionOutput(
+          expectedOutput = yield* AgentRuntime.projectCompletionOutput(
             agent,
             completion,
             call.params,
@@ -3354,19 +3361,19 @@ const make = Effect.gen(function* () {
                 cause,
               }),
             ),
-          )).encoded;
+          );
         } else {
           const responseText = yield* terminalAssistantText(response.messages);
-          expectedOutput = (yield* AgentRuntime.decodeFinalOutput(agent, responseText).pipe(
+          expectedOutput = yield* AgentRuntime.decodeFinalOutput(agent, responseText).pipe(
             Effect.mapError((cause) =>
               RunJournalError.make({
                 message: `Run ${runId} final response output failed recovery decoding`,
                 cause,
               }),
             ),
-          )).encoded;
+          );
         }
-        const boundedExpectedOutput = yield* decodePersisted(expectedOutput).pipe(
+        const boundedExpectedOutput = yield* decodePersisted(expectedOutput.encoded).pipe(
           Effect.mapError((cause) =>
             RunJournalError.make({
               message: `Run ${runId} reconstructed output exceeds canonical persistence bounds`,
@@ -3389,6 +3396,54 @@ const make = Effect.gen(function* () {
           return yield* RunJournalError.make({
             message: `Run ${runId} terminal completion output disagrees with its canonical response or Tool result`,
           });
+        }
+        const expectedRunDisposition =
+          recordedCompletion.finishReason === "budget-exhausted"
+            ? undefined
+            : yield* AgentRuntime.encodeRunDisposition(agent, expectedOutput.decoded).pipe(
+                Effect.mapError((cause) =>
+                  RunJournalError.make({
+                    message: `Run ${runId} run disposition failed recovery projection`,
+                    cause,
+                  }),
+                ),
+              );
+        if (
+          (expectedRunDisposition === undefined) !==
+          (recordedCompletion.runDisposition === undefined)
+        ) {
+          return yield* RunJournalError.make({
+            message: `Run ${runId} terminal run disposition disagrees with its reconstructed output`,
+          });
+        }
+        if (
+          expectedRunDisposition !== undefined &&
+          recordedCompletion.runDisposition !== undefined
+        ) {
+          const boundedExpectedRunDisposition = yield* decodePersisted(expectedRunDisposition).pipe(
+            Effect.mapError((cause) =>
+              RunJournalError.make({
+                message: `Run ${runId} reconstructed run disposition exceeds canonical persistence bounds`,
+                cause,
+              }),
+            ),
+          );
+          const [expectedRunDispositionDigest, recordedRunDispositionDigest] = yield* Effect.all([
+            withCrypto(digestJson(boundedExpectedRunDisposition)),
+            withCrypto(digestJson(recordedCompletion.runDisposition)),
+          ]).pipe(
+            Effect.mapError((cause) =>
+              RunJournalError.make({
+                message: `Run ${runId} run disposition comparison failed`,
+                cause,
+              }),
+            ),
+          );
+          if (expectedRunDispositionDigest !== recordedRunDispositionDigest) {
+            return yield* RunJournalError.make({
+              message: `Run ${runId} terminal run disposition disagrees with its reconstructed output`,
+            });
+          }
         }
         return {
           _tag: "completed" as const,
@@ -4582,6 +4637,21 @@ const make = Effect.gen(function* () {
         const canonicalTurn = turnOffset + state.pendingTurn.turn;
         const createdAt = yield* nowUtc;
         let committedLen = history.content.length;
+        const completedRun =
+          state.completedOutput === undefined
+            ? undefined
+            : {
+                output: state.completedOutput,
+                ...(state.completedRunDisposition === undefined
+                  ? {}
+                  : { runDisposition: state.completedRunDisposition }),
+                ...(state.completedFinishReason === undefined
+                  ? {}
+                  : { finishReason: state.completedFinishReason }),
+                ...(state.completedExhausted === undefined
+                  ? {}
+                  : { exhausted: state.completedExhausted }),
+              };
         if (knownIds.has(modelResponseRecordId(runId, canonicalTurn))) {
           // The response is already durable (commit 1 of the split shape): only the results
           // batch remains. The slice is [response messages…, tool message, trailing input…]:
@@ -4623,19 +4693,8 @@ const make = Effect.gen(function* () {
               resultParts.length === 1 &&
               completionPart?.name === completion.tool &&
               completionPart.isFailure !== true &&
-              state.completedOutput !== undefined
-                ? {
-                    output: state.completedOutput,
-                    ...(state.completedRunDisposition === undefined
-                      ? {}
-                      : { runDisposition: state.completedRunDisposition }),
-                    ...(state.completedFinishReason === undefined
-                      ? {}
-                      : { finishReason: state.completedFinishReason }),
-                    ...(state.completedExhausted === undefined
-                      ? {}
-                      : { exhausted: state.completedExhausted }),
-                  }
+              completedRun !== undefined
+                ? completedRun
                 : undefined;
             const batch = yield* turnResultsBatch({
               runId,
@@ -4667,6 +4726,7 @@ const make = Effect.gen(function* () {
               deploymentId: config.deploymentId,
               createdAt,
               ...(runScopedPrefixLength > 0 ? { runScopedPrefixLength } : {}),
+              ...(completedRun === undefined ? {} : { runCompletion: completedRun }),
               usage: stagedUsage.get(canonicalTurn),
             }),
           );
@@ -4747,9 +4807,9 @@ const make = Effect.gen(function* () {
               event.exhausted,
               event.runDisposition,
             ).pipe(
-              // The terminal state is available while the result batch is
-              // built, so its RunCompleted marker commits atomically with the
-              // successful completion Tool result.
+              // The terminal state is available while the final canonical
+              // batch is built, so its RunCompleted marker commits atomically
+              // with either the no-tool response or the completion Tool result.
               Effect.andThen(commitPendingTurn),
             );
           }

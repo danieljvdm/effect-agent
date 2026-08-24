@@ -1,4 +1,3 @@
-import type { IdGenerator } from "@effect-agent/core";
 import {
   Agent,
   AgentPolicy,
@@ -10,7 +9,6 @@ import {
   type IdGenerator,
 } from "@effect-agent/core";
 import { COMPACTION_SUMMARY_PREFIX, ToolExecutionClass } from "@effect-agent/engine";
-import type { AdmissionConflict, FenceRejected, SettlementConflict } from "@effect-agent/session";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -48,6 +46,7 @@ import {
   promptFromCanonicalRecords,
   replayConversation,
   recoveryRepairRecordId,
+  runCompletedRecordId,
   runIdForSubmission,
   submissionInputRecordId,
   submissionSettlementRecordId,
@@ -321,6 +320,50 @@ const corruptedCompletionBaseLayer = Layer.mergeAll(
 
 const corruptedCompletionTestLayer = DurableAgentRuntime.layer.pipe(
   Layer.provideMerge(corruptedCompletionBaseLayer),
+);
+
+const corruptRunDispositionEnvelope = (
+  envelope: CanonicalRecordEnvelope,
+): CanonicalRecordEnvelope => {
+  const payload = envelope.record.payload;
+  if (payload._tag !== "RunCompleted" || payload.runDisposition === undefined) return envelope;
+  return CanonicalRecordEnvelope.make({
+    ...envelope,
+    record: RecordEnvelope.make({
+      ...envelope.record,
+      payload: RunCompleted.make({
+        runId: payload.runId,
+        output: payload.output,
+        runDisposition: "hostile-replacement",
+        ...(payload.finishReason === undefined ? {} : { finishReason: payload.finishReason }),
+        ...(payload.exhausted === undefined ? {} : { exhausted: payload.exhausted }),
+      }),
+    }),
+  });
+};
+
+const corruptedRunDispositionStoreLayer = Layer.effect(
+  ConversationStore,
+  Effect.gen(function* () {
+    const inner = yield* ConversationStore;
+    return ConversationStore.of({
+      ...inner,
+      read: (request) => inner.read(request).pipe(Stream.map(corruptRunDispositionEnvelope)),
+    });
+  }),
+).pipe(Layer.provide(MemoryConversationStoreLive));
+
+const corruptedRunDispositionTestLayer = DurableAgentRuntime.layer.pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      MemorySubmissionLedgerLive,
+      corruptedRunDispositionStoreLayer,
+      WakeScheduler.layerNoop,
+      DurableRuntimeFailpoint.layerTest,
+      ToolReconciler.uncertain,
+      configLayer,
+    ).pipe(Layer.provideMerge(NodeCrypto.layer)),
+  ),
 );
 
 const pricedConfigLayer = DurableRuntimeConfig.layer({
@@ -1030,6 +1073,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         "ModelResponseRecorded",
         "ToolCallSettled",
         "ModelResponseRecorded",
+        "RunCompleted",
         "SubmissionSettled",
       ]);
       expect(records.map((envelope) => envelope.record.recordId)).toEqual([
@@ -1038,6 +1082,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         modelResponseRecordId(runId, 1),
         `tool-settled:${runId}:1:search-1`,
         modelResponseRecordId(runId, 2),
+        runCompletedRecordId(runId),
         submissionSettlementRecordId(submissionId),
       ]);
 
@@ -1119,6 +1164,49 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           expect(decodedDisposition).toBe("application-complete");
         }
       }),
+  );
+
+  it.effect("recovers a canonically completed no-tool Turn without another model call", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0
+          ? finalParts('{"answer":"Committed once."}')
+          : finalParts('{"answer":"Wrong duplicate call."}'),
+      );
+      const agent = Agent.withModel(plannerDefinition, scripted.model);
+      const conversation = "conversation-final-turn-recovery";
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: "complete once?" },
+        submitOptions(conversation, "final-turn-recovery-1"),
+      );
+
+      yield* armFailpoint("turn:after-canonical-append");
+      const crashed = yield* Effect.exit(
+        runtime.processConversation(agent, decodeConversationId(conversation)),
+      );
+      expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+      expect(scripted.prompts).toHaveLength(1);
+      yield* clearFailpoint;
+
+      const settled = yield* runtime.processConversation(agent, decodeConversationId(conversation));
+      expect(settled).toHaveLength(1);
+      expect(settled[0]?.outcome).toBe("completed");
+      expect(yield* runtime.awaitSettlement(receipt)).toEqual(settled[0]);
+      expect(scripted.prompts).toHaveLength(1);
+
+      const payloads = (yield* readLog(conversation)).map((envelope) => envelope.record.payload);
+      expect(payloads.filter((payload) => payload._tag === "ModelResponseRecorded")).toHaveLength(
+        1,
+      );
+      expect(payloads.filter((payload) => payload._tag === "RunCompleted")).toHaveLength(1);
+      expect(payloads.at(-1)).toMatchObject({
+        _tag: "SubmissionSettled",
+        outcome: "completed",
+        result: { answer: "Committed once." },
+      });
+    }),
   );
 
   it.effect(
@@ -1429,6 +1517,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           "ToolCallSettled",
           "ToolCallSettled",
           "ModelResponseRecorded",
+          "RunCompleted",
           "SubmissionSettled",
         ]);
         // Exact synthetic settlements: identities in declaration order, each
@@ -2579,6 +2668,37 @@ layer(corruptedCompletionTestLayer)("RUN-032 recovered completion validation", (
       );
       expect(failureTag(recovered)).toBe("RunJournalError");
       expect(yield* Ref.get(handlerCalls)).toBe(1);
+      expect(scripted.prompts).toHaveLength(1);
+    }),
+  );
+});
+
+layer(corruptedRunDispositionTestLayer)("RUN-029 recovered run disposition validation", (it) => {
+  it.effect("rejects a marker whose disposition disagrees with its reconstructed output", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const scripted = yield* makeScriptedModel(() =>
+        finalParts('{"answer":"done","runDisposition":"application-complete"}'),
+      );
+      const agent = Agent.withModel(dispositionDefinition, scripted.model);
+      const conversation = "conversation-hostile-run-disposition";
+
+      yield* runtime.submit(
+        agent,
+        { question: "validate disposition recovery" },
+        submitOptions(conversation, "hostile-run-disposition-1"),
+      );
+      yield* armFailpoint("turn:after-canonical-append");
+      const crashed = yield* Effect.exit(
+        runtime.processConversation(agent, decodeConversationId(conversation)),
+      );
+      expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+      yield* clearFailpoint;
+
+      const recovered = yield* Effect.exit(
+        runtime.processConversation(agent, decodeConversationId(conversation)),
+      );
+      expect(failureTag(recovered)).toBe("RunJournalError");
       expect(scripted.prompts).toHaveLength(1);
     }),
   );

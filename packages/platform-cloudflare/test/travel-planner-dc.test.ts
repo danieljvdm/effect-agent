@@ -250,6 +250,7 @@ describe("DC Travel Planner — baseline settlement", () => {
       "ToolCallSettled",
       "ToolCallSettled",
       "ModelResponseRecorded",
+      "RunCompleted",
       "SubmissionSettled",
     ]);
     const settled = settledPayloadOf(records);
