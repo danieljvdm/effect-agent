@@ -6,14 +6,13 @@
   "scripts": {
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
-    "test": "vp test --passWithNoTests",
-    "review": "bun src/cli.ts"
+    "test": "vp test --passWithNoTests"
   },
   "dependencies": {
     "@effect-agent/pr-review": "workspace:*",
+    "@effect/ai-openai": "catalog:",
     "@effect/platform-node": "catalog:",
-    "effect": "catalog:",
-    "effect-agent": "workspace:*"
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

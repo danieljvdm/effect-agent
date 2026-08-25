@@ -60,6 +60,12 @@ const WorkflowJob = Schema.Struct({
 });
 const WorkflowFile = Schema.Struct({
   on: Schema.Record(Schema.String, Schema.Unknown),
+  concurrency: Schema.optionalKey(
+    Schema.Struct({
+      group: Schema.String,
+      "cancel-in-progress": Schema.Boolean,
+    }),
+  ),
   permissions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   jobs: Schema.Record(Schema.String, WorkflowJob),
 });
@@ -87,13 +93,8 @@ const packageNames = [
   "testing",
 ] as const;
 
-/**
- * The one framework package allowed to depend on upstream provider adapters:
- * its CLI/Action host entrypoints ship batteries-included provider bindings
- * (D-034, ADR-0016). The factory surface itself stays Model-agnostic, and
- * provider WRAPPER packages remain deliberately absent.
- */
-const providerConsumingPackages = new Set<string>(["pr-review"]);
+/** Provider bindings belong to leaf applications, never framework packages. */
+const providerConsumingPackages = new Set<string>();
 const exampleNames = [
   "code-mode-cloudflare",
   "demo",
@@ -108,6 +109,7 @@ const effectTestPackageNames = [
   "engine",
   "platform-cloudflare",
   "platform-node",
+  "pr-review",
   "sandbox-local",
   "session",
   "storage-cloudflare",
@@ -122,6 +124,7 @@ const productionPackageNames = [
   "engine",
   "platform-cloudflare",
   "platform-node",
+  "pr-review",
   "sandbox",
   "sandbox-local",
   "session",
@@ -878,12 +881,25 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
 
       expect(reviewWorkflow.on).toEqual({
         pull_request: {
-          types: ["opened", "reopened", "ready_for_review", "synchronize", "labeled"],
-          "paths-ignore": generatedPaths,
+          types: ["opened", "reopened", "ready_for_review", "synchronize"],
         },
+        issue_comment: { types: ["created"] },
       });
-      expect(reviewWorkflow.jobs.review?.if).toBe(
-        "${{ !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'pr-review:final-audit') }}",
+      expect(reviewWorkflow.jobs.review?.if).toContain("!github.event.pull_request.draft");
+      expect(reviewWorkflow.jobs.review?.if).toContain(
+        "github.event.comment.body == '/effect-agent review'",
+      );
+      expect(reviewWorkflow.jobs.review?.if).toContain(
+        "github.event.comment.body == '/effect-agent review full'",
+      );
+      expect(reviewWorkflow.concurrency?.["cancel-in-progress"]).toBe(false);
+      const reviewStep = workflowStep(reviewWorkflow, "review", "Review the pull request");
+      expect(reviewStep?.uses).toBe("danieljvdm/effect-agent/action@main");
+      expect(reviewStep?.with?.mode).toContain("'auto'");
+      expect(reviewStep?.with?.mode).toContain("'incremental'");
+      expect(reviewStep?.with?.mode).toContain("'full'");
+      expect(reviewStep?.with?.mode).toContain(
+        "github.event.comment.body == '/effect-agent review full'",
       );
 
       expect(releaseWorkflow.on).toEqual({ push: { branches: ["main"] } });
@@ -1806,7 +1822,7 @@ Exercise the generated release verifier.
   );
 
   it.effect(
-    "WO-006 WO-009 WO-010 WO-011 WOI-012 keeps provider adapters catalog-pinned and confines the work-order leaf off the reviewer",
+    "PRR-005 WO-006 WO-009 WO-010 WO-011 WOI-012 confines provider adapters to leaf applications",
     () =>
       Effect.gen(function* () {
         const root = yield* readManifest(`${repositoryRoot}/package.json`);
@@ -1863,12 +1879,13 @@ Exercise the generated release verifier.
         expect(
           repoOpsDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
         ).toBe(false);
-        // The pr-review example is a consumer of the packaged reviewer (D-034):
-        // provider bindings reach it through @effect-agent/pr-review, so it no
-        // longer declares provider adapters itself.
+        // The GitHub channel owns the concrete provider and platform edges;
+        // the reusable reviewer package stays provider-neutral (PRR-005).
         expect(prReview.name).toBe("@effect-agent/example-pr-review");
         expect(prReview.dependencies?.["@effect-agent/pr-review"]).toBe("workspace:*");
-        expect(prReview.dependencies?.["effect-agent"]).toBe("workspace:*");
+        expect(prReview.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+        expect(prReview.dependencies?.["@effect/platform-node"]).toBe("catalog:");
+        expect(prReview.dependencies?.["effect-agent"]).toBeUndefined();
         expect(prReview.dependencies?.effect).toBe("catalog:");
         expect(prReviewDependencies).not.toContain("wrangler");
         expect(
@@ -1941,13 +1958,12 @@ Exercise the generated release verifier.
           ),
         ).toEqual([]);
 
-        // The packaged reviewer pins its provider adapters through the catalog
-        // like every other shared dependency (D-034, ADR-0016).
+        // The packaged reviewer is transport- and provider-neutral (PRR-005).
         const prReviewPackage = yield* readManifest(
           `${repositoryRoot}/packages/pr-review/package.json`,
         );
         for (const adapter of providerAdapterDependencies) {
-          expect(prReviewPackage.dependencies?.[adapter]).toBe("catalog:");
+          expect(prReviewPackage.dependencies?.[adapter]).toBeUndefined();
         }
 
         for (const packageName of packageNames) {

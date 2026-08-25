@@ -127,27 +127,11 @@ entrypoint.
 
 ### `@effect-agent/pr-review`
 
-The packaged GitHub pull-request reviewer: schema-first review contracts, the
-`PullRequestSource`/`ReviewPublisher` ports with GitHub REST adapters, fail-closed anchor
-validation and publication planning, a fail-open sticky progress comment
-(`ReviewProgressReporter`), flat and fan-out reviewer shapes, and the `PrReview`
-configuration factory. Fan-out is scheduled entirely by host code from the deterministic
-unit plan. There is no coordinator model or delegation Tool. Independent general and specialist
-discovery plus fresh candidate verification run as bounded child passes with one retry each,
-and only exactly confirmed candidates publish. Its public result separates path/input
-coverage from pass settlement; neither claim means exhaustive defect detection. Every
-completed run that can be signed advances the authenticated incremental baseline; a pass
-that stays failed carries its paths forward as retryable scope inside the state instead of
-freezing the baseline, and only a fully settled state authorizes skip-unchanged. A rewritten
-head that is no longer a git ancestor stays incremental when a two-dot tree comparison can
-name the current PR paths whose contents changed; unchanged leftovers keep failed stages bound
-to their exact paths and retain stored findings. Failed verification reopens discovery only for
-its owning paths because candidate payloads are not persisted. The package exports `./testing` for
-fixture sources, a collecting publisher, and prompt-keyed scripted models. It exports `./action`
-and `./cli` as platform-node host entrypoints. It consumes the `effect-agent` umbrella as the first
-package-level consumer. Deployment class E only; review posting is never claimed exactly-once. Its
-built-in OpenAI host configuration accepts the single explicit service tier `fast`, includes it in
-the model profile fingerprint, and rejects that provider-specific setting when Anthropic is selected.
+A provider-neutral, deployment-class-E review agent. The host supplies bounded patches; one
+tool-free model turn returns a Schema-decoded report; the package validates paths and RIGHT-side
+line anchors and exposes observed token usage. It contains no GitHub adapter, provider binding,
+entrypoint, retry, fan-out, continuity state, or publication behavior. See the
+[PR-review specification](/spec/pr-review).
 
 ### `@effect-agent/testing`
 
@@ -159,20 +143,18 @@ equivalence).
 ## Leaf examples
 
 `examples/demo` is a local browser test bench. `examples/providers` is a compile-only proof that the
-same Definition binds directly to upstream OpenAI and Anthropic Models. `examples/pr-review` is a
-consumer of `@effect-agent/pr-review` demonstrating the adaptation path (guidance, an extra
-read-only tool, ignore globs); `examples/pr-work-orders` is the private
+same Definition binds directly to upstream OpenAI and Anthropic Models. `examples/pr-review` is the
+GitHub channel over `@effect-agent/pr-review`: it owns webhook policy, REST decoding, bounded diff
+admission, deterministic four-shard fan-out, the OpenAI Layer, merging, and publication.
+`examples/pr-work-orders` is the private
 trusted-local proof of a head-bound work-order implementer;
 `examples/pr-work-order-ingress` is the private GitHub dispatch and isolated
 publication proof; `examples/repo-ops`
 is an internal repository-operations auditor. None is a framework
-or deployment package. The repository root also carries `action/`, the prebuilt
-node-runtime GitHub Action over `@effect-agent/pr-review` with its committed bundle.
-Its normal synchronize path recovers authenticated review state and reviews only the new delta
-plus carried unreviewed scope; explicit final mode performs fresh discovery over the bounded
-full diff. Blocking findings fail the check first; a machinery-incomplete result fails it with
-reasons that explicitly name a reviewer-side gap carried forward for retry, never a request to
-change code.
+or deployment package. The repository root also carries `action/`, the committed node-runtime
+bundle of that channel. It automatically reviews an initial head and one incremental follow-up;
+later runs require an explicit collaborator command. Blocking findings fail the check after the
+review is visible.
 
 ## Dependency direction
 

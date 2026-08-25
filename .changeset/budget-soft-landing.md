@@ -2,7 +2,6 @@
 "@effect-agent/core": minor
 "@effect-agent/engine": minor
 "@effect-agent/session": minor
-"@effect-agent/pr-review": patch
 ---
 
 Budget soft landing (D-037, ADR-0019, RUN-018/019/020): `AgentPolicy` gains
@@ -15,5 +14,4 @@ completes with the honest `finishReason: "budget-exhausted"` on the live event, 
 `AgentResult`, and (additively) the durable `SubmissionSettled` record. Duration, token, cost, and
 repeated-failure bounds stay hard rails; `onExhaustion: "fail"` preserves the prior run-fatal
 behavior exactly. BEHAVIOR CHANGE ON UPGRADE: Turn/Tool-Call budget deaths become honest
-completions unless a policy pins `"fail"` — `@effect-agent/pr-review` pins `"fail"` pending its
-containment rework.
+completions unless a policy pins `"fail"`.
