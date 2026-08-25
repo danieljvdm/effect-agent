@@ -155,7 +155,7 @@ const renderAutomaticPause = (automaticReviewsRemaining: number): string | undef
     : [
         "> [!NOTE]",
         "> **Automatic reviews are paused for this pull request.**",
-        "> Further pushes will not start another review. Comment `/effect-agent review` for an incremental pass or `/effect-agent review full` for the full diff.",
+        "> Further pushes will not start another review. Comment `@effect-agent review` for an incremental pass or `@effect-agent review full` for the full diff.",
       ].join("\n");
 
 export const renderReviewBody = (input: ReviewPresentationInput): string => {
@@ -272,7 +272,7 @@ export const renderReviewPauseBody = (input: ReviewPausePresentationInput): stri
     ].join("\n"),
     "### Summary",
     "Further pushes will not start another automatic model review, and this pause notice will not be posted again.",
-    "Comment `/effect-agent review` for another review of the latest changes, or `/effect-agent review full` for the full pull request diff.",
+    "Comment `@effect-agent review` for another review of the latest changes, or `@effect-agent review full` for the full pull request diff.",
     `<sub>No model call · review automation paused at <code>${input.headRevision.slice(0, 7)}</code></sub>`,
   ].join("\n\n");
 };

@@ -23,7 +23,7 @@ inputs:
     required: false
     default: "auto"
   command:
-    description: "Optional raw collaborator command. Surrounding whitespace is ignored; unsupported commands exit before model execution."
+    description: "Optional raw collaborator command. Accepts @effect-agent review, @effect-agent review full, and the legacy slash forms."
     required: false
   comment-id:
     description: "Issue comment ID for a manual command. Required when command is set so the action can acknowledge it with an eyes reaction."

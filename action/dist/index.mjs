@@ -47290,8 +47290,10 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
 // examples/pr-review/src/selection.ts
 var reviewModeFromCommand = (command) => {
   switch (command.trim()) {
+    case "@effect-agent review":
     case "/effect-agent review":
       return "incremental";
+    case "@effect-agent review full":
     case "/effect-agent review full":
       return "full";
     default:
@@ -47480,7 +47482,7 @@ var renderInputUsage = (input) => `${formatNumber(input.inputTokens)} input (${f
 var renderAutomaticPause = (automaticReviewsRemaining) => automaticReviewsRemaining > 0 ? undefined : [
   "> [!NOTE]",
   "> **Automatic reviews are paused for this pull request.**",
-  "> Further pushes will not start another review. Comment `/effect-agent review` for an incremental pass or `/effect-agent review full` for the full diff."
+  "> Further pushes will not start another review. Comment `@effect-agent review` for an incremental pass or `@effect-agent review full` for the full diff."
 ].join(`
 `);
 var renderReviewBody = (input) => {
@@ -47567,7 +47569,7 @@ var renderReviewPauseBody = (input) => {
 `),
     "### Summary",
     "Further pushes will not start another automatic model review, and this pause notice will not be posted again.",
-    "Comment `/effect-agent review` for another review of the latest changes, or `/effect-agent review full` for the full pull request diff.",
+    "Comment `@effect-agent review` for another review of the latest changes, or `@effect-agent review full` for the full pull request diff.",
     `<sub>No model call · review automation paused at <code>${input.headRevision.slice(0, 7)}</code></sub>`
   ].join(`
 

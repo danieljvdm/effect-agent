@@ -130,7 +130,7 @@ describe("review presentation", () => {
 
       > [!NOTE]
       > **Automatic reviews are paused for this pull request.**
-      > Further pushes will not start another review. Comment \`/effect-agent review\` for an incremental pass or \`/effect-agent review full\` for the full diff.
+      > Further pushes will not start another review. Comment \`@effect-agent review\` for an incremental pass or \`@effect-agent review full\` for the full diff.
 
       ### Summary
 
@@ -174,7 +174,7 @@ describe("review presentation", () => {
 
       Further pushes will not start another automatic model review, and this pause notice will not be posted again.
 
-      Comment \`/effect-agent review\` for another review of the latest changes, or \`/effect-agent review full\` for the full pull request diff.
+      Comment \`@effect-agent review\` for another review of the latest changes, or \`@effect-agent review full\` for the full pull request diff.
 
       <sub>No model call · review automation paused at <code>abcdef0</code></sub>
 
