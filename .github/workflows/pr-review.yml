@@ -42,7 +42,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Review the pull request
-        uses: danieljvdm/effect-agent/action@f7e7c9e4e236d9458e9614a0b992221e7295dd92
+        uses: danieljvdm/effect-agent/action@main
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           github-token: ${{ steps.app-token.outputs.token }}
