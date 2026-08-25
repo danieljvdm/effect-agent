@@ -15,6 +15,13 @@ export type ReviewSelection =
       readonly reason: "head-already-reviewed" | "automatic-reviews-paused";
     }
   | {
+      readonly _tag: "pause";
+      readonly reason: "automatic-reviews-paused";
+      readonly automaticReviewLimit: number;
+      readonly automaticAttempts: number;
+      readonly lastCompletedRevision: string | undefined;
+    }
+  | {
       readonly _tag: "review";
       readonly scope: "full" | "incremental";
       readonly baseRevision: string | undefined;
@@ -23,19 +30,32 @@ export type ReviewSelection =
       readonly reason: string;
     };
 
-const MARKER_PATTERN =
+const ATTEMPT_MARKER_PATTERN =
   /(?:^|\n)<!-- effect-agent-review:v2 automatic=(true|false) completed=(true|false) -->\s*$/;
+const PAUSE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-review-pause:v1 limit=([0-9]+) -->\s*$/;
 
 export const reviewMarker = (automatic: boolean, completed = true): string =>
   `<!-- effect-agent-review:v2 automatic=${String(automatic)} completed=${String(completed)} -->`;
 
+export const reviewPauseMarker = (automaticReviewLimit: number): string =>
+  `<!-- effect-agent-review-pause:v1 limit=${String(automaticReviewLimit)} -->`;
+
 const markerKind = (
   body: string,
-): { readonly automatic: boolean; readonly completed: boolean } | undefined => {
-  const match = MARKER_PATTERN.exec(body);
-  return match === null
-    ? undefined
-    : { automatic: match[1] === "true", completed: match[2] === "true" };
+):
+  | { readonly _tag: "attempt"; readonly automatic: boolean; readonly completed: boolean }
+  | { readonly _tag: "pause"; readonly automaticReviewLimit: string }
+  | undefined => {
+  const attempt = ATTEMPT_MARKER_PATTERN.exec(body);
+  if (attempt !== null) {
+    return {
+      _tag: "attempt",
+      automatic: attempt[1] === "true",
+      completed: attempt[2] === "true",
+    };
+  }
+  const pause = PAUSE_MARKER_PATTERN.exec(body);
+  return pause === null ? undefined : { _tag: "pause", automaticReviewLimit: pause[1] ?? "" };
 };
 
 /** Select scope from trusted GitHub reviews without persisting model context. */
@@ -61,7 +81,10 @@ export const selectReview = (input: {
       const byTime = (left.item.submittedAt ?? "").localeCompare(right.item.submittedAt ?? "");
       return byTime === 0 ? left.item.id - right.item.id : byTime;
     });
-  const automaticAttempts = trusted.filter(({ marker }) => marker.automatic).length;
+  const attempts = trusted.flatMap(({ item, marker }) =>
+    marker._tag === "attempt" ? [{ item, marker }] : [],
+  );
+  const automaticAttempts = attempts.filter(({ marker }) => marker.automatic).length;
   const automaticReviewsRemaining = Math.max(
     0,
     input.automaticReviewLimit - automaticAttempts - (input.mode === "auto" ? 1 : 0),
@@ -79,7 +102,7 @@ export const selectReview = (input: {
   }
 
   if (
-    trusted.some(
+    attempts.some(
       ({ item, marker }) =>
         item.commitId === input.currentHead && (input.mode === "auto" || marker.completed),
     )
@@ -88,10 +111,26 @@ export const selectReview = (input: {
   }
 
   if (input.mode === "auto" && automaticAttempts >= input.automaticReviewLimit) {
-    return { _tag: "skip", reason: "automatic-reviews-paused" };
+    if (input.automaticReviewLimit === 0) {
+      return { _tag: "skip", reason: "automatic-reviews-paused" };
+    }
+    const pausePublished = trusted.some(
+      ({ marker }) =>
+        marker._tag === "pause" &&
+        marker.automaticReviewLimit === String(input.automaticReviewLimit),
+    );
+    if (pausePublished) return { _tag: "skip", reason: "automatic-reviews-paused" };
+    return {
+      _tag: "pause",
+      reason: "automatic-reviews-paused",
+      automaticReviewLimit: input.automaticReviewLimit,
+      automaticAttempts,
+      lastCompletedRevision: attempts.filter(({ marker }) => marker.completed).at(-1)?.item
+        .commitId,
+    };
   }
 
-  const latest = trusted.filter(({ marker }) => marker.completed).at(-1)?.item;
+  const latest = attempts.filter(({ marker }) => marker.completed).at(-1)?.item;
   if (latest?.commitId === undefined) {
     return {
       _tag: "review",

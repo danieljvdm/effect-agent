@@ -4,9 +4,11 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   defaultReviewPresentation,
   renderFindingBody,
+  renderReviewPauseBody,
   renderReviewBody,
   renderReviewFailureBody,
   withReviewMarker,
+  withReviewPauseMarker,
 } from "../src/presentation.ts";
 
 const headRevision = "abcdef0123456789abcdef0123456789abcdef01";
@@ -144,6 +146,40 @@ describe("review presentation", () => {
     expect(withReviewMarker("Custom presentation", false, false)).toBe(
       "Custom presentation\n\n<!-- effect-agent-review:v2 automatic=false completed=false -->",
     );
+  });
+
+  it("renders a one-time closing review without a model call", () => {
+    const body = withReviewPauseMarker(
+      renderReviewPauseBody({
+        automaticReviewLimit: 2,
+        automaticAttempts: 2,
+        lastCompletedRevision: "840c401c8e3103efcb70bd602e88b85834bd021d",
+        headRevision,
+      }),
+      2,
+    );
+
+    expect(body).toMatchInlineSnapshot(`
+      "## Effect Agent review
+
+      > [!NOTE]
+      > **Automatic reviews are paused for this pull request.**
+      > The configured automatic review limit has been reached. No model call was made for this update.
+
+      | Automatic attempts | Last completed review | Current head |
+      | :-- | :-- | :-- |
+      | **2 of 2 used** | <code>840c401</code> | <code>abcdef0</code> |
+
+      ### Summary
+
+      Further pushes will not start another automatic model review, and this pause notice will not be posted again.
+
+      Comment \`/effect-agent review\` for another review of the latest changes, or \`/effect-agent review full\` for the full pull request diff.
+
+      <sub>No model call · review automation paused at <code>abcdef0</code></sub>
+
+      <!-- effect-agent-review-pause:v1 limit=2 -->"
+    `);
   });
 
   it("shows the pause after a failed final automatic attempt", () => {

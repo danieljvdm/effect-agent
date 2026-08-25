@@ -154,9 +154,9 @@ publication proof; `examples/repo-ops`
 is an internal repository-operations auditor. None is a framework
 or deployment package. The repository root also carries `action/`, the committed node-runtime
 bundle of that channel. Its configurable automatic-attempt limit defaults to an initial review and
-one incremental follow-up; the final attempt visibly pauses automatic reviews, and later runs
-require an explicit collaborator command. Known GPT-5.6 models include an estimated dollar cost.
-Blocking findings fail the check after the review is visible.
+one incremental follow-up. The first post-limit event publishes one closing no-model review, then
+later runs remain quiet until an explicit collaborator command. Known GPT-5.6 models include an
+estimated dollar cost. Blocking findings fail the check after the review is visible.
 
 ## Dependency direction
 

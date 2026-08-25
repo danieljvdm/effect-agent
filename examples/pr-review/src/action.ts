@@ -25,7 +25,12 @@ import type { Response } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { type ChangedFile, makeGitHubClient } from "./github.ts";
-import { type ReviewCostEstimate, ReviewPresentation, withReviewMarker } from "./presentation.ts";
+import {
+  type ReviewCostEstimate,
+  ReviewPresentation,
+  withReviewMarker,
+  withReviewPauseMarker,
+} from "./presentation.ts";
 import { selectReview } from "./selection.ts";
 
 const MAX_REVIEW_PATCH_CHARS = 320_000;
@@ -156,8 +161,10 @@ const writeOutputs = Effect.fn("writeReviewOutputs")(function* (
   );
 });
 
-const skip = Effect.fn("skipReview")(function* (reason: string) {
-  yield* Console.log(`PR review skipped: ${reason}`);
+const skip = Effect.fn("skipReview")(function* (reason: string, reviewUrl?: string) {
+  yield* Console.log(
+    reviewUrl === undefined ? `PR review skipped: ${reason}` : `Posted PR review: ${reviewUrl}`,
+  );
   yield* writeOutputs([
     ["skipped", "true"],
     ["reason", reason],
@@ -168,6 +175,7 @@ const skip = Effect.fn("skipReview")(function* (reason: string) {
     ["output-tokens", 0],
     ["estimated-cost-usd", "0.000000"],
     ["blocking-findings", 0],
+    ...(reviewUrl === undefined ? [] : [["review-url", reviewUrl] as const]),
   ]);
 });
 
@@ -411,6 +419,22 @@ export const reviewActionProgram = Effect.gen(function* () {
     history,
   });
   if (selection._tag === "skip") return yield* skip(selection.reason);
+  if (selection._tag === "pause") {
+    const reviewUrl = yield* github.publishReview({
+      commitId: pull.headRevision,
+      body: withReviewPauseMarker(
+        presentation.renderPause({
+          automaticReviewLimit: selection.automaticReviewLimit,
+          automaticAttempts: selection.automaticAttempts,
+          lastCompletedRevision: selection.lastCompletedRevision,
+          headRevision: pull.headRevision,
+        }),
+        selection.automaticReviewLimit,
+      ),
+      comments: [],
+    });
+    return yield* skip(selection.reason, reviewUrl);
+  }
 
   const fullFiles = yield* github.listFiles;
   let scopedFiles: ReadonlyArray<ChangedFile> = fullFiles;

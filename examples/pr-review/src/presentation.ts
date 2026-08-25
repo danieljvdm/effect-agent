@@ -1,7 +1,7 @@
 import type { ReviewFinding, ReviewReport, ReviewSeverity } from "@effect-agent/pr-review";
 import { Context } from "effect";
 
-import { reviewMarker } from "./selection.ts";
+import { reviewMarker, reviewPauseMarker } from "./selection.ts";
 
 const REVIEW_BODY_LIMIT = 60_000;
 
@@ -242,16 +242,53 @@ export const renderReviewFailureBody = (input: ReviewFailurePresentationInput): 
   return parts.join("\n\n");
 };
 
+export interface ReviewPausePresentationInput {
+  readonly automaticReviewLimit: number;
+  readonly automaticAttempts: number;
+  readonly lastCompletedRevision: string | undefined;
+  readonly headRevision: string;
+}
+
+export const renderReviewPauseBody = (input: ReviewPausePresentationInput): string => {
+  const attempts =
+    input.automaticAttempts === input.automaticReviewLimit
+      ? `${String(input.automaticAttempts)} of ${String(input.automaticReviewLimit)} used`
+      : `${String(input.automaticAttempts)} recorded · limit ${String(input.automaticReviewLimit)}`;
+  const lastCompleted =
+    input.lastCompletedRevision === undefined
+      ? "None"
+      : `<code>${input.lastCompletedRevision.slice(0, 7)}</code>`;
+  return [
+    "## Effect Agent review",
+    [
+      "> [!NOTE]",
+      "> **Automatic reviews are paused for this pull request.**",
+      "> The configured automatic review limit has been reached. No model call was made for this update.",
+    ].join("\n"),
+    [
+      "| Automatic attempts | Last completed review | Current head |",
+      "| :-- | :-- | :-- |",
+      `| **${attempts}** | ${lastCompleted} | <code>${input.headRevision.slice(0, 7)}</code> |`,
+    ].join("\n"),
+    "### Summary",
+    "Further pushes will not start another automatic model review, and this pause notice will not be posted again.",
+    "Comment `/effect-agent review` for another review of the latest changes, or `/effect-agent review full` for the full pull request diff.",
+    `<sub>No model call · review automation paused at <code>${input.headRevision.slice(0, 7)}</code></sub>`,
+  ].join("\n\n");
+};
+
 export interface ReviewPresentation {
   readonly renderFinding: (finding: ReviewFinding, headRevision: string) => string;
   readonly renderReview: (input: ReviewPresentationInput) => string;
   readonly renderFailure: (input: ReviewFailurePresentationInput) => string;
+  readonly renderPause: (input: ReviewPausePresentationInput) => string;
 }
 
 export const defaultReviewPresentation: ReviewPresentation = {
   renderFinding: renderFindingBody,
   renderReview: renderReviewBody,
   renderFailure: renderReviewFailureBody,
+  renderPause: renderReviewPauseBody,
 };
 
 export const ReviewPresentation: Context.Reference<ReviewPresentation> =
@@ -259,9 +296,16 @@ export const ReviewPresentation: Context.Reference<ReviewPresentation> =
     defaultValue: () => defaultReviewPresentation,
   });
 
-/** Keep the trusted attempt marker outside host-replaceable presentation. */
-export const withReviewMarker = (body: string, automatic: boolean, completed = true): string => {
+const withTerminalMarker = (body: string, marker: string): string => {
   const visibleBody = body.trimEnd();
-  const marker = reviewMarker(automatic, completed);
   return visibleBody.length === 0 ? marker : `${visibleBody}\n\n${marker}`;
 };
+
+/** Keep the trusted attempt marker outside host-replaceable presentation. */
+export const withReviewMarker = (body: string, automatic: boolean, completed = true): string => {
+  return withTerminalMarker(body, reviewMarker(automatic, completed));
+};
+
+/** Keep the trusted one-time pause marker outside host-replaceable presentation. */
+export const withReviewPauseMarker = (body: string, automaticReviewLimit: number): string =>
+  withTerminalMarker(body, reviewPauseMarker(automaticReviewLimit));

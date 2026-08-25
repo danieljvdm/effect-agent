@@ -23,7 +23,7 @@ inputs:
     required: false
     default: "auto"
   automatic-review-limit:
-    description: "Number of automatic review attempts allowed per pull request. Accepts any non-negative integer."
+    description: "Number of automatic review attempts allowed per pull request. Zero disables automatic reviews and notices."
     required: false
     default: "2"
   expected-head:
@@ -45,7 +45,7 @@ inputs:
     required: false
 outputs:
   skipped:
-    description: "Whether model execution and publication were skipped."
+    description: "Whether model review execution was skipped. A closing pause review may still be published."
   reason:
     description: "Selection or skip reason."
   input-tokens:

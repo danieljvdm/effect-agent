@@ -1,6 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { reviewMarker, selectReview, type ReviewHistoryItem } from "../src/selection.ts";
+import {
+  reviewMarker,
+  reviewPauseMarker,
+  selectReview,
+  type ReviewHistoryItem,
+} from "../src/selection.ts";
 
 const item = (
   id: number,
@@ -16,6 +21,15 @@ const item = (
   commitId: head,
   submittedAt: `2026-01-0${String(id)}T00:00:00Z`,
   ...overrides,
+});
+
+const pauseItem = (id: number, head: string, limit: number): ReviewHistoryItem => ({
+  id,
+  authorLogin: "effect-agent[bot]",
+  authorType: "Bot",
+  body: reviewPauseMarker(limit),
+  commitId: head,
+  submittedAt: `2026-01-0${String(id)}T00:00:00Z`,
 });
 
 describe("GitHub review selection", () => {
@@ -58,6 +72,22 @@ describe("GitHub review selection", () => {
         reviewAuthor: "effect-agent[bot]",
         automaticReviewLimit: 2,
         history: [item(1, "head-1", true), item(2, "head-2", true)],
+      }),
+    ).toEqual({
+      _tag: "pause",
+      reason: "automatic-reviews-paused",
+      automaticReviewLimit: 2,
+      automaticAttempts: 2,
+      lastCompletedRevision: "head-2",
+    });
+
+    expect(
+      selectReview({
+        mode: "auto",
+        currentHead: "head-4",
+        reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
+        history: [item(1, "head-1", true), item(2, "head-2", true), pauseItem(3, "head-3", 2)],
       }),
     ).toEqual({ _tag: "skip", reason: "automatic-reviews-paused" });
   });
@@ -127,7 +157,11 @@ describe("GitHub review selection", () => {
         automaticReviewLimit: 2,
         history: [item(1, "head-1", true, false), item(2, "head-2", true, false)],
       }),
-    ).toEqual({ _tag: "skip", reason: "automatic-reviews-paused" });
+    ).toMatchObject({
+      _tag: "pause",
+      automaticAttempts: 2,
+      lastCompletedRevision: undefined,
+    });
   });
 
   it("PRR-006 trusts only the terminal host marker", () => {
@@ -158,5 +192,34 @@ describe("GitHub review selection", () => {
         history,
       }),
     ).toMatchObject({ _tag: "review", automaticReviewsRemaining: 0 });
+  });
+
+  it("PRR-006 keeps a zero automatic limit silent", () => {
+    expect(
+      selectReview({
+        mode: "auto",
+        currentHead: "head-1",
+        reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 0,
+        history: [],
+      }),
+    ).toEqual({ _tag: "skip", reason: "automatic-reviews-paused" });
+  });
+
+  it("PRR-006 admits another review after the consumer raises a previously paused limit", () => {
+    expect(
+      selectReview({
+        mode: "auto",
+        currentHead: "head-4",
+        reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 3,
+        history: [item(1, "head-1", true), item(2, "head-2", true), pauseItem(3, "head-3", 2)],
+      }),
+    ).toMatchObject({
+      _tag: "review",
+      scope: "incremental",
+      baseRevision: "head-2",
+      automaticReviewsRemaining: 0,
+    });
   });
 });

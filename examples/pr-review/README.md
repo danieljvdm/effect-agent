@@ -22,11 +22,13 @@ weaken automatic-wave accounting.
 
 `automatic-review-limit` sets the number of automatic attempts per pull request
 and defaults to two. It accepts any non-negative integer without a configured
-upper cap. The final admitted attempt shows that automatic reviews are paused
-and points collaborators to `/effect-agent review` or `/effect-agent review
-full`; those manual reviews do not resume automatic reviews. Review bodies
-carry only a tiny terminal marker; no model conversation or signed continuity
-state is persisted.
+upper cap; zero disables automatic reviews and notices. The final admitted
+attempt shows that automatic reviews are paused and points collaborators to
+`/effect-agent review` or `/effect-agent review full`. The next automatic event
+publishes one closing no-model review with the last completed review and current
+head. Later pushes remain quiet. Manual reviews do not resume automatic reviews.
+Review bodies carry only a tiny terminal marker; no model conversation or
+signed continuity state is persisted.
 
 The first automatic attempt and every full command review GitHub's current PR
 diff. Later incremental attempts compare the last completed reviewed head with

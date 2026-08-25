@@ -47271,11 +47271,21 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
 });
 
 // examples/pr-review/src/selection.ts
-var MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-review:v2 automatic=(true|false) completed=(true|false) -->\s*$/;
+var ATTEMPT_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-review:v2 automatic=(true|false) completed=(true|false) -->\s*$/;
+var PAUSE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-review-pause:v1 limit=([0-9]+) -->\s*$/;
 var reviewMarker = (automatic, completed = true) => `<!-- effect-agent-review:v2 automatic=${String(automatic)} completed=${String(completed)} -->`;
+var reviewPauseMarker = (automaticReviewLimit) => `<!-- effect-agent-review-pause:v1 limit=${String(automaticReviewLimit)} -->`;
 var markerKind = (body) => {
-  const match9 = MARKER_PATTERN.exec(body);
-  return match9 === null ? undefined : { automatic: match9[1] === "true", completed: match9[2] === "true" };
+  const attempt = ATTEMPT_MARKER_PATTERN.exec(body);
+  if (attempt !== null) {
+    return {
+      _tag: "attempt",
+      automatic: attempt[1] === "true",
+      completed: attempt[2] === "true"
+    };
+  }
+  const pause = PAUSE_MARKER_PATTERN.exec(body);
+  return pause === null ? undefined : { _tag: "pause", automaticReviewLimit: pause[1] ?? "" };
 };
 var selectReview = (input) => {
   const author = input.reviewAuthor.toLowerCase();
@@ -47286,7 +47296,8 @@ var selectReview = (input) => {
     const byTime = (left.item.submittedAt ?? "").localeCompare(right.item.submittedAt ?? "");
     return byTime === 0 ? left.item.id - right.item.id : byTime;
   });
-  const automaticAttempts = trusted.filter(({ marker }) => marker.automatic).length;
+  const attempts = trusted.flatMap(({ item, marker }) => marker._tag === "attempt" ? [{ item, marker }] : []);
+  const automaticAttempts = attempts.filter(({ marker }) => marker.automatic).length;
   const automaticReviewsRemaining = Math.max(0, input.automaticReviewLimit - automaticAttempts - (input.mode === "auto" ? 1 : 0));
   if (input.mode === "full") {
     return {
@@ -47298,13 +47309,25 @@ var selectReview = (input) => {
       reason: "manual full review"
     };
   }
-  if (trusted.some(({ item, marker }) => item.commitId === input.currentHead && (input.mode === "auto" || marker.completed))) {
+  if (attempts.some(({ item, marker }) => item.commitId === input.currentHead && (input.mode === "auto" || marker.completed))) {
     return { _tag: "skip", reason: "head-already-reviewed" };
   }
   if (input.mode === "auto" && automaticAttempts >= input.automaticReviewLimit) {
-    return { _tag: "skip", reason: "automatic-reviews-paused" };
+    if (input.automaticReviewLimit === 0) {
+      return { _tag: "skip", reason: "automatic-reviews-paused" };
+    }
+    const pausePublished = trusted.some(({ marker }) => marker._tag === "pause" && marker.automaticReviewLimit === String(input.automaticReviewLimit));
+    if (pausePublished)
+      return { _tag: "skip", reason: "automatic-reviews-paused" };
+    return {
+      _tag: "pause",
+      reason: "automatic-reviews-paused",
+      automaticReviewLimit: input.automaticReviewLimit,
+      automaticAttempts,
+      lastCompletedRevision: attempts.filter(({ marker }) => marker.completed).at(-1)?.item.commitId
+    };
   }
-  const latest = trusted.filter(({ marker }) => marker.completed).at(-1)?.item;
+  const latest = attempts.filter(({ marker }) => marker.completed).at(-1)?.item;
   if (latest?.commitId === undefined) {
     return {
       _tag: "review",
@@ -47498,21 +47521,50 @@ var renderReviewFailureBody = (input) => {
 
 `);
 };
+var renderReviewPauseBody = (input) => {
+  const attempts = input.automaticAttempts === input.automaticReviewLimit ? `${String(input.automaticAttempts)} of ${String(input.automaticReviewLimit)} used` : `${String(input.automaticAttempts)} recorded · limit ${String(input.automaticReviewLimit)}`;
+  const lastCompleted = input.lastCompletedRevision === undefined ? "None" : `<code>${input.lastCompletedRevision.slice(0, 7)}</code>`;
+  return [
+    "## Effect Agent review",
+    [
+      "> [!NOTE]",
+      "> **Automatic reviews are paused for this pull request.**",
+      "> The configured automatic review limit has been reached. No model call was made for this update."
+    ].join(`
+`),
+    [
+      "| Automatic attempts | Last completed review | Current head |",
+      "| :-- | :-- | :-- |",
+      `| **${attempts}** | ${lastCompleted} | <code>${input.headRevision.slice(0, 7)}</code> |`
+    ].join(`
+`),
+    "### Summary",
+    "Further pushes will not start another automatic model review, and this pause notice will not be posted again.",
+    "Comment `/effect-agent review` for another review of the latest changes, or `/effect-agent review full` for the full pull request diff.",
+    `<sub>No model call · review automation paused at <code>${input.headRevision.slice(0, 7)}</code></sub>`
+  ].join(`
+
+`);
+};
 var defaultReviewPresentation = {
   renderFinding: renderFindingBody,
   renderReview: renderReviewBody,
-  renderFailure: renderReviewFailureBody
+  renderFailure: renderReviewFailureBody,
+  renderPause: renderReviewPauseBody
 };
 var ReviewPresentation = exports_Context.Reference("@effect-agent/example-pr-review/ReviewPresentation", {
   defaultValue: () => defaultReviewPresentation
 });
-var withReviewMarker = (body, automatic, completed = true) => {
+var withTerminalMarker = (body, marker) => {
   const visibleBody = body.trimEnd();
-  const marker = reviewMarker(automatic, completed);
   return visibleBody.length === 0 ? marker : `${visibleBody}
 
 ${marker}`;
 };
+var withReviewMarker = (body, automatic, completed = true) => {
+  return withTerminalMarker(body, reviewMarker(automatic, completed));
+};
+var withReviewPauseMarker = (body, automaticReviewLimit) => withTerminalMarker(body, reviewPauseMarker(automaticReviewLimit));
 
 // examples/pr-review/src/action.ts
 var MAX_REVIEW_PATCH_CHARS = 320000;
@@ -47603,8 +47655,8 @@ var writeOutputs = exports_Effect.fn("writeReviewOutputs")(function* (entries3) 
 `)}
 `, { flag: "a" });
 });
-var skip = exports_Effect.fn("skipReview")(function* (reason) {
-  yield* exports_Console.log(`PR review skipped: ${reason}`);
+var skip = exports_Effect.fn("skipReview")(function* (reason, reviewUrl) {
+  yield* exports_Console.log(reviewUrl === undefined ? `PR review skipped: ${reason}` : `Posted PR review: ${reviewUrl}`);
   yield* writeOutputs([
     ["skipped", "true"],
     ["reason", reason],
@@ -47614,7 +47666,8 @@ var skip = exports_Effect.fn("skipReview")(function* (reason) {
     ["cache-write-input-tokens", 0],
     ["output-tokens", 0],
     ["estimated-cost-usd", "0.000000"],
-    ["blocking-findings", 0]
+    ["blocking-findings", 0],
+    ...reviewUrl === undefined ? [] : [["review-url", reviewUrl]]
   ]);
 });
 var matchesIgnore = (path, rawPattern) => {
@@ -47762,6 +47815,19 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   });
   if (selection._tag === "skip")
     return yield* skip(selection.reason);
+  if (selection._tag === "pause") {
+    const reviewUrl2 = yield* github.publishReview({
+      commitId: pull.headRevision,
+      body: withReviewPauseMarker(presentation.renderPause({
+        automaticReviewLimit: selection.automaticReviewLimit,
+        automaticAttempts: selection.automaticAttempts,
+        lastCompletedRevision: selection.lastCompletedRevision,
+        headRevision: pull.headRevision
+      }), selection.automaticReviewLimit),
+      comments: []
+    });
+    return yield* skip(selection.reason, reviewUrl2);
+  }
   const fullFiles = yield* github.listFiles;
   let scopedFiles = fullFiles;
   let actualScope = selection.scope;
