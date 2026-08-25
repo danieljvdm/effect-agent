@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/session",
-  "version": "0.1.0-beta.28",
+  "version": "0.1.0-beta.29",
   "description": "Canonical Conversation records, reducers, store ports, recovery classifier, and the durable agent runtime coordinator for Effect Agent.",
   "license": "MIT",
   "repository": {
