@@ -36,7 +36,13 @@ signed continuity state is persisted.
 
 The first automatic attempt and every full command review GitHub's current PR
 diff. Later incremental attempts compare the last completed reviewed head with
-the current head. A rebase or failed comparison falls back to the current full
-PR diff. Merging the base branch can make GitHub's head-to-head comparison
-include upstream merge changes; published inline findings are still rechecked
-against the current PR diff.
+the current head by exact commit-tree contents across the current pull-request
+paths. This keeps amended, rebased, and force-pushed reviews incremental without
+persisting file state. An unavailable or truncated tree comparison makes no
+model call; only an explicit full command may widen review scope. Changed paths
+are hydrated from the current pull-request diff, and published inline findings
+are rechecked against that diff.
+
+Blocking findings publish a GitHub change request against the inspected head.
+Other reviews remain comments because a partial later pass cannot safely clear
+an older blocking review. A maintainer dismisses a resolved change request.

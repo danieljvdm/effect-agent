@@ -279,6 +279,9 @@ export const runReviewWave = Effect.fn("runReviewWave")(function* <A, E, R>(
   return yield* Effect.all(reviews, { concurrency: MAX_REVIEW_SHARDS });
 });
 
+export const reviewEventFor = (blockingFindings: number): "COMMENT" | "REQUEST_CHANGES" =>
+  blockingFindings > 0 ? "REQUEST_CHANGES" : "COMMENT";
+
 export const mergeReviewOutcomes = (
   outcomes: ReadonlyArray<ReviewOutcome>,
 ): {
@@ -439,6 +442,7 @@ export const reviewActionProgram = Effect.gen(function* () {
   if (selection._tag === "pause") {
     const reviewUrl = yield* github.publishReview({
       commitId: pull.headRevision,
+      event: "COMMENT",
       body: withReviewPauseMarker(
         presentation.renderPause({
           automaticReviewLimit: selection.automaticReviewLimit,
@@ -455,27 +459,24 @@ export const reviewActionProgram = Effect.gen(function* () {
 
   const fullFiles = yield* github.listFiles;
   let scopedFiles: ReadonlyArray<ChangedFile> = fullFiles;
-  let actualScope = selection.scope;
-  let reviewBaseRevision = pull.baseRevision;
   if (selection.scope === "incremental" && selection.baseRevision !== undefined) {
-    const comparison = yield* github.compareFiles(selection.baseRevision, pull.headRevision).pipe(
-      Effect.map((value) => ({ _tag: "success" as const, value })),
-      Effect.catch((error) =>
-        Console.warn(
-          `Incremental comparison failed; reviewing the full diff: ${error.reason}`,
-        ).pipe(Effect.as({ _tag: "failure" as const })),
-      ),
-    );
-    if (
-      comparison._tag === "success" &&
-      comparison.value.status === "ahead" &&
-      comparison.value.files.length < 300
-    ) {
-      scopedFiles = comparison.value.files;
-      reviewBaseRevision = selection.baseRevision;
-    } else {
-      actualScope = "full";
-    }
+    const comparison = yield* github
+      .compareTrees(
+        selection.baseRevision,
+        pull.headRevision,
+        fullFiles.map((file) => file.path),
+      )
+      .pipe(
+        Effect.map((value) => ({ _tag: "success" as const, value })),
+        Effect.catch((error) =>
+          Console.warn(`Incremental tree comparison failed: ${error.reason}`).pipe(
+            Effect.as({ _tag: "failure" as const }),
+          ),
+        ),
+      );
+    if (comparison._tag === "failure") return yield* skip("incremental-scope-unavailable");
+    const changedPaths = new Set(comparison.value.changedPaths);
+    scopedFiles = fullFiles.filter((file) => changedPaths.has(file.path));
   }
 
   const surface = prepareReviewSurface(scopedFiles, ignore);
@@ -496,9 +497,11 @@ export const reviewActionProgram = Effect.gen(function* () {
   if (surface.changes.length === 0) {
     report = ReviewReport.make({
       summary:
-        surface.ignoredPaths.length === scopedFiles.length
-          ? "No changed files matched the configured review scope."
-          : "No textual patch fit within the review input bound.",
+        selection.scope === "incremental" && scopedFiles.length === 0
+          ? "No pull-request files changed since the last completed review."
+          : surface.ignoredPaths.length === scopedFiles.length
+            ? "No changed files matched the configured review scope."
+            : "No textual patch fit within the review input bound.",
       findings: [],
     });
   } else {
@@ -524,7 +527,7 @@ export const reviewActionProgram = Effect.gen(function* () {
           ReviewRequest.make({
             title: pull.title.slice(0, 1_000),
             description: pull.description.slice(0, 20_000),
-            baseRevision: reviewBaseRevision,
+            baseRevision: pull.baseRevision,
             headRevision: pull.headRevision,
             changes,
             unreviewedPaths,
@@ -536,6 +539,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       yield* Console.error(`PR review wave failed:\n${Cause.pretty(reviewExit.cause)}`);
       const reviewUrl = yield* github.publishReview({
         commitId: pull.headRevision,
+        event: "COMMENT",
         body: withReviewMarker(
           presentation.renderFailure({
             automaticReviewsRemaining: selection.automaticReviewsRemaining,
@@ -573,12 +577,13 @@ export const reviewActionProgram = Effect.gen(function* () {
           url: pricing.url,
         };
 
+  const blocking = report.findings.filter((finding) => finding.severity === "blocking").length;
   const body = withReviewMarker(
     presentation.renderReview({
       report,
       automatic: selection.automatic,
       automaticReviewsRemaining: selection.automaticReviewsRemaining,
-      scope: actualScope,
+      scope: selection.scope,
       reviewedFiles: surface.changes.length,
       unreviewedFiles: surface.unreviewedPaths.length,
       ignoredFiles: surface.ignoredPaths.length,
@@ -595,6 +600,7 @@ export const reviewActionProgram = Effect.gen(function* () {
   );
   const reviewUrl = yield* github.publishReview({
     commitId: pull.headRevision,
+    event: reviewEventFor(blocking),
     body,
     comments: report.findings.flatMap((finding) =>
       finding.line === undefined
@@ -608,7 +614,6 @@ export const reviewActionProgram = Effect.gen(function* () {
           ],
     ),
   });
-  const blocking = report.findings.filter((finding) => finding.severity === "blocking").length;
   yield* writeOutputs([
     ["skipped", "false"],
     ["reason", selection.reason],

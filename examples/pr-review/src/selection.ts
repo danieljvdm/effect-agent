@@ -26,7 +26,10 @@ export interface ReviewHistoryItem {
 export type ReviewSelection =
   | {
       readonly _tag: "skip";
-      readonly reason: "head-already-reviewed" | "automatic-reviews-paused";
+      readonly reason:
+        | "head-already-reviewed"
+        | "automatic-reviews-paused"
+        | "incremental-baseline-unavailable";
     }
   | {
       readonly _tag: "pause";
@@ -146,6 +149,9 @@ export const selectReview = (input: {
 
   const latest = attempts.filter(({ marker }) => marker.completed).at(-1)?.item;
   if (latest?.commitId === undefined) {
+    if (input.mode === "incremental") {
+      return { _tag: "skip", reason: "incremental-baseline-unavailable" };
+    }
     return {
       _tag: "review",
       scope: "full",

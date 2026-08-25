@@ -8,7 +8,7 @@ import {
 } from "@effect-agent/pr-review";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Config, ConfigProvider, Deferred, Effect, Fiber, Ref } from "effect";
+import { Config, ConfigProvider, Deferred, Effect, Fiber, Ref, Schema } from "effect";
 import { Response } from "effect/unstable/ai";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
@@ -18,11 +18,13 @@ import {
   mergeReviewOutcomes,
   prepareReviewSurface,
   reviewActionProgram,
+  reviewEventFor,
   runReviewWave,
   shardReviewChanges,
   withActionInputs,
 } from "../src/action.ts";
 import type { ChangedFile } from "../src/github.ts";
+import { reviewMarker } from "../src/selection.ts";
 
 const file = (path: string, patch: string | undefined): ChangedFile => ({
   path,
@@ -140,6 +142,156 @@ describe("Manual command acknowledgement", () => {
         "POST /repos/reve-ai/example/issues/comments/42/reactions",
         "GET /repos/reve-ai/example/pulls/12",
       ]);
+    }),
+  );
+});
+
+describe("Incremental review scope", () => {
+  it("publishes blocking findings as a head-bound change request", () => {
+    expect(reviewEventFor(1)).toBe("REQUEST_CHANGES");
+    expect(reviewEventFor(0)).toBe("COMMENT");
+  });
+
+  it.effect("PRR-007 keeps a manual review incremental after a force-push", () =>
+    Effect.gen(function* () {
+      const reviewedHead = "1".repeat(40);
+      const currentHead = "2".repeat(40);
+      const reviewedTree = "3".repeat(40);
+      const currentTree = "4".repeat(40);
+      const unchangedBlob = "5".repeat(40);
+      const requests = yield* Ref.make<ReadonlyArray<string>>([]);
+      const publishedBodies = yield* Ref.make<ReadonlyArray<string>>([]);
+      const client = HttpClient.make((request, url) => {
+        let body: unknown;
+        if (request.method === "POST" && url.pathname.endsWith("/reactions")) {
+          body = { id: 1, content: "eyes" };
+        } else if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
+          body = {
+            number: 12,
+            title: "Rewrite the branch",
+            body: null,
+            draft: false,
+            html_url: "https://github.test/reve-ai/example/pull/12",
+            base: { sha: "0".repeat(40) },
+            head: { sha: currentHead },
+          };
+        } else if (request.method === "GET" && url.pathname.endsWith("/pulls/12/reviews")) {
+          body = [
+            {
+              id: 1,
+              body: reviewMarker(false),
+              commit_id: reviewedHead,
+              submitted_at: "2026-08-25T00:00:00Z",
+              user: { login: "effect-agent[bot]", type: "Bot" },
+            },
+          ];
+        } else if (request.method === "GET" && url.pathname.endsWith("/pulls/12/files")) {
+          body = [
+            {
+              filename: "src/unchanged.ts",
+              status: "modified",
+              additions: 1,
+              deletions: 1,
+              patch: "@@ -1 +1 @@\n-old\n+new",
+            },
+          ];
+        } else if (request.method === "GET" && url.pathname.endsWith(reviewedHead)) {
+          body = { sha: reviewedHead, tree: { sha: reviewedTree } };
+        } else if (request.method === "GET" && url.pathname.endsWith(currentHead)) {
+          body = { sha: currentHead, tree: { sha: currentTree } };
+        } else if (request.method === "GET" && url.pathname.endsWith(reviewedTree)) {
+          body = {
+            sha: reviewedTree,
+            truncated: false,
+            tree: [
+              {
+                path: "src/unchanged.ts",
+                mode: "100644",
+                type: "blob",
+                sha: unchangedBlob,
+              },
+            ],
+          };
+        } else if (request.method === "GET" && url.pathname.endsWith(currentTree)) {
+          body = {
+            sha: currentTree,
+            truncated: false,
+            tree: [
+              {
+                path: "src/unchanged.ts",
+                mode: "100644",
+                type: "blob",
+                sha: unchangedBlob,
+              },
+            ],
+          };
+        } else if (request.method === "POST" && url.pathname.endsWith("/pulls/12/reviews")) {
+          const encoded =
+            request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}";
+          const published = Schema.decodeUnknownSync(Schema.Struct({ body: Schema.String }))(
+            JSON.parse(encoded),
+          );
+          body = { html_url: "https://github.test/reve-ai/example/pull/12#review" };
+          return Ref.update(requests, (current) => [
+            ...current,
+            `${request.method} ${url.pathname}`,
+          ]).pipe(
+            Effect.andThen(Ref.update(publishedBodies, (current) => [...current, published.body])),
+            Effect.as(
+              HttpClientResponse.fromWeb(
+                request,
+                new globalThis.Response(JSON.stringify(body), {
+                  status: 200,
+                  headers: { "content-type": "application/json" },
+                }),
+              ),
+            ),
+          );
+        } else {
+          return Effect.die(new Error(`unexpected request ${request.method} ${url.href}`));
+        }
+        return Ref.update(requests, (current) => [
+          ...current,
+          `${request.method} ${url.pathname}`,
+        ]).pipe(
+          Effect.as(
+            HttpClientResponse.fromWeb(
+              request,
+              new globalThis.Response(JSON.stringify(body), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+            ),
+          ),
+        );
+      });
+      const provider = ConfigProvider.fromEnv({
+        env: {
+          GITHUB_REPOSITORY: "reve-ai/example",
+          GITHUB_TOKEN: "github-token",
+          GITHUB_API_URL: "https://api.github.test",
+          PR_REVIEW_PULL_REQUEST: "12",
+          PR_REVIEW_AUTHOR: "effect-agent[bot]",
+          PR_REVIEW_COMMAND: "/effect-agent review",
+          PR_REVIEW_COMMENT_ID: "42",
+        },
+      });
+
+      yield* reviewActionProgram.pipe(
+        Effect.provideService(ConfigProvider.ConfigProvider, provider),
+        Effect.provideService(HttpClient.HttpClient, client),
+        Effect.provide(NodeServices.layer),
+      );
+
+      const requested = yield* Ref.get(requests);
+      const published = yield* Ref.get(publishedBodies);
+      expect(requested.some((request) => request.includes("/compare/"))).toBe(false);
+      expect(requested.filter((request) => request.includes("/git/trees/"))).toHaveLength(2);
+      expect(published).toHaveLength(1);
+      expect(published[0]).toContain("| **Incremental** | 0 reviewed | ✅ None |");
+      expect(published[0]).toContain(
+        "No pull-request files changed since the last completed review.",
+      );
     }),
   );
 });

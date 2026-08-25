@@ -36,9 +36,38 @@ const ReviewWire = Schema.Struct({
   }),
 });
 
-const CompareWire = Schema.Struct({
-  status: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
-  files: Schema.optionalKey(Schema.Array(ChangedFileWire).check(Schema.isMaxLength(300))),
+const GitCommitWire = Schema.Struct({
+  sha: Revision,
+  tree: Schema.Struct({ sha: Revision }),
+});
+
+const GitTreeEntryFields = {
+  path: Schema.String.check(Schema.isMaxLength(4_096)),
+  sha: Revision,
+} as const;
+
+const GitTreeEntryWire = Schema.Union([
+  Schema.Struct({
+    ...GitTreeEntryFields,
+    mode: Schema.Literals(["100644", "100755", "120000"]),
+    type: Schema.Literal("blob"),
+  }),
+  Schema.Struct({
+    ...GitTreeEntryFields,
+    mode: Schema.Literal("040000"),
+    type: Schema.Literal("tree"),
+  }),
+  Schema.Struct({
+    ...GitTreeEntryFields,
+    mode: Schema.Literal("160000"),
+    type: Schema.Literal("commit"),
+  }),
+]);
+
+const GitTreeWire = Schema.Struct({
+  sha: Revision,
+  tree: Schema.Array(GitTreeEntryWire).check(Schema.isMaxLength(100_000)),
+  truncated: Schema.Boolean,
 });
 
 const PublishedReviewWire = Schema.Struct({ html_url: ShortString });
@@ -49,7 +78,7 @@ const ReactionWire = Schema.Struct({
 });
 const PublishReviewWire = Schema.Struct({
   commit_id: Revision,
-  event: Schema.Literal("COMMENT"),
+  event: Schema.Literals(["COMMENT", "REQUEST_CHANGES"]),
   body: Schema.String.check(Schema.isMaxLength(100_000)),
   comments: Schema.Array(
     Schema.Struct({
@@ -79,9 +108,8 @@ export interface ChangedFile {
   readonly patch: string | undefined;
 }
 
-export interface CompareView {
-  readonly status: string;
-  readonly files: ReadonlyArray<ChangedFile>;
+export interface TreeComparisonView {
+  readonly changedPaths: ReadonlyArray<string>;
 }
 
 export class GitHubApiFailure extends Schema.TaggedError<GitHubApiFailure>()("GitHubApiFailure", {
@@ -201,21 +229,70 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     });
   });
 
-  const compareFiles = (base: string, head: string) =>
-    execute(
-      "compare reviewed and current heads",
+  const readTreeSnapshot = Effect.fn("GitHubClient.readTreeSnapshot")(function* (revision: string) {
+    const commit = yield* execute(
+      "get Git commit",
       HttpClientRequest.get(
-        `${apiUrl}/repos/${options.repository}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
+        `${apiUrl}/repos/${options.repository}/git/commits/${encodeURIComponent(revision)}`,
       ),
-    ).pipe(
-      Effect.flatMap(decode(CompareWire, "compare reviewed and current heads")),
-      Effect.map(
-        (wire): CompareView => ({
-          status: wire.status,
-          files: (wire.files ?? []).map(changedFileFromWire),
-        }),
+    ).pipe(Effect.flatMap(decode(GitCommitWire, "get Git commit")));
+    if (commit.sha !== revision) {
+      return yield* GitHubApiFailure.make({
+        operation: "get Git commit",
+        reason: `GitHub returned commit ${commit.sha} for requested revision ${revision}`,
+      });
+    }
+    const tree = yield* execute(
+      "get recursive Git tree",
+      HttpClientRequest.get(
+        `${apiUrl}/repos/${options.repository}/git/trees/${encodeURIComponent(commit.tree.sha)}?recursive=1`,
       ),
+    ).pipe(Effect.flatMap(decode(GitTreeWire, "get recursive Git tree")));
+    if (tree.sha !== commit.tree.sha) {
+      return yield* GitHubApiFailure.make({
+        operation: "get recursive Git tree",
+        reason: `GitHub returned tree ${tree.sha} for requested tree ${commit.tree.sha}`,
+      });
+    }
+    if (tree.truncated) {
+      return yield* GitHubApiFailure.make({
+        operation: "get recursive Git tree",
+        reason: `GitHub truncated tree ${tree.sha}`,
+      });
+    }
+    const entries = new Map<string, typeof GitTreeEntryWire.Type>();
+    for (const entry of tree.tree) {
+      if (entries.has(entry.path)) {
+        return yield* GitHubApiFailure.make({
+          operation: "get recursive Git tree",
+          reason: `GitHub returned duplicate path '${entry.path}' in tree ${tree.sha}`,
+        });
+      }
+      entries.set(entry.path, entry);
+    }
+    return entries;
+  });
+
+  const compareTrees = Effect.fn("GitHubClient.compareTrees")(function* (
+    base: string,
+    head: string,
+    paths: ReadonlyArray<string>,
+  ) {
+    const { baseEntries, headEntries } = yield* Effect.all(
+      {
+        baseEntries: readTreeSnapshot(base),
+        headEntries: readTreeSnapshot(head),
+      },
+      { concurrency: 2 },
     );
+    const changedPaths = [...new Set(paths)].sort().filter((path) => {
+      const before = baseEntries.get(path);
+      const after = headEntries.get(path);
+      if (before === undefined || after === undefined) return before !== after;
+      return before.sha !== after.sha || before.mode !== after.mode || before.type !== after.type;
+    });
+    return { changedPaths } satisfies TreeComparisonView;
+  });
 
   const acknowledgeComment = Effect.fn("GitHubClient.acknowledgeComment")(function* (
     commentId: number,
@@ -236,6 +313,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
 
   const publishReview = (input: {
     readonly commitId: string;
+    readonly event: "COMMENT" | "REQUEST_CHANGES";
     readonly body: string;
     readonly comments: ReadonlyArray<{
       readonly path: string;
@@ -246,7 +324,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     Effect.gen(function* () {
       const body = yield* Schema.encodeEffect(PublishReviewWire)({
         commit_id: input.commitId,
-        event: "COMMENT",
+        event: input.event,
         body: input.body,
         comments: input.comments.map((comment) => ({
           path: comment.path,
@@ -269,7 +347,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     getPullRequest,
     listFiles,
     listReviews,
-    compareFiles,
+    compareTrees,
     acknowledgeComment,
     publishReview,
   } as const;

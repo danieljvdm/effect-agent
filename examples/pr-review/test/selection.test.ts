@@ -135,6 +135,18 @@ describe("GitHub review selection", () => {
     });
   });
 
+  it("PRR-007 does not turn an incremental command without a baseline into a full review", () => {
+    expect(
+      selectReview({
+        mode: "incremental",
+        currentHead: "head-1",
+        reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
+        history: [],
+      }),
+    ).toEqual({ _tag: "skip", reason: "incremental-baseline-unavailable" });
+  });
+
   it("PRR-006 skips a head that already has a trusted review", () => {
     expect(
       selectReview({

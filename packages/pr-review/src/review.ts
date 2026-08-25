@@ -46,6 +46,7 @@ export const ReviewCategory = Schema.Literals([
   "concurrency",
   "performance",
   "resources",
+  "reliability",
   "error-handling",
   "testing",
   "maintainability",
