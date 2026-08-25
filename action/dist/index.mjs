@@ -42892,9 +42892,9 @@ var reviewPolicy = AgentPolicy.make({
   maxToolCalls: 1,
   maxDuration: "5 minutes",
   toolConcurrency: 1,
-  tokenBudget: 160000,
-  completionReserveTokens: 16000,
-  contextTokenLimit: 140000,
+  tokenBudget: 52000,
+  completionReserveTokens: 4000,
+  contextTokenLimit: 48000,
   onExhaustion: "fail"
 });
 var makeDefinition = (guidance) => Agent.define("pr-review", {
@@ -42910,8 +42910,8 @@ ${guidance.trim()}`,
   metadata: { deploymentClass: "E", surface: "read-only" }
 });
 var reviewBudgetLimits = UsageBudgetLimits.make({
-  maxInputTokens: 140000,
-  maxOutputTokens: 12000,
+  maxInputTokens: 48000,
+  maxOutputTokens: 4000,
   maxToolCalls: 0,
   maxDurationMillis: 300000
 });
@@ -47234,6 +47234,9 @@ var selectReview = (input) => {
 var MAX_REVIEW_PATCH_CHARS = 320000;
 var MAX_PATCH_CHARS = 80000;
 var MAX_REVIEW_FILES = 100;
+var TARGET_SHARD_PATCH_CHARS = 80000;
+var MAX_MERGED_FINDINGS = 12;
+var MAX_REVIEW_SHARDS = 4;
 
 class ActionConfigurationError extends exports_Schema.TaggedError()("ActionConfigurationError", { message: exports_Schema.String }) {
 }
@@ -47297,6 +47300,45 @@ var prepareReviewSurface = (files, ignore6) => {
   }
   return { changes: changes2, unreviewedPaths, ignoredPaths };
 };
+var shardReviewChanges = (changes2) => {
+  if (changes2.length === 0)
+    return [];
+  const totalChars = changes2.reduce((total, change) => total + change.patch.length, 0);
+  const shardCount = Math.min(MAX_REVIEW_SHARDS, changes2.length, Math.max(1, Math.ceil(totalChars / TARGET_SHARD_PATCH_CHARS)));
+  const shards = Array.from({ length: shardCount }, () => ({
+    chars: 0,
+    changes: []
+  }));
+  const largestFirst = changes2.map((change, index2) => ({ change, index: index2 })).sort((left, right) => right.change.patch.length - left.change.patch.length);
+  for (const item of largestFirst) {
+    let target = shards[0];
+    if (target === undefined)
+      break;
+    for (const shard of shards) {
+      if (shard.chars < target.chars)
+        target = shard;
+    }
+    target.changes.push(item);
+    target.chars += item.change.patch.length;
+  }
+  return shards.map((shard) => shard.changes.sort((left, right) => left.index - right.index).map(({ change }) => change));
+};
+var runReviewWave = exports_Effect.fn("runReviewWave")(function* (reviews) {
+  return yield* exports_Effect.all(reviews, { concurrency: MAX_REVIEW_SHARDS });
+});
+var mergeReviewOutcomes = (outcomes) => {
+  const severityOrder = { blocking: 0, important: 1, nit: 2 };
+  const findings = outcomes.flatMap((outcome) => outcome.report.findings).sort((left, right) => severityOrder[left.severity] - severityOrder[right.severity]).slice(0, MAX_MERGED_FINDINGS);
+  const summary2 = outcomes.length === 1 ? outcomes[0]?.report.summary ?? "Review completed without a summary." : outcomes.map((outcome, index2) => `Shard ${String(index2 + 1)}:
+${outcome.report.summary.slice(0, 1400)}`).join(`
+
+`);
+  return {
+    report: ReviewReport.make({ summary: summary2, findings }),
+    inputTokens: outcomes.reduce((total, outcome) => total + outcome.usage.inputTokens, 0),
+    outputTokens: outcomes.reduce((total, outcome) => total + outcome.usage.outputTokens, 0)
+  };
+};
 var reanchorToFullPullRequest = (files, report2) => {
   const patches = new Map(files.map((file2) => [file2.path, file2.patch]));
   return ReviewReport.make({
@@ -47326,7 +47368,7 @@ var renderBody = (input) => {
 
 ${finding.body}`));
   }
-  sections.push(`Scope: ${input.scope}; ${String(input.reviewedFiles)} file(s) reviewed, ${String(input.unreviewedFiles)} unavailable or outside the input bound, ${String(input.ignoredFiles)} ignored.`, `Usage: ${String(input.inputTokens)} input / ${String(input.outputTokens)} output tokens.`, reviewMarker(input.automatic));
+  sections.push(`Scope: ${input.scope}; ${String(input.reviewedFiles)} file(s) reviewed, ${String(input.unreviewedFiles)} unavailable or outside the input bound, ${String(input.ignoredFiles)} ignored.`, `Review wave: ${String(input.shards)} independent shard(s).`, `Usage: ${String(input.inputTokens)} input / ${String(input.outputTokens)} output tokens.`, reviewMarker(input.automatic));
   return sections.join(`
 
 `);
@@ -47386,7 +47428,9 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   const surface = prepareReviewSurface(scopedFiles, ignore6);
   const fs = yield* exports_FileSystem.FileSystem;
   const guidance = guidanceFile.length === 0 ? undefined : (yield* fs.readFileString(guidanceFile)).slice(0, 20000);
-  let outcome;
+  let shardCount = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
   let report2;
   if (surface.changes.length === 0) {
     report2 = ReviewReport.make({
@@ -47394,29 +47438,32 @@ var reviewActionProgram = exports_Effect.gen(function* () {
       findings: []
     });
   } else {
+    const shards = shardReviewChanges(surface.changes);
+    shardCount = shards.length;
     const reviewer = makeReviewer({
       model: exports_OpenAiLanguageModel.model(modelName, {
-        max_output_tokens: 12000,
+        max_output_tokens: 4000,
         store: false,
         strictJsonSchema: true,
         reasoning: { effort }
       }),
       ...guidance === undefined ? {} : { guidance }
     });
-    const reviewExit = yield* reviewer.review(ReviewRequest.make({
+    const unreviewedPaths = surface.unreviewedPaths.filter((path) => path.length <= 512).slice(0, 300);
+    const reviewExit = yield* runReviewWave(shards.map((changes2) => reviewer.review(ReviewRequest.make({
       title: pull.title.slice(0, 1000),
       description: pull.description.slice(0, 20000),
       baseRevision: selection.baseRevision ?? pull.baseRevision,
       headRevision: pull.headRevision,
-      changes: surface.changes,
-      unreviewedPaths: surface.unreviewedPaths.filter((path) => path.length <= 512).slice(0, 300)
-    })).pipe(exports_Effect.provide(openAiClientLayer), exports_Effect.exit);
+      changes: changes2,
+      unreviewedPaths
+    })))).pipe(exports_Effect.provide(openAiClientLayer), exports_Effect.exit);
     if (exports_Exit.isFailure(reviewExit)) {
       const reviewUrl2 = yield* github.publishReview({
         commitId: pull.headRevision,
         body: [
           "## PR review",
-          "The reviewer did not produce a schema-valid report. No findings were published.",
+          "One or more review shards failed to produce a schema-valid report. No findings were published.",
           reviewMarker(selection.automatic, false)
         ].join(`
 
@@ -47431,11 +47478,11 @@ var reviewActionProgram = exports_Effect.gen(function* () {
       ]);
       return yield* exports_Effect.failCause(reviewExit.cause);
     }
-    outcome = reviewExit.value;
-    report2 = reanchorToFullPullRequest(fullFiles, outcome.report);
+    const merged = mergeReviewOutcomes(reviewExit.value);
+    inputTokens = merged.inputTokens;
+    outputTokens = merged.outputTokens;
+    report2 = reanchorToFullPullRequest(fullFiles, merged.report);
   }
-  const inputTokens = outcome?.usage.inputTokens ?? 0;
-  const outputTokens = outcome?.usage.outputTokens ?? 0;
   const body = renderBody({
     report: report2,
     automatic: selection.automatic,
@@ -47443,6 +47490,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     reviewedFiles: surface.changes.length,
     unreviewedFiles: surface.unreviewedPaths.length,
     ignoredFiles: surface.ignoredPaths.length,
+    shards: shardCount,
     inputTokens,
     outputTokens
   });

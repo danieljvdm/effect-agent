@@ -6,6 +6,7 @@ import {
   ReviewReport,
   ReviewRequest,
   type ReviewOutcome,
+  type ReviewSeverity,
 } from "@effect-agent/pr-review";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Console, Effect, Exit, FileSystem, Layer, Schema } from "effect";
@@ -17,6 +18,9 @@ import { reviewMarker, selectReview } from "./selection.ts";
 const MAX_REVIEW_PATCH_CHARS = 320_000;
 const MAX_PATCH_CHARS = 80_000;
 const MAX_REVIEW_FILES = 100;
+const TARGET_SHARD_PATCH_CHARS = 80_000;
+const MAX_MERGED_FINDINGS = 12;
+export const MAX_REVIEW_SHARDS = 4;
 
 export class ActionConfigurationError extends Schema.TaggedError<ActionConfigurationError>()(
   "ActionConfigurationError",
@@ -105,6 +109,78 @@ export const prepareReviewSurface = (
   return { changes, unreviewedPaths, ignoredPaths };
 };
 
+/** Partition one admitted diff into a small, deterministic, size-balanced wave. */
+export const shardReviewChanges = (
+  changes: ReadonlyArray<ReviewChange>,
+): ReadonlyArray<ReadonlyArray<ReviewChange>> => {
+  if (changes.length === 0) return [];
+  const totalChars = changes.reduce((total, change) => total + change.patch.length, 0);
+  const shardCount = Math.min(
+    MAX_REVIEW_SHARDS,
+    changes.length,
+    Math.max(1, Math.ceil(totalChars / TARGET_SHARD_PATCH_CHARS)),
+  );
+  const shards: Array<{
+    chars: number;
+    changes: Array<{ readonly index: number; readonly change: ReviewChange }>;
+  }> = Array.from({ length: shardCount }, () => ({
+    chars: 0,
+    changes: [],
+  }));
+  const largestFirst = changes
+    .map((change, index) => ({ change, index }))
+    .sort((left, right) => right.change.patch.length - left.change.patch.length);
+
+  for (const item of largestFirst) {
+    let target = shards[0];
+    if (target === undefined) break;
+    for (const shard of shards) {
+      if (shard.chars < target.chars) target = shard;
+    }
+    target.changes.push(item);
+    target.chars += item.change.patch.length;
+  }
+
+  return shards.map((shard) =>
+    shard.changes.sort((left, right) => left.index - right.index).map(({ change }) => change),
+  );
+};
+
+/** Run one bounded parallel wave. Each Effect remains a one-turn reviewer invocation. */
+export const runReviewWave = Effect.fn("runReviewWave")(function* <A, E, R>(
+  reviews: ReadonlyArray<Effect.Effect<A, E, R>>,
+): Effect.fn.Return<ReadonlyArray<A>, E, R> {
+  return yield* Effect.all(reviews, { concurrency: MAX_REVIEW_SHARDS });
+});
+
+export const mergeReviewOutcomes = (
+  outcomes: ReadonlyArray<ReviewOutcome>,
+): {
+  readonly report: ReviewReport;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+} => {
+  const severityOrder: Record<ReviewSeverity, number> = { blocking: 0, important: 1, nit: 2 };
+  const findings = outcomes
+    .flatMap((outcome) => outcome.report.findings)
+    .sort((left, right) => severityOrder[left.severity] - severityOrder[right.severity])
+    .slice(0, MAX_MERGED_FINDINGS);
+  const summary =
+    outcomes.length === 1
+      ? (outcomes[0]?.report.summary ?? "Review completed without a summary.")
+      : outcomes
+          .map(
+            (outcome, index) =>
+              `Shard ${String(index + 1)}:\n${outcome.report.summary.slice(0, 1_400)}`,
+          )
+          .join("\n\n");
+  return {
+    report: ReviewReport.make({ summary, findings }),
+    inputTokens: outcomes.reduce((total, outcome) => total + outcome.usage.inputTokens, 0),
+    outputTokens: outcomes.reduce((total, outcome) => total + outcome.usage.outputTokens, 0),
+  };
+};
+
 const reanchorToFullPullRequest = (
   files: ReadonlyArray<ChangedFile>,
   report: ReviewReport,
@@ -139,6 +215,7 @@ const renderBody = (input: {
   readonly reviewedFiles: number;
   readonly unreviewedFiles: number;
   readonly ignoredFiles: number;
+  readonly shards: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
 }): string => {
@@ -155,6 +232,7 @@ const renderBody = (input: {
   }
   sections.push(
     `Scope: ${input.scope}; ${String(input.reviewedFiles)} file(s) reviewed, ${String(input.unreviewedFiles)} unavailable or outside the input bound, ${String(input.ignoredFiles)} ignored.`,
+    `Review wave: ${String(input.shards)} independent shard(s).`,
     `Usage: ${String(input.inputTokens)} input / ${String(input.outputTokens)} output tokens.`,
     reviewMarker(input.automatic),
   );
@@ -251,7 +329,9 @@ export const reviewActionProgram = Effect.gen(function* () {
       ? undefined
       : (yield* fs.readFileString(guidanceFile)).slice(0, 20_000);
 
-  let outcome: ReviewOutcome | undefined;
+  let shardCount = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
   let report: ReviewReport;
   if (surface.changes.length === 0) {
     report = ReviewReport.make({
@@ -262,35 +342,40 @@ export const reviewActionProgram = Effect.gen(function* () {
       findings: [],
     });
   } else {
+    const shards = shardReviewChanges(surface.changes);
+    shardCount = shards.length;
     const reviewer = makeReviewer({
       model: OpenAiLanguageModel.model(modelName, {
-        max_output_tokens: 12_000,
+        max_output_tokens: 4_000,
         store: false,
         strictJsonSchema: true,
         reasoning: { effort },
       }),
       ...(guidance === undefined ? {} : { guidance }),
     });
-    const reviewExit = yield* reviewer
-      .review(
-        ReviewRequest.make({
-          title: pull.title.slice(0, 1_000),
-          description: pull.description.slice(0, 20_000),
-          baseRevision: selection.baseRevision ?? pull.baseRevision,
-          headRevision: pull.headRevision,
-          changes: surface.changes,
-          unreviewedPaths: surface.unreviewedPaths
-            .filter((path) => path.length <= 512)
-            .slice(0, 300),
-        }),
-      )
-      .pipe(Effect.provide(openAiClientLayer), Effect.exit);
+    const unreviewedPaths = surface.unreviewedPaths
+      .filter((path) => path.length <= 512)
+      .slice(0, 300);
+    const reviewExit = yield* runReviewWave(
+      shards.map((changes) =>
+        reviewer.review(
+          ReviewRequest.make({
+            title: pull.title.slice(0, 1_000),
+            description: pull.description.slice(0, 20_000),
+            baseRevision: selection.baseRevision ?? pull.baseRevision,
+            headRevision: pull.headRevision,
+            changes,
+            unreviewedPaths,
+          }),
+        ),
+      ),
+    ).pipe(Effect.provide(openAiClientLayer), Effect.exit);
     if (Exit.isFailure(reviewExit)) {
       const reviewUrl = yield* github.publishReview({
         commitId: pull.headRevision,
         body: [
           "## PR review",
-          "The reviewer did not produce a schema-valid report. No findings were published.",
+          "One or more review shards failed to produce a schema-valid report. No findings were published.",
           reviewMarker(selection.automatic, false),
         ].join("\n\n"),
         comments: [],
@@ -303,12 +388,12 @@ export const reviewActionProgram = Effect.gen(function* () {
       ]);
       return yield* Effect.failCause(reviewExit.cause);
     }
-    outcome = reviewExit.value;
-    report = reanchorToFullPullRequest(fullFiles, outcome.report);
+    const merged = mergeReviewOutcomes(reviewExit.value);
+    inputTokens = merged.inputTokens;
+    outputTokens = merged.outputTokens;
+    report = reanchorToFullPullRequest(fullFiles, merged.report);
   }
 
-  const inputTokens = outcome?.usage.inputTokens ?? 0;
-  const outputTokens = outcome?.usage.outputTokens ?? 0;
   const body = renderBody({
     report,
     automatic: selection.automatic,
@@ -316,6 +401,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     reviewedFiles: surface.changes.length,
     unreviewedFiles: surface.unreviewedPaths.length,
     ignoredFiles: surface.ignoredPaths.length,
+    shards: shardCount,
     inputTokens,
     outputTokens,
   });

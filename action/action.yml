@@ -1,5 +1,5 @@
 name: "Effect Agent PR Review"
-description: "Run one bounded review pass and publish its validated findings to GitHub."
+description: "Run one bounded parallel review wave and publish its validated findings to GitHub."
 branding:
   icon: "eye"
   color: "purple"

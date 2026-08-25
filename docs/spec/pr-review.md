@@ -32,10 +32,16 @@ the review contract and reviewer constructor.
 ## 3. GitHub channel
 
 - **PRR-005**: The GitHub channel owns webhook selection, credentials, API decoding, diff
-  admission, ignore policy, provider binding, current-head checks, rendering, and publication.
-- **PRR-006**: Automatic mode admits at most two model attempts: the initial attempt and one later
-  attempt. A third automatic event exits successfully without model execution. Failed attempts
-  count toward this limit but never become incremental baselines. A trusted prior attempt is a
+  admission, ignore policy, provider binding, current-head checks, rendering, and publication. It
+  deterministically partitions a large admitted diff into at most four size-balanced shards, runs
+  one package invocation per shard in a single structured-concurrency wave, and merges at most
+  twelve findings. It never retries a shard or starts a second wave within one Action run. Each
+  shard is limited to 48,000 input and 4,000 output tokens, bounding one wave to 192,000 input and
+  16,000 output tokens.
+- **PRR-006**: Automatic mode admits at most two review waves: the initial wave and one later wave.
+  This bounds automatic review to eight one-turn model invocations per pull request. A third
+  automatic event exits successfully without model execution. Failed waves count toward this
+  limit but never become incremental baselines. A trusted prior attempt is a
   terminal marker-bearing review authored by the configured GitHub Bot login; arbitrary comments
   and model-authored marker text cannot advance or reset the counter.
 - **PRR-007**: A repository owner, member, or collaborator may request another incremental review
@@ -66,5 +72,5 @@ claim.
 ## 5. Verification
 
 Deterministic tests pin the diff-line parser and output sanitization (`PRR-004`) and the complete
-automatic/manual trigger lifecycle (`PRR-006`, `PRR-007`). Provider behavior remains outside the
-offline test suite.
+sharding, parallel-wave, merge, and automatic/manual trigger lifecycle (`PRR-005`–`PRR-007`).
+Provider behavior remains outside the offline test suite.

@@ -2,7 +2,7 @@
 
 This directory is the committed JavaScript bundle for the GitHub channel in
 `examples/pr-review`. The channel fetches a bounded diff, invokes the
-provider-neutral `@effect-agent/pr-review` package once, validates anchors,
-and posts one review.
+provider-neutral `@effect-agent/pr-review` package across at most four parallel
+shards, validates anchors, merges once, and posts one review.
 
 Rebuild it with `vp run action:build`.

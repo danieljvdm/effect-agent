@@ -145,7 +145,8 @@ equivalence).
 `examples/demo` is a local browser test bench. `examples/providers` is a compile-only proof that the
 same Definition binds directly to upstream OpenAI and Anthropic Models. `examples/pr-review` is the
 GitHub channel over `@effect-agent/pr-review`: it owns webhook policy, REST decoding, bounded diff
-admission, the OpenAI Layer, and publication. `examples/pr-work-orders` is the private
+admission, deterministic four-shard fan-out, the OpenAI Layer, merging, and publication.
+`examples/pr-work-orders` is the private
 trusted-local proof of a head-bound work-order implementer;
 `examples/pr-work-order-ingress` is the private GitHub dispatch and isolated
 publication proof; `examples/repo-ops`
