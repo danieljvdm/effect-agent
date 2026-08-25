@@ -7,6 +7,15 @@ The package itself remains provider- and transport-neutral.
 Large admitted diffs are partitioned into at most four size-balanced shards.
 Each shard gets one tool-free model turn, all shards run in one bounded parallel
 wave, and the channel merges at most twelve findings into one GitHub review.
+It renders each finding with a severity and category label plus a collapsed,
+copyable prompt for coding agents. Presentation is deterministic and adds no
+model calls.
+
+The bundled channel resolves a defaulted `ReviewPresentation` Effect reference.
+An embedding host may provide another implementation to replace the visible
+GitHub Markdown without changing the reviewer. The channel always appends its
+trusted attempt marker after rendering, so a presentation override cannot
+weaken automatic-wave accounting.
 
 Automatic events admit at most two review waves, including failed waves, for a
 hard ceiling of eight automatic model turns per pull request. Further pushes

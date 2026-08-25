@@ -13,7 +13,8 @@ import { Cause, Config, Console, Effect, Exit, FileSystem, Layer, Schema } from 
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { type ChangedFile, makeGitHubClient } from "./github.ts";
-import { reviewMarker, selectReview } from "./selection.ts";
+import { ReviewPresentation, withReviewMarker } from "./presentation.ts";
+import { selectReview } from "./selection.ts";
 
 const MAX_REVIEW_PATCH_CHARS = 320_000;
 const MAX_PATCH_CHARS = 80_000;
@@ -200,6 +201,7 @@ const reanchorToFullPullRequest = (
           path: finding.path,
           ...(line === undefined ? {} : { line }),
           severity: finding.severity,
+          category: finding.category,
           title: finding.title,
           body: finding.body,
         }),
@@ -208,42 +210,12 @@ const reanchorToFullPullRequest = (
   });
 };
 
-const renderBody = (input: {
-  readonly report: ReviewReport;
-  readonly automatic: boolean;
-  readonly scope: "full" | "incremental";
-  readonly reviewedFiles: number;
-  readonly unreviewedFiles: number;
-  readonly ignoredFiles: number;
-  readonly shards: number;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-}): string => {
-  const unanchored = input.report.findings.filter((finding) => finding.line === undefined);
-  const sections = ["## PR review", input.report.summary];
-  if (unanchored.length > 0) {
-    sections.push(
-      "### Findings without an inline anchor",
-      ...unanchored.map(
-        (finding) =>
-          `**${finding.severity}: ${finding.title}** — \`${finding.path}\`\n\n${finding.body}`,
-      ),
-    );
-  }
-  sections.push(
-    `Scope: ${input.scope}; ${String(input.reviewedFiles)} file(s) reviewed, ${String(input.unreviewedFiles)} unavailable or outside the input bound, ${String(input.ignoredFiles)} ignored.`,
-    `Review wave: ${String(input.shards)} independent shard(s).`,
-    `Usage: ${String(input.inputTokens)} input / ${String(input.outputTokens)} output tokens.`,
-    reviewMarker(input.automatic),
-  );
-  return sections.join("\n\n");
-};
-
 const openAiClientLayer = OpenAiClient.layerConfig({
   apiKey: Config.redacted("OPENAI_API_KEY"),
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
 export const reviewActionProgram = Effect.gen(function* () {
+  const presentation = yield* ReviewPresentation;
   const repository = yield* Config.nonEmptyString("GITHUB_REPOSITORY");
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     return yield* ActionConfigurationError.make({
@@ -376,11 +348,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       yield* Console.error(`PR review wave failed:\n${Cause.pretty(reviewExit.cause)}`);
       const reviewUrl = yield* github.publishReview({
         commitId: pull.headRevision,
-        body: [
-          "## PR review",
-          "One or more review shards failed to produce a schema-valid report. No findings were published.",
-          reviewMarker(selection.automatic, false),
-        ].join("\n\n"),
+        body: withReviewMarker(presentation.renderFailure(), selection.automatic, false),
         comments: [],
       });
       yield* writeOutputs([
@@ -397,17 +365,21 @@ export const reviewActionProgram = Effect.gen(function* () {
     report = reanchorToFullPullRequest(fullFiles, merged.report);
   }
 
-  const body = renderBody({
-    report,
-    automatic: selection.automatic,
-    scope: actualScope,
-    reviewedFiles: surface.changes.length,
-    unreviewedFiles: surface.unreviewedPaths.length,
-    ignoredFiles: surface.ignoredPaths.length,
-    shards: shardCount,
-    inputTokens,
-    outputTokens,
-  });
+  const body = withReviewMarker(
+    presentation.renderReview({
+      report,
+      automatic: selection.automatic,
+      scope: actualScope,
+      reviewedFiles: surface.changes.length,
+      unreviewedFiles: surface.unreviewedPaths.length,
+      ignoredFiles: surface.ignoredPaths.length,
+      shards: shardCount,
+      inputTokens,
+      outputTokens,
+      headRevision: pull.headRevision,
+    }),
+    selection.automatic,
+  );
   const reviewUrl = yield* github.publishReview({
     commitId: pull.headRevision,
     body,
@@ -418,7 +390,7 @@ export const reviewActionProgram = Effect.gen(function* () {
             {
               path: finding.path,
               line: finding.line,
-              body: `**${finding.severity}: ${finding.title}**\n\n${finding.body}`,
+              body: presentation.renderFinding(finding, pull.headRevision),
             },
           ],
     ),

@@ -36,6 +36,21 @@ export class ReviewRequest extends Schema.Class<ReviewRequest>(
 export const ReviewSeverity = Schema.Literals(["blocking", "important", "nit"]);
 export type ReviewSeverity = typeof ReviewSeverity.Type;
 
+/** A model-claimed problem kind used only to label findings for readers. */
+export const ReviewCategory = Schema.Literals([
+  "correctness",
+  "security",
+  "concurrency",
+  "performance",
+  "resources",
+  "error-handling",
+  "testing",
+  "maintainability",
+  "style",
+  "docs",
+]);
+export type ReviewCategory = typeof ReviewCategory.Type;
+
 /** One actionable defect. `line` is a RIGHT-side line in the supplied patch. */
 export class ReviewFinding extends Schema.Class<ReviewFinding>(
   "@effect-agent/pr-review/ReviewFinding",
@@ -43,6 +58,8 @@ export class ReviewFinding extends Schema.Class<ReviewFinding>(
   path: ReviewPath,
   line: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   severity: ReviewSeverity,
+  /** Presentation label only; it never changes review admission or failure policy. */
+  category: ReviewCategory,
   title: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   body: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
 }) {}
@@ -72,7 +89,7 @@ const BASE_INSTRUCTIONS = `Review the supplied pull-request diff once.
 
 Report only concrete correctness, security, reliability, or maintainability defects that the author should act on. Do not praise, restate the change, invent missing repository context, or ask for speculative cleanup. An empty findings array is valid.
 
-Every finding must use an exact supplied path. Set line only to a RIGHT-side added or context line visible in that path's unified patch; otherwise omit line. Use blocking only for a defect that should prevent shipping. Treat unreviewedPaths as unavailable scope and never imply that you inspected it.`;
+Every finding must use an exact supplied path. Set line only to a RIGHT-side added or context line visible in that path's unified patch; otherwise omit line. Use blocking only for a defect that should prevent shipping. Classify each finding with the closest available category. Treat unreviewedPaths as unavailable scope and never imply that you inspected it.`;
 
 export const reviewPolicy = AgentPolicy.make({
   maxTurns: 1,
@@ -155,6 +172,7 @@ export const sanitizeReviewReport = (
         path: finding.path,
         ...(line === undefined ? {} : { line }),
         severity: finding.severity,
+        category: finding.category,
         title: finding.title,
         body: finding.body,
       }),
