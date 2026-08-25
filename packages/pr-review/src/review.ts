@@ -11,6 +11,8 @@ import {
 } from "effect-agent";
 import { type LanguageModel, type Model, Toolkit } from "effect/unstable/ai";
 
+export type { RunCostEstimator };
+
 const ReviewPath = Schema.NonEmptyString.check(Schema.isMaxLength(512));
 const Revision = Schema.NonEmptyString.check(Schema.isMaxLength(128));
 

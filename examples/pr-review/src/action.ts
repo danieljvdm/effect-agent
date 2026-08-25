@@ -5,6 +5,7 @@ import {
   ReviewFinding,
   ReviewReport,
   ReviewRequest,
+  type RunCostEstimator,
   type ReviewOutcome,
   type ReviewSeverity,
 } from "@effect-agent/pr-review";
@@ -20,7 +21,6 @@ import {
   Layer,
   Schema,
 } from "effect";
-import type { RunCostEstimator } from "effect-agent";
 import type { Response } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
