@@ -890,7 +890,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(reviewWorkflow.jobs.review?.if).toContain("@effect-agent /review full");
       expect(reviewWorkflow.concurrency?.["cancel-in-progress"]).toBe(false);
       const reviewStep = workflowStep(reviewWorkflow, "review", "Review the pull request");
-      expect(reviewStep?.uses).toBe("danieljvdm/effect-agent/action@main");
+      expect(reviewStep?.uses).toBe(
+        "danieljvdm/effect-agent/action@19ad966142c51a61a361148911538d7643f4a807",
+      );
       expect(reviewStep?.with?.mode).toContain("'auto'");
       expect(reviewStep?.with?.mode).toContain("'incremental'");
       expect(reviewStep?.with?.mode).toContain("'full'");
