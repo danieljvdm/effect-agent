@@ -72,4 +72,42 @@ describe("review presentation", () => {
     );
     expect(body).toMatch(/<!-- effect-agent-review:v2 automatic=false completed=true -->$/);
   });
+
+  it("keeps untrusted unanchored text inside its disclosure", () => {
+    const body = renderReviewBody({
+      report: ReviewReport.make({
+        summary: "One finding could contain markup.",
+        findings: [
+          ReviewFinding.make({
+            path: "src/<projection>.ts",
+            severity: "important",
+            category: "correctness",
+            title: "Unexpected </DETAILS > close",
+            body: "The explanation contains <details>nested markup</details>.",
+          }),
+        ],
+      }),
+      automatic: false,
+      scope: "full",
+      reviewedFiles: 1,
+      unreviewedFiles: 0,
+      ignoredFiles: 0,
+      shards: 1,
+      inputTokens: 100,
+      outputTokens: 50,
+      headRevision,
+    });
+    const unanchoredSection = body.slice(
+      body.indexOf("<summary>Findings without an inline anchor"),
+      body.indexOf("<summary>🤖 Prompt for all"),
+    );
+
+    expect(unanchoredSection).toContain("src/&lt;projection>.ts");
+    expect(unanchoredSection).toContain("Unexpected &lt;/DETAILS > close");
+    expect(unanchoredSection).toContain(
+      "The explanation contains &lt;details>nested markup&lt;/details>.",
+    );
+    expect(unanchoredSection).not.toContain("</DETAILS >");
+    expect(unanchoredSection).not.toContain("<details>nested markup");
+  });
 });

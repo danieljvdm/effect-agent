@@ -59,6 +59,8 @@ const fenceFor = (value: string): string => {
   return fence;
 };
 
+const escapeHtmlOpeners = (value: string): string => value.replaceAll("<", "&lt;");
+
 const promptDetails = (summary: string, prompt: string): string => {
   const fence = fenceFor(prompt);
   return [
@@ -101,9 +103,9 @@ export const renderFindingBody = (finding: ReviewFinding, headRevision: string):
 
 const renderUnanchoredFinding = (finding: ReviewFinding): string =>
   [
-    `**[${findingLabel(finding)}] ${finding.title}** · \`${finding.path}\``,
+    `**[${findingLabel(finding)}] ${escapeHtmlOpeners(finding.title)}** · \`${escapeHtmlOpeners(finding.path)}\``,
     "",
-    finding.body.replaceAll("</details>", "&lt;/details&gt;"),
+    escapeHtmlOpeners(finding.body),
   ].join("\n");
 
 export interface ReviewPresentationInput {

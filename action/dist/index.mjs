@@ -47176,6 +47176,7 @@ var fenceFor = (value4) => {
     fence += "`";
   return fence;
 };
+var escapeHtmlOpeners = (value4) => value4.replaceAll("<", "&lt;");
 var promptDetails = (summary2, prompt) => {
   const fence = fenceFor(prompt);
   return [
@@ -47207,13 +47208,13 @@ var renderFindingBody = (finding, headRevision) => [
   "",
   finding.body,
   "",
-  promptDetails("Prompt for AI agents", renderAgentPrompt(finding, headRevision))
+  promptDetails("Prompt for AI Agents", renderAgentPrompt(finding, headRevision))
 ].join(`
 `);
 var renderUnanchoredFinding = (finding) => [
-  `**[${findingLabel(finding)}] ${finding.title}** · \`${finding.path}\``,
+  `**[${findingLabel(finding)}] ${escapeHtmlOpeners(finding.title)}** · \`${escapeHtmlOpeners(finding.path)}\``,
   "",
-  finding.body.replaceAll("</details>", "&lt;/details&gt;")
+  escapeHtmlOpeners(finding.body)
 ].join(`
 `);
 var renderReviewBody = (input) => {
