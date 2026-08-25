@@ -8,7 +8,7 @@ inputs:
     description: "OpenAI API key."
     required: true
   github-token:
-    description: "Token with pull-requests: write on this repository."
+    description: "Token with pull-requests: write and, for manual commands, issues: write on this repository."
     required: false
     default: ${{ github.token }}
   pull-request:
@@ -25,6 +25,10 @@ inputs:
   command:
     description: "Optional raw collaborator command. Surrounding whitespace is ignored; unsupported commands exit before model execution."
     required: false
+  comment-id:
+    description: "Issue comment ID for a manual command. Required when command is set so the action can acknowledge it with an eyes reaction."
+    required: false
+    default: "0"
   automatic-review-limit:
     description: "Number of automatic review attempts allowed per pull request. Zero disables automatic reviews and notices."
     required: false

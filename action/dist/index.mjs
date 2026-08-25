@@ -47170,6 +47170,11 @@ var CompareWire = exports_Schema.Struct({
   files: exports_Schema.optionalKey(exports_Schema.Array(ChangedFileWire).check(exports_Schema.isMaxLength(300)))
 });
 var PublishedReviewWire = exports_Schema.Struct({ html_url: ShortString });
+var CreateReactionWire = exports_Schema.Struct({ content: exports_Schema.Literal("eyes") });
+var ReactionWire = exports_Schema.Struct({
+  id: exports_Schema.Natural,
+  content: exports_Schema.Literal("eyes")
+});
 var PublishReviewWire = exports_Schema.Struct({
   commit_id: Revision2,
   event: exports_Schema.Literal("COMMENT"),
@@ -47252,6 +47257,11 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
     status: wire.status,
     files: (wire.files ?? []).map(changedFileFromWire)
   })));
+  const acknowledgeComment = exports_Effect.fn("GitHubClient.acknowledgeComment")(function* (commentId) {
+    const body = yield* exports_Schema.encodeEffect(CreateReactionWire)({ content: "eyes" }).pipe(exports_Effect.mapError((cause) => failure("encode issue comment reaction", cause)));
+    const reactionRequest = yield* exports_HttpClientRequest.post(`${apiUrl}/repos/${options3.repository}/issues/comments/${String(commentId)}/reactions`).pipe(exports_HttpClientRequest.bodyJson(body), exports_Effect.mapError((cause) => failure("encode issue comment reaction", cause)));
+    yield* execute2("acknowledge review command", reactionRequest).pipe(exports_Effect.flatMap(decode4(ReactionWire, "acknowledge review command")));
+  });
   const publishReview = (input) => exports_Effect.gen(function* () {
     const body = yield* exports_Schema.encodeEffect(PublishReviewWire)({
       commit_id: input.commitId,
@@ -47267,7 +47277,14 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
     const request4 = yield* exports_HttpClientRequest.post(`${pullUrl}/reviews`).pipe(exports_HttpClientRequest.bodyJson(body), exports_Effect.mapError((cause) => failure("encode pull request review", cause)));
     return yield* execute2("publish pull request review", request4).pipe(exports_Effect.flatMap(decode4(PublishedReviewWire, "publish pull request review")), exports_Effect.map((wire) => wire.html_url));
   });
-  return { getPullRequest, listFiles, listReviews, compareFiles, publishReview };
+  return {
+    getPullRequest,
+    listFiles,
+    listReviews,
+    compareFiles,
+    acknowledgeComment,
+    publishReview
+  };
 });
 
 // examples/pr-review/src/selection.ts
@@ -47641,6 +47658,7 @@ var ACTION_INPUT_BY_CONFIG = {
   PR_REVIEW_AUTHOR: "INPUT_REVIEW-AUTHOR",
   PR_REVIEW_MODE: "INPUT_MODE",
   PR_REVIEW_COMMAND: "INPUT_COMMAND",
+  PR_REVIEW_COMMENT_ID: "INPUT_COMMENT-ID",
   PR_REVIEW_AUTOMATIC_LIMIT: "INPUT_AUTOMATIC-REVIEW-LIMIT",
   PR_REVIEW_EXPECTED_HEAD: "INPUT_EXPECTED-HEAD",
   PR_REVIEW_MODEL: "INPUT_MODEL",
@@ -47802,6 +47820,12 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   if (mode === undefined) {
     return yield* skip("unsupported-review-command");
   }
+  const commentId = yield* exports_Config.schema(exports_Schema.Natural, "PR_REVIEW_COMMENT_ID").pipe(exports_Config.withDefault(0));
+  if (command.trim().length > 0 && commentId === 0) {
+    return yield* ActionConfigurationError.make({
+      message: "comment-id is required for a manual review command"
+    });
+  }
   const automaticReviewLimit = yield* exports_Config.schema(exports_Schema.Natural, "PR_REVIEW_AUTOMATIC_LIMIT").pipe(exports_Config.withDefault(2));
   const expectedHead = yield* exports_Config.string("PR_REVIEW_EXPECTED_HEAD").pipe(exports_Config.withDefault(""));
   const modelName = yield* exports_Config.nonEmptyString("PR_REVIEW_MODEL").pipe(exports_Config.withDefault("gpt-5.6-sol"));
@@ -47815,6 +47839,8 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     token,
     apiUrl
   });
+  if (commentId > 0)
+    yield* github.acknowledgeComment(commentId);
   const pull = yield* github.getPullRequest;
   if (pull.draft)
     return yield* skip("draft-pull-request");

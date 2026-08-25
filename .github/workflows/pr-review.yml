@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
   pull-requests: write
 
 concurrency:
@@ -38,6 +39,7 @@ jobs:
           app-id: ${{ secrets.EFFECT_AGENT_APP_ID }}
           private-key: ${{ secrets.EFFECT_AGENT_APP_PRIVATE_KEY }}
           permission-contents: read
+          permission-issues: write
           permission-pull-requests: write
 
       - name: Review the pull request
@@ -49,6 +51,7 @@ jobs:
           review-author: effect-agent[bot]
           mode: ${{ github.event_name == 'pull_request' && 'auto' || 'incremental' }}
           command: ${{ github.event_name == 'issue_comment' && github.event.comment.body || '' }}
+          comment-id: ${{ github.event.comment.id || 0 }}
           automatic-review-limit: 2
           expected-head: ${{ github.event.pull_request.head.sha || '' }}
           effort: medium

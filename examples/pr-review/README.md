@@ -28,7 +28,8 @@ attempt shows that automatic reviews are paused and points collaborators to
 publishes one closing no-model review with the last completed review and current
 head. Later pushes remain quiet. Manual reviews do not resume automatic reviews.
 Trailing command whitespace is ignored; additional command text is rejected before
-model execution.
+model execution. An accepted manual command receives an `eyes` reaction before the channel reads
+pull-request state or starts model work.
 Review bodies carry only a tiny terminal marker; no model conversation or
 signed continuity state is persisted.
 
