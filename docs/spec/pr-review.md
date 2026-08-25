@@ -57,7 +57,9 @@ the review contract and reviewer constructor.
   completed attempt revalidates inline anchors against that pull-request diff. Blocking findings
   fail the Action after publication; other findings remain advisory. The channel derives severity
   and category labels, summary callouts, and agent-ready prompt blocks from the validated report;
-  presentation does not start another model Turn.
+  presentation does not start another model Turn. Visible GitHub Markdown comes from a defaulted
+  Effect reference that an embedding host may replace. The channel appends its trusted terminal
+  marker outside that replaceable presentation so overrides cannot weaken wave accounting.
 
 The workflow checks out the trusted default branch, serializes runs for the same pull request, and
 passes the webhook head SHA so stale queued events stop before model execution. It does not cancel

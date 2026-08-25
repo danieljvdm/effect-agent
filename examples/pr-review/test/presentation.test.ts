@@ -1,7 +1,12 @@
 import { ReviewFinding, ReviewReport } from "@effect-agent/pr-review";
 import { describe, expect, it } from "@effect/vitest";
 
-import { renderFindingBody, renderReviewBody } from "../src/presentation.ts";
+import {
+  defaultReviewPresentation,
+  renderFindingBody,
+  renderReviewBody,
+  withReviewMarker,
+} from "../src/presentation.ts";
 
 const headRevision = "abcdef0123456789abcdef0123456789abcdef01";
 
@@ -60,17 +65,62 @@ describe("review presentation", () => {
       headRevision,
     });
 
-    expect(body).toContain("> [!CAUTION]\n> 1 blocking finding. Do not merge");
+    expect(body).toContain("> [!CAUTION]\n> **1 blocking finding.** Do not merge");
     expect(body).toContain(
-      "**Scope:** Full diff · **Files:** 2 reviewed, 1 unavailable, 3 ignored · **Findings:** 1 blocking, 1 important",
+      "| **Full diff** | 2 reviewed · 1 unavailable · 3 ignored | 🛑 1 blocking · ⚠️ 1 important |",
     );
     expect(body).toContain("<summary>Findings without an inline anchor (1)</summary>");
     expect(body).toContain("**[⚠️ important · security] Authorization is not enforced**");
     expect(body).toContain("<summary>🤖 Prompt for all 2 findings with AI agents</summary>");
     expect(body).toContain(
-      "_2 parallel review shards · 12,345 input / 678 output tokens · reviewed at `abcdef0`._",
+      "<sub>2 parallel review shards · 12,345 input / 678 output tokens · reviewed at <code>abcdef0</code></sub>",
     );
-    expect(body).toMatch(/<!-- effect-agent-review:v2 automatic=false completed=true -->$/);
+  });
+
+  it("renders a clean review as a compact receipt", () => {
+    const body = withReviewMarker(
+      defaultReviewPresentation.renderReview({
+        report: ReviewReport.make({
+          summary: "No actionable defects found in the supplied diff.",
+          findings: [],
+        }),
+        automatic: true,
+        scope: "incremental",
+        reviewedFiles: 3,
+        unreviewedFiles: 0,
+        ignoredFiles: 2,
+        shards: 1,
+        inputTokens: 2_267,
+        outputTokens: 456,
+        headRevision,
+      }),
+      true,
+    );
+
+    expect(body).toMatchInlineSnapshot(`
+      "## Effect Agent review
+
+      > [!TIP]
+      > **No actionable findings.**
+
+      | Scope | Files | Findings |
+      | :-- | :-- | :-- |
+      | **Incremental** | 3 reviewed · 2 ignored | ✅ None |
+
+      ### Summary
+
+      No actionable defects found in the supplied diff.
+
+      <sub>1 review shard · 2,267 input / 456 output tokens · reviewed at <code>abcdef0</code></sub>
+
+      <!-- effect-agent-review:v2 automatic=true completed=true -->"
+    `);
+  });
+
+  it("keeps attempt accounting outside replaceable presentation", () => {
+    expect(withReviewMarker("Custom presentation", false, false)).toBe(
+      "Custom presentation\n\n<!-- effect-agent-review:v2 automatic=false completed=false -->",
+    );
   });
 
   it("keeps untrusted unanchored text inside its disclosure", () => {

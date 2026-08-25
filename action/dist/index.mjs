@@ -47147,28 +47147,28 @@ var severityCounts = (report2) => ({
 var renderFindingTally = (report2) => {
   const counts = severityCounts(report2);
   const parts2 = [
-    ...counts.blocking > 0 ? [`${String(counts.blocking)} blocking`] : [],
-    ...counts.important > 0 ? [`${String(counts.important)} important`] : [],
-    ...counts.nit > 0 ? [`${String(counts.nit)} nit`] : []
+    ...counts.blocking > 0 ? [`\uD83D\uDED1 ${String(counts.blocking)} blocking`] : [],
+    ...counts.important > 0 ? [`⚠️ ${String(counts.important)} important`] : [],
+    ...counts.nit > 0 ? [`\uD83D\uDC85 ${String(counts.nit)} nit`] : []
   ];
-  return parts2.length === 0 ? "none" : parts2.join(", ");
+  return parts2.length === 0 ? "✅ None" : parts2.join(" · ");
 };
 var renderVerdict = (report2) => {
   const counts = severityCounts(report2);
   if (counts.blocking > 0) {
     return `> [!CAUTION]
-> ${countNoun(counts.blocking, "blocking finding")}. Do not merge until ${counts.blocking === 1 ? "it is" : "they are"} addressed.`;
+> **${countNoun(counts.blocking, "blocking finding")}.** Do not merge until ${counts.blocking === 1 ? "it is" : "they are"} addressed.`;
   }
   if (counts.important > 0) {
     return `> [!IMPORTANT]
-> ${countNoun(counts.important, "important finding")} to address before merging.`;
+> **${countNoun(counts.important, "important finding")}.** Address before merging.`;
   }
   if (counts.nit > 0) {
     return `> [!NOTE]
-> ${countNoun(counts.nit, "minor finding")}.`;
+> **${countNoun(counts.nit, "minor finding")}.**`;
   }
   return `> [!TIP]
-> No actionable findings.`;
+> **No actionable findings.**`;
 };
 var fenceFor = (value4) => {
   let fence = "```";
@@ -47217,12 +47217,22 @@ var renderUnanchoredFinding = (finding) => [
   escapeHtmlOpeners(finding.body)
 ].join(`
 `);
+var renderCoverage = (input) => [
+  `${String(input.reviewedFiles)} reviewed`,
+  ...input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} unavailable`] : [],
+  ...input.ignoredFiles > 0 ? [`${String(input.ignoredFiles)} ignored`] : []
+].join(" · ");
 var renderReviewBody = (input) => {
   const unanchored = input.report.findings.filter((finding) => finding.line === undefined);
   const parts2 = [
     "## Effect Agent review",
     renderVerdict(input.report),
-    `**Scope:** ${input.scope === "full" ? "Full diff" : "Incremental"} · **Files:** ${String(input.reviewedFiles)} reviewed, ${String(input.unreviewedFiles)} unavailable, ${String(input.ignoredFiles)} ignored · **Findings:** ${renderFindingTally(input.report)}`,
+    [
+      "| Scope | Files | Findings |",
+      "| :-- | :-- | :-- |",
+      `| **${input.scope === "full" ? "Full diff" : "Incremental"}** | ${renderCoverage(input)} | ${renderFindingTally(input.report)} |`
+    ].join(`
+`),
     "### Summary",
     input.report.summary
   ];
@@ -47246,28 +47256,42 @@ var renderReviewBody = (input) => {
 ---
 
 `)) : undefined;
-  const shardLabel = input.shards === 1 ? "1 review shard" : countNoun(input.shards, "parallel review shard");
-  const footer = `_${shardLabel} · ${formatNumber(input.inputTokens)} input / ${formatNumber(input.outputTokens)} output tokens · reviewed at \`${input.headRevision.slice(0, 7)}\`._`;
-  const marker = reviewMarker(input.automatic);
-  if (consolidatedPrompt !== undefined && [...parts2, consolidatedPrompt, footer, marker].join(`
+  const shardLabel = input.shards === 0 ? "No model call" : input.shards === 1 ? "1 review shard" : countNoun(input.shards, "parallel review shard");
+  const usage2 = input.shards === 0 ? "" : ` · ${formatNumber(input.inputTokens)} input / ${formatNumber(input.outputTokens)} output tokens`;
+  const footer = `<sub>${shardLabel}${usage2} · reviewed at <code>${input.headRevision.slice(0, 7)}</code></sub>`;
+  if (consolidatedPrompt !== undefined && [...parts2, consolidatedPrompt, footer].join(`
 
 `).length <= REVIEW_BODY_LIMIT) {
     parts2.push(consolidatedPrompt);
   }
-  parts2.push(footer, marker);
+  parts2.push(footer);
   return parts2.join(`
 
 `);
 };
-var renderReviewFailureBody = (automatic) => [
+var renderReviewFailureBody = () => [
   "## Effect Agent review",
   `> [!CAUTION]
 > The review failed before it could publish findings.`,
-  "One or more review shards did not return a schema-valid report.",
-  reviewMarker(automatic, false)
+  "One or more review shards did not return a schema-valid report."
 ].join(`
 
 `);
+var defaultReviewPresentation = {
+  renderFinding: renderFindingBody,
+  renderReview: renderReviewBody,
+  renderFailure: renderReviewFailureBody
+};
+var ReviewPresentation = exports_Context.Reference("@effect-agent/example-pr-review/ReviewPresentation", {
+  defaultValue: () => defaultReviewPresentation
+});
+var withReviewMarker = (body, automatic, completed = true) => {
+  const visibleBody = body.trimEnd();
+  const marker = reviewMarker(automatic, completed);
+  return visibleBody.length === 0 ? marker : `${visibleBody}
+
+${marker}`;
+};
 
 // examples/pr-review/src/action.ts
 var MAX_REVIEW_PATCH_CHARS = 320000;
@@ -47404,6 +47428,7 @@ var openAiClientLayer = exports_OpenAiClient.layerConfig({
   apiKey: exports_Config.redacted("OPENAI_API_KEY")
 }).pipe(exports_Layer.provide(exports_FetchHttpClient.layer));
 var reviewActionProgram = exports_Effect.gen(function* () {
+  const presentation = yield* ReviewPresentation;
   const repository = yield* exports_Config.nonEmptyString("GITHUB_REPOSITORY");
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     return yield* ActionConfigurationError.make({
@@ -47492,7 +47517,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
 ${exports_Cause.pretty(reviewExit.cause)}`);
       const reviewUrl2 = yield* github.publishReview({
         commitId: pull.headRevision,
-        body: renderReviewFailureBody(selection.automatic),
+        body: withReviewMarker(presentation.renderFailure(), selection.automatic, false),
         comments: []
       });
       yield* writeOutputs([
@@ -47508,7 +47533,7 @@ ${exports_Cause.pretty(reviewExit.cause)}`);
     outputTokens = merged.outputTokens;
     report2 = reanchorToFullPullRequest(fullFiles, merged.report);
   }
-  const body = renderReviewBody({
+  const body = withReviewMarker(presentation.renderReview({
     report: report2,
     automatic: selection.automatic,
     scope: actualScope,
@@ -47519,7 +47544,7 @@ ${exports_Cause.pretty(reviewExit.cause)}`);
     inputTokens,
     outputTokens,
     headRevision: pull.headRevision
-  });
+  }), selection.automatic);
   const reviewUrl = yield* github.publishReview({
     commitId: pull.headRevision,
     body,
@@ -47527,7 +47552,7 @@ ${exports_Cause.pretty(reviewExit.cause)}`);
       {
         path: finding.path,
         line: finding.line,
-        body: renderFindingBody(finding, pull.headRevision)
+        body: presentation.renderFinding(finding, pull.headRevision)
       }
     ])
   });

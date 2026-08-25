@@ -1,4 +1,5 @@
 import type { ReviewFinding, ReviewReport, ReviewSeverity } from "@effect-agent/pr-review";
+import { Context } from "effect";
 
 import { reviewMarker } from "./selection.ts";
 
@@ -32,25 +33,25 @@ const severityCounts = (report: ReviewReport) => ({
 const renderFindingTally = (report: ReviewReport): string => {
   const counts = severityCounts(report);
   const parts = [
-    ...(counts.blocking > 0 ? [`${String(counts.blocking)} blocking`] : []),
-    ...(counts.important > 0 ? [`${String(counts.important)} important`] : []),
-    ...(counts.nit > 0 ? [`${String(counts.nit)} nit`] : []),
+    ...(counts.blocking > 0 ? [`🛑 ${String(counts.blocking)} blocking`] : []),
+    ...(counts.important > 0 ? [`⚠️ ${String(counts.important)} important`] : []),
+    ...(counts.nit > 0 ? [`💅 ${String(counts.nit)} nit`] : []),
   ];
-  return parts.length === 0 ? "none" : parts.join(", ");
+  return parts.length === 0 ? "✅ None" : parts.join(" · ");
 };
 
 const renderVerdict = (report: ReviewReport): string => {
   const counts = severityCounts(report);
   if (counts.blocking > 0) {
-    return `> [!CAUTION]\n> ${countNoun(counts.blocking, "blocking finding")}. Do not merge until ${counts.blocking === 1 ? "it is" : "they are"} addressed.`;
+    return `> [!CAUTION]\n> **${countNoun(counts.blocking, "blocking finding")}.** Do not merge until ${counts.blocking === 1 ? "it is" : "they are"} addressed.`;
   }
   if (counts.important > 0) {
-    return `> [!IMPORTANT]\n> ${countNoun(counts.important, "important finding")} to address before merging.`;
+    return `> [!IMPORTANT]\n> **${countNoun(counts.important, "important finding")}.** Address before merging.`;
   }
   if (counts.nit > 0) {
-    return `> [!NOTE]\n> ${countNoun(counts.nit, "minor finding")}.`;
+    return `> [!NOTE]\n> **${countNoun(counts.nit, "minor finding")}.**`;
   }
-  return "> [!TIP]\n> No actionable findings.";
+  return "> [!TIP]\n> **No actionable findings.**";
 };
 
 const fenceFor = (value: string): string => {
@@ -121,12 +122,23 @@ export interface ReviewPresentationInput {
   readonly headRevision: string;
 }
 
+const renderCoverage = (input: ReviewPresentationInput): string =>
+  [
+    `${String(input.reviewedFiles)} reviewed`,
+    ...(input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} unavailable`] : []),
+    ...(input.ignoredFiles > 0 ? [`${String(input.ignoredFiles)} ignored`] : []),
+  ].join(" · ");
+
 export const renderReviewBody = (input: ReviewPresentationInput): string => {
   const unanchored = input.report.findings.filter((finding) => finding.line === undefined);
   const parts = [
     "## Effect Agent review",
     renderVerdict(input.report),
-    `**Scope:** ${input.scope === "full" ? "Full diff" : "Incremental"} · **Files:** ${String(input.reviewedFiles)} reviewed, ${String(input.unreviewedFiles)} unavailable, ${String(input.ignoredFiles)} ignored · **Findings:** ${renderFindingTally(input.report)}`,
+    [
+      "| Scope | Files | Findings |",
+      "| :-- | :-- | :-- |",
+      `| **${input.scope === "full" ? "Full diff" : "Incremental"}** | ${renderCoverage(input)} | ${renderFindingTally(input.report)} |`,
+    ].join("\n"),
     "### Summary",
     input.report.summary,
   ];
@@ -154,24 +166,54 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
         )
       : undefined;
   const shardLabel =
-    input.shards === 1 ? "1 review shard" : countNoun(input.shards, "parallel review shard");
-  const footer = `_${shardLabel} · ${formatNumber(input.inputTokens)} input / ${formatNumber(input.outputTokens)} output tokens · reviewed at \`${input.headRevision.slice(0, 7)}\`._`;
-  const marker = reviewMarker(input.automatic);
+    input.shards === 0
+      ? "No model call"
+      : input.shards === 1
+        ? "1 review shard"
+        : countNoun(input.shards, "parallel review shard");
+  const usage =
+    input.shards === 0
+      ? ""
+      : ` · ${formatNumber(input.inputTokens)} input / ${formatNumber(input.outputTokens)} output tokens`;
+  const footer = `<sub>${shardLabel}${usage} · reviewed at <code>${input.headRevision.slice(0, 7)}</code></sub>`;
 
   if (
     consolidatedPrompt !== undefined &&
-    [...parts, consolidatedPrompt, footer, marker].join("\n\n").length <= REVIEW_BODY_LIMIT
+    [...parts, consolidatedPrompt, footer].join("\n\n").length <= REVIEW_BODY_LIMIT
   ) {
     parts.push(consolidatedPrompt);
   }
-  parts.push(footer, marker);
+  parts.push(footer);
   return parts.join("\n\n");
 };
 
-export const renderReviewFailureBody = (automatic: boolean): string =>
+export const renderReviewFailureBody = (): string =>
   [
     "## Effect Agent review",
     "> [!CAUTION]\n> The review failed before it could publish findings.",
     "One or more review shards did not return a schema-valid report.",
-    reviewMarker(automatic, false),
   ].join("\n\n");
+
+export interface ReviewPresentation {
+  readonly renderFinding: (finding: ReviewFinding, headRevision: string) => string;
+  readonly renderReview: (input: ReviewPresentationInput) => string;
+  readonly renderFailure: () => string;
+}
+
+export const defaultReviewPresentation: ReviewPresentation = {
+  renderFinding: renderFindingBody,
+  renderReview: renderReviewBody,
+  renderFailure: renderReviewFailureBody,
+};
+
+export const ReviewPresentation: Context.Reference<ReviewPresentation> =
+  Context.Reference<ReviewPresentation>("@effect-agent/example-pr-review/ReviewPresentation", {
+    defaultValue: () => defaultReviewPresentation,
+  });
+
+/** Keep the trusted attempt marker outside host-replaceable presentation. */
+export const withReviewMarker = (body: string, automatic: boolean, completed = true): string => {
+  const visibleBody = body.trimEnd();
+  const marker = reviewMarker(automatic, completed);
+  return visibleBody.length === 0 ? marker : `${visibleBody}\n\n${marker}`;
+};

@@ -13,7 +13,7 @@ import { Cause, Config, Console, Effect, Exit, FileSystem, Layer, Schema } from 
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { type ChangedFile, makeGitHubClient } from "./github.ts";
-import { renderFindingBody, renderReviewBody, renderReviewFailureBody } from "./presentation.ts";
+import { ReviewPresentation, withReviewMarker } from "./presentation.ts";
 import { selectReview } from "./selection.ts";
 
 const MAX_REVIEW_PATCH_CHARS = 320_000;
@@ -215,6 +215,7 @@ const openAiClientLayer = OpenAiClient.layerConfig({
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
 export const reviewActionProgram = Effect.gen(function* () {
+  const presentation = yield* ReviewPresentation;
   const repository = yield* Config.nonEmptyString("GITHUB_REPOSITORY");
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     return yield* ActionConfigurationError.make({
@@ -347,7 +348,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       yield* Console.error(`PR review wave failed:\n${Cause.pretty(reviewExit.cause)}`);
       const reviewUrl = yield* github.publishReview({
         commitId: pull.headRevision,
-        body: renderReviewFailureBody(selection.automatic),
+        body: withReviewMarker(presentation.renderFailure(), selection.automatic, false),
         comments: [],
       });
       yield* writeOutputs([
@@ -364,18 +365,21 @@ export const reviewActionProgram = Effect.gen(function* () {
     report = reanchorToFullPullRequest(fullFiles, merged.report);
   }
 
-  const body = renderReviewBody({
-    report,
-    automatic: selection.automatic,
-    scope: actualScope,
-    reviewedFiles: surface.changes.length,
-    unreviewedFiles: surface.unreviewedPaths.length,
-    ignoredFiles: surface.ignoredPaths.length,
-    shards: shardCount,
-    inputTokens,
-    outputTokens,
-    headRevision: pull.headRevision,
-  });
+  const body = withReviewMarker(
+    presentation.renderReview({
+      report,
+      automatic: selection.automatic,
+      scope: actualScope,
+      reviewedFiles: surface.changes.length,
+      unreviewedFiles: surface.unreviewedPaths.length,
+      ignoredFiles: surface.ignoredPaths.length,
+      shards: shardCount,
+      inputTokens,
+      outputTokens,
+      headRevision: pull.headRevision,
+    }),
+    selection.automatic,
+  );
   const reviewUrl = yield* github.publishReview({
     commitId: pull.headRevision,
     body,
@@ -386,7 +390,7 @@ export const reviewActionProgram = Effect.gen(function* () {
             {
               path: finding.path,
               line: finding.line,
-              body: renderFindingBody(finding, pull.headRevision),
+              body: presentation.renderFinding(finding, pull.headRevision),
             },
           ],
     ),
