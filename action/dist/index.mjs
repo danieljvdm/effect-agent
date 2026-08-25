@@ -47166,9 +47166,35 @@ var ReviewWire = exports_Schema.Struct({
     type: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64))
   })
 });
-var CompareWire = exports_Schema.Struct({
-  status: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64)),
-  files: exports_Schema.optionalKey(exports_Schema.Array(ChangedFileWire).check(exports_Schema.isMaxLength(300)))
+var GitCommitWire = exports_Schema.Struct({
+  sha: Revision2,
+  tree: exports_Schema.Struct({ sha: Revision2 })
+});
+var GitTreeEntryFields = {
+  path: exports_Schema.String.check(exports_Schema.isMaxLength(4096)),
+  sha: Revision2
+};
+var GitTreeEntryWire = exports_Schema.Union([
+  exports_Schema.Struct({
+    ...GitTreeEntryFields,
+    mode: exports_Schema.Literals(["100644", "100755", "120000"]),
+    type: exports_Schema.Literal("blob")
+  }),
+  exports_Schema.Struct({
+    ...GitTreeEntryFields,
+    mode: exports_Schema.Literal("040000"),
+    type: exports_Schema.Literal("tree")
+  }),
+  exports_Schema.Struct({
+    ...GitTreeEntryFields,
+    mode: exports_Schema.Literal("160000"),
+    type: exports_Schema.Literal("commit")
+  })
+]);
+var GitTreeWire = exports_Schema.Struct({
+  sha: Revision2,
+  tree: exports_Schema.Array(GitTreeEntryWire).check(exports_Schema.isMaxLength(1e5)),
+  truncated: exports_Schema.Boolean
 });
 var PublishedReviewWire = exports_Schema.Struct({ html_url: ShortString });
 var CreateReactionWire = exports_Schema.Struct({ content: exports_Schema.Literal("eyes") });
@@ -47178,7 +47204,7 @@ var ReactionWire = exports_Schema.Struct({
 });
 var PublishReviewWire = exports_Schema.Struct({
   commit_id: Revision2,
-  event: exports_Schema.Literal("COMMENT"),
+  event: exports_Schema.Literals(["COMMENT", "REQUEST_CHANGES"]),
   body: exports_Schema.String.check(exports_Schema.isMaxLength(1e5)),
   comments: exports_Schema.Array(exports_Schema.Struct({
     path: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512)),
@@ -47254,10 +47280,53 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
       reason: "review history exceeds the 1,000-review admission bound"
     });
   });
-  const compareFiles = (base2, head5) => execute2("compare reviewed and current heads", exports_HttpClientRequest.get(`${apiUrl}/repos/${options3.repository}/compare/${encodeURIComponent(base2)}...${encodeURIComponent(head5)}`)).pipe(exports_Effect.flatMap(decode4(CompareWire, "compare reviewed and current heads")), exports_Effect.map((wire) => ({
-    status: wire.status,
-    files: (wire.files ?? []).map(changedFileFromWire)
-  })));
+  const readTreeSnapshot = exports_Effect.fn("GitHubClient.readTreeSnapshot")(function* (revision) {
+    const commit = yield* execute2("get Git commit", exports_HttpClientRequest.get(`${apiUrl}/repos/${options3.repository}/git/commits/${encodeURIComponent(revision)}`)).pipe(exports_Effect.flatMap(decode4(GitCommitWire, "get Git commit")));
+    if (commit.sha !== revision) {
+      return yield* GitHubApiFailure.make({
+        operation: "get Git commit",
+        reason: `GitHub returned commit ${commit.sha} for requested revision ${revision}`
+      });
+    }
+    const tree = yield* execute2("get recursive Git tree", exports_HttpClientRequest.get(`${apiUrl}/repos/${options3.repository}/git/trees/${encodeURIComponent(commit.tree.sha)}?recursive=1`)).pipe(exports_Effect.flatMap(decode4(GitTreeWire, "get recursive Git tree")));
+    if (tree.sha !== commit.tree.sha) {
+      return yield* GitHubApiFailure.make({
+        operation: "get recursive Git tree",
+        reason: `GitHub returned tree ${tree.sha} for requested tree ${commit.tree.sha}`
+      });
+    }
+    if (tree.truncated) {
+      return yield* GitHubApiFailure.make({
+        operation: "get recursive Git tree",
+        reason: `GitHub truncated tree ${tree.sha}`
+      });
+    }
+    const entries3 = new Map;
+    for (const entry of tree.tree) {
+      if (entries3.has(entry.path)) {
+        return yield* GitHubApiFailure.make({
+          operation: "get recursive Git tree",
+          reason: `GitHub returned duplicate path '${entry.path}' in tree ${tree.sha}`
+        });
+      }
+      entries3.set(entry.path, entry);
+    }
+    return entries3;
+  });
+  const compareTrees = exports_Effect.fn("GitHubClient.compareTrees")(function* (base2, head5, paths) {
+    const { baseEntries, headEntries } = yield* exports_Effect.all({
+      baseEntries: readTreeSnapshot(base2),
+      headEntries: readTreeSnapshot(head5)
+    }, { concurrency: 2 });
+    const changedPaths = [...new Set(paths)].sort().filter((path) => {
+      const before = baseEntries.get(path);
+      const after = headEntries.get(path);
+      if (before === undefined || after === undefined)
+        return before !== after;
+      return before.sha !== after.sha || before.mode !== after.mode || before.type !== after.type;
+    });
+    return { changedPaths };
+  });
   const acknowledgeComment = exports_Effect.fn("GitHubClient.acknowledgeComment")(function* (commentId) {
     const body = yield* exports_Schema.encodeEffect(CreateReactionWire)({ content: "eyes" }).pipe(exports_Effect.mapError((cause) => failure("encode issue comment reaction", cause)));
     const reactionRequest = yield* exports_HttpClientRequest.post(`${apiUrl}/repos/${options3.repository}/issues/comments/${String(commentId)}/reactions`).pipe(exports_HttpClientRequest.bodyJson(body), exports_Effect.mapError((cause) => failure("encode issue comment reaction", cause)));
@@ -47266,7 +47335,7 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
   const publishReview = (input) => exports_Effect.gen(function* () {
     const body = yield* exports_Schema.encodeEffect(PublishReviewWire)({
       commit_id: input.commitId,
-      event: "COMMENT",
+      event: input.event,
       body: input.body,
       comments: input.comments.map((comment) => ({
         path: comment.path,
@@ -47282,7 +47351,7 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
     getPullRequest,
     listFiles,
     listReviews,
-    compareFiles,
+    compareTrees,
     acknowledgeComment,
     publishReview
   };
@@ -47359,6 +47428,9 @@ var selectReview = (input) => {
   }
   const latest = attempts.filter(({ marker }) => marker.completed).at(-1)?.item;
   if (latest?.commitId === undefined) {
+    if (input.mode === "incremental") {
+      return { _tag: "skip", reason: "incremental-baseline-unavailable" };
+    }
     return {
       _tag: "review",
       scope: "full",
@@ -47764,6 +47836,7 @@ var shardReviewChanges = (changes2) => {
 var runReviewWave = exports_Effect.fn("runReviewWave")(function* (reviews) {
   return yield* exports_Effect.all(reviews, { concurrency: MAX_REVIEW_SHARDS });
 });
+var reviewEventFor = (blockingFindings) => blockingFindings > 0 ? "REQUEST_CHANGES" : "COMMENT";
 var mergeReviewOutcomes = (outcomes) => {
   const severityOrder = { blocking: 0, important: 1, nit: 2 };
   const findings = outcomes.flatMap((outcome) => outcome.report.findings).sort((left, right) => severityOrder[left.severity] - severityOrder[right.severity]).slice(0, MAX_MERGED_FINDINGS);
@@ -47863,6 +47936,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   if (selection._tag === "pause") {
     const reviewUrl2 = yield* github.publishReview({
       commitId: pull.headRevision,
+      event: "COMMENT",
       body: withReviewPauseMarker(presentation.renderPause({
         automaticReviewLimit: selection.automaticReviewLimit,
         automaticAttempts: selection.automaticAttempts,
@@ -47875,16 +47949,12 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   }
   const fullFiles = yield* github.listFiles;
   let scopedFiles = fullFiles;
-  let actualScope = selection.scope;
-  let reviewBaseRevision = pull.baseRevision;
   if (selection.scope === "incremental" && selection.baseRevision !== undefined) {
-    const comparison = yield* github.compareFiles(selection.baseRevision, pull.headRevision).pipe(exports_Effect.map((value4) => ({ _tag: "success", value: value4 })), exports_Effect.catch((error2) => exports_Console.warn(`Incremental comparison failed; reviewing the full diff: ${error2.reason}`).pipe(exports_Effect.as({ _tag: "failure" }))));
-    if (comparison._tag === "success" && comparison.value.status === "ahead" && comparison.value.files.length < 300) {
-      scopedFiles = comparison.value.files;
-      reviewBaseRevision = selection.baseRevision;
-    } else {
-      actualScope = "full";
-    }
+    const comparison = yield* github.compareTrees(selection.baseRevision, pull.headRevision, fullFiles.map((file2) => file2.path)).pipe(exports_Effect.map((value4) => ({ _tag: "success", value: value4 })), exports_Effect.catch((error2) => exports_Console.warn(`Incremental tree comparison failed: ${error2.reason}`).pipe(exports_Effect.as({ _tag: "failure" }))));
+    if (comparison._tag === "failure")
+      return yield* skip("incremental-scope-unavailable");
+    const changedPaths = new Set(comparison.value.changedPaths);
+    scopedFiles = fullFiles.filter((file2) => changedPaths.has(file2.path));
   }
   const surface = prepareReviewSurface(scopedFiles, ignore6);
   const fs = yield* exports_FileSystem.FileSystem;
@@ -47899,7 +47969,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   let report2;
   if (surface.changes.length === 0) {
     report2 = ReviewReport.make({
-      summary: surface.ignoredPaths.length === scopedFiles.length ? "No changed files matched the configured review scope." : "No textual patch fit within the review input bound.",
+      summary: selection.scope === "incremental" && scopedFiles.length === 0 ? "No pull-request files changed since the last completed review." : surface.ignoredPaths.length === scopedFiles.length ? "No changed files matched the configured review scope." : "No textual patch fit within the review input bound.",
       findings: []
     });
   } else {
@@ -47920,7 +47990,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     const reviewExit = yield* runReviewWave(shards.map((changes2) => reviewer.review(ReviewRequest.make({
       title: pull.title.slice(0, 1000),
       description: pull.description.slice(0, 20000),
-      baseRevision: reviewBaseRevision,
+      baseRevision: pull.baseRevision,
       headRevision: pull.headRevision,
       changes: changes2,
       unreviewedPaths
@@ -47930,6 +48000,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
 ${exports_Cause.pretty(reviewExit.cause)}`);
       const reviewUrl2 = yield* github.publishReview({
         commitId: pull.headRevision,
+        event: "COMMENT",
         body: withReviewMarker(presentation.renderFailure({
           automaticReviewsRemaining: selection.automaticReviewsRemaining
         }), selection.automatic, false),
@@ -47958,11 +48029,12 @@ ${exports_Cause.pretty(reviewExit.cause)}`);
     label: pricing.label,
     url: pricing.url
   };
+  const blocking = report2.findings.filter((finding) => finding.severity === "blocking").length;
   const body = withReviewMarker(presentation.renderReview({
     report: report2,
     automatic: selection.automatic,
     automaticReviewsRemaining: selection.automaticReviewsRemaining,
-    scope: actualScope,
+    scope: selection.scope,
     reviewedFiles: surface.changes.length,
     unreviewedFiles: surface.unreviewedPaths.length,
     ignoredFiles: surface.ignoredPaths.length,
@@ -47977,6 +48049,7 @@ ${exports_Cause.pretty(reviewExit.cause)}`);
   }), selection.automatic);
   const reviewUrl = yield* github.publishReview({
     commitId: pull.headRevision,
+    event: reviewEventFor(blocking),
     body,
     comments: report2.findings.flatMap((finding) => finding.line === undefined ? [] : [
       {
@@ -47986,7 +48059,6 @@ ${exports_Cause.pretty(reviewExit.cause)}`);
       }
     ])
   });
-  const blocking = report2.findings.filter((finding) => finding.severity === "blocking").length;
   yield* writeOutputs([
     ["skipped", "false"],
     ["reason", selection.reason],

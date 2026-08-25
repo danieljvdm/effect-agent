@@ -59,28 +59,31 @@ the review contract and reviewer constructor.
   aliases. The bundled channel ignores trailing whitespace but rejects trailing prose before model
   execution. It acknowledges an admitted manual command with an `eyes` reaction before reading
   pull-request state or starting model work. Manual reviews do not count as automatic reviews or
-  resume them.
+  resume them. An incremental command never authorizes a full-diff model review.
 - **PRR-008**: An attempt marker stores only its version, whether the attempt was automatic, and
   whether it produced a report. A separate closing marker stores only its version and the configured
   automatic limit, making the no-model notice idempotent without counting it as another attempt.
   GitHub's review `commit_id` is the baseline for completed attempts. No transcript, finding
-  continuity, signature, fingerprint, retry queue, or assurance state is persisted. A
-  baseline-to-head comparison is incremental only when GitHub reports the current head ahead of the
-  baseline. Rebases, divergent history, oversized comparisons, and comparison failures fall back to
-  the current full PR diff. A merge from the base branch may add upstream changes to an
-  otherwise-ahead comparison; inline findings are still revalidated against the current PR diff.
-- **PRR-009**: The channel publishes one `COMMENT` review only after the model settles, against the
-  commit it inspected. A failed attempt publishes only an honest failure marker and no findings. A
-  completed attempt revalidates inline anchors against that pull-request diff. Blocking findings
-  fail the Action after publication; other findings remain advisory. The no-model closing review is
-  derived only from trusted history and never claims that the current diff was inspected. The
-  channel derives severity and category labels, summary callouts, and agent-ready prompt blocks from
-  the validated report; presentation does not start another model Turn. Visible GitHub Markdown
-  comes from a defaulted Effect reference that an embedding host may replace. The channel appends
-  its trusted terminal marker outside that replaceable presentation so overrides cannot weaken wave
-  accounting. For the known GPT-5.6 model ids, the default presentation includes a host-computed
-  estimate using OpenAI's published standard token rates and links to that model's rate card.
-  Unknown model ids omit cost.
+  continuity, signature, fingerprint, retry queue, or assurance state is persisted. Incremental
+  scope comes from an exact comparison of the baseline and current commit trees across current
+  pull-request paths, so amended, rebased, and force-pushed heads use the same mechanism as ordinary
+  pushes. Changed paths are hydrated from the current pull-request diff. Missing or truncated trees
+  and missing completed baselines make no model call rather than widening scope. Inline findings are
+  revalidated against the current pull-request diff.
+- **PRR-009**: The channel publishes one review only after the model settles, against the commit it
+  inspected. Blocking findings use GitHub's `REQUEST_CHANGES` event and fail the Action after
+  publication. Nonblocking and failed reviews remain `COMMENT` events, so a partial later pass cannot
+  clear an older blocking review; a maintainer must dismiss a resolved change request explicitly. A
+  failed attempt publishes only an honest failure marker and no findings. A completed attempt
+  revalidates inline anchors against that pull-request diff. Other findings remain advisory. The
+  no-model closing review is derived only from trusted history and never claims that the current diff
+  was inspected. The channel derives severity and category labels, summary callouts, and agent-ready
+  prompt blocks from the validated report; presentation does not start another model Turn. Visible
+  GitHub Markdown comes from a defaulted Effect reference that an embedding host may replace. The
+  channel appends its trusted terminal marker outside that replaceable presentation so overrides
+  cannot weaken wave accounting. For the known GPT-5.6 model ids, the default presentation includes
+  a host-computed estimate using OpenAI's published standard token rates and links to that model's
+  rate card. Unknown model ids omit cost.
 
 The workflow checks out the trusted default branch, serializes runs for the same pull request, and
 passes the webhook head SHA so stale queued events stop before model execution. It does not cancel
