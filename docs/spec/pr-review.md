@@ -5,7 +5,7 @@
 `@effect-agent/pr-review` is a provider-neutral, ephemeral review agent. A host supplies a bounded
 pull-request diff and receives a structured report. GitHub events, REST calls, model selection,
 review history, and publication are channel concerns and live in the private
-`examples/pr-review` leaf.
+`packages/pr-review-action` workspace.
 
 The design deliberately favors a small number of independent review passes over a continuing
 conversation. Review output is advice, not durable agent state.

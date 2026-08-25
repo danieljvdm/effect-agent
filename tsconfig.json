@@ -44,7 +44,7 @@
       "path": "./examples/demo"
     },
     {
-      "path": "./examples/pr-review"
+      "path": "./packages/pr-review-action"
     },
     {
       "path": "./examples/pr-work-orders"

@@ -141,22 +141,23 @@ and reusable conformance evidence. Production packages never depend on it (the o
 exception: `platform-cloudflare`'s test suite consumes the shared fixtures to prove DN/DC
 equivalence).
 
+## GitHub Action
+
+The private `packages/pr-review-action` workspace owns the GitHub channel over
+`@effect-agent/pr-review`: webhook policy, REST decoding, bounded diff admission, deterministic
+four-shard fan-out, the OpenAI Layer, merging, and publication. The root `action` directory holds
+the consumer-facing metadata and committed node-runtime bundle. See the
+[PR-review specification](/spec/pr-review).
+
 ## Leaf examples
 
 `examples/demo` is a local browser test bench. `examples/providers` is a compile-only proof that the
-same Definition binds directly to upstream OpenAI and Anthropic Models. `examples/pr-review` is the
-GitHub channel over `@effect-agent/pr-review`: it owns webhook policy, REST decoding, bounded diff
-admission, deterministic four-shard fan-out, the OpenAI Layer, merging, and publication.
-`examples/pr-work-orders` is the private
+same Definition binds directly to upstream OpenAI and Anthropic Models. `examples/pr-work-orders` is the private
 trusted-local proof of a head-bound work-order implementer;
 `examples/pr-work-order-ingress` is the private GitHub dispatch and isolated
 publication proof; `examples/repo-ops`
 is an internal repository-operations auditor. None is a framework
-or deployment package. The repository root also carries `action/`, the committed node-runtime
-bundle of that channel. Its configurable automatic-attempt limit defaults to an initial review and
-one incremental follow-up. The first post-limit event publishes one closing no-model review, then
-later runs remain quiet until an explicit collaborator command. Known GPT-5.6 models include an
-estimated dollar cost. Blocking findings fail the check after the review is visible.
+or deployment package.
 
 ## Dependency direction
 

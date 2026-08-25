@@ -6,7 +6,7 @@
     "@effect-agent/core": "0.0.0",
     "@effect-agent/engine": "0.0.0",
     "@effect-agent/example-demo": "0.0.0",
-    "@effect-agent/example-pr-review": "0.0.0",
+    "@effect-agent/pr-review-action": "0.0.0",
     "@effect-agent/example-providers": "0.0.0",
     "@effect-agent/example-repo-ops": "0.0.0",
     "@effect-agent/platform-cloudflare": "0.0.0",

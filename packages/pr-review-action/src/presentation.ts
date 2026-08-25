@@ -292,7 +292,7 @@ export const defaultReviewPresentation: ReviewPresentation = {
 };
 
 export const ReviewPresentation: Context.Reference<ReviewPresentation> =
-  Context.Reference<ReviewPresentation>("@effect-agent/example-pr-review/ReviewPresentation", {
+  Context.Reference<ReviewPresentation>("@effect-agent/pr-review-action/ReviewPresentation", {
     defaultValue: () => defaultReviewPresentation,
   });
 

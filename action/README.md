@@ -1,8 +1,13 @@
 # Effect Agent PR Review action
 
-This directory is the committed JavaScript bundle for the GitHub channel in
-`examples/pr-review`. The channel fetches a bounded diff, invokes the
-provider-neutral `@effect-agent/pr-review` package across at most four parallel
-shards, validates anchors, merges once, and posts one review.
+This directory is the published GitHub Action path. It contains the consumer
+contract in `action.yml` and the committed JavaScript bundle in `dist/`.
 
-Rebuild it with `vp run action:build`.
+The private
+[`@effect-agent/pr-review-action`](../packages/pr-review-action) workspace
+owns the source and tests. The public
+[`@effect-agent/pr-review`](../packages/pr-review) package remains provider-
+and transport-neutral. See the
+[PR-review specification](../docs/spec/pr-review.md) for channel semantics.
+
+Rebuild the committed bundle with `vp run action:build`.
