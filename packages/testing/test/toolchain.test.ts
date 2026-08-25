@@ -886,8 +886,8 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         issue_comment: { types: ["created"] },
       });
       expect(reviewWorkflow.jobs.review?.if).toContain("!github.event.pull_request.draft");
-      expect(reviewWorkflow.jobs.review?.if).toContain("@effect-agent review");
-      expect(reviewWorkflow.jobs.review?.if).toContain("@effect-agent full review");
+      expect(reviewWorkflow.jobs.review?.if).toContain("@effect-agent /review");
+      expect(reviewWorkflow.jobs.review?.if).toContain("@effect-agent /review full");
       expect(reviewWorkflow.concurrency?.["cancel-in-progress"]).toBe(false);
       const reviewStep = workflowStep(reviewWorkflow, "review", "Review the pull request");
       expect(reviewStep?.uses).toBe("danieljvdm/effect-agent/action@main");
