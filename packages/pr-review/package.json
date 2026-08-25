@@ -1,7 +1,7 @@
 {
   "name": "@effect-agent/pr-review",
   "version": "0.1.0-beta.28",
-  "description": "Bounded, fail-closed GitHub pull-request reviewer built on the effect-agent public surface: schema-first review contracts, read-only tools, GitHub adapters, a configuration factory, and CLI + GitHub Actions entrypoints.",
+  "description": "A provider-neutral, single-pass pull-request review agent.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -14,10 +14,7 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./testing": "./src/testing.ts",
-    "./action": "./src/action.ts",
-    "./cli": "./src/cli.ts"
+    ".": "./src/index.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -28,9 +25,6 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "@effect/ai-anthropic": "catalog:",
-    "@effect/ai-openai": "catalog:",
-    "@effect/platform-node": "catalog:",
     "effect": "catalog:",
     "effect-agent": "workspace:*"
   },

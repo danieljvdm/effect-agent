@@ -78,10 +78,9 @@ rejected four-call batch cannot trip a limit of three.
 
 **`"fail"`.** Exhaustion fails the Run typed before any declared application Handler starts,
 including a completion Tool. Choose fail mode for pipelines that must never accept a truncated
-answer or start a delivery side effect after a policy breach. The repository's own PR reviewer
-pins it for review _children_, because every configured discovery and verification pass must
-settle exactly; a partial result would launder exhaustion into settled review assurance. Its
-separate input-coverage claim is host-derived and does not imply defect recall.
+answer or start a delivery side effect after a policy breach. The repository's PR reviewer uses
+this mode for its single tool-free pass, so it either returns one schema-valid report or publishes
+nothing.
 
 Duration, cost, and repeated-failure limits always fail the Run. Token exhaustion allows only one
 constrained final answer under RUN-025, so it cannot loop or spend without a bound.

@@ -4,7 +4,6 @@
 "@effect-agent/session": minor
 "@effect-agent/capabilities": minor
 "@effect-agent/testing": minor
-"@effect-agent/pr-review": minor
 ---
 
 Context economics (#54, RUN-022–027/CAP-017): application tool results are bounded by default (50 KiB

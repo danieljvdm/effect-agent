@@ -1,170 +1,57 @@
 name: "Effect Agent PR Review"
-description: >-
-  Review the current pull request with @effect-agent/pr-review — a bounded,
-  read-only reviewer whose findings are validated against the real diff — and
-  post the result as a pull-request review. Ephemeral execution (deployment
-  class E): a runtime failure posts nothing, incomplete input or assurance
-  fails the check honestly, and posting is never exactly-once.
+description: "Run one bounded review pass and publish its validated findings to GitHub."
 branding:
   icon: "eye"
   color: "purple"
 inputs:
   openai-api-key:
-    description: "OpenAI API key (required when provider is openai, the default)."
-    required: false
-  anthropic-api-key:
-    description: "Anthropic API key (required when provider is anthropic)."
-    required: false
+    description: "OpenAI API key."
+    required: true
   github-token:
     description: "Token with pull-requests: write on this repository."
     required: false
     default: ${{ github.token }}
+  pull-request:
+    description: "Pull request number."
+    required: true
   review-author:
-    description: >-
-      GitHub bot login that authors reviews posted with github-token. Set this
-      to '<app-slug>[bot]' when using a custom GitHub App token.
+    description: "GitHub bot login used to recognize this channel's prior reviews."
     required: false
     default: "github-actions[bot]"
-  state-secret:
-    description: >-
-      Stable secret used only to HMAC-authenticate incremental review state.
-      Omitting or rotating it safely forces a full review.
+  mode:
+    description: 'Scope policy: "auto", "incremental", or "full".'
     required: false
-  provider:
-    description: 'Model provider: "openai" (default) or "anthropic".'
+    default: "auto"
+  expected-head:
+    description: "Webhook head SHA; a stale event exits before model execution."
     required: false
-    default: "openai"
   model:
-    description: "Model id (defaults: openai gpt-5.6-sol, anthropic claude-sonnet-5)."
+    description: "OpenAI model id."
     required: false
+    default: "gpt-5.6-sol"
   effort:
-    description: >-
-      Reasoning effort: "low", "medium", "high", "xhigh", "max", or a number
-      in [0, 1]. Stored as a position and resolved onto the provider's own
-      effort ladder, so the same value survives a provider or model change.
-      Unset uses the provider default.
+    description: 'Reasoning effort: "low", "medium", "high", or "xhigh".'
     required: false
-  service-tier:
-    description: >-
-      OpenAI Responses service tier. The only supported value is "fast".
-      Omitting it uses the OpenAI project's configured default. Setting it
-      with a non-OpenAI provider fails configuration.
-    required: false
-  max-duration-minutes:
-    description: >-
-      Run duration budget in minutes (defaults: 8 flat, 20 fan-out). Keep the
-      job's timeout-minutes ABOVE this so the reviewer ends its run gracefully
-      instead of being killed by the runner with nothing posted.
-    required: false
-  post:
-    description: "Post the review ('true', default) or only print the plan ('false')."
-    required: false
-    default: "true"
-  apply-verdict:
-    description: "Map the model verdict onto APPROVE/REQUEST_CHANGES instead of always COMMENT."
-    required: false
-    default: "false"
-  fan-out:
-    description: >-
-      Use deterministic evidence sharding, independent general and specialist
-      discovery, and candidate verification as host-scheduled child passes
-      (each retried once on failure). Enabled by default because the flat
-      shape has no independent verifier and therefore cannot produce settled
-      review assurance.
-    required: false
-    default: "true"
-  guidance:
-    description: "Extra review guidance injected into the reviewer's instructions."
-    required: false
+    default: "medium"
   guidance-file:
-    description: >-
-      Path to a committed review-profile file whose content is injected into
-      the reviewer's instructions (before any inline guidance). Requires
-      actions/checkout; a configured-but-unreadable file fails the job.
+    description: "Optional committed repository guidance file."
     required: false
   ignore:
-    description: 'Comma-separated glob patterns removed from the review surface, e.g. "**/*.lock,dist/**".'
+    description: "Comma-separated exact paths, prefix/**, **/name, or **/*.suffix patterns."
     required: false
-  max-findings:
-    description: "Findings bound (1-20)."
-    required: false
-  skip-unchanged:
-    description: >-
-      Skip model execution when the current effective patch matches the last
-      FULLY SETTLED stored review ('true', default), including commit-ID-only
-      rebases, while preserving the stored blocking/success conclusion. A
-      stored state carrying unreviewed scope is never skipped over — the next
-      run retries exactly that scope. Set 'false' to force execution.
-    required: false
-    default: "true"
-  retire-stale-reviews:
-    description: >-
-      Retire marker-bearing prior bot reviews after posting a newer review
-      ('true', default): supersede their bodies and minimize inline comments
-      for findings no longer carried as unresolved.
-    required: false
-    default: "true"
-  review-mode:
-    description: >-
-      "incremental" (default) reviews changes since the last reviewed head
-      plus any carried unreviewed scope; the baseline advances on every
-      completed run. "final" deliberately performs fresh discovery over the
-      full current pull-request diff.
-    required: false
-    default: "incremental"
-  progress-comment:
-    description: >-
-      Maintain one sticky "review in progress" issue comment on the pull
-      request, posted the moment a run starts and updated in place with the
-      settled outcome ('true', default). At-least-once with generation-fenced
-      writes: stale runs cannot replace newer status, duplicates from unfenced
-      overlapping runs are cleaned up best-effort, and a per-PR workflow
-      concurrency group gives strict single-comment behavior. Fail-open and
-      cosmetic: progress faults never change the review or the check. Dry
-      runs (post: 'false') post no progress. Set 'false' to post nothing
-      before the review itself.
-    required: false
-    default: "true"
-  log-level:
-    description: >-
-      Minimum Action log level: "Info" (default) renders compact one-line
-      progress; "Debug" additionally shows the engine's per-turn and
-      per-handler telemetry; "Warn"/"Error" quiet routine runs.
-    required: false
-    default: "Info"
 outputs:
   skipped:
-    description: "'true' when the event is not reviewable or the effective patch already has settled stored assurance."
-  skip-reason:
-    description: "Why the run skipped (set only when skipped is 'true')."
-  conclusion:
-    description: >-
-      Host-derived check conclusion: success, blocking (code findings), or
-      incomplete (reviewer-side gap carried forward and retried next run).
-  input-coverage:
-    description: "Host-derived path/evidence assignment: complete or incomplete."
-  review-assurance:
-    description: "Configured discovery and verification settlement: settled, incomplete, or unverified."
-  review-mode:
-    description: "Selected scope: incremental or full."
-  review-reason:
-    description: "Why incremental or full scope was selected."
-  verdict:
-    description: "The review verdict: approve, comment, or request-changes."
-  inline-comments:
-    description: "Number of inline comments in the validated plan."
-  demoted-findings:
-    description: "Number of findings whose anchors failed diff validation."
-  concerns:
-    description: "Number of non-anchored concerns rendered into the review body."
-  unreviewed-paths:
-    description: "Number of retryable unreviewed paths carried to the next run."
+    description: "Whether model execution and publication were skipped."
+  reason:
+    description: "Selection or skip reason."
   input-tokens:
-    description: "Input tokens the run budget observed across the whole run."
+    description: "Observed model input tokens."
   output-tokens:
-    description: "Output tokens the run budget observed across the whole run."
+    description: "Observed model output tokens."
+  blocking-findings:
+    description: "Number of published blocking findings."
   review-url:
-    description: "URL of the posted review (empty on dry runs)."
+    description: "URL of the published review."
 runs:
   using: node24
   main: dist/index.mjs

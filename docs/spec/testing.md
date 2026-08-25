@@ -367,31 +367,11 @@ The Travel Planner Reference Application (the cumulative fixture tree in
   redacted;
 - persistent and durable profiles identify deployment class `P`, `DN`, or `DC` explicitly.
 
-The `@effect-agent/pr-review` deterministic fixtures separately pin input coverage and review
-assurance. They must prove that every path in a 41-file reviewable changeset is assigned or
-explicitly reported, and that an oversized textual diff is split into complete bounded evidence
-shards rather than silently truncated; every unit receives a fresh specialist discovery pass,
-with deterministic host-classified risk categories directing its focus;
-a defect missed by general discovery can still become a candidate; and an independent verifier
-rejects an unsupported candidate before host-side publication. Failed or exhausted discovery and
-verification passes remain visible, leave candidates unsettled, advance authenticated continuity
-state with exact failed-stage ownership, and cannot produce a successful Action conclusion.
-Incremental fixtures prove that newly affected paths invalidate carried findings while unchanged
-findings remain active, and that different failed stages stay attached to their own unchanged
-paths. A failed verification may regenerate candidates through fresh discovery, but only for its
-own paths. Confirmed non-anchored concerns retain their host-validated evidence paths; changing or
-deleting any one invalidates the old concern and reopens the remaining current paths for context,
-while legacy pathless concern state forces a full review. Explicit final mode discards prior
-assurance scope and plans fresh discovery over the complete bounded diff.
-Overflow fixtures preserve every affected path and the exact unassigned-shard count while bounding
-identifier diagnostics. Extra or duplicate delegation declarations cannot hide behind an expected
-work ID, equivalent cross-pass candidates are verified once, and an empty plan settles without
-spawning a child.
-
-These fixtures guarantee deterministic work assignment, complete assignment accounting, exact
-pass settlement, and fail-closed publication from confirmed candidates. They do not and cannot
-prove that a model found every defect, that the keyword risk classifier recognizes every risky
-semantic change, or that redundant passes provide model diversity.
+The `@effect-agent/pr-review` suite pins its small trust boundary: unified-diff RIGHT-side line
+parsing, unknown-path removal, invalid-anchor demotion, and finding deduplication. The GitHub leaf
+suite pins the trigger lifecycle: one initial automatic review, one automatic incremental review,
+then no model execution until an authorized manual command. These tests do not claim model recall
+or semantic review coverage.
 
 Test IDs use requirement references:
 
@@ -418,11 +398,9 @@ Every pull request:
   dependency path that reached them;
 - docs link and requirement-ID validation.
 
-A workspace-wide `sideEffects: false` declaration is intentionally absent. Published executable
-subpaths such as `@effect-agent/pr-review/action` and `@effect-agent/pr-review/cli` start their
-`NodeRuntime` programs at module scope, so a blanket metadata assertion would be false. Production
-purity is enforced as an import-graph boundary; explicitly named testing and executable subpaths
-retain their declared behavior.
+A workspace-wide `sideEffects: false` declaration is intentionally absent because executable leaf
+workspaces start runtime programs at module scope. Production purity is enforced as an import-graph
+boundary rather than inferred from blanket package metadata.
 
 Adapter changes also run the relevant conformance suite. Release candidates
 run databases, process-kill crash tests, security tests, examples, package install

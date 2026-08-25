@@ -1,48 +1,36 @@
-# Agentic pull-request review via the prebuilt ./action bundle
-# (@effect-agent/pr-review). Reviews always post as COMMENT events; a missing
-# provider credential fails the Action instead of producing a skipped green
-# check. Normal synchronize events review
-# only changes since the last compatible successfully covered head. Applying
-# the `pr-review:final-audit` label requests one deliberate full-diff audit.
 name: PR Review
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize, labeled]
-    # Pure generated Changesets updates are verified and checked by the trusted
-    # Release workflow. GITHUB_TOKEN updates cannot trigger this workflow, so
-    # their exact-tree verifier rejects unexpected paths. An unexpected path
-    # added by a later human update makes this workflow apply normally.
-    paths-ignore:
-      - ".changeset/**"
-      - "bun.lock"
-      - "packages/*/CHANGELOG.md"
-      - "packages/*/package.json"
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
-  # Ignored label events must not cancel a real review before their job-level
-  # condition skips them. Final-audit labels share the ordinary PR group.
-  group: ${{ github.event.action == 'labeled' && github.event.label.name != 'pr-review:final-audit' && format('pr-review-ignored-{0}-{1}', github.event.pull_request.number, github.run_id) || format('pr-review-{0}', github.event.pull_request.number) }}
-  cancel-in-progress: true
+  group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
 
 jobs:
   review:
-    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'pr-review:final-audit' && 'pr-review-ignored' || 'review' }}
-    # Drafts wait for ready_for_review (the action also skips drafts
-    # internally; this guard saves the runner spin-up).
-    if: ${{ !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'pr-review:final-audit') }}
+    if: >-
+      (github.event_name == 'pull_request' && !github.event.pull_request.draft) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+        (github.event.comment.author_association == 'OWNER' ||
+         github.event.comment.author_association == 'MEMBER' ||
+         github.event.comment.author_association == 'COLLABORATOR') &&
+        (github.event.comment.body == '@effect-agent review' ||
+         github.event.comment.body == '@effect-agent full review'))
     runs-on: ubuntu-latest
-    # Above the configured 10-minute review duration budget, so a run approaching
-    # its own budget ends gracefully instead of being killed by the runner
-    # with nothing posted.
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
-      - name: Check out repository
+      - name: Check out the trusted review channel
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Mint the Effect Agent GitHub App token
         id: app-token
@@ -53,38 +41,15 @@ jobs:
           permission-contents: read
           permission-pull-requests: write
 
-      - name: Review the pull request and post the validated result
-        uses: ./action
+      - name: Review the pull request
+        uses: danieljvdm/effect-agent/action@main
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           github-token: ${{ steps.app-token.outputs.token }}
-          # Continuity state is author-gated. Must match the installation login.
+          pull-request: ${{ github.event.pull_request.number || github.event.issue.number }}
           review-author: effect-agent[bot]
-          # A dedicated secret is preferred. The provider credential is a
-          # stable workflow-only fallback and is never sent to the reviewer as state.
-          state-secret: ${{ secrets.PR_REVIEW_STATE_SECRET || secrets.OPENAI_API_KEY }}
-          # Keep one fan-out review profile across initial, incremental, and
-          # final runs. A flat review cannot completely cover a large initial
-          # scope within its tool-call bound, and switching topology later
-          # invalidates the authenticated incremental-review baseline.
-          fan-out: "true"
-          # Medium is the routine-review default. The deliberate full-diff
-          # audit gets high effort without changing the review topology.
-          effort: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'high' || 'medium' }}
-          # Bound pathological fan-out runs below the package's 15-minute
-          # ceiling while leaving headroom under the 20-minute runner timeout.
-          max-duration-minutes: "10"
-          # The repository's deep Effect-architecture review profile —
-          # distilled from the effect-architecture-audit skill and AGENTS.md's
-          # non-negotiables. Fan-out injects it into every child reviewer.
+          mode: ${{ github.event_name == 'pull_request' && 'auto' || github.event.comment.body == '@effect-agent full review' && 'full' || 'incremental' }}
+          expected-head: ${{ github.event.pull_request.head.sha || '' }}
+          effort: medium
           guidance-file: .github/review-guidance.md
-          # Generated and vendored surfaces the reviewer should never spend
-          # budget on: the lockfile, the committed action bundle, changesets
-          # output, and repo-owned skill copies.
           ignore: "bun.lock,action/dist/**,work-order-action/dist/**,**/CHANGELOG.md,.agents/skills/**,.claude/skills/**"
-          # Scale the safety ceiling with PR size instead of truncating a large
-          # review to the same output as a tiny patch. This is an upper bound,
-          # not a quota; the guidance still requires every finding to be
-          # concrete and worth acting on.
-          max-findings: ${{ (github.event.pull_request.changed_files > 20 || github.event.pull_request.additions > 800 || github.event.pull_request.deletions > 800) && '20' || (github.event.pull_request.changed_files > 5 || github.event.pull_request.additions > 250 || github.event.pull_request.deletions > 250) && '12' || '6' }}
-          review-mode: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'final' || 'incremental' }}

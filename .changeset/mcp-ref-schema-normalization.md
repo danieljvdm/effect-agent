@@ -11,7 +11,6 @@
 "@effect-agent/storage-cloudflare": patch
 "@effect-agent/platform-node": patch
 "@effect-agent/platform-cloudflare": patch
-"@effect-agent/pr-review": patch
 "@effect-agent/testing": patch
 ---
 

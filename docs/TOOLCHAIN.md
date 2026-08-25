@@ -73,16 +73,16 @@ packages/
   storage-cloudflare/   Durable Object SQLite persistence adapter and routed port protocol
   platform-node/        Class DN Node/SQLite Layer assembly and durable host
   platform-cloudflare/  Class DC Cloudflare Layer assembly (Conversation Objects, alarms)
-  pr-review/            Packaged GitHub pull-request reviewer (factory, adapters, CLI/Action entrypoints)
+  pr-review/            Provider-neutral, single-pass pull-request review agent
   testing/              Scripted model, fixtures, and conformance test kit
 examples/
   demo/             Leaf TanStack Start browser bench
-  pr-review/        Leaf consumer of @effect-agent/pr-review (guidance, extra tool, ignore globs)
+  pr-review/        GitHub channel, OpenAI binding, event policy, and review publication
   pr-work-orders/           Trusted-local work-order implementer proof (private, class E)
   pr-work-order-ingress/    GitHub dispatch, persistent journal, isolated checks/publication
   providers/        Leaf OpenAI/Anthropic Model-binding compile proof
   repo-ops/         Leaf repo-ops evidence auditor (P7 internal agent)
-action/             Prebuilt node24 GitHub Action over @effect-agent/pr-review (committed bundle)
+action/             Prebuilt node24 bundle of the examples/pr-review GitHub channel
 work-order-action/  Prebuilt node24 PR work-order Action (committed bundle, separate authority)
 ```
 

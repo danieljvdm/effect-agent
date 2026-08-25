@@ -6,19 +6,20 @@ import { ChildProcess } from "effect/unstable/process";
 // ---------------------------------------------------------------------------
 // Bundle both JavaScript Action entrypoints into committed dist files. A
 // node-runtime Action must run directly from an immutable checkout without an
-// install step. `--check` rebuilds to scratch paths and rejects stale bundles.
+// install step. `--check` rebuilds to scratch and rejects stale bundles. Bun's
+// generated identifiers depend on the output basename, so scratch is also `index.mjs`.
 // ---------------------------------------------------------------------------
 
 const bundles = [
   {
-    entry: "packages/pr-review/src/internal/action-entry.ts",
+    entry: "examples/pr-review/src/action-entry.ts",
     bundle: "action/dist/index.mjs",
-    scratch: "node_modules/.tmp/action-dist-check/review-index.mjs",
+    scratch: "node_modules/.tmp/action-dist-check/index.mjs",
   },
   {
     entry: "examples/pr-work-order-ingress/src/action-entry.ts",
     bundle: "work-order-action/dist/index.mjs",
-    scratch: "node_modules/.tmp/action-dist-check/work-order-index.mjs",
+    scratch: "node_modules/.tmp/action-dist-check/index.mjs",
   },
 ] as const;
 
