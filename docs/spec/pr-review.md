@@ -45,8 +45,8 @@ the review contract and reviewer constructor.
   terminal marker-bearing review authored by the configured GitHub Bot login; arbitrary comments
   and model-authored marker text cannot advance or reset the counter.
 - **PRR-007**: A repository owner, member, or collaborator may request another incremental review
-  with the exact comment `@effect-agent /review`, or a full review with
-  `@effect-agent /review full`. Manual reviews do not count as automatic reviews.
+  with the exact comment `/effect-agent review`, or a full review with
+  `/effect-agent review full`. Manual reviews do not count as automatic reviews.
 - **PRR-008**: The marker stores only its version, whether the attempt was automatic, and whether
   it produced a report. GitHub's review `commit_id` is the baseline for completed attempts. No
   transcript, finding continuity, signature, fingerprint, retry queue, or assurance state is

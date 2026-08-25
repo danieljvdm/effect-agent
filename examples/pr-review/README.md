@@ -10,6 +10,6 @@ wave, and the channel merges at most twelve findings into one GitHub review.
 
 Automatic events admit at most two review waves, including failed waves, for a
 hard ceiling of eight automatic model turns per pull request. Further pushes
-require `@effect-agent /review` or `@effect-agent /review full` from a repository
+require `/effect-agent review` or `/effect-agent review full` from a repository
 collaborator. Review bodies carry only a tiny terminal marker; no model
 conversation or signed continuity state is persisted.
