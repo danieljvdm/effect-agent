@@ -42940,6 +42940,7 @@ var ReviewCategory = exports_Schema.Literals([
   "concurrency",
   "performance",
   "resources",
+  "reliability",
   "error-handling",
   "testing",
   "maintainability",

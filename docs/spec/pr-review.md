@@ -14,7 +14,9 @@ conversation. Review output is advice, not durable agent state.
 
 - **PRR-001**: The package input and output are Effect Schemas. The input contains pull-request
   metadata, complete admitted patches, revisions, and explicit unavailable paths. The output
-  contains a summary and at most twelve findings.
+  contains a summary and at most twelve findings. Each finding uses one bounded category:
+  `correctness`, `security`, `concurrency`, `performance`, `resources`, `reliability`,
+  `error-handling`, `testing`, `maintainability`, `style`, or `docs`.
 - **PRR-002**: One invocation performs exactly one `AgentRuntime.run`, with one model turn and an
   empty Toolkit. The package does not fan out, retry model calls, spawn subagents, or resume model
   context.

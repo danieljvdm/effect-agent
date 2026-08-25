@@ -48,7 +48,8 @@ describe("review output boundary", () => {
                       {
                         type: "text-delta" as const,
                         id: "review",
-                        delta: '{"summary":"No defects found.","findings":[]}',
+                        delta:
+                          '{"summary":"One defect found.","findings":[{"path":"src/index.ts","line":2,"severity":"important","category":"reliability","title":"Dropped acknowledgment","body":"The completed operation can lose its acknowledgment."}]}',
                       },
                       { type: "text-end" as const, id: "review" },
                       {
@@ -86,6 +87,7 @@ describe("review output boundary", () => {
         outputTokens: 4,
         estimatedCostMicrousd: 123,
       });
+      expect(outcome.report.findings[0]?.category).toBe("reliability");
     }),
   );
 
