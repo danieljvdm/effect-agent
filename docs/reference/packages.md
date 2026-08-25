@@ -153,8 +153,8 @@ publication proof; `examples/repo-ops`
 is an internal repository-operations auditor. None is a framework
 or deployment package. The repository root also carries `action/`, the committed node-runtime
 bundle of that channel. It automatically reviews an initial head and one incremental follow-up;
-later runs require an explicit collaborator command. Blocking findings fail the check after the
-review is visible.
+the follow-up visibly pauses automatic reviews, and later runs require an explicit collaborator
+command. Blocking findings fail the check after the review is visible.
 
 ## Dependency direction
 

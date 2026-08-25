@@ -19,7 +19,7 @@ const item = (
 });
 
 describe("GitHub review selection", () => {
-  it("PRR-006 reviews the initial head and one automatic follow-up, then stops", () => {
+  it("PRR-006 reviews the initial head and one automatic follow-up, then pauses", () => {
     expect(
       selectReview({
         mode: "auto",
@@ -27,7 +27,12 @@ describe("GitHub review selection", () => {
         reviewAuthor: "effect-agent[bot]",
         history: [],
       }),
-    ).toMatchObject({ _tag: "review", scope: "full", automatic: true });
+    ).toMatchObject({
+      _tag: "review",
+      scope: "full",
+      automatic: true,
+      automaticReviewsRemaining: 1,
+    });
 
     expect(
       selectReview({
@@ -41,6 +46,7 @@ describe("GitHub review selection", () => {
       scope: "incremental",
       baseRevision: "head-1",
       automatic: true,
+      automaticReviewsRemaining: 0,
     });
 
     expect(
@@ -50,7 +56,7 @@ describe("GitHub review selection", () => {
         reviewAuthor: "effect-agent[bot]",
         history: [item(1, "head-1", true), item(2, "head-2", true)],
       }),
-    ).toEqual({ _tag: "skip", reason: "automatic-limit-reached" });
+    ).toEqual({ _tag: "skip", reason: "automatic-reviews-paused" });
   });
 
   it("PRR-006 ignores untrusted markers and does not count manual reviews", () => {
@@ -69,7 +75,7 @@ describe("GitHub review selection", () => {
     ).toMatchObject({ _tag: "review", scope: "incremental", baseRevision: "head-2" });
   });
 
-  it("PRR-007 permits an explicit full review after the automatic limit", () => {
+  it("PRR-007 permits an explicit full review while automatic reviews are paused", () => {
     expect(
       selectReview({
         mode: "full",
@@ -77,7 +83,12 @@ describe("GitHub review selection", () => {
         reviewAuthor: "effect-agent[bot]",
         history: [item(1, "head-1", true), item(2, "head-2", true)],
       }),
-    ).toMatchObject({ _tag: "review", scope: "full", automatic: false });
+    ).toMatchObject({
+      _tag: "review",
+      scope: "full",
+      automatic: false,
+      automaticReviewsRemaining: 0,
+    });
   });
 
   it("PRR-006 skips a head that already has a trusted review", () => {
@@ -108,7 +119,7 @@ describe("GitHub review selection", () => {
         reviewAuthor: "effect-agent[bot]",
         history: [item(1, "head-1", true, false), item(2, "head-2", true, false)],
       }),
-    ).toEqual({ _tag: "skip", reason: "automatic-limit-reached" });
+    ).toEqual({ _tag: "skip", reason: "automatic-reviews-paused" });
   });
 
   it("PRR-006 trusts only the terminal host marker", () => {

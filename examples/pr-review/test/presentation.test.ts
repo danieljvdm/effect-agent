@@ -5,6 +5,7 @@ import {
   defaultReviewPresentation,
   renderFindingBody,
   renderReviewBody,
+  renderReviewFailureBody,
   withReviewMarker,
 } from "../src/presentation.ts";
 
@@ -55,6 +56,7 @@ describe("review presentation", () => {
         findings: [anchoredFinding, unanchoredFinding],
       }),
       automatic: false,
+      automaticReviewsRemaining: 2,
       scope: "full",
       reviewedFiles: 2,
       unreviewedFiles: 1,
@@ -73,7 +75,7 @@ describe("review presentation", () => {
     expect(body).toContain("**[⚠️ important · security] Authorization is not enforced**");
     expect(body).toContain("<summary>🤖 Prompt for all 2 findings with AI agents</summary>");
     expect(body).toContain(
-      "<sub>2 parallel review shards · 12,345 input / 678 output tokens · reviewed at <code>abcdef0</code></sub>",
+      "<sub>2 parallel review shards · 12,345 input / 678 output tokens · reviewed at <code>abcdef0</code> · 2 automatic reviews remain</sub>",
     );
   });
 
@@ -85,6 +87,7 @@ describe("review presentation", () => {
           findings: [],
         }),
         automatic: true,
+        automaticReviewsRemaining: 0,
         scope: "incremental",
         reviewedFiles: 3,
         unreviewedFiles: 0,
@@ -107,6 +110,10 @@ describe("review presentation", () => {
       | :-- | :-- | :-- |
       | **Incremental** | 3 reviewed · 2 ignored | ✅ None |
 
+      > [!NOTE]
+      > **Automatic reviews are paused for this pull request.**
+      > Further pushes will not start another review. Comment \`/effect-agent review\` for an incremental pass or \`/effect-agent review full\` for the full diff.
+
       ### Summary
 
       No actionable defects found in the supplied diff.
@@ -120,6 +127,15 @@ describe("review presentation", () => {
   it("keeps attempt accounting outside replaceable presentation", () => {
     expect(withReviewMarker("Custom presentation", false, false)).toBe(
       "Custom presentation\n\n<!-- effect-agent-review:v2 automatic=false completed=false -->",
+    );
+  });
+
+  it("shows the pause after a failed final automatic attempt", () => {
+    expect(renderReviewFailureBody({ automaticReviewsRemaining: 0 })).toContain(
+      "Automatic reviews are paused for this pull request.",
+    );
+    expect(renderReviewFailureBody({ automaticReviewsRemaining: 1 })).not.toContain(
+      "Automatic reviews are paused",
     );
   });
 
@@ -138,6 +154,7 @@ describe("review presentation", () => {
         ],
       }),
       automatic: false,
+      automaticReviewsRemaining: 1,
       scope: "full",
       reviewedFiles: 1,
       unreviewedFiles: 0,

@@ -40,13 +40,15 @@ the review contract and reviewer constructor.
   32,000 output tokens.
 - **PRR-006**: Automatic mode admits at most two review waves: the initial wave and one later wave.
   This bounds automatic review to eight one-turn model invocations per pull request. A third
-  automatic event exits successfully without model execution. Failed waves count toward this
-  limit but never become incremental baselines. A trusted prior attempt is a
+  automatic event exits successfully without model execution. The second attempt visibly states
+  that automatic reviews are paused and names the manual commands that remain available. Failed
+  waves count toward this limit and show the same pause notice, but never become incremental
+  baselines. A trusted prior attempt is a
   terminal marker-bearing review authored by the configured GitHub Bot login; arbitrary comments
   and model-authored marker text cannot advance or reset the counter.
 - **PRR-007**: A repository owner, member, or collaborator may request another incremental review
   with the exact comment `/effect-agent review`, or a full review with
-  `/effect-agent review full`. Manual reviews do not count as automatic reviews.
+  `/effect-agent review full`. Manual reviews do not count as automatic reviews or resume them.
 - **PRR-008**: The marker stores only its version, whether the attempt was automatic, and whether
   it produced a report. GitHub's review `commit_id` is the baseline for completed attempts. No
   transcript, finding continuity, signature, fingerprint, retry queue, or assurance state is

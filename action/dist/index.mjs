@@ -47077,6 +47077,7 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
 });
 
 // examples/pr-review/src/selection.ts
+var MAX_AUTOMATIC_REVIEWS = 2;
 var MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-review:v2 automatic=(true|false) completed=(true|false) -->\s*$/;
 var reviewMarker = (automatic, completed = true) => `<!-- effect-agent-review:v2 automatic=${String(automatic)} completed=${String(completed)} -->`;
 var markerKind = (body) => {
@@ -47092,20 +47093,23 @@ var selectReview = (input) => {
     const byTime = (left.item.submittedAt ?? "").localeCompare(right.item.submittedAt ?? "");
     return byTime === 0 ? left.item.id - right.item.id : byTime;
   });
+  const automaticAttempts = trusted.filter(({ marker }) => marker.automatic).length;
+  const automaticReviewsRemaining = Math.max(0, MAX_AUTOMATIC_REVIEWS - automaticAttempts - (input.mode === "auto" ? 1 : 0));
   if (input.mode === "full") {
     return {
       _tag: "review",
       scope: "full",
       baseRevision: undefined,
       automatic: false,
+      automaticReviewsRemaining,
       reason: "manual full review"
     };
   }
   if (trusted.some(({ item, marker }) => item.commitId === input.currentHead && (input.mode === "auto" || marker.completed))) {
     return { _tag: "skip", reason: "head-already-reviewed" };
   }
-  if (input.mode === "auto" && trusted.filter(({ marker }) => marker.automatic).length >= 2) {
-    return { _tag: "skip", reason: "automatic-limit-reached" };
+  if (input.mode === "auto" && automaticAttempts >= MAX_AUTOMATIC_REVIEWS) {
+    return { _tag: "skip", reason: "automatic-reviews-paused" };
   }
   const latest = trusted.filter(({ marker }) => marker.completed).at(-1)?.item;
   if (latest?.commitId === undefined) {
@@ -47114,6 +47118,7 @@ var selectReview = (input) => {
       scope: "full",
       baseRevision: undefined,
       automatic: input.mode === "auto",
+      automaticReviewsRemaining,
       reason: "no prior review baseline"
     };
   }
@@ -47122,6 +47127,7 @@ var selectReview = (input) => {
     scope: "incremental",
     baseRevision: latest.commitId,
     automatic: input.mode === "auto",
+    automaticReviewsRemaining,
     reason: input.mode === "auto" ? "one automatic follow-up" : "manual incremental review"
   };
 };
@@ -47222,6 +47228,12 @@ var renderCoverage = (input) => [
   ...input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} unavailable`] : [],
   ...input.ignoredFiles > 0 ? [`${String(input.ignoredFiles)} ignored`] : []
 ].join(" · ");
+var renderAutomaticPause = (automaticReviewsRemaining) => automaticReviewsRemaining > 0 ? undefined : [
+  "> [!NOTE]",
+  "> **Automatic reviews are paused for this pull request.**",
+  "> Further pushes will not start another review. Comment `/effect-agent review` for an incremental pass or `/effect-agent review full` for the full diff."
+].join(`
+`);
 var renderReviewBody = (input) => {
   const unanchored = input.report.findings.filter((finding) => finding.line === undefined);
   const parts2 = [
@@ -47232,10 +47244,12 @@ var renderReviewBody = (input) => {
       "| :-- | :-- | :-- |",
       `| **${input.scope === "full" ? "Full diff" : "Incremental"}** | ${renderCoverage(input)} | ${renderFindingTally(input.report)} |`
     ].join(`
-`),
-    "### Summary",
-    input.report.summary
+`)
   ];
+  const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
+  if (automaticPause !== undefined)
+    parts2.push(automaticPause);
+  parts2.push("### Summary", input.report.summary);
   if (unanchored.length > 0) {
     parts2.push([
       "<details>",
@@ -47258,7 +47272,8 @@ var renderReviewBody = (input) => {
 `)) : undefined;
   const shardLabel = input.shards === 0 ? "No model call" : input.shards === 1 ? "1 review shard" : countNoun(input.shards, "parallel review shard");
   const usage2 = input.shards === 0 ? "" : ` · ${formatNumber(input.inputTokens)} input / ${formatNumber(input.outputTokens)} output tokens`;
-  const footer = `<sub>${shardLabel}${usage2} · reviewed at <code>${input.headRevision.slice(0, 7)}</code></sub>`;
+  const automaticReviewStatus = input.automaticReviewsRemaining === 0 ? "" : input.automaticReviewsRemaining === 1 ? " · 1 automatic review remains" : ` · ${String(input.automaticReviewsRemaining)} automatic reviews remain`;
+  const footer = `<sub>${shardLabel}${usage2} · reviewed at <code>${input.headRevision.slice(0, 7)}</code>${automaticReviewStatus}</sub>`;
   if (consolidatedPrompt !== undefined && [...parts2, consolidatedPrompt, footer].join(`
 
 `).length <= REVIEW_BODY_LIMIT) {
@@ -47269,14 +47284,20 @@ var renderReviewBody = (input) => {
 
 `);
 };
-var renderReviewFailureBody = () => [
-  "## Effect Agent review",
-  `> [!CAUTION]
+var renderReviewFailureBody = (input) => {
+  const parts2 = [
+    "## Effect Agent review",
+    `> [!CAUTION]
 > The review failed before it could publish findings.`,
-  "One or more review shards did not return a schema-valid report."
-].join(`
+    "One or more review shards did not return a schema-valid report."
+  ];
+  const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
+  if (automaticPause !== undefined)
+    parts2.push(automaticPause);
+  return parts2.join(`
 
 `);
+};
 var defaultReviewPresentation = {
   renderFinding: renderFindingBody,
   renderReview: renderReviewBody,
@@ -47517,7 +47538,9 @@ var reviewActionProgram = exports_Effect.gen(function* () {
 ${exports_Cause.pretty(reviewExit.cause)}`);
       const reviewUrl2 = yield* github.publishReview({
         commitId: pull.headRevision,
-        body: withReviewMarker(presentation.renderFailure(), selection.automatic, false),
+        body: withReviewMarker(presentation.renderFailure({
+          automaticReviewsRemaining: selection.automaticReviewsRemaining
+        }), selection.automatic, false),
         comments: []
       });
       yield* writeOutputs([
@@ -47536,6 +47559,7 @@ ${exports_Cause.pretty(reviewExit.cause)}`);
   const body = withReviewMarker(presentation.renderReview({
     report: report2,
     automatic: selection.automatic,
+    automaticReviewsRemaining: selection.automaticReviewsRemaining,
     scope: actualScope,
     reviewedFiles: surface.changes.length,
     unreviewedFiles: surface.unreviewedPaths.length,

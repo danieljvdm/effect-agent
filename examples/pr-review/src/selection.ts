@@ -1,5 +1,7 @@
 export type ReviewMode = "auto" | "incremental" | "full";
 
+const MAX_AUTOMATIC_REVIEWS = 2;
+
 export interface ReviewHistoryItem {
   readonly id: number;
   readonly authorLogin: string;
@@ -12,13 +14,14 @@ export interface ReviewHistoryItem {
 export type ReviewSelection =
   | {
       readonly _tag: "skip";
-      readonly reason: "head-already-reviewed" | "automatic-limit-reached";
+      readonly reason: "head-already-reviewed" | "automatic-reviews-paused";
     }
   | {
       readonly _tag: "review";
       readonly scope: "full" | "incremental";
       readonly baseRevision: string | undefined;
       readonly automatic: boolean;
+      readonly automaticReviewsRemaining: number;
       readonly reason: string;
     };
 
@@ -59,6 +62,11 @@ export const selectReview = (input: {
       const byTime = (left.item.submittedAt ?? "").localeCompare(right.item.submittedAt ?? "");
       return byTime === 0 ? left.item.id - right.item.id : byTime;
     });
+  const automaticAttempts = trusted.filter(({ marker }) => marker.automatic).length;
+  const automaticReviewsRemaining = Math.max(
+    0,
+    MAX_AUTOMATIC_REVIEWS - automaticAttempts - (input.mode === "auto" ? 1 : 0),
+  );
 
   if (input.mode === "full") {
     return {
@@ -66,6 +74,7 @@ export const selectReview = (input: {
       scope: "full",
       baseRevision: undefined,
       automatic: false,
+      automaticReviewsRemaining,
       reason: "manual full review",
     };
   }
@@ -79,8 +88,8 @@ export const selectReview = (input: {
     return { _tag: "skip", reason: "head-already-reviewed" };
   }
 
-  if (input.mode === "auto" && trusted.filter(({ marker }) => marker.automatic).length >= 2) {
-    return { _tag: "skip", reason: "automatic-limit-reached" };
+  if (input.mode === "auto" && automaticAttempts >= MAX_AUTOMATIC_REVIEWS) {
+    return { _tag: "skip", reason: "automatic-reviews-paused" };
   }
 
   const latest = trusted.filter(({ marker }) => marker.completed).at(-1)?.item;
@@ -90,6 +99,7 @@ export const selectReview = (input: {
       scope: "full",
       baseRevision: undefined,
       automatic: input.mode === "auto",
+      automaticReviewsRemaining,
       reason: "no prior review baseline",
     };
   }
@@ -99,6 +109,7 @@ export const selectReview = (input: {
     scope: "incremental",
     baseRevision: latest.commitId,
     automatic: input.mode === "auto",
+    automaticReviewsRemaining,
     reason: input.mode === "auto" ? "one automatic follow-up" : "manual incremental review",
   };
 };

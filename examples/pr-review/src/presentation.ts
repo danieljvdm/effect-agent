@@ -112,6 +112,7 @@ const renderUnanchoredFinding = (finding: ReviewFinding): string =>
 export interface ReviewPresentationInput {
   readonly report: ReviewReport;
   readonly automatic: boolean;
+  readonly automaticReviewsRemaining: number;
   readonly scope: "full" | "incremental";
   readonly reviewedFiles: number;
   readonly unreviewedFiles: number;
@@ -129,6 +130,15 @@ const renderCoverage = (input: ReviewPresentationInput): string =>
     ...(input.ignoredFiles > 0 ? [`${String(input.ignoredFiles)} ignored`] : []),
   ].join(" · ");
 
+const renderAutomaticPause = (automaticReviewsRemaining: number): string | undefined =>
+  automaticReviewsRemaining > 0
+    ? undefined
+    : [
+        "> [!NOTE]",
+        "> **Automatic reviews are paused for this pull request.**",
+        "> Further pushes will not start another review. Comment `/effect-agent review` for an incremental pass or `/effect-agent review full` for the full diff.",
+      ].join("\n");
+
 export const renderReviewBody = (input: ReviewPresentationInput): string => {
   const unanchored = input.report.findings.filter((finding) => finding.line === undefined);
   const parts = [
@@ -139,9 +149,10 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
       "| :-- | :-- | :-- |",
       `| **${input.scope === "full" ? "Full diff" : "Incremental"}** | ${renderCoverage(input)} | ${renderFindingTally(input.report)} |`,
     ].join("\n"),
-    "### Summary",
-    input.report.summary,
   ];
+  const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
+  if (automaticPause !== undefined) parts.push(automaticPause);
+  parts.push("### Summary", input.report.summary);
 
   if (unanchored.length > 0) {
     parts.push(
@@ -175,7 +186,13 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
     input.shards === 0
       ? ""
       : ` · ${formatNumber(input.inputTokens)} input / ${formatNumber(input.outputTokens)} output tokens`;
-  const footer = `<sub>${shardLabel}${usage} · reviewed at <code>${input.headRevision.slice(0, 7)}</code></sub>`;
+  const automaticReviewStatus =
+    input.automaticReviewsRemaining === 0
+      ? ""
+      : input.automaticReviewsRemaining === 1
+        ? " · 1 automatic review remains"
+        : ` · ${String(input.automaticReviewsRemaining)} automatic reviews remain`;
+  const footer = `<sub>${shardLabel}${usage} · reviewed at <code>${input.headRevision.slice(0, 7)}</code>${automaticReviewStatus}</sub>`;
 
   if (
     consolidatedPrompt !== undefined &&
@@ -187,17 +204,25 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
   return parts.join("\n\n");
 };
 
-export const renderReviewFailureBody = (): string =>
-  [
+export interface ReviewFailurePresentationInput {
+  readonly automaticReviewsRemaining: number;
+}
+
+export const renderReviewFailureBody = (input: ReviewFailurePresentationInput): string => {
+  const parts = [
     "## Effect Agent review",
     "> [!CAUTION]\n> The review failed before it could publish findings.",
     "One or more review shards did not return a schema-valid report.",
-  ].join("\n\n");
+  ];
+  const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
+  if (automaticPause !== undefined) parts.push(automaticPause);
+  return parts.join("\n\n");
+};
 
 export interface ReviewPresentation {
   readonly renderFinding: (finding: ReviewFinding, headRevision: string) => string;
   readonly renderReview: (input: ReviewPresentationInput) => string;
-  readonly renderFailure: () => string;
+  readonly renderFailure: (input: ReviewFailurePresentationInput) => string;
 }
 
 export const defaultReviewPresentation: ReviewPresentation = {

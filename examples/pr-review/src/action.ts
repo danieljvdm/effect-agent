@@ -348,7 +348,13 @@ export const reviewActionProgram = Effect.gen(function* () {
       yield* Console.error(`PR review wave failed:\n${Cause.pretty(reviewExit.cause)}`);
       const reviewUrl = yield* github.publishReview({
         commitId: pull.headRevision,
-        body: withReviewMarker(presentation.renderFailure(), selection.automatic, false),
+        body: withReviewMarker(
+          presentation.renderFailure({
+            automaticReviewsRemaining: selection.automaticReviewsRemaining,
+          }),
+          selection.automatic,
+          false,
+        ),
         comments: [],
       });
       yield* writeOutputs([
@@ -369,6 +375,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     presentation.renderReview({
       report,
       automatic: selection.automatic,
+      automaticReviewsRemaining: selection.automaticReviewsRemaining,
       scope: actualScope,
       reviewedFiles: surface.changes.length,
       unreviewedFiles: surface.unreviewedPaths.length,
