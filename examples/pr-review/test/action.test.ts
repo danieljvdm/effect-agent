@@ -6,15 +6,18 @@ import {
   ReviewUsage,
   type ReviewSeverity,
 } from "@effect-agent/pr-review";
+import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Config, ConfigProvider, Deferred, Effect, Fiber } from "effect";
+import { Config, ConfigProvider, Deferred, Effect, Fiber, Ref } from "effect";
 import { Response } from "effect/unstable/ai";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import {
   MAX_REVIEW_SHARDS,
   estimateGpt56CostMicrousd,
   mergeReviewOutcomes,
   prepareReviewSurface,
+  reviewActionProgram,
   runReviewWave,
   shardReviewChanges,
   withActionInputs,
@@ -81,6 +84,62 @@ describe("Action configuration", () => {
         }),
       );
       expect(yield* Config.nonEmptyString("OPENAI_API_KEY").parse(provider)).toBe("action-key");
+    }),
+  );
+});
+
+describe("Manual command acknowledgement", () => {
+  it.effect("PRR-007 reacts before reading pull-request state", () =>
+    Effect.gen(function* () {
+      const requests = yield* Ref.make<ReadonlyArray<string>>([]);
+      const client = HttpClient.make((request, url) => {
+        const wire = url.pathname.endsWith("/reactions")
+          ? { id: 1, content: "eyes" }
+          : {
+              number: 12,
+              title: "Draft pull request",
+              body: null,
+              draft: true,
+              html_url: "https://github.test/reve-ai/example/pull/12",
+              base: { sha: "base" },
+              head: { sha: "head" },
+            };
+        return Ref.update(requests, (current) => [
+          ...current,
+          `${request.method} ${url.pathname}`,
+        ]).pipe(
+          Effect.as(
+            HttpClientResponse.fromWeb(
+              request,
+              new globalThis.Response(JSON.stringify(wire), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+            ),
+          ),
+        );
+      });
+      const provider = ConfigProvider.fromEnv({
+        env: {
+          GITHUB_REPOSITORY: "reve-ai/example",
+          GITHUB_TOKEN: "github-token",
+          GITHUB_API_URL: "https://api.github.test",
+          PR_REVIEW_PULL_REQUEST: "12",
+          PR_REVIEW_COMMAND: "/effect-agent review full",
+          PR_REVIEW_COMMENT_ID: "42",
+        },
+      });
+
+      yield* reviewActionProgram.pipe(
+        Effect.provideService(ConfigProvider.ConfigProvider, provider),
+        Effect.provideService(HttpClient.HttpClient, client),
+        Effect.provide(NodeServices.layer),
+      );
+
+      expect(yield* Ref.get(requests)).toEqual([
+        "POST /repos/reve-ai/example/issues/comments/42/reactions",
+        "GET /repos/reve-ai/example/pulls/12",
+      ]);
     }),
   );
 });

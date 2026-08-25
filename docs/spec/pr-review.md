@@ -54,8 +54,10 @@ the review contract and reviewer constructor.
 - **PRR-007**: A repository owner, member, or collaborator may request another incremental review
   with the exact comment `@effect-agent review`, or a full review with
   `@effect-agent review full`. The previous `/effect-agent review` forms remain compatibility
-  aliases. The bundled channel ignores trailing whitespace but rejects trailing prose before
-  model execution. Manual reviews do not count as automatic reviews or resume them.
+  aliases. The bundled channel ignores trailing whitespace but rejects trailing prose before model
+  execution. It acknowledges an admitted manual command with an `eyes` reaction before reading
+  pull-request state or starting model work. Manual reviews do not count as automatic reviews or
+  resume them.
 - **PRR-008**: An attempt marker stores only its version, whether the attempt was automatic, and
   whether it produced a report. A separate closing marker stores only its version and the configured
   automatic limit, making the no-model notice idempotent without counting it as another attempt.

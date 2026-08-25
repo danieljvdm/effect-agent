@@ -119,6 +119,7 @@ const ACTION_INPUT_BY_CONFIG: Readonly<Record<string, string>> = {
   PR_REVIEW_AUTHOR: "INPUT_REVIEW-AUTHOR",
   PR_REVIEW_MODE: "INPUT_MODE",
   PR_REVIEW_COMMAND: "INPUT_COMMAND",
+  PR_REVIEW_COMMENT_ID: "INPUT_COMMENT-ID",
   PR_REVIEW_AUTOMATIC_LIMIT: "INPUT_AUTOMATIC-REVIEW-LIMIT",
   PR_REVIEW_EXPECTED_HEAD: "INPUT_EXPECTED-HEAD",
   PR_REVIEW_MODEL: "INPUT_MODEL",
@@ -384,6 +385,14 @@ export const reviewActionProgram = Effect.gen(function* () {
   if (mode === undefined) {
     return yield* skip("unsupported-review-command");
   }
+  const commentId = yield* Config.schema(Schema.Natural, "PR_REVIEW_COMMENT_ID").pipe(
+    Config.withDefault(0),
+  );
+  if (command.trim().length > 0 && commentId === 0) {
+    return yield* ActionConfigurationError.make({
+      message: "comment-id is required for a manual review command",
+    });
+  }
   const automaticReviewLimit = yield* Config.schema(
     Schema.Natural,
     "PR_REVIEW_AUTOMATIC_LIMIT",
@@ -411,6 +420,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     token,
     apiUrl,
   });
+  if (commentId > 0) yield* github.acknowledgeComment(commentId);
   const pull = yield* github.getPullRequest;
   if (pull.draft) return yield* skip("draft-pull-request");
   if (expectedHead.length > 0 && pull.headRevision !== expectedHead) {
