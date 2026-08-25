@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   reviewMarker,
+  reviewModeFromCommand,
   reviewPauseMarker,
   selectReview,
   type ReviewHistoryItem,
@@ -33,6 +34,12 @@ const pauseItem = (id: number, head: string, limit: number): ReviewHistoryItem =
 });
 
 describe("GitHub review selection", () => {
+  it("PRR-007 trims manual commands without accepting trailing prose", () => {
+    expect(reviewModeFromCommand("/effect-agent review\r\n")).toBe("incremental");
+    expect(reviewModeFromCommand("  /effect-agent review full\n")).toBe("full");
+    expect(reviewModeFromCommand("/effect-agent review please")).toBeUndefined();
+  });
+
   it("PRR-006 reviews the initial head and one automatic follow-up, then pauses", () => {
     expect(
       selectReview({

@@ -62,6 +62,17 @@ describe("Action configuration", () => {
     }),
   );
 
+  it.effect("preserves the raw manual review command for validation", () =>
+    Effect.gen(function* () {
+      const provider = withActionInputs(
+        ConfigProvider.fromEnv({ env: { INPUT_COMMAND: "/effect-agent review\r\n" } }),
+      );
+      expect(yield* Config.string("PR_REVIEW_COMMAND").parse(provider)).toBe(
+        "/effect-agent review\r\n",
+      );
+    }),
+  );
+
   it.effect("falls back to an Action input when the environment value is empty", () =>
     Effect.gen(function* () {
       const provider = withActionInputs(

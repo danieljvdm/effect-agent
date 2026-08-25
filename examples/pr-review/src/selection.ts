@@ -1,5 +1,17 @@
 export type ReviewMode = "auto" | "incremental" | "full";
 
+/** Parse a trusted collaborator command without admitting prefixes or trailing prose. */
+export const reviewModeFromCommand = (command: string): "incremental" | "full" | undefined => {
+  switch (command.trim()) {
+    case "/effect-agent review":
+      return "incremental";
+    case "/effect-agent review full":
+      return "full";
+    default:
+      return undefined;
+  }
+};
+
 export interface ReviewHistoryItem {
   readonly id: number;
   readonly authorLogin: string;

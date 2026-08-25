@@ -27,6 +27,8 @@ attempt shows that automatic reviews are paused and points collaborators to
 `/effect-agent review` or `/effect-agent review full`. The next automatic event
 publishes one closing no-model review with the last completed review and current
 head. Later pushes remain quiet. Manual reviews do not resume automatic reviews.
+Trailing command whitespace is ignored; additional command text is rejected before
+model execution.
 Review bodies carry only a tiny terminal marker; no model conversation or
 signed continuity state is persisted.
 

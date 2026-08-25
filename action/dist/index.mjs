@@ -47271,6 +47271,16 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
 });
 
 // examples/pr-review/src/selection.ts
+var reviewModeFromCommand = (command) => {
+  switch (command.trim()) {
+    case "/effect-agent review":
+      return "incremental";
+    case "/effect-agent review full":
+      return "full";
+    default:
+      return;
+  }
+};
 var ATTEMPT_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-review:v2 automatic=(true|false) completed=(true|false) -->\s*$/;
 var PAUSE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-review-pause:v1 limit=([0-9]+) -->\s*$/;
 var reviewMarker = (automatic, completed = true) => `<!-- effect-agent-review:v2 automatic=${String(automatic)} completed=${String(completed)} -->`;
@@ -47630,6 +47640,7 @@ var ACTION_INPUT_BY_CONFIG = {
   PR_REVIEW_PULL_REQUEST: "INPUT_PULL-REQUEST",
   PR_REVIEW_AUTHOR: "INPUT_REVIEW-AUTHOR",
   PR_REVIEW_MODE: "INPUT_MODE",
+  PR_REVIEW_COMMAND: "INPUT_COMMAND",
   PR_REVIEW_AUTOMATIC_LIMIT: "INPUT_AUTOMATIC-REVIEW-LIMIT",
   PR_REVIEW_EXPECTED_HEAD: "INPUT_EXPECTED-HEAD",
   PR_REVIEW_MODEL: "INPUT_MODEL",
@@ -47785,7 +47796,12 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   const pullRequestNumber = yield* exports_Config.schema(exports_Schema.Int.check(exports_Schema.isGreaterThan(0)), "PR_REVIEW_PULL_REQUEST");
   const token = yield* exports_Config.redacted("GITHUB_TOKEN");
   const reviewAuthor = yield* exports_Config.nonEmptyString("PR_REVIEW_AUTHOR").pipe(exports_Config.withDefault("github-actions[bot]"));
-  const mode = yield* exports_Config.literals(["auto", "incremental", "full"], "PR_REVIEW_MODE").pipe(exports_Config.withDefault("auto"));
+  const configuredMode = yield* exports_Config.literals(["auto", "incremental", "full"], "PR_REVIEW_MODE").pipe(exports_Config.withDefault("auto"));
+  const command = yield* exports_Config.string("PR_REVIEW_COMMAND").pipe(exports_Config.withDefault(""));
+  const mode = command.trim().length === 0 ? configuredMode : reviewModeFromCommand(command);
+  if (mode === undefined) {
+    return yield* skip("unsupported-review-command");
+  }
   const automaticReviewLimit = yield* exports_Config.schema(exports_Schema.Natural, "PR_REVIEW_AUTOMATIC_LIMIT").pipe(exports_Config.withDefault(2));
   const expectedHead = yield* exports_Config.string("PR_REVIEW_EXPECTED_HEAD").pipe(exports_Config.withDefault(""));
   const modelName = yield* exports_Config.nonEmptyString("PR_REVIEW_MODEL").pipe(exports_Config.withDefault("gpt-5.6-sol"));

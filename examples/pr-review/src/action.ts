@@ -31,7 +31,7 @@ import {
   withReviewMarker,
   withReviewPauseMarker,
 } from "./presentation.ts";
-import { selectReview } from "./selection.ts";
+import { reviewModeFromCommand, selectReview } from "./selection.ts";
 
 const MAX_REVIEW_PATCH_CHARS = 320_000;
 const MAX_PATCH_CHARS = 80_000;
@@ -118,6 +118,7 @@ const ACTION_INPUT_BY_CONFIG: Readonly<Record<string, string>> = {
   PR_REVIEW_PULL_REQUEST: "INPUT_PULL-REQUEST",
   PR_REVIEW_AUTHOR: "INPUT_REVIEW-AUTHOR",
   PR_REVIEW_MODE: "INPUT_MODE",
+  PR_REVIEW_COMMAND: "INPUT_COMMAND",
   PR_REVIEW_AUTOMATIC_LIMIT: "INPUT_AUTOMATIC-REVIEW-LIMIT",
   PR_REVIEW_EXPECTED_HEAD: "INPUT_EXPECTED-HEAD",
   PR_REVIEW_MODEL: "INPUT_MODEL",
@@ -374,9 +375,15 @@ export const reviewActionProgram = Effect.gen(function* () {
   const reviewAuthor = yield* Config.nonEmptyString("PR_REVIEW_AUTHOR").pipe(
     Config.withDefault("github-actions[bot]"),
   );
-  const mode = yield* Config.literals(["auto", "incremental", "full"], "PR_REVIEW_MODE").pipe(
-    Config.withDefault("auto"),
-  );
+  const configuredMode = yield* Config.literals(
+    ["auto", "incremental", "full"],
+    "PR_REVIEW_MODE",
+  ).pipe(Config.withDefault("auto"));
+  const command = yield* Config.string("PR_REVIEW_COMMAND").pipe(Config.withDefault(""));
+  const mode = command.trim().length === 0 ? configuredMode : reviewModeFromCommand(command);
+  if (mode === undefined) {
+    return yield* skip("unsupported-review-command");
+  }
   const automaticReviewLimit = yield* Config.schema(
     Schema.Natural,
     "PR_REVIEW_AUTOMATIC_LIMIT",
