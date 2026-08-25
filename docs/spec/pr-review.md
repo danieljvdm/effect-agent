@@ -36,8 +36,8 @@ the review contract and reviewer constructor.
   deterministically partitions a large admitted diff into at most four size-balanced shards, runs
   one package invocation per shard in a single structured-concurrency wave, and merges at most
   twelve findings. It never retries a shard or starts a second wave within one Action run. Each
-  shard is limited to 48,000 input and 4,000 output tokens, bounding one wave to 192,000 input and
-  16,000 output tokens.
+  shard is limited to 48,000 input and 8,000 output tokens, bounding one wave to 192,000 input and
+  32,000 output tokens.
 - **PRR-006**: Automatic mode admits at most two review waves: the initial wave and one later wave.
   This bounds automatic review to eight one-turn model invocations per pull request. A third
   automatic event exits successfully without model execution. Failed waves count toward this

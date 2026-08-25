@@ -79,8 +79,8 @@ export const reviewPolicy = AgentPolicy.make({
   maxToolCalls: 1,
   maxDuration: "5 minutes",
   toolConcurrency: 1,
-  tokenBudget: 52_000,
-  completionReserveTokens: 4_000,
+  tokenBudget: 56_000,
+  completionReserveTokens: 8_000,
   contextTokenLimit: 48_000,
   onExhaustion: "fail",
 });
@@ -101,7 +101,7 @@ const makeDefinition = (guidance?: string) =>
 
 export const reviewBudgetLimits = UsageBudgetLimits.make({
   maxInputTokens: 48_000,
-  maxOutputTokens: 4_000,
+  maxOutputTokens: 8_000,
   maxToolCalls: 0,
   maxDurationMillis: 300_000,
 });

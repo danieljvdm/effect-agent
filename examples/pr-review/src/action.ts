@@ -9,7 +9,7 @@ import {
   type ReviewSeverity,
 } from "@effect-agent/pr-review";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { Config, Console, Effect, Exit, FileSystem, Layer, Schema } from "effect";
+import { Cause, Config, Console, Effect, Exit, FileSystem, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { type ChangedFile, makeGitHubClient } from "./github.ts";
@@ -346,7 +346,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     shardCount = shards.length;
     const reviewer = makeReviewer({
       model: OpenAiLanguageModel.model(modelName, {
-        max_output_tokens: 4_000,
+        max_output_tokens: 8_000,
         store: false,
         strictJsonSchema: true,
         reasoning: { effort },
@@ -371,6 +371,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       ),
     ).pipe(Effect.provide(openAiClientLayer), Effect.exit);
     if (Exit.isFailure(reviewExit)) {
+      yield* Console.error(`PR review wave failed:\n${Cause.pretty(reviewExit.cause)}`);
       const reviewUrl = yield* github.publishReview({
         commitId: pull.headRevision,
         body: [
