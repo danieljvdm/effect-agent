@@ -42,6 +42,11 @@ const CompareWire = Schema.Struct({
 });
 
 const PublishedReviewWire = Schema.Struct({ html_url: ShortString });
+const CreateReactionWire = Schema.Struct({ content: Schema.Literal("eyes") });
+const ReactionWire = Schema.Struct({
+  id: Schema.Natural,
+  content: Schema.Literal("eyes"),
+});
 const PublishReviewWire = Schema.Struct({
   commit_id: Revision,
   event: Schema.Literal("COMMENT"),
@@ -212,6 +217,23 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       ),
     );
 
+  const acknowledgeComment = Effect.fn("GitHubClient.acknowledgeComment")(function* (
+    commentId: number,
+  ) {
+    const body = yield* Schema.encodeEffect(CreateReactionWire)({ content: "eyes" }).pipe(
+      Effect.mapError((cause) => failure("encode issue comment reaction", cause)),
+    );
+    const reactionRequest = yield* HttpClientRequest.post(
+      `${apiUrl}/repos/${options.repository}/issues/comments/${String(commentId)}/reactions`,
+    ).pipe(
+      HttpClientRequest.bodyJson(body),
+      Effect.mapError((cause) => failure("encode issue comment reaction", cause)),
+    );
+    yield* execute("acknowledge review command", reactionRequest).pipe(
+      Effect.flatMap(decode(ReactionWire, "acknowledge review command")),
+    );
+  });
+
   const publishReview = (input: {
     readonly commitId: string;
     readonly body: string;
@@ -243,5 +265,12 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       );
     });
 
-  return { getPullRequest, listFiles, listReviews, compareFiles, publishReview } as const;
+  return {
+    getPullRequest,
+    listFiles,
+    listReviews,
+    compareFiles,
+    acknowledgeComment,
+    publishReview,
+  } as const;
 });
