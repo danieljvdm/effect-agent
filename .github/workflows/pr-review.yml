@@ -22,8 +22,7 @@ jobs:
         (github.event.comment.author_association == 'OWNER' ||
          github.event.comment.author_association == 'MEMBER' ||
          github.event.comment.author_association == 'COLLABORATOR') &&
-        (github.event.comment.body == '/effect-agent review' ||
-         github.event.comment.body == '/effect-agent review full'))
+        startsWith(github.event.comment.body, '/effect-agent review'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -48,7 +47,9 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           pull-request: ${{ github.event.pull_request.number || github.event.issue.number }}
           review-author: effect-agent[bot]
-          mode: ${{ github.event_name == 'pull_request' && 'auto' || github.event.comment.body == '/effect-agent review full' && 'full' || 'incremental' }}
+          mode: ${{ github.event_name == 'pull_request' && 'auto' || 'incremental' }}
+          command: ${{ github.event_name == 'issue_comment' && github.event.comment.body || '' }}
+          automatic-review-limit: 2
           expected-head: ${{ github.event.pull_request.head.sha || '' }}
           effort: medium
           guidance-file: .github/review-guidance.md

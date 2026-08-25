@@ -1,7 +1,7 @@
 import type { ReviewFinding, ReviewReport, ReviewSeverity } from "@effect-agent/pr-review";
 import { Context } from "effect";
 
-import { reviewMarker } from "./selection.ts";
+import { reviewMarker, reviewPauseMarker } from "./selection.ts";
 
 const REVIEW_BODY_LIMIT = 60_000;
 
@@ -112,14 +112,25 @@ const renderUnanchoredFinding = (finding: ReviewFinding): string =>
 export interface ReviewPresentationInput {
   readonly report: ReviewReport;
   readonly automatic: boolean;
+  readonly automaticReviewsRemaining: number;
   readonly scope: "full" | "incremental";
   readonly reviewedFiles: number;
   readonly unreviewedFiles: number;
   readonly ignoredFiles: number;
   readonly shards: number;
   readonly inputTokens: number;
+  readonly uncachedInputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheWriteInputTokens: number;
   readonly outputTokens: number;
+  readonly estimatedCost?: ReviewCostEstimate | undefined;
   readonly headRevision: string;
+}
+
+export interface ReviewCostEstimate {
+  readonly microusd: number;
+  readonly label: string;
+  readonly url: string;
 }
 
 const renderCoverage = (input: ReviewPresentationInput): string =>
@@ -128,6 +139,24 @@ const renderCoverage = (input: ReviewPresentationInput): string =>
     ...(input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} unavailable`] : []),
     ...(input.ignoredFiles > 0 ? [`${String(input.ignoredFiles)} ignored`] : []),
   ].join(" · ");
+
+const formatEstimatedUsd = (microusd: number): string => {
+  const dollars = microusd / 1_000_000;
+  const digits = dollars > 0 && dollars < 0.0001 ? 6 : dollars < 1 ? 4 : 2;
+  return `$${dollars.toFixed(digits)}`;
+};
+
+const renderInputUsage = (input: ReviewPresentationInput): string =>
+  `${formatNumber(input.inputTokens)} input (${formatNumber(input.uncachedInputTokens)} uncached · ${formatNumber(input.cachedInputTokens)} cached · ${formatNumber(input.cacheWriteInputTokens)} cache write)`;
+
+const renderAutomaticPause = (automaticReviewsRemaining: number): string | undefined =>
+  automaticReviewsRemaining > 0
+    ? undefined
+    : [
+        "> [!NOTE]",
+        "> **Automatic reviews are paused for this pull request.**",
+        "> Further pushes will not start another review. Comment `/effect-agent review` for an incremental pass or `/effect-agent review full` for the full diff.",
+      ].join("\n");
 
 export const renderReviewBody = (input: ReviewPresentationInput): string => {
   const unanchored = input.report.findings.filter((finding) => finding.line === undefined);
@@ -139,9 +168,10 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
       "| :-- | :-- | :-- |",
       `| **${input.scope === "full" ? "Full diff" : "Incremental"}** | ${renderCoverage(input)} | ${renderFindingTally(input.report)} |`,
     ].join("\n"),
-    "### Summary",
-    input.report.summary,
   ];
+  const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
+  if (automaticPause !== undefined) parts.push(automaticPause);
+  parts.push("### Summary", input.report.summary);
 
   if (unanchored.length > 0) {
     parts.push(
@@ -174,8 +204,18 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
   const usage =
     input.shards === 0
       ? ""
-      : ` · ${formatNumber(input.inputTokens)} input / ${formatNumber(input.outputTokens)} output tokens`;
-  const footer = `<sub>${shardLabel}${usage} · reviewed at <code>${input.headRevision.slice(0, 7)}</code></sub>`;
+      : ` · ${renderInputUsage(input)} / ${formatNumber(input.outputTokens)} output tokens`;
+  const estimatedCost =
+    input.estimatedCost === undefined
+      ? ""
+      : ` · ≈ ${formatEstimatedUsd(input.estimatedCost.microusd)} at <a href="${input.estimatedCost.url}">${input.estimatedCost.label} rates</a>`;
+  const automaticReviewStatus =
+    input.automaticReviewsRemaining === 0
+      ? ""
+      : input.automaticReviewsRemaining === 1
+        ? " · 1 automatic review remains"
+        : ` · ${String(input.automaticReviewsRemaining)} automatic reviews remain`;
+  const footer = `<sub>${shardLabel}${usage}${estimatedCost} · reviewed at <code>${input.headRevision.slice(0, 7)}</code>${automaticReviewStatus}</sub>`;
 
   if (
     consolidatedPrompt !== undefined &&
@@ -187,23 +227,68 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
   return parts.join("\n\n");
 };
 
-export const renderReviewFailureBody = (): string =>
-  [
+export interface ReviewFailurePresentationInput {
+  readonly automaticReviewsRemaining: number;
+}
+
+export const renderReviewFailureBody = (input: ReviewFailurePresentationInput): string => {
+  const parts = [
     "## Effect Agent review",
     "> [!CAUTION]\n> The review failed before it could publish findings.",
     "One or more review shards did not return a schema-valid report.",
+  ];
+  const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
+  if (automaticPause !== undefined) parts.push(automaticPause);
+  return parts.join("\n\n");
+};
+
+export interface ReviewPausePresentationInput {
+  readonly automaticReviewLimit: number;
+  readonly automaticAttempts: number;
+  readonly lastCompletedRevision: string | undefined;
+  readonly headRevision: string;
+}
+
+export const renderReviewPauseBody = (input: ReviewPausePresentationInput): string => {
+  const attempts =
+    input.automaticAttempts === input.automaticReviewLimit
+      ? `${String(input.automaticAttempts)} of ${String(input.automaticReviewLimit)} used`
+      : `${String(input.automaticAttempts)} recorded · limit ${String(input.automaticReviewLimit)}`;
+  const lastCompleted =
+    input.lastCompletedRevision === undefined
+      ? "None"
+      : `<code>${input.lastCompletedRevision.slice(0, 7)}</code>`;
+  return [
+    "## Effect Agent review",
+    [
+      "> [!NOTE]",
+      "> **Automatic reviews are paused for this pull request.**",
+      "> The configured automatic review limit has been reached. No model call was made for this update.",
+    ].join("\n"),
+    [
+      "| Automatic attempts | Last completed review | Current head |",
+      "| :-- | :-- | :-- |",
+      `| **${attempts}** | ${lastCompleted} | <code>${input.headRevision.slice(0, 7)}</code> |`,
+    ].join("\n"),
+    "### Summary",
+    "Further pushes will not start another automatic model review, and this pause notice will not be posted again.",
+    "Comment `/effect-agent review` for another review of the latest changes, or `/effect-agent review full` for the full pull request diff.",
+    `<sub>No model call · review automation paused at <code>${input.headRevision.slice(0, 7)}</code></sub>`,
   ].join("\n\n");
+};
 
 export interface ReviewPresentation {
   readonly renderFinding: (finding: ReviewFinding, headRevision: string) => string;
   readonly renderReview: (input: ReviewPresentationInput) => string;
-  readonly renderFailure: () => string;
+  readonly renderFailure: (input: ReviewFailurePresentationInput) => string;
+  readonly renderPause: (input: ReviewPausePresentationInput) => string;
 }
 
 export const defaultReviewPresentation: ReviewPresentation = {
   renderFinding: renderFindingBody,
   renderReview: renderReviewBody,
   renderFailure: renderReviewFailureBody,
+  renderPause: renderReviewPauseBody,
 };
 
 export const ReviewPresentation: Context.Reference<ReviewPresentation> =
@@ -211,9 +296,16 @@ export const ReviewPresentation: Context.Reference<ReviewPresentation> =
     defaultValue: () => defaultReviewPresentation,
   });
 
-/** Keep the trusted attempt marker outside host-replaceable presentation. */
-export const withReviewMarker = (body: string, automatic: boolean, completed = true): string => {
+const withTerminalMarker = (body: string, marker: string): string => {
   const visibleBody = body.trimEnd();
-  const marker = reviewMarker(automatic, completed);
   return visibleBody.length === 0 ? marker : `${visibleBody}\n\n${marker}`;
 };
+
+/** Keep the trusted attempt marker outside host-replaceable presentation. */
+export const withReviewMarker = (body: string, automatic: boolean, completed = true): string => {
+  return withTerminalMarker(body, reviewMarker(automatic, completed));
+};
+
+/** Keep the trusted one-time pause marker outside host-replaceable presentation. */
+export const withReviewPauseMarker = (body: string, automaticReviewLimit: number): string =>
+  withTerminalMarker(body, reviewPauseMarker(automaticReviewLimit));

@@ -887,20 +887,14 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       });
       expect(reviewWorkflow.jobs.review?.if).toContain("!github.event.pull_request.draft");
       expect(reviewWorkflow.jobs.review?.if).toContain(
-        "github.event.comment.body == '/effect-agent review'",
-      );
-      expect(reviewWorkflow.jobs.review?.if).toContain(
-        "github.event.comment.body == '/effect-agent review full'",
+        "startsWith(github.event.comment.body, '/effect-agent review')",
       );
       expect(reviewWorkflow.concurrency?.["cancel-in-progress"]).toBe(false);
       const reviewStep = workflowStep(reviewWorkflow, "review", "Review the pull request");
       expect(reviewStep?.uses).toBe("danieljvdm/effect-agent/action@main");
       expect(reviewStep?.with?.mode).toContain("'auto'");
       expect(reviewStep?.with?.mode).toContain("'incremental'");
-      expect(reviewStep?.with?.mode).toContain("'full'");
-      expect(reviewStep?.with?.mode).toContain(
-        "github.event.comment.body == '/effect-agent review full'",
-      );
+      expect(reviewStep?.with?.command).toContain("github.event.comment.body");
 
       expect(releaseWorkflow.on).toEqual({ push: { branches: ["main"] } });
       expect(releaseWorkflow.permissions).toEqual({});

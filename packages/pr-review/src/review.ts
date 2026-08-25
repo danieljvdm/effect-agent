@@ -5,10 +5,13 @@ import {
   AgentRuntime,
   IdGenerator,
   makeUsageBudget,
+  type RunCostEstimator,
   toRunBudgetHook,
   UsageBudgetLimits,
 } from "effect-agent";
 import { type LanguageModel, type Model, Toolkit } from "effect/unstable/ai";
+
+export type { RunCostEstimator };
 
 const ReviewPath = Schema.NonEmptyString.check(Schema.isMaxLength(512));
 const Revision = Schema.NonEmptyString.check(Schema.isMaxLength(128));
@@ -72,10 +75,25 @@ export class ReviewReport extends Schema.Class<ReviewReport>(
   findings: Schema.Array(ReviewFinding).check(Schema.isMaxLength(12)),
 }) {}
 
-export class ReviewUsage extends Schema.Class<ReviewUsage>("@effect-agent/pr-review/ReviewUsage")({
+const ReviewUsageFields = Schema.Struct({
   inputTokens: Schema.Natural,
+  uncachedInputTokens: Schema.Natural,
+  cachedInputTokens: Schema.Natural,
+  cacheWriteInputTokens: Schema.Natural,
   outputTokens: Schema.Natural,
-}) {}
+  estimatedCostMicrousd: Schema.optionalKey(Schema.Natural),
+}).check(
+  Schema.makeFilter(
+    (usage) =>
+      usage.inputTokens ===
+      usage.uncachedInputTokens + usage.cachedInputTokens + usage.cacheWriteInputTokens,
+    { title: "Input token total equals uncached, cached, and cache-write components" },
+  ),
+);
+
+export class ReviewUsage extends Schema.Class<ReviewUsage>("@effect-agent/pr-review/ReviewUsage")(
+  ReviewUsageFields,
+) {}
 
 export class ReviewOutcome extends Schema.Class<ReviewOutcome>(
   "@effect-agent/pr-review/ReviewOutcome",
@@ -89,7 +107,7 @@ const BASE_INSTRUCTIONS = `Review the supplied pull-request diff once.
 
 Report only concrete correctness, security, reliability, or maintainability defects that the author should act on. Do not praise, restate the change, invent missing repository context, or ask for speculative cleanup. An empty findings array is valid.
 
-Every finding must use an exact supplied path. Set line only to a RIGHT-side added or context line visible in that path's unified patch; otherwise omit line. Use blocking only for a defect that should prevent shipping. Classify each finding with the closest available category. Treat unreviewedPaths as unavailable scope and never imply that you inspected it.`;
+Every finding must use an exact supplied path. Set line only to a RIGHT-side added or context line visible in that path's unified patch; otherwise omit line. Use blocking only for a defect that should prevent shipping. Classify each finding with the closest available category. Treat unreviewedPaths as unavailable scope and never imply that you inspected it. A changed file absent from changes may have been withheld by the host; never infer that it was not changed, and report only defects proven by the supplied patches.`;
 
 export const reviewPolicy = AgentPolicy.make({
   maxTurns: 1,
@@ -184,6 +202,7 @@ export const sanitizeReviewReport = (
 export interface ReviewerOptions<Provider, ModelProvides, ModelRequires> {
   readonly model: Model.Model<Provider, LanguageModel.LanguageModel | ModelProvides, ModelRequires>;
   readonly guidance?: string | undefined;
+  readonly estimateCostMicrousd?: RunCostEstimator | undefined;
 }
 
 /** Build a provider-neutral reviewer. The returned `review` performs exactly one Run. */
@@ -197,6 +216,9 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       const budget = yield* makeUsageBudget(reviewBudgetLimits);
       const result = yield* AgentRuntime.run(binding, request, {
         budget: toRunBudgetHook(budget),
+        ...(options.estimateCostMicrousd === undefined
+          ? {}
+          : { estimateCostMicrousd: options.estimateCostMicrousd }),
       });
       const usage = yield* budget.snapshot;
       return ReviewOutcome.make({
@@ -204,7 +226,16 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         turns: result.turns,
         usage: ReviewUsage.make({
           inputTokens: usage.inputTokens,
+          uncachedInputTokens: Math.max(
+            0,
+            usage.inputTokens - usage.cacheReadInputTokens - usage.cacheWriteInputTokens,
+          ),
+          cachedInputTokens: usage.cacheReadInputTokens,
+          cacheWriteInputTokens: usage.cacheWriteInputTokens,
           outputTokens: usage.outputTokens,
+          ...(options.estimateCostMicrousd === undefined
+            ? {}
+            : { estimatedCostMicrousd: usage.costMicrousd }),
         }),
       });
     }).pipe(Effect.provide(IdGenerator.layer), Effect.scoped);

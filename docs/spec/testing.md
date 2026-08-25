@@ -369,9 +369,10 @@ The Travel Planner Reference Application (the cumulative fixture tree in
 
 The `@effect-agent/pr-review` suite pins its small trust boundary: unified-diff RIGHT-side line
 parsing, unknown-path removal, invalid-anchor demotion, and finding deduplication. The GitHub leaf
-suite pins the trigger lifecycle: one initial automatic review, one automatic incremental review,
-then no model execution until an authorized manual command. These tests do not claim model recall
-or semantic review coverage.
+suite pins the trigger lifecycle: a consumer-selected number of automatic attempts, a visible pause
+at that limit, and no later model execution until an authorized manual command. It also pins the
+published GPT-5.6 rate calculation and cached/uncached usage receipt. These tests do not claim model
+recall or semantic review coverage.
 
 Test IDs use requirement references:
 

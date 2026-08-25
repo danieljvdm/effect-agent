@@ -7750,8 +7750,30 @@ var ReducerMin = /* @__PURE__ */ make2((a, b) => Math.min(a, b), Infinity);
 var String3 = globalThis.String;
 var isString2 = isString;
 var Order3 = String2;
+var toUpperCase = (self) => self.toUpperCase();
 var trim = (self) => self.trim();
 var camelToSnake = (self) => self.replace(/([A-Z])/g, "_$1").toLowerCase();
+var normalizeCase = (input, splitRegExp, stripRegExp, delimiter, transform) => {
+  let result2 = input;
+  for (const regexp of splitRegExp) {
+    result2 = result2.replace(regexp, "$1\x00$2");
+  }
+  for (const regexp of stripRegExp) {
+    result2 = result2.replace(regexp, "\x00");
+  }
+  let start = 0;
+  let end = result2.length;
+  while (result2.charAt(start) === "\x00") {
+    start++;
+  }
+  while (result2.charAt(end - 1) === "\x00") {
+    end--;
+  }
+  return result2.slice(start, end).split("\x00").map(transform).join(delimiter);
+};
+var CONFIG_SPLIT_REGEXP = [/([a-z0-9])([A-Z])/g, /([A-Z])([A-Z][a-z])/g];
+var STRIP_REGEXP = /[^A-Z0-9]+/gi;
+var configCase = (self) => normalizeCase(self, CONFIG_SPLIT_REGEXP, [STRIP_REGEXP], "_", toUpperCase);
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/random.js
 var Random = /* @__PURE__ */ Reference("effect/Random", {
@@ -28837,11 +28859,11 @@ __export(exports_Config, {
   schema: () => schema,
   redacted: () => redacted,
   port: () => port,
-  orElse: () => orElse2,
+  orElse: () => orElse3,
   option: () => option3,
   number: () => number3,
   nonEmptyString: () => nonEmptyString,
-  nested: () => nested,
+  nested: () => nested2,
   mapOrFail: () => mapOrFail,
   map: () => map13,
   logLevel: () => logLevel,
@@ -28866,6 +28888,27 @@ __export(exports_Config, {
 });
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/ConfigProvider.js
+var exports_ConfigProvider = {};
+__export(exports_ConfigProvider, {
+  orElse: () => orElse2,
+  nested: () => nested,
+  mapInput: () => mapInput4,
+  makeValue: () => makeValue,
+  makeRecord: () => makeRecord,
+  makeArray: () => makeArray,
+  make: () => make41,
+  layerAdd: () => layerAdd,
+  layer: () => layer13,
+  fromUnknown: () => fromUnknown,
+  fromEnvRecord: () => fromEnvRecord,
+  fromEnv: () => fromEnv,
+  fromDotEnvContents: () => fromDotEnvContents,
+  fromDotEnv: () => fromDotEnv,
+  fromDir: () => fromDir,
+  constantCase: () => constantCase,
+  SourceError: () => SourceError,
+  ConfigProvider: () => ConfigProvider
+});
 function makeValue(value4) {
   return {
     _tag: "Value",
@@ -28885,6 +28928,9 @@ function makeArray(length, value4) {
     length,
     value: value4
   };
+}
+
+class SourceError extends (/* @__PURE__ */ TaggedError2("SourceError")) {
 }
 var ConfigProvider = /* @__PURE__ */ Reference("effect/ConfigProvider", {
   defaultValue: () => fromEnv()
@@ -28907,8 +28953,70 @@ function makeProvider(load, mapInput4) {
 function makeSource(get9, transform3) {
   return makeProvider((path) => get9(transform3(path)), (f) => makeSource(get9, flow(transform3, f)));
 }
+function makeOrElse(first, second) {
+  return makeProvider((path) => flatMap5(first.load(path), (node) => node !== undefined ? succeed6(node) : second.load(path)), (f) => makeOrElse(first.mapInput(f), second.mapInput(f)));
+}
 function make41(get9) {
   return makeSource(get9, identityPath);
+}
+var orElse2 = /* @__PURE__ */ dual(2, (self, that) => makeOrElse(self, that));
+var mapInput4 = /* @__PURE__ */ dual(2, (self, f) => self.mapInput(f));
+var constantCase = /* @__PURE__ */ mapInput4((path) => path.map((seg) => typeof seg === "number" ? seg : configCase(seg)));
+var nested = /* @__PURE__ */ dual(2, (self, prefix) => {
+  const path = typeof prefix === "string" ? [prefix] : prefix;
+  return mapInput4(self, (input) => [...path, ...input]);
+});
+var layer13 = (self) => isEffect2(self) ? effect(ConfigProvider)(self) : succeed5(ConfigProvider)(self);
+var layerAdd = (self, options) => effect(ConfigProvider)(gen3(function* () {
+  const current = yield* ConfigProvider;
+  const configProvider = isEffect2(self) ? yield* self : self;
+  return options?.asPrimary ? orElse2(configProvider, current) : orElse2(current, configProvider);
+}));
+function fromUnknown(root, options) {
+  const preserveEmptyStrings = options?.preserveEmptyStrings === true;
+  return make41((path) => succeed6(nodeAtJson(root, path, preserveEmptyStrings)));
+}
+function nodeAtJson(root, path, preserveEmptyStrings) {
+  let cur = root;
+  for (const seg of path) {
+    if (cur === null || cur === undefined)
+      return;
+    if (Array.isArray(cur)) {
+      if (typeof seg !== "number" || !Number.isInteger(seg) || seg < 0 || seg >= cur.length)
+        return;
+      cur = cur[seg];
+      continue;
+    }
+    if (isObject(cur)) {
+      if (typeof seg !== "string")
+        return;
+      if (!Object.hasOwn(cur, seg))
+        return;
+      cur = cur[seg];
+      continue;
+    }
+    return;
+  }
+  return describeUnknown(cur, preserveEmptyStrings);
+}
+function describeUnknown(u, preserveEmptyStrings) {
+  if (u === undefined || u === null)
+    return;
+  if (typeof u === "string")
+    return stringNode(u, preserveEmptyStrings);
+  if (typeof u === "number" || typeof u === "boolean" || typeof u === "bigint") {
+    return makeValue(String(u));
+  }
+  if (Array.isArray(u))
+    return makeArray(u.length);
+  if (isObject(u)) {
+    return makeRecord(new Set(Object.keys(u)));
+  }
+  return makeValue(format(u));
+}
+function stringNode(value4, preserveEmptyStrings) {
+  const normalized = emptyStringAsMissing(value4, preserveEmptyStrings);
+  return normalized === undefined ? undefined : makeValue(normalized);
 }
 function emptyStringAsMissing(value4, preserveEmptyStrings) {
   return value4 === "" && !preserveEmptyStrings ? undefined : value4;
@@ -28968,6 +29076,82 @@ function trieNodeAt(root, path) {
   }
   return node;
 }
+function fromDotEnvContents(lines, options) {
+  let env = parseDotEnvContents(lines);
+  if (options?.expandVariables) {
+    env = dotEnvExpand(env);
+  }
+  return fromEnvRecord(env, {
+    preserveEmptyStrings: options?.preserveEmptyStrings
+  });
+}
+var DOT_ENV_LINE = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/mg;
+function parseDotEnvContents(lines) {
+  const obj = Object.create(null);
+  lines = lines.replace(/\r\n?/gm, `
+`);
+  let match9;
+  while ((match9 = DOT_ENV_LINE.exec(lines)) != null) {
+    const key = match9[1];
+    let value4 = match9[2] || "";
+    value4 = value4.trim();
+    const maybeQuote = value4[0];
+    value4 = value4.replace(/^(['"`])([\s\S]*)\1$/gm, "$2");
+    if (maybeQuote === '"') {
+      value4 = value4.replace(/\\n/g, `
+`);
+      value4 = value4.replace(/\\r/g, "\r");
+    }
+    obj[key] = value4;
+  }
+  return obj;
+}
+function dotEnvExpand(parsed) {
+  const newParsed = Object.create(null);
+  for (const configKey of Object.keys(parsed)) {
+    newParsed[configKey] = interpolate(parsed[configKey], parsed).replace(/\\\$/g, "$");
+  }
+  return newParsed;
+}
+function interpolate(envValue, parsed) {
+  const lastUnescapedDollarSignIndex = searchLast(envValue, /(?!(?<=\\))\$/g);
+  if (lastUnescapedDollarSignIndex === -1)
+    return envValue;
+  const rightMostGroup = envValue.slice(lastUnescapedDollarSignIndex);
+  const matchGroup = /((?!(?<=\\))\${?([\w]+)(?::-([^}\\]*))?}?)/;
+  const match9 = rightMostGroup.match(matchGroup);
+  if (match9 !== null) {
+    const [_, group, variableName, defaultValue] = match9;
+    const value4 = Object.hasOwn(parsed, variableName) && parsed[variableName] !== "" ? parsed[variableName] : defaultValue ?? "";
+    return interpolate(envValue.replace(group, value4), parsed);
+  }
+  return envValue;
+}
+function searchLast(str, rgx) {
+  const matches = Array.from(str.matchAll(rgx));
+  return matches.length > 0 ? matches.slice(-1)[0].index : -1;
+}
+var fromDotEnv = /* @__PURE__ */ fnUntraced2(function* (options) {
+  const fs = yield* FileSystem;
+  const content = yield* fs.readFileString(options?.path ?? ".env");
+  return fromDotEnvContents(content, options);
+});
+var fromDir = /* @__PURE__ */ fnUntraced2(function* (options) {
+  const platformPath = yield* Path;
+  const fs = yield* FileSystem;
+  const rootPath = options?.rootPath ?? "/";
+  const preserveEmptyStrings = options?.preserveEmptyStrings === true;
+  return make41((path) => {
+    const fullPath = platformPath.join(rootPath, ...path.map(String));
+    const asFile = fs.readFileString(fullPath).pipe(map8((content) => stringNode(content.trim(), preserveEmptyStrings)));
+    const asDirectory = fs.readDirectory(fullPath).pipe(map8((entries3) => makeRecord(new Set(entries3.map((entry) => platformPath.basename(entry))))));
+    return asFile.pipe(catch_3((fileCause) => asDirectory.pipe(catch_3((dirCause) => isNotFound(fileCause) && isNotFound(dirCause) ? succeed6(undefined) : fail6(isNotFound(fileCause) ? dirCause : fileCause)))), mapError4((cause) => new SourceError({
+      message: `Failed to read file at ${platformPath.join(rootPath, ...path.map(String))}`,
+      cause
+    })));
+  });
+});
+var isNotFound = (cause) => cause.reason._tag === "NotFound";
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/LogLevel.js
 var values2 = ["All", "Fatal", "Error", "Warn", "Info", "Debug", "Trace", "None"];
@@ -29037,7 +29221,7 @@ var map13 = /* @__PURE__ */ dual(2, (self, f) => {
 var mapOrFail = /* @__PURE__ */ dual(2, (self, f) => {
   return make42((provider, pathPrefix) => flatMap5(evaluateAt(self, provider, pathPrefix), (resolution) => resolution._tag === "Resolved" ? f(resolution.value).pipe(mapEager2((value4) => resolved(value4, resolution.hasInput)), mapErrorEager2((error) => evaluationFailure(error, resolution.hasInput))) : succeed6(resolution)));
 });
-var orElse2 = /* @__PURE__ */ dual(2, (self, that) => {
+var orElse3 = /* @__PURE__ */ dual(2, (self, that) => {
   return make42((provider, pathPrefix) => matchEffect3(evaluateAt(self, provider, pathPrefix), {
     onFailure: (failure) => preserveInputEvidence(evaluateAt(that(failure.error), provider, pathPrefix), failure.hasInput),
     onSuccess: (resolution) => resolution._tag === "Absent" ? evaluateAt(that(resolution.error), provider, pathPrefix) : succeed6(resolution)
@@ -29316,7 +29500,7 @@ function url(name) {
 function date(name) {
   return schema(Date4, name);
 }
-var nested = /* @__PURE__ */ dual(2, (self, name) => make42((provider, pathPrefix) => evaluateAt(self, provider, [...pathPrefix, name])));
+var nested2 = /* @__PURE__ */ dual(2, (self, name) => make42((provider, pathPrefix) => evaluateAt(self, provider, [...pathPrefix, name])));
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Console.js
 var exports_Console = {};
 __export(exports_Console, {
@@ -29419,7 +29603,7 @@ __export(exports_ErrorReporter, {
   severity: () => severity,
   report: () => report,
   make: () => make43,
-  layer: () => layer13,
+  layer: () => layer14,
   isIgnored: () => isIgnored,
   ignore: () => ignore5,
   getSeverity: () => getSeverity,
@@ -29462,7 +29646,7 @@ var make43 = (report) => {
   };
 };
 var CurrentErrorReporters2 = CurrentErrorReporters;
-var layer13 = (reporters, options) => effect(CurrentErrorReporters2, withFiber2(fnUntraced2(function* (fiber3) {
+var layer14 = (reporters, options) => effect(CurrentErrorReporters2, withFiber2(fnUntraced2(function* (fiber3) {
   const currentReporters = new Set(options?.mergeWithExisting === true ? fiber3.getRef(CurrentErrorReporters) : []);
   for (const reporter of reporters) {
     currentReporters.add(isEffect2(reporter) ? yield* reporter : reporter);
@@ -29576,7 +29760,7 @@ var getUnsafe5 = (self) => self.ref.current;
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/FetchHttpClient.js
 var exports_FetchHttpClient = {};
 __export(exports_FetchHttpClient, {
-  layer: () => layer14,
+  layer: () => layer15,
   RequestInit: () => RequestInit,
   Fetch: () => Fetch
 });
@@ -29988,8 +30172,8 @@ var fromInputNested = (input) => {
         }
       }
     } else if (typeof value4 === "object") {
-      const nested2 = fromInputNested(value4);
-      for (const [k, v] of nested2) {
+      const nested3 = fromInputNested(value4);
+      for (const [k, v] of nested3) {
         out.push([[key, ...typeof k === "string" ? [k] : k], v]);
       }
     } else if (value4 !== undefined) {
@@ -30869,7 +31053,7 @@ var transformResponse = /* @__PURE__ */ dual(2, (self, f) => makeWith2((request3
 var catch_6 = /* @__PURE__ */ dual(2, (self, f) => transformResponse(self, catch_3(f)));
 var catchTag5 = /* @__PURE__ */ dual(3, (self, tag2, f) => transformResponse(self, (effect2) => catchTag3(effect2, tag2, f)));
 var catchTags4 = /* @__PURE__ */ dual(2, (self, cases) => transformResponse(self, catchTags2(cases)));
-var filterOrElse3 = /* @__PURE__ */ dual(3, (self, f, orElse3) => transformResponse(self, filterOrElse2(f, orElse3)));
+var filterOrElse3 = /* @__PURE__ */ dual(3, (self, f, orElse4) => transformResponse(self, filterOrElse2(f, orElse4)));
 var filterOrFail3 = /* @__PURE__ */ dual(3, (self, f, orFailWith) => transformResponse(self, filterOrFail2(f, orFailWith)));
 var filterStatus2 = /* @__PURE__ */ dual(2, (self, f) => transformResponse(self, flatMap5(filterStatus(f))));
 var filterStatusOk2 = /* @__PURE__ */ transformResponse(/* @__PURE__ */ flatMap5(filterStatusOk));
@@ -31388,7 +31572,7 @@ var fetch = /* @__PURE__ */ make49((request3, url2, signal, fiber3) => {
   }
   return send(undefined);
 });
-var layer14 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
+var layer15 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
 // packages/core/src/identifiers.ts
 var identifier2 = (name) => exports_Schema.NonEmptyString.pipe(exports_Schema.brand(`@effect-agent/core/${name}`));
 var AgentId = identifier2("AgentId");
@@ -32719,7 +32903,7 @@ var reasonFromHttpStatus = (params) => {
 var exports_IdGenerator = {};
 __export(exports_IdGenerator, {
   make: () => make51,
-  layer: () => layer15,
+  layer: () => layer16,
   defaultIdGenerator: () => defaultIdGenerator,
   IdGenerator: () => IdGenerator
 });
@@ -32780,7 +32964,7 @@ var make51 = /* @__PURE__ */ fnUntraced2(function* ({
     generateId
   };
 });
-var layer15 = (options3) => effect(IdGenerator)(make51(options3));
+var layer16 = (options3) => effect(IdGenerator)(make51(options3));
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/LanguageModel.js
 var exports_LanguageModel = {};
 __export(exports_LanguageModel, {
@@ -34458,9 +34642,9 @@ var Proto17 = {
     };
   }
 };
-var make57 = (provider, modelName, layer16) => Object.assign(Object.create(Proto17), {
+var make57 = (provider, modelName, layer17) => Object.assign(Object.create(Proto17), {
   provider
-}, merge2(layer16, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
+}, merge2(layer17, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Tool.js
 var exports_Tool = {};
 __export(exports_Tool, {
@@ -42778,11 +42962,16 @@ class ReviewReport extends exports_Schema.Class("@effect-agent/pr-review/ReviewR
   findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(12))
 }) {
 }
-
-class ReviewUsage extends exports_Schema.Class("@effect-agent/pr-review/ReviewUsage")({
+var ReviewUsageFields = exports_Schema.Struct({
   inputTokens: exports_Schema.Natural,
-  outputTokens: exports_Schema.Natural
-}) {
+  uncachedInputTokens: exports_Schema.Natural,
+  cachedInputTokens: exports_Schema.Natural,
+  cacheWriteInputTokens: exports_Schema.Natural,
+  outputTokens: exports_Schema.Natural,
+  estimatedCostMicrousd: exports_Schema.optionalKey(exports_Schema.Natural)
+}).check(exports_Schema.makeFilter((usage2) => usage2.inputTokens === usage2.uncachedInputTokens + usage2.cachedInputTokens + usage2.cacheWriteInputTokens, { title: "Input token total equals uncached, cached, and cache-write components" }));
+
+class ReviewUsage extends exports_Schema.Class("@effect-agent/pr-review/ReviewUsage")(ReviewUsageFields) {
 }
 
 class ReviewOutcome extends exports_Schema.Class("@effect-agent/pr-review/ReviewOutcome")({
@@ -42795,7 +42984,7 @@ var BASE_INSTRUCTIONS = `Review the supplied pull-request diff once.
 
 Report only concrete correctness, security, reliability, or maintainability defects that the author should act on. Do not praise, restate the change, invent missing repository context, or ask for speculative cleanup. An empty findings array is valid.
 
-Every finding must use an exact supplied path. Set line only to a RIGHT-side added or context line visible in that path's unified patch; otherwise omit line. Use blocking only for a defect that should prevent shipping. Classify each finding with the closest available category. Treat unreviewedPaths as unavailable scope and never imply that you inspected it.`;
+Every finding must use an exact supplied path. Set line only to a RIGHT-side added or context line visible in that path's unified patch; otherwise omit line. Use blocking only for a defect that should prevent shipping. Classify each finding with the closest available category. Treat unreviewedPaths as unavailable scope and never imply that you inspected it. A changed file absent from changes may have been withheld by the host; never infer that it was not changed, and report only defects proven by the supplied patches.`;
 var reviewPolicy = AgentPolicy.make({
   maxTurns: 1,
   maxToolCalls: 1,
@@ -42876,7 +43065,8 @@ var makeReviewer = (options3) => {
   const review = (request3) => exports_Effect.gen(function* () {
     const budget2 = yield* makeUsageBudget(reviewBudgetLimits);
     const result4 = yield* AgentRuntime.run(binding, request3, {
-      budget: toRunBudgetHook(budget2)
+      budget: toRunBudgetHook(budget2),
+      ...options3.estimateCostMicrousd === undefined ? {} : { estimateCostMicrousd: options3.estimateCostMicrousd }
     });
     const usage2 = yield* budget2.snapshot;
     return ReviewOutcome.make({
@@ -42884,7 +43074,11 @@ var makeReviewer = (options3) => {
       turns: result4.turns,
       usage: ReviewUsage.make({
         inputTokens: usage2.inputTokens,
-        outputTokens: usage2.outputTokens
+        uncachedInputTokens: Math.max(0, usage2.inputTokens - usage2.cacheReadInputTokens - usage2.cacheWriteInputTokens),
+        cachedInputTokens: usage2.cacheReadInputTokens,
+        cacheWriteInputTokens: usage2.cacheWriteInputTokens,
+        outputTokens: usage2.outputTokens,
+        ...options3.estimateCostMicrousd === undefined ? {} : { estimatedCostMicrousd: usage2.costMicrousd }
       })
     });
   }).pipe(exports_Effect.provide(IdGenerator2.layer), exports_Effect.scoped);
@@ -42897,7 +43091,7 @@ __export(exports_OpenAiClient, {
   make: () => make61,
   layerWebSocketMode: () => layerWebSocketMode,
   layerConfig: () => layerConfig,
-  layer: () => layer16,
+  layer: () => layer17,
   OpenAiSocket: () => OpenAiSocket,
   OpenAiClient: () => OpenAiClient
 });
@@ -44010,7 +44204,7 @@ var make61 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createEmbedding
   });
 }, withRedactedHeaders);
-var layer16 = (options3) => effect(OpenAiClient, make61(options3));
+var layer17 = (options3) => effect(OpenAiClient, make61(options3));
 var layerConfig = (options3) => effect(OpenAiClient, gen3(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
@@ -44177,7 +44371,7 @@ __export(exports_OpenAiLanguageModel, {
   withConfigOverride: () => withConfigOverride,
   model: () => model,
   make: () => make62,
-  layer: () => layer17,
+  layer: () => layer18,
   Config: () => Config
 });
 
@@ -44756,7 +44950,7 @@ var SharedModelIds = ModelIdsShared.members[1];
 
 class Config extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiLanguageModel/Config")) {
 }
-var model = (model2, config) => make57("openai", model2, layer17({
+var model = (model2, config) => make57("openai", model2, layer18({
   model: model2,
   config
 }));
@@ -44864,7 +45058,7 @@ var make62 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer17 = (options3) => effect(LanguageModel, make62(options3));
+var layer18 = (options3) => effect(LanguageModel, make62(options3));
 var withConfigOverride = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config), (config) => provideService2(self, Config, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -47077,11 +47271,31 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
 });
 
 // examples/pr-review/src/selection.ts
-var MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-review:v2 automatic=(true|false) completed=(true|false) -->\s*$/;
+var reviewModeFromCommand = (command) => {
+  switch (command.trim()) {
+    case "/effect-agent review":
+      return "incremental";
+    case "/effect-agent review full":
+      return "full";
+    default:
+      return;
+  }
+};
+var ATTEMPT_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-review:v2 automatic=(true|false) completed=(true|false) -->\s*$/;
+var PAUSE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-review-pause:v1 limit=([0-9]+) -->\s*$/;
 var reviewMarker = (automatic, completed = true) => `<!-- effect-agent-review:v2 automatic=${String(automatic)} completed=${String(completed)} -->`;
+var reviewPauseMarker = (automaticReviewLimit) => `<!-- effect-agent-review-pause:v1 limit=${String(automaticReviewLimit)} -->`;
 var markerKind = (body) => {
-  const match9 = MARKER_PATTERN.exec(body);
-  return match9 === null ? undefined : { automatic: match9[1] === "true", completed: match9[2] === "true" };
+  const attempt = ATTEMPT_MARKER_PATTERN.exec(body);
+  if (attempt !== null) {
+    return {
+      _tag: "attempt",
+      automatic: attempt[1] === "true",
+      completed: attempt[2] === "true"
+    };
+  }
+  const pause = PAUSE_MARKER_PATTERN.exec(body);
+  return pause === null ? undefined : { _tag: "pause", automaticReviewLimit: pause[1] ?? "" };
 };
 var selectReview = (input) => {
   const author = input.reviewAuthor.toLowerCase();
@@ -47092,28 +47306,45 @@ var selectReview = (input) => {
     const byTime = (left.item.submittedAt ?? "").localeCompare(right.item.submittedAt ?? "");
     return byTime === 0 ? left.item.id - right.item.id : byTime;
   });
+  const attempts = trusted.flatMap(({ item, marker }) => marker._tag === "attempt" ? [{ item, marker }] : []);
+  const automaticAttempts = attempts.filter(({ marker }) => marker.automatic).length;
+  const automaticReviewsRemaining = Math.max(0, input.automaticReviewLimit - automaticAttempts - (input.mode === "auto" ? 1 : 0));
   if (input.mode === "full") {
     return {
       _tag: "review",
       scope: "full",
       baseRevision: undefined,
       automatic: false,
+      automaticReviewsRemaining,
       reason: "manual full review"
     };
   }
-  if (trusted.some(({ item, marker }) => item.commitId === input.currentHead && (input.mode === "auto" || marker.completed))) {
+  if (attempts.some(({ item, marker }) => item.commitId === input.currentHead && (input.mode === "auto" || marker.completed))) {
     return { _tag: "skip", reason: "head-already-reviewed" };
   }
-  if (input.mode === "auto" && trusted.filter(({ marker }) => marker.automatic).length >= 2) {
-    return { _tag: "skip", reason: "automatic-limit-reached" };
+  if (input.mode === "auto" && automaticAttempts >= input.automaticReviewLimit) {
+    if (input.automaticReviewLimit === 0) {
+      return { _tag: "skip", reason: "automatic-reviews-paused" };
+    }
+    const pausePublished = trusted.some(({ marker }) => marker._tag === "pause" && marker.automaticReviewLimit === String(input.automaticReviewLimit));
+    if (pausePublished)
+      return { _tag: "skip", reason: "automatic-reviews-paused" };
+    return {
+      _tag: "pause",
+      reason: "automatic-reviews-paused",
+      automaticReviewLimit: input.automaticReviewLimit,
+      automaticAttempts,
+      lastCompletedRevision: attempts.filter(({ marker }) => marker.completed).at(-1)?.item.commitId
+    };
   }
-  const latest = trusted.filter(({ marker }) => marker.completed).at(-1)?.item;
+  const latest = attempts.filter(({ marker }) => marker.completed).at(-1)?.item;
   if (latest?.commitId === undefined) {
     return {
       _tag: "review",
       scope: "full",
       baseRevision: undefined,
       automatic: input.mode === "auto",
+      automaticReviewsRemaining,
       reason: "no prior review baseline"
     };
   }
@@ -47122,6 +47353,7 @@ var selectReview = (input) => {
     scope: "incremental",
     baseRevision: latest.commitId,
     automatic: input.mode === "auto",
+    automaticReviewsRemaining,
     reason: input.mode === "auto" ? "one automatic follow-up" : "manual incremental review"
   };
 };
@@ -47222,6 +47454,18 @@ var renderCoverage = (input) => [
   ...input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} unavailable`] : [],
   ...input.ignoredFiles > 0 ? [`${String(input.ignoredFiles)} ignored`] : []
 ].join(" · ");
+var formatEstimatedUsd = (microusd) => {
+  const dollars = microusd / 1e6;
+  const digits = dollars > 0 && dollars < 0.0001 ? 6 : dollars < 1 ? 4 : 2;
+  return `$${dollars.toFixed(digits)}`;
+};
+var renderInputUsage = (input) => `${formatNumber(input.inputTokens)} input (${formatNumber(input.uncachedInputTokens)} uncached · ${formatNumber(input.cachedInputTokens)} cached · ${formatNumber(input.cacheWriteInputTokens)} cache write)`;
+var renderAutomaticPause = (automaticReviewsRemaining) => automaticReviewsRemaining > 0 ? undefined : [
+  "> [!NOTE]",
+  "> **Automatic reviews are paused for this pull request.**",
+  "> Further pushes will not start another review. Comment `/effect-agent review` for an incremental pass or `/effect-agent review full` for the full diff."
+].join(`
+`);
 var renderReviewBody = (input) => {
   const unanchored = input.report.findings.filter((finding) => finding.line === undefined);
   const parts2 = [
@@ -47232,10 +47476,12 @@ var renderReviewBody = (input) => {
       "| :-- | :-- | :-- |",
       `| **${input.scope === "full" ? "Full diff" : "Incremental"}** | ${renderCoverage(input)} | ${renderFindingTally(input.report)} |`
     ].join(`
-`),
-    "### Summary",
-    input.report.summary
+`)
   ];
+  const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
+  if (automaticPause !== undefined)
+    parts2.push(automaticPause);
+  parts2.push("### Summary", input.report.summary);
   if (unanchored.length > 0) {
     parts2.push([
       "<details>",
@@ -47257,8 +47503,10 @@ var renderReviewBody = (input) => {
 
 `)) : undefined;
   const shardLabel = input.shards === 0 ? "No model call" : input.shards === 1 ? "1 review shard" : countNoun(input.shards, "parallel review shard");
-  const usage2 = input.shards === 0 ? "" : ` · ${formatNumber(input.inputTokens)} input / ${formatNumber(input.outputTokens)} output tokens`;
-  const footer = `<sub>${shardLabel}${usage2} · reviewed at <code>${input.headRevision.slice(0, 7)}</code></sub>`;
+  const usage2 = input.shards === 0 ? "" : ` · ${renderInputUsage(input)} / ${formatNumber(input.outputTokens)} output tokens`;
+  const estimatedCost = input.estimatedCost === undefined ? "" : ` · ≈ ${formatEstimatedUsd(input.estimatedCost.microusd)} at <a href="${input.estimatedCost.url}">${input.estimatedCost.label} rates</a>`;
+  const automaticReviewStatus = input.automaticReviewsRemaining === 0 ? "" : input.automaticReviewsRemaining === 1 ? " · 1 automatic review remains" : ` · ${String(input.automaticReviewsRemaining)} automatic reviews remain`;
+  const footer = `<sub>${shardLabel}${usage2}${estimatedCost} · reviewed at <code>${input.headRevision.slice(0, 7)}</code>${automaticReviewStatus}</sub>`;
   if (consolidatedPrompt !== undefined && [...parts2, consolidatedPrompt, footer].join(`
 
 `).length <= REVIEW_BODY_LIMIT) {
@@ -47269,29 +47517,64 @@ var renderReviewBody = (input) => {
 
 `);
 };
-var renderReviewFailureBody = () => [
-  "## Effect Agent review",
-  `> [!CAUTION]
+var renderReviewFailureBody = (input) => {
+  const parts2 = [
+    "## Effect Agent review",
+    `> [!CAUTION]
 > The review failed before it could publish findings.`,
-  "One or more review shards did not return a schema-valid report."
-].join(`
+    "One or more review shards did not return a schema-valid report."
+  ];
+  const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
+  if (automaticPause !== undefined)
+    parts2.push(automaticPause);
+  return parts2.join(`
 
 `);
+};
+var renderReviewPauseBody = (input) => {
+  const attempts = input.automaticAttempts === input.automaticReviewLimit ? `${String(input.automaticAttempts)} of ${String(input.automaticReviewLimit)} used` : `${String(input.automaticAttempts)} recorded · limit ${String(input.automaticReviewLimit)}`;
+  const lastCompleted = input.lastCompletedRevision === undefined ? "None" : `<code>${input.lastCompletedRevision.slice(0, 7)}</code>`;
+  return [
+    "## Effect Agent review",
+    [
+      "> [!NOTE]",
+      "> **Automatic reviews are paused for this pull request.**",
+      "> The configured automatic review limit has been reached. No model call was made for this update."
+    ].join(`
+`),
+    [
+      "| Automatic attempts | Last completed review | Current head |",
+      "| :-- | :-- | :-- |",
+      `| **${attempts}** | ${lastCompleted} | <code>${input.headRevision.slice(0, 7)}</code> |`
+    ].join(`
+`),
+    "### Summary",
+    "Further pushes will not start another automatic model review, and this pause notice will not be posted again.",
+    "Comment `/effect-agent review` for another review of the latest changes, or `/effect-agent review full` for the full pull request diff.",
+    `<sub>No model call · review automation paused at <code>${input.headRevision.slice(0, 7)}</code></sub>`
+  ].join(`
+
+`);
+};
 var defaultReviewPresentation = {
   renderFinding: renderFindingBody,
   renderReview: renderReviewBody,
-  renderFailure: renderReviewFailureBody
+  renderFailure: renderReviewFailureBody,
+  renderPause: renderReviewPauseBody
 };
 var ReviewPresentation = exports_Context.Reference("@effect-agent/example-pr-review/ReviewPresentation", {
   defaultValue: () => defaultReviewPresentation
 });
-var withReviewMarker = (body, automatic, completed = true) => {
+var withTerminalMarker = (body, marker) => {
   const visibleBody = body.trimEnd();
-  const marker = reviewMarker(automatic, completed);
   return visibleBody.length === 0 ? marker : `${visibleBody}
 
 ${marker}`;
 };
+var withReviewMarker = (body, automatic, completed = true) => {
+  return withTerminalMarker(body, reviewMarker(automatic, completed));
+};
+var withReviewPauseMarker = (body, automaticReviewLimit) => withTerminalMarker(body, reviewPauseMarker(automaticReviewLimit));
 
 // examples/pr-review/src/action.ts
 var MAX_REVIEW_PATCH_CHARS = 320000;
@@ -47300,6 +47583,72 @@ var MAX_REVIEW_FILES = 100;
 var TARGET_SHARD_PATCH_CHARS = 80000;
 var MAX_MERGED_FINDINGS = 12;
 var MAX_REVIEW_SHARDS = 4;
+var GPT_56_SOL_PRICING = {
+  label: "GPT-5.6 Sol",
+  url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+  inputRateHundredths: 400,
+  cachedInputRateHundredths: 40,
+  cacheWriteRateHundredths: 500,
+  outputRateHundredths: 2000
+};
+var GPT_56_PRICING = {
+  "gpt-5.6": GPT_56_SOL_PRICING,
+  "gpt-5.6-sol": GPT_56_SOL_PRICING,
+  "gpt-5.6-terra": {
+    label: "GPT-5.6 Terra",
+    url: "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+    inputRateHundredths: 200,
+    cachedInputRateHundredths: 20,
+    cacheWriteRateHundredths: 250,
+    outputRateHundredths: 1200
+  },
+  "gpt-5.6-luna": {
+    label: "GPT-5.6 Luna",
+    url: "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+    inputRateHundredths: 20,
+    cachedInputRateHundredths: 2,
+    cacheWriteRateHundredths: 25,
+    outputRateHundredths: 120
+  }
+};
+var GPT_56_PRICING_VERSION = "openai-api-2026-08-25";
+var estimateGpt56CostMicrousd = (model2, usage2) => {
+  const pricing = GPT_56_PRICING[model2];
+  if (pricing === undefined)
+    return;
+  const cacheRead = usage2.inputTokens.cacheRead ?? 0;
+  const inputTotal = usage2.inputTokens.total ?? (usage2.inputTokens.uncached ?? 0) + cacheRead;
+  const uncached = Math.max(0, inputTotal - cacheRead);
+  const cacheWrite = Math.min(uncached, usage2.inputTokens.cacheWrite ?? 0);
+  const standardInput = uncached - cacheWrite;
+  const output = usage2.outputTokens.total ?? 0;
+  const costHundredths = standardInput * pricing.inputRateHundredths + cacheRead * pricing.cachedInputRateHundredths + cacheWrite * pricing.cacheWriteRateHundredths + output * pricing.outputRateHundredths;
+  return Math.ceil(costHundredths / 100);
+};
+var gpt56CostEstimator = (model2) => {
+  const pricing = GPT_56_PRICING[model2];
+  if (pricing === undefined)
+    return;
+  return (usage2) => exports_Effect.succeed({
+    costMicrousd: estimateGpt56CostMicrousd(model2, usage2) ?? 0,
+    pricingVersion: GPT_56_PRICING_VERSION
+  });
+};
+var ACTION_INPUT_BY_CONFIG = {
+  OPENAI_API_KEY: "INPUT_OPENAI-API-KEY",
+  GITHUB_TOKEN: "INPUT_GITHUB-TOKEN",
+  PR_REVIEW_PULL_REQUEST: "INPUT_PULL-REQUEST",
+  PR_REVIEW_AUTHOR: "INPUT_REVIEW-AUTHOR",
+  PR_REVIEW_MODE: "INPUT_MODE",
+  PR_REVIEW_COMMAND: "INPUT_COMMAND",
+  PR_REVIEW_AUTOMATIC_LIMIT: "INPUT_AUTOMATIC-REVIEW-LIMIT",
+  PR_REVIEW_EXPECTED_HEAD: "INPUT_EXPECTED-HEAD",
+  PR_REVIEW_MODEL: "INPUT_MODEL",
+  PR_REVIEW_EFFORT: "INPUT_EFFORT",
+  PR_REVIEW_GUIDANCE_FILE: "INPUT_GUIDANCE-FILE",
+  PR_REVIEW_IGNORE: "INPUT_IGNORE"
+};
+var withActionInputs = (provider) => exports_ConfigProvider.orElse(provider, exports_ConfigProvider.mapInput(provider, (path) => path.map((segment) => typeof segment === "string" ? ACTION_INPUT_BY_CONFIG[segment] ?? segment : segment)));
 
 class ActionConfigurationError extends exports_Schema.TaggedError()("ActionConfigurationError", { message: exports_Schema.String }) {
 }
@@ -47317,14 +47666,19 @@ var writeOutputs = exports_Effect.fn("writeReviewOutputs")(function* (entries3) 
 `)}
 `, { flag: "a" });
 });
-var skip = exports_Effect.fn("skipReview")(function* (reason) {
-  yield* exports_Console.log(`PR review skipped: ${reason}`);
+var skip = exports_Effect.fn("skipReview")(function* (reason, reviewUrl) {
+  yield* exports_Console.log(reviewUrl === undefined ? `PR review skipped: ${reason}` : `Posted PR review: ${reviewUrl}`);
   yield* writeOutputs([
     ["skipped", "true"],
     ["reason", reason],
     ["input-tokens", 0],
+    ["uncached-input-tokens", 0],
+    ["cached-input-tokens", 0],
+    ["cache-write-input-tokens", 0],
     ["output-tokens", 0],
-    ["blocking-findings", 0]
+    ["estimated-cost-usd", "0.000000"],
+    ["blocking-findings", 0],
+    ...reviewUrl === undefined ? [] : [["review-url", reviewUrl]]
   ]);
 });
 var matchesIgnore = (path, rawPattern) => {
@@ -47399,7 +47753,11 @@ ${outcome.report.summary.slice(0, 1400)}`).join(`
   return {
     report: ReviewReport.make({ summary: summary2, findings }),
     inputTokens: outcomes.reduce((total, outcome) => total + outcome.usage.inputTokens, 0),
-    outputTokens: outcomes.reduce((total, outcome) => total + outcome.usage.outputTokens, 0)
+    uncachedInputTokens: outcomes.reduce((total, outcome) => total + outcome.usage.uncachedInputTokens, 0),
+    cachedInputTokens: outcomes.reduce((total, outcome) => total + outcome.usage.cachedInputTokens, 0),
+    cacheWriteInputTokens: outcomes.reduce((total, outcome) => total + outcome.usage.cacheWriteInputTokens, 0),
+    outputTokens: outcomes.reduce((total, outcome) => total + outcome.usage.outputTokens, 0),
+    estimatedCostMicrousd: outcomes.every((outcome) => outcome.usage.estimatedCostMicrousd !== undefined) ? outcomes.reduce((total, outcome) => total + (outcome.usage.estimatedCostMicrousd ?? 0), 0) : undefined
   };
 };
 var reanchorToFullPullRequest = (files, report2) => {
@@ -47438,7 +47796,13 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   const pullRequestNumber = yield* exports_Config.schema(exports_Schema.Int.check(exports_Schema.isGreaterThan(0)), "PR_REVIEW_PULL_REQUEST");
   const token = yield* exports_Config.redacted("GITHUB_TOKEN");
   const reviewAuthor = yield* exports_Config.nonEmptyString("PR_REVIEW_AUTHOR").pipe(exports_Config.withDefault("github-actions[bot]"));
-  const mode = yield* exports_Config.literals(["auto", "incremental", "full"], "PR_REVIEW_MODE").pipe(exports_Config.withDefault("auto"));
+  const configuredMode = yield* exports_Config.literals(["auto", "incremental", "full"], "PR_REVIEW_MODE").pipe(exports_Config.withDefault("auto"));
+  const command = yield* exports_Config.string("PR_REVIEW_COMMAND").pipe(exports_Config.withDefault(""));
+  const mode = command.trim().length === 0 ? configuredMode : reviewModeFromCommand(command);
+  if (mode === undefined) {
+    return yield* skip("unsupported-review-command");
+  }
+  const automaticReviewLimit = yield* exports_Config.schema(exports_Schema.Natural, "PR_REVIEW_AUTOMATIC_LIMIT").pipe(exports_Config.withDefault(2));
   const expectedHead = yield* exports_Config.string("PR_REVIEW_EXPECTED_HEAD").pipe(exports_Config.withDefault(""));
   const modelName = yield* exports_Config.nonEmptyString("PR_REVIEW_MODEL").pipe(exports_Config.withDefault("gpt-5.6-sol"));
   const effort = yield* exports_Config.literals(["low", "medium", "high", "xhigh"], "PR_REVIEW_EFFORT").pipe(exports_Config.withDefault("medium"));
@@ -47462,10 +47826,24 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     mode,
     currentHead: pull.headRevision,
     reviewAuthor,
+    automaticReviewLimit,
     history
   });
   if (selection._tag === "skip")
     return yield* skip(selection.reason);
+  if (selection._tag === "pause") {
+    const reviewUrl2 = yield* github.publishReview({
+      commitId: pull.headRevision,
+      body: withReviewPauseMarker(presentation.renderPause({
+        automaticReviewLimit: selection.automaticReviewLimit,
+        automaticAttempts: selection.automaticAttempts,
+        lastCompletedRevision: selection.lastCompletedRevision,
+        headRevision: pull.headRevision
+      }), selection.automaticReviewLimit),
+      comments: []
+    });
+    return yield* skip(selection.reason, reviewUrl2);
+  }
   const fullFiles = yield* github.listFiles;
   let scopedFiles = fullFiles;
   let actualScope = selection.scope;
@@ -47484,7 +47862,11 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   const guidance = guidanceFile.length === 0 ? undefined : (yield* fs.readFileString(guidanceFile)).slice(0, 20000);
   let shardCount = 0;
   let inputTokens = 0;
+  let uncachedInputTokens = 0;
+  let cachedInputTokens = 0;
+  let cacheWriteInputTokens = 0;
   let outputTokens = 0;
+  let estimatedCostMicrousd;
   let report2;
   if (surface.changes.length === 0) {
     report2 = ReviewReport.make({
@@ -47494,6 +47876,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   } else {
     const shards = shardReviewChanges(surface.changes);
     shardCount = shards.length;
+    const estimateCostMicrousd = gpt56CostEstimator(modelName);
     const reviewer = makeReviewer({
       model: exports_OpenAiLanguageModel.model(modelName, {
         max_output_tokens: 8000,
@@ -47501,6 +47884,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
         strictJsonSchema: true,
         reasoning: { effort }
       }),
+      ...estimateCostMicrousd === undefined ? {} : { estimateCostMicrousd },
       ...guidance === undefined ? {} : { guidance }
     });
     const unreviewedPaths = surface.unreviewedPaths.filter((path) => path.length <= 512).slice(0, 300);
@@ -47517,7 +47901,9 @@ var reviewActionProgram = exports_Effect.gen(function* () {
 ${exports_Cause.pretty(reviewExit.cause)}`);
       const reviewUrl2 = yield* github.publishReview({
         commitId: pull.headRevision,
-        body: withReviewMarker(presentation.renderFailure(), selection.automatic, false),
+        body: withReviewMarker(presentation.renderFailure({
+          automaticReviewsRemaining: selection.automaticReviewsRemaining
+        }), selection.automatic, false),
         comments: []
       });
       yield* writeOutputs([
@@ -47530,19 +47916,34 @@ ${exports_Cause.pretty(reviewExit.cause)}`);
     }
     const merged = mergeReviewOutcomes(reviewExit.value);
     inputTokens = merged.inputTokens;
+    uncachedInputTokens = merged.uncachedInputTokens;
+    cachedInputTokens = merged.cachedInputTokens;
+    cacheWriteInputTokens = merged.cacheWriteInputTokens;
     outputTokens = merged.outputTokens;
+    estimatedCostMicrousd = merged.estimatedCostMicrousd;
     report2 = reanchorToFullPullRequest(fullFiles, merged.report);
   }
+  const pricing = GPT_56_PRICING[modelName];
+  const estimatedCost = estimatedCostMicrousd === undefined || pricing === undefined ? undefined : {
+    microusd: estimatedCostMicrousd,
+    label: pricing.label,
+    url: pricing.url
+  };
   const body = withReviewMarker(presentation.renderReview({
     report: report2,
     automatic: selection.automatic,
+    automaticReviewsRemaining: selection.automaticReviewsRemaining,
     scope: actualScope,
     reviewedFiles: surface.changes.length,
     unreviewedFiles: surface.unreviewedPaths.length,
     ignoredFiles: surface.ignoredPaths.length,
     shards: shardCount,
     inputTokens,
+    uncachedInputTokens,
+    cachedInputTokens,
+    cacheWriteInputTokens,
     outputTokens,
+    estimatedCost,
     headRevision: pull.headRevision
   }), selection.automatic);
   const reviewUrl = yield* github.publishReview({
@@ -47561,7 +47962,14 @@ ${exports_Cause.pretty(reviewExit.cause)}`);
     ["skipped", "false"],
     ["reason", selection.reason],
     ["input-tokens", inputTokens],
+    ["uncached-input-tokens", uncachedInputTokens],
+    ["cached-input-tokens", cachedInputTokens],
+    ["cache-write-input-tokens", cacheWriteInputTokens],
     ["output-tokens", outputTokens],
+    [
+      "estimated-cost-usd",
+      estimatedCost === undefined ? "" : (estimatedCost.microusd / 1e6).toFixed(6)
+    ],
     ["blocking-findings", blocking],
     ["review-url", reviewUrl]
   ]);
@@ -47571,22 +47979,5 @@ ${exports_Cause.pretty(reviewExit.cause)}`);
 });
 
 // examples/pr-review/src/action-entry.ts
-var INPUT_TO_ENV = [
-  ["INPUT_OPENAI-API-KEY", "OPENAI_API_KEY"],
-  ["INPUT_GITHUB-TOKEN", "GITHUB_TOKEN"],
-  ["INPUT_PULL-REQUEST", "PR_REVIEW_PULL_REQUEST"],
-  ["INPUT_REVIEW-AUTHOR", "PR_REVIEW_AUTHOR"],
-  ["INPUT_MODE", "PR_REVIEW_MODE"],
-  ["INPUT_EXPECTED-HEAD", "PR_REVIEW_EXPECTED_HEAD"],
-  ["INPUT_MODEL", "PR_REVIEW_MODEL"],
-  ["INPUT_EFFORT", "PR_REVIEW_EFFORT"],
-  ["INPUT_GUIDANCE-FILE", "PR_REVIEW_GUIDANCE_FILE"],
-  ["INPUT_IGNORE", "PR_REVIEW_IGNORE"]
-];
-for (const [input, target] of INPUT_TO_ENV) {
-  const value4 = process.env[input];
-  if (value4 !== undefined && value4 !== "" && (process.env[target] ?? "") === "") {
-    process.env[target] = value4;
-  }
-}
-exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.scoped, exports_Effect.provide(exports_Layer.mergeAll(exports_NodeServices.layer, exports_FetchHttpClient.layer))), { disableErrorReporting: true });
+var configProvider = withActionInputs(exports_ConfigProvider.fromEnv());
+exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.scoped, exports_Effect.provideService(exports_ConfigProvider.ConfigProvider, configProvider), exports_Effect.provide(exports_Layer.mergeAll(exports_NodeServices.layer, exports_FetchHttpClient.layer))), { disableErrorReporting: true });
