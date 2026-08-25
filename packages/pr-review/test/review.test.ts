@@ -88,6 +88,7 @@ describe("review output boundary", () => {
             path: "src/index.ts",
             line: 2,
             severity: "important",
+            category: "correctness",
             title: "Broken branch",
             body: "This branch returns the wrong value.",
           }),
@@ -95,6 +96,7 @@ describe("review output boundary", () => {
             path: "src/index.ts",
             line: 99,
             severity: "nit",
+            category: "maintainability",
             title: "Invalid anchor",
             body: "Keep this finding, but not its line.",
           }),
@@ -102,12 +104,14 @@ describe("review output boundary", () => {
             path: "src/index.ts",
             line: 2,
             severity: "important",
+            category: "correctness",
             title: "Broken branch",
             body: "Duplicate.",
           }),
           ReviewFinding.make({
             path: "not-in-the-diff.ts",
             severity: "blocking",
+            category: "security",
             title: "Invented path",
             body: "Drop this.",
           }),
@@ -117,6 +121,7 @@ describe("review output boundary", () => {
 
     expect(report.findings).toHaveLength(2);
     expect(report.findings[0]?.line).toBe(2);
+    expect(report.findings[0]?.category).toBe("correctness");
     expect(report.findings[1]?.line).toBeUndefined();
   });
 });

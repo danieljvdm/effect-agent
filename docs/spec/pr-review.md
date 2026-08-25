@@ -55,7 +55,9 @@ the review contract and reviewer constructor.
 - **PRR-009**: The channel publishes one `COMMENT` review only after the model settles, against the
   commit it inspected. A failed attempt publishes only an honest failure marker and no findings. A
   completed attempt revalidates inline anchors against that pull-request diff. Blocking findings
-  fail the Action after publication; other findings remain advisory.
+  fail the Action after publication; other findings remain advisory. The channel derives severity
+  and category labels, summary callouts, and agent-ready prompt blocks from the validated report;
+  presentation does not start another model Turn.
 
 The workflow checks out the trusted default branch, serializes runs for the same pull request, and
 passes the webhook head SHA so stale queued events stop before model execution. It does not cancel

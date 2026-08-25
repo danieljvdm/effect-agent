@@ -111,6 +111,7 @@ describe("bounded review wave", () => {
             ReviewFinding.make({
               path: `src/${String(index)}-${String(findingIndex)}.ts`,
               severity,
+              category: "correctness",
               title: `Finding ${String(index)}-${String(findingIndex)}`,
               body: "Actionable defect.",
             }),
