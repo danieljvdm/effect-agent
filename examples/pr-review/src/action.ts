@@ -302,6 +302,7 @@ export const reviewActionProgram = Effect.gen(function* () {
   const fullFiles = yield* github.listFiles;
   let scopedFiles: ReadonlyArray<ChangedFile> = fullFiles;
   let actualScope = selection.scope;
+  let reviewBaseRevision = pull.baseRevision;
   if (selection.scope === "incremental" && selection.baseRevision !== undefined) {
     const comparison = yield* github.compareFiles(selection.baseRevision, pull.headRevision).pipe(
       Effect.map((value) => ({ _tag: "success" as const, value })),
@@ -317,6 +318,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       comparison.value.files.length < 300
     ) {
       scopedFiles = comparison.value.files;
+      reviewBaseRevision = selection.baseRevision;
     } else {
       actualScope = "full";
     }
@@ -362,7 +364,7 @@ export const reviewActionProgram = Effect.gen(function* () {
           ReviewRequest.make({
             title: pull.title.slice(0, 1_000),
             description: pull.description.slice(0, 20_000),
-            baseRevision: selection.baseRevision ?? pull.baseRevision,
+            baseRevision: reviewBaseRevision,
             headRevision: pull.headRevision,
             changes,
             unreviewedPaths,
