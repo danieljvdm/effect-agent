@@ -1,5 +1,19 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.29
+
+### Minor Changes
+
+- [#161](https://github.com/danieljvdm/effect-agent/pull/161) [`b3be989`](https://github.com/danieljvdm/effect-agent/commit/b3be989556006cde3b0fd49c320b2f2eb492e76b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Replace the reviewer with a provider-neutral, single-pass agent and move GitHub and provider policy
+  to the private channel. Review large diffs in one bounded four-shard parallel wave, limit automatic
+  GitHub waves to two, require a collaborator command for later reviews, and present findings with
+  severity and category labels plus agent-ready prompts.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.29
+
 ## 0.1.0-beta.28
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/pr-review",
-  "version": "0.1.0-beta.28",
+  "version": "0.1.0-beta.29",
   "description": "A provider-neutral, single-pass pull-request review agent.",
   "license": "MIT",
   "repository": {
