@@ -117,7 +117,7 @@ jobs:
             vite-task-test-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
             vite-task-test-${{ runner.os }}-
 
-      - name: Run package and example test suites
+      - name: Run workspace test suites
         run: bun run test
 
       - name: Save Vite Task cache

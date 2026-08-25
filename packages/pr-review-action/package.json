@@ -1,10 +1,10 @@
 {
-  "name": "@effect-agent/example-pr-review",
+  "name": "@effect-agent/pr-review-action",
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {},
   "scripts": {
-    "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vp test --passWithNoTests"
   },

@@ -12,7 +12,7 @@ import { ChildProcess } from "effect/unstable/process";
 
 const bundles = [
   {
-    entry: "examples/pr-review/src/action-entry.ts",
+    entry: "packages/pr-review-action/src/action-entry.ts",
     bundle: "action/dist/index.mjs",
     manifest: "action/dist/index.manifest.json",
     scratch: "node_modules/.tmp/action-dist-check/index.mjs",

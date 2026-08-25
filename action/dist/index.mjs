@@ -47137,7 +47137,7 @@ var transformToolCallParams = /* @__PURE__ */ fnUntraced2(function* (tools, tool
     })
   })));
 });
-// examples/pr-review/src/github.ts
+// packages/pr-review-action/src/github.ts
 var ShortString = exports_Schema.String.check(exports_Schema.isMaxLength(2048));
 var Revision2 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(128));
 var PullRequestWire = exports_Schema.Struct({
@@ -47357,7 +47357,7 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
   };
 });
 
-// examples/pr-review/src/selection.ts
+// packages/pr-review-action/src/selection.ts
 var reviewModeFromCommand = (command) => {
   switch (command.trim()) {
     case "@effect-agent review":
@@ -47450,7 +47450,7 @@ var selectReview = (input) => {
   };
 };
 
-// examples/pr-review/src/presentation.ts
+// packages/pr-review-action/src/presentation.ts
 var REVIEW_BODY_LIMIT = 60000;
 var severityAppearance = {
   blocking: { icon: "\uD83D\uDED1", label: "blocking" },
@@ -47654,7 +47654,7 @@ var defaultReviewPresentation = {
   renderFailure: renderReviewFailureBody,
   renderPause: renderReviewPauseBody
 };
-var ReviewPresentation = exports_Context.Reference("@effect-agent/example-pr-review/ReviewPresentation", {
+var ReviewPresentation = exports_Context.Reference("@effect-agent/pr-review-action/ReviewPresentation", {
   defaultValue: () => defaultReviewPresentation
 });
 var withTerminalMarker = (body, marker) => {
@@ -47668,7 +47668,7 @@ var withReviewMarker = (body, automatic, completed = true) => {
 };
 var withReviewPauseMarker = (body, automaticReviewLimit) => withTerminalMarker(body, reviewPauseMarker(automaticReviewLimit));
 
-// examples/pr-review/src/action.ts
+// packages/pr-review-action/src/action.ts
 var MAX_REVIEW_PATCH_CHARS = 320000;
 var MAX_PATCH_CHARS = 80000;
 var MAX_REVIEW_FILES = 100;
@@ -48079,6 +48079,6 @@ ${exports_Cause.pretty(reviewExit.cause)}`);
     return yield* BlockingFindings.make({ count: blocking });
 });
 
-// examples/pr-review/src/action-entry.ts
+// packages/pr-review-action/src/action-entry.ts
 var configProvider = withActionInputs(exports_ConfigProvider.fromEnv());
 exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.scoped, exports_Effect.provideService(exports_ConfigProvider.ConfigProvider, configProvider), exports_Effect.provide(exports_Layer.mergeAll(exports_NodeServices.layer, exports_FetchHttpClient.layer))), { disableErrorReporting: true });

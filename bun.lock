@@ -96,22 +96,6 @@
         "vite-plus": "catalog:",
       },
     },
-    "examples/pr-review": {
-      "name": "@effect-agent/example-pr-review",
-      "version": "0.0.0",
-      "dependencies": {
-        "@effect-agent/pr-review": "workspace:*",
-        "@effect/ai-openai": "catalog:",
-        "@effect/platform-node": "catalog:",
-        "effect": "catalog:",
-      },
-      "devDependencies": {
-        "@effect/vitest": "catalog:",
-        "@types/node": "catalog:",
-        "typescript": "catalog:",
-        "vite-plus": "catalog:",
-      },
-    },
     "examples/pr-work-order-ingress": {
       "name": "@effect-agent/example-pr-work-order-ingress",
       "version": "0.0.0",
@@ -297,6 +281,22 @@
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
+    "packages/pr-review-action": {
+      "name": "@effect-agent/pr-review-action",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/pr-review": "workspace:*",
+        "@effect/ai-openai": "catalog:",
+        "@effect/platform-node": "catalog:",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/vitest": "catalog:",
+        "@types/node": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
       },
@@ -687,8 +687,6 @@
 
     "@effect-agent/example-demo": ["@effect-agent/example-demo@workspace:examples/demo"],
 
-    "@effect-agent/example-pr-review": ["@effect-agent/example-pr-review@workspace:examples/pr-review"],
-
     "@effect-agent/example-pr-work-order-ingress": ["@effect-agent/example-pr-work-order-ingress@workspace:examples/pr-work-order-ingress"],
 
     "@effect-agent/example-pr-work-orders": ["@effect-agent/example-pr-work-orders@workspace:examples/pr-work-orders"],
@@ -702,6 +700,8 @@
     "@effect-agent/platform-node": ["@effect-agent/platform-node@workspace:packages/platform-node"],
 
     "@effect-agent/pr-review": ["@effect-agent/pr-review@workspace:packages/pr-review"],
+
+    "@effect-agent/pr-review-action": ["@effect-agent/pr-review-action@workspace:packages/pr-review-action"],
 
     "@effect-agent/sandbox": ["@effect-agent/sandbox@workspace:packages/sandbox"],
 

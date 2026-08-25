@@ -92,6 +92,7 @@ const packageNames = [
   "storage-sqlite",
   "testing",
 ] as const;
+const privatePackageNames = ["pr-review-action"] as const;
 
 /** Provider bindings belong to leaf applications, never framework packages. */
 const providerConsumingPackages = new Set<string>();
@@ -100,7 +101,6 @@ const exampleNames = [
   "demo",
   "pr-work-order-ingress",
   "pr-work-orders",
-  "pr-review",
   "providers",
   "repo-ops",
 ] as const;
@@ -680,7 +680,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     }),
   );
 
-  it.effect("keeps framework packages separate from leaf example workspaces", () =>
+  it.effect("keeps package workspaces separate from leaf example workspaces", () =>
     Effect.gen(function* () {
       const [activePackages, activeExamples, rootEntries, rootManifest] = yield* Effect.all([
         readWorkspaceNames(`${repositoryRoot}/packages`),
@@ -689,7 +689,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         readManifest(`${repositoryRoot}/package.json`),
       ]);
 
-      expect([...activePackages].sort()).toEqual([...packageNames].sort());
+      expect([...activePackages].sort()).toEqual([...packageNames, ...privatePackageNames].sort());
       expect([...activeExamples].sort()).toEqual([...exampleNames].sort());
       expect(rootManifest.workspaces).toEqual(["packages/*", "examples/*"]);
       expect(rootEntries).not.toContain("apps");
@@ -1823,7 +1823,9 @@ Exercise the generated release verifier.
         const demo = yield* readManifest(`${repositoryRoot}/examples/demo/package.json`);
         const providers = yield* readManifest(`${repositoryRoot}/examples/providers/package.json`);
         const repoOps = yield* readManifest(`${repositoryRoot}/examples/repo-ops/package.json`);
-        const prReview = yield* readManifest(`${repositoryRoot}/examples/pr-review/package.json`);
+        const prReviewAction = yield* readManifest(
+          `${repositoryRoot}/packages/pr-review-action/package.json`,
+        );
         const prWorkOrders = yield* readManifest(
           `${repositoryRoot}/examples/pr-work-orders/package.json`,
         );
@@ -1833,7 +1835,7 @@ Exercise the generated release verifier.
         const demoDependencies = manifestDependencies(demo);
         const providerDependencies = manifestDependencies(providers);
         const repoOpsDependencies = manifestDependencies(repoOps);
-        const prReviewDependencies = manifestDependencies(prReview);
+        const prReviewDependencies = manifestDependencies(prReviewAction);
         const prWorkOrdersDependencies = manifestDependencies(prWorkOrders);
         const prWorkOrderIngressDependencies = manifestDependencies(prWorkOrderIngress);
 
@@ -1875,12 +1877,13 @@ Exercise the generated release verifier.
         ).toBe(false);
         // The GitHub channel owns the concrete provider and platform edges;
         // the reusable reviewer package stays provider-neutral (PRR-005).
-        expect(prReview.name).toBe("@effect-agent/example-pr-review");
-        expect(prReview.dependencies?.["@effect-agent/pr-review"]).toBe("workspace:*");
-        expect(prReview.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(prReview.dependencies?.["@effect/platform-node"]).toBe("catalog:");
-        expect(prReview.dependencies?.["effect-agent"]).toBeUndefined();
-        expect(prReview.dependencies?.effect).toBe("catalog:");
+        expect(prReviewAction.name).toBe("@effect-agent/pr-review-action");
+        expect(prReviewAction.private).toBe(true);
+        expect(prReviewAction.dependencies?.["@effect-agent/pr-review"]).toBe("workspace:*");
+        expect(prReviewAction.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+        expect(prReviewAction.dependencies?.["@effect/platform-node"]).toBe("catalog:");
+        expect(prReviewAction.dependencies?.["effect-agent"]).toBeUndefined();
+        expect(prReviewAction.dependencies?.effect).toBe("catalog:");
         expect(prReviewDependencies).not.toContain("wrangler");
         expect(
           prReviewDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
@@ -1967,7 +1970,7 @@ Exercise the generated release verifier.
           expect(manifestDependencies(manifest)).not.toContain(demo.name);
           expect(manifestDependencies(manifest)).not.toContain(providers.name);
           expect(manifestDependencies(manifest)).not.toContain(repoOps.name);
-          expect(manifestDependencies(manifest)).not.toContain(prReview.name);
+          expect(manifestDependencies(manifest)).not.toContain(prReviewAction.name);
           expect(manifestDependencies(manifest)).not.toContain(codeModeCloudflare.name);
           if (providerConsumingPackages.has(packageName)) continue;
           for (const adapter of providerAdapterDependencies) {
