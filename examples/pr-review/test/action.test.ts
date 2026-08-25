@@ -61,6 +61,17 @@ describe("Action configuration", () => {
       expect(yield* Config.string("PR_REVIEW_AUTOMATIC_LIMIT").parse(provider)).toBe("7");
     }),
   );
+
+  it.effect("falls back to an Action input when the environment value is empty", () =>
+    Effect.gen(function* () {
+      const provider = withActionInputs(
+        ConfigProvider.fromEnv({
+          env: { OPENAI_API_KEY: "", "INPUT_OPENAI-API-KEY": "action-key" },
+        }),
+      );
+      expect(yield* Config.nonEmptyString("OPENAI_API_KEY").parse(provider)).toBe("action-key");
+    }),
+  );
 });
 
 describe("GPT-5.6 cost estimation", () => {

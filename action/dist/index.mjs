@@ -42984,7 +42984,7 @@ var BASE_INSTRUCTIONS = `Review the supplied pull-request diff once.
 
 Report only concrete correctness, security, reliability, or maintainability defects that the author should act on. Do not praise, restate the change, invent missing repository context, or ask for speculative cleanup. An empty findings array is valid.
 
-Every finding must use an exact supplied path. Set line only to a RIGHT-side added or context line visible in that path's unified patch; otherwise omit line. Use blocking only for a defect that should prevent shipping. Classify each finding with the closest available category. Treat unreviewedPaths as unavailable scope and never imply that you inspected it.`;
+Every finding must use an exact supplied path. Set line only to a RIGHT-side added or context line visible in that path's unified patch; otherwise omit line. Use blocking only for a defect that should prevent shipping. Classify each finding with the closest available category. Treat unreviewedPaths as unavailable scope and never imply that you inspected it. A changed file absent from changes may have been withheld by the host; never infer that it was not changed, and report only defects proven by the supplied patches.`;
 var reviewPolicy = AgentPolicy.make({
   maxTurns: 1,
   maxToolCalls: 1,

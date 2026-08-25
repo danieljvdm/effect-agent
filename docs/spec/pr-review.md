@@ -21,6 +21,8 @@ conversation. Review output is advice, not durable agent state.
 - **PRR-003**: Token, duration, findings, file, and patch bounds are finite. The outcome reports
   observed uncached, cached, cache-write, total input, and output tokens plus an optional host-priced
   cost estimate. A host must identify paths it did not admit rather than imply complete coverage.
+  The reviewer must not infer that an absent file was unchanged because the host may have withheld
+  generated, ignored, unavailable, or oversized patches.
 - **PRR-004**: Model output is untrusted. Before returning it, the package removes findings for
   unknown paths, deduplicates them, and removes line anchors that are not RIGHT-side added or
   context lines in the supplied patch. Removing an invalid anchor keeps the finding available for
