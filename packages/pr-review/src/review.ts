@@ -5,6 +5,7 @@ import {
   AgentRuntime,
   IdGenerator,
   makeUsageBudget,
+  type RunCostEstimator,
   toRunBudgetHook,
   UsageBudgetLimits,
 } from "effect-agent";
@@ -72,10 +73,25 @@ export class ReviewReport extends Schema.Class<ReviewReport>(
   findings: Schema.Array(ReviewFinding).check(Schema.isMaxLength(12)),
 }) {}
 
-export class ReviewUsage extends Schema.Class<ReviewUsage>("@effect-agent/pr-review/ReviewUsage")({
+const ReviewUsageFields = Schema.Struct({
   inputTokens: Schema.Natural,
+  uncachedInputTokens: Schema.Natural,
+  cachedInputTokens: Schema.Natural,
+  cacheWriteInputTokens: Schema.Natural,
   outputTokens: Schema.Natural,
-}) {}
+  estimatedCostMicrousd: Schema.optionalKey(Schema.Natural),
+}).check(
+  Schema.makeFilter(
+    (usage) =>
+      usage.inputTokens ===
+      usage.uncachedInputTokens + usage.cachedInputTokens + usage.cacheWriteInputTokens,
+    { title: "Input token total equals uncached, cached, and cache-write components" },
+  ),
+);
+
+export class ReviewUsage extends Schema.Class<ReviewUsage>("@effect-agent/pr-review/ReviewUsage")(
+  ReviewUsageFields,
+) {}
 
 export class ReviewOutcome extends Schema.Class<ReviewOutcome>(
   "@effect-agent/pr-review/ReviewOutcome",
@@ -184,6 +200,7 @@ export const sanitizeReviewReport = (
 export interface ReviewerOptions<Provider, ModelProvides, ModelRequires> {
   readonly model: Model.Model<Provider, LanguageModel.LanguageModel | ModelProvides, ModelRequires>;
   readonly guidance?: string | undefined;
+  readonly estimateCostMicrousd?: RunCostEstimator | undefined;
 }
 
 /** Build a provider-neutral reviewer. The returned `review` performs exactly one Run. */
@@ -197,6 +214,9 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       const budget = yield* makeUsageBudget(reviewBudgetLimits);
       const result = yield* AgentRuntime.run(binding, request, {
         budget: toRunBudgetHook(budget),
+        ...(options.estimateCostMicrousd === undefined
+          ? {}
+          : { estimateCostMicrousd: options.estimateCostMicrousd }),
       });
       const usage = yield* budget.snapshot;
       return ReviewOutcome.make({
@@ -204,7 +224,16 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         turns: result.turns,
         usage: ReviewUsage.make({
           inputTokens: usage.inputTokens,
+          uncachedInputTokens: Math.max(
+            0,
+            usage.inputTokens - usage.cacheReadInputTokens - usage.cacheWriteInputTokens,
+          ),
+          cachedInputTokens: usage.cacheReadInputTokens,
+          cacheWriteInputTokens: usage.cacheWriteInputTokens,
           outputTokens: usage.outputTokens,
+          ...(options.estimateCostMicrousd === undefined
+            ? {}
+            : { estimatedCostMicrousd: usage.costMicrousd }),
         }),
       });
     }).pipe(Effect.provide(IdGenerator.layer), Effect.scoped);

@@ -19,8 +19,8 @@ conversation. Review output is advice, not durable agent state.
   empty Toolkit. The package does not fan out, retry model calls, spawn subagents, or resume model
   context.
 - **PRR-003**: Token, duration, findings, file, and patch bounds are finite. The outcome reports
-  observed input and output tokens. A host must identify paths it did not admit rather than imply
-  complete coverage.
+  observed uncached, cached, cache-write, total input, and output tokens plus an optional host-priced
+  cost estimate. A host must identify paths it did not admit rather than imply complete coverage.
 - **PRR-004**: Model output is untrusted. Before returning it, the package removes findings for
   unknown paths, deduplicates them, and removes line anchors that are not RIGHT-side added or
   context lines in the supplied patch. Removing an invalid anchor keeps the finding available for
@@ -38,13 +38,13 @@ the review contract and reviewer constructor.
   twelve findings. It never retries a shard or starts a second wave within one Action run. Each
   shard is limited to 48,000 input and 8,000 output tokens, bounding one wave to 192,000 input and
   32,000 output tokens.
-- **PRR-006**: Automatic mode admits at most two review waves: the initial wave and one later wave.
-  This bounds automatic review to eight one-turn model invocations per pull request. A third
-  automatic event exits successfully without model execution. The second attempt visibly states
-  that automatic reviews are paused and names the manual commands that remain available. Failed
-  waves count toward this limit and show the same pause notice, but never become incremental
-  baselines. A trusted prior attempt is a
-  terminal marker-bearing review authored by the configured GitHub Bot login; arbitrary comments
+- **PRR-006**: Automatic mode admits a consumer-configured non-negative number of review waves,
+  defaulting to two. Configuration validation does not cap this setting; each admitted wave retains
+  the per-wave bounds in PRR-005. An automatic event after the configured count exits successfully
+  without model execution. The final admitted attempt visibly states that automatic reviews are
+  paused and names the manual commands that remain available. Failed waves count toward this limit
+  and show the same pause notice, but never become incremental baselines. A trusted prior attempt is
+  a terminal marker-bearing review authored by the configured GitHub Bot login; arbitrary comments
   and model-authored marker text cannot advance or reset the counter.
 - **PRR-007**: A repository owner, member, or collaborator may request another incremental review
   with the exact comment `/effect-agent review`, or a full review with
@@ -52,8 +52,10 @@ the review contract and reviewer constructor.
 - **PRR-008**: The marker stores only its version, whether the attempt was automatic, and whether
   it produced a report. GitHub's review `commit_id` is the baseline for completed attempts. No
   transcript, finding continuity, signature, fingerprint, retry queue, or assurance state is
-  persisted. If GitHub cannot compare the baseline with the current head, the channel reviews the
-  current full diff.
+  persisted. A baseline-to-head comparison is incremental only when GitHub reports the current head
+  ahead of the baseline. Rebases, divergent history, oversized comparisons, and comparison failures
+  fall back to the current full PR diff. A merge from the base branch may add upstream changes to an
+  otherwise-ahead comparison; inline findings are still revalidated against the current PR diff.
 - **PRR-009**: The channel publishes one `COMMENT` review only after the model settles, against the
   commit it inspected. A failed attempt publishes only an honest failure marker and no findings. A
   completed attempt revalidates inline anchors against that pull-request diff. Blocking findings
@@ -61,7 +63,9 @@ the review contract and reviewer constructor.
   and category labels, summary callouts, and agent-ready prompt blocks from the validated report;
   presentation does not start another model Turn. Visible GitHub Markdown comes from a defaulted
   Effect reference that an embedding host may replace. The channel appends its trusted terminal
-  marker outside that replaceable presentation so overrides cannot weaken wave accounting.
+  marker outside that replaceable presentation so overrides cannot weaken wave accounting. For the
+  known GPT-5.6 model ids, the default presentation includes a host-computed estimate using OpenAI's
+  published standard token rates and links to that model's rate card. Unknown model ids omit cost.
 
 The workflow checks out the trusted default branch, serializes runs for the same pull request, and
 passes the webhook head SHA so stale queued events stop before model execution. It does not cancel

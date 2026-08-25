@@ -49,6 +49,7 @@ jobs:
           pull-request: ${{ github.event.pull_request.number || github.event.issue.number }}
           review-author: effect-agent[bot]
           mode: ${{ github.event_name == 'pull_request' && 'auto' || github.event.comment.body == '/effect-agent review full' && 'full' || 'incremental' }}
+          automatic-review-limit: 2
           expected-head: ${{ github.event.pull_request.head.sha || '' }}
           effort: medium
           guidance-file: .github/review-guidance.md

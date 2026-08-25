@@ -63,7 +63,15 @@ describe("review presentation", () => {
       ignoredFiles: 3,
       shards: 2,
       inputTokens: 12_345,
+      uncachedInputTokens: 10_000,
+      cachedInputTokens: 2_000,
+      cacheWriteInputTokens: 345,
       outputTokens: 678,
+      estimatedCost: {
+        microusd: 62_940,
+        label: "GPT-5.6 Sol",
+        url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+      },
       headRevision,
     });
 
@@ -75,7 +83,7 @@ describe("review presentation", () => {
     expect(body).toContain("**[⚠️ important · security] Authorization is not enforced**");
     expect(body).toContain("<summary>🤖 Prompt for all 2 findings with AI agents</summary>");
     expect(body).toContain(
-      "<sub>2 parallel review shards · 12,345 input / 678 output tokens · reviewed at <code>abcdef0</code> · 2 automatic reviews remain</sub>",
+      '<sub>2 parallel review shards · 12,345 input (10,000 uncached · 2,000 cached · 345 cache write) / 678 output tokens · ≈ $0.0629 at <a href="https://developers.openai.com/api/docs/models/gpt-5.6-sol">GPT-5.6 Sol rates</a> · reviewed at <code>abcdef0</code> · 2 automatic reviews remain</sub>',
     );
   });
 
@@ -94,7 +102,15 @@ describe("review presentation", () => {
         ignoredFiles: 2,
         shards: 1,
         inputTokens: 2_267,
+        uncachedInputTokens: 2_000,
+        cachedInputTokens: 200,
+        cacheWriteInputTokens: 67,
         outputTokens: 456,
+        estimatedCost: {
+          microusd: 18_188,
+          label: "GPT-5.6 Sol",
+          url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+        },
         headRevision,
       }),
       true,
@@ -118,7 +134,7 @@ describe("review presentation", () => {
 
       No actionable defects found in the supplied diff.
 
-      <sub>1 review shard · 2,267 input / 456 output tokens · reviewed at <code>abcdef0</code></sub>
+      <sub>1 review shard · 2,267 input (2,000 uncached · 200 cached · 67 cache write) / 456 output tokens · ≈ $0.0182 at <a href="https://developers.openai.com/api/docs/models/gpt-5.6-sol">GPT-5.6 Sol rates</a> · reviewed at <code>abcdef0</code></sub>
 
       <!-- effect-agent-review:v2 automatic=true completed=true -->"
     `);
@@ -161,6 +177,9 @@ describe("review presentation", () => {
       ignoredFiles: 0,
       shards: 1,
       inputTokens: 100,
+      uncachedInputTokens: 100,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
       outputTokens: 50,
       headRevision,
     });

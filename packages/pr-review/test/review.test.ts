@@ -55,7 +55,12 @@ describe("review output boundary", () => {
                         type: "finish" as const,
                         reason: "stop" as const,
                         usage: {
-                          inputTokens: { total: 10 },
+                          inputTokens: {
+                            total: 10,
+                            uncached: 7,
+                            cacheRead: 2,
+                            cacheWrite: 1,
+                          },
                           outputTokens: { total: 4 },
                         },
                       },
@@ -67,10 +72,20 @@ describe("review output boundary", () => {
         ),
       );
 
-      const outcome = yield* makeReviewer({ model }).review(request);
+      const outcome = yield* makeReviewer({
+        model,
+        estimateCostMicrousd: () => Effect.succeed(123),
+      }).review(request);
       expect(yield* Ref.get(calls)).toBe(1);
       expect(outcome.turns).toBe(1);
-      expect(outcome.usage).toMatchObject({ inputTokens: 10, outputTokens: 4 });
+      expect(outcome.usage).toMatchObject({
+        inputTokens: 10,
+        uncachedInputTokens: 7,
+        cachedInputTokens: 2,
+        cacheWriteInputTokens: 1,
+        outputTokens: 4,
+        estimatedCostMicrousd: 123,
+      });
     }),
   );
 
@@ -125,3 +140,29 @@ describe("review output boundary", () => {
     expect(report.findings[1]?.line).toBeUndefined();
   });
 });
+
+// Compile-time E/R proof: adding host pricing does not add an error or service requirement.
+type Equal<Left, Right> =
+  (<T>() => T extends Left ? 1 : 2) extends <T>() => T extends Right ? 1 : 2 ? true : false;
+type Assert<T extends true> = T;
+type EffectError<Value> =
+  Value extends Effect.Effect<unknown, infer Error, unknown> ? Error : never;
+type EffectRequirements<Value> =
+  Value extends Effect.Effect<unknown, unknown, infer Requirements> ? Requirements : never;
+
+declare const typedModel: Model.Model<"typed", LanguageModel.LanguageModel, never>;
+const typedReviews = (model: typeof typedModel) => ({
+  unpriced: makeReviewer({ model }).review(request),
+  priced: makeReviewer({
+    model,
+    estimateCostMicrousd: () => Effect.succeed(1),
+  }).review(request),
+});
+type TypedReviews = ReturnType<typeof typedReviews>;
+const pricingTypeProofs: readonly [
+  Assert<Equal<EffectError<TypedReviews["priced"]>, EffectError<TypedReviews["unpriced"]>>>,
+  Assert<
+    Equal<EffectRequirements<TypedReviews["priced"]>, EffectRequirements<TypedReviews["unpriced"]>>
+  >,
+] = [true, true];
+void pricingTypeProofs;

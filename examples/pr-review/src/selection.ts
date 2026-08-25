@@ -1,7 +1,5 @@
 export type ReviewMode = "auto" | "incremental" | "full";
 
-const MAX_AUTOMATIC_REVIEWS = 2;
-
 export interface ReviewHistoryItem {
   readonly id: number;
   readonly authorLogin: string;
@@ -45,6 +43,7 @@ export const selectReview = (input: {
   readonly mode: ReviewMode;
   readonly currentHead: string;
   readonly reviewAuthor: string;
+  readonly automaticReviewLimit: number;
   readonly history: ReadonlyArray<ReviewHistoryItem>;
 }): ReviewSelection => {
   const author = input.reviewAuthor.toLowerCase();
@@ -65,7 +64,7 @@ export const selectReview = (input: {
   const automaticAttempts = trusted.filter(({ marker }) => marker.automatic).length;
   const automaticReviewsRemaining = Math.max(
     0,
-    MAX_AUTOMATIC_REVIEWS - automaticAttempts - (input.mode === "auto" ? 1 : 0),
+    input.automaticReviewLimit - automaticAttempts - (input.mode === "auto" ? 1 : 0),
   );
 
   if (input.mode === "full") {
@@ -88,7 +87,7 @@ export const selectReview = (input: {
     return { _tag: "skip", reason: "head-already-reviewed" };
   }
 
-  if (input.mode === "auto" && automaticAttempts >= MAX_AUTOMATIC_REVIEWS) {
+  if (input.mode === "auto" && automaticAttempts >= input.automaticReviewLimit) {
     return { _tag: "skip", reason: "automatic-reviews-paused" };
   }
 

@@ -25,6 +25,7 @@ describe("GitHub review selection", () => {
         mode: "auto",
         currentHead: "head-1",
         reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
         history: [],
       }),
     ).toMatchObject({
@@ -39,6 +40,7 @@ describe("GitHub review selection", () => {
         mode: "auto",
         currentHead: "head-2",
         reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
         history: [item(1, "head-1", true)],
       }),
     ).toMatchObject({
@@ -54,6 +56,7 @@ describe("GitHub review selection", () => {
         mode: "auto",
         currentHead: "head-3",
         reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
         history: [item(1, "head-1", true), item(2, "head-2", true)],
       }),
     ).toEqual({ _tag: "skip", reason: "automatic-reviews-paused" });
@@ -70,6 +73,7 @@ describe("GitHub review selection", () => {
         mode: "auto",
         currentHead: "head-4",
         reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
         history,
       }),
     ).toMatchObject({ _tag: "review", scope: "incremental", baseRevision: "head-2" });
@@ -81,6 +85,7 @@ describe("GitHub review selection", () => {
         mode: "full",
         currentHead: "head-3",
         reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
         history: [item(1, "head-1", true), item(2, "head-2", true)],
       }),
     ).toMatchObject({
@@ -97,6 +102,7 @@ describe("GitHub review selection", () => {
         mode: "auto",
         currentHead: "head-1",
         reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
         history: [item(1, "head-1", true)],
       }),
     ).toEqual({ _tag: "skip", reason: "head-already-reviewed" });
@@ -108,6 +114,7 @@ describe("GitHub review selection", () => {
         mode: "auto",
         currentHead: "head-2",
         reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
         history: [item(1, "head-1", true, false)],
       }),
     ).toMatchObject({ _tag: "review", scope: "full", automatic: true });
@@ -117,6 +124,7 @@ describe("GitHub review selection", () => {
         mode: "auto",
         currentHead: "head-3",
         reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
         history: [item(1, "head-1", true, false), item(2, "head-2", true, false)],
       }),
     ).toEqual({ _tag: "skip", reason: "automatic-reviews-paused" });
@@ -131,8 +139,24 @@ describe("GitHub review selection", () => {
         mode: "auto",
         currentHead: "head-2",
         reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
         history: [injected],
       }),
     ).toMatchObject({ _tag: "review", scope: "incremental", automatic: true });
+  });
+
+  it("PRR-006 honors a consumer-selected limit above the default", () => {
+    const history = Array.from({ length: 20 }, (_, index) =>
+      item(index + 1, `head-${String(index + 1)}`, true),
+    );
+    expect(
+      selectReview({
+        mode: "auto",
+        currentHead: "head-21",
+        reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 21,
+        history,
+      }),
+    ).toMatchObject({ _tag: "review", automaticReviewsRemaining: 0 });
   });
 });

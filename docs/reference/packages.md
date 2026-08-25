@@ -129,8 +129,9 @@ entrypoint.
 
 A provider-neutral, deployment-class-E review agent. The host supplies bounded patches; one
 tool-free model turn returns a Schema-decoded report; the package validates paths and RIGHT-side
-line anchors and exposes observed token usage. It contains no GitHub adapter, provider binding,
-entrypoint, retry, fan-out, continuity state, or publication behavior. See the
+line anchors and exposes observed cached, uncached, cache-write, and output token usage plus an
+optional host-priced estimate. It contains no GitHub adapter, provider binding, entrypoint, retry,
+fan-out, continuity state, or publication behavior. See the
 [PR-review specification](/spec/pr-review).
 
 ### `@effect-agent/testing`
@@ -152,9 +153,10 @@ trusted-local proof of a head-bound work-order implementer;
 publication proof; `examples/repo-ops`
 is an internal repository-operations auditor. None is a framework
 or deployment package. The repository root also carries `action/`, the committed node-runtime
-bundle of that channel. It automatically reviews an initial head and one incremental follow-up;
-the follow-up visibly pauses automatic reviews, and later runs require an explicit collaborator
-command. Blocking findings fail the check after the review is visible.
+bundle of that channel. Its configurable automatic-attempt limit defaults to an initial review and
+one incremental follow-up; the final attempt visibly pauses automatic reviews, and later runs
+require an explicit collaborator command. Known GPT-5.6 models include an estimated dollar cost.
+Blocking findings fail the check after the review is visible.
 
 ## Dependency direction
 

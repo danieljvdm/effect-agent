@@ -22,6 +22,10 @@ inputs:
     description: 'Scope policy: "auto", "incremental", or "full".'
     required: false
     default: "auto"
+  automatic-review-limit:
+    description: "Number of automatic review attempts allowed per pull request. Accepts any non-negative integer."
+    required: false
+    default: "2"
   expected-head:
     description: "Webhook head SHA; a stale event exits before model execution."
     required: false
@@ -45,9 +49,17 @@ outputs:
   reason:
     description: "Selection or skip reason."
   input-tokens:
-    description: "Observed model input tokens."
+    description: "Observed total model input tokens."
+  uncached-input-tokens:
+    description: "Observed input tokens not served from or written to the provider prompt cache."
+  cached-input-tokens:
+    description: "Observed input tokens served from the provider prompt cache."
+  cache-write-input-tokens:
+    description: "Observed input tokens written to the provider prompt cache."
   output-tokens:
     description: "Observed model output tokens."
+  estimated-cost-usd:
+    description: "Estimated model cost in US dollars when the configured model has known pricing."
   blocking-findings:
     description: "Number of published blocking findings."
   review-url:

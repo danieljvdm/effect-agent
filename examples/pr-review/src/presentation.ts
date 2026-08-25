@@ -119,8 +119,18 @@ export interface ReviewPresentationInput {
   readonly ignoredFiles: number;
   readonly shards: number;
   readonly inputTokens: number;
+  readonly uncachedInputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheWriteInputTokens: number;
   readonly outputTokens: number;
+  readonly estimatedCost?: ReviewCostEstimate | undefined;
   readonly headRevision: string;
+}
+
+export interface ReviewCostEstimate {
+  readonly microusd: number;
+  readonly label: string;
+  readonly url: string;
 }
 
 const renderCoverage = (input: ReviewPresentationInput): string =>
@@ -129,6 +139,15 @@ const renderCoverage = (input: ReviewPresentationInput): string =>
     ...(input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} unavailable`] : []),
     ...(input.ignoredFiles > 0 ? [`${String(input.ignoredFiles)} ignored`] : []),
   ].join(" · ");
+
+const formatEstimatedUsd = (microusd: number): string => {
+  const dollars = microusd / 1_000_000;
+  const digits = dollars > 0 && dollars < 0.0001 ? 6 : dollars < 1 ? 4 : 2;
+  return `$${dollars.toFixed(digits)}`;
+};
+
+const renderInputUsage = (input: ReviewPresentationInput): string =>
+  `${formatNumber(input.inputTokens)} input (${formatNumber(input.uncachedInputTokens)} uncached · ${formatNumber(input.cachedInputTokens)} cached · ${formatNumber(input.cacheWriteInputTokens)} cache write)`;
 
 const renderAutomaticPause = (automaticReviewsRemaining: number): string | undefined =>
   automaticReviewsRemaining > 0
@@ -185,14 +204,18 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
   const usage =
     input.shards === 0
       ? ""
-      : ` · ${formatNumber(input.inputTokens)} input / ${formatNumber(input.outputTokens)} output tokens`;
+      : ` · ${renderInputUsage(input)} / ${formatNumber(input.outputTokens)} output tokens`;
+  const estimatedCost =
+    input.estimatedCost === undefined
+      ? ""
+      : ` · ≈ ${formatEstimatedUsd(input.estimatedCost.microusd)} at <a href="${input.estimatedCost.url}">${input.estimatedCost.label} rates</a>`;
   const automaticReviewStatus =
     input.automaticReviewsRemaining === 0
       ? ""
       : input.automaticReviewsRemaining === 1
         ? " · 1 automatic review remains"
         : ` · ${String(input.automaticReviewsRemaining)} automatic reviews remain`;
-  const footer = `<sub>${shardLabel}${usage} · reviewed at <code>${input.headRevision.slice(0, 7)}</code>${automaticReviewStatus}</sub>`;
+  const footer = `<sub>${shardLabel}${usage}${estimatedCost} · reviewed at <code>${input.headRevision.slice(0, 7)}</code>${automaticReviewStatus}</sub>`;
 
   if (
     consolidatedPrompt !== undefined &&
