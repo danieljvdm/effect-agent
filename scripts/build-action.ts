@@ -1,27 +1,47 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Console, Effect, FileSystem, Schema, Stream } from "effect";
+import { Console, Crypto, Effect, Encoding, FileSystem, Schema, Stream } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
 // ---------------------------------------------------------------------------
 // Bundle both JavaScript Action entrypoints into committed dist files. A
 // node-runtime Action must run directly from an immutable checkout without an
-// install step. `--check` rebuilds to scratch and rejects stale bundles. Bun's
-// generated identifiers depend on the output basename, so scratch is also `index.mjs`.
+// install step. `--check` rebuilds to scratch and rejects stale bundles using
+// stable input and artifact digests; Bun may reorder equivalent bundle output.
 // ---------------------------------------------------------------------------
 
 const bundles = [
   {
     entry: "examples/pr-review/src/action-entry.ts",
     bundle: "action/dist/index.mjs",
+    manifest: "action/dist/index.manifest.json",
     scratch: "node_modules/.tmp/action-dist-check/index.mjs",
+    metafile: "node_modules/.tmp/action-dist-check/pr-review.json",
   },
   {
     entry: "examples/pr-work-order-ingress/src/action-entry.ts",
     bundle: "work-order-action/dist/index.mjs",
+    manifest: "work-order-action/dist/index.manifest.json",
     scratch: "node_modules/.tmp/action-dist-check/index.mjs",
+    metafile: "node_modules/.tmp/action-dist-check/pr-work-order.json",
   },
 ] as const;
+
+const buildInputs = ["scripts/build-action.ts", "package.json", "bun.lock"] as const;
+
+const Sha256 = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
+const BunMetafile = Schema.Struct({
+  inputs: Schema.Record(Schema.String, Schema.Unknown),
+});
+const BundleManifest = Schema.Struct({
+  version: Schema.Literal(1),
+  inputsSha256: Sha256,
+  bundleSha256: Sha256,
+});
+
+const decodeMetafile = Schema.decodeUnknownEffect(Schema.fromJsonString(BunMetafile));
+const decodeManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(BundleManifest));
+const encodeManifest = Schema.encodeEffect(Schema.fromJsonString(BundleManifest));
 
 class CommandError extends Schema.TaggedError<CommandError>()("CommandError", {
   command: Schema.String,
@@ -60,13 +80,38 @@ const runCommand = Effect.fn("runCommand")(function* (
   return trimmed;
 });
 
-const bundleTo = Effect.fn("bundleTo")(function* (entry: string, outfile: string) {
+const sha256 = Effect.fn("sha256")(function* (bytes: Uint8Array) {
+  const crypto = yield* Crypto.Crypto;
+  const digest = yield* crypto.digest("SHA-256", bytes);
+  return yield* Schema.decodeUnknownEffect(Sha256)(Encoding.encodeHex(digest));
+});
+
+const fingerprintInputs = Effect.fn("fingerprintInputs")(function* (metafilePath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const metafile = yield* decodeMetafile(yield* fs.readFileString(metafilePath));
+  const inputs = [...Object.keys(metafile.inputs), ...buildInputs]
+    .map((source) => ({ source, key: source.replaceAll("\\", "/") }))
+    .sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
+  const records: Array<string> = [];
+  for (const input of inputs) {
+    const digest = yield* sha256(yield* fs.readFile(input.source));
+    records.push(`${input.key}\0${digest}\n`);
+  }
+  return yield* sha256(new TextEncoder().encode(records.join("")));
+});
+
+const bundleTo = Effect.fn("bundleTo")(function* (
+  entry: string,
+  outfile: string,
+  metafile: string,
+) {
   yield* runCommand("bun", [
     "build",
     entry,
     "--target=node",
     "--format=esm",
     `--outfile=${outfile}`,
+    `--metafile=${metafile}`,
   ]);
 });
 
@@ -78,21 +123,27 @@ const checkFlag = Flag.boolean("check").pipe(
 const command = CliCommand.make("build-action", { check: checkFlag }, ({ check }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory("node_modules/.tmp/action-dist-check", { recursive: true });
     if (!check) {
       for (const item of bundles) {
-        yield* bundleTo(item.entry, item.bundle);
+        yield* bundleTo(item.entry, item.bundle, item.metafile);
+        const manifest = BundleManifest.make({
+          version: 1,
+          inputsSha256: yield* fingerprintInputs(item.metafile),
+          bundleSha256: yield* sha256(yield* fs.readFile(item.bundle)),
+        });
+        yield* fs.writeFileString(item.manifest, `${yield* encodeManifest(manifest)}\n`);
         const stat = yield* fs.stat(item.bundle);
         yield* Console.log(`Bundled ${item.entry} -> ${item.bundle} (${stat.size} bytes).`);
       }
       return;
     }
     for (const item of bundles) {
-      yield* bundleTo(item.entry, item.scratch);
-      const committed = yield* fs
-        .readFileString(item.bundle)
-        .pipe(Effect.orElseSucceed(() => undefined));
-      const fresh = yield* fs.readFileString(item.scratch);
-      if (committed !== fresh) {
+      yield* bundleTo(item.entry, item.scratch, item.metafile);
+      const manifest = yield* decodeManifest(yield* fs.readFileString(item.manifest));
+      const inputsSha256 = yield* fingerprintInputs(item.metafile);
+      const bundleSha256 = yield* sha256(yield* fs.readFile(item.bundle));
+      if (manifest.inputsSha256 !== inputsSha256 || manifest.bundleSha256 !== bundleSha256) {
         return yield* StaleBundleError.make({ bundle: item.bundle });
       }
       yield* Console.log(`${item.bundle} is up to date.`);
@@ -109,4 +160,4 @@ const program = CliCommand.run(command, { version: "1.0.0" }).pipe(
   Effect.provide(NodeServices.layer),
 );
 
-NodeRuntime.runMain(program, { disableErrorReporting: true });
+NodeRuntime.runMain(program);
