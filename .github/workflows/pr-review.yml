@@ -22,7 +22,8 @@ jobs:
         (github.event.comment.author_association == 'OWNER' ||
          github.event.comment.author_association == 'MEMBER' ||
          github.event.comment.author_association == 'COLLABORATOR') &&
-        startsWith(github.event.comment.body, '/effect-agent review'))
+        (startsWith(github.event.comment.body, '@effect-agent review') ||
+         startsWith(github.event.comment.body, '/effect-agent review')))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

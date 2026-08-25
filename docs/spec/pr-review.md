@@ -52,9 +52,10 @@ the review contract and reviewer constructor.
   the configured GitHub Bot login; arbitrary comments and model-authored marker text cannot advance
   or reset the counter.
 - **PRR-007**: A repository owner, member, or collaborator may request another incremental review
-  with the exact comment `/effect-agent review`, or a full review with
-  `/effect-agent review full`. The bundled channel ignores trailing whitespace but rejects trailing
-  prose before model execution. Manual reviews do not count as automatic reviews or resume them.
+  with the exact comment `@effect-agent review`, or a full review with
+  `@effect-agent review full`. The previous `/effect-agent review` forms remain compatibility
+  aliases. The bundled channel ignores trailing whitespace but rejects trailing prose before
+  model execution. Manual reviews do not count as automatic reviews or resume them.
 - **PRR-008**: An attempt marker stores only its version, whether the attempt was automatic, and
   whether it produced a report. A separate closing marker stores only its version and the configured
   automatic limit, making the no-model notice idempotent without counting it as another attempt.

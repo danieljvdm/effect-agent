@@ -23,7 +23,7 @@ inputs:
     required: false
     default: "auto"
   command:
-    description: "Optional raw collaborator command. Surrounding whitespace is ignored; unsupported commands exit before model execution."
+    description: "Optional raw collaborator command. Accepts @effect-agent review, @effect-agent review full, and the legacy slash forms."
     required: false
   automatic-review-limit:
     description: "Number of automatic review attempts allowed per pull request. Zero disables automatic reviews and notices."
