@@ -34,8 +34,10 @@ The work-order examples and `work-order-action/` provide head-bound GitHub dispa
 model/check/publisher jobs, and atomic publication. They remain separate from the read-only PR
 reviewer.
 
-Completion is an engineering claim, not a stability claim. Cloudflare evidence comes from
-workerd/Miniflare, live-model suites are opt-in, and open-source preparation remains pending.
+Completion is an engineering claim, not a stability claim. Cloudflare durability evidence comes
+from workerd/Miniflare; an opt-in temporary deployment proves the Browser Run Worker binding
+against Cloudflare's hosted service. Live-model suites remain opt-in, and open-source preparation
+remains pending.
 
 Normative words such as **MUST**, **SHOULD**, and **MAY** are used in their usual RFC sense.
 

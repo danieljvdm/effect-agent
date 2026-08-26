@@ -152,7 +152,9 @@ the consumer-facing metadata and committed node-runtime bundle. See the
 ## Leaf examples
 
 `examples/demo` is a local browser test bench. `examples/providers` is a compile-only proof that the
-same Definition binds directly to upstream OpenAI and Anthropic Models. `examples/pr-work-orders` is the private
+same Definition binds directly to upstream OpenAI and Anthropic Models.
+`examples/browser-run-worker-proof` is the opt-in temporary Cloudflare deployment that proves the
+native Browser Run binding through the shipped page-capture Layers. `examples/pr-work-orders` is the private
 trusted-local proof of a head-bound work-order implementer;
 `examples/pr-work-order-ingress` is the private GitHub dispatch and isolated
 publication proof; `examples/repo-ops`

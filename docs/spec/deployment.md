@@ -430,6 +430,19 @@ billed Workers AI extraction. It requires `EFFECT_AGENT_LIVE=1`, `OPENAI_API_KEY
 vp run --no-cache -F @effect-agent/example-providers test test/browser-live-smoke.test.ts --reporter=verbose
 ```
 
+The separate private `examples/browser-run-worker-proof` leaf closes the binding-transport evidence
+gap without a model. Its fixed opt-in Effect workflow deploys one collision-resistant temporary
+Worker with a native `BROWSER` binding and compatibility date `2026-03-24`, invokes one bounded
+Markdown `WebCapture.make` handler against `https://example.com/`, validates the stable `Example
+Domain` fact, and deletes the Worker through a Scope finalizer. The workflow fails if its generated
+name already exists, never retries an unresolved invocation, and surfaces deletion failure. The
+ordinary test suite scripts the deployment operations and verifies finalization without Cloudflare
+credentials. The hosted proof is:
+
+```sh
+vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
+```
+
 The adapter records no persistent state and claims deployment class `E` only.
 
 Current platform references:

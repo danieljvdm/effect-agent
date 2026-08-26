@@ -28,6 +28,25 @@
         "vue": "catalog:",
       },
     },
+    "examples/browser-run-worker-proof": {
+      "name": "@effect-agent/example-browser-run-worker-proof",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/capabilities": "workspace:*",
+        "@effect-agent/platform-cloudflare": "workspace:*",
+        "@effect/platform-node": "catalog:",
+        "effect": "catalog:",
+        "effect-cf": "catalog:",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "catalog:",
+        "@effect/vitest": "catalog:",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+        "wrangler": "catalog:",
+      },
+    },
     "examples/code-mode-cloudflare": {
       "name": "@effect-agent/example-code-mode-cloudflare",
       "version": "0.0.0",
@@ -465,6 +484,7 @@
     "vitepress": "2.0.0-alpha.18",
     "vitest": "4.1.10",
     "vue": "3.5.40",
+    "wrangler": "4.123.0",
   },
   "packages": {
     "@ai-sdk/gateway": ["@ai-sdk/gateway@4.0.32", "", { "dependencies": { "@ai-sdk/provider": "4.0.4", "@ai-sdk/provider-utils": "5.0.15", "@vercel/oidc": "3.2.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-U82ZbFEQY80YTyzOEI0jrCjV4Q52uN7/ln/KyI1AvSNR/IX3XwePOfsQWOfDhvmqXkb3TcYbVzWr4p85msKgOw=="],
@@ -682,6 +702,8 @@
     "@effect-agent/core": ["@effect-agent/core@workspace:packages/core"],
 
     "@effect-agent/engine": ["@effect-agent/engine@workspace:packages/engine"],
+
+    "@effect-agent/example-browser-run-worker-proof": ["@effect-agent/example-browser-run-worker-proof@workspace:examples/browser-run-worker-proof"],
 
     "@effect-agent/example-code-mode-cloudflare": ["@effect-agent/example-code-mode-cloudflare@workspace:examples/code-mode-cloudflare"],
 
