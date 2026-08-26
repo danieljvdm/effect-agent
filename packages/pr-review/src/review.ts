@@ -119,6 +119,7 @@ export const reviewPolicy = AgentPolicy.make({
   completionReserveTokens: 8_000,
   contextTokenLimit: 48_000,
   onExhaustion: "fail",
+  runStatus: "off",
 });
 
 const makeDefinition = (guidance?: string) =>
@@ -183,19 +184,18 @@ export const sanitizeReviewReport = (
       finding.line !== undefined && isCommentableLine(patch, finding.line)
         ? finding.line
         : undefined;
-    const key = `${finding.path}\u0000${String(line ?? "")}\u0000${finding.title.trim().toLowerCase()}`;
+    const sanitized = ReviewFinding.make({
+      path: finding.path,
+      ...(line === undefined ? {} : { line }),
+      severity: finding.severity,
+      category: finding.category,
+      title: finding.title,
+      body: finding.body,
+    });
+    const key = JSON.stringify(sanitized);
     if (seen.has(key)) continue;
     seen.add(key);
-    findings.push(
-      ReviewFinding.make({
-        path: finding.path,
-        ...(line === undefined ? {} : { line }),
-        severity: finding.severity,
-        category: finding.category,
-        title: finding.title,
-        body: finding.body,
-      }),
-    );
+    findings.push(sanitized);
   }
   return ReviewReport.make({ summary: report.summary, findings });
 };
