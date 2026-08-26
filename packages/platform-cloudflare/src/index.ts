@@ -24,3 +24,6 @@ export * from "./conversation-object.ts";
 export * from "./client.ts";
 export * from "./code-mode-executor.ts";
 export * from "./browser-quick-action.ts";
+export * from "./browser-rest-capture.ts";
+export * from "./interactive-browser.ts";
+export * from "./browser-rest-crawl.ts";

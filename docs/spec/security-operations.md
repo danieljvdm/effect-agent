@@ -173,6 +173,12 @@ or included in an executor binding, and the deterministic test substitute identi
 `unisolated` rather than masquerading as a boundary.
 
 Page capture output is a rendered web page and therefore untrusted, attacker-influenced input.
+Interactive browser sessions carry the same fail-closed egress posture: an immutable exact-host
+HTTPS policy is checked for navigation, redirects, and subrequests. One scoped browser/context/page
+pass permits only bounded navigate, read, fill, and click operations; concurrent calls fail busy,
+and action, elapsed-time, and UTF-8 output limits fail at the first violation. Handles are never
+persisted, replayed, reconnected, or exposed to models. Cloudflare cleanup is best-effort warning-
+only when the remote outcome is uncertain; provider diagnostics remain host-only.
 The capture capability is deny-by-default: an immutable construction-time HTTPS host allowlist
 governs navigation, redirects, and every browser subrequest. The request Schema rejects malformed
 URLs, non-HTTPS targets, and embedded credentials; discovered links must be absolute,
@@ -191,6 +197,17 @@ Model-visible failures and cleanup logs carry only bounded,
 fixed operation or HTTP-status descriptions and never interpolate foreign exception text,
 rate-limit bodies, provider envelopes, or other remote error bodies.
 A page that instructs the model is data, never authority.
+
+Screenshot bytes are untrusted content. `PageScreenshot` bounds them before buffering and keeps
+them out of canonical records, model context, logs, telemetry, and error diagnostics.
+
+Crawl Markdown and metadata are likewise untrusted content. `PageCrawl` fixes one exact HTTPS host
+and rejects off-host source or redirect metadata before emission. The Cloudflare adapter sends its
+redacted API token only to the fixed `api.cloudflare.com` origin, bounds each response incrementally,
+and never exposes or persists the provider job identity. Cloudflare retains crawl results for up to
+14 days; callers that need a stricter retention boundary must not enable this provider. Public
+diagnostics and cleanup warnings contain fixed operation descriptions rather than the token, foreign
+response body, or provider envelope.
 
 The read-only SQL reference Tool's guarantee is database authority, not SQL text inspection: a
 database identity without mutation, DDL, administrative, or extension privileges; denial of

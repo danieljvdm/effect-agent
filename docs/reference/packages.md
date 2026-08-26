@@ -47,6 +47,12 @@ It depends outward from engine; the engine does not import it.
 
 Defines schema-first, platform-neutral sandbox requests, events, errors, the streaming `Sandbox`
 service, the callback-shaped `CodeExecutor` port, and the stateless `PageCapture` port.
+It also exports the sibling `PageScreenshot` port for one bounded caller-owned PNG and the scoped
+`PageCrawl` Stream port for bounded same-host Markdown records.
+The scoped `InteractiveBrowser` port is a distinct programmatic capability: one ephemeral
+browser/context/page pass with navigate, bounded read, fill, and click operations. Its handle is
+not transportable or persistable, and its immutable exact-host policy covers redirects and
+subrequests.
 
 ### `@effect-agent/sandbox-local`
 
@@ -122,8 +128,12 @@ service to adapt `quickAction()` to the `PageCapture` port without granting Work
 `browserQuickActionWorkersAiCaptureLayer` requires both the browser-binding service and the
 explicit `BrowserQuickActionWorkersAi` authorization and accounting service before permitting
 structured extraction. The `./browser-quick-action` export provides these adapters without
-loading Durable Object runtime modules. It is a Layer-assembly library, not an application
-entrypoint.
+loading Durable Object runtime modules. The Node-safe `./browser-rest-capture` export provides a
+second `PageCapture` implementation through explicit account/token construction values and an
+Effect `HttpClient` requirement. The Node-safe `./browser-rest-crawl` export adapts `PageCrawl` to
+Cloudflare's REST crawl endpoint with explicit redacted credentials, bounded polling and lazy
+pagination, and scoped remote-job cleanup. Neither REST subpath imports Worker runtime modules.
+This is a Layer-assembly library, not an application entrypoint.
 
 ### `@effect-agent/pr-review`
 
@@ -152,7 +162,9 @@ the consumer-facing metadata and committed node-runtime bundle. See the
 ## Leaf examples
 
 `examples/demo` is a local browser test bench. `examples/providers` is a compile-only proof that the
-same Definition binds directly to upstream OpenAI and Anthropic Models. `examples/pr-work-orders` is the private
+same Definition binds directly to upstream OpenAI and Anthropic Models.
+`examples/browser-run-worker-proof` is the opt-in temporary Cloudflare deployment that proves the
+native Browser Run binding through the shipped page-capture Layers. `examples/pr-work-orders` is the private
 trusted-local proof of a head-bound work-order implementer;
 `examples/pr-work-order-ingress` is the private GitHub dispatch and isolated
 publication proof; `examples/repo-ops`

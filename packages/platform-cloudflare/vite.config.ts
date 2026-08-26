@@ -16,7 +16,13 @@ export default defineConfig({
   // defaults, so the published artifact's declarations and sourcemap are
   // pinned explicitly here.
   pack: {
-    entry: ["src/index.ts", "src/browser-quick-action.ts"],
+    entry: [
+      "src/index.ts",
+      "src/browser-quick-action.ts",
+      "src/interactive-browser.ts",
+      "src/browser-rest-capture.ts",
+      "src/browser-rest-crawl.ts",
+    ],
     dts: true,
     sourcemap: true,
   },

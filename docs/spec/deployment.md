@@ -414,7 +414,12 @@ alongside any `X-Browser-Ms-Used` observation. The ordinary
 `browserQuickActionCaptureLayer` has no Workers AI authority. The host-owned binding service
 keeps browser RPC authority visible in both adapter requirement channels, while the opt-in Layer
 also requires Workers AI authority. The adapter rejects typed the `kitesurf` engine the binding
-cannot select (the REST and CDP surfaces can; a REST adapter is a possible later slice).
+cannot select. `browserRestCaptureLayer` is the second `PageCapture` implementation: a Node-safe,
+explicit-credential Layer requiring Effect `HttpClient`. It keeps Cloudflare REST endpoint and
+envelope details in `platform-cloudflare`, uses the fixed
+`https://api.cloudflare.com/client/v4/accounts/{account}/browser-rendering/{action}` endpoint, and
+adds `browser=kitesurf` only for Kitesurf (Chromium omits that query). It preserves the same bounded
+stream decoding, typed error mapping, and explicit Workers AI authorization split as the binding.
 `quickAction()` requires a Worker compatibility date of `2026-03-24` or later and has no local
 implementation: local `wrangler dev` needs remote mode. Ordinary tests use a scripted binding
 inside workerd. An opt-in live smoke in the provider-owning `examples/providers` leaf additionally
@@ -430,12 +435,81 @@ billed Workers AI extraction. It requires `EFFECT_AGENT_LIVE=1`, `OPENAI_API_KEY
 vp run --no-cache -F @effect-agent/example-providers test test/browser-live-smoke.test.ts --reporter=verbose
 ```
 
+The separate private `examples/browser-run-worker-proof` leaf closes the binding-transport evidence
+gap without a model. Its fixed opt-in Effect workflow deploys one collision-resistant temporary
+Worker with a native `BROWSER` binding and compatibility date `2026-03-24`, invokes one bounded
+Markdown `WebCapture.make` handler against `https://example.com/`, validates the stable `Example
+Domain` fact, captures one bounded PNG through `PageScreenshot`, validates its eight-byte PNG
+signature, discards the image bytes, and deletes the Worker through a Scope finalizer. The Worker
+leaves 11 seconds between its Markdown and screenshot Quick Actions to honor the Free plan request
+interval. The proof
+response contains only bounded validation metadata. The workflow fails if its generated name
+already exists, never retries an unresolved invocation, and surfaces deletion failure. The ordinary
+test suite scripts the deployment operations and verifies finalization without Cloudflare
+credentials. The hosted proof is:
+
+```sh
+vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
+```
+
+### Browser Run interactive browser sessions
+
+The scoped `InteractiveBrowser` adapter uses the explicitly supplied Browser Run `browser`
+binding and `@cloudflare/puppeteer` 1.1.0. It launches one browser pass, context, and page under
+Scope, with immediate reverse-order finalizers. `keep_alive` is only Cloudflare's inactivity
+setting; the caller's elapsed-time deadline is authoritative. Navigation, redirects, and every
+subrequest use the immutable exact-host policy. Capacity refusal and remote expiry remain typed;
+uncertain actions are never retried or replayed. This capability has no durable session, registry,
+reconnect, or model Tool.
+
+The opt-in Worker proof uses compatibility date 2026-03-24 or later (and remote Browser Run mode
+where required), one allowed public HTTPS page, and bounded metadata/text only. It is not live
+evidence for ordinary checks and is never a required CI gate.
+
+### Browser Run PNG screenshots
+
+`browserQuickActionScreenshotLayer` adapts the explicit Browser Run binding to `PageScreenshot`.
+It requests binary PNG only, rejects Kitesurf before the RPC, validates `image/png`, and releases
+the response body on every exit. The returned bytes belong only to the direct caller and never
+enter framework persistence, telemetry, logs, or metadata.
+
 The adapter records no persistent state and claims deployment class `E` only.
+
+### Browser Run REST crawls
+
+`browserRestCrawlLayer` is the Node-safe Cloudflare implementation of the scoped `PageCrawl`
+contract (capability spec §9.4). Construction requires an account identifier, a redacted API token,
+and Effect `HttpClient`; every request targets the fixed
+`https://api.cloudflare.com/client/v4/accounts/{account}/browser-rendering/crawl` origin. The Layer
+creates one job, polls its lightweight status with `Clock` and `Schedule`, then lazily requests
+result cursors as the consumer pulls. It performs no retry or job reattachment and exposes no job
+handle.
+
+The request disables external links and subdomains, while the adapter independently validates the
+exact starting host on every source and redirect-metadata URL. Incremental JSON reads have separate
+control and result transport bounds. The caller's page-count, per-page UTF-8 byte, aggregate byte,
+and absolute deadline limits remain authoritative across creation, polling, and pagination. A
+terminal provider status suppresses cancellation. Otherwise the consuming Scope issues exactly one
+DELETE after creation on failure, defect, deadline, interruption, or early close. Deletion failure
+emits one fixed bounded warning and leaves the primary `Exit` unchanged.
+
+Cloudflare may retain crawl results for up to 14 days even though the framework does not persist or
+return their job identity. The opt-in provider smoke uses the link-free `https://httpbin.org/html`
+fixture, permits at most three pages on that exact host, and logs only bounded Markdown excerpts. It
+requires
+`EFFECT_AGENT_LIVE=1`, `CLOUDFLARE_ACCOUNT_ID`, and `CLOUDFLARE_API_TOKEN`:
+
+```sh
+vp run --no-cache -F @effect-agent/example-providers test test/browser-crawl-live-smoke.test.ts --reporter=verbose
+```
 
 Current platform references:
 
 - [Browser Run Quick Actions](https://developers.cloudflare.com/browser-run/quick-actions/)
+- [Browser Run screenshot Quick Action](https://developers.cloudflare.com/browser-run/quick-actions/screenshot-endpoint/)
 - [Browser Run structured extraction and Workers AI](https://developers.cloudflare.com/browser-run/quick-actions/json-endpoint/)
+- [Browser Run crawl endpoint](https://developers.cloudflare.com/browser-run/quick-actions/crawl-endpoint/)
+- [Browser Run limits](https://developers.cloudflare.com/browser-run/limits/)
 - [SQLite-backed Durable Object storage](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)
 - [Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)
 - [Durable Object alarms](https://developers.cloudflare.com/durable-objects/api/alarms/)
@@ -490,3 +564,7 @@ Current platform references:
   cleanup, distinguishes response envelopes by trusted metadata, rejects malformed link
   payloads, keeps platform refusals and safe backoff hints typed, denies Workers AI without its
   explicit host authorization and accounting service, and claims deployment class `E` only.
+- **DEPLOY-015**: The Browser Run REST crawl adapter uses one fixed API origin and redacted token,
+  creates one private job, applies an absolute deadline across polling and lazy bounded pagination,
+  performs no retries or reattachment, and cancels a known-running job exactly once when its Scope
+  exits; cancellation failure emits a fixed warning without changing the primary `Exit`.

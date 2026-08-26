@@ -1,0 +1,161 @@
+import { Context, Schema, type Effect, type Scope } from "effect";
+
+import { PageCaptureTargetUrl } from "./page-capture.ts";
+import { SandboxImplementation } from "./sandbox.ts";
+
+const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
+const BoundedText = Schema.String.check(Schema.isMaxLength(8 * 1024 * 1024));
+const BoundedMessage = Schema.String.check(Schema.isMaxLength(8 * 1024));
+const Selector = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
+const FieldValue = Schema.String.check(Schema.isMaxLength(64 * 1024));
+const browserUrl = Reflect.get(globalThis, "URL");
+
+/** Canonical HTTPS host authority, optionally carrying a non-default port. */
+export const InteractiveBrowserHost = Schema.NonEmptyString.check(
+  Schema.isMaxLength(255),
+  Schema.makeFilter(
+    (value) => {
+      if (typeof browserUrl !== "function") return false;
+      try {
+        const url: unknown = Reflect.construct(browserUrl, [`https://${value}/`]);
+        return (
+          typeof url === "object" &&
+          url !== null &&
+          Reflect.get(url, "protocol") === "https:" &&
+          Reflect.get(url, "username") === "" &&
+          Reflect.get(url, "password") === "" &&
+          Reflect.get(url, "host") === value
+        );
+      } catch {
+        return false;
+      }
+    },
+    { title: "a canonical credential-free HTTPS host authority" },
+  ),
+);
+export type InteractiveBrowserHost = typeof InteractiveBrowserHost.Type;
+
+export class InteractiveBrowserPolicy extends Schema.Class<InteractiveBrowserPolicy>(
+  "InteractiveBrowserPolicy",
+)({
+  allowedHosts: Schema.Array(InteractiveBrowserHost).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(64),
+    Schema.isUnique(),
+  ),
+  maxActions: PositiveInt.check(Schema.isLessThanOrEqualTo(1_000)),
+  maxElapsedMillis: PositiveInt.check(Schema.isLessThanOrEqualTo(10 * 60_000)),
+  maxReturnedBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(8 * 1024 * 1024)),
+}) {}
+
+export class BrowserNavigateRequest extends Schema.Class<BrowserNavigateRequest>(
+  "BrowserNavigateRequest",
+)({ url: PageCaptureTargetUrl }) {}
+export class BrowserReadTextRequest extends Schema.Class<BrowserReadTextRequest>(
+  "BrowserReadTextRequest",
+)({ selector: Schema.optionalKey(Selector) }) {}
+export class BrowserFillRequest extends Schema.Class<BrowserFillRequest>("BrowserFillRequest")({
+  selector: Selector,
+  value: FieldValue,
+}) {}
+export class BrowserClickRequest extends Schema.Class<BrowserClickRequest>("BrowserClickRequest")({
+  selector: Selector,
+}) {}
+export class BrowserNavigationResult extends Schema.Class<BrowserNavigationResult>(
+  "BrowserNavigationResult",
+)({ url: PageCaptureTargetUrl }) {}
+export class BrowserTextResult extends Schema.Class<BrowserTextResult>("BrowserTextResult")({
+  text: BoundedText,
+}) {}
+/** Post-action URL observation; no provider session state crosses this boundary. */
+export class BrowserActionResult extends Schema.Class<BrowserActionResult>("BrowserActionResult")({
+  url: PageCaptureTargetUrl,
+}) {}
+
+export class InteractiveBrowserPolicyDeniedError extends Schema.TaggedError<InteractiveBrowserPolicyDeniedError>()(
+  "InteractiveBrowserPolicyDeniedError",
+  { implementation: SandboxImplementation, message: BoundedMessage },
+) {}
+export class InteractiveBrowserBusyError extends Schema.TaggedError<InteractiveBrowserBusyError>()(
+  "InteractiveBrowserBusyError",
+  { implementation: SandboxImplementation, message: BoundedMessage },
+) {}
+export class InteractiveBrowserCapacityError extends Schema.TaggedError<InteractiveBrowserCapacityError>()(
+  "InteractiveBrowserCapacityError",
+  { implementation: SandboxImplementation, message: BoundedMessage },
+) {}
+export class InteractiveBrowserExpiredError extends Schema.TaggedError<InteractiveBrowserExpiredError>()(
+  "InteractiveBrowserExpiredError",
+  { implementation: SandboxImplementation, message: BoundedMessage },
+) {}
+export class InteractiveBrowserActionError extends Schema.TaggedError<InteractiveBrowserActionError>()(
+  "InteractiveBrowserActionError",
+  {
+    implementation: SandboxImplementation,
+    operation: Schema.Literals(["navigate", "read-text", "fill", "click"]),
+    message: BoundedMessage,
+    cause: Schema.optionalKey(Schema.Defect()),
+  },
+) {}
+export class InteractiveBrowserProtocolError extends Schema.TaggedError<InteractiveBrowserProtocolError>()(
+  "InteractiveBrowserProtocolError",
+  {
+    implementation: SandboxImplementation,
+    message: BoundedMessage,
+    cause: Schema.optionalKey(Schema.Defect()),
+  },
+) {}
+export class InteractiveBrowserLimitError extends Schema.TaggedError<InteractiveBrowserLimitError>()(
+  "InteractiveBrowserLimitError",
+  {
+    implementation: SandboxImplementation,
+    limit: Schema.Literals(["actions", "elapsed", "returned-bytes"]),
+    maximum: PositiveInt,
+    observed: Schema.Natural,
+    message: BoundedMessage,
+  },
+) {}
+export class InteractiveBrowserUnsupportedError extends Schema.TaggedError<InteractiveBrowserUnsupportedError>()(
+  "InteractiveBrowserUnsupportedError",
+  {
+    implementation: SandboxImplementation,
+    feature: Schema.Literals(["navigation", "read-text", "fill", "click", "policy"]),
+    message: BoundedMessage,
+  },
+) {}
+export const InteractiveBrowserError = Schema.Union([
+  InteractiveBrowserPolicyDeniedError,
+  InteractiveBrowserBusyError,
+  InteractiveBrowserCapacityError,
+  InteractiveBrowserExpiredError,
+  InteractiveBrowserActionError,
+  InteractiveBrowserProtocolError,
+  InteractiveBrowserLimitError,
+  InteractiveBrowserUnsupportedError,
+]);
+export type InteractiveBrowserError = typeof InteractiveBrowserError.Type;
+
+/** A live handle is intentionally not a Schema value and cannot cross persistence/transport boundaries. */
+export interface BrowserHandle {
+  readonly navigate: (
+    request: BrowserNavigateRequest,
+  ) => Effect.Effect<BrowserNavigationResult, InteractiveBrowserError>;
+  readonly readText: (
+    request: BrowserReadTextRequest,
+  ) => Effect.Effect<BrowserTextResult, InteractiveBrowserError>;
+  readonly fill: (
+    request: BrowserFillRequest,
+  ) => Effect.Effect<BrowserActionResult, InteractiveBrowserError>;
+  readonly click: (
+    request: BrowserClickRequest,
+  ) => Effect.Effect<BrowserActionResult, InteractiveBrowserError>;
+}
+
+export class InteractiveBrowser extends Context.Service<
+  InteractiveBrowser,
+  {
+    readonly open: (
+      policy: InteractiveBrowserPolicy,
+    ) => Effect.Effect<BrowserHandle, InteractiveBrowserError, Scope.Scope>;
+  }
+>()("@effect-agent/sandbox/InteractiveBrowser") {}

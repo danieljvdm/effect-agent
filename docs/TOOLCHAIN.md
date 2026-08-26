@@ -9,8 +9,10 @@ under `examples/demo`; `examples/providers` is a compile-only native provider-bi
 `examples/pr-work-orders` is a private trusted-local proof of the head-bound work-order host.
 `examples/pr-work-order-ingress` is the private GitHub dispatch and isolated-publication proof.
 Cloudflare support exists as library packages (`storage-cloudflare`, `platform-cloudflare` since
-Phase 6), not as an application scaffold: there is no `wrangler` dependency or configuration,
-and the Worker entries in the repository are test fixtures.
+Phase 6), not as an application scaffold. The narrowly scoped
+`examples/browser-run-worker-proof` leaf owns the repository's direct Wrangler dependency and one
+configuration used only for its opt-in temporary deployment. Other Worker entries remain test
+fixtures or private examples.
 
 ## Source-of-truth versions
 
@@ -37,6 +39,7 @@ The root `package.json` is the only version source for shared dependencies.
 | `@types/node`                     |             `26.1.2` | Node types for repository scripts                                                 |
 | VitePress                         |     `2.0.0-alpha.18` | Markdown-driven documentation site                                                |
 | Vue                               |             `3.5.40` | VitePress theme components                                                        |
+| Wrangler                          |            `4.123.0` | Opt-in temporary Browser Run Worker deployment                                    |
 
 Workspace packages refer to shared versions with `catalog:`. They must not introduce a second
 Effect version. The Bun lockfile is committed and CI installs it with `--frozen-lockfile`.
@@ -82,6 +85,7 @@ examples/
   pr-work-order-ingress/    GitHub dispatch, persistent journal, isolated checks/publication
   providers/        Leaf OpenAI/Anthropic Model-binding compile proof
   repo-ops/         Leaf repo-ops evidence auditor (P7 internal agent)
+  browser-run-worker-proof/  Opt-in temporary deployment proving the native Browser Run binding
 action/             Published PR-review Action metadata and committed node24 bundle
 work-order-action/  Prebuilt node24 PR work-order Action (committed bundle, separate authority)
 ```

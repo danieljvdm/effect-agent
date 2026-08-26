@@ -57,6 +57,9 @@
     },
     {
       "path": "./examples/repo-ops"
+    },
+    {
+      "path": "./examples/browser-run-worker-proof"
     }
   ]
 }

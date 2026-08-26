@@ -40876,6 +40876,259 @@ var PageCaptureError = exports_Schema.Union([
 
 class PageCapture extends exports_Context.Service()("@effect-agent/sandbox/PageCapture") {
 }
+
+// packages/sandbox/src/interactive-browser.ts
+var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var BoundedText = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024 * 1024));
+var BoundedMessage3 = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
+var Selector = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
+var FieldValue = exports_Schema.String.check(exports_Schema.isMaxLength(64 * 1024));
+var browserUrl = Reflect.get(globalThis, "URL");
+var InteractiveBrowserHost = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(255), exports_Schema.makeFilter((value4) => {
+  if (typeof browserUrl !== "function")
+    return false;
+  try {
+    const url2 = Reflect.construct(browserUrl, [`https://${value4}/`]);
+    return typeof url2 === "object" && url2 !== null && Reflect.get(url2, "protocol") === "https:" && Reflect.get(url2, "username") === "" && Reflect.get(url2, "password") === "" && Reflect.get(url2, "host") === value4;
+  } catch {
+    return false;
+  }
+}, { title: "a canonical credential-free HTTPS host authority" }));
+
+class InteractiveBrowserPolicy extends exports_Schema.Class("InteractiveBrowserPolicy")({
+  allowedHosts: exports_Schema.Array(InteractiveBrowserHost).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(64), exports_Schema.isUnique()),
+  maxActions: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(1000)),
+  maxElapsedMillis: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(10 * 60000)),
+  maxReturnedBytes: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(8 * 1024 * 1024))
+}) {
+}
+
+class BrowserNavigateRequest extends exports_Schema.Class("BrowserNavigateRequest")({ url: PageCaptureTargetUrl }) {
+}
+
+class BrowserReadTextRequest extends exports_Schema.Class("BrowserReadTextRequest")({ selector: exports_Schema.optionalKey(Selector) }) {
+}
+
+class BrowserFillRequest extends exports_Schema.Class("BrowserFillRequest")({
+  selector: Selector,
+  value: FieldValue
+}) {
+}
+
+class BrowserClickRequest extends exports_Schema.Class("BrowserClickRequest")({
+  selector: Selector
+}) {
+}
+
+class BrowserNavigationResult extends exports_Schema.Class("BrowserNavigationResult")({ url: PageCaptureTargetUrl }) {
+}
+
+class BrowserTextResult extends exports_Schema.Class("BrowserTextResult")({
+  text: BoundedText
+}) {
+}
+
+class BrowserActionResult extends exports_Schema.Class("BrowserActionResult")({
+  url: PageCaptureTargetUrl
+}) {
+}
+
+class InteractiveBrowserPolicyDeniedError extends exports_Schema.TaggedError()("InteractiveBrowserPolicyDeniedError", { implementation: SandboxImplementation, message: BoundedMessage3 }) {
+}
+
+class InteractiveBrowserBusyError extends exports_Schema.TaggedError()("InteractiveBrowserBusyError", { implementation: SandboxImplementation, message: BoundedMessage3 }) {
+}
+
+class InteractiveBrowserCapacityError extends exports_Schema.TaggedError()("InteractiveBrowserCapacityError", { implementation: SandboxImplementation, message: BoundedMessage3 }) {
+}
+
+class InteractiveBrowserExpiredError extends exports_Schema.TaggedError()("InteractiveBrowserExpiredError", { implementation: SandboxImplementation, message: BoundedMessage3 }) {
+}
+
+class InteractiveBrowserActionError extends exports_Schema.TaggedError()("InteractiveBrowserActionError", {
+  implementation: SandboxImplementation,
+  operation: exports_Schema.Literals(["navigate", "read-text", "fill", "click"]),
+  message: BoundedMessage3,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class InteractiveBrowserProtocolError extends exports_Schema.TaggedError()("InteractiveBrowserProtocolError", {
+  implementation: SandboxImplementation,
+  message: BoundedMessage3,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class InteractiveBrowserLimitError extends exports_Schema.TaggedError()("InteractiveBrowserLimitError", {
+  implementation: SandboxImplementation,
+  limit: exports_Schema.Literals(["actions", "elapsed", "returned-bytes"]),
+  maximum: PositiveInt5,
+  observed: exports_Schema.Natural,
+  message: BoundedMessage3
+}) {
+}
+
+class InteractiveBrowserUnsupportedError extends exports_Schema.TaggedError()("InteractiveBrowserUnsupportedError", {
+  implementation: SandboxImplementation,
+  feature: exports_Schema.Literals(["navigation", "read-text", "fill", "click", "policy"]),
+  message: BoundedMessage3
+}) {
+}
+var InteractiveBrowserError = exports_Schema.Union([
+  InteractiveBrowserPolicyDeniedError,
+  InteractiveBrowserBusyError,
+  InteractiveBrowserCapacityError,
+  InteractiveBrowserExpiredError,
+  InteractiveBrowserActionError,
+  InteractiveBrowserProtocolError,
+  InteractiveBrowserLimitError,
+  InteractiveBrowserUnsupportedError
+]);
+
+class InteractiveBrowser extends exports_Context.Service()("@effect-agent/sandbox/InteractiveBrowser") {
+}
+// packages/sandbox/src/page-crawl.ts
+var MAX_PAGE_BYTES = 8 * 1024 * 1024;
+var MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+var MAX_PAGES = 100;
+var MAX_DEPTH = 10;
+var MAX_DEADLINE_MILLIS = 10 * 60000;
+var MAX_DIAGNOSTIC_LENGTH = 8000;
+var PositiveInt6 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var BoundedMarkdown = exports_Schema.String.check(exports_Schema.isMaxLength(MAX_PAGE_BYTES));
+var BoundedMessage4 = exports_Schema.String.check(exports_Schema.isMaxLength(MAX_DIAGNOSTIC_LENGTH));
+var HttpStatus2 = exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(100), exports_Schema.isLessThanOrEqualTo(599));
+var PageCrawlStartUrl = PageCaptureTargetUrl;
+var PageCrawlPurpose = exports_Schema.Literals(["search", "ai-input", "ai-train"]);
+
+class PageCrawlLimits extends exports_Schema.Class("PageCrawlLimits")({
+  maxPages: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_PAGES)),
+  maxDepth: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_DEPTH)),
+  maxPageBytes: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_PAGE_BYTES)),
+  maxTotalBytes: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_TOTAL_BYTES)),
+  deadlineMillis: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_DEADLINE_MILLIS))
+}) {
+}
+
+class PageCrawlRequest extends exports_Schema.Class("PageCrawlRequest")({
+  startUrl: PageCrawlStartUrl,
+  purposes: exports_Schema.Array(PageCrawlPurpose).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(3), exports_Schema.isUnique()),
+  limits: PageCrawlLimits
+}) {
+}
+var PageCrawlRecordStatus = exports_Schema.Literals([
+  "queued",
+  "completed",
+  "disallowed",
+  "skipped",
+  "errored",
+  "cancelled"
+]);
+
+class PageCrawlRecordMetadata extends exports_Schema.Class("PageCrawlRecordMetadata")({
+  status: HttpStatus2,
+  url: PageCrawlStartUrl,
+  title: exports_Schema.optionalKey(exports_Schema.String.check(exports_Schema.isMaxLength(4096)))
+}) {
+}
+
+class PageCrawlRecord extends exports_Schema.Class("PageCrawlRecord")({
+  url: PageCrawlStartUrl,
+  status: PageCrawlRecordStatus,
+  markdown: exports_Schema.optionalKey(BoundedMarkdown),
+  metadata: exports_Schema.optionalKey(PageCrawlRecordMetadata)
+}) {
+}
+
+class PageCrawlRateLimitedError extends exports_Schema.TaggedError()("PageCrawlRateLimitedError", {
+  implementation: SandboxImplementation,
+  reason: exports_Schema.Literals(["rate", "quota"]),
+  retryAfterMillis: exports_Schema.optionalKey(exports_Schema.Natural),
+  message: BoundedMessage4,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class PageCrawlProtocolError extends exports_Schema.TaggedError()("PageCrawlProtocolError", {
+  implementation: SandboxImplementation,
+  message: BoundedMessage4,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class PageCrawlLimitError extends exports_Schema.TaggedError()("PageCrawlLimitError", {
+  implementation: SandboxImplementation,
+  limit: exports_Schema.Literals(["pages", "page-bytes", "total-bytes", "deadline"]),
+  maximum: PositiveInt6,
+  observed: exports_Schema.Natural,
+  message: BoundedMessage4
+}) {
+}
+
+class PageCrawlTerminalError extends exports_Schema.TaggedError()("PageCrawlTerminalError", {
+  implementation: SandboxImplementation,
+  status: exports_Schema.Literals([
+    "errored",
+    "cancelled_by_user",
+    "cancelled_due_to_timeout",
+    "cancelled_due_to_limits"
+  ]),
+  message: BoundedMessage4
+}) {
+}
+var PageCrawlError = exports_Schema.Union([
+  PageCrawlRateLimitedError,
+  PageCrawlProtocolError,
+  PageCrawlLimitError,
+  PageCrawlTerminalError
+]);
+
+class PageCrawl extends exports_Context.Service()("@effect-agent/sandbox/PageCrawl") {
+}
+// packages/sandbox/src/page-screenshot.ts
+var MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024;
+var PositiveInt7 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+
+class PageScreenshotLimits extends exports_Schema.Class("PageScreenshotLimits")({
+  maxOutputBytes: PositiveInt7.check(exports_Schema.isLessThanOrEqualTo(MAX_SCREENSHOT_BYTES))
+}) {
+}
+
+class PageScreenshotRequest extends exports_Schema.Class("PageScreenshotRequest")({
+  target: PageCaptureTarget,
+  engine: PageCaptureEngine,
+  limits: PageScreenshotLimits,
+  fullPage: exports_Schema.Boolean,
+  navigation: exports_Schema.optionalKey(PageNavigationOptions),
+  viewport: exports_Schema.optionalKey(PageViewport),
+  resourcePolicy: exports_Schema.optionalKey(PageResourcePolicy)
+}) {
+}
+
+class PageScreenshotResult extends exports_Schema.Class("PageScreenshotResult")({
+  implementation: SandboxImplementation,
+  mediaType: exports_Schema.Literal("image/png"),
+  bytes: exports_Schema.Uint8Array.check(exports_Schema.isMaxLength(MAX_SCREENSHOT_BYTES))
+}) {
+}
+
+class PageScreenshotOutputLimitError extends exports_Schema.TaggedError()("PageScreenshotOutputLimitError", {
+  implementation: SandboxImplementation,
+  limit: PositiveInt7,
+  observed: exports_Schema.Natural
+}) {
+}
+var PageScreenshotError = exports_Schema.Union([
+  PageCaptureRateLimitedError,
+  PageCaptureNavigationError,
+  PageCaptureUnsupportedError,
+  PageCaptureProtocolError,
+  PageScreenshotOutputLimitError
+]);
+
+class PageScreenshot extends exports_Context.Service()("@effect-agent/sandbox/PageScreenshot") {
+}
 // packages/capabilities/src/code-mode.ts
 var maxFailureTextLength = 4 * 1024;
 var BoundedFailureText = exports_Schema.String.check(exports_Schema.isMaxLength(maxFailureTextLength));
@@ -41168,7 +41421,7 @@ var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, ex
 }));
 
 // packages/capabilities/src/commands.ts
-var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt8 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 
 class SteeringCommand extends exports_Schema.TaggedClass()("SteeringCommand", {
   id: exports_Schema.NonEmptyString,
@@ -41192,7 +41445,7 @@ class FollowUpCommand extends exports_Schema.TaggedClass()("FollowUpCommand", {
 var RunCommand = exports_Schema.Union([SteeringCommand, FollowUpCommand]);
 var CommandDrainPolicy = exports_Schema.Literals(["one", "all"]);
 
-class RunCommandQueueConfig extends exports_Schema.Class("@effect-agent/capabilities/RunCommandQueueConfig")({ capacity: PositiveInt5 }) {
+class RunCommandQueueConfig extends exports_Schema.Class("@effect-agent/capabilities/RunCommandQueueConfig")({ capacity: PositiveInt8 }) {
 }
 
 class RunCommandQueueClosed extends exports_Schema.TaggedError()("RunCommandQueueClosed", { runId: RunId }) {
@@ -42381,7 +42634,7 @@ class ElicitationDeclined extends (/* @__PURE__ */ Error4("@effect/ai/McpSchema/
 // packages/capabilities/src/mcp.ts
 var MAX_MCP_TOOLS = 128;
 var MAX_MCP_DISCOVERY_BYTES = 1024 * 1024;
-var PositiveInt6 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt9 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var Sha256Digest = exports_Schema.String.check(exports_Schema.isPattern(/^sha256:[a-f0-9]{64}$/));
 var JsonArray2 = exports_Schema.Array(exports_Schema.Json);
 var isJsonArray2 = exports_Schema.is(JsonArray2);
@@ -42394,10 +42647,10 @@ class McpServerIdentity extends exports_Schema.Class("@effect-agent/capabilities
 
 class McpConnectionRequest extends exports_Schema.Class("@effect-agent/capabilities/McpConnectionRequest")({
   serverId: exports_Schema.NonEmptyString,
-  maxToolCount: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
-  maxToolDescriptionBytes: PositiveInt6,
-  maxDiscoveryBytes: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
-  connectTimeoutMillis: PositiveInt6
+  maxToolCount: PositiveInt9.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
+  maxToolDescriptionBytes: PositiveInt9,
+  maxDiscoveryBytes: PositiveInt9.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
+  connectTimeoutMillis: PositiveInt9
 }) {
 }
 
@@ -42599,9 +42852,9 @@ var connectMcp = exports_Effect.fn("connectMcp")(function* (request3) {
   };
 });
 // packages/capabilities/src/scheduling.ts
-var PositiveInt7 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt10 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var RunSchedulingOverride = exports_Schema.Union([
-  exports_Schema.Struct({ mode: exports_Schema.Literal("bounded"), concurrency: PositiveInt7 }),
+  exports_Schema.Struct({ mode: exports_Schema.Literal("bounded"), concurrency: PositiveInt10 }),
   exports_Schema.Struct({ mode: exports_Schema.Literal("sequential") })
 ]);
 // packages/capabilities/src/subagent-reservation.ts
@@ -43090,19 +43343,19 @@ var SubagentReservationsMemoryLive = exports_Layer.effect(SubagentReservations, 
 }));
 
 // packages/capabilities/src/subagent.ts
-var PositiveInt8 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt11 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var Natural4 = exports_Schema.Natural;
 var FinitePositiveDuration4 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
 var SubagentPolicyFields = exports_Schema.Struct({
-  maxChildren: PositiveInt8,
-  maxConcurrency: PositiveInt8,
-  maxTurns: PositiveInt8,
-  maxToolCalls: PositiveInt8,
+  maxChildren: PositiveInt11,
+  maxConcurrency: PositiveInt11,
+  maxTurns: PositiveInt11,
+  maxToolCalls: PositiveInt11,
   maxDuration: FinitePositiveDuration4,
-  maxInputTokens: exports_Schema.optionalKey(PositiveInt8),
-  maxOutputTokens: exports_Schema.optionalKey(PositiveInt8),
+  maxInputTokens: exports_Schema.optionalKey(PositiveInt11),
+  maxOutputTokens: exports_Schema.optionalKey(PositiveInt11),
   maxCostMicrousd: exports_Schema.optionalKey(Natural4),
-  maxResultBytes: exports_Schema.optionalKey(PositiveInt8)
+  maxResultBytes: exports_Schema.optionalKey(PositiveInt11)
 });
 
 class SubagentPolicy extends exports_Schema.Class("@effect-agent/capabilities/SubagentPolicy")(SubagentPolicyFields) {

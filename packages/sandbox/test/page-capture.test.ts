@@ -11,6 +11,10 @@ import {
   PageCaptureRateLimitedError,
   PageCaptureRequest,
   PageCaptureResult,
+  PageScreenshotError,
+  PageScreenshotLimits,
+  PageScreenshotRequest,
+  PageScreenshotResult,
   PageUrlTarget,
   SandboxImplementation,
 } from "../src/index.ts";
@@ -20,7 +24,40 @@ const implementation = SandboxImplementation.make({
   identity: "test-page-capture",
 });
 
-describe("PageCapture schemas", () => {
+describe("Page capture and screenshot schemas", () => {
+  it("round-trips bounded PNG screenshot requests, results, and errors", () => {
+    const request = PageScreenshotRequest.make({
+      target: PageUrlTarget.make({ url: "https://docs.example.com/" }),
+      engine: "chromium",
+      limits: PageScreenshotLimits.make({ maxOutputBytes: 1024 }),
+      fullPage: true,
+    });
+    const result = PageScreenshotResult.make({
+      implementation,
+      mediaType: "image/png",
+      bytes: new Uint8Array([137, 80, 78, 71]),
+    });
+    expect(
+      Schema.decodeSync(PageScreenshotRequest)(Schema.encodeSync(PageScreenshotRequest)(request)),
+    ).toEqual(request);
+    expect(
+      Schema.decodeSync(PageScreenshotResult)(Schema.encodeSync(PageScreenshotResult)(result)),
+    ).toEqual(result);
+    expect(
+      Schema.decodeUnknownOption(PageScreenshotError)({
+        _tag: "PageScreenshotOutputLimitError",
+        implementation,
+        limit: 1,
+        observed: 2,
+      })._tag,
+    ).toBe("Some");
+    expect(
+      Schema.decodeUnknownOption(PageScreenshotRequest)({
+        ...request,
+        limits: { maxOutputBytes: 0 },
+      })._tag,
+    ).toBe("None");
+  });
   it("round-trips a complete structured capture request", () => {
     const request = PageCaptureRequest.make({
       target: PageUrlTarget.make({ url: "https://docs.example.com/pricing" }),
