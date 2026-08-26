@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.31
+
+### Patch Changes
+
+- [#183](https://github.com/danieljvdm/effect-agent/pull/183) [`d3c42d4`](https://github.com/danieljvdm/effect-agent/commit/d3c42d4e34f27610845863ec29908cd3fce95188) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add bounded selector scrape to `PageCapture`, `WebCapture.makeScrape`, and the Cloudflare binding and REST adapters.
+
+- Updated dependencies [[`d3c42d4`](https://github.com/danieljvdm/effect-agent/commit/d3c42d4e34f27610845863ec29908cd3fce95188)]:
+  - @effect-agent/sandbox@0.1.0-beta.31
+  - @effect-agent/storage-cloudflare@0.1.0-beta.31
+  - @effect-agent/core@0.1.0-beta.31
+  - @effect-agent/engine@0.1.0-beta.31
+  - @effect-agent/session@0.1.0-beta.31
+
 ## 0.1.0-beta.30
 
 ### Patch Changes
