@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.30
+
+### Patch Changes
+
+- [#167](https://github.com/danieljvdm/effect-agent/pull/167) [`cb2256d`](https://github.com/danieljvdm/effect-agent/commit/cb2256d48838b83aa15cf9c252194c8ac96678c3) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Accept reliability findings emitted from the reviewer's documented defect vocabulary.
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.30
+
 ## 0.1.0-beta.29
 
 ### Minor Changes
