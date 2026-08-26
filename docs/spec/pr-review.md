@@ -113,9 +113,9 @@ case, but it never turns those repeats into retries within an invocation.
 
 Committed tests use a deterministic model and make no provider request. Live trials require the
 same explicit opt-in gate as other live-model evidence and do not gate ordinary pull requests.
-Private source and raw live results are not committed. Expected defects are human-authored semantic
-invariants with bounded evidence, not strings that model output must copy. Human adjudication is
-the initial source of truth.
+Private source and raw live results are not committed. Expected defects are semantic invariants
+with bounded source evidence, not strings that model output must copy. Saved judgments name their
+adjudicator and rationale; prior model output is not grading authority.
 
 The primary quality claim concerns the first trial. Later identical trials measure instability and
 cannot convert a first-trial miss into a pass. The leaf reports expected-blocker detection at any
@@ -125,7 +125,7 @@ later-only expected blockers, typed failures, tokens, cost when supplied by the 
 time. It does not add a database, hosted eval service, transcript store, model grader, or production
 retry path.
 
-Human judgments bind to a digest of the complete schema-encoded observation set and identify the
+Judgments bind to a digest of the complete schema-encoded observation set and identify the
 case, variant, trial, and emitted finding index. They distinguish expected-defect matches, new
 valid defects, invalid findings, and unclear findings. Missing judgments remain explicit. A
 finding satisfies blocker recall only when it matches an expected blocker and the reviewer emitted

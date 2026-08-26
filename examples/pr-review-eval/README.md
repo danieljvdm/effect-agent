@@ -5,7 +5,7 @@ This private leaf measures the model-dependent part of pull-request review. It r
 observation per independent trial.
 
 It does not fetch pull requests, shard diffs, publish GitHub reviews, or ask another model to grade
-findings. Saved human judgments are the scoring authority.
+findings. Saved judgments with a named adjudicator and source evidence are the scoring authority.
 
 ## Data
 
@@ -80,7 +80,7 @@ vp run pr-review-eval -- \
 Each trial is one independent reviewer invocation. The runner records typed trial failures, but it
 does not retry them. Defects and interruption stop the run.
 
-## Human judgments and reports
+## Judgments and reports
 
 The offline report command binds a judgment set to the SHA-256 digest of the exact observations it
 labels. Run it once without judgments to get that digest and an explicit list of unjudged finding
