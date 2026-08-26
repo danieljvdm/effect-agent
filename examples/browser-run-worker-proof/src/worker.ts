@@ -1,4 +1,4 @@
-import { WebCapture, WebCaptureSuccess } from "@effect-agent/capabilities";
+import { WebCapture, WebCaptureScrapeSuccess, WebCaptureSuccess } from "@effect-agent/capabilities";
 import {
   BrowserQuickActionBrowserBinding,
   browserQuickActionCaptureLayer,
@@ -34,6 +34,13 @@ const proofCapture = WebCapture.make("capture_example_domain", {
   urls: ["example.com"],
   actions: ["markdown"],
   maxResponseBytes: 4 * 1_024,
+});
+
+const PROOF_SCRAPE_SELECTORS = ["h1", "a"] as const;
+const proofScrape = WebCapture.makeScrape("scrape_example_domain", {
+  description: "Scrape the fixed Example Domain proof page by selector.",
+  urls: ["example.com"],
+  maxResponseBytes: 16 * 1_024,
 });
 
 const SCREENSHOT_MAX_OUTPUT_BYTES = 256 * 1_024;
@@ -80,7 +87,9 @@ const proofLayer = Layer.unwrap(
       Layer.provide(BrowserRunInteractiveBinding.layer({ browser: env.BROWSER })),
     );
     const browserRunLayer = Layer.merge(quickActionLayer, interactiveLayer);
-    return proofCapture.handlers.pipe(Layer.provideMerge(browserRunLayer));
+    return Layer.merge(proofCapture.handlers, proofScrape.handlers).pipe(
+      Layer.provideMerge(browserRunLayer),
+    );
   }),
 );
 
@@ -100,6 +109,30 @@ const runProof = Effect.gen(function* () {
   if (!Schema.is(WebCaptureSuccess)(result) || !result.markdown?.includes(PROOF_FACT)) {
     return yield* WorkerCaptureProofError.make({
       message: "The Markdown capture did not contain the expected stable fact",
+    });
+  }
+  yield* Effect.sleep(QUICK_ACTION_PACING_DELAY);
+  const scrapeToolkit = yield* Toolkit.make(proofScrape.tool);
+  const scrapeResults = yield* scrapeToolkit.handle("scrape_example_domain", {
+    url: PROOF_SOURCE_URL,
+    selectors: PROOF_SCRAPE_SELECTORS,
+  });
+  const scrapeLast = yield* Stream.runLast(scrapeResults);
+  if (Option.isNone(scrapeLast) || scrapeLast.value.preliminary) {
+    return yield* WorkerCaptureProofError.make({
+      message: "The selector scrape handler did not return a final result",
+    });
+  }
+  const scrapeResult = scrapeLast.value.result;
+  const heading = Schema.is(WebCaptureScrapeSuccess)(scrapeResult)
+    ? scrapeResult.groups.find((group) => group.selector === "h1")
+    : undefined;
+  if (
+    heading === undefined ||
+    !heading.results.some((element) => element.text.includes(PROOF_FACT))
+  ) {
+    return yield* WorkerCaptureProofError.make({
+      message: "The selector scrape did not contain the expected stable heading",
     });
   }
   yield* Effect.sleep(QUICK_ACTION_PACING_DELAY);
@@ -137,6 +170,10 @@ const runProof = Effect.gen(function* () {
       sourceUrl: PROOF_SOURCE_URL,
       action: "markdown",
       fact: PROOF_FACT,
+      scrape: {
+        selectors: PROOF_SCRAPE_SELECTORS,
+        headingFact: PROOF_FACT,
+      },
       screenshot: {
         mediaType: "image/png",
         pngSignatureValid: true,

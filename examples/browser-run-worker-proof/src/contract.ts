@@ -8,6 +8,11 @@ const ScreenshotProof = Schema.Struct({
   pngSignatureValid: Schema.Literal(true),
 });
 
+const ScrapeProof = Schema.Struct({
+  selectors: Schema.Tuple([Schema.Literal("h1"), Schema.Literal("a")]),
+  headingFact: Schema.Literal(PROOF_FACT),
+});
+
 export class BrowserRunInteractiveProof extends Schema.Class<BrowserRunInteractiveProof>(
   "@effect-agent/example-browser-run-worker-proof/BrowserRunInteractiveProof",
 )({
@@ -21,6 +26,7 @@ export class BrowserRunWorkerProofResult extends Schema.Class<BrowserRunWorkerPr
   sourceUrl: Schema.Literal(PROOF_SOURCE_URL),
   action: Schema.Literal("markdown"),
   fact: Schema.Literal(PROOF_FACT),
+  scrape: ScrapeProof,
   screenshot: ScreenshotProof,
   interactive: BrowserRunInteractiveProof,
 }) {}

@@ -15,6 +15,10 @@ const proofResult = () =>
     sourceUrl: "https://example.com/",
     action: "markdown",
     fact: "Example Domain",
+    scrape: {
+      selectors: ["h1", "a"],
+      headingFact: "Example Domain",
+    },
     screenshot: {
       mediaType: "image/png",
       pngSignatureValid: true,
@@ -67,6 +71,8 @@ describe("Browser Run Worker proof deployment resource", () => {
 
       assert.strictEqual(proof.result.interactive.finalUrl, "https://example.com/");
       assert.strictEqual(proof.result.interactive.readFact, "Example Domain");
+      assert.deepStrictEqual(proof.result.scrape.selectors, ["h1", "a"]);
+      assert.strictEqual(proof.result.scrape.headingFact, "Example Domain");
       assert.deepStrictEqual(Object.keys(proof.result.interactive).sort(), [
         "finalUrl",
         "readFact",

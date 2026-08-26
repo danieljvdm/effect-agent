@@ -275,7 +275,7 @@ are bounded at the adapter boundary.
 
 Code Mode is distinct from a general code interpreter: one native Effect AI Tool accepts bounded
 JavaScript source written by the model, executes it in one isolated pass, and lets the program
-call an explicit allowlist of existing Effect AI Tools through typed sandbox globals
+call an explicit allowlist of existing Effect AI Tools through typed sandbox globals.
 The generated program is one
 async function expression invoked by a fixed harness entrypoint. The handler never invokes a
 second model.
@@ -325,8 +325,9 @@ no Code Mode claim until this specification says otherwise.
 ## 9.2 Page capture and the PageCapture port
 
 Page capture renders one page — a navigated https URL or supplied HTML — in a managed headless
-browser and returns exactly one bounded output: rendered HTML, Markdown, discovered links, or
-schema-shaped structured data. The port is a stateless sibling of `Sandbox` and `CodeExecutor`
+browser and returns exactly one bounded output: rendered HTML, Markdown, discovered links,
+schema-shaped structured data, or grouped selector scrape results. The port is a stateless sibling
+of `Sandbox` and `CodeExecutor`
 in `@effect-agent/sandbox`: a browser is intrinsically an egress device, so it carries its own
 explicit capture contract instead of widening the sandbox network policy that every existing
 adapter rejects typed.
@@ -349,6 +350,11 @@ node use the explicitly supported, type-checked JSON Schema vocabulary. The docu
 to 64 KiB of encoded data, depth 32, 4,096 total nodes, and 256 entries per collection.
 Malformed keywords, unsupported keywords, cycles, and over-budget documents fail at the request
 Schema boundary.
+Selector scrape requests contain 1 to 64 bounded selectors. Results preserve provider group and
+element order and are limited to 4,096 aggregate elements, 64 bounded attributes per element,
+bounded text and HTML, and finite geometry. Malformed or over-budget scrape results fail typed;
+adapters never truncate them into an apparently successful result. The response byte budget still
+applies to the complete provider response before decoding.
 Adapters reuse the `SandboxImplementation` posture idiom (CAP-010), reject any feature or engine
 they cannot honor, and surface platform rate and quota refusals as one typed failure carrying
 the platform's own backoff hint. Foreign browser or transport failures retain their original live
@@ -368,9 +374,10 @@ redirect destinations, and every rendered-page subrequest. `WebCapture.makeExtra
 platform-side JSON response format from one Effect Schema and decodes the untrusted result
 through that exact Schema; its handler Layer visibly requires both `PageCapture` and the
 Schema's decoding services, and the Tool invocation keeps those decoding services visible in
-its own requirement channel.
+its own requirement channel. `WebCapture.makeScrape` exposes only the target URL and bounded
+selector list while preserving the portable grouped result contract.
 
-Both builders return ordinary Tools with `failureMode: "return"` and execution class
+All three builders return ordinary Tools with `failureMode: "return"` and execution class
 `uncertain`: page JavaScript can mutate remote state, so captures are neither safely replayable
 nor eligible for readonly-only Code Mode. Platform-side model inference is never implicit; the
 host must authorize and account for its provider before extraction starts. Authorization and
@@ -381,6 +388,13 @@ set, and an extraction Schema the deriver cannot express. Stateful browser sessi
 PDFs, snapshot bundles, crawling, and accessibility trees remain outside this one-page port.
 Screenshots and crawling use separate sibling contracts with their own binary and scoped-stream
 semantics. Page capture claims deployment class `E` only.
+
+Raw CDP browser execution is not a supported capability. The pinned Cloudflare browser client has
+no session egress guardrail, and the later provider guardrail accepts hostnames rather than this
+framework's exact HTTPS origins. Page request interception is not a containment boundary for
+arbitrary Target, Runtime, Fetch, and Network commands. A future connector therefore requires
+either a provider-enforced exact-origin boundary or an explicitly accepted, separately named
+unrestricted authority; it must not be hidden inside Code Mode or `InteractiveBrowser`.
 
 ## 9.3 Page screenshots
 
@@ -520,8 +534,10 @@ default and are excluded from ordinary span attributes.
   credential-free HTTPS navigation, redirects, and subrequests; returned links are validated
   credential-free HTTP(S) data; its action set, engine, and byte budget are fixed at capability
   construction; structured extraction accepts only a bounded object JSON Schema and exposes its
-  decoder requirements; browser execution remains `uncertain`; model inference requires explicit
-  host authorization and accounting; and every result is treated as untrusted input.
+  decoder requirements; selector scrape preserves bounded grouped results and rejects malformed or
+  over-budget provider output without truncation; browser execution remains `uncertain`; model
+  inference requires explicit host authorization and accounting; and every result is treated as
+  untrusted input.
 - **CAP-019**: Page screenshots use a separate Schema-first port with fixed PNG output and a
   caller-owned byte lifetime; adapters enforce MIME and byte bounds and never persist or project
   screenshot bytes.

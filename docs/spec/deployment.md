@@ -385,7 +385,7 @@ Action Layer in `@effect-agent/platform-cloudflare` (`browserQuickActionCaptureL
 capture is one stateless `quickAction()` RPC on the Wrangler `browser` binding. The host resolves
 that binding explicitly and supplies it through `BrowserQuickActionBrowserBinding.layer`; both
 capture Layers visibly require the resulting Effect service (DEPLOY-010) and never read ambiently.
-The Layer accepts Cloudflare's pinned native `BrowserRun` and exposes the four supported actions
+The Layer accepts Cloudflare's pinned native `BrowserRun` and exposes the five supported actions
 as Effect methods using the native option types, so incompatible Quick Action options fail
 compilation. Native Promise rejection becomes a typed binding RPC error before the capture adapter
 maps it into the `PageCapture` error union.
@@ -398,6 +398,10 @@ that documented envelope fails typed instead of being reinterpreted as a REST pa
 returned link must satisfy the canonical bounded,
 credential-free HTTP(S) link Schema; malformed entries, unsupported schemes, embedded credentials,
 and over-limit collections fail typed instead of being discarded.
+The `scrape` action projects the portable selector list into Cloudflare's `elements` request and
+decodes the provider's grouped response through the portable scrape Schemas. Malformed groups,
+excess aggregate elements, excess attributes, non-finite geometry, and encoded responses beyond the
+caller budget fail typed; the adapter never returns a truncated scrape as success.
 HTTP 429 becomes a typed rate/quota failure; `Retry-After` is included only when conversion to
 milliseconds remains a safe integer. Foreign browser RPC and response-stream failures retain
 their original cause; provider envelope errors, rate-limit bodies, and non-success HTTP bodies
@@ -439,10 +443,10 @@ The separate private `examples/browser-run-worker-proof` leaf closes the binding
 gap without a model. Its fixed opt-in Effect workflow deploys one collision-resistant temporary
 Worker with a native `BROWSER` binding and compatibility date `2026-03-24`, invokes one bounded
 Markdown `WebCapture.make` handler against `https://example.com/`, validates the stable `Example
-Domain` fact, captures one bounded PNG through `PageScreenshot`, validates its eight-byte PNG
+Domain` fact, invokes `WebCapture.makeScrape` with two selectors and validates the grouped heading,
+captures one bounded PNG through `PageScreenshot`, validates its eight-byte PNG
 signature, discards the image bytes, and deletes the Worker through a Scope finalizer. The Worker
-leaves 11 seconds between its Markdown and screenshot Quick Actions to honor the Free plan request
-interval. The proof
+leaves 11 seconds between each Quick Action to honor the Free plan request interval. The proof
 response contains only bounded validation metadata. The workflow fails if its generated name
 already exists, never retries an unresolved invocation, and surfaces deletion failure. The ordinary
 test suite scripts the deployment operations and verifies finalization without Cloudflare
@@ -461,6 +465,12 @@ setting; the caller's elapsed-time deadline is authoritative. Navigation, redire
 subrequest use the immutable exact-host policy. Capacity refusal and remote expiry remain typed;
 uncertain actions are never retried or replayed. This capability has no durable session, registry,
 reconnect, or model Tool.
+
+Raw CDP execution is intentionally absent. The pinned browser client cannot enforce an immutable
+session egress boundary, and Cloudflare's newer hostname-only guardrail cannot express the exact
+HTTPS-origin policy required by the portable contract. Request interception is not sufficient
+against arbitrary CDP domains. This deployment therefore makes no constrained-CDP or browser Code
+Mode claim.
 
 The opt-in Worker proof uses compatibility date 2026-03-24 or later (and remote Browser Run mode
 where required), one allowed public HTTPS page, and bounded metadata/text only. It is not live
@@ -506,6 +516,7 @@ vp run --no-cache -F @effect-agent/example-providers test test/browser-crawl-liv
 Current platform references:
 
 - [Browser Run Quick Actions](https://developers.cloudflare.com/browser-run/quick-actions/)
+- [Browser Run selector scrape](https://developers.cloudflare.com/browser-run/quick-actions/scrape-endpoint/)
 - [Browser Run screenshot Quick Action](https://developers.cloudflare.com/browser-run/quick-actions/screenshot-endpoint/)
 - [Browser Run structured extraction and Workers AI](https://developers.cloudflare.com/browser-run/quick-actions/json-endpoint/)
 - [Browser Run crawl endpoint](https://developers.cloudflare.com/browser-run/quick-actions/crawl-endpoint/)
@@ -561,9 +572,10 @@ Current platform references:
 - **DEPLOY-014**: The Browser Run Quick Action page-capture adapter visibly requires the
   host-provided service for an explicitly resolved browser binding, applies the fixed
   browser-request allowlist, incrementally enforces the response byte budget with scoped reader
-  cleanup, distinguishes response envelopes by trusted metadata, rejects malformed link
-  payloads, keeps platform refusals and safe backoff hints typed, denies Workers AI without its
-  explicit host authorization and accounting service, and claims deployment class `E` only.
+  cleanup, distinguishes response envelopes by trusted metadata, rejects malformed link and
+  selector-scrape payloads, keeps platform refusals and safe backoff hints typed, denies Workers AI
+  without its explicit host authorization and accounting service, and claims deployment class `E`
+  only.
 - **DEPLOY-015**: The Browser Run REST crawl adapter uses one fixed API origin and redacted token,
   creates one private job, applies an absolute deadline across polling and lazy bounded pagination,
   performs no retries or reattachment, and cancels a known-running job exactly once when its Scope

@@ -19,6 +19,9 @@ import { SANDBOX_DIAGNOSTIC_MAX_LENGTH, SandboxImplementation } from "./sandbox.
 
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const MAX_LINKS = 4_096;
+const MAX_SCRAPE_SELECTORS = 64;
+const MAX_SCRAPE_ELEMENTS = 4_096;
+const MAX_SCRAPE_ATTRIBUTES = 64;
 const MAX_RESPONSE_FORMAT_BYTES = 64 * 1024;
 const MAX_RESPONSE_FORMAT_DEPTH = 32;
 const MAX_RESPONSE_FORMAT_NODES = 4_096;
@@ -31,6 +34,10 @@ const BoundedUrl = Schema.NonEmptyString.check(Schema.isMaxLength(8 * 1024));
 const BoundedHtml = Schema.NonEmptyString.check(Schema.isMaxLength(2 * 1024 * 1024));
 const BoundedPrompt = Schema.NonEmptyString.check(Schema.isMaxLength(8 * 1024));
 const BoundedSelector = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
+const BoundedAttributeName = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
+const BoundedAttributeValue = Schema.String.check(Schema.isMaxLength(64 * 1_024));
+const BoundedScrapeText = Schema.String.check(Schema.isMaxLength(1024 * 1_024));
+const BoundedScrapeHtml = Schema.String.check(Schema.isMaxLength(2 * 1024 * 1_024));
 const BoundedPattern = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 const BoundedMessage = Schema.String.check(Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
 const BoundedInferenceProvider = Schema.NonEmptyString.check(Schema.isMaxLength(256));
@@ -364,6 +371,17 @@ export class CapturePageLinks extends Schema.TaggedClass<CapturePageLinks>()("Ca
   visibleLinksOnly: Schema.optionalKey(Schema.Boolean),
 }) {}
 
+/** Return rendered element records grouped by their requested CSS selector. */
+export class CapturePageScrape extends Schema.TaggedClass<CapturePageScrape>()(
+  "CapturePageScrape",
+  {
+    selectors: Schema.Array(BoundedSelector).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(MAX_SCRAPE_SELECTORS),
+    ),
+  },
+) {}
+
 /**
  * Extract structured data from the rendered page. `responseFormat` is a
  * bounded, object-shaped JSON Schema document, typically derived from an
@@ -383,6 +401,7 @@ export const PageCaptureAction = Schema.Union([
   CapturePageContent,
   CapturePageMarkdown,
   CapturePageLinks,
+  CapturePageScrape,
   CapturePageStructured,
 ]);
 export type PageCaptureAction = typeof PageCaptureAction.Type;
@@ -490,11 +509,52 @@ export class PageStructuredCaptured extends Schema.TaggedClass<PageStructuredCap
   },
 ) {}
 
+/** One bounded HTML attribute returned by a selector scrape. */
+export class PageScrapeAttribute extends Schema.Class<PageScrapeAttribute>("PageScrapeAttribute")({
+  name: BoundedAttributeName,
+  value: BoundedAttributeValue,
+}) {}
+
+/** One rendered element returned by a selector scrape. */
+export class PageScrapeElement extends Schema.Class<PageScrapeElement>("PageScrapeElement")({
+  text: BoundedScrapeText,
+  html: BoundedScrapeHtml,
+  attributes: Schema.Array(PageScrapeAttribute).check(Schema.isMaxLength(MAX_SCRAPE_ATTRIBUTES)),
+  left: Schema.Finite,
+  top: Schema.Finite,
+  width: Schema.Finite,
+  height: Schema.Finite,
+}) {}
+
+/** All rendered elements matched by one requested selector. */
+export class PageScrapeGroup extends Schema.Class<PageScrapeGroup>("PageScrapeGroup")({
+  selector: BoundedSelector,
+  results: Schema.Array(PageScrapeElement).check(Schema.isMaxLength(MAX_SCRAPE_ELEMENTS)),
+}) {}
+
+const PageScrapeGroups = Schema.Array(PageScrapeGroup).check(
+  Schema.isMaxLength(MAX_SCRAPE_SELECTORS),
+  Schema.makeFilter(
+    (groups) =>
+      groups.reduce((total, group) => total + group.results.length, 0) <= MAX_SCRAPE_ELEMENTS,
+    { title: "at most 4096 aggregate scraped elements" },
+  ),
+);
+
+/** Bounded rendered element records, preserving selector grouping. */
+export class PageScrapeCaptured extends Schema.TaggedClass<PageScrapeCaptured>()(
+  "PageScrapeCaptured",
+  {
+    groups: PageScrapeGroups,
+  },
+) {}
+
 /** Exactly one output kind per pass, matching the requested action. */
 export const PageCaptureOutput = Schema.Union([
   PageContentCaptured,
   PageMarkdownCaptured,
   PageLinksCaptured,
+  PageScrapeCaptured,
   PageStructuredCaptured,
 ]);
 export type PageCaptureOutput = typeof PageCaptureOutput.Type;

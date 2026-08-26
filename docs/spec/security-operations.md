@@ -183,7 +183,9 @@ The capture capability is deny-by-default: an immutable construction-time HTTPS 
 governs navigation, redirects, and every browser subrequest. The request Schema rejects malformed
 URLs, non-HTTPS targets, and embedded credentials; discovered links must be absolute,
 credential-free HTTP(S) URLs and grant no navigation authority. Responses are byte-bounded before
-buffering. Rendered JavaScript may mutate
+buffering. Selector scrape additionally bounds selector count, aggregate elements, attributes,
+strings, and geometry, and rejects malformed or excessive provider output rather than truncating it.
+Rendered JavaScript may mutate
 remote state, so capture Tools remain `uncertain`, are not automatically replayed, and cannot
 enter readonly-only Code Mode. Structured extraction accepts only a bounded object JSON Schema;
 the request rejects malformed or unsupported root and nested keywords, excessive encoded bytes,
@@ -197,6 +199,13 @@ Model-visible failures and cleanup logs carry only bounded,
 fixed operation or HTTP-status descriptions and never interpolate foreign exception text,
 rate-limit bodies, provider envelopes, or other remote error bodies.
 A page that instructs the model is data, never authority.
+
+Arbitrary CDP is not a constrained browser authority. The pinned Cloudflare client has no
+session-wide egress guardrail, the provider's later hostname-only guardrail cannot distinguish
+scheme or port, and page request interception can be disabled or bypassed by CDP commands that
+create targets or fetch outside the page. Raw CDP therefore remains unsupported unless a future
+provider boundary enforces the exact HTTPS origins or the host explicitly accepts a separately
+named unrestricted browser authority.
 
 Screenshot bytes are untrusted content. `PageScreenshot` bounds them before buffering and keeps
 them out of canonical records, model context, logs, telemetry, and error diagnostics.

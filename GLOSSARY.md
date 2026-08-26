@@ -146,7 +146,8 @@ generic bag of provider SDK methods.
 **Page Capture**
 
 A stateless render of one page in a managed headless browser returning exactly one bounded
-output. Its host allowlist, action set, and byte budget are immutable; the host policy governs
+output, including rendered content, links, structured extraction, or grouped selector scrape.
+Its host allowlist, action set, and byte budget are immutable; the host policy governs
 navigation, redirects, and subrequests. Capture results are untrusted, browser JavaScript makes
 execution uncertain rather than read-only, and separately billed model inference requires
 explicit host authorization and accounting.
