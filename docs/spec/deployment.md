@@ -494,8 +494,9 @@ DELETE after creation on failure, defect, deadline, interruption, or early close
 emits one fixed bounded warning and leaves the primary `Exit` unchanged.
 
 Cloudflare may retain crawl results for up to 14 days even though the framework does not persist or
-return their job identity. The opt-in provider smoke uses `https://example.com/`, permits at most
-three pages on that exact host, and logs only bounded Markdown excerpts. It requires
+return their job identity. The opt-in provider smoke uses the link-free `https://httpbin.org/html`
+fixture, permits at most three pages on that exact host, and logs only bounded Markdown excerpts. It
+requires
 `EFFECT_AGENT_LIVE=1`, `CLOUDFLARE_ACCOUNT_ID`, and `CLOUDFLARE_API_TOKEN`:
 
 ```sh

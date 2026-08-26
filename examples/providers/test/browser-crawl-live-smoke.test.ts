@@ -7,7 +7,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 const ACCOUNT = "CLOUDFLARE_ACCOUNT_ID";
 const TOKEN = "CLOUDFLARE_API_TOKEN";
-const START_URL = "https://example.com/";
+const START_URL = "https://httpbin.org/html";
+const START_HOST = "httpbin.org";
+const PROOF_FACT = "Herman Melville - Moby-Dick";
 const MAX_PAGES = 3;
 const MAX_PAGE_BYTES = 32 * 1_024;
 const enabled =
@@ -41,7 +43,7 @@ describe.skipIf(!enabled)("Browser Run REST crawl smoke (opt-in)", () => {
         expect(records.length).toBeGreaterThan(0);
         expect(records.length).toBeLessThanOrEqual(MAX_PAGES);
         for (const record of records) {
-          expect(new URL(record.url).host).toBe("example.com");
+          expect(new URL(record.url).host).toBe(START_HOST);
           if (record.markdown !== undefined) {
             expect(new TextEncoder().encode(record.markdown).byteLength).toBeLessThanOrEqual(
               MAX_PAGE_BYTES,
@@ -52,7 +54,7 @@ describe.skipIf(!enabled)("Browser Run REST crawl smoke (opt-in)", () => {
           (record) => record.status === "completed" && record.markdown !== undefined,
         );
         expect(completed.length).toBeGreaterThan(0);
-        expect(completed[0]?.markdown).toContain("Example Domain");
+        expect(completed[0]?.markdown).toContain(PROOF_FACT);
 
         yield* Console.log(
           "\nCloudflare Browser Run crawl records:",
