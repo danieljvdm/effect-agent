@@ -13,6 +13,8 @@ Phase 6), not as an application scaffold. The narrowly scoped
 `examples/browser-run-worker-proof` leaf owns the repository's direct Wrangler dependency and one
 configuration used only for its opt-in temporary deployment. Other Worker entries remain test
 fixtures or private examples.
+`examples/pr-review-eval` is the opt-in live-model quality bench for the provider-neutral PR
+reviewer. It stores only safe fixtures in Git and keeps private corpora and raw run results ignored.
 
 ## Source-of-truth versions
 
@@ -86,6 +88,7 @@ examples/
   providers/        Leaf OpenAI/Anthropic Model-binding compile proof
   repo-ops/         Leaf repo-ops evidence auditor (P7 internal agent)
   browser-run-worker-proof/  Opt-in temporary deployment proving the native Browser Run binding
+  pr-review-eval/   Opt-in replay bench for first-pass PR-review model quality
 action/             Published PR-review Action metadata and committed node24 bundle
 work-order-action/  Prebuilt node24 PR work-order Action (committed bundle, separate authority)
 ```

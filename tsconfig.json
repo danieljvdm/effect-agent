@@ -60,6 +60,9 @@
     },
     {
       "path": "./examples/browser-run-worker-proof"
+    },
+    {
+      "path": "./examples/pr-review-eval"
     }
   ]
 }

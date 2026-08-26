@@ -102,6 +102,7 @@ const exampleNames = [
   "demo",
   "pr-work-order-ingress",
   "pr-work-orders",
+  "pr-review-eval",
   "providers",
   "repo-ops",
 ] as const;

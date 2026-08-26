@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "version": 1,
+      "id": "optional-read-regression",
+      "kind": "known-defects",
+      "provenance": "Synthetic, redistributable smoke case for runner validation only.",
+      "inputDigest": "f3533b2cb72fb5d38b16d883f1412aa59d3bb54be449a8bdbce328ec9b157306",
+      "request": {
+        "title": "Remove optional handling",
+        "description": "",
+        "baseRevision": "base",
+        "headRevision": "head",
+        "changes": [
+          {
+            "path": "src/read.ts",
+            "patch": "@@ -1 +1 @@\n-export const read = (value?: string) => value?.length ?? 0;\n+export const read = (value?: string) => value.length;"
+          }
+        ],
+        "unreviewedPaths": []
+      },
+      "expectedDefects": [
+        {
+          "id": "undefined-dereference",
+          "severity": "blocking",
+          "invariant": "Calling read without a value must not throw.",
+          "evidence": [
+            {
+              "path": "src/read.ts",
+              "line": 1,
+              "description": "The changed expression dereferences an optional value."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "id": "optional-read-control",
+      "kind": "clean-control",
+      "provenance": "Synthetic, redistributable smoke case for runner validation only.",
+      "inputDigest": "fcf80400bc696578f5b4a5a8cd7451d96c8283dceabedf644bb66a5498a0766e",
+      "request": {
+        "title": "Handle optional reads",
+        "description": "",
+        "baseRevision": "base",
+        "headRevision": "head",
+        "changes": [
+          {
+            "path": "src/read.ts",
+            "patch": "@@ -1 +1 @@\n-export const read = (value?: string) => value.length;\n+export const read = (value?: string) => value?.length ?? 0;"
+          }
+        ],
+        "unreviewedPaths": []
+      },
+      "expectedDefects": []
+    }
+  ]
+}

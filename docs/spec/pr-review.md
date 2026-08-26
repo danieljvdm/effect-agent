@@ -102,3 +102,22 @@ claim.
 Deterministic tests pin the diff-line parser and output sanitization (`PRR-004`) and the complete
 sharding, parallel-wave, merge, and automatic/manual trigger lifecycle (`PRR-005`–`PRR-007`).
 Provider behavior remains outside the offline test suite.
+
+## 6. Model-quality evaluation
+
+The private `examples/pr-review-eval` leaf replays versioned, schema-encoded `ReviewRequest` cases
+through the public reviewer boundary. It records the exact input digest, complete model
+configuration, trial index, elapsed time, and either the validated `ReviewOutcome` or one bounded
+typed failure. A trial remains one package invocation under PRR-002; the eval runner may repeat a
+case, but it never turns those repeats into retries within an invocation.
+
+Committed tests use a deterministic model and make no provider request. Live trials require the
+same explicit opt-in gate as other live-model evidence and do not gate ordinary pull requests.
+Private source and raw live results are not committed. Expected defects are human-authored semantic
+invariants with bounded evidence, not strings that model output must copy. Human adjudication is
+the initial source of truth.
+
+The primary quality claim concerns the first trial. Later identical trials measure instability and
+cannot convert a first-trial miss into a pass. The leaf may report recall, precision, later-only
+valid findings, typed failures, tokens, cost when supplied by the host, and elapsed time. It does
+not add a database, hosted eval service, transcript store, model grader, or production retry path.

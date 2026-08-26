@@ -1,0 +1,27 @@
+{
+  "name": "@effect-agent/example-pr-review-eval",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "eval": "bun src/main.ts",
+    "test": "vp test"
+  },
+  "dependencies": {
+    "@effect-agent/pr-review": "workspace:*",
+    "@effect/ai-openai": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect-agent/testing": "workspace:*",
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
