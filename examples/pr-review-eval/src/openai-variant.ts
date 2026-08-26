@@ -8,6 +8,7 @@ import {
   type EvalReasoningEffort,
   EvalReviewerFailure,
   EvalVariantConfiguration,
+  type EvalVariantId,
 } from "./contracts.ts";
 import { digestText } from "./corpus.ts";
 import { type EvalVariant } from "./runner.ts";
@@ -36,6 +37,7 @@ export const openAiClientLayer = OpenAiClient.layerConfig({
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
 export interface CurrentOpenAiVariantOptions {
+  readonly id: EvalVariantId;
   readonly model: string;
   readonly reasoningEffort: EvalReasoningEffort;
   readonly guidance?: string | undefined;
@@ -48,7 +50,7 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
     const guidanceDigest =
       effectiveGuidance === undefined ? undefined : yield* digestGuidance(effectiveGuidance);
     const configuration = EvalVariantConfiguration.make({
-      id: "current",
+      id: options.id,
       reviewerProfile: CURRENT_REVIEWER_PROFILE,
       provider: "openai",
       model: options.model,

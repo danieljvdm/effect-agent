@@ -38,11 +38,15 @@ strict structured output, and `store: false`.
 EFFECT_AGENT_LIVE=1 OPENAI_API_KEY=... \
 vp run @effect-agent/example-pr-review-eval#eval -- \
   --cases data/cases.json \
-  run --output results/current.jsonl --trials 5
+  run --variant current --output results/current.jsonl --trials 5
 ```
 
 The command refuses to overwrite an existing result file. Use repeated `--case` flags on `run` to
 select a subset. `--concurrency` is bounded from one to four and defaults to one.
+
+Give each baseline or candidate a stable `--variant` ID. Run variants independently so a provider
+failure cannot destroy an earlier result file. The report command accepts up to eight repeated
+`--observations` files and rejects incompatible case sets, model configurations, or trial grids.
 
 The shipped clean control can exercise one live call without exposing private source:
 
@@ -65,13 +69,16 @@ references:
 ```sh
 vp run @effect-agent/example-pr-review-eval#eval -- \
   --cases data/cases.json \
-  report --observations results/current.jsonl --output results/unjudged-report.json
+  report --observations results/current.jsonl \
+  --observations results/candidate-guidance-v1.jsonl \
+  --output results/unjudged-report.json
 ```
 
 Create `data/judgments.json` with the reported `observationSetDigest`. Each judgment identifies one
 case, variant, trial, and zero-based finding index; records the adjudicator and rationale; and uses
 one of `matches-expected`, `new-valid`, `invalid`, or `unclear`. A `matches-expected` row names one
-or more case defect IDs. The other labels leave `matchedDefectIds` empty.
+or more case defect IDs. The other labels leave `matchedDefectIds` empty. Supply the same complete
+set of observation files when generating the digest and the final report.
 
 Then write the adjudicated report:
 
@@ -79,6 +86,7 @@ Then write the adjudicated report:
 vp run @effect-agent/example-pr-review-eval#eval -- \
   --cases data/cases.json \
   report --observations results/current.jsonl \
+  --observations results/candidate-guidance-v1.jsonl \
   --judgments data/judgments.json --output results/report.json
 ```
 

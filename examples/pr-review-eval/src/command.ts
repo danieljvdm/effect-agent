@@ -1,10 +1,10 @@
 import { Config, Console, Effect, FileSystem, Option, Schema } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 
-import { EvalCaseId, EvalConfigurationError, EvalDataError } from "./contracts.ts";
+import { EvalCaseId, EvalConfigurationError, EvalDataError, EvalVariantId } from "./contracts.ts";
 import { loadEvalSuite, preflightObservationOutput, writeObservations } from "./corpus.ts";
 import { makeCurrentOpenAiVariant, openAiClientLayer } from "./openai-variant.ts";
-import { loadJudgmentSet, loadObservationFile, writeQualityReport } from "./report-files.ts";
+import { loadJudgmentSet, loadObservationFiles, writeQualityReport } from "./report-files.ts";
 import { makeQualityReport, renderQualityReport } from "./report.ts";
 import { runEvalSuite } from "./runner.ts";
 
@@ -85,10 +85,15 @@ const guidance = Flag.file("guidance").pipe(
   Flag.withDescription("Optional repository guidance file, capped at 20,000 characters."),
   Flag.optional,
 );
+const variantId = Flag.string("variant").pipe(
+  Flag.withDefault("current"),
+  Flag.withSchema(EvalVariantId),
+  Flag.withDescription("Stable ID for this baseline or candidate configuration."),
+);
 
 const runCommand = Command.make(
   "run",
-  { concurrency, effort, guidance, model, output, selectedCases, trials },
+  { concurrency, effort, guidance, model, output, selectedCases, trials, variantId },
   Effect.fn("PrReviewEval.runCommand")(function* (options) {
     const liveGate = yield* Config.string("EFFECT_AGENT_LIVE").pipe(Config.withDefault(""));
     if (liveGate !== "1") {
@@ -124,6 +129,7 @@ const runCommand = Command.make(
         }),
     });
     const variant = yield* makeCurrentOpenAiVariant({
+      id: options.variantId,
       model: options.model,
       reasoningEffort: options.effort,
       ...(guidanceText === undefined ? {} : { guidance: guidanceText }),
@@ -141,14 +147,15 @@ const runCommand = Command.make(
   Command.withExamples([
     {
       command:
-        "pr-review-eval --cases ./data/cases.json run --output ./results/current.jsonl --trials 5",
+        "pr-review-eval --cases ./data/cases.json run --variant current --output ./results/current.jsonl --trials 5",
       description: "Run five independent trials for every case with the production defaults.",
     },
   ]),
 );
 
-const observationsFile = Flag.file("observations").pipe(
-  Flag.withDescription("JSONL observations produced by the run command."),
+const observationFiles = Flag.file("observations").pipe(
+  Flag.withDescription("JSONL observations; repeat once per baseline or candidate."),
+  Flag.between(1, 8),
 );
 const judgmentsFile = Flag.file("judgments").pipe(
   Flag.withDescription("Optional schema-encoded human judgment set."),
@@ -160,11 +167,11 @@ const reportOutput = Flag.file("output").pipe(
 
 const reportCommand = Command.make(
   "report",
-  { judgmentsFile, observationsFile, reportOutput },
+  { judgmentsFile, observationFiles, reportOutput },
   Effect.fn("PrReviewEval.reportCommand")(function* (options) {
     const shared = yield* root;
     const suite = yield* loadEvalSuite(shared.casesFile);
-    const observations = yield* loadObservationFile(options.observationsFile);
+    const observations = yield* loadObservationFiles(options.observationFiles);
     const judgments = yield* Option.match(options.judgmentsFile, {
       onNone: () => Effect.succeed(undefined),
       onSome: loadJudgmentSet,

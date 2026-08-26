@@ -54,6 +54,13 @@ export const loadObservationFile = Effect.fn("PrReviewEval.loadObservationFile")
   return yield* decodeObservationLines(contents);
 });
 
+export const loadObservationFiles = Effect.fn("PrReviewEval.loadObservationFiles")(function* (
+  paths: ReadonlyArray<string>,
+) {
+  const batches = yield* Effect.forEach(paths, loadObservationFile);
+  return batches.flat();
+});
+
 export const loadJudgmentSet = Effect.fn("PrReviewEval.loadJudgmentSet")(function* (path: string) {
   const contents = yield* readBoundedFile(path, MAX_JUDGMENT_BYTES, "read judgments");
   return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(EvalJudgmentSet))(contents).pipe(

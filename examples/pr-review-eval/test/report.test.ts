@@ -23,7 +23,7 @@ import {
   EvalTrialSucceeded,
   EvalVariantConfiguration,
   loadJudgmentSet,
-  loadObservationFile,
+  loadObservationFiles,
   loadEvalSuite,
   makeQualityReport,
   preflightObservationOutput,
@@ -353,21 +353,31 @@ describe("PR-review eval quality report", () => {
         observation(known, current, 1, succeeded([])),
         observation(clean, current, 1, succeeded([])),
       ];
-      const judgments = judgmentSet(yield* digestObservationSet(observations), []);
       const fs = yield* FileSystem.FileSystem;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pr-review-report-" });
       const observationsPath = `${directory}/observations.jsonl`;
+      const candidateObservationsPath = `${directory}/candidate-observations.jsonl`;
       const judgmentsPath = `${directory}/judgments.json`;
       const reportPath = `${directory}/report.json`;
 
       yield* writeObservations(observationsPath, observations);
+      const candidateObservations = observations.map((entry) =>
+        EvalObservation.make({ ...entry, variant: configuration("candidate") }),
+      );
+      yield* writeObservations(candidateObservationsPath, candidateObservations);
+      const loadedObservations = yield* loadObservationFiles([
+        observationsPath,
+        candidateObservationsPath,
+      ]);
+      expect(loadedObservations).toEqual([...observations, ...candidateObservations]);
+      const judgments = judgmentSet(yield* digestObservationSet(loadedObservations), []);
       yield* fs.writeFileString(
         judgmentsPath,
         Schema.encodeSync(Schema.fromJsonString(EvalJudgmentSet))(judgments),
       );
-      const loadedObservations = yield* loadObservationFile(observationsPath);
       const loadedJudgments = yield* loadJudgmentSet(judgmentsPath);
       const report = yield* makeQualityReport(suite, loadedObservations, loadedJudgments);
+      expect(report.variants).toHaveLength(2);
       yield* preflightObservationOutput(reportPath);
       yield* writeQualityReport(reportPath, report);
 

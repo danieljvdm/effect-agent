@@ -26,6 +26,7 @@ import {
   EvalReviewerFailure,
   EvalSuite,
   EvalVariantConfiguration,
+  EvalVariantId,
   digestGuidance,
   loadEvalSuite,
   makeCurrentOpenAiVariant,
@@ -184,10 +185,12 @@ describe("PR-review model eval", () => {
   it.effect("derives output-affecting guidance identity inside the live variant", () =>
     Effect.gen(function* () {
       const variant = yield* makeCurrentOpenAiVariant({
+        id: Schema.decodeSync(EvalVariantId)("candidate-guidance-v1"),
         model: "gpt-5.6-sol",
         reasoningEffort: "medium",
         guidance: "  Keep the public error channel typed.  ",
       });
+      expect(variant.configuration.id).toBe("candidate-guidance-v1");
       expect(variant.configuration.reviewerProfile).toBe("single-pass-v1");
       expect(variant.configuration.guidanceDigest).toBe(
         yield* digestGuidance("Keep the public error channel typed."),

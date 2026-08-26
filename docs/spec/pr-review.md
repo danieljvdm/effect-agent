@@ -132,3 +132,6 @@ identities, model configurations, runner versions, or incomplete trial grids rat
 combining them. “Overall” metrics aggregate each variant across its common case set; variants are
 never averaged together. New valid findings remain explicit corpus-repair candidates because the
 bench does not invent identities for them from model-authored prose.
+
+Each live invocation writes one stable, caller-named variant to a new observation file. Offline
+reporting may combine up to eight such files, while retaining the same compatibility checks.
