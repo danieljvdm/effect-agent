@@ -66,6 +66,7 @@ const makeClient = (
   content: () => Effect.fail(unusedRpcError),
   markdown: () => Effect.fail(unusedRpcError),
   links: () => Effect.fail(unusedRpcError),
+  scrape: () => Effect.fail(unusedRpcError),
   json: () => Effect.fail(unusedRpcError),
 });
 

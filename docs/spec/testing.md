@@ -262,6 +262,11 @@ cannot honestly prove them and must not pass them by simulation:
 - ambient network denied by default;
 - a synchronous runaway program terminated by an enforced platform CPU limit.
 
+No raw-CDP conformance suite exists: the required exact-origin browser boundary is not available,
+so the capability is rejected instead of simulated. Selector scrape is tested at the portable
+Schema and public adapter seams for grouped success, malformed output, and every collection and
+byte bound.
+
 Broker semantics are asserted once against the engine seam: direct and programmatic invocation
 of the same Tool preserve parameter, handler, success, failure, requirement, and interruption
 behavior; typed handler failures stay typed; approval or policy denial prevents handler start;

@@ -11,6 +11,7 @@ import {
   PageContentCaptured,
   PageLinksCaptured,
   PageMarkdownCaptured,
+  PageScrapeCaptured,
   PageStructuredCaptured,
   PageCaptureUnsupportedError,
   SandboxImplementation,
@@ -118,7 +119,9 @@ const requestBody = (request: PageCaptureRequest): Record<string, unknown> => {
   return body;
 };
 
-const actionName = (action: PageCaptureAction): "content" | "markdown" | "links" | "json" => {
+const actionName = (
+  action: PageCaptureAction,
+): "content" | "markdown" | "links" | "scrape" | "json" => {
   switch (action._tag) {
     case "CapturePageContent":
       return "content";
@@ -126,6 +129,8 @@ const actionName = (action: PageCaptureAction): "content" | "markdown" | "links"
       return "markdown";
     case "CapturePageLinks":
       return "links";
+    case "CapturePageScrape":
+      return "scrape";
     case "CapturePageStructured":
       return "json";
   }
@@ -143,6 +148,11 @@ const actionBody = (request: PageCaptureRequest): Record<string, unknown> => {
         ...(request.action.visibleLinksOnly === undefined
           ? {}
           : { visibleLinksOnly: request.action.visibleLinksOnly }),
+      };
+    case "CapturePageScrape":
+      return {
+        ...body,
+        elements: request.action.selectors.map((selector) => ({ selector })),
       };
     case "CapturePageStructured":
       return {
@@ -256,6 +266,15 @@ const parseOutput = (
       return Option.isSome(decoded)
         ? decoded.value
         : protocolError("Browser Run links did not return a bounded array of valid URLs");
+    }
+    case "CapturePageScrape": {
+      const decoded = Schema.decodeUnknownOption(PageScrapeCaptured)({
+        _tag: "PageScrapeCaptured",
+        groups: envelope.value.result,
+      });
+      return Option.isSome(decoded)
+        ? decoded.value
+        : protocolError("Browser Run scrape did not return bounded grouped element records");
     }
     case "CapturePageStructured":
       return PageStructuredCaptured.make({ value: envelope.value.result });

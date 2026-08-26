@@ -3,12 +3,14 @@ import {
   CapturePageContent,
   CapturePageLinks,
   CapturePageMarkdown,
+  CapturePageScrape,
   CapturePageStructured,
   PageCapture,
   PageCaptureLimits,
   PageCaptureRequest,
   PageCaptureResponseFormat,
   PageResourcePolicy,
+  PageScrapeCaptured,
   PageUrlTarget,
   type PageCaptureAction,
   type PageCaptureEngine,
@@ -36,6 +38,7 @@ const BoundedFailureText = Schema.String.check(Schema.isMaxLength(maxFailureText
 const BoundedErrorTag = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 const BoundedUrl = Schema.NonEmptyString.check(Schema.isMaxLength(8 * 1024));
 const BoundedContent = Schema.String.check(Schema.isMaxLength(1024 * 1024));
+const BoundedSelector = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 
 /** The model-selectable capture actions the first slice exposes. */
 export const WebCaptureAction = Schema.Literals(["markdown", "content", "links"]);
@@ -50,6 +53,12 @@ export const WebCaptureParameters = Schema.Struct({
 /** Model-decoded extraction parameters: one absolute https URL. */
 export const WebCaptureExtractParameters = Schema.Struct({
   url: BoundedUrl,
+});
+
+/** Model-decoded scrape parameters: one allowed URL and 1..64 CSS selectors. */
+export const WebCaptureScrapeParameters = Schema.Struct({
+  url: BoundedUrl,
+  selectors: Schema.Array(BoundedSelector).check(Schema.isMinLength(1), Schema.isMaxLength(64)),
 });
 
 /**
@@ -81,6 +90,14 @@ export class WebCaptureFailure extends Schema.TaggedError<WebCaptureFailure>()(
   },
 ) {}
 
+/** The bounded model-visible selector scrape success. */
+export class WebCaptureScrapeSuccess extends Schema.Class<WebCaptureScrapeSuccess>(
+  "@effect-agent/capabilities/WebCaptureScrapeSuccess",
+)({
+  url: BoundedUrl,
+  groups: PageScrapeCaptured.fields.groups,
+}) {}
+
 /** The native Effect AI Tool created by `WebCapture.make`. */
 export type WebCaptureTool<Name extends string> = Tool.Tool<
   Name,
@@ -104,6 +121,17 @@ export type WebCaptureExtractTool<Name extends string, S extends Schema.Top> = T
   S["DecodingServices"]
 >;
 
+/** The native Effect AI Tool created by `WebCapture.makeScrape`. */
+export type WebCaptureScrapeTool<Name extends string> = Tool.Tool<
+  Name,
+  {
+    readonly parameters: typeof WebCaptureScrapeParameters;
+    readonly success: typeof WebCaptureScrapeSuccess;
+    readonly failure: typeof WebCaptureFailure;
+    readonly failureMode: "return";
+  }
+>;
+
 /** Singleton Tool record provided by one web-capture handler Layer. */
 export type WebCaptureTools<Name extends string> = {
   readonly [Key in Name]: WebCaptureTool<Name>;
@@ -112,6 +140,11 @@ export type WebCaptureTools<Name extends string> = {
 /** Singleton Tool record provided by one extraction handler Layer. */
 export type WebCaptureExtractTools<Name extends string, S extends Schema.Top> = {
   readonly [Key in Name]: WebCaptureExtractTool<Name, S>;
+};
+
+/** Singleton Tool record provided by one selector-scrape handler Layer. */
+export type WebCaptureScrapeTools<Name extends string> = {
+  readonly [Key in Name]: WebCaptureScrapeTool<Name>;
 };
 
 /** Construction requirements of a schema-shaped extraction handler Layer. */
@@ -155,6 +188,8 @@ export interface WebCaptureExtractOptions<S extends Schema.Top> extends WebCaptu
   readonly prompt?: string | undefined;
 }
 
+export interface WebCaptureScrapeOptions extends WebCaptureSharedOptions {}
+
 /**
  * An immutable web-capture definition: one model-facing Tool over a fixed
  * URL policy, plus the handler Layer that runs captures through the
@@ -190,6 +225,17 @@ export interface WebCaptureExtractDefinition<Name extends string, S extends Sche
     never,
     WebCaptureExtractLayerRequirements<S>
   >;
+}
+
+/** An immutable selector-scrape definition. */
+export interface WebCaptureScrapeDefinition<Name extends string> {
+  readonly name: Name;
+  readonly description: string;
+  readonly urlPatterns: ReadonlyArray<string>;
+  readonly engine: PageCaptureEngine;
+  readonly maxResponseBytes: number;
+  readonly tool: WebCaptureScrapeTool<Name>;
+  readonly handlers: Layer.Layer<Tool.HandlersFor<WebCaptureScrapeTools<Name>>, never, PageCapture>;
 }
 
 const defaultMaxResponseBytes = 128 * 1024;
@@ -593,5 +639,85 @@ const makeExtract = <const Name extends string, S extends Schema.Top>(
   });
 };
 
+const makeScrape = <const Name extends string>(
+  name: Name,
+  options: WebCaptureScrapeOptions,
+): WebCaptureScrapeDefinition<Name> => {
+  const patterns = compileUrlPolicy(options.urls);
+  const resourcePolicy = compileResourcePolicy(patterns);
+  const maxResponseBytes = validateMaxResponseBytes(options.maxResponseBytes);
+  const engine = options.engine ?? "chromium";
+  const description = [
+    options.description,
+    "",
+    `Scrapes rendered elements for 1 to 64 CSS selectors. ${policyContract("selector scrape", patterns, maxResponseBytes)}`,
+  ].join("\n");
+
+  const tool = Tool.make(name, {
+    description,
+    parameters: WebCaptureScrapeParameters,
+    success: WebCaptureScrapeSuccess,
+    failure: WebCaptureFailure,
+    failureMode: "return",
+  })
+    .annotate(Tool.Readonly, false)
+    .annotate(ToolExecutionClassAnnotation, "uncertain") as WebCaptureScrapeTool<Name>;
+  const toolkit = Toolkit.make(tool);
+
+  const build = Effect.gen(function* () {
+    const pageCapture = yield* PageCapture;
+    const invoke = Effect.fn(`WebCapture.${name}`)(function* (parameters: {
+      readonly url: string;
+      readonly selectors: ReadonlyArray<string>;
+    }) {
+      const denied = deniedUrl(parameters.url, patterns);
+      if (denied !== undefined) {
+        return yield* denied;
+      }
+      const result = yield* pageCapture
+        .capture(
+          PageCaptureRequest.make({
+            target: PageUrlTarget.make({ url: parameters.url }),
+            action: CapturePageScrape.make({ selectors: parameters.selectors }),
+            engine,
+            limits: PageCaptureLimits.make({ maxOutputBytes: maxResponseBytes }),
+            resourcePolicy,
+          }),
+        )
+        .pipe(Effect.catch((error) => Effect.fail(portFailure(error))));
+      if (result.output._tag !== "PageScrapeCaptured") {
+        return yield* failure(
+          "WebCaptureProtocolMismatch",
+          `The capture adapter answered a selector scrape request with ${result.output._tag}`,
+        );
+      }
+      return WebCaptureScrapeSuccess.make({
+        url: parameters.url,
+        groups: result.output.groups,
+      });
+    });
+
+    return { [name]: invoke } as unknown as Toolkit.HandlersFrom<WebCaptureScrapeTools<Name>>;
+  });
+
+  const handlers = toolkit.toLayer(
+    build as unknown as Effect.Effect<
+      Toolkit.HandlersFrom<Toolkit.ToolsByName<readonly [WebCaptureScrapeTool<Name>]>>,
+      never,
+      PageCapture
+    >,
+  ) as unknown as Layer.Layer<Tool.HandlersFor<WebCaptureScrapeTools<Name>>, never, PageCapture>;
+
+  return Object.freeze({
+    name,
+    description,
+    urlPatterns: patterns,
+    engine,
+    maxResponseBytes,
+    tool,
+    handlers,
+  });
+};
+
 /** Web capture builder namespace (capability spec §9.2). */
-export const WebCapture = { make, makeExtract } as const;
+export const WebCapture = { make, makeExtract, makeScrape } as const;

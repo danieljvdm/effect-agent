@@ -2,6 +2,7 @@ import {
   CapturePageContent,
   CapturePageLinks,
   CapturePageMarkdown,
+  CapturePageScrape,
   CapturePageStructured,
   PageCapture,
   PageCaptureInferencePolicyError,
@@ -27,7 +28,7 @@ import {
 } from "../src/browser-quick-action.ts";
 
 interface RecordedCall {
-  readonly action: "screenshot" | "content" | "markdown" | "links" | "json";
+  readonly action: "screenshot" | "content" | "markdown" | "links" | "scrape" | "json";
   readonly options: unknown;
 }
 
@@ -59,6 +60,7 @@ const makeBinding = (responses: ReadonlyArray<Response | Error>) => {
     content: (options) => respond("content", options),
     markdown: (options) => respond("markdown", options),
     links: (options) => respond("links", options),
+    scrape: (options) => respond("scrape", options),
     json: (options) => respond("json", options),
   };
   return { binding, calls };
@@ -235,6 +237,49 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     expect(structured.resourceUse.inference).toEqual({
       provider: "cloudflare-workers-ai",
       modelCalls: 1,
+    });
+  });
+
+  it("projects selector scrapes through the native binding options", async () => {
+    const { binding, calls } = makeBinding([
+      jsonResponse({
+        success: true,
+        result: [
+          {
+            selector: ".plan",
+            results: [
+              {
+                text: "Pro",
+                html: '<article class="plan">Pro</article>',
+                attributes: [{ name: "class", value: "plan" }],
+                left: 10,
+                top: 20,
+                width: 300,
+                height: 120,
+              },
+            ],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await capture(
+      binding,
+      request(CapturePageScrape.make({ selectors: [".plan", "#faq"] })),
+    );
+
+    expect(calls).toEqual([
+      {
+        action: "scrape",
+        options: {
+          url: "https://docs.example.com/pricing",
+          elements: [{ selector: ".plan" }, { selector: "#faq" }],
+        },
+      },
+    ]);
+    expect(result.output).toMatchObject({
+      _tag: "PageScrapeCaptured",
+      groups: [{ selector: ".plan", results: [{ text: "Pro", width: 300 }] }],
     });
   });
 

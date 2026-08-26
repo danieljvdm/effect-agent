@@ -40175,6 +40175,9 @@ class CodeExecutor extends exports_Context.Service()("@effect-agent/sandbox/Code
 // packages/sandbox/src/page-capture.ts
 var MAX_OUTPUT_BYTES2 = 8 * 1024 * 1024;
 var MAX_LINKS = 4096;
+var MAX_SCRAPE_SELECTORS = 64;
+var MAX_SCRAPE_ELEMENTS = 4096;
+var MAX_SCRAPE_ATTRIBUTES = 64;
 var MAX_RESPONSE_FORMAT_BYTES = 64 * 1024;
 var MAX_RESPONSE_FORMAT_DEPTH = 32;
 var MAX_RESPONSE_FORMAT_NODES = 4096;
@@ -40184,6 +40187,10 @@ var BoundedUrl = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(
 var BoundedHtml = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2 * 1024 * 1024));
 var BoundedPrompt = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
 var BoundedSelector = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
+var BoundedAttributeName = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
+var BoundedAttributeValue = exports_Schema.String.check(exports_Schema.isMaxLength(64 * 1024));
+var BoundedScrapeText = exports_Schema.String.check(exports_Schema.isMaxLength(1024 * 1024));
+var BoundedScrapeHtml = exports_Schema.String.check(exports_Schema.isMaxLength(2 * 1024 * 1024));
 var BoundedPattern = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
 var BoundedMessage2 = exports_Schema.String.check(exports_Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
 var BoundedInferenceProvider = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
@@ -40372,6 +40379,11 @@ class CapturePageLinks extends exports_Schema.TaggedClass()("CapturePageLinks", 
 }) {
 }
 
+class CapturePageScrape extends exports_Schema.TaggedClass()("CapturePageScrape", {
+  selectors: exports_Schema.Array(BoundedSelector).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(MAX_SCRAPE_SELECTORS))
+}) {
+}
+
 class CapturePageStructured extends exports_Schema.TaggedClass()("CapturePageStructured", {
   responseFormat: PageCaptureResponseFormat,
   prompt: exports_Schema.optionalKey(BoundedPrompt)
@@ -40381,6 +40393,7 @@ var PageCaptureAction = exports_Schema.Union([
   CapturePageContent,
   CapturePageMarkdown,
   CapturePageLinks,
+  CapturePageScrape,
   CapturePageStructured
 ]);
 
@@ -40458,10 +40471,40 @@ class PageStructuredCaptured extends exports_Schema.TaggedClass()("PageStructure
   value: exports_Schema.Json
 }) {
 }
+
+class PageScrapeAttribute extends exports_Schema.Class("PageScrapeAttribute")({
+  name: BoundedAttributeName,
+  value: BoundedAttributeValue
+}) {
+}
+
+class PageScrapeElement extends exports_Schema.Class("PageScrapeElement")({
+  text: BoundedScrapeText,
+  html: BoundedScrapeHtml,
+  attributes: exports_Schema.Array(PageScrapeAttribute).check(exports_Schema.isMaxLength(MAX_SCRAPE_ATTRIBUTES)),
+  left: exports_Schema.Finite,
+  top: exports_Schema.Finite,
+  width: exports_Schema.Finite,
+  height: exports_Schema.Finite
+}) {
+}
+
+class PageScrapeGroup extends exports_Schema.Class("PageScrapeGroup")({
+  selector: BoundedSelector,
+  results: exports_Schema.Array(PageScrapeElement).check(exports_Schema.isMaxLength(MAX_SCRAPE_ELEMENTS))
+}) {
+}
+var PageScrapeGroups = exports_Schema.Array(PageScrapeGroup).check(exports_Schema.isMaxLength(MAX_SCRAPE_SELECTORS), exports_Schema.makeFilter((groups) => groups.reduce((total, group2) => total + group2.results.length, 0) <= MAX_SCRAPE_ELEMENTS, { title: "at most 4096 aggregate scraped elements" }));
+
+class PageScrapeCaptured extends exports_Schema.TaggedClass()("PageScrapeCaptured", {
+  groups: PageScrapeGroups
+}) {
+}
 var PageCaptureOutput = exports_Schema.Union([
   PageContentCaptured,
   PageMarkdownCaptured,
   PageLinksCaptured,
+  PageScrapeCaptured,
   PageStructuredCaptured
 ]);
 
@@ -43141,6 +43184,7 @@ var BoundedFailureText3 = exports_Schema.String.check(exports_Schema.isMaxLength
 var BoundedErrorTag3 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
 var BoundedUrl2 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
 var BoundedContent = exports_Schema.String.check(exports_Schema.isMaxLength(1024 * 1024));
+var BoundedSelector2 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
 var WebCaptureAction = exports_Schema.Literals(["markdown", "content", "links"]);
 var WebCaptureParameters = exports_Schema.Struct({
   url: BoundedUrl2,
@@ -43148,6 +43192,10 @@ var WebCaptureParameters = exports_Schema.Struct({
 });
 var WebCaptureExtractParameters = exports_Schema.Struct({
   url: BoundedUrl2
+});
+var WebCaptureScrapeParameters = exports_Schema.Struct({
+  url: BoundedUrl2,
+  selectors: exports_Schema.Array(BoundedSelector2).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(64))
 });
 
 class WebCaptureSuccess extends exports_Schema.Class("@effect-agent/capabilities/WebCaptureSuccess")({
@@ -43163,6 +43211,12 @@ class WebCaptureFailure extends exports_Schema.TaggedError()("WebCaptureFailure"
   errorTag: BoundedErrorTag3,
   message: BoundedFailureText3,
   retryAfterMillis: exports_Schema.optionalKey(exports_Schema.Natural)
+}) {
+}
+
+class WebCaptureScrapeSuccess extends exports_Schema.Class("@effect-agent/capabilities/WebCaptureScrapeSuccess")({
+  url: BoundedUrl2,
+  groups: PageScrapeCaptured.fields.groups
 }) {
 }
 var defaultMaxResponseBytes = 128 * 1024;
