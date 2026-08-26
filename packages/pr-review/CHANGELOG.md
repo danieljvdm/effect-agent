@@ -1,5 +1,12 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.31
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.31
+
 ## 0.1.0-beta.30
 
 ### Patch Changes

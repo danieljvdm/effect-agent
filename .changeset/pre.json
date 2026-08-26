@@ -23,7 +23,8 @@
     "@effect-agent/example-code-mode-cloudflare": "0.0.0",
     "@effect-agent/example-pr-work-orders": "0.0.0",
     "@effect-agent/example-pr-work-order-ingress": "0.0.0",
-    "@effect-agent/example-browser-run-worker-proof": "0.0.0"
+    "@effect-agent/example-browser-run-worker-proof": "0.0.0",
+    "@effect-agent/example-pr-review-eval": "0.0.0"
   },
   "changesets": [
     "audited-platform-boundaries",
@@ -33,6 +34,7 @@
     "bound-sandbox-boundaries",
     "bounded-browser-screenshots",
     "bounded-recovery-history",
+    "bounded-selector-scrape",
     "bright-rivers-own",
     "browser-run-page-capture",
     "browser-run-rest-capture",
