@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/storage-memory",
-  "version": "0.1.0-beta.29",
+  "version": "0.1.0-beta.30",
   "description": "In-memory Conversation store and submission ledger reference adapters for Effect Agent tests and conformance suites.",
   "license": "MIT",
   "repository": {

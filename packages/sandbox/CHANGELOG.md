@@ -1,5 +1,19 @@
 # @effect-agent/sandbox
 
+## 0.1.0-beta.30
+
+### Patch Changes
+
+- [#172](https://github.com/danieljvdm/effect-agent/pull/172) [`d123424`](https://github.com/danieljvdm/effect-agent/commit/d123424be7679cfe1b8d133d0d2aa1497e087590) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add a bounded `PageScreenshot` PNG port and the native Cloudflare Browser Run Quick Action Layer.
+  Screenshot bytes remain caller-owned and are never persisted or projected by the framework.
+
+- [#172](https://github.com/danieljvdm/effect-agent/pull/172) [`d123424`](https://github.com/danieljvdm/effect-agent/commit/d123424be7679cfe1b8d133d0d2aa1497e087590) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add a bounded same-host `PageCrawl` stream and a Cloudflare Browser Run REST adapter with scoped
+  remote-job cleanup.
+
+- [#172](https://github.com/danieljvdm/effect-agent/pull/172) [`d123424`](https://github.com/danieljvdm/effect-agent/commit/d123424be7679cfe1b8d133d0d2aa1497e087590) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add a scoped, provider-neutral `InteractiveBrowser` contract for bounded navigation and interaction, with typed busy, limit, capacity, expiry, and uncertain-execution semantics.
+
+  Document the Cloudflare Browser Run Puppeteer adapter boundary and opt-in Worker proof requirements.
+
 ## 0.1.0-beta.29
 
 ## 0.1.0-beta.28
