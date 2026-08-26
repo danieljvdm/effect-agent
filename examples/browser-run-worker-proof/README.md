@@ -7,7 +7,8 @@ temporary deployed Worker. The Worker resolves `env.BROWSER` through
 keeps the stable `Example Domain` fact. During the same Worker invocation, it also provides
 `browserQuickActionScreenshotLayer`, captures a bounded PNG through `PageScreenshot`, validates its
 media type and exact eight-byte PNG signature, and discards the bytes. The response contains only
-the Markdown fact and Schema-defined validation metadata. Finally, a separate narrowly scoped
+the Markdown fact and Schema-defined validation metadata. The Worker leaves 11 seconds between
+the two Quick Actions so the proof respects the Free plan request interval. Finally, a separate narrowly scoped
 `InteractiveBrowser` pass launches Chromium through the same real `BROWSER` binding, navigates to
 the fixed `example.com` host, and reads at most 4 KiB of page text. Its immutable policy permits one
 page, exactly two actions, and 45 seconds of elapsed time. The Worker validates the final URL and

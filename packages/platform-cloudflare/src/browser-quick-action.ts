@@ -547,7 +547,9 @@ const screenshotOptions = (request: PageScreenshotRequest): BrowserRunScreenshot
         : { timeout: request.navigation.waitForSelector.timeoutMillis }),
     };
   }
-  if (request.viewport !== undefined) options.viewport = request.viewport;
+  if (request.viewport !== undefined) {
+    options.viewport = { width: request.viewport.width, height: request.viewport.height };
+  }
   if (request.resourcePolicy?.rejectResourceTypes !== undefined) {
     options.rejectResourceTypes = [...request.resourcePolicy.rejectResourceTypes];
   }

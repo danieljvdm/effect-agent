@@ -18,7 +18,7 @@ import {
   PageScreenshotRequest,
   PageUrlTarget,
 } from "@effect-agent/sandbox";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import { Worker, WorkerEnvironment } from "effect-cf";
 import { Toolkit } from "effect/unstable/ai";
 
@@ -38,6 +38,7 @@ const proofCapture = WebCapture.make("capture_example_domain", {
 
 const SCREENSHOT_MAX_OUTPUT_BYTES = 256 * 1_024;
 const INTERACTIVE_MAX_RETURNED_BYTES = 4 * 1_024;
+const QUICK_ACTION_PACING_DELAY = Duration.seconds(11);
 const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const EXAMPLE_DOMAIN_REQUEST_PATTERN = "^https://example\\.com(?::[0-9]+)?(?:[/?#]|$)";
 
@@ -101,6 +102,7 @@ const runProof = Effect.gen(function* () {
       message: "The Markdown capture did not contain the expected stable fact",
     });
   }
+  yield* Effect.sleep(QUICK_ACTION_PACING_DELAY);
   const screenshots = yield* PageScreenshot;
   const screenshot = yield* screenshots.capture(screenshotRequest);
   if (screenshot.mediaType !== "image/png" || !hasPngSignature(screenshot.bytes)) {

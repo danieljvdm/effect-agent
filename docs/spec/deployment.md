@@ -440,7 +440,9 @@ gap without a model. Its fixed opt-in Effect workflow deploys one collision-resi
 Worker with a native `BROWSER` binding and compatibility date `2026-03-24`, invokes one bounded
 Markdown `WebCapture.make` handler against `https://example.com/`, validates the stable `Example
 Domain` fact, captures one bounded PNG through `PageScreenshot`, validates its eight-byte PNG
-signature, discards the image bytes, and deletes the Worker through a Scope finalizer. The proof
+signature, discards the image bytes, and deletes the Worker through a Scope finalizer. The Worker
+leaves 11 seconds between its Markdown and screenshot Quick Actions to honor the Free plan request
+interval. The proof
 response contains only bounded validation metadata. The workflow fails if its generated name
 already exists, never retries an unresolved invocation, and surfaces deletion failure. The ordinary
 test suite scripts the deployment operations and verifies finalization without Cloudflare

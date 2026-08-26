@@ -189,7 +189,8 @@ describe("Browser Run PNG screenshot adapter", () => {
       }),
     );
 
-    const fromUrl = await capture(client);
+    const urlRequest = request();
+    const fromUrl = await capture(client, urlRequest);
     const fromHtml = await capture(
       client,
       request({ target: PageHtmlTarget.make({ html: "<main>proof</main>" }), fullPage: false }),
@@ -198,6 +199,8 @@ describe("Browser Run PNG screenshot adapter", () => {
     expect([...fromUrl.bytes]).toEqual([137, 80, 78, 71]);
     expect(fromUrl.mediaType).toBe("image/png");
     expect([...fromHtml.bytes]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    expect(calls[0]?.viewport).not.toBe(urlRequest.viewport);
+    expect(Object.getPrototypeOf(calls[0]?.viewport ?? null)).toBe(Object.prototype);
     expect(calls).toEqual([
       expect.objectContaining({
         url: "https://example.com/screenshot-source",
