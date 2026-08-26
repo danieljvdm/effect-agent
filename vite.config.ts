@@ -133,6 +133,15 @@ export default defineConfig({
     sourcemap: true,
   },
   run: {
-    cache: true,
+    cache: {
+      scripts: true,
+      tasks: false,
+    },
+    tasks: {
+      "pr-review-eval": {
+        command: "bun --cwd examples/pr-review-eval src/main.ts",
+        untrackedEnv: ["EFFECT_AGENT_LIVE", "OPENAI_API_KEY"],
+      },
+    },
   },
 });

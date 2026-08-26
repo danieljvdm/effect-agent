@@ -22,7 +22,7 @@ is not a model-quality benchmark.
 Validate a suite without credentials or model calls:
 
 ```sh
-vp run @effect-agent/example-pr-review-eval#eval -- \
+vp run pr-review-eval -- \
   --cases data/cases.json validate
 ```
 
@@ -35,8 +35,10 @@ match the current PR-review Action: `gpt-5.6-sol`, medium reasoning effort, 8,00
 strict structured output, and `store: false`.
 
 ```sh
+mkdir -p examples/pr-review-eval/results
+
 EFFECT_AGENT_LIVE=1 OPENAI_API_KEY=... \
-vp run @effect-agent/example-pr-review-eval#eval -- \
+vp run pr-review-eval -- \
   --cases data/cases.json \
   run --variant current --output results/current.jsonl --trials 5
 ```
@@ -52,7 +54,7 @@ The shipped clean control can exercise one live call without exposing private so
 
 ```sh
 EFFECT_AGENT_LIVE=1 OPENAI_API_KEY=... \
-vp run @effect-agent/example-pr-review-eval#eval -- \
+vp run pr-review-eval -- \
   --cases fixtures/smoke-suite.json \
   run --case optional-read-control --output results/smoke.jsonl --trials 1
 ```
@@ -67,7 +69,7 @@ labels. Run it once without judgments to get that digest and an explicit list of
 references:
 
 ```sh
-vp run @effect-agent/example-pr-review-eval#eval -- \
+vp run pr-review-eval -- \
   --cases data/cases.json \
   report --observations results/current.jsonl \
   --observations results/candidate-guidance-v1.jsonl \
@@ -83,7 +85,7 @@ set of observation files when generating the digest and the final report.
 Then write the adjudicated report:
 
 ```sh
-vp run @effect-agent/example-pr-review-eval#eval -- \
+vp run pr-review-eval -- \
   --cases data/cases.json \
   report --observations results/current.jsonl \
   --observations results/candidate-guidance-v1.jsonl \
