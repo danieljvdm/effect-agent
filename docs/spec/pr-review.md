@@ -148,3 +148,5 @@ Reports require the intended trial count and case selection rather than inferrin
 observed rows. The default selection is the entire suite; a subset must be explicit. Empty supplied
 files and missing cells in the declared trial grid fail closed, so an interrupted prefix cannot be
 mistaken for a completed smaller run. The runner does not retry or resume lost provider calls.
+A conclusive preregistered veto can justify early rejection, but an incomplete observation set
+cannot support an accepted comparison.

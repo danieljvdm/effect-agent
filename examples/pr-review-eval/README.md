@@ -27,6 +27,8 @@ generated paths omitted by the original review.
 `fixtures/public-effect-agent-v2.json` contains additional public challenge cases, including
 nonblocking defects and a clean control. Historical review claims that failed source verification
 were removed before candidate execution; the corrections are recorded in issue #191.
+Source-verified nonblocking defects discovered during that screen were added afterward as corpus
+repairs, not counted as candidate gains.
 
 For each expected defect, trace a supported input or interleaving through its callers to an
 observable incorrect result. A missing defensive check alone does not establish a defect, and a
@@ -79,6 +81,10 @@ vp run pr-review-eval -- \
 
 Each trial is one independent reviewer invocation. The runner records typed trial failures, but it
 does not retry them. Defects and interruption stop the run.
+
+Stop a candidate when a saved finding proves a preregistered rejection condition. Keep the
+observations and judgments, but treat the stopped run as partial. Do not shrink the intended trial
+grid to make its report look complete.
 
 ## Judgments and reports
 

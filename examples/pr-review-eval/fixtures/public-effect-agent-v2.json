@@ -95,7 +95,7 @@
       "version": 1,
       "id": "effect-agent-91-182949a",
       "kind": "known-defects",
-      "provenance": "Public PR #91 full-diff snapshot at 182949a, reconstructed from the exact GitHub compare and review-time title/body. Review pullrequestreview-4948171501 is provenance, not ground truth: source audit retained the mutable-snapshot defect but rejected its multiset blocker because the supported reviewer deduplicates findings and unequal multiplicity does not omit a distinct finding ID. The generated lockfile was ignored by the original reviewer and is omitted here.",
+      "provenance": "Public PR #91 full-diff snapshot at 182949a, reconstructed from the exact GitHub compare and review-time title/body. Review pullrequestreview-4948171501 is provenance, not ground truth: source audit retained the mutable-snapshot defect but rejected its multiset blocker because the supported reviewer deduplicates findings and unequal multiplicity does not omit a distinct finding ID. The generated lockfile was ignored by the original reviewer and is omitted here. After the rejected #191 screen, source-assisted adjudication added two nonblocking defects as corpus repairs, not blocker wins.",
       "sourceUrl": "https://github.com/danieljvdm/effect-agent/pull/91",
       "inputDigest": "c01ddd6429c17aa78aff290374fd1f923eb197fe9475a988dd3f2163018cc12b",
       "request": {
@@ -216,6 +216,55 @@
               "description": "Changed and anchor files start a second cold load, so one request can combine different head snapshots."
             }
           ]
+        },
+        {
+          "id": "overlapping-edits-bypass-unique-match",
+          "severity": "important",
+          "invariant": "Workspace edits promised as exact and unique must reject overlapping occurrences of the expected text before mutating a file.",
+          "evidence": [
+            {
+              "path": "examples/pr-remediation/src/implementation-agent.ts",
+              "line": 90,
+              "description": "The edit Tool contract promises replacement of one exact, unique string."
+            },
+            {
+              "path": "examples/pr-remediation/src/local-git.ts",
+              "line": 525,
+              "description": "The second search starts after the first match's full length, so expected \"aa\" in \"aaa\" hides the overlapping occurrence and edits the file to \"ba\" instead of rejecting it."
+            }
+          ]
+        },
+        {
+          "id": "check-commits-escape-validated-patch",
+          "severity": "important",
+          "invariant": "Publication must contain exactly the tree changes whose digest and paths passed host validation against the reviewed head. A configured trusted-local check must not hide additional committed changes by moving the comparison base.",
+          "evidence": [
+            {
+              "path": "examples/pr-remediation/src/local-git.ts",
+              "line": 550,
+              "description": "inspectPatch compares changed paths with the current detached HEAD, so a check-created commit disappears from this comparison."
+            },
+            {
+              "path": "examples/pr-remediation/src/local-git.ts",
+              "line": 570,
+              "description": "The matching binary-patch comparison also uses the current detached HEAD and omits the check-created commit."
+            },
+            {
+              "path": "examples/pr-remediation/src/loop.ts",
+              "line": 194,
+              "description": "After checks, the loop verifies only the remaining working-tree patch digest and paths."
+            },
+            {
+              "path": "examples/pr-remediation/src/local-git.ts",
+              "line": 700,
+              "description": "commitAndPublish stages the allowed paths and compares that staged diff with the same check-mutated HEAD, so the allowed uncommitted patch still matches."
+            },
+            {
+              "path": "examples/pr-remediation/src/local-git.ts",
+              "line": 746,
+              "description": "Publication verifies only that the external PR ref still names the reviewed head, then advances it to the descendant containing the trusted check's commit."
+            }
+          ]
         }
       ]
     },
@@ -223,7 +272,7 @@
       "version": 1,
       "id": "effect-agent-99-0f60570",
       "kind": "known-defects",
-      "provenance": "Public PR #99 full-diff snapshot at 0f60570, reconstructed from the exact GitHub compare and review-time body. Review pullrequestreview-4949538226 is provenance, not ground truth: source audit retained the important polling-test defect but rejected its identity-collision blocker because the endpoint returns a false-positive progress wake, which the canonical reread contract explicitly permits.",
+      "provenance": "Public PR #99 full-diff snapshot at 0f60570, reconstructed from the exact GitHub compare and review-time body. Review pullrequestreview-4949538226 is provenance, not ground truth: source audit retained the important polling-test defect but rejected its identity-collision blocker because the endpoint returns a false-positive progress wake, which the canonical reread contract explicitly permits. After the rejected #191 screen, source-assisted adjudication added one nonblocking defect as a corpus repair, not a blocker win.",
       "sourceUrl": "https://github.com/danieljvdm/effect-agent/pull/99",
       "inputDigest": "adbf16477c8947690b74a12ff38e1c5d7de3932d00c3bb312ead976522a99705",
       "request": {
@@ -327,6 +376,33 @@
               "description": "The shared helpers use setTimeout, Date.now polling, and a five-second Promise race to gate exact waiter-state transitions."
             }
           ]
+        },
+        {
+          "id": "active-cancellation-forgets-late-transport-attempts",
+          "severity": "important",
+          "invariant": "After cancellation of an active waiter ID, an already-sent duplicate transport attempt arriving immediately afterward must not register and park after caller interruption when no cancellation hint has been evicted.",
+          "evidence": [
+            {
+              "path": "packages/platform-cloudflare/src/progress-wait.ts",
+              "line": 91,
+              "description": "For an active ID, cancel deletes the registration instead of replacing it with the bounded cancellation tombstone used when no registration exists."
+            },
+            {
+              "path": "packages/platform-cloudflare/src/progress-wait.ts",
+              "line": 95,
+              "description": "Cancellation wakes only the deferreds present at that moment."
+            },
+            {
+              "path": "packages/platform-cloudflare/src/progress-wait.ts",
+              "line": 53,
+              "description": "A later subscription sees no tombstone, creates a new active set, and parks at line 67."
+            },
+            {
+              "path": "packages/platform-cloudflare/test/progress-wait.test.ts",
+              "line": 137,
+              "description": "The transport contract exercises duplicate and late attempts, but its late case cancels before any active subscription and does not cover arrival after active cancellation."
+            }
+          ]
         }
       ]
     },
@@ -334,7 +410,7 @@
       "version": 1,
       "id": "effect-agent-65-0f4d8ff",
       "kind": "known-defects",
-      "provenance": "Public PR #65 full-diff snapshot at 0f4d8ff, reconstructed from the exact Git compare and unchanged PR title/body. All 12 admitted text patches are included; bun.lock is omitted under the original reviewer's generated-file ignore policy. The newly added request-size guard was independently checked with the exact historical parsing function against a streamed 131122-byte body; the subsequent fix rejects that body before durable submission. This oracle covers the incomplete guard, not a newly introduced buffering behavior.",
+      "provenance": "Public PR #65 full-diff snapshot at 0f4d8ff, reconstructed from the exact Git compare and unchanged PR title/body. All 12 admitted text patches are included; bun.lock is omitted under the original reviewer's generated-file ignore policy. The newly added request-size guard was independently checked with the exact historical parsing function against a streamed 131122-byte body; the subsequent fix rejects that body before durable submission. This oracle covers the incomplete guard, not a newly introduced buffering behavior. After the rejected #191 screen, source-assisted adjudication added one nonblocking seeding defect as a corpus repair, not a blocker win; no SQL payload was executed.",
       "sourceUrl": "https://github.com/danieljvdm/effect-agent/pull/65",
       "inputDigest": "de62e498e041a7dadb7cae7457ad7dbfbf48a6396f6baa3e23abc0246cbf1daf",
       "request": {
@@ -421,6 +497,38 @@
               "description": "POST /ask invokes readQuestion after authentication, then seeds the database at line 347 and submits the durable run at lines 369 or 383. The documented default scripted profile sets no secret, so the oversized request reaches this path without credentials; a configured shared secret still requires a valid bearer token."
             }
           ]
+        },
+        {
+          "id": "invoice-seeding-is-not-atomic",
+          "severity": "important",
+          "invariant": "Per-request invoice seeding must converge to one complete seed set under concurrent calls and partial failure.",
+          "evidence": [
+            {
+              "path": "examples/code-mode-cloudflare/src/worker.ts",
+              "line": 347,
+              "description": "Every accepted request invokes seedInvoices."
+            },
+            {
+              "path": "examples/code-mode-cloudflare/src/db.ts",
+              "line": 50,
+              "description": "The table has no stable uniqueness constraint on the seeded customer rows."
+            },
+            {
+              "path": "examples/code-mode-cloudflare/src/db.ts",
+              "line": 56,
+              "description": "The count check and inserts are separate operations: two requests can both observe zero and insert two seed sets, while failure after one insert makes later calls skip the missing rows."
+            },
+            {
+              "path": "examples/code-mode-cloudflare/src/profiles.ts",
+              "line": 14,
+              "description": "The default scripted program returns every high-revenue row, so duplicate seed sets produce six entries instead of three."
+            },
+            {
+              "path": "examples/code-mode-cloudflare/src/worker.ts",
+              "line": 228,
+              "description": "The receipt exposes the duplicated tool result."
+            }
+          ]
         }
       ]
     },
@@ -428,7 +536,7 @@
       "version": 1,
       "id": "effect-agent-17-71eedd7",
       "kind": "known-defects",
-      "provenance": "Public PR #17 full-diff snapshot at 71eedd7, reconstructed from the exact Git compare and the creation-time body preserved in public edit history. Its tree matches the publicly reviewed head 96852ca, and all 12 text patches are included. Source tracing and the deterministic regression added at c5d4e6c prove that the coordinator could omit a successful child's blocking finding before host publication. The default workflow publishes COMMENT; a false APPROVE requires the supported --post --apply-verdict options.",
+      "provenance": "Public PR #17 full-diff snapshot at 71eedd7, reconstructed from the exact Git compare and the creation-time body preserved in public edit history. Its tree matches the publicly reviewed head 96852ca, and all 12 text patches are included. Source tracing and the deterministic regression added at c5d4e6c prove that the coordinator could omit a successful child's blocking finding before host publication. The default workflow publishes COMMENT; a false APPROVE requires the supported --post --apply-verdict options. After the rejected #191 screen, source-assisted adjudication added four nonblocking defects as corpus repairs, not blocker wins.",
       "sourceUrl": "https://github.com/danieljvdm/effect-agent/pull/17",
       "inputDigest": "c49a9575ddfbe16097c999ddb34af6e4b260d2aaacc06352949354e221076b7f",
       "request": {
@@ -513,6 +621,89 @@
               "path": "examples/pr-review/src/cli.ts",
               "line": 155,
               "description": "The supported --fan-out caller uses this executeReview path with caller-selected post and applyVerdict settings."
+            }
+          ]
+        },
+        {
+          "id": "fanout-delegation-does-not-bind-planned-paths",
+          "severity": "important",
+          "invariant": "Each delegation request must identify a host-planned unit and include all its planned files without substitution; a schema-valid request must not silently omit assigned work.",
+          "evidence": [
+            {
+              "path": "examples/pr-review/src/fan-out-review-agent.ts",
+              "line": 182,
+              "description": "prepareInput copies the coordinator-supplied unit ID and paths into the child brief without comparing them with the host plan."
+            },
+            {
+              "path": "examples/pr-review/src/fan-out-review-agent.ts",
+              "line": 323,
+              "description": "Using every planned path is enforced only by coordinator instructions, so a schema-valid subset or substitution reaches the child."
+            }
+          ]
+        },
+        {
+          "id": "fanout-result-identity-is-not-bound",
+          "severity": "important",
+          "invariant": "A delegated child result must be bound to the unit identity of its invocation before it counts as completed coverage.",
+          "evidence": [
+            {
+              "path": "examples/pr-review/src/fan-out-review-agent.ts",
+              "line": 193,
+              "description": "projectResult accepts the child-reported unitId without comparing it with the invocation's unitId, so a unit A call can return a report labeled unit B."
+            },
+            {
+              "path": "examples/pr-review/src/fan-out-review-agent.ts",
+              "line": 196,
+              "description": "projectResult copies the findings beside that unverified label and retains no host-bound invocation identity for downstream validation."
+            }
+          ]
+        },
+        {
+          "id": "fanout-coverage-gaps-can-be-undisclosed",
+          "severity": "important",
+          "invariant": "Known failed units, undiffable paths, and unassigned paths must remain disclosed at publication even when a schema-valid coordinator summary omits them.",
+          "evidence": [
+            {
+              "path": "examples/pr-review/src/review-units.ts",
+              "line": 110,
+              "description": "Once eight twelve-file units are full, further paths become unassigned; 97 small files therefore leave one unassigned even when the source count matches metadata."
+            },
+            {
+              "path": "examples/pr-review/src/fan-out-review-agent.ts",
+              "line": 324,
+              "description": "Disclosure of failed, undiffable, and unassigned work exists only as a coordinator instruction."
+            },
+            {
+              "path": "examples/pr-review/src/run-review.ts",
+              "line": 119,
+              "description": "The coordinator review is decoded and published without host code adding coverage gaps from the review plan."
+            }
+          ]
+        },
+        {
+          "id": "fanout-tests-do-not-verify-final-review",
+          "severity": "important",
+          "invariant": "Fan-out end-to-end tests must reject a published review that drops scripted child findings or claims unread assigned files were reviewed; returning and asserting the same prewritten review is not an independent oracle.",
+          "evidence": [
+            {
+              "path": "examples/pr-review/src/fan-out-profiles.ts",
+              "line": 118,
+              "description": "The scripted coordinator returns script.review independently of the child results in its prompt."
+            },
+            {
+              "path": "examples/pr-review/test/pr-review-fanout.test.ts",
+              "line": 354,
+              "description": "The happy child scripts read only alpha and gamma although the two planned units also contain beta and delta."
+            },
+            {
+              "path": "examples/pr-review/test/pr-review-fanout.test.ts",
+              "line": 372,
+              "description": "The prewritten happy review nevertheless claims coverage of both units and all four files."
+            },
+            {
+              "path": "examples/pr-review/test/pr-review-fanout.test.ts",
+              "line": 392,
+              "description": "The end-to-end assertion compares the output with that same prewritten review, so merge and coverage-disclosure defects remain green."
             }
           ]
         }

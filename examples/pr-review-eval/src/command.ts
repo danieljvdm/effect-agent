@@ -158,7 +158,7 @@ const observationFiles = Flag.file("observations").pipe(
   Flag.between(1, 8),
 );
 const judgmentsFile = Flag.file("judgments").pipe(
-  Flag.withDescription("Optional schema-encoded human judgment set."),
+  Flag.withDescription("Optional schema-encoded judgment set with named adjudicators."),
   Flag.optional,
 );
 const reportOutput = Flag.file("output").pipe(
