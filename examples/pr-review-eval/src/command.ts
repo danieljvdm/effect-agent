@@ -91,6 +91,7 @@ const variantId = Flag.string("variant").pipe(
   Flag.withDescription("Stable ID for this baseline or candidate configuration."),
 );
 const segmentedFiles = Flag.boolean("segmented-files").pipe(
+  Flag.withDefault(false),
   Flag.withDescription(
     "Present metadata, ordered file patches, and invocation scope as separate model messages.",
   ),
