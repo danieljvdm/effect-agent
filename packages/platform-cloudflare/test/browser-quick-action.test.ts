@@ -27,7 +27,7 @@ import {
 } from "../src/browser-quick-action.ts";
 
 interface RecordedCall {
-  readonly action: "content" | "markdown" | "links" | "json";
+  readonly action: "screenshot" | "content" | "markdown" | "links" | "json";
   readonly options: unknown;
 }
 
@@ -55,6 +55,7 @@ const makeBinding = (responses: ReadonlyArray<Response | Error>) => {
       : Effect.succeed(next);
   };
   const binding: BrowserQuickActionClient = {
+    screenshot: (options) => respond("screenshot", options),
     content: (options) => respond("content", options),
     markdown: (options) => respond("markdown", options),
     links: (options) => respond("links", options),

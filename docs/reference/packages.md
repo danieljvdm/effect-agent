@@ -47,6 +47,7 @@ It depends outward from engine; the engine does not import it.
 
 Defines schema-first, platform-neutral sandbox requests, events, errors, the streaming `Sandbox`
 service, the callback-shaped `CodeExecutor` port, and the stateless `PageCapture` port.
+It also exports the sibling `PageScreenshot` port for one bounded caller-owned PNG.
 
 ### `@effect-agent/sandbox-local`
 

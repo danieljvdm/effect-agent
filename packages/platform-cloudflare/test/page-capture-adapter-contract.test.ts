@@ -54,7 +54,7 @@ const adapters: ReadonlyArray<Adapter> = [
     name: "Worker binding",
     layer: (responses, denied) => {
       let index = 0;
-      const invoke = (action: "content" | "markdown" | "links" | "json") => () => {
+      const invoke = (action: "screenshot" | "content" | "markdown" | "links" | "json") => () => {
         const response = responses[index++];
         return response === undefined
           ? Effect.fail(
@@ -63,6 +63,7 @@ const adapters: ReadonlyArray<Adapter> = [
           : Effect.succeed(response);
       };
       const binding: BrowserQuickActionClient = {
+        screenshot: invoke("screenshot"),
         content: invoke("content"),
         markdown: invoke("markdown"),
         links: invoke("links"),

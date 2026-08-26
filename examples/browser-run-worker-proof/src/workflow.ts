@@ -266,7 +266,7 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
           workerProofError(
             "response",
             "validate temporary Worker response",
-            "The temporary Worker did not return the expected Browser Run fact",
+            "The temporary Worker did not return the expected Browser Run fact and screenshot metadata",
             { cause },
           ),
         ),

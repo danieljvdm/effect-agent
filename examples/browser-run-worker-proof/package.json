@@ -12,6 +12,7 @@
   "dependencies": {
     "@effect-agent/capabilities": "workspace:*",
     "@effect-agent/platform-cloudflare": "workspace:*",
+    "@effect-agent/sandbox": "workspace:*",
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
     "effect-cf": "catalog:"

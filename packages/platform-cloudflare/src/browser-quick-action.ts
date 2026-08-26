@@ -11,6 +11,12 @@ import {
   PageCaptureResourceUse,
   PageCaptureResult,
   PageCaptureUnsupportedError,
+  PageScreenshot,
+  PageScreenshotOutputLimitError,
+  PageScreenshotResult,
+  type PageScreenshotCapture,
+  type PageScreenshotError,
+  type PageScreenshotRequest,
   PageContentCaptured,
   PageLinksCaptured,
   PageMarkdownCaptured,
@@ -47,6 +53,9 @@ export const browserQuickActionImplementation = SandboxImplementation.make({
  * directly from the pinned Workers declarations rather than a local copy.
  */
 export interface BrowserQuickActionClient {
+  readonly screenshot: (
+    options: BrowserRunScreenshotOptions,
+  ) => Effect.Effect<Response, BrowserQuickActionRpcError>;
   readonly content: (
     options: BrowserRunContentOptions,
   ) => Effect.Effect<Response, BrowserQuickActionRpcError>;
@@ -65,7 +74,7 @@ export interface BrowserQuickActionClient {
 export class BrowserQuickActionRpcError extends Schema.TaggedError<BrowserQuickActionRpcError>()(
   "BrowserQuickActionRpcError",
   {
-    action: Schema.Literals(["content", "markdown", "links", "json"]),
+    action: Schema.Literals(["screenshot", "content", "markdown", "links", "json"]),
     cause: Schema.Defect(),
   },
 ) {}
@@ -85,7 +94,7 @@ export class BrowserQuickActionBrowserBinding extends Context.Service<
   ): Layer.Layer<BrowserQuickActionBrowserBinding> {
     const browser = options.browser;
     const invoke = Effect.fn("BrowserQuickActionBrowserBinding.invoke")(function* (
-      action: "content" | "markdown" | "links" | "json",
+      action: "screenshot" | "content" | "markdown" | "links" | "json",
       evaluate: () => Promise<Response>,
     ): Effect.fn.Return<Response, BrowserQuickActionRpcError> {
       return yield* Effect.tryPromise({
@@ -94,6 +103,8 @@ export class BrowserQuickActionBrowserBinding extends Context.Service<
       });
     });
     return Layer.succeed(BrowserQuickActionBrowserBinding)({
+      screenshot: (request) =>
+        invoke("screenshot", () => browser.quickAction("screenshot", request)),
       content: (request) => invoke("content", () => browser.quickAction("content", request)),
       markdown: (request) => invoke("markdown", () => browser.quickAction("markdown", request)),
       links: (request) => invoke("links", () => browser.quickAction("links", request)),
@@ -511,4 +522,184 @@ export const browserQuickActionWorkersAiCaptureLayer = (): Layer.Layer<
       const workersAi = yield* BrowserQuickActionWorkersAi;
       return PageCapture.of({ capture: makeCapture(browser, workersAi) });
     }),
+  );
+
+const screenshotOptions = (request: PageScreenshotRequest): BrowserRunScreenshotOptions => {
+  const options: BrowserRunBaseOptions = {};
+  if (
+    request.navigation?.waitUntil !== undefined ||
+    request.navigation?.timeoutMillis !== undefined
+  ) {
+    options.gotoOptions = {
+      ...(request.navigation.waitUntil === undefined
+        ? {}
+        : { waitUntil: request.navigation.waitUntil }),
+      ...(request.navigation.timeoutMillis === undefined
+        ? {}
+        : { timeout: request.navigation.timeoutMillis }),
+    };
+  }
+  if (request.navigation?.waitForSelector !== undefined) {
+    options.waitForSelector = {
+      selector: request.navigation.waitForSelector.selector,
+      ...(request.navigation.waitForSelector.timeoutMillis === undefined
+        ? {}
+        : { timeout: request.navigation.waitForSelector.timeoutMillis }),
+    };
+  }
+  if (request.viewport !== undefined) options.viewport = request.viewport;
+  if (request.resourcePolicy?.rejectResourceTypes !== undefined) {
+    options.rejectResourceTypes = [...request.resourcePolicy.rejectResourceTypes];
+  }
+  if (request.resourcePolicy?.allowRequestPatterns !== undefined) {
+    options.allowRequestPattern = [...request.resourcePolicy.allowRequestPatterns];
+  }
+  return {
+    ...options,
+    ...(request.target._tag === "PageUrlTarget"
+      ? { url: request.target.url }
+      : { html: request.target.html }),
+    screenshotOptions: { type: "png", encoding: "binary", fullPage: request.fullPage },
+  };
+};
+
+const cancelBody = (body: ReadableStream<Uint8Array>): Effect.Effect<void> =>
+  Effect.tryPromise({
+    try: () => body.cancel(),
+    catch: () => undefined,
+  }).pipe(Effect.catch(() => Effect.void));
+
+const releaseScreenshotReader = (
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Effect.Effect<void> =>
+  Effect.tryPromise({ try: () => reader.cancel(), catch: () => undefined }).pipe(
+    Effect.catch(() => Effect.logWarning("Canceling the screenshot response failed")),
+    Effect.ensuring(
+      Effect.try({
+        try: () => reader.releaseLock(),
+        catch: () => undefined,
+      }).pipe(Effect.catch(() => Effect.logWarning("Releasing the screenshot response failed"))),
+    ),
+  );
+
+const pngResponse = (response: Response): boolean =>
+  response.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase() === "image/png";
+
+const declaredLength = (response: Response): number | undefined => {
+  const raw = response.headers.get("Content-Length");
+  if (raw === null || !/^(0|[1-9][0-9]*)$/.test(raw)) return undefined;
+  const length = Number(raw);
+  return Number.isSafeInteger(length) ? length : undefined;
+};
+
+const readScreenshot = Effect.fn("BrowserQuickActionScreenshot.read")(function* (
+  response: Response,
+  request: PageScreenshotRequest,
+) {
+  const body = response.body;
+  if (body === null) {
+    return yield* protocolError("The screenshot response had no body");
+  }
+  if (!pngResponse(response)) {
+    yield* cancelBody(body);
+    return yield* protocolError("The screenshot response was not image/png");
+  }
+  const length = declaredLength(response);
+  if (length !== undefined && length > request.limits.maxOutputBytes) {
+    yield* cancelBody(body);
+    return yield* PageScreenshotOutputLimitError.make({
+      implementation: browserQuickActionImplementation,
+      limit: request.limits.maxOutputBytes,
+      observed: length,
+    });
+  }
+  const reader = yield* Effect.acquireRelease(
+    Effect.try({
+      try: () => body.getReader(),
+      catch: (cause) => protocolError("Opening the screenshot response failed", cause),
+    }),
+    releaseScreenshotReader,
+  );
+  const chunks: Array<Uint8Array> = [];
+  let observed = 0;
+  while (true) {
+    const next = yield* Effect.tryPromise({
+      try: () => reader.read(),
+      catch: (cause) => protocolError("Reading the screenshot response failed", cause),
+    });
+    if (next.done) break;
+    observed += next.value.byteLength;
+    if (observed > request.limits.maxOutputBytes) {
+      return yield* PageScreenshotOutputLimitError.make({
+        implementation: browserQuickActionImplementation,
+        limit: request.limits.maxOutputBytes,
+        observed,
+      });
+    }
+    chunks.push(next.value);
+  }
+  const bytes = new Uint8Array(observed);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}, Effect.scoped);
+
+const makeScreenshot = (browser: BrowserQuickActionClient): PageScreenshotCapture =>
+  Effect.fn("BrowserQuickActionScreenshot.capture")(function* (
+    request: PageScreenshotRequest,
+  ): Effect.fn.Return<PageScreenshotResult, PageScreenshotError> {
+    if (request.engine !== "chromium") {
+      return yield* PageCaptureUnsupportedError.make({
+        implementation: browserQuickActionImplementation,
+        feature: "engine",
+        message: "The browser binding's screenshot action exposes no engine selector",
+      });
+    }
+    const response = yield* browser
+      .screenshot(screenshotOptions(request))
+      .pipe(
+        Effect.mapError((error) =>
+          protocolError("The browser binding rejected the screenshot", error.cause),
+        ),
+      );
+    if (response.status === 429) {
+      const body = response.body;
+      if (body !== null) yield* cancelBody(body);
+      return yield* PageCaptureRateLimitedError.make({
+        implementation: browserQuickActionImplementation,
+        reason: "rate",
+        ...(retryAfterMillis(response) === undefined
+          ? {}
+          : { retryAfterMillis: retryAfterMillis(response) }),
+        message: "The screenshot Quick Action was rate limited",
+      });
+    }
+    if (!response.ok) {
+      const body = response.body;
+      if (body !== null) yield* cancelBody(body);
+      const message = `The screenshot Quick Action answered HTTP ${response.status}`;
+      return yield* response.status >= 500 ? protocolError(message) : navigationError(message);
+    }
+    const bytes = yield* readScreenshot(response, request);
+    return PageScreenshotResult.make({
+      implementation: browserQuickActionImplementation,
+      mediaType: "image/png",
+      bytes,
+    });
+  });
+
+/** Native Browser Run screenshot adapter. It retains PNG bytes only for the caller's result. */
+export const browserQuickActionScreenshotLayer = (): Layer.Layer<
+  PageScreenshot,
+  never,
+  BrowserQuickActionBrowserBinding
+> =>
+  Layer.effect(
+    PageScreenshot,
+    Effect.map(BrowserQuickActionBrowserBinding, (browser) =>
+      PageScreenshot.of({ capture: makeScreenshot(browser) }),
+    ),
   );

@@ -192,6 +192,9 @@ fixed operation or HTTP-status descriptions and never interpolate foreign except
 rate-limit bodies, provider envelopes, or other remote error bodies.
 A page that instructs the model is data, never authority.
 
+Screenshot bytes are untrusted content. `PageScreenshot` bounds them before buffering and keeps
+them out of canonical records, model context, logs, telemetry, and error diagnostics.
+
 The read-only SQL reference Tool's guarantee is database authority, not SQL text inspection: a
 database identity without mutation, DDL, administrative, or extension privileges; denial of
 side-effecting functions reachable from a `SELECT`, including installed extensions and

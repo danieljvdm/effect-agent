@@ -21,6 +21,10 @@ describe("Browser Run Worker proof deployment resource", () => {
               sourceUrl: "https://example.com/",
               action: "markdown",
               fact: "Example Domain",
+              screenshot: {
+                mediaType: "image/png",
+                pngSignatureValid: true,
+              },
             }),
           ),
         delete: (name) => Ref.update(events, (current) => [...current, `delete:${name}`]),

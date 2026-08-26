@@ -439,20 +439,30 @@ The separate private `examples/browser-run-worker-proof` leaf closes the binding
 gap without a model. Its fixed opt-in Effect workflow deploys one collision-resistant temporary
 Worker with a native `BROWSER` binding and compatibility date `2026-03-24`, invokes one bounded
 Markdown `WebCapture.make` handler against `https://example.com/`, validates the stable `Example
-Domain` fact, and deletes the Worker through a Scope finalizer. The workflow fails if its generated
-name already exists, never retries an unresolved invocation, and surfaces deletion failure. The
-ordinary test suite scripts the deployment operations and verifies finalization without Cloudflare
+Domain` fact, captures one bounded PNG through `PageScreenshot`, validates its eight-byte PNG
+signature, discards the image bytes, and deletes the Worker through a Scope finalizer. The proof
+response contains only bounded validation metadata. The workflow fails if its generated name
+already exists, never retries an unresolved invocation, and surfaces deletion failure. The ordinary
+test suite scripts the deployment operations and verifies finalization without Cloudflare
 credentials. The hosted proof is:
 
 ```sh
 vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
 ```
 
+### Browser Run PNG screenshots
+
+`browserQuickActionScreenshotLayer` adapts the explicit Browser Run binding to `PageScreenshot`.
+It requests binary PNG only, rejects Kitesurf before the RPC, validates `image/png`, and releases
+the response body on every exit. The returned bytes belong only to the direct caller and never
+enter framework persistence, telemetry, logs, or metadata.
+
 The adapter records no persistent state and claims deployment class `E` only.
 
 Current platform references:
 
 - [Browser Run Quick Actions](https://developers.cloudflare.com/browser-run/quick-actions/)
+- [Browser Run screenshot Quick Action](https://developers.cloudflare.com/browser-run/quick-actions/screenshot-endpoint/)
 - [Browser Run structured extraction and Workers AI](https://developers.cloudflare.com/browser-run/quick-actions/json-endpoint/)
 - [SQLite-backed Durable Object storage](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)
 - [Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)

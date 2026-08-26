@@ -29,7 +29,7 @@ const liveEnabled =
   (process.env[CLOUDFLARE_TOKEN_ENV] ?? "") !== "";
 
 interface RecordedQuickAction {
-  readonly action: "content" | "markdown" | "links" | "json";
+  readonly action: "screenshot" | "content" | "markdown" | "links" | "json";
   readonly options: Record<string, unknown>;
 }
 
@@ -73,6 +73,7 @@ const makeLiveBrowserBinding = Effect.gen(function* () {
     });
   });
   const binding: BrowserQuickActionClient = {
+    screenshot: (options) => runQuickAction("screenshot", options),
     content: (options) => runQuickAction("content", options),
     markdown: (options) => runQuickAction("markdown", options),
     links: (options) => runQuickAction("links", options),

@@ -381,6 +381,18 @@ screenshots, PDFs, snapshot bundles, crawling, and accessibility trees were cons
 deliberately excluded from this first slice — each needs binary transport or session semantics
 this stateless contract does not promise. Page capture claims deployment class `E` only.
 
+## 9.3 Page screenshots
+
+`PageScreenshot` is a sibling stateless port for one caller-owned PNG. Its request fixes one
+credential-free HTTPS target, navigation and subrequest policy, viewport, full-page choice,
+engine, and byte limit before execution. `capture` returns one bounded `Uint8Array` with the
+fixed `image/png` media type. The framework never writes those bytes to canonical records, model
+text, logs, telemetry, or result metadata. The caller decides any later storage or handoff.
+
+The native Browser Run adapter validates MIME, rejects an honest over-budget Content-Length before
+acquiring a reader, and uses incremental byte counting as the authority. It cancels bodies on all
+paths. Kitesurf fails typed because the native binding cannot select it.
+
 ## 10. Subagents
 
 The proposed Subagent capability is specified in [subagents.md](./subagents.md). It uses declared
@@ -460,3 +472,6 @@ default and are excluded from ordinary span attributes.
   construction; structured extraction accepts only a bounded object JSON Schema and exposes its
   decoder requirements; browser execution remains `uncertain`; model inference requires explicit
   host authorization and accounting; and every result is treated as untrusted input.
+- **CAP-019**: Page screenshots use a separate Schema-first port with fixed PNG output and a
+  caller-owned byte lifetime; adapters enforce MIME and byte bounds and never persist or project
+  screenshot bytes.
