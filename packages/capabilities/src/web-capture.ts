@@ -556,12 +556,10 @@ const makeExtract = <const Name extends string, S extends Schema.Top>(
       // The platform's extraction is untrusted; only the original Effect
       // Schema decides whether the value is the promised shape.
       return yield* decodeExtracted(result.output.value).pipe(
-        Effect.catch((error) =>
-          Effect.fail(
-            failure(
-              "WebCaptureDecodeFailed",
-              `The extracted value did not match the expected schema: ${String(error).slice(0, 2_048)}`,
-            ),
+        Effect.mapError(() =>
+          failure(
+            "WebCaptureDecodeFailed",
+            "The extracted value did not match the expected schema",
           ),
         ),
       );
