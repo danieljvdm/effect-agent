@@ -13,6 +13,7 @@
     "@effect-agent/core": "workspace:*",
     "@effect-agent/engine": "workspace:*",
     "@effect-agent/platform-cloudflare": "workspace:*",
+    "@effect-agent/sandbox": "workspace:*",
     "@effect-agent/testing": "workspace:*",
     "@effect/ai-anthropic": "catalog:",
     "@effect/ai-openai": "catalog:",

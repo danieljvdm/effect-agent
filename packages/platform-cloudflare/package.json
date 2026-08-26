@@ -15,7 +15,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./browser-quick-action": "./src/browser-quick-action.ts"
+    "./browser-quick-action": "./src/browser-quick-action.ts",
+    "./browser-rest-capture": "./src/browser-rest-capture.ts"
   },
   "publishConfig": {
     "access": "public"

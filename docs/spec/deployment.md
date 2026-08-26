@@ -414,7 +414,12 @@ alongside any `X-Browser-Ms-Used` observation. The ordinary
 `browserQuickActionCaptureLayer` has no Workers AI authority. The host-owned binding service
 keeps browser RPC authority visible in both adapter requirement channels, while the opt-in Layer
 also requires Workers AI authority. The adapter rejects typed the `kitesurf` engine the binding
-cannot select (the REST and CDP surfaces can; a REST adapter is a possible later slice).
+cannot select. `browserRestCaptureLayer` is the second `PageCapture` implementation: a Node-safe,
+explicit-credential Layer requiring Effect `HttpClient`. It keeps Cloudflare REST endpoint and
+envelope details in `platform-cloudflare`, uses the fixed
+`https://api.cloudflare.com/client/v4/accounts/{account}/browser-rendering/{action}` endpoint, and
+adds `browser=kitesurf` only for Kitesurf (Chromium omits that query). It preserves the same bounded
+stream decoding, typed error mapping, and explicit Workers AI authorization split as the binding.
 `quickAction()` requires a Worker compatibility date of `2026-03-24` or later and has no local
 implementation: local `wrangler dev` needs remote mode. Ordinary tests use a scripted binding
 inside workerd. An opt-in live smoke in the provider-owning `examples/providers` leaf additionally

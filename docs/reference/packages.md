@@ -122,8 +122,10 @@ service to adapt `quickAction()` to the `PageCapture` port without granting Work
 `browserQuickActionWorkersAiCaptureLayer` requires both the browser-binding service and the
 explicit `BrowserQuickActionWorkersAi` authorization and accounting service before permitting
 structured extraction. The `./browser-quick-action` export provides these adapters without
-loading Durable Object runtime modules. It is a Layer-assembly library, not an application
-entrypoint.
+loading Durable Object runtime modules. The Node-safe `./browser-rest-capture` export provides a
+second `PageCapture` implementation through explicit account/token construction values and an
+Effect `HttpClient` requirement; it never imports Worker runtime modules. It is a Layer-assembly
+library, not an application entrypoint.
 
 ### `@effect-agent/pr-review`
 
