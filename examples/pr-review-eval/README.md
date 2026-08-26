@@ -100,8 +100,10 @@ vp run pr-review-eval -- \
 The primary recall and precision measures use trial one. Repeats expose later-only blockers but do
 not repair the first-pass score. A matched blocker counts toward blocker recall only when the model
 also emitted it as `blocking`; an `important` finding would not stop the pull request. Precision is
-left unresolved while any relevant finding is unclear or unjudged. New valid findings remain
-listed for corpus repair instead of being matched by prose. Reporting is deterministic, offline,
-and requires the complete observation set produced by the run, including when `run --case` selected
-a subset. Each variant report is its overall aggregate across that common case set; variants are
-not averaged together.
+left unresolved while any relevant finding is unclear or unjudged. Blocker detection separately
+counts expected blockers found at any severity. Blocking precision treats an invalid blocking
+finding, or one matching only a non-blocking expected defect, as overstated; new valid, unclear, and
+unjudged blocking findings leave it unresolved. New valid findings remain listed for corpus repair
+instead of being matched by prose. Reporting is deterministic, offline, and requires the complete
+observation set produced by the run, including when `run --case` selected a subset. Each variant
+report is its overall aggregate across that common case set; variants are not averaged together.

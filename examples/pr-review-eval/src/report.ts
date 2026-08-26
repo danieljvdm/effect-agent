@@ -75,6 +75,31 @@ export class EvalFindingQuality extends Schema.Class<EvalFindingQuality>(
   "@effect-agent/example-pr-review-eval/EvalFindingQuality",
 )(FindingQualityFields) {}
 
+const BlockingFindingQualityFields = Schema.Struct({
+  aligned: Schema.Natural,
+  overstated: Schema.Natural,
+  unresolved: Schema.Natural,
+  precision: EvalRate,
+}).check(
+  Schema.makeFilter(
+    (quality) => {
+      const denominator = quality.aligned + quality.overstated;
+      const expectedStatus =
+        quality.unresolved > 0 ? "unresolved" : denominator === 0 ? "not-applicable" : "measured";
+      return (
+        quality.precision.numerator === quality.aligned &&
+        quality.precision.denominator === denominator &&
+        quality.precision.status === expectedStatus
+      );
+    },
+    { title: "Blocking-finding counts and precision are consistent" },
+  ),
+);
+
+export class EvalBlockingFindingQuality extends Schema.Class<EvalBlockingFindingQuality>(
+  "@effect-agent/example-pr-review-eval/EvalBlockingFindingQuality",
+)(BlockingFindingQualityFields) {}
+
 export class EvalFailureCount extends Schema.Class<EvalFailureCount>(
   "@effect-agent/example-pr-review-eval/EvalFailureCount",
 )({
@@ -157,12 +182,14 @@ export class EvalCaseQualityReport extends Schema.Class<EvalCaseQualityReport>(
   caseVersion: Schema.Literal(1),
   inputDigest: EvalInputDigest,
   kind: EvalCaseKind,
+  blockerDetection: EvalRate,
   blockerRecall: EvalRate,
   blockerStatus: EvalBlockerCaseStatus,
   cleanControlPassed: Schema.optionalKey(Schema.Boolean),
   laterOnlyBlockingDefects: Schema.Array(EvalLaterBlocker),
   firstTrialFindings: EvalFindingQuality,
   allTrialFindings: EvalFindingQuality,
+  firstTrialBlockingFindings: EvalBlockingFindingQuality,
   firstTrialFailureTag: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(200))),
   resources: EvalResourceSummary,
 }) {}
@@ -200,12 +227,14 @@ export class EvalVariantQualityReport extends Schema.Class<EvalVariantQualityRep
   "@effect-agent/example-pr-review-eval/EvalVariantQualityReport",
 )({
   configuration: EvalVariantConfiguration,
+  blockerDetection: EvalRate,
   blockerRecall: EvalRate,
   blockerCases: EvalCaseCompletionSummary,
   cleanControls: EvalCleanControlSummary,
   laterOnlyBlockingDefects: Schema.Array(EvalLaterBlocker),
   firstTrialFindings: EvalFindingQuality,
   allTrialFindings: EvalFindingQuality,
+  firstTrialBlockingFindings: EvalBlockingFindingQuality,
   firstTrialFailures: Schema.Natural,
   resources: EvalResourceSummary,
   cases: Schema.Array(EvalCaseQualityReport),
@@ -222,7 +251,7 @@ export class EvalCaseIdentity extends Schema.Class<EvalCaseIdentity>(
 export class EvalQualityReport extends Schema.Class<EvalQualityReport>(
   "@effect-agent/example-pr-review-eval/EvalQualityReport",
 )({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   observationSetDigest: EvalObservationSetDigest,
   runnerVersion: EvalRunnerVersion,
   trialCount: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -311,6 +340,48 @@ const findingQuality = (findings: ReadonlyArray<IndexedFinding>): EvalFindingQua
     unclear,
     unjudged,
     precision: makeRate(valid, valid + invalid, unclear + unjudged > 0),
+  });
+};
+
+const blockingFindingQuality = (
+  findings: ReadonlyArray<IndexedFinding>,
+  evalCase: EvalCase,
+): EvalBlockingFindingQuality => {
+  const expectedSeverity = new Map(
+    evalCase.expectedDefects.map((defect) => [defect.id, defect.severity] as const),
+  );
+  let aligned = 0;
+  let overstated = 0;
+  let unresolved = 0;
+  for (const indexed of findings) {
+    if (indexed.reference.finding.severity !== "blocking") continue;
+    switch (indexed.judgment?.label) {
+      case "matches-expected":
+        if (
+          indexed.judgment.matchedDefectIds.some(
+            (defectId) => expectedSeverity.get(defectId) === "blocking",
+          )
+        ) {
+          aligned += 1;
+        } else {
+          overstated += 1;
+        }
+        break;
+      case "invalid":
+        overstated += 1;
+        break;
+      case "new-valid":
+      case "unclear":
+      case undefined:
+        unresolved += 1;
+        break;
+    }
+  }
+  return EvalBlockingFindingQuality.make({
+    aligned,
+    overstated,
+    unresolved,
+    precision: makeRate(aligned, aligned + overstated, unresolved > 0),
   });
 };
 
@@ -585,6 +656,7 @@ const indexFindings = (
 const matchedBlockingDefects = (
   findings: ReadonlyArray<IndexedFinding>,
   evalCase: EvalCase,
+  requireBlockingSeverity: boolean,
 ): ReadonlySet<EvalDefectId> => {
   const blockers = new Set(
     evalCase.expectedDefects
@@ -594,7 +666,7 @@ const matchedBlockingDefects = (
   const matched = new Set<EvalDefectId>();
   for (const indexed of findings) {
     if (
-      indexed.reference.finding.severity !== "blocking" ||
+      (requireBlockingSeverity && indexed.reference.finding.severity !== "blocking") ||
       indexed.judgment?.label !== "matches-expected"
     ) {
       continue;
@@ -614,7 +686,8 @@ const caseReport = (
 ): EvalCaseQualityReport => {
   const indexed = observations.flatMap((observation) => indexFindings(observation, judgments));
   const firstFindings = indexed.filter((finding) => finding.reference.trial === 1);
-  const firstMatched = matchedBlockingDefects(firstFindings, evalCase);
+  const firstDetected = matchedBlockingDefects(firstFindings, evalCase, false);
+  const firstMatched = matchedBlockingDefects(firstFindings, evalCase, true);
   const expectedBlockers = evalCase.expectedDefects.filter(
     (defect) => defect.severity === "blocking",
   );
@@ -628,6 +701,13 @@ const caseReport = (
     firstMatched.size < expectedBlockers.length &&
     firstObservation.result._tag === "Succeeded" &&
     unresolvedBlockingFindings.length > 0;
+  const unresolvedDetectionFindings = firstFindings.filter(
+    (finding) => finding.judgment === undefined || finding.judgment.label === "unclear",
+  );
+  const firstDetectionUnresolved =
+    firstDetected.size < expectedBlockers.length &&
+    firstObservation.result._tag === "Succeeded" &&
+    unresolvedDetectionFindings.length > 0;
   const blockerStatus: EvalBlockerCaseStatus =
     expectedBlockers.length === 0
       ? "not-applicable"
@@ -651,6 +731,7 @@ const caseReport = (
         const trialMatched = matchedBlockingDefects(
           indexed.filter((finding) => finding.reference.trial === trial),
           evalCase,
+          true,
         );
         if (trialMatched.has(defect.id)) {
           laterOnlyBlockingDefects.push(
@@ -671,6 +752,11 @@ const caseReport = (
     caseVersion: evalCase.version,
     inputDigest: evalCase.inputDigest,
     kind: evalCase.kind,
+    blockerDetection: makeRate(
+      firstDetected.size,
+      expectedBlockers.length,
+      firstDetectionUnresolved,
+    ),
     blockerRecall: makeRate(firstMatched.size, expectedBlockers.length, firstUnresolved),
     blockerStatus,
     ...(evalCase.kind === "clean-control"
@@ -682,6 +768,7 @@ const caseReport = (
     laterOnlyBlockingDefects,
     firstTrialFindings: firstQuality,
     allTrialFindings: findingQuality(indexed),
+    firstTrialBlockingFindings: blockingFindingQuality(firstFindings, evalCase),
     ...(firstObservation.result._tag === "Failed"
       ? { firstTrialFailureTag: firstObservation.result.errorTag }
       : {}),
@@ -709,6 +796,23 @@ const aggregateFindingQuality = (
       totals.valid + totals.invalid,
       totals.unclear + totals.unjudged > 0,
     ),
+  });
+};
+
+const aggregateBlockingFindingQuality = (
+  reports: ReadonlyArray<EvalCaseQualityReport>,
+): EvalBlockingFindingQuality => {
+  const totals = reports.reduce(
+    (accumulator, report) => ({
+      aligned: accumulator.aligned + report.firstTrialBlockingFindings.aligned,
+      overstated: accumulator.overstated + report.firstTrialBlockingFindings.overstated,
+      unresolved: accumulator.unresolved + report.firstTrialBlockingFindings.unresolved,
+    }),
+    { aligned: 0, overstated: 0, unresolved: 0 },
+  );
+  return EvalBlockingFindingQuality.make({
+    ...totals,
+    precision: makeRate(totals.aligned, totals.aligned + totals.overstated, totals.unresolved > 0),
   });
 };
 
@@ -750,18 +854,26 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
       cases.push(caseReport(evalCase, firstObservation, caseObservations, validated.judgments));
     }
 
+    const blockerDetected = cases.reduce(
+      (total, report) => total + report.blockerDetection.numerator,
+      0,
+    );
     const blockerFound = cases.reduce((total, report) => total + report.blockerRecall.numerator, 0);
     const blockerTotal = cases.reduce(
       (total, report) => total + report.blockerRecall.denominator,
       0,
     );
     const blockerUnresolved = cases.some((report) => report.blockerRecall.status === "unresolved");
+    const detectionUnresolved = cases.some(
+      (report) => report.blockerDetection.status === "unresolved",
+    );
     const eligibleCases = cases.filter((report) => report.blockerStatus !== "not-applicable");
     const cleanControls = cases.filter((report) => report.kind === "clean-control");
 
     variants.push(
       EvalVariantQualityReport.make({
         configuration,
+        blockerDetection: makeRate(blockerDetected, blockerTotal, detectionUnresolved),
         blockerRecall: makeRate(blockerFound, blockerTotal, blockerUnresolved),
         blockerCases: EvalCaseCompletionSummary.make({
           complete: eligibleCases.filter((report) => report.blockerStatus === "complete").length,
@@ -778,6 +890,7 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
         laterOnlyBlockingDefects: cases.flatMap((report) => report.laterOnlyBlockingDefects),
         firstTrialFindings: aggregateFindingQuality(cases, "firstTrialFindings"),
         allTrialFindings: aggregateFindingQuality(cases, "allTrialFindings"),
+        firstTrialBlockingFindings: aggregateBlockingFindingQuality(cases),
         firstTrialFailures: cases.filter((report) => report.firstTrialFailureTag !== undefined)
           .length,
         resources: resourceSummary(variantObservations),
@@ -787,7 +900,7 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
   }
 
   return EvalQualityReport.make({
-    version: 1,
+    version: 2,
     observationSetDigest: validated.observationSetDigest,
     runnerVersion: validated.runnerVersion,
     trialCount: validated.trialCount,
@@ -813,10 +926,14 @@ export const renderQualityReport = (report: EvalQualityReport): string =>
   report.variants
     .map((variant) => {
       const quality = variant.firstTrialFindings;
+      const blockingQuality = variant.firstTrialBlockingFindings;
       return [
-        `${variant.configuration.id}: blockers ${renderRate(variant.blockerRecall)}`,
+        `${variant.configuration.id}: blocking-recall ${renderRate(variant.blockerRecall)}`,
+        `detected ${renderRate(variant.blockerDetection)}`,
         `complete ${variant.blockerCases.complete}/${variant.blockerCases.total}`,
         `precision ${renderRate(quality.precision)}`,
+        `blocking-precision ${renderRate(blockingQuality.precision)}`,
+        `overstated-blocking ${blockingQuality.overstated}`,
         `invalid ${quality.invalid}`,
         `unclear ${quality.unclear}`,
         `unjudged ${quality.unjudged}`,

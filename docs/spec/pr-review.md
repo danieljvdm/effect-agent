@@ -118,9 +118,12 @@ invariants with bounded evidence, not strings that model output must copy. Human
 the initial source of truth.
 
 The primary quality claim concerns the first trial. Later identical trials measure instability and
-cannot convert a first-trial miss into a pass. The leaf may report recall, precision, later-only
-expected blockers, typed failures, tokens, cost when supplied by the host, and elapsed time. It does
-not add a database, hosted eval service, transcript store, model grader, or production retry path.
+cannot convert a first-trial miss into a pass. The leaf reports expected-blocker detection at any
+severity separately from blocker recall, plus blocking-finding precision so severity tuning cannot
+pass by promoting invalid or expected-nonblocking findings. It may also report finding precision,
+later-only expected blockers, typed failures, tokens, cost when supplied by the host, and elapsed
+time. It does not add a database, hosted eval service, transcript store, model grader, or production
+retry path.
 
 Human judgments bind to a digest of the complete schema-encoded observation set and identify the
 case, variant, trial, and emitted finding index. They distinguish expected-defect matches, new
