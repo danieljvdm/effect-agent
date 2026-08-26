@@ -19,6 +19,7 @@ export default defineConfig({
     entry: [
       "src/index.ts",
       "src/browser-quick-action.ts",
+      "src/interactive-browser.ts",
       "src/browser-rest-capture.ts",
       "src/browser-rest-crawl.ts",
     ],

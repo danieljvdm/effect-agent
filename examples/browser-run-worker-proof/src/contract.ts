@@ -8,6 +8,13 @@ const ScreenshotProof = Schema.Struct({
   pngSignatureValid: Schema.Literal(true),
 });
 
+export class BrowserRunInteractiveProof extends Schema.Class<BrowserRunInteractiveProof>(
+  "@effect-agent/example-browser-run-worker-proof/BrowserRunInteractiveProof",
+)({
+  finalUrl: Schema.Literal(PROOF_SOURCE_URL),
+  readFact: Schema.Literal(PROOF_FACT),
+}) {}
+
 export class BrowserRunWorkerProofResult extends Schema.Class<BrowserRunWorkerProofResult>(
   "@effect-agent/example-browser-run-worker-proof/BrowserRunWorkerProofResult",
 )({
@@ -15,4 +22,5 @@ export class BrowserRunWorkerProofResult extends Schema.Class<BrowserRunWorkerPr
   action: Schema.Literal("markdown"),
   fact: Schema.Literal(PROOF_FACT),
   screenshot: ScreenshotProof,
+  interactive: BrowserRunInteractiveProof,
 }) {}

@@ -49,6 +49,10 @@ Defines schema-first, platform-neutral sandbox requests, events, errors, the str
 service, the callback-shaped `CodeExecutor` port, and the stateless `PageCapture` port.
 It also exports the sibling `PageScreenshot` port for one bounded caller-owned PNG and the scoped
 `PageCrawl` Stream port for bounded same-host Markdown records.
+The scoped `InteractiveBrowser` port is a distinct programmatic capability: one ephemeral
+browser/context/page pass with navigate, bounded read, fill, and click operations. Its handle is
+not transportable or persistable, and its immutable exact-host policy covers redirects and
+subrequests.
 
 ### `@effect-agent/sandbox-local`
 

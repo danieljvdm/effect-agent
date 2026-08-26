@@ -97,6 +97,7 @@ const privatePackageNames = ["pr-review-action"] as const;
 /** Provider bindings belong to leaf applications, never framework packages. */
 const providerConsumingPackages = new Set<string>();
 const exampleNames = [
+  "browser-run-worker-proof",
   "code-mode-cloudflare",
   "demo",
   "pr-work-order-ingress",
@@ -132,14 +133,16 @@ const productionPackageNames = [
   "storage-memory",
   "storage-sqlite",
 ] as const;
-// Phase 6: only these two packages may carry Cloudflare dependencies, and only
-// the types-only package plus the in-workerd test harness — wrangler and
+// Only these two packages may carry Cloudflare dependencies. The shared
+// allowance is types plus the in-workerd test harness; provider SDKs are
+// admitted separately to the outward adapter that owns them. Wrangler and
 // application scaffolds stay banned everywhere.
 const cloudflarePackageNames: ReadonlyArray<string> = ["platform-cloudflare", "storage-cloudflare"];
 const allowedCloudflareToolchainDependencies = new Set([
   "@cloudflare/vitest-pool-workers",
   "@cloudflare/workers-types",
 ]);
+const platformCloudflareProviderDependencies = new Set(["@cloudflare/puppeteer"]);
 // Phase 6 exit gate "Agent/core/engine packages import no Cloudflare platform
 // types", audited at the manifest layer: only the two Cloudflare packages may
 // depend on @cloudflare/* or the Durable Object SqlClient, in ANY dependency
@@ -1713,9 +1716,12 @@ Exercise the generated release verifier.
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
         const dependencies = manifestDependencies(manifest);
-        const cloudflareAllowance = cloudflarePackageNames.includes(packageName)
-          ? allowedCloudflareToolchainDependencies
-          : new Set<string>();
+        const cloudflareAllowance = new Set([
+          ...(cloudflarePackageNames.includes(packageName)
+            ? allowedCloudflareToolchainDependencies
+            : []),
+          ...(packageName === "platform-cloudflare" ? platformCloudflareProviderDependencies : []),
+        ]);
 
         expect(
           dependencies.filter(

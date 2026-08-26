@@ -450,6 +450,20 @@ credentials. The hosted proof is:
 vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
 ```
 
+### Browser Run interactive browser sessions
+
+The scoped `InteractiveBrowser` adapter uses the explicitly supplied Browser Run `browser`
+binding and `@cloudflare/puppeteer` 1.1.0. It launches one browser pass, context, and page under
+Scope, with immediate reverse-order finalizers. `keep_alive` is only Cloudflare's inactivity
+setting; the caller's elapsed-time deadline is authoritative. Navigation, redirects, and every
+subrequest use the immutable exact-host policy. Capacity refusal and remote expiry remain typed;
+uncertain actions are never retried or replayed. This capability has no durable session, registry,
+reconnect, or model Tool.
+
+The opt-in Worker proof uses compatibility date 2026-03-24 or later (and remote Browser Run mode
+where required), one allowed public HTTPS page, and bounded metadata/text only. It is not live
+evidence for ordinary checks and is never a required CI gate.
+
 ### Browser Run PNG screenshots
 
 `browserQuickActionScreenshotLayer` adapts the explicit Browser Run binding to `PageScreenshot`.

@@ -3,6 +3,7 @@
   "name": "browser-run-worker-proof",
   "main": "src/worker.ts",
   "compatibility_date": "2026-03-24",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": false,
   "browser": {

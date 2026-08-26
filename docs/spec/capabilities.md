@@ -419,6 +419,30 @@ other terminal jobs are never cancelled. Cancellation failure is cleanup uncerta
 fixed bounded warning without provider detail and never defects, masks, or changes the primary
 `Exit`. The adapter performs no automatic retry and claims deployment class `E` only.
 
+## 9.5 Interactive browser
+
+`InteractiveBrowser` is a separate, provider-neutral, scoped service for one browser pass. The
+pass owns exactly one browser, context, and page and exposes only navigate, bounded text read, one
+field fill, and one element click. Its immutable policy fixes an exact HTTPS host allowlist, one
+page, action-count, elapsed-time, and returned UTF-8 byte limits before acquisition. The same
+policy governs initial navigation, redirects, and every page subrequest; violations fail closed.
+
+The returned handle is ephemeral and is not a Schema value, durable record, reconnect token, or
+model-facing Tool. A handle permits one operation at a time; concurrent calls fail immediately
+with a typed busy error. Capacity refusal, browser expiry/remote closure, navigation failure, and
+malformed adapter observations remain typed failures. Browser JavaScript and navigation can mutate
+remote state, so operations are uncertain: no automatic retry or replay is permitted.
+
+Adapters acquire browser, context, and page resources in `Scope`, register finalizers immediately,
+and close them in reverse order on every `Exit`. Cleanup failures are warning-only uncertainty and
+must not mask the primary result. No daemon fiber, module-global registry, persistence, or generic
+Puppeteer wrapper is allowed. Features the provider cannot enforce fail as typed unsupported.
+
+The Cloudflare adapter uses the explicit Browser Run binding and `@cloudflare/puppeteer` 1.1.0.
+Cloudflare's `keep_alive` controls inactivity only; the application deadline remains authoritative.
+Cloudflare launch capacity refusal and disconnected/expired sessions map to typed capacity or
+expiry errors, retaining provider details only as host-side causes.
+
 ## 10. Subagents
 
 The proposed Subagent capability is specified in [subagents.md](./subagents.md). It uses declared

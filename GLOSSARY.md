@@ -158,6 +158,13 @@ starting host and page-count, depth, byte, and deadline limits are fixed before 
 job identity and pagination remain adapter-private, and a known-running job is cancelled when the
 consumer's Scope exits.
 
+**Interactive Browser**
+
+A scoped, provider-neutral browser pass owning one browser, context, and page. Its immutable
+policy fixes the exact HTTPS host set, action count, elapsed time, and returned UTF-8 byte budget;
+navigation, redirects, and subrequests are all subject to that policy. Handles are ephemeral and
+uncertain: they are never persisted, replayed, reconnected, or exposed as model Tools.
+
 **Approval**  
 A policy decision that suspends or denies a proposed Tool Call before its Handler starts. Approval
 is not inferred from model prose.

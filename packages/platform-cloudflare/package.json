@@ -16,6 +16,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./browser-quick-action": "./src/browser-quick-action.ts",
+    "./interactive-browser": "./src/interactive-browser.ts",
     "./browser-rest-capture": "./src/browser-rest-capture.ts",
     "./browser-rest-crawl": "./src/browser-rest-crawl.ts"
   },
@@ -28,6 +29,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@cloudflare/puppeteer": "catalog:",
     "@effect-agent/core": "workspace:*",
     "@effect-agent/engine": "workspace:*",
     "@effect-agent/sandbox": "workspace:*",

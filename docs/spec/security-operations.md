@@ -173,6 +173,12 @@ or included in an executor binding, and the deterministic test substitute identi
 `unisolated` rather than masquerading as a boundary.
 
 Page capture output is a rendered web page and therefore untrusted, attacker-influenced input.
+Interactive browser sessions carry the same fail-closed egress posture: an immutable exact-host
+HTTPS policy is checked for navigation, redirects, and subrequests. One scoped browser/context/page
+pass permits only bounded navigate, read, fill, and click operations; concurrent calls fail busy,
+and action, elapsed-time, and UTF-8 output limits fail at the first violation. Handles are never
+persisted, replayed, reconnected, or exposed to models. Cloudflare cleanup is best-effort warning-
+only when the remote outcome is uncertain; provider diagnostics remain host-only.
 The capture capability is deny-by-default: an immutable construction-time HTTPS host allowlist
 governs navigation, redirects, and every browser subrequest. The request Schema rejects malformed
 URLs, non-HTTPS targets, and embedded credentials; discovered links must be absolute,
