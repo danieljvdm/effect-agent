@@ -231,7 +231,9 @@ const makeScriptedPort = Effect.gen(function* () {
                 return finish(
                   PageStructuredCaptured.make({
                     value: url.includes("/malformed")
-                      ? { nope: true }
+                      ? {
+                          plans: [{ name: "Pro", monthlyUsd: "secret-token=attacker-controlled" }],
+                        }
                       : { plans: [{ name: "Pro", monthlyUsd: 20 }] },
                   }),
                 );
@@ -572,7 +574,9 @@ layer(identifiers)("WebCapture handlers through a scripted port", (it) => {
       expect(outcome.toolResults[0].result).toMatchObject({
         _tag: "WebCaptureFailure",
         errorTag: "WebCaptureDecodeFailed",
+        message: "The extracted value did not match the expected schema",
       });
+      expect(JSON.stringify(outcome.toolResults[0].result)).not.toContain("secret-token");
     }),
   );
 
