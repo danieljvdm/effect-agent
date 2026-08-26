@@ -195,6 +195,14 @@ A page that instructs the model is data, never authority.
 Screenshot bytes are untrusted content. `PageScreenshot` bounds them before buffering and keeps
 them out of canonical records, model context, logs, telemetry, and error diagnostics.
 
+Crawl Markdown and metadata are likewise untrusted content. `PageCrawl` fixes one exact HTTPS host
+and rejects off-host source or redirect metadata before emission. The Cloudflare adapter sends its
+redacted API token only to the fixed `api.cloudflare.com` origin, bounds each response incrementally,
+and never exposes or persists the provider job identity. Cloudflare retains crawl results for up to
+14 days; callers that need a stricter retention boundary must not enable this provider. Public
+diagnostics and cleanup warnings contain fixed operation descriptions rather than the token, foreign
+response body, or provider envelope.
+
 The read-only SQL reference Tool's guarantee is database authority, not SQL text inspection: a
 database identity without mutation, DDL, administrative, or extension privileges; denial of
 side-effecting functions reachable from a `SELECT`, including installed extensions and

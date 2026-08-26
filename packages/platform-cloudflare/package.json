@@ -1,7 +1,7 @@
 {
   "name": "@effect-agent/platform-cloudflare",
   "version": "0.1.0-beta.29",
-  "description": "Class DC layer assembly for Effect Agent: SQLite-backed Conversation Durable Objects with alarm-driven recovery.",
+  "description": "Cloudflare Layer assembly for Effect Agent: Durable Objects and Browser Run adapters.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,7 +16,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./browser-quick-action": "./src/browser-quick-action.ts",
-    "./browser-rest-capture": "./src/browser-rest-capture.ts"
+    "./browser-rest-capture": "./src/browser-rest-capture.ts",
+    "./browser-rest-crawl": "./src/browser-rest-crawl.ts"
   },
   "publishConfig": {
     "access": "public"

@@ -21,6 +21,7 @@ must detect absence explicitly; it must not silently substitute weaker behavior.
 | Sandbox                    | Implemented |                          No |     For untrusted commands/code |
 | Code Mode                  | Implemented |                          No |                              No |
 | Page capture               | Implemented |                          No |                              No |
+| Page crawl                 | Implemented |                          No |                              No |
 | Subagents                  | Implemented |                          No |                              No |
 | Persistent agent state     | Implemented |                          No |                              No |
 | Durable steps              | Implemented |                          No |                              No |
@@ -376,10 +377,10 @@ host must authorize and account for its provider before extraction starts. Autho
 accounting refusals fail as `PageCaptureInferencePolicyError`, identifying the provider and which
 policy step failed while retaining host diagnostics only as the live cause. Construction fails
 closed on an empty or malformed host pattern, an invalid response byte budget, an empty action
-set, and an extraction Schema the deriver cannot express. Stateful browser sessions,
-screenshots, PDFs, snapshot bundles, crawling, and accessibility trees were considered and
-deliberately excluded from this first slice — each needs binary transport or session semantics
-this stateless contract does not promise. Page capture claims deployment class `E` only.
+set, and an extraction Schema the deriver cannot express. Stateful browser sessions, screenshots,
+PDFs, snapshot bundles, crawling, and accessibility trees remain outside this one-page port.
+Screenshots and crawling use separate sibling contracts with their own binary and scoped-stream
+semantics. Page capture claims deployment class `E` only.
 
 ## 9.3 Page screenshots
 
@@ -392,6 +393,31 @@ text, logs, telemetry, or result metadata. The caller decides any later storage 
 The native Browser Run adapter validates MIME, rejects an honest over-budget Content-Length before
 acquiring a reader, and uses incremental byte counting as the authority. It cancels bodies on all
 paths. Kitesurf fails typed because the native binding cannot select it.
+
+## 9.4 Page crawls
+
+`PageCrawl` is a Schema-first, scoped `Stream` port for one bounded rendered-Markdown crawl. Its
+request fixes one credential-free HTTPS starting URL, a non-empty set of content-signal purposes,
+and page-count, depth, per-page byte, aggregate byte, and wall-clock limits. Every returned record
+must remain on the starting URL's exact WHATWG host; redirects reported in record metadata are
+checked against the same host. The stream preserves Cloudflare's documented per-record states so a
+consumer can distinguish completed, disallowed, skipped, errored, queued, and cancelled pages.
+
+Provider job identity, polling, cursor pagination, cancellation, and retention are adapter-private.
+The caller cannot reattach to or persist a crawl job. Pagination is lazy: the adapter requests the
+next cursor only after downstream demand consumes the current page. It accepts the two cursor
+shapes exposed by Cloudflare's official surfaces, normalizes each to one comparison representation,
+and rejects malformed or repeated cursors before another request. All response bodies are read
+incrementally under explicit transport bounds, while record Markdown is checked at the first
+per-page or aggregate byte violation before emission.
+
+The crawl and its remote job belong to the consuming `Scope`. If interruption wins before creation
+returns a job identity, the adapter performs no deletion. Once creation returns an identity, the
+adapter installs its finalizer immediately. A known-running job receives exactly one cancellation
+attempt on typed failure, defect, deadline, interruption, or early consumer close; completed and
+other terminal jobs are never cancelled. Cancellation failure is cleanup uncertainty: it emits one
+fixed bounded warning without provider detail and never defects, masks, or changes the primary
+`Exit`. The adapter performs no automatic retry and claims deployment class `E` only.
 
 ## 10. Subagents
 
@@ -475,3 +501,6 @@ default and are excluded from ordinary span attributes.
 - **CAP-019**: Page screenshots use a separate Schema-first port with fixed PNG output and a
   caller-owned byte lifetime; adapters enforce MIME and byte bounds and never persist or project
   screenshot bytes.
+- **CAP-020**: Page crawls use a scoped, exact-host Stream with immutable page-count, depth,
+  per-page, aggregate, and deadline limits; adapters keep job identity private, paginate lazily,
+  never retry unresolved work, and cancel a known-running job exactly once when its Scope exits.

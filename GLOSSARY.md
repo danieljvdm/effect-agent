@@ -151,6 +151,13 @@ navigation, redirects, and subrequests. Capture results are untrusted, browser J
 execution uncertain rather than read-only, and separately billed model inference requires
 explicit host authorization and accounting.
 
+**Page Crawl**
+
+A scoped stream of rendered Markdown records discovered from one credential-free HTTPS URL. The
+starting host and page-count, depth, byte, and deadline limits are fixed before execution; provider
+job identity and pagination remain adapter-private, and a known-running job is cancelled when the
+consumer's Scope exits.
+
 **Approval**  
 A policy decision that suspends or denies a proposed Tool Call before its Handler starts. Approval
 is not inferred from model prose.

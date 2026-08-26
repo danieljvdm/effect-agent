@@ -36,8 +36,9 @@ reviewer.
 
 Completion is an engineering claim, not a stability claim. Cloudflare durability evidence comes
 from workerd/Miniflare; an opt-in temporary deployment proves the Browser Run Worker binding
-against Cloudflare's hosted service. Live-model suites remain opt-in, and open-source preparation
-remains pending.
+against Cloudflare's hosted service. The sandbox also exposes bounded page capture, PNG screenshot,
+and scoped same-host Markdown crawl ports; Cloudflare supplies native-binding and REST adapters.
+Live-model and live-provider suites remain opt-in, and open-source preparation remains pending.
 
 Normative words such as **MUST**, **SHOULD**, and **MAY** are used in their usual RFC sense.
 

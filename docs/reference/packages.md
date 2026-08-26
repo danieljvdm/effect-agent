@@ -47,7 +47,8 @@ It depends outward from engine; the engine does not import it.
 
 Defines schema-first, platform-neutral sandbox requests, events, errors, the streaming `Sandbox`
 service, the callback-shaped `CodeExecutor` port, and the stateless `PageCapture` port.
-It also exports the sibling `PageScreenshot` port for one bounded caller-owned PNG.
+It also exports the sibling `PageScreenshot` port for one bounded caller-owned PNG and the scoped
+`PageCrawl` Stream port for bounded same-host Markdown records.
 
 ### `@effect-agent/sandbox-local`
 
@@ -125,8 +126,10 @@ explicit `BrowserQuickActionWorkersAi` authorization and accounting service befo
 structured extraction. The `./browser-quick-action` export provides these adapters without
 loading Durable Object runtime modules. The Node-safe `./browser-rest-capture` export provides a
 second `PageCapture` implementation through explicit account/token construction values and an
-Effect `HttpClient` requirement; it never imports Worker runtime modules. It is a Layer-assembly
-library, not an application entrypoint.
+Effect `HttpClient` requirement. The Node-safe `./browser-rest-crawl` export adapts `PageCrawl` to
+Cloudflare's REST crawl endpoint with explicit redacted credentials, bounded polling and lazy
+pagination, and scoped remote-job cleanup. Neither REST subpath imports Worker runtime modules.
+This is a Layer-assembly library, not an application entrypoint.
 
 ### `@effect-agent/pr-review`
 
