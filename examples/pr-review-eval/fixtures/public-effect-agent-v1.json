@@ -81,18 +81,6 @@
               "description": "Child insertion can race parent retirement and leave an orphan that no longer charges the ancestor."
             }
           ]
-        },
-        {
-          "id": "array-schema-admitted-by-record-boundary",
-          "severity": "blocking",
-          "invariant": "Fail-closed JSON Schema rendering must reject arrays everywhere a schema record is required.",
-          "evidence": [
-            {
-              "path": "packages/capabilities/src/code-mode.ts",
-              "line": 227,
-              "description": "Predicate.isObject admits arrays where the removed record guard rejected them."
-            }
-          ]
         }
       ]
     },
@@ -163,14 +151,50 @@
               "description": "The broad settled-child boolean bypasses the deadline around the entire replacement Attempt execution stream."
             }
           ]
+        },
+        {
+          "id": "recovery-policy-change-widens-run-deadline",
+          "severity": "blocking",
+          "invariant": "A logical Run's durable deadline must remain bound to its canonical start policy across replacement Attempts and deployments.",
+          "evidence": [
+            {
+              "path": "packages/session/src/durable-runtime.ts",
+              "line": 2812,
+              "description": "Every replacement Attempt recomputes the deadline from the current in-memory maxDuration policy."
+            }
+          ]
+        },
+        {
+          "id": "mixed-open-batch-blocks-settled-child-cleanup",
+          "severity": "blocking",
+          "invariant": "An expired mixed Tool batch must complete every mandatory settled-child join without authorizing unresolved ordinary Tool execution.",
+          "evidence": [
+            {
+              "path": "packages/session/src/durable-runtime.ts",
+              "line": 2940,
+              "description": "The all-calls predicate withholds cleanup authority when one unresolved ordinary call shares the batch."
+            }
+          ]
+        },
+        {
+          "id": "tightened-deadline-misreports-elapsed-time",
+          "severity": "important",
+          "invariant": "A tightening-only deadline must not fabricate an earlier Run start or corrupt RUN-024 elapsed-time status.",
+          "evidence": [
+            {
+              "path": "packages/engine/src/index.ts",
+              "line": 4125,
+              "description": "The Run start is derived by subtracting the full policy duration from an independently tightened deadline."
+            }
+          ]
         }
       ]
     },
     {
       "version": 1,
       "id": "effect-agent-104-8cc7882",
-      "kind": "clean-control",
-      "provenance": "Public PR #104 fixed snapshot at 8cc7882, reconstructed from the exact GitHub compare and unchanged PR body; its full-diff review at pullrequestreview-4951967874 reported no findings. The generated Action bundle was ignored by the original reviewer and is omitted here.",
+      "kind": "known-defects",
+      "provenance": "Public PR #104 follow-up snapshot at 8cc7882, reconstructed from the exact GitHub compare and unchanged PR body. Its original public full-diff review at pullrequestreview-4951967874 reported no findings, but later source adjudication confirmed four defects; prior automated reviews are provenance, not ground truth. The generated Action bundle was ignored by the original reviewer and is omitted here.",
       "inputDigest": "f01f45ce6f2887597f8ed3cc06383359d0188a0bbc55c8c088a4da6959212cdc",
       "request": {
         "title": "fix(session): preserve durable run duration deadlines",
@@ -221,7 +245,56 @@
         ],
         "unreviewedPaths": []
       },
-      "expectedDefects": []
+      "expectedDefects": [
+        {
+          "id": "past-deadline-cleanup-authority-is-forgeable",
+          "severity": "blocking",
+          "invariant": "Past-deadline cleanup authority must be coordinator-owned evidence that an ordinary public caller cannot forge from Tool names and call IDs.",
+          "evidence": [
+            {
+              "path": "packages/engine/src/index.ts",
+              "line": 3946,
+              "description": "The public resume seam authenticates cleanup using caller-supplied IDs and a delegation-shaped Tool name."
+            }
+          ]
+        },
+        {
+          "id": "recovery-policy-change-widens-run-deadline",
+          "severity": "blocking",
+          "invariant": "A logical Run's durable deadline must remain bound to its canonical start policy across replacement Attempts and deployments.",
+          "evidence": [
+            {
+              "path": "packages/session/src/durable-runtime.ts",
+              "line": 2812,
+              "description": "Every replacement Attempt recomputes the deadline from the current in-memory maxDuration policy."
+            }
+          ]
+        },
+        {
+          "id": "mixed-open-batch-blocks-settled-child-cleanup",
+          "severity": "blocking",
+          "invariant": "An expired mixed Tool batch must complete every mandatory settled-child join without authorizing unresolved ordinary Tool execution.",
+          "evidence": [
+            {
+              "path": "packages/session/src/durable-runtime.ts",
+              "line": 2941,
+              "description": "Cleanup authority is withheld unless every open call is a canonically settled child."
+            }
+          ]
+        },
+        {
+          "id": "tightened-deadline-misreports-elapsed-time",
+          "severity": "important",
+          "invariant": "A tightening-only deadline must not fabricate an earlier Run start or corrupt RUN-024 elapsed-time status.",
+          "evidence": [
+            {
+              "path": "packages/engine/src/index.ts",
+              "line": 4175,
+              "description": "The Run start is derived by subtracting the full policy duration from an independently tightened deadline."
+            }
+          ]
+        }
+      ]
     },
     {
       "version": 1,

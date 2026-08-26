@@ -20,8 +20,9 @@ under `results/`; both directories are ignored in this workspace.
 is not a model-quality benchmark.
 
 `fixtures/public-effect-agent-v1.json` is a redistributable quality screen reconstructed from
-public Effect Agent pull requests. It contains two reviewed defect snapshots and two reviewed
-clean controls; each provenance record names any generated paths omitted by the original review.
+public Effect Agent pull requests. It contains source-adjudicated semantic oracles and preserves
+prior automated reviews as provenance rather than ground truth; each provenance record names any
+generated paths omitted by the original review.
 
 Validate a suite without credentials or model calls:
 
