@@ -4,18 +4,20 @@ import { Command, Flag } from "effect/unstable/cli";
 import { EvalCaseId, EvalConfigurationError, EvalDataError } from "./contracts.ts";
 import { loadEvalSuite, preflightObservationOutput, writeObservations } from "./corpus.ts";
 import { makeCurrentOpenAiVariant, openAiClientLayer } from "./openai-variant.ts";
+import { loadJudgmentSet, loadObservationFile, writeQualityReport } from "./report-files.ts";
+import { makeQualityReport, renderQualityReport } from "./report.ts";
 import { runEvalSuite } from "./runner.ts";
 
 const casesFile = Flag.file("cases").pipe(
   Flag.withDescription("Path to one schema-encoded eval suite JSON file."),
 );
 const selectedCases = Flag.string("case").pipe(
-  Flag.withDescription("Run one case ID. Repeat this flag to select several cases."),
+  Flag.withDescription("Select one case ID. Repeat this flag to select several cases."),
   Flag.atMost(50),
 );
 
 const root = Command.make("pr-review-eval").pipe(
-  Command.withSharedFlags({ casesFile, selectedCases }),
+  Command.withSharedFlags({ casesFile }),
   Command.withDescription("Validate and run the opt-in PR-review model evaluation bench."),
 );
 
@@ -37,11 +39,11 @@ const decodeSelectedCases = (values: ReadonlyArray<string>) =>
 
 const validateCommand = Command.make(
   "validate",
-  {},
-  Effect.fn("PrReviewEval.validateCommand")(function* () {
+  { selectedCases },
+  Effect.fn("PrReviewEval.validateCommand")(function* (options) {
     const shared = yield* root;
     const suite = yield* loadEvalSuite(shared.casesFile);
-    const selected = yield* decodeSelectedCases(shared.selectedCases);
+    const selected = yield* decodeSelectedCases(options.selectedCases);
     const known = new Set(suite.cases.map((evalCase) => evalCase.id));
     const unknown = selected.filter((id) => !known.has(id));
     if (unknown.length > 0) {
@@ -86,7 +88,7 @@ const guidance = Flag.file("guidance").pipe(
 
 const runCommand = Command.make(
   "run",
-  { concurrency, effort, guidance, model, output, trials },
+  { concurrency, effort, guidance, model, output, selectedCases, trials },
   Effect.fn("PrReviewEval.runCommand")(function* (options) {
     const liveGate = yield* Config.string("EFFECT_AGENT_LIVE").pipe(Config.withDefault(""));
     if (liveGate !== "1") {
@@ -96,7 +98,7 @@ const runCommand = Command.make(
     }
     const shared = yield* root;
     const suite = yield* loadEvalSuite(shared.casesFile);
-    const caseIds = yield* decodeSelectedCases(shared.selectedCases);
+    const caseIds = yield* decodeSelectedCases(options.selectedCases);
     yield* preflightObservationOutput(options.output);
     const fs = yield* FileSystem.FileSystem;
     const guidanceText = yield* Option.match(options.guidance, {
@@ -145,4 +147,42 @@ const runCommand = Command.make(
   ]),
 );
 
-export const command = root.pipe(Command.withSubcommands([validateCommand, runCommand]));
+const observationsFile = Flag.file("observations").pipe(
+  Flag.withDescription("JSONL observations produced by the run command."),
+);
+const judgmentsFile = Flag.file("judgments").pipe(
+  Flag.withDescription("Optional schema-encoded human judgment set."),
+  Flag.optional,
+);
+const reportOutput = Flag.file("output").pipe(
+  Flag.withDescription("New JSON file to receive the deterministic quality report."),
+);
+
+const reportCommand = Command.make(
+  "report",
+  { judgmentsFile, observationsFile, reportOutput },
+  Effect.fn("PrReviewEval.reportCommand")(function* (options) {
+    const shared = yield* root;
+    const suite = yield* loadEvalSuite(shared.casesFile);
+    const observations = yield* loadObservationFile(options.observationsFile);
+    const judgments = yield* Option.match(options.judgmentsFile, {
+      onNone: () => Effect.succeed(undefined),
+      onSome: loadJudgmentSet,
+    });
+    const report = yield* makeQualityReport(suite, observations, judgments);
+    yield* preflightObservationOutput(options.reportOutput);
+    yield* writeQualityReport(options.reportOutput, report);
+    yield* Console.log(renderQualityReport(report));
+    if (judgments === undefined) {
+      yield* Console.log(
+        `No judgment file was supplied; ${report.unjudgedFindings.length} finding(s) remain explicit in the report.`,
+      );
+    }
+  }),
+).pipe(
+  Command.withDescription("Reduce saved observations and human judgments without model calls."),
+);
+
+export const command = root.pipe(
+  Command.withSubcommands([validateCommand, runCommand, reportCommand]),
+);

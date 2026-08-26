@@ -32,6 +32,14 @@ export const EvalInputDigest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{6
 );
 export type EvalInputDigest = typeof EvalInputDigest.Type;
 
+export const EvalObservationSetDigest = Schema.String.check(
+  Schema.isPattern(/^[a-f0-9]{64}$/),
+).pipe(Schema.brand("@effect-agent/example-pr-review-eval/EvalObservationSetDigest"));
+export type EvalObservationSetDigest = typeof EvalObservationSetDigest.Type;
+
+export const EvalVariantId = BoundedIdentifier;
+export type EvalVariantId = typeof EvalVariantId.Type;
+
 export class EvalEvidence extends Schema.Class<EvalEvidence>(
   "@effect-agent/example-pr-review-eval/EvalEvidence",
 )({
@@ -107,7 +115,7 @@ export type EvalReasoningEffort = typeof EvalReasoningEffort.Type;
 export class EvalVariantConfiguration extends Schema.Class<EvalVariantConfiguration>(
   "@effect-agent/example-pr-review-eval/EvalVariantConfiguration",
 )({
-  id: BoundedIdentifier,
+  id: EvalVariantId,
   reviewerProfile: BoundedIdentifier,
   provider: Schema.Literal("openai"),
   model: Schema.NonEmptyString.check(Schema.isMaxLength(200)),

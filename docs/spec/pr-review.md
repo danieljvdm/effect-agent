@@ -119,5 +119,16 @@ the initial source of truth.
 
 The primary quality claim concerns the first trial. Later identical trials measure instability and
 cannot convert a first-trial miss into a pass. The leaf may report recall, precision, later-only
-valid findings, typed failures, tokens, cost when supplied by the host, and elapsed time. It does
+expected blockers, typed failures, tokens, cost when supplied by the host, and elapsed time. It does
 not add a database, hosted eval service, transcript store, model grader, or production retry path.
+
+Human judgments bind to a digest of the complete schema-encoded observation set and identify the
+case, variant, trial, and emitted finding index. They distinguish expected-defect matches, new
+valid defects, invalid findings, and unclear findings. Missing judgments remain explicit. A
+finding satisfies blocker recall only when it matches an expected blocker and the reviewer emitted
+it at blocking severity, because lower severity does not stop publication. Precision remains
+unresolved while a finding is unclear or unjudged. The pure offline reduction rejects mixed case
+identities, model configurations, runner versions, or incomplete trial grids rather than silently
+combining them. “Overall” metrics aggregate each variant across its common case set; variants are
+never averaged together. New valid findings remain explicit corpus-repair candidates because the
+bench does not invent identities for them from model-authored prose.
