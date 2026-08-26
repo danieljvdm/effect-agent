@@ -10,7 +10,18 @@ import {
 import { ScriptedModel } from "@effect-agent/testing";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, FileSystem, Option, Ref, Schema, type Scope } from "effect";
+import {
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  PlatformError,
+  Ref,
+  Schema,
+  type Scope,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { Model } from "effect/unstable/ai";
 
@@ -30,7 +41,6 @@ import {
   digestGuidance,
   loadEvalSuite,
   makeCurrentOpenAiVariant,
-  preflightObservationOutput,
   runEvalSuite,
   validateEvalSuite,
   writeObservations,
@@ -157,9 +167,9 @@ describe("PR-review model eval", () => {
         trials: 1,
         concurrency: 1,
         caseIds: [],
-      });
+      }).pipe(Stream.runCollect);
       expect(observations).toHaveLength(1);
-      expect(observations[0]?.runnerVersion).toBe("0.1.0");
+      expect(observations[0]?.runnerVersion).toBe("0.1.1");
       expect(observations[0]?.result._tag).toBe("Succeeded");
       if (observations[0]?.result._tag === "Succeeded") {
         expect(observations[0].result.outcome.report.findings[0]?.title).toBe(
@@ -170,12 +180,11 @@ describe("PR-review model eval", () => {
       const fs = yield* FileSystem.FileSystem;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pr-review-eval-" });
       const output = `${directory}/observations.jsonl`;
-      yield* preflightObservationOutput(output);
-      yield* writeObservations(output, observations);
+      expect(yield* writeObservations(output, Stream.fromIterable(observations))).toBe(1);
       const decoded = yield* decodeObservationLines(yield* fs.readFileString(output));
       expect(decoded).toEqual(observations);
       const historical = (yield* fs.readFileString(output)).replace(
-        '"runnerVersion":"0.1.0"',
+        '"runnerVersion":"0.1.1"',
         '"runnerVersion":"0.0.9"',
       );
       expect((yield* decodeObservationLines(historical))[0]?.runnerVersion).toBe("0.0.9");
@@ -218,7 +227,7 @@ describe("PR-review model eval", () => {
         trials: 1,
         concurrency: 1,
         caseIds: [selectedId],
-      });
+      }).pipe(Stream.runCollect);
 
       expect(observations).toHaveLength(1);
       expect(observations[0]?.caseId).toBe(selectedId);
@@ -226,29 +235,157 @@ describe("PR-review model eval", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("interrupts active trials and releases their scoped resources", () =>
+  it.effect(
+    "persists completed trials before interruption and closes model and file resources",
+    () =>
+      Effect.gen(function* () {
+        const suite = yield* makeSuite();
+        const acquired = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
+        const calls = yield* Ref.make(0);
+        const opened = yield* Ref.make<Option.Option<FileSystem.File>>(Option.none());
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pr-review-interrupted-" });
+        const output = `${directory}/observations.jsonl`;
+        const variant: EvalVariant<Scope.Scope> = {
+          configuration: configuration("interruptible"),
+          review: () =>
+            Effect.gen(function* () {
+              if ((yield* Ref.updateAndGet(calls, (count) => count + 1)) === 1) {
+                return successfulOutcome;
+              }
+              return yield* Effect.acquireRelease(Deferred.succeed(acquired, undefined), () =>
+                Deferred.succeed(released, undefined),
+              ).pipe(Effect.andThen(Effect.never));
+            }),
+        };
+        const fiber = yield* writeObservations(
+          output,
+          runEvalSuite(suite, [variant], { trials: 3, concurrency: 1, caseIds: [] }),
+        ).pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            open: (path, options) =>
+              fs.open(path, options).pipe(Effect.tap((file) => Ref.set(opened, Option.some(file)))),
+          }),
+          Effect.forkChild,
+        );
+
+        yield* Deferred.await(acquired);
+        const persisted = yield* fs.readFileString(output);
+        const decoded = yield* decodeObservationLines(persisted);
+        expect(decoded.map((observation) => observation.trial)).toEqual([1]);
+        expect(decoded[0]?.result._tag).toBe("Succeeded");
+        yield* Fiber.interrupt(fiber);
+
+        expect(yield* Deferred.isDone(released)).toBe(true);
+        expect(yield* fs.readFileString(output)).toBe(persisted);
+        expect(yield* Ref.get(calls)).toBe(2);
+        const handle = yield* Ref.get(opened);
+        expect(Option.isSome(handle)).toBe(true);
+        if (Option.isSome(handle)) {
+          expect((yield* Effect.result(handle.value.stat))._tag).toBe("Failure");
+        }
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("refuses an existing output before starting any model call", () =>
     Effect.gen(function* () {
       const suite = yield* makeSuite();
-      const acquired = yield* Deferred.make<void>();
-      const released = yield* Deferred.make<void>();
-      const variant: EvalVariant<Scope.Scope> = {
-        configuration: configuration("interruptible"),
-        review: () =>
-          Effect.acquireRelease(Deferred.succeed(acquired, undefined), () =>
-            Deferred.succeed(released, undefined),
-          ).pipe(Effect.andThen(Effect.never)),
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pr-review-existing-" });
+      const output = `${directory}/observations.jsonl`;
+      yield* fs.writeFileString(output, "existing evidence\n");
+      const calls = yield* Ref.make(0);
+      const variant: EvalVariant<never> = {
+        configuration: configuration("existing"),
+        review: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(successfulOutcome)),
       };
-      const fiber = yield* runEvalSuite(suite, [variant], {
-        trials: 1,
-        concurrency: 1,
-        caseIds: [],
-      }).pipe(Effect.scoped, Effect.forkChild);
 
-      yield* Deferred.await(acquired);
-      yield* Fiber.interrupt(fiber);
+      const result = yield* writeObservations(
+        output,
+        runEvalSuite(suite, [variant], { trials: 1, concurrency: 1, caseIds: [] }),
+      ).pipe(Effect.result);
 
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "EvalDataError", operation: "open observations" },
+      });
+      expect(yield* Ref.get(calls)).toBe(0);
+      expect(yield* fs.readFileString(output)).toBe("existing evidence\n");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("flushes out-of-order completions and cancels active work after a write failure", () =>
+    Effect.gen(function* () {
+      const suite = yield* makeSuite();
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pr-review-write-failure-" });
+      const output = `${directory}/observations.jsonl`;
+      const blocked = yield* Deferred.make<void>();
+      const released = yield* Deferred.make<void>();
+      const saved = yield* Deferred.make<void>();
+      const calls = yield* Ref.make(0);
+      const writes = yield* Ref.make(0);
+      const opened = yield* Ref.make<Option.Option<FileSystem.File>>(Option.none());
+      const variant: EvalVariant<Scope.Scope> = {
+        configuration: configuration("write-failure"),
+        review: () =>
+          Effect.gen(function* () {
+            const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+            if (call === 1) {
+              return yield* Effect.acquireRelease(Deferred.succeed(blocked, undefined), () =>
+                Deferred.succeed(released, undefined),
+              ).pipe(Effect.andThen(Effect.never));
+            }
+            yield* Deferred.await(call === 2 ? blocked : saved);
+            return successfulOutcome;
+          }),
+      };
+      const outputFailure = PlatformError.systemError({
+        _tag: "Unknown",
+        module: "FileSystem",
+        method: "writeAll",
+        description: "Injected output failure",
+      });
+
+      const result = yield* writeObservations(
+        output,
+        runEvalSuite(suite, [variant], { trials: 6, concurrency: 2, caseIds: [] }),
+      ).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          open: Effect.fn(function* (path, options) {
+            const file = yield* fs.open(path, options);
+            yield* Ref.set(opened, Option.some(file));
+            return {
+              ...file,
+              writeAll: (bytes: Uint8Array) =>
+                Ref.updateAndGet(writes, (count) => count + 1).pipe(
+                  Effect.flatMap((count) =>
+                    count === 2 ? Effect.fail(outputFailure) : file.writeAll(bytes),
+                  ),
+                ),
+              sync: file.sync.pipe(Effect.tap(() => Deferred.succeed(saved, undefined))),
+            };
+          }),
+        }),
+        Effect.result,
+      );
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "EvalDataError", operation: "write observations" },
+      });
       expect(yield* Deferred.isDone(released)).toBe(true);
-    }).pipe(Effect.provide(NodeServices.layer)),
+      const decoded = yield* decodeObservationLines(yield* fs.readFileString(output));
+      expect(decoded.map((observation) => observation.trial)).toEqual([2]);
+      const handle = yield* Ref.get(opened);
+      expect(Option.isSome(handle)).toBe(true);
+      if (Option.isSome(handle)) {
+        expect((yield* Effect.result(handle.value.stat))._tag).toBe("Failure");
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("bounds concurrent trials and records typed reviewer failures", () =>
@@ -281,7 +418,7 @@ describe("PR-review model eval", () => {
         trials: 4,
         concurrency: 2,
         caseIds: [],
-      });
+      }).pipe(Stream.runCollect);
       expect(yield* Ref.get(maximum)).toBe(2);
       expect(observations).toHaveLength(8);
       expect(

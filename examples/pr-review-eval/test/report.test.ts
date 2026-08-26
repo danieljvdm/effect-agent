@@ -8,7 +8,7 @@ import {
 } from "@effect-agent/pr-review";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { DateTime, Effect, FileSystem, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Schema, Stream } from "effect";
 
 import {
   CURRENT_RUNNER_VERSION,
@@ -31,7 +31,6 @@ import {
   loadObservationFiles,
   loadEvalSuite,
   makeQualityReport,
-  preflightObservationOutput,
   writeObservations,
   writeQualityReport,
 } from "../src/index.ts";
@@ -214,7 +213,7 @@ describe("PR-review eval quality report", () => {
         judgment(known, candidate, 2, 0, "matches-expected", [defectId]),
       ]);
 
-      const report = yield* makeQualityReport(suite, observations, judgments);
+      const report = yield* makeQualityReport(suite, observations, 2, judgments);
       expect(report.variants).toHaveLength(2);
       const currentReport = report.variants.find(
         (variant) => variant.configuration.id === "current",
@@ -357,7 +356,12 @@ describe("PR-review eval quality report", () => {
       const judgments = judgmentSet(digest, [
         judgment(known, variant, 1, 0, "matches-expected", [defectId]),
       ]);
-      const report = yield* makeQualityReport(suite, observations, judgments);
+      const report = yield* makeQualityReport(
+        EvalSuite.make({ ...suite, cases: [known] }),
+        observations,
+        1,
+        judgments,
+      );
       const variantReport = report.variants[0];
       expect(variantReport?.blockerDetection).toMatchObject({
         numerator: 1,
@@ -398,7 +402,7 @@ describe("PR-review eval quality report", () => {
         EvalObservation.make({ ...knownObservation, inputDigest: wrongDigest }),
         cleanObservation,
       ];
-      expect((yield* Effect.result(makeQualityReport(suite, incompatibleCase)))._tag).toBe(
+      expect((yield* Effect.result(makeQualityReport(suite, incompatibleCase, 1)))._tag).toBe(
         "Failure",
       );
 
@@ -409,7 +413,7 @@ describe("PR-review eval quality report", () => {
           variant: configuration("current", "different-model"),
         }),
       ];
-      expect((yield* Effect.result(makeQualityReport(suite, incompatibleConfig)))._tag).toBe(
+      expect((yield* Effect.result(makeQualityReport(suite, incompatibleConfig, 1)))._tag).toBe(
         "Failure",
       );
 
@@ -418,14 +422,24 @@ describe("PR-review eval quality report", () => {
         [],
       );
       expect(
-        (yield* Effect.result(makeQualityReport(suite, observations, staleJudgments)))._tag,
+        (yield* Effect.result(makeQualityReport(suite, observations, 1, staleJudgments)))._tag,
       ).toBe("Failure");
 
-      const report = yield* makeQualityReport(suite, observations, judgmentSet(digest, []));
+      const report = yield* makeQualityReport(suite, observations, 1, judgmentSet(digest, []));
       expect(report.caseSet).toHaveLength(2);
       expect(report.variants).toHaveLength(1);
 
-      const subsetReport = yield* makeQualityReport(suite, [knownObservation]);
+      expect((yield* Effect.result(makeQualityReport(suite, observations, 5)))._tag).toBe(
+        "Failure",
+      );
+      expect((yield* Effect.result(makeQualityReport(suite, [knownObservation], 1)))._tag).toBe(
+        "Failure",
+      );
+      const subsetReport = yield* makeQualityReport(
+        EvalSuite.make({ ...suite, cases: [known] }),
+        [knownObservation],
+        1,
+      );
       expect(subsetReport.caseSet.map((identity) => identity.id)).toEqual([known.id]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -450,11 +464,14 @@ describe("PR-review eval quality report", () => {
       const judgmentsPath = `${directory}/judgments.json`;
       const reportPath = `${directory}/report.json`;
 
-      yield* writeObservations(observationsPath, observations);
+      yield* writeObservations(observationsPath, Stream.fromIterable(observations));
       const candidateObservations = observations.map((entry) =>
         EvalObservation.make({ ...entry, variant: configuration("candidate") }),
       );
-      yield* writeObservations(candidateObservationsPath, candidateObservations);
+      yield* writeObservations(
+        candidateObservationsPath,
+        Stream.fromIterable(candidateObservations),
+      );
       const loadedObservations = yield* loadObservationFiles([
         observationsPath,
         candidateObservationsPath,
@@ -466,9 +483,8 @@ describe("PR-review eval quality report", () => {
         Schema.encodeSync(Schema.fromJsonString(EvalJudgmentSet))(judgments),
       );
       const loadedJudgments = yield* loadJudgmentSet(judgmentsPath);
-      const report = yield* makeQualityReport(suite, loadedObservations, loadedJudgments);
+      const report = yield* makeQualityReport(suite, loadedObservations, 1, loadedJudgments);
       expect(report.variants).toHaveLength(2);
-      yield* preflightObservationOutput(reportPath);
       yield* writeQualityReport(reportPath, report);
 
       expect(
@@ -476,6 +492,15 @@ describe("PR-review eval quality report", () => {
           yield* fs.readFileString(reportPath),
         ),
       ).toEqual(report);
+
+      const emptyPath = `${directory}/interrupted-candidate.jsonl`;
+      yield* fs.writeFileString(emptyPath, "");
+      expect(
+        yield* loadObservationFiles([observationsPath, emptyPath]).pipe(Effect.result),
+      ).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "EvalDataError", operation: "read observations" },
+      });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

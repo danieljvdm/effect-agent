@@ -1,12 +1,19 @@
 import { Config, Console, Effect, FileSystem, Option, Schema } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 
-import { EvalCaseId, EvalConfigurationError, EvalDataError, EvalVariantId } from "./contracts.ts";
-import { loadEvalSuite, preflightObservationOutput, writeObservations } from "./corpus.ts";
+import {
+  EvalCaseId,
+  EvalConfigurationError,
+  EvalDataError,
+  EvalSuite,
+  EvalTrialCount,
+  EvalVariantId,
+} from "./contracts.ts";
+import { loadEvalSuite, writeObservations } from "./corpus.ts";
 import { makeCurrentOpenAiVariant, openAiClientLayer } from "./openai-variant.ts";
 import { loadJudgmentSet, loadObservationFiles, writeQualityReport } from "./report-files.ts";
 import { makeQualityReport, renderQualityReport } from "./report.ts";
-import { runEvalSuite } from "./runner.ts";
+import { runEvalSuite, selectEvalCases } from "./runner.ts";
 
 const casesFile = Flag.file("cases").pipe(
   Flag.withDescription("Path to one schema-encoded eval suite JSON file."),
@@ -44,16 +51,8 @@ const validateCommand = Command.make(
     const shared = yield* root;
     const suite = yield* loadEvalSuite(shared.casesFile);
     const selected = yield* decodeSelectedCases(options.selectedCases);
-    const known = new Set(suite.cases.map((evalCase) => evalCase.id));
-    const unknown = selected.filter((id) => !known.has(id));
-    if (unknown.length > 0) {
-      return yield* EvalConfigurationError.make({
-        message: `Unknown eval case ID(s): ${unknown.join(", ")}`,
-      });
-    }
-    yield* Console.log(
-      `Validated ${selected.length === 0 ? suite.cases.length : selected.length} eval case(s).`,
-    );
+    const cases = yield* selectEvalCases(suite, selected);
+    yield* Console.log(`Validated ${cases.length} eval case(s).`);
   }),
 ).pipe(
   Command.withDescription("Decode cases and verify their input digests without calling a model."),
@@ -64,7 +63,7 @@ const output = Flag.file("output").pipe(
 );
 const trials = Flag.integer("trials").pipe(
   Flag.withDefault(2),
-  Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 20 }))),
+  Flag.withSchema(EvalTrialCount),
   Flag.withDescription("Independent trials per case and variant, between 1 and 20."),
 );
 const concurrency = Flag.integer("concurrency").pipe(
@@ -104,7 +103,6 @@ const runCommand = Command.make(
     const shared = yield* root;
     const suite = yield* loadEvalSuite(shared.casesFile);
     const caseIds = yield* decodeSelectedCases(options.selectedCases);
-    yield* preflightObservationOutput(options.output);
     const fs = yield* FileSystem.FileSystem;
     const guidanceText = yield* Option.match(options.guidance, {
       onNone: () => Effect.succeed(undefined),
@@ -134,13 +132,15 @@ const runCommand = Command.make(
       reasoningEffort: options.effort,
       ...(guidanceText === undefined ? {} : { guidance: guidanceText }),
     });
-    const observations = yield* runEvalSuite(suite, [variant], {
-      trials: options.trials,
-      concurrency: options.concurrency,
-      caseIds,
-    }).pipe(Effect.provide(openAiClientLayer));
-    yield* writeObservations(options.output, observations);
-    yield* Console.log(`Wrote ${observations.length} eval observation(s) to ${options.output}.`);
+    const count = yield* writeObservations(
+      options.output,
+      runEvalSuite(suite, [variant], {
+        trials: options.trials,
+        concurrency: options.concurrency,
+        caseIds,
+      }),
+    ).pipe(Effect.provide(openAiClientLayer));
+    yield* Console.log(`Wrote ${count} eval observation(s) to ${options.output}.`);
   }),
 ).pipe(
   Command.withDescription("Run the current reviewer against selected cases and write JSONL."),
@@ -164,20 +164,33 @@ const judgmentsFile = Flag.file("judgments").pipe(
 const reportOutput = Flag.file("output").pipe(
   Flag.withDescription("New JSON file to receive the deterministic quality report."),
 );
+const reportTrials = Flag.integer("trials").pipe(
+  Flag.withSchema(EvalTrialCount),
+  Flag.withDescription("Expected trials per case and variant; must match the original run."),
+);
 
 const reportCommand = Command.make(
   "report",
-  { judgmentsFile, observationFiles, reportOutput },
+  { judgmentsFile, observationFiles, reportOutput, reportTrials, selectedCases },
   Effect.fn("PrReviewEval.reportCommand")(function* (options) {
     const shared = yield* root;
     const suite = yield* loadEvalSuite(shared.casesFile);
+    const caseIds = yield* decodeSelectedCases(options.selectedCases);
+    const selectedSuite = EvalSuite.make({
+      ...suite,
+      cases: yield* selectEvalCases(suite, caseIds),
+    });
     const observations = yield* loadObservationFiles(options.observationFiles);
     const judgments = yield* Option.match(options.judgmentsFile, {
       onNone: () => Effect.succeed(undefined),
       onSome: loadJudgmentSet,
     });
-    const report = yield* makeQualityReport(suite, observations, judgments);
-    yield* preflightObservationOutput(options.reportOutput);
+    const report = yield* makeQualityReport(
+      selectedSuite,
+      observations,
+      options.reportTrials,
+      judgments,
+    );
     yield* writeQualityReport(options.reportOutput, report);
     yield* Console.log(renderQualityReport(report));
     if (judgments === undefined) {

@@ -11,6 +11,7 @@ import {
   EvalObservationSetDigest,
   EvalRunnerVersion,
   type EvalSuite,
+  EvalTrialCount,
   EvalVariantConfiguration,
   EvalVariantId,
 } from "./contracts.ts";
@@ -461,8 +462,14 @@ interface ValidatedInputs {
 const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* (
   suite: EvalSuite,
   observations: ReadonlyArray<EvalObservation>,
+  expectedTrialCount: number,
   judgmentSet: EvalJudgmentSet | undefined,
 ) {
+  const trialCount = yield* Schema.decodeUnknownEffect(EvalTrialCount)(expectedTrialCount).pipe(
+    Effect.mapError(() =>
+      EvalReportError.make({ message: "Declare the expected trial count between 1 and 20" }),
+    ),
+  );
   if (observations.length === 0) {
     return yield* EvalReportError.make({ message: "At least one eval observation is required" });
   }
@@ -510,35 +517,8 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
     });
   }
 
-  const firstVariantId = configurations.keys().next().value;
-  if (firstVariantId === undefined) {
-    return yield* EvalReportError.make({ message: "Eval observation grid is empty" });
-  }
-  const selectedCaseIds = new Set(
-    observations
-      .filter((observation) => observation.variant.id === firstVariantId)
-      .map((observation) => observation.caseId),
-  );
   for (const variantId of configurations.keys()) {
-    const variantCaseIds = new Set(
-      observations
-        .filter((observation) => observation.variant.id === variantId)
-        .map((observation) => observation.caseId),
-    );
-    if (
-      variantCaseIds.size !== selectedCaseIds.size ||
-      [...selectedCaseIds].some((caseId) => !variantCaseIds.has(caseId))
-    ) {
-      return yield* EvalReportError.make({
-        message: "All variants must cover the same eval case set",
-      });
-    }
-  }
-  const selectedCases = suite.cases.filter((evalCase) => selectedCaseIds.has(evalCase.id));
-
-  let trialCount: number | undefined;
-  for (const variantId of configurations.keys()) {
-    for (const evalCase of selectedCases) {
+    for (const evalCase of suite.cases) {
       const trials = observations
         .filter(
           (observation) =>
@@ -546,15 +526,9 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
         )
         .map((observation) => observation.trial)
         .sort((left, right) => left - right);
-      if (trials.length === 0 || trials.some((trial, index) => trial !== index + 1)) {
+      if (trials.length !== trialCount || trials.some((trial, index) => trial !== index + 1)) {
         return yield* EvalReportError.make({
-          message: `Variant ${variantId} does not have a dense trial grid for ${evalCase.id}`,
-        });
-      }
-      if (trialCount === undefined) trialCount = trials.length;
-      if (trialCount !== trials.length) {
-        return yield* EvalReportError.make({
-          message: "All variants and cases must use the same trial count",
+          message: `Variant ${variantId} does not have the expected ${trialCount} trials for ${evalCase.id}`,
         });
       }
     }
@@ -611,7 +585,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
   }
 
   const runnerVersion = runnerVersions.values().next().value;
-  if (runnerVersion === undefined || trialCount === undefined) {
+  if (runnerVersion === undefined) {
     return yield* EvalReportError.make({ message: "Eval observation grid is empty" });
   }
 
@@ -619,7 +593,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
     observationSetDigest,
     runnerVersion,
     trialCount,
-    cases: selectedCases,
+    cases: suite.cases,
     configurations,
     observations: byKey,
     judgments,
@@ -819,9 +793,10 @@ const aggregateBlockingFindingQuality = (
 export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(function* (
   suite: EvalSuite,
   observations: ReadonlyArray<EvalObservation>,
+  expectedTrialCount: number,
   judgmentSet?: EvalJudgmentSet,
 ) {
-  const validated = yield* validateInputs(suite, observations, judgmentSet);
+  const validated = yield* validateInputs(suite, observations, expectedTrialCount, judgmentSet);
   const variants: Array<EvalVariantQualityReport> = [];
   const unjudgedFindings: Array<EvalFindingReference> = [];
   const unmappedValidFindings: Array<EvalFindingReference> = [];

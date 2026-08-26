@@ -137,4 +137,14 @@ never averaged together. New valid findings remain explicit corpus-repair candid
 bench does not invent identities for them from model-authored prose.
 
 Each live invocation writes one stable, caller-named variant to a new observation file. Offline
-reporting may combine up to eight such files, while retaining the same compatibility checks.
+reporting may combine up to eight such files, while retaining the same compatibility checks. The
+runner opens the output exclusively before starting model work and appends and synchronizes each
+completed observation through one scoped writer. Completed concurrent trials do not wait for an
+earlier unfinished trial. A write failure stops consumption and interrupts active calls; calls
+already started may still incur cost. Interruption preserves earlier rows and closes the file, but
+an OS or I/O failure may leave an incomplete trailing line, which decoding rejects.
+
+Reports require the intended trial count and case selection rather than inferring them from
+observed rows. The default selection is the entire suite; a subset must be explicit. Empty supplied
+files and missing cells in the declared trial grid fail closed, so an interrupted prefix cannot be
+mistaken for a completed smaller run. The runner does not retry or resume lost provider calls.

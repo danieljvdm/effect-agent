@@ -14,13 +14,15 @@ export const EvalRunnerVersion = Schema.String.check(
 );
 export type EvalRunnerVersion = typeof EvalRunnerVersion.Type;
 
-export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.1.0");
+export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.1.1");
 export const CURRENT_REVIEWER_PROFILE = "single-pass-v1";
 
 export const EvalCaseId = BoundedIdentifier.pipe(
   Schema.brand("@effect-agent/example-pr-review-eval/EvalCaseId"),
 );
 export type EvalCaseId = typeof EvalCaseId.Type;
+
+export const EvalTrialCount = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 20 }));
 
 export const EvalDefectId = BoundedIdentifier.pipe(
   Schema.brand("@effect-agent/example-pr-review-eval/EvalDefectId"),

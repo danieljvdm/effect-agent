@@ -55,6 +55,11 @@ vp run pr-review-eval -- \
 The command refuses to overwrite an existing result file. Use repeated `--case` flags on `run` to
 select a subset. `--concurrency` is bounded from one to four and defaults to one.
 
+The output is created before model execution. Each completed trial is appended and synchronized
+immediately, so a later interruption preserves earlier observations. A write failure stops the run
+and interrupts active calls; calls already started may still incur cost. The file remains available
+for inspection after failure, including a possibly incomplete final line after an I/O failure.
+
 Give each baseline or candidate a stable `--variant` ID. Run variants independently so a provider
 failure cannot destroy an earlier result file. The report command accepts up to eight repeated
 `--observations` files and rejects incompatible case sets, model configurations, or trial grids.
@@ -82,6 +87,7 @@ vp run pr-review-eval -- \
   --cases data/cases.json \
   report --observations results/current.jsonl \
   --observations results/candidate-guidance-v1.jsonl \
+  --trials 5 \
   --output results/unjudged-report.json
 ```
 
@@ -98,6 +104,7 @@ vp run pr-review-eval -- \
   --cases data/cases.json \
   report --observations results/current.jsonl \
   --observations results/candidate-guidance-v1.jsonl \
+  --trials 5 \
   --judgments data/judgments.json --output results/report.json
 ```
 
@@ -108,6 +115,8 @@ left unresolved while any relevant finding is unclear or unjudged. Blocker detec
 counts expected blockers found at any severity. Blocking precision treats an invalid blocking
 finding, or one matching only a non-blocking expected defect, as overstated; new valid, unclear, and
 unjudged blocking findings leave it unresolved. New valid findings remain listed for corpus repair
-instead of being matched by prose. Reporting is deterministic, offline, and requires the complete
-observation set produced by the run, including when `run --case` selected a subset. Each variant
-report is its overall aggregate across that common case set; variants are not averaged together.
+instead of being matched by prose. Reporting is deterministic and offline. `report --trials` is
+required and must match the intended run. By default every suite case is required; repeat the same
+`--case` selection used by `run` to report an intentional subset. Empty files, malformed lines, and
+missing trials fail rather than turn an interrupted prefix into a smaller successful run. Each
+variant report aggregates that declared case set; variants are not averaged together.
