@@ -175,10 +175,25 @@ or included in an executor binding, and the deterministic test substitute identi
 Page capture output is a rendered web page and therefore untrusted, attacker-influenced input.
 Interactive browser sessions carry the same fail-closed egress posture: an immutable exact-host
 HTTPS policy is checked for navigation, redirects, and subrequests. One scoped browser/context/page
-pass permits only bounded navigate, read, fill, and click operations; concurrent calls fail busy,
-and action, elapsed-time, and UTF-8 output limits fail at the first violation. Handles are never
-persisted, replayed, reconnected, or exposed to models. Cloudflare cleanup is best-effort warning-
-only when the remote outcome is uncertain; provider diagnostics remain host-only.
+pass permits bounded navigate, read, fill, click, screenshot, and scroll operations; concurrent
+calls fail busy, and action, elapsed-time, and per-result byte limits fail at the first violation.
+Handles are never persisted, replayed, reconnected for execution, or exposed to models. Explicit
+closure remains available after interruption or a policy violation and invalidates all further
+actions. Cloudflare Scope cleanup emits fixed warnings when the remote outcome is uncertain;
+explicit close reports typed failure. Provider diagnostics remain host-only.
+
+Cloudflare session IDs, handoff IDs, and Live View URLs are redacted host values. Live View URLs
+grant access to the remote browser and must be treated as secrets. The generic browser handle
+exposes none of these values or operator controls. Hosts authenticate and authorize recipients,
+serialize human and agent control, and own any private cleanup metadata and durable action
+receipts. A cleanup-only connection by session ID may terminate a leaked session, but must never
+return a usable browser handle or replay an unresolved action. Handoff does not suspend the
+application deadline or grant controller ownership. No provider cancellation or exactly-once
+handoff guarantee is implied.
+Tab mode narrows the viewer UI, not the operator's authorization. Human interaction bypasses the
+framework action counter, and a viewer that connected before URL expiry can remain connected
+until the browser closes. The host must limit viewer recipients to trusted operators and close
+the session to end their access.
 The capture capability is deny-by-default: an immutable construction-time HTTPS host allowlist
 governs navigation, redirects, and every browser subrequest. The request Schema rejects malformed
 URLs, non-HTTPS targets, and embedded credentials; discovered links must be absolute,
@@ -208,7 +223,10 @@ provider boundary enforces the exact HTTPS origins or the host explicitly accept
 named unrestricted browser authority.
 
 Screenshot bytes are untrusted content. `PageScreenshot` bounds them before buffering and keeps
-them out of canonical records, model context, logs, telemetry, and error diagnostics.
+them out of canonical records, model context, logs, telemetry, and error diagnostics. Interactive
+screenshots have the same output privacy rules. Puppeteer buffers their PNG before returning it;
+the interactive adapter checks its signature and byte limit before releasing it to the caller,
+but does not claim an incremental transport or provider-memory bound.
 
 Crawl Markdown and metadata are likewise untrusted content. `PageCrawl` fixes one exact HTTPS host
 and rejects off-host source or redirect metadata before emission. The Cloudflare adapter sends its

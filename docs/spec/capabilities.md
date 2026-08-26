@@ -22,6 +22,7 @@ must detect absence explicitly; it must not silently substitute weaker behavior.
 | Code Mode                  | Implemented |                          No |                              No |
 | Page capture               | Implemented |                          No |                              No |
 | Page crawl                 | Implemented |                          No |                              No |
+| Interactive browser        | Implemented |                          No |                              No |
 | Subagents                  | Implemented |                          No |                              No |
 | Persistent agent state     | Implemented |                          No |                              No |
 | Durable steps              | Implemented |                          No |                              No |
@@ -436,10 +437,20 @@ fixed bounded warning without provider detail and never defects, masks, or chang
 ## 9.5 Interactive browser
 
 `InteractiveBrowser` is a separate, provider-neutral, scoped service for one browser pass. The
-pass owns exactly one browser, context, and page and exposes only navigate, bounded text read, one
-field fill, and one element click. Its immutable policy fixes an exact HTTPS host allowlist, one
-page, action-count, elapsed-time, and returned UTF-8 byte limits before acquisition. The same
-policy governs initial navigation, redirects, and every page subrequest; violations fail closed.
+pass owns exactly one browser, context, and page. Its handle supports navigation, bounded text
+reads, field filling, element clicks, PNG screenshots, viewport scrolling, and explicit closure.
+Its immutable policy fixes an exact HTTPS host allowlist, one page, action-count, elapsed-time,
+and per-result byte limits before acquisition. Text counts UTF-8 bytes; screenshots count PNG
+bytes. The same policy governs initial navigation, redirects, and every page subrequest;
+violations fail closed.
+
+`screenshot(BrowserScreenshotRequest)` captures the current page without navigation or a new
+browser. The request selects viewport or full-page capture with `fullPage`; the result reuses
+`PageScreenshotResult`. Bytes belong to the caller and never enter framework records, model
+context, logs, or telemetry. `scroll(BrowserScrollRequest)` scrolls the current viewport by
+`deltaX` and `deltaY` CSS pixels, each an integer from -100,000 to 100,000, and returns the observed
+page URL. Screenshot and scroll operations consume the same action budget and use the same
+deadline and concurrency gate as navigation, reads, fills, and clicks.
 
 The returned handle is ephemeral and is not a Schema value, durable record, reconnect token, or
 model-facing Tool. A handle permits one operation at a time; concurrent calls fail immediately
@@ -448,14 +459,22 @@ malformed adapter observations remain typed failures. Browser JavaScript and nav
 remote state, so operations are uncertain: no automatic retry or replay is permitted.
 
 Adapters acquire browser, context, and page resources in `Scope`, register finalizers immediately,
-and close them in reverse order on every `Exit`. Cleanup failures are warning-only uncertainty and
-must not mask the primary result. No daemon fiber, module-global registry, persistence, or generic
+and close them in reverse order on every `Exit`. `yield* handle.close` invalidates the handle before
+teardown and remains available after an interrupted action, policy failure, or exhausted budget.
+It shares one teardown attempt with Scope finalization; repeated close calls return that attempt's
+outcome without repeating remote closure. Explicit close reports a typed cleanup failure. Scope
+cleanup emits fixed warnings and must not mask the primary result. An action that finishes after
+closure cannot return success. No daemon fiber, module-global registry, persistence, or generic
 Puppeteer wrapper is allowed. Features the provider cannot enforce fail as typed unsupported.
 
 The Cloudflare adapter uses the explicit Browser Run binding and `@cloudflare/puppeteer` 1.1.0.
 Cloudflare's `keep_alive` controls inactivity only; the application deadline remains authoritative.
 Cloudflare launch capacity refusal and disconnected/expired sessions map to typed capacity or
 expiry errors, retaining provider details only as host-side causes.
+Cloudflare Live View, handoff, and cleanup by private provider identity belong to the separate
+host API in `@effect-agent/platform-cloudflare`, not to `BrowserHandle`. The host owns permissions,
+controller arbitration, and any durable action receipts. This capability adds no durable browser
+state or automatic recovery of uncertain actions.
 
 ## 10. Subagents
 
@@ -544,3 +563,7 @@ default and are excluded from ordinary span attributes.
 - **CAP-020**: Page crawls use a scoped, exact-host Stream with immutable page-count, depth,
   per-page, aggregate, and deadline limits; adapters keep job identity private, paginate lazily,
   never retry unresolved work, and cancel a known-running job exactly once when its Scope exits.
+- **CAP-021**: Interactive browser actions share one scoped page, immutable host policy, action
+  budget, deadline, and single-operation gate. Screenshots return bounded caller-owned PNG bytes;
+  scrolls accept bounded pixel deltas. Explicit closure invalidates the handle and shares teardown
+  with Scope finalization. Provider identities and operator controls stay outside the generic handle.

@@ -8,6 +8,8 @@ import {
   BrowserNavigateRequest,
   BrowserNavigationResult,
   BrowserReadTextRequest,
+  BrowserScreenshotRequest,
+  BrowserScrollRequest,
   BrowserTextResult,
   InteractiveBrowserActionError,
   InteractiveBrowserBusyError,
@@ -24,6 +26,7 @@ import {
   type BrowserHandle,
   type InteractiveBrowser,
   type InteractiveBrowserError as BrowserError,
+  type PageScreenshotResult,
 } from "../src/index.ts";
 
 type Equal<A, B> =
@@ -55,6 +58,16 @@ describe("InteractiveBrowser schemas", () => {
     expect(BrowserReadTextRequest.make({ selector: "main" }).selector).toBe("main");
     expect(BrowserFillRequest.make({ selector: "#q", value: "value" }).value).toBe("value");
     expect(BrowserClickRequest.make({ selector: "button" }).selector).toBe("button");
+    const screenshot = BrowserScreenshotRequest.make({ fullPage: false });
+    expect(
+      Schema.decodeSync(BrowserScreenshotRequest)(
+        Schema.encodeSync(BrowserScreenshotRequest)(screenshot),
+      ),
+    ).toEqual(screenshot);
+    const scroll = BrowserScrollRequest.make({ deltaX: -100_000, deltaY: 100_000 });
+    expect(
+      Schema.decodeSync(BrowserScrollRequest)(Schema.encodeSync(BrowserScrollRequest)(scroll)),
+    ).toEqual(scroll);
     expect(BrowserNavigationResult.make({ url: "https://example.com/final" }).url).toBe(
       "https://example.com/final",
     );
@@ -138,6 +151,19 @@ describe("InteractiveBrowser schemas", () => {
     expect(Schema.decodeUnknownExit(BrowserActionResult)({ url: "http://example.com" })._tag).toBe(
       "Failure",
     );
+    for (const value of [{}, { fullPage: "true" }]) {
+      expect(Schema.decodeUnknownExit(BrowserScreenshotRequest)(value)._tag).toBe("Failure");
+    }
+    for (const value of [
+      { deltaX: 0 },
+      { deltaX: 0, deltaY: 0.5 },
+      { deltaX: -100_001, deltaY: 0 },
+      { deltaX: 0, deltaY: 100_001 },
+      { deltaX: Number.NaN, deltaY: 0 },
+      { deltaX: 0, deltaY: Number.POSITIVE_INFINITY },
+    ]) {
+      expect(Schema.decodeUnknownExit(BrowserScrollRequest)(value)._tag).toBe("Failure");
+    }
   });
 
   it("rejects malformed values for every expected error shape", () => {
@@ -185,6 +211,21 @@ describe("InteractiveBrowser schemas", () => {
       BrowserHandle extends typeof InteractiveBrowserError.Type ? true : false,
       false
     > = true;
-    expect(result && handleIsNotSchema).toBe(true);
+    const screenshot: Equal<
+      ReturnType<BrowserHandle["screenshot"]>,
+      Effect.Effect<PageScreenshotResult, BrowserError>
+    > = true;
+    const scroll: Equal<
+      ReturnType<BrowserHandle["scroll"]>,
+      Effect.Effect<BrowserActionResult, BrowserError>
+    > = true;
+    const close: Equal<BrowserHandle["close"], Effect.Effect<void, BrowserError>> = true;
+    const hasNoHostControls: Equal<
+      Extract<keyof BrowserHandle, "sessionId" | "getLiveView" | "handoff" | "getHandoffState">,
+      never
+    > = true;
+    expect(result && handleIsNotSchema && screenshot && scroll && close && hasNoHostControls).toBe(
+      true,
+    );
   });
 });

@@ -50,9 +50,10 @@ service, the callback-shaped `CodeExecutor` port, and the stateless `PageCapture
 It also exports the sibling `PageScreenshot` port for one bounded caller-owned PNG and the scoped
 `PageCrawl` Stream port for bounded same-host Markdown records.
 The scoped `InteractiveBrowser` port is a distinct programmatic capability: one ephemeral
-browser/context/page pass with navigate, bounded read, fill, and click operations. Its handle is
-not transportable or persistable, and its immutable exact-host policy covers redirects and
-subrequests.
+browser/context/page pass with navigation, bounded reads, fills, clicks, PNG screenshots, viewport
+scrolling, and explicit early closure. Its handle is not transportable or persistable, and its
+immutable exact-host policy covers redirects and subrequests. Screenshot bytes reuse
+`PageScreenshotResult` and share the handle's per-result byte limit.
 
 ### `@effect-agent/sandbox-local`
 
@@ -133,6 +134,10 @@ second `PageCapture` implementation through explicit account/token construction 
 Effect `HttpClient` requirement. The Node-safe `./browser-rest-crawl` export adapts `PageCrawl` to
 Cloudflare's REST crawl endpoint with explicit redacted credentials, bounded polling and lazy
 pagination, and scoped remote-job cleanup. Neither REST subpath imports Worker runtime modules.
+The `./interactive-browser` export supplies `browserRunInteractiveLayer` for the generic browser
+port and `browserRunInteractiveHostLayer` for host-only Live View, handoff, redacted session
+identity, and explicit cleanup by identity. Both require `BrowserRunInteractiveBinding`; neither
+adds a registry, execution reconnect, or durable browser state.
 This is a Layer-assembly library, not an application entrypoint.
 
 ### `@effect-agent/pr-review`
