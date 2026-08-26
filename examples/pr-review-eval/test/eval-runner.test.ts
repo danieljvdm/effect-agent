@@ -159,7 +159,7 @@ describe("PR-review model eval", () => {
         caseIds: [],
       });
       expect(observations).toHaveLength(1);
-      expect(observations[0]?.runnerVersion).toBe("0.2.0");
+      expect(observations[0]?.runnerVersion).toBe("0.1.0");
       expect(observations[0]?.result._tag).toBe("Succeeded");
       if (observations[0]?.result._tag === "Succeeded") {
         expect(observations[0].result.outcome.report.findings[0]?.title).toBe(
@@ -175,10 +175,10 @@ describe("PR-review model eval", () => {
       const decoded = yield* decodeObservationLines(yield* fs.readFileString(output));
       expect(decoded).toEqual(observations);
       const historical = (yield* fs.readFileString(output)).replace(
-        '"runnerVersion":"0.2.0"',
         '"runnerVersion":"0.1.0"',
+        '"runnerVersion":"0.0.9"',
       );
-      expect((yield* decodeObservationLines(historical))[0]?.runnerVersion).toBe("0.1.0");
+      expect((yield* decodeObservationLines(historical))[0]?.runnerVersion).toBe("0.0.9");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -195,16 +195,6 @@ describe("PR-review model eval", () => {
       expect(variant.configuration.guidanceDigest).toBe(
         yield* digestGuidance("Keep the public error channel typed."),
       );
-
-      const segmented = yield* makeCurrentOpenAiVariant({
-        id: Schema.decodeSync(EvalVariantId)("candidate-segmented-files-v1"),
-        model: "gpt-5.6-sol",
-        reasoningEffort: "medium",
-        guidance: "Keep the public error channel typed.",
-        requestPresentation: "segmented-files-v1",
-      });
-      expect(segmented.configuration.reviewerProfile).toBe("single-pass-segmented-files-v1");
-      expect(segmented.configuration.guidanceDigest).toBe(variant.configuration.guidanceDigest);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

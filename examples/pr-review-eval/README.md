@@ -54,9 +54,6 @@ select a subset. `--concurrency` is bounded from one to four and defaults to one
 Give each baseline or candidate a stable `--variant` ID. Run variants independently so a provider
 failure cannot destroy an earlier result file. The report command accepts up to eight repeated
 `--observations` files and rejects incompatible case sets, model configurations, or trial grids.
-The experimental `--segmented-files` flag keeps the canonical request unchanged while presenting
-its metadata, ordered patches, and invocation scope as separate model messages. Its distinct
-reviewer profile prevents observations from being mistaken for the default presentation.
 
 The shipped clean control can exercise one live call without exposing private source:
 
