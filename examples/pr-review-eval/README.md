@@ -24,6 +24,10 @@ public Effect Agent pull requests. It contains source-adjudicated semantic oracl
 prior automated reviews as provenance rather than ground truth; each provenance record names any
 generated paths omitted by the original review.
 
+`fixtures/public-effect-agent-v2.json` is a fresh public severity-calibration holdout. It pins five
+defective snapshots with six blocking and two important defects plus one independently audited
+clean control; the suite was frozen before running the severity-only candidate.
+
 Validate a suite without credentials or model calls:
 
 ```sh
