@@ -93,14 +93,8 @@ export const renderAgentPrompt = (finding: ReviewFinding, headRevision: string):
   ].join("\n");
 };
 
-export const renderFindingBody = (finding: ReviewFinding, headRevision: string): string =>
-  [
-    `**[${findingLabel(finding)}] ${finding.title}**`,
-    "",
-    finding.body,
-    "",
-    promptDetails("Prompt for AI Agents", renderAgentPrompt(finding, headRevision)),
-  ].join("\n");
+export const renderFindingBody = (finding: ReviewFinding): string =>
+  [`**[${findingLabel(finding)}] ${finding.title}**`, "", finding.body].join("\n");
 
 const renderUnanchoredFinding = (finding: ReviewFinding): string =>
   [
@@ -187,7 +181,7 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
   }
 
   const consolidatedPrompt =
-    input.report.findings.length > 1 || unanchored.length > 0
+    input.report.findings.length > 0
       ? promptDetails(
           `Prompt for all ${countNoun(input.report.findings.length, "finding")} with AI agents`,
           input.report.findings

@@ -43301,7 +43301,8 @@ var reviewPolicy = AgentPolicy.make({
   tokenBudget: 56000,
   completionReserveTokens: 8000,
   contextTokenLimit: 48000,
-  onExhaustion: "fail"
+  onExhaustion: "fail",
+  runStatus: "off"
 });
 var makeDefinition = (guidance) => Agent.define("pr-review", {
   input: ReviewRequest,
@@ -43352,18 +43353,19 @@ var sanitizeReviewReport = (request3, report2) => {
     if (patch3 === undefined)
       continue;
     const line = finding.line !== undefined && isCommentableLine(patch3, finding.line) ? finding.line : undefined;
-    const key = `${finding.path}\x00${String(line ?? "")}\x00${finding.title.trim().toLowerCase()}`;
-    if (seen.has(key))
-      continue;
-    seen.add(key);
-    findings.push(ReviewFinding.make({
+    const sanitized = ReviewFinding.make({
       path: finding.path,
       ...line === undefined ? {} : { line },
       severity: finding.severity,
       category: finding.category,
       title: finding.title,
       body: finding.body
-    }));
+    });
+    const key = JSON.stringify(sanitized);
+    if (seen.has(key))
+      continue;
+    seen.add(key);
+    findings.push(sanitized);
   }
   return ReviewReport.make({ summary: report2.summary, findings });
 };
@@ -47834,13 +47836,7 @@ var renderAgentPrompt = (finding, headRevision) => {
   ].join(`
 `);
 };
-var renderFindingBody = (finding, headRevision) => [
-  `**[${findingLabel(finding)}] ${finding.title}**`,
-  "",
-  finding.body,
-  "",
-  promptDetails("Prompt for AI Agents", renderAgentPrompt(finding, headRevision))
-].join(`
+var renderFindingBody = (finding) => [`**[${findingLabel(finding)}] ${finding.title}**`, "", finding.body].join(`
 `);
 var renderUnanchoredFinding = (finding) => [
   `**[${findingLabel(finding)}] ${escapeHtmlOpeners(finding.title)}** · \`${escapeHtmlOpeners(finding.path)}\``,
@@ -47896,7 +47892,7 @@ var renderReviewBody = (input) => {
     ].join(`
 `));
   }
-  const consolidatedPrompt = input.report.findings.length > 1 || unanchored.length > 0 ? promptDetails(`Prompt for all ${countNoun(input.report.findings.length, "finding")} with AI agents`, input.report.findings.map((finding) => renderAgentPrompt(finding, input.headRevision)).join(`
+  const consolidatedPrompt = input.report.findings.length > 0 ? promptDetails(`Prompt for all ${countNoun(input.report.findings.length, "finding")} with AI agents`, input.report.findings.map((finding) => renderAgentPrompt(finding, input.headRevision)).join(`
 
 ---
 
