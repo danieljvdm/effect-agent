@@ -133,5 +133,10 @@ combining them. “Overall” metrics aggregate each variant across its common c
 never averaged together. New valid findings remain explicit corpus-repair candidates because the
 bench does not invent identities for them from model-authored prose.
 
+A named eval candidate may use a built-in model-only request presentation through the reviewer
+constructor. Such a presentation preserves every schema-encoded request field, patch byte, and
+file order; it does not replace canonical input, change its digest, or alter PRR-002. The production
+channel retains the default presentation until a frozen comparison meets its decision rule.
+
 Each live invocation writes one stable, caller-named variant to a new observation file. Offline
 reporting may combine up to eight such files, while retaining the same compatibility checks.

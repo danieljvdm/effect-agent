@@ -1,10 +1,11 @@
-import { makeReviewer } from "@effect-agent/pr-review";
+import { makeReviewer, type ReviewRequestPresentation } from "@effect-agent/pr-review";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Effect, Layer, Option, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import {
   CURRENT_REVIEWER_PROFILE,
+  SEGMENTED_FILES_REVIEWER_PROFILE,
   type EvalReasoningEffort,
   EvalReviewerFailure,
   EvalVariantConfiguration,
@@ -41,6 +42,7 @@ export interface CurrentOpenAiVariantOptions {
   readonly model: string;
   readonly reasoningEffort: EvalReasoningEffort;
   readonly guidance?: string | undefined;
+  readonly requestPresentation?: ReviewRequestPresentation | undefined;
 }
 
 export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenAiVariant")(
@@ -51,7 +53,10 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
       effectiveGuidance === undefined ? undefined : yield* digestGuidance(effectiveGuidance);
     const configuration = EvalVariantConfiguration.make({
       id: options.id,
-      reviewerProfile: CURRENT_REVIEWER_PROFILE,
+      reviewerProfile:
+        options.requestPresentation === undefined
+          ? CURRENT_REVIEWER_PROFILE
+          : SEGMENTED_FILES_REVIEWER_PROFILE,
       provider: "openai",
       model: options.model,
       reasoningEffort: options.reasoningEffort,
@@ -68,6 +73,9 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
         strictJsonSchema: configuration.strictJsonSchema,
       }),
       ...(effectiveGuidance === undefined ? {} : { guidance: effectiveGuidance }),
+      ...(options.requestPresentation === undefined
+        ? {}
+        : { requestPresentation: options.requestPresentation }),
     });
     return {
       configuration,

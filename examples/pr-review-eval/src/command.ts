@@ -90,10 +90,25 @@ const variantId = Flag.string("variant").pipe(
   Flag.withSchema(EvalVariantId),
   Flag.withDescription("Stable ID for this baseline or candidate configuration."),
 );
+const segmentedFiles = Flag.boolean("segmented-files").pipe(
+  Flag.withDescription(
+    "Present metadata, ordered file patches, and invocation scope as separate model messages.",
+  ),
+);
 
 const runCommand = Command.make(
   "run",
-  { concurrency, effort, guidance, model, output, selectedCases, trials, variantId },
+  {
+    concurrency,
+    effort,
+    guidance,
+    model,
+    output,
+    segmentedFiles,
+    selectedCases,
+    trials,
+    variantId,
+  },
   Effect.fn("PrReviewEval.runCommand")(function* (options) {
     const liveGate = yield* Config.string("EFFECT_AGENT_LIVE").pipe(Config.withDefault(""));
     if (liveGate !== "1") {
@@ -133,6 +148,7 @@ const runCommand = Command.make(
       model: options.model,
       reasoningEffort: options.effort,
       ...(guidanceText === undefined ? {} : { guidance: guidanceText }),
+      ...(options.segmentedFiles ? { requestPresentation: "segmented-files-v1" } : {}),
     });
     const observations = yield* runEvalSuite(suite, [variant], {
       trials: options.trials,
