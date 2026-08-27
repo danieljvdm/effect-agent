@@ -1,5 +1,22 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.32
+
+### Minor Changes
+
+- [#194](https://github.com/danieljvdm/effect-agent/pull/194) [`7592ded`](https://github.com/danieljvdm/effect-agent/commit/7592deda757e0eeb0243f86bae9c2b15623e3c76) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add same-session PNG screenshots, viewport scrolling, and explicit closure to interactive browser handles. Expose host-only Cloudflare Live View, handoff, and cleanup through redacted session identities.
+
+  BEHAVIOR CHANGE: Custom browser adapters must implement `screenshot`, `scroll`, and the `close` Effect.
+
+### Patch Changes
+
+- Updated dependencies [[`7592ded`](https://github.com/danieljvdm/effect-agent/commit/7592deda757e0eeb0243f86bae9c2b15623e3c76)]:
+  - @effect-agent/sandbox@0.1.0-beta.32
+  - @effect-agent/storage-cloudflare@0.1.0-beta.32
+  - @effect-agent/core@0.1.0-beta.32
+  - @effect-agent/engine@0.1.0-beta.32
+  - @effect-agent/session@0.1.0-beta.32
+
 ## 0.1.0-beta.31
 
 ### Patch Changes

@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.32
+
+### Patch Changes
+
+- [#192](https://github.com/danieljvdm/effect-agent/pull/192) [`047ac9a`](https://github.com/danieljvdm/effect-agent/commit/047ac9a74faa63dbbb05dafbd39a45a801d09d9c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve distinct findings with matching labels and remove premature wrap-up prompts from single-pass reviews. Publish maximum-length findings without repeating their text in inline agent prompts.
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.32
+
 ## 0.1.0-beta.31
 
 ### Patch Changes
