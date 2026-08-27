@@ -1,7 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer, Ref, Result, Stream, Struct } from "effect";
-import type { AiError } from "effect/unstable/ai";
-import { LanguageModel, Model, type Prompt, type Response, Tool } from "effect/unstable/ai";
+import {
+  type AiError,
+  LanguageModel,
+  Model,
+  type Prompt,
+  type Response,
+  Tool,
+} from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
 import {
@@ -83,6 +89,28 @@ const otherBlocker = ReviewFinding.make({
   body: "The cached return bypasses the owner check; check ownership before returning the record.",
 });
 
+const importantFinding = ReviewFinding.make({
+  ...otherBlocker,
+  severity: "important",
+  title: "Nonblocking fallback error",
+  body: "The fallback reports the wrong optional status; return the status produced by the supported fallback.",
+});
+
+const nitFinding = ReviewFinding.make({
+  ...otherBlocker,
+  severity: "nit",
+  title: "Minor diagnostic mismatch",
+  body: "The diagnostic names the wrong optional phase; use the phase that produced the message.",
+});
+
+const submittedFinding = (
+  finding: ReviewFinding,
+  priority: 0 | 1 | 2 | 3,
+): Omit<ReviewFinding, "severity"> & { readonly priority: 0 | 1 | 2 | 3 } => ({
+  ...Struct.omit(finding, ["severity"]),
+  priority,
+});
+
 const sourceResults = (prompt: Prompt.Prompt) =>
   prompt.content
     .filter((message) => message.role === "tool")
@@ -119,13 +147,25 @@ describe("review output boundary", () => {
           );
           expect(schema).toContain('"findings"');
           expect(schema).toContain('"maxItems":24');
+          expect(schema).toContain('"priority"');
+          expect(schema).not.toContain('"severity"');
+          expect(schema.indexOf('"body"')).toBeLessThan(schema.indexOf('"priority"'));
           expect(schema).not.toContain('"decisions"');
           expect(schema).not.toContain('"before"');
           expect(schema).not.toContain('"repairSafety"');
         }
         return Stream.unwrap(
           Ref.update(calls, (count) => count + 1).pipe(
-            Effect.as(response({ findings: [blocker, otherBlocker] })),
+            Effect.as(
+              response({
+                findings: [
+                  submittedFinding(blocker, 0),
+                  submittedFinding(otherBlocker, 1),
+                  submittedFinding(importantFinding, 2),
+                  submittedFinding(nitFinding, 3),
+                ],
+              }),
+            ),
           ),
         );
       });
@@ -139,7 +179,12 @@ describe("review output boundary", () => {
         .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
       expect(yield* Ref.get(calls)).toBe(1);
-      expect(outcome.report.findings).toEqual([blocker, otherBlocker]);
+      expect(outcome.report.findings).toEqual([
+        blocker,
+        otherBlocker,
+        importantFinding,
+        nitFinding,
+      ]);
       expect(outcome).toMatchObject({
         turns: 1,
         usage: {
@@ -260,7 +305,11 @@ describe("review output boundary", () => {
   it.effect("PRR-002 rejects a finding that does not name a causative changed path", () =>
     Effect.gen(function* () {
       const model = scriptedModel(() =>
-        response({ findings: [{ ...blocker, path: "src/unchanged.ts" }] }),
+        response({
+          findings: [
+            submittedFinding(ReviewFinding.make({ ...blocker, path: "src/unchanged.ts" }), 0),
+          ],
+        }),
       );
       const result = yield* makeReviewer({ model })
         .review(request)
@@ -274,7 +323,15 @@ describe("review output boundary", () => {
       const topLevel = ReviewFinding.make(Struct.omit(otherBlocker, ["line"]));
       const invalid = ReviewFinding.make({ ...otherBlocker, line: 999 });
       const model = scriptedModel(() =>
-        response({ findings: [blocker, invalid, topLevel, invalid, blocker] }),
+        response({
+          findings: [
+            submittedFinding(blocker, 0),
+            submittedFinding(invalid, 1),
+            submittedFinding(topLevel, 1),
+            submittedFinding(invalid, 1),
+            submittedFinding(blocker, 0),
+          ],
+        }),
       );
       const outcome = yield* makeReviewer({ model })
         .review(request)
@@ -291,7 +348,11 @@ describe("review output boundary", () => {
           title: `Independent cause ${String(index)}`,
         }),
       );
-      const result = yield* makeReviewer({ model: scriptedModel(() => response({ findings })) })
+      const result = yield* makeReviewer({
+        model: scriptedModel(() =>
+          response({ findings: findings.map((finding) => submittedFinding(finding, 1)) }),
+        ),
+      })
         .review(request)
         .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
       if (count === 24) {
