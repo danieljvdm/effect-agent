@@ -5,20 +5,24 @@ import {
   browserQuickActionScreenshotLayer,
 } from "@effect-agent/platform-cloudflare/browser-quick-action";
 import {
+  BrowserRunHandoffRequest,
   BrowserRunInteractiveBinding,
-  browserRunInteractiveLayer,
+  BrowserRunInteractiveHost,
+  BrowserRunLiveViewRequest,
+  browserRunInteractiveHostLayer,
 } from "@effect-agent/platform-cloudflare/interactive-browser";
 import {
   BrowserNavigateRequest,
   BrowserReadTextRequest,
-  InteractiveBrowser,
+  BrowserScreenshotRequest,
+  BrowserScrollRequest,
   InteractiveBrowserPolicy,
   PageScreenshot,
   PageScreenshotLimits,
   PageScreenshotRequest,
   PageUrlTarget,
 } from "@effect-agent/sandbox";
-import { Duration, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Duration, Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
 import { Worker, WorkerEnvironment } from "effect-cf";
 import { Toolkit } from "effect/unstable/ai";
 
@@ -44,7 +48,7 @@ const proofScrape = WebCapture.makeScrape("scrape_example_domain", {
 });
 
 const SCREENSHOT_MAX_OUTPUT_BYTES = 256 * 1_024;
-const INTERACTIVE_MAX_RETURNED_BYTES = 4 * 1_024;
+const INTERACTIVE_MAX_TEXT_BYTES = 4 * 1_024;
 const QUICK_ACTION_PACING_DELAY = Duration.seconds(11);
 const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const EXAMPLE_DOMAIN_REQUEST_PATTERN = "^https://example\\.com(?::[0-9]+)?(?:[/?#]|$)";
@@ -60,9 +64,9 @@ const screenshotRequest = PageScreenshotRequest.make({
 
 const interactivePolicy = InteractiveBrowserPolicy.make({
   allowedHosts: ["example.com"],
-  maxActions: 2,
-  maxElapsedMillis: 45_000,
-  maxReturnedBytes: INTERACTIVE_MAX_RETURNED_BYTES,
+  maxActions: 7,
+  maxElapsedMillis: 90_000,
+  maxReturnedBytes: SCREENSHOT_MAX_OUTPUT_BYTES,
 });
 
 const interactiveNavigateRequest = BrowserNavigateRequest.make({ url: PROOF_SOURCE_URL });
@@ -83,7 +87,7 @@ const proofLayer = Layer.unwrap(
       browserQuickActionCaptureLayer(),
       browserQuickActionScreenshotLayer(),
     ).pipe(Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: env.BROWSER })));
-    const interactiveLayer = browserRunInteractiveLayer().pipe(
+    const interactiveLayer = browserRunInteractiveHostLayer().pipe(
       Layer.provide(BrowserRunInteractiveBinding.layer({ browser: env.BROWSER })),
     );
     const browserRunLayer = Layer.merge(quickActionLayer, interactiveLayer);
@@ -145,8 +149,9 @@ const runProof = Effect.gen(function* () {
   }
   const interactive = yield* Effect.scoped(
     Effect.gen(function* () {
-      const browsers = yield* InteractiveBrowser;
-      const handle = yield* browsers.open(interactivePolicy);
+      const browsers = yield* BrowserRunInteractiveHost;
+      const session = yield* browsers.open(interactivePolicy);
+      const handle = session.handle;
       const navigation = yield* handle.navigate(interactiveNavigateRequest);
       if (navigation.url !== PROOF_SOURCE_URL) {
         return yield* WorkerCaptureProofError.make({
@@ -154,14 +159,62 @@ const runProof = Effect.gen(function* () {
         });
       }
       const page = yield* handle.readText(interactiveReadTextRequest);
-      if (!page.text.includes(PROOF_FACT)) {
+      if (
+        !page.text.includes(PROOF_FACT) ||
+        new TextEncoder().encode(page.text).byteLength > INTERACTIVE_MAX_TEXT_BYTES
+      ) {
         return yield* WorkerCaptureProofError.make({
           message: "The interactive browser text did not contain the expected stable fact",
+        });
+      }
+      const scrolled = yield* handle.scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: 128 }));
+      if (scrolled.url !== PROOF_SOURCE_URL) {
+        return yield* WorkerCaptureProofError.make({
+          message: "The interactive scroll changed the expected page URL",
+        });
+      }
+      const image = yield* handle.screenshot(BrowserScreenshotRequest.make({ fullPage: false }));
+      if (image.mediaType !== "image/png" || !hasPngSignature(image.bytes)) {
+        return yield* WorkerCaptureProofError.make({
+          message: "The interactive screenshot was not a PNG with the expected signature",
+        });
+      }
+      const liveView = yield* session.getLiveView(
+        BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 }),
+      );
+      const handoff = yield* session.handoff(
+        BrowserRunHandoffRequest.make({
+          instructions: "Temporary browser proof. The host will close this session immediately.",
+          timeout: 5_000,
+        }),
+      );
+      const handoffState = yield* session.getHandoffState;
+      if (
+        !handoffState.active ||
+        handoffState.handoffId === undefined ||
+        Redacted.value(handoffState.handoffId) !== Redacted.value(handoff.handoffId) ||
+        !Redacted.isRedacted(session.sessionId) ||
+        !Redacted.isRedacted(liveView.devtoolsFrontendUrl)
+      ) {
+        return yield* WorkerCaptureProofError.make({
+          message: "The interactive host controls did not return the expected private state",
+        });
+      }
+      yield* session.close;
+      const afterClose = yield* handle.readText(interactiveReadTextRequest).pipe(Effect.flip);
+      if (afterClose._tag !== "InteractiveBrowserExpiredError") {
+        return yield* WorkerCaptureProofError.make({
+          message: "The explicitly closed browser handle did not reject further actions",
         });
       }
       return BrowserRunInteractiveProof.make({
         finalUrl: PROOF_SOURCE_URL,
         readFact: PROOF_FACT,
+        screenshot: { mediaType: "image/png", pngSignatureValid: true },
+        scrolled: true,
+        liveViewCreated: true,
+        handoffActive: true,
+        closed: true,
       });
     }),
   );

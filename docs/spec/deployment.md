@@ -464,17 +464,60 @@ Scope, with immediate reverse-order finalizers. `keep_alive` is only Cloudflare'
 setting; the caller's elapsed-time deadline is authoritative. Navigation, redirects, and every
 subrequest use the immutable exact-host policy. Capacity refusal and remote expiry remain typed;
 uncertain actions are never retried or replayed. This capability has no durable session, registry,
-reconnect, or model Tool.
+execution reconnect, or model Tool.
 
-Raw CDP execution is intentionally absent. The pinned browser client cannot enforce an immutable
+Arbitrary CDP execution is intentionally absent. The pinned browser client cannot enforce an immutable
 session egress boundary, and Cloudflare's newer hostname-only guardrail cannot express the exact
 HTTPS-origin policy required by the portable contract. Request interception is not sufficient
 against arbitrary CDP domains. This deployment therefore makes no constrained-CDP or browser Code
 Mode claim.
 
-The opt-in Worker proof uses compatibility date 2026-03-24 or later (and remote Browser Run mode
-where required), one allowed public HTTPS page, and bounded metadata/text only. It is not live
-evidence for ordinary checks and is never a required CI gate.
+The generic handle's `screenshot` and `scroll` use the existing Puppeteer page. Screenshots request
+PNG, check the returned signature and byte count, and reuse `PageScreenshotResult` without invoking
+the stateless capture port. Puppeteer buffers the image before the adapter can inspect it; the
+byte limit bounds returned data, not provider allocation or transport buffering. Scrolling applies
+the Schema-defined viewport deltas, then checks the observed page URL. Both operations use the
+same single-operation gate, action count, and absolute deadline as the other page operations.
+
+`browserRunInteractiveHostLayer()` provides `BrowserRunInteractiveHost` from the same explicit
+`BrowserRunInteractiveBinding`. Its scoped `open(policy)` returns a private host session with
+`handle`, redacted `sessionId`, `getLiveView`, `handoff`, `getHandoffState`, and `close`.
+`browserRunInteractiveLayer()` projects only the generic handle. Hosts that need operator controls
+open through the host service and pass only `session.handle` to their browser workflow.
+
+Live View and handoff use Cloudflare's CDP extensions on the owned page. Live View supports only
+`mode: "tab"`, the UI Cloudflare requires for handoff. Full-browser and DevTools UI modes are
+outside this adapter's contract; tab mode itself is not an authorization boundary.
+Its request supplies `expiresInMs` between 60,000 and 3,600,000 milliseconds; handoff supplies at
+most 1,024 characters of `instructions` and a finite `timeout`.
+Both durations must fit within the pass's remaining time. The result URLs and handoff identifiers
+are redacted values. The pinned Puppeteer package does not type Cloudflare's extension commands,
+so a narrow SDK boundary returns unknown values for Effect Schema decoding. CDP sessions belong
+to Scope and detach during cleanup, including when acquisition completes after interruption.
+The host may initiate handoff and query its state, but the framework does not arbitrate controller
+ownership, await a human decision, or persist action receipts. Closing the session ends the pass;
+there is no separately documented provider command to cancel a handoff.
+URL expiry limits the initial viewer connection, not an already-open viewer. Human interaction
+does not pass through the framework's action counter. Hosts must authorize trusted operators and
+close the session or its Scope to terminate viewer access; checking an automation deadline does
+not revoke an active Live View connection.
+
+`handle.close` and host-session `close` are Effects that invalidate the handle and share one reverse-order
+teardown with Scope cleanup. Explicit close reports typed failure; Scope cleanup logs fixed
+warnings without masking the original `Exit`. `BrowserRunInteractiveHost.closeSession(sessionId)`
+is an explicit cleanup operation for a host-retained redacted identity. It makes one bounded
+`puppeteer.connect(binding, id)` attempt only to close the remote browser, never to expose or
+resume a handle. A still-owned, expired, or unavailable provider session can make this operation
+fail typed. It performs no retry and is not a forced-close guarantee. The host remains responsible
+for authorizing cleanup, retaining private identity where needed, and reconciling failed cleanup
+after process loss. No `effect-cf` change is required.
+
+The opt-in Worker proof uses compatibility date 2026-03-24 or later and one allowed public HTTPS
+page. It navigates, reads, scrolls, captures PNG bytes from the same session, creates a tab Live View,
+starts a bounded handoff, checks its active identity, and explicitly closes the session. It checks
+that the old handle rejects further actions and returns only bounded validation metadata. It
+discards all screenshot bytes and private provider values. Running its scripted tests is not live
+Cloudflare evidence, and the hosted proof is never a required CI gate.
 
 ### Browser Run PNG screenshots
 
@@ -521,6 +564,8 @@ Current platform references:
 - [Browser Run structured extraction and Workers AI](https://developers.cloudflare.com/browser-run/quick-actions/json-endpoint/)
 - [Browser Run crawl endpoint](https://developers.cloudflare.com/browser-run/quick-actions/crawl-endpoint/)
 - [Browser Run limits](https://developers.cloudflare.com/browser-run/limits/)
+- [Browser Run Puppeteer](https://developers.cloudflare.com/browser-run/puppeteer/)
+- [Browser Run Live View and handoff](https://developers.cloudflare.com/browser-run/features/human-in-the-loop/)
 - [SQLite-backed Durable Object storage](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)
 - [Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)
 - [Durable Object alarms](https://developers.cloudflare.com/durable-objects/api/alarms/)

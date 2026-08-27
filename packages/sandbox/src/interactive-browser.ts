@@ -1,6 +1,7 @@
 import { Context, Schema, type Effect, type Scope } from "effect";
 
 import { PageCaptureTargetUrl } from "./page-capture.ts";
+import type { PageScreenshotResult } from "./page-screenshot.ts";
 import { SandboxImplementation } from "./sandbox.ts";
 
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
@@ -8,6 +9,7 @@ const BoundedText = Schema.String.check(Schema.isMaxLength(8 * 1024 * 1024));
 const BoundedMessage = Schema.String.check(Schema.isMaxLength(8 * 1024));
 const Selector = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 const FieldValue = Schema.String.check(Schema.isMaxLength(64 * 1024));
+const ScrollDelta = Schema.Int.check(Schema.isBetween({ minimum: -100_000, maximum: 100_000 }));
 const browserUrl = Reflect.get(globalThis, "URL");
 
 /** Canonical HTTPS host authority, optionally carrying a non-default port. */
@@ -61,6 +63,17 @@ export class BrowserFillRequest extends Schema.Class<BrowserFillRequest>("Browse
 export class BrowserClickRequest extends Schema.Class<BrowserClickRequest>("BrowserClickRequest")({
   selector: Selector,
 }) {}
+/** Capture the current page without navigating or opening another browser. */
+export class BrowserScreenshotRequest extends Schema.Class<BrowserScreenshotRequest>(
+  "BrowserScreenshotRequest",
+)({ fullPage: Schema.Boolean }) {}
+/** Scroll the current viewport by signed CSS pixel deltas. */
+export class BrowserScrollRequest extends Schema.Class<BrowserScrollRequest>(
+  "BrowserScrollRequest",
+)({
+  deltaX: ScrollDelta,
+  deltaY: ScrollDelta,
+}) {}
 export class BrowserNavigationResult extends Schema.Class<BrowserNavigationResult>(
   "BrowserNavigationResult",
 )({ url: PageCaptureTargetUrl }) {}
@@ -92,7 +105,15 @@ export class InteractiveBrowserActionError extends Schema.TaggedError<Interactiv
   "InteractiveBrowserActionError",
   {
     implementation: SandboxImplementation,
-    operation: Schema.Literals(["navigate", "read-text", "fill", "click"]),
+    operation: Schema.Literals([
+      "navigate",
+      "read-text",
+      "fill",
+      "click",
+      "screenshot",
+      "scroll",
+      "close",
+    ]),
     message: BoundedMessage,
     cause: Schema.optionalKey(Schema.Defect()),
   },
@@ -119,7 +140,15 @@ export class InteractiveBrowserUnsupportedError extends Schema.TaggedError<Inter
   "InteractiveBrowserUnsupportedError",
   {
     implementation: SandboxImplementation,
-    feature: Schema.Literals(["navigation", "read-text", "fill", "click", "policy"]),
+    feature: Schema.Literals([
+      "navigation",
+      "read-text",
+      "fill",
+      "click",
+      "screenshot",
+      "scroll",
+      "policy",
+    ]),
     message: BoundedMessage,
   },
 ) {}
@@ -149,6 +178,15 @@ export interface BrowserHandle {
   readonly click: (
     request: BrowserClickRequest,
   ) => Effect.Effect<BrowserActionResult, InteractiveBrowserError>;
+  /** PNG bytes are caller-owned and bounded by the pass's per-result byte limit. */
+  readonly screenshot: (
+    request: BrowserScreenshotRequest,
+  ) => Effect.Effect<PageScreenshotResult, InteractiveBrowserError>;
+  readonly scroll: (
+    request: BrowserScrollRequest,
+  ) => Effect.Effect<BrowserActionResult, InteractiveBrowserError>;
+  /** Invalidate the handle and close its resources early, including after an interrupted action. */
+  readonly close: Effect.Effect<void, InteractiveBrowserError>;
 }
 
 export class InteractiveBrowser extends Context.Service<

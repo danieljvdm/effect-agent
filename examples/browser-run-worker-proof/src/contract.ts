@@ -18,6 +18,11 @@ export class BrowserRunInteractiveProof extends Schema.Class<BrowserRunInteracti
 )({
   finalUrl: Schema.Literal(PROOF_SOURCE_URL),
   readFact: Schema.Literal(PROOF_FACT),
+  screenshot: ScreenshotProof,
+  scrolled: Schema.Literal(true),
+  liveViewCreated: Schema.Literal(true),
+  handoffActive: Schema.Literal(true),
+  closed: Schema.Literal(true),
 }) {}
 
 export class BrowserRunWorkerProofResult extends Schema.Class<BrowserRunWorkerProofResult>(

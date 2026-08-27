@@ -40597,6 +40597,7 @@ var BoundedText = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 102
 var BoundedMessage3 = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
 var Selector = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
 var FieldValue = exports_Schema.String.check(exports_Schema.isMaxLength(64 * 1024));
+var ScrollDelta = exports_Schema.Int.check(exports_Schema.isBetween({ minimum: -1e5, maximum: 1e5 }));
 var browserUrl = Reflect.get(globalThis, "URL");
 var InteractiveBrowserHost = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(255), exports_Schema.makeFilter((value4) => {
   if (typeof browserUrl !== "function")
@@ -40634,6 +40635,15 @@ class BrowserClickRequest extends exports_Schema.Class("BrowserClickRequest")({
 }) {
 }
 
+class BrowserScreenshotRequest extends exports_Schema.Class("BrowserScreenshotRequest")({ fullPage: exports_Schema.Boolean }) {
+}
+
+class BrowserScrollRequest extends exports_Schema.Class("BrowserScrollRequest")({
+  deltaX: ScrollDelta,
+  deltaY: ScrollDelta
+}) {
+}
+
 class BrowserNavigationResult extends exports_Schema.Class("BrowserNavigationResult")({ url: PageCaptureTargetUrl }) {
 }
 
@@ -40661,7 +40671,15 @@ class InteractiveBrowserExpiredError extends exports_Schema.TaggedError()("Inter
 
 class InteractiveBrowserActionError extends exports_Schema.TaggedError()("InteractiveBrowserActionError", {
   implementation: SandboxImplementation,
-  operation: exports_Schema.Literals(["navigate", "read-text", "fill", "click"]),
+  operation: exports_Schema.Literals([
+    "navigate",
+    "read-text",
+    "fill",
+    "click",
+    "screenshot",
+    "scroll",
+    "close"
+  ]),
   message: BoundedMessage3,
   cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
@@ -40685,7 +40703,15 @@ class InteractiveBrowserLimitError extends exports_Schema.TaggedError()("Interac
 
 class InteractiveBrowserUnsupportedError extends exports_Schema.TaggedError()("InteractiveBrowserUnsupportedError", {
   implementation: SandboxImplementation,
-  feature: exports_Schema.Literals(["navigation", "read-text", "fill", "click", "policy"]),
+  feature: exports_Schema.Literals([
+    "navigation",
+    "read-text",
+    "fill",
+    "click",
+    "screenshot",
+    "scroll",
+    "policy"
+  ]),
   message: BoundedMessage3
 }) {
 }

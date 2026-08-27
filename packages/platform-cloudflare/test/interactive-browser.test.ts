@@ -3,18 +3,26 @@ import {
   BrowserFillRequest,
   BrowserNavigateRequest,
   BrowserReadTextRequest,
+  BrowserScreenshotRequest,
+  BrowserScrollRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
   type BrowserHandle,
 } from "@effect-agent/sandbox";
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Exit, Fiber, Layer, Logger, type Scope } from "effect";
+import { Duration, Effect, Exit, Fiber, Layer, Logger, Redacted, type Scope } from "effect";
 import { TestClock } from "effect/testing";
 
 import {
   BrowserRunInteractiveBinding,
+  BrowserRunInteractiveHost,
+  BrowserRunLiveViewRequest,
+  BrowserRunHandoffRequest,
+  browserRunInteractiveHostLayer,
   browserRunInteractiveLayer,
+  type BrowserRunCloudflareCommand,
   type BrowserRunInteractiveBrowser,
+  type BrowserRunInteractiveCdpSession,
   type BrowserRunInteractiveContext,
   type BrowserRunInteractivePage,
   type BrowserRunInteractiveRequest,
@@ -42,7 +50,13 @@ type ScopedOpenRequirement = Equal<
   Scope.Scope
 >;
 
-type CloseTarget = "page" | "context" | "browser" | "request-listener" | "disconnect-listener";
+type CloseTarget =
+  | "page"
+  | "context"
+  | "browser"
+  | "request-listener"
+  | "disconnect-listener"
+  | "cdp";
 
 interface RequestEmissionOptions {
   readonly settlement?: "resolve" | "reject" | "throw";
@@ -65,6 +79,12 @@ interface FixtureOptions {
   readonly interceptionError?: unknown;
   readonly connectionStateError?: unknown;
   readonly urlError?: unknown;
+  readonly sessionId?: unknown;
+  readonly connectError?: unknown;
+  readonly connect?: (
+    sessionId: string,
+    browser: BrowserRunInteractiveBrowser,
+  ) => Promise<BrowserRunInteractiveBrowser>;
   readonly closeErrors?: ReadonlySet<CloseTarget>;
   readonly enableInterception?: (controls: FixtureControls) => Promise<void>;
   readonly launch?: (
@@ -78,6 +98,16 @@ interface FixtureOptions {
   readonly readText?: (selector: string | undefined, maximumBytes: number) => Promise<unknown>;
   readonly fill?: (selector: string, value: string) => Promise<void>;
   readonly click?: (selector: string) => Promise<void>;
+  readonly screenshot?: (fullPage: boolean) => Promise<unknown>;
+  readonly scroll?: (deltaX: number, deltaY: number) => Promise<void>;
+  readonly cdpSend?: (
+    command: BrowserRunCloudflareCommand,
+    parameters: unknown,
+  ) => Promise<unknown>;
+  readonly createCdp?: (
+    session: BrowserRunInteractiveCdpSession,
+  ) => Promise<BrowserRunInteractiveCdpSession>;
+  readonly remoteClose?: (target: "page" | "context" | "browser" | "cdp") => Promise<void>;
 }
 
 interface Fixture {
@@ -166,7 +196,10 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
   };
 
   const page: BrowserRunInteractivePage = {
-    close: async () => close("page"),
+    close: async () => {
+      close("page");
+      await options.remoteClose?.("page");
+    },
     setBypassServiceWorker: async (enabled) => {
       calls.push(`page.bypass:${String(enabled)}`);
       if (options.setupError !== undefined) throw options.setupError;
@@ -211,6 +244,38 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
       calls.push(`page.click:${selector}`);
       await options.click?.(selector);
     },
+    screenshot: async (fullPage) => {
+      calls.push(`page.screenshot:${String(fullPage)}`);
+      return options.screenshot === undefined
+        ? new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+        : await options.screenshot(fullPage);
+    },
+    scroll: async (deltaX, deltaY) => {
+      calls.push(`page.scroll:${String(deltaX)}:${String(deltaY)}`);
+      await options.scroll?.(deltaX, deltaY);
+    },
+    createCdpSession: async () => {
+      calls.push("page.createCdpSession");
+      const session: BrowserRunInteractiveCdpSession = {
+        send: async (command, parameters) => {
+          calls.push(`cdp.send:${command}`);
+          if (options.cdpSend !== undefined) return options.cdpSend(command, parameters);
+          if (command === "Cloudflare.getLiveView") {
+            return {
+              devtoolsFrontendUrl:
+                "https://live.browser.run/ui/view?mode=tab&wss=live.browser.run/api/devtools/browser/session/page/target?jwt=secret",
+            };
+          }
+          if (command === "Cloudflare.handoff") return { handoffId: "handoff-id" };
+          return { active: true, handoffId: "handoff-id", durationMs: 10 };
+        },
+        detach: async () => {
+          close("cdp");
+          await options.remoteClose?.("cdp");
+        },
+      };
+      return options.createCdp === undefined ? session : options.createCdp(session);
+    },
   };
 
   const context: BrowserRunInteractiveContext = {
@@ -219,7 +284,10 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
       if (options.newPageError !== undefined) throw options.newPageError;
       return options.newPage === undefined ? page : options.newPage(page);
     },
-    close: async () => close("context"),
+    close: async () => {
+      close("context");
+      await options.remoteClose?.("context");
+    },
   };
 
   const browser: BrowserRunInteractiveBrowser = {
@@ -228,7 +296,11 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
       if (options.createContextError !== undefined) throw options.createContextError;
       return options.createContext === undefined ? context : options.createContext(context);
     },
-    close: async () => close("browser"),
+    close: async () => {
+      close("browser");
+      await options.remoteClose?.("browser");
+    },
+    sessionId: () => options.sessionId ?? "session-id",
     isConnected: () => {
       if (options.connectionStateError !== undefined) throw options.connectionStateError;
       return options.connected !== false;
@@ -252,6 +324,11 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
       keepAliveMillis.push(keepAlive);
       if (options.launchError !== undefined) throw options.launchError;
       return options.launch === undefined ? browser : options.launch(browser);
+    },
+    connect: async (sessionId) => {
+      calls.push(`binding.connect:${sessionId}`);
+      if (options.connectError !== undefined) throw options.connectError;
+      return options.connect === undefined ? browser : options.connect(sessionId, browser);
     },
   };
 
@@ -284,6 +361,11 @@ const fixtureLayer = (fixture: Fixture): Layer.Layer<InteractiveBrowser> =>
     Layer.provide(Layer.succeed(BrowserRunInteractiveBinding)(fixture.binding)),
   );
 
+const fixtureHostLayer = (fixture: Fixture): Layer.Layer<BrowserRunInteractiveHost> =>
+  browserRunInteractiveHostLayer().pipe(
+    Layer.provide(Layer.succeed(BrowserRunInteractiveBinding)(fixture.binding)),
+  );
+
 const withBrowser = <A, E, R>(
   fixture: Fixture,
   use: (handle: BrowserHandle) => Effect.Effect<A, E, R>,
@@ -294,6 +376,14 @@ const withBrowser = <A, E, R>(
     const handle = yield* browser.open(browserPolicy);
     return yield* use(handle);
   }).pipe(Effect.scoped, Effect.provide(fixtureLayer(fixture)));
+
+const withHost = <A, E, R>(
+  fixture: Fixture,
+  use: (host: BrowserRunInteractiveHost["Service"]) => Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    return yield* use(yield* BrowserRunInteractiveHost);
+  }).pipe(Effect.scoped, Effect.provide(fixtureHostLayer(fixture)));
 
 const closedResources = (fixture: Fixture): ReadonlyArray<string> =>
   fixture.calls.filter(
@@ -912,6 +1002,391 @@ describe("Browser Run interactive browser adapter", () => {
       expect(logs.join("\n")).toContain("Removing the browser disconnect listener failed");
       expect(logs.join("\n")).toContain("Closing the interactive browser failed");
       expect(logs.join("\n")).not.toContain("private-");
+    }),
+  );
+
+  it.effect("screenshots and scrolls the same page within shared action and byte limits", () =>
+    Effect.gen(function* () {
+      const providerBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]);
+      const fixture = makeFixture({ screenshot: async () => providerBytes });
+      const result = yield* withBrowser(
+        fixture,
+        (handle) =>
+          Effect.gen(function* () {
+            const scrolled = yield* handle.scroll(
+              BrowserScrollRequest.make({ deltaX: -10, deltaY: 250 }),
+            );
+            const screenshot = yield* handle.screenshot(
+              BrowserScreenshotRequest.make({ fullPage: false }),
+            );
+            const limit = yield* handle.readText(readText()).pipe(Effect.flip);
+            return { limit, screenshot, scrolled };
+          }),
+        policy({ maxActions: 2, maxReturnedBytes: 9 }),
+      );
+
+      expect(result.scrolled).toEqual({ url: "https://example.com/" });
+      expect(result.screenshot.mediaType).toBe("image/png");
+      expect(result.screenshot.bytes).toEqual(providerBytes);
+      expect(result.screenshot.bytes).not.toBe(providerBytes);
+      expect(result.limit).toMatchObject({
+        _tag: "InteractiveBrowserLimitError",
+        limit: "actions",
+        observed: 3,
+      });
+      expect(fixture.calls).toContain("page.scroll:-10:250");
+      expect(fixture.calls).toContain("page.screenshot:false");
+    }),
+  );
+
+  it.effect("rejects malformed screenshot input, PNG output, and per-result overflow", () =>
+    Effect.gen(function* () {
+      const malformedRequest = BrowserScreenshotRequest.make({ fullPage: false });
+      expect(Reflect.set(malformedRequest, "fullPage", "yes")).toBe(true);
+      const inputFixture = makeFixture();
+      const inputError = yield* withBrowser(inputFixture, (handle) =>
+        handle.screenshot(malformedRequest),
+      ).pipe(Effect.flip);
+      expect(inputError).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
+      expect(inputFixture.calls.some((call) => call.startsWith("page.screenshot:"))).toBe(false);
+
+      const malformedPng = makeFixture({ screenshot: async () => new Uint8Array([1, 2, 3]) });
+      const protocol = yield* withBrowser(malformedPng, (handle) =>
+        handle.screenshot(BrowserScreenshotRequest.make({ fullPage: true })),
+      ).pipe(Effect.flip);
+      expect(protocol).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
+      expect(protocol).not.toHaveProperty("cause");
+      expect(String(protocol)).not.toContain("1,2,3");
+
+      const overflow = makeFixture({
+        screenshot: async () =>
+          new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]),
+      });
+      const limit = yield* withBrowser(
+        overflow,
+        (handle) => handle.screenshot(BrowserScreenshotRequest.make({ fullPage: true })),
+        policy({ maxReturnedBytes: 8 }),
+      ).pipe(Effect.flip);
+      expect(limit).toMatchObject({
+        _tag: "InteractiveBrowserLimitError",
+        limit: "returned-bytes",
+        maximum: 8,
+        observed: 9,
+      });
+    }),
+  );
+
+  it.effect("invalidates immediately and tears down once during an in-flight action", () =>
+    Effect.gen(function* () {
+      const gate = makeGate<void>();
+      const fixture = makeFixture({
+        scroll: async () => {
+          gate.markStarted();
+          await gate.promise;
+        },
+      });
+
+      yield* withBrowser(fixture, (handle) =>
+        Effect.gen(function* () {
+          const scrolling = yield* handle
+            .scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: 1 }))
+            .pipe(Effect.forkChild);
+          yield* awaitPromise(gate.started);
+          yield* handle.close;
+          yield* handle.close;
+          gate.resolve(undefined);
+          const stale = yield* Fiber.join(scrolling).pipe(Effect.flip);
+          expect(stale).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
+          const closed = yield* handle.readText(readText()).pipe(Effect.flip);
+          expect(closed).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
+        }),
+      );
+      expectResourcesClosedOnce(fixture);
+    }),
+  );
+
+  it.effect(
+    "explicitly closes after an interrupted action while the owning Scope remains live",
+    () =>
+      Effect.gen(function* () {
+        const gate = makeGate<void>();
+        const fixture = makeFixture({
+          scroll: async () => {
+            gate.markStarted();
+            await gate.promise;
+          },
+        });
+
+        yield* withBrowser(fixture, (handle) =>
+          Effect.gen(function* () {
+            const scrolling = yield* handle
+              .scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: 1 }))
+              .pipe(Effect.forkChild);
+            yield* awaitPromise(gate.started);
+            yield* Fiber.interrupt(scrolling);
+            expect(closedResources(fixture)).toEqual([]);
+            yield* handle.close;
+            expectResourcesClosedOnce(fixture);
+            gate.resolve(undefined);
+            yield* Effect.yieldNow;
+          }),
+        );
+        expectResourcesClosedOnce(fixture);
+      }),
+  );
+
+  it.effect("bounds each explicit cleanup step and continues reverse-order teardown", () =>
+    Effect.gen(function* () {
+      const pageClose = makeGate<void>();
+      const fixture = makeFixture({
+        remoteClose: async (target) => {
+          if (target === "page") {
+            pageClose.markStarted();
+            await pageClose.promise;
+          }
+        },
+      });
+
+      yield* withBrowser(fixture, (handle) =>
+        Effect.gen(function* () {
+          const closing = yield* handle.close.pipe(Effect.forkChild);
+          yield* awaitPromise(pageClose.started);
+          yield* TestClock.adjust(Duration.seconds(10));
+          const error = yield* Fiber.join(closing).pipe(Effect.flip);
+          expect(error).toMatchObject({
+            _tag: "InteractiveBrowserActionError",
+            operation: "close",
+          });
+        }),
+      );
+      expectResourcesClosedOnce(fixture);
+    }),
+  );
+
+  it.effect("keeps Cloudflare controls redacted, bounded, single-flight, and scoped", () =>
+    Effect.gen(function* () {
+      const parameters: Array<unknown> = [];
+      const fixture = makeFixture({
+        cdpSend: async (command, input) => {
+          parameters.push(input);
+          if (command === "Cloudflare.getLiveView") {
+            return {
+              devtoolsFrontendUrl:
+                "https://live.browser.run/ui/view?mode=tab&wss=live.browser.run/api/devtools/browser/session/page/target?jwt=secret",
+            };
+          }
+          if (command === "Cloudflare.handoff") return { handoffId: "private-handoff" };
+          return { active: true, handoffId: "private-handoff", durationMs: 25 };
+        },
+      });
+
+      yield* withHost(fixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy({ maxActions: 3, maxElapsedMillis: 90_000 }));
+          expect(Redacted.isRedacted(session.sessionId)).toBe(true);
+          expect(Redacted.value(session.sessionId)).toBe("session-id");
+          const liveView = yield* session.getLiveView(
+            BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 }),
+          );
+          const handoff = yield* session.handoff(
+            BrowserRunHandoffRequest.make({ instructions: "Complete MFA", timeout: 1_000 }),
+          );
+          const state = yield* session.getHandoffState;
+          expect(Redacted.isRedacted(liveView.devtoolsFrontendUrl)).toBe(true);
+          expect(Redacted.value(liveView.devtoolsFrontendUrl)).toContain("jwt=secret");
+          expect(Redacted.value(handoff.handoffId)).toBe("private-handoff");
+          expect(Redacted.value(state.handoffId!)).toBe("private-handoff");
+          const limit = yield* session.handle
+            .scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: 10 }))
+            .pipe(Effect.flip);
+          expect(limit).toMatchObject({
+            _tag: "InteractiveBrowserLimitError",
+            limit: "actions",
+            observed: 4,
+          });
+          yield* session.close;
+        }),
+      );
+
+      expect(parameters).toEqual([
+        { mode: "tab", expiresInMs: 60_000 },
+        { instructions: "Complete MFA", timeout: 1_000 },
+        {},
+      ]);
+      expect(fixture.calls.filter((call) => call === "cdp.close")).toHaveLength(3);
+      expectResourcesClosedOnce(fixture);
+    }),
+  );
+
+  it.effect("rejects unsafe Live View responses and requests beyond the remaining pass", () =>
+    Effect.gen(function* () {
+      const unsafe =
+        "https://operator:secret@live.browser.run/ui/view?mode=tab&wss=live.browser.run/api/devtools/browser/session/page/target";
+      const fixture = makeFixture({
+        cdpSend: async () => ({ devtoolsFrontendUrl: unsafe }),
+      });
+      const malformed = yield* withHost(fixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy({ maxElapsedMillis: 90_000 }));
+          return yield* session
+            .getLiveView(BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 }))
+            .pipe(Effect.flip);
+        }),
+      );
+      expect(malformed).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
+      expect(malformed).not.toHaveProperty("cause");
+      expect(String(malformed)).not.toContain("operator:secret");
+      expect(fixture.calls.filter((call) => call === "cdp.close")).toHaveLength(1);
+
+      const shortExpiry = BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 });
+      expect(Reflect.set(shortExpiry, "expiresInMs", 10_000)).toBe(true);
+      const expiryFixture = makeFixture();
+      const expiryError = yield* withHost(expiryFixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy({ maxElapsedMillis: 90_000 }));
+          return yield* session.getLiveView(shortExpiry).pipe(Effect.flip);
+        }),
+      );
+      expect(expiryError).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
+      expect(expiryFixture.calls.some((call) => call.startsWith("cdp.send:"))).toBe(false);
+
+      const incompleteState = makeFixture({
+        cdpSend: async () => ({ active: true }),
+      });
+      const stateError = yield* withHost(incompleteState, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy());
+          return yield* session.getHandoffState.pipe(Effect.flip);
+        }),
+      );
+      expect(stateError).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
+      expect(stateError).not.toHaveProperty("cause");
+
+      const longInstructions = BrowserRunHandoffRequest.make({
+        instructions: "Wait",
+        timeout: 1_000,
+      });
+      expect(Reflect.set(longInstructions, "instructions", "x".repeat(1_025))).toBe(true);
+      const instructionFixture = makeFixture();
+      const instructionError = yield* withHost(instructionFixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy());
+          return yield* session.handoff(longInstructions).pipe(Effect.flip);
+        }),
+      );
+      expect(instructionError).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
+      expect(instructionFixture.calls.some((call) => call.startsWith("cdp.send:"))).toBe(false);
+
+      const overlong = makeFixture();
+      const denied = yield* withHost(overlong, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy({ maxElapsedMillis: 500 }));
+          return yield* session
+            .handoff(BrowserRunHandoffRequest.make({ instructions: "Wait", timeout: 1_000 }))
+            .pipe(Effect.flip);
+        }),
+      );
+      expect(denied).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
+      expect(overlong.calls.some((call) => call.startsWith("cdp.send:"))).toBe(false);
+    }),
+  );
+
+  it.effect("uses one finite cleanup-only connection and closes late acquisition", () =>
+    Effect.gen(function* () {
+      const success = makeFixture();
+      yield* withHost(success, (host) => host.closeSession(Redacted.make("leaked_session")));
+      expect(success.calls).toContain("binding.connect:leaked_session");
+      expect(success.calls.filter((call) => call === "browser.close")).toHaveLength(1);
+
+      const gate = makeGate<BrowserRunInteractiveBrowser>();
+      const late = makeFixture({
+        connect: async () => {
+          gate.markStarted();
+          return gate.promise;
+        },
+      });
+      yield* withHost(late, (host) =>
+        Effect.gen(function* () {
+          const closing = yield* host
+            .closeSession(Redacted.make("late_session"))
+            .pipe(Effect.forkChild);
+          yield* awaitPromise(gate.started);
+          yield* TestClock.adjust(Duration.seconds(10));
+          expect(yield* Fiber.join(closing).pipe(Effect.flip)).toMatchObject({
+            _tag: "InteractiveBrowserActionError",
+            operation: "close",
+          });
+          gate.resolve(late.browser);
+          yield* Effect.yieldNow;
+          yield* Effect.yieldNow;
+        }),
+      );
+      expect(late.calls.filter((call) => call === "browser.close")).toHaveLength(1);
+      expect(late.calls.filter((call) => call.startsWith("binding.connect:"))).toHaveLength(1);
+    }),
+  );
+
+  it.effect("rejects a concurrent generic action while a host control owns the pass", () =>
+    Effect.gen(function* () {
+      const gate = makeGate<unknown>();
+      const fixture = makeFixture({
+        cdpSend: async () => {
+          gate.markStarted();
+          return gate.promise;
+        },
+      });
+
+      yield* withHost(fixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy());
+          const querying = yield* session.getHandoffState.pipe(Effect.forkChild);
+          yield* awaitPromise(gate.started);
+          const busy = yield* session.handle
+            .scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: 1 }))
+            .pipe(Effect.flip);
+          expect(busy).toMatchObject({ _tag: "InteractiveBrowserBusyError" });
+          expect(fixture.calls.filter((call) => call === "page.createCdpSession")).toHaveLength(1);
+          expect(fixture.calls.some((call) => call.startsWith("page.scroll:"))).toBe(false);
+          gate.resolve({ active: true, handoffId: "handoff-id", durationMs: 10 });
+          expect((yield* Fiber.join(querying)).active).toBe(true);
+        }),
+      );
+      expect(fixture.calls.filter((call) => call === "cdp.close")).toHaveLength(1);
+    }),
+  );
+
+  it.effect("detaches a CDP session that arrives after the pass deadline", () =>
+    Effect.gen(function* () {
+      const gate = makeGate<BrowserRunInteractiveCdpSession>();
+      const fixture = makeFixture({
+        createCdp: async () => {
+          gate.markStarted();
+          return gate.promise;
+        },
+      });
+
+      yield* withHost(fixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy({ maxElapsedMillis: 100 }));
+          const querying = yield* session.getHandoffState.pipe(Effect.forkChild);
+          yield* awaitPromise(gate.started);
+          yield* TestClock.adjust(Duration.millis(100));
+          expect(yield* Fiber.join(querying).pipe(Effect.flip)).toMatchObject({
+            _tag: "InteractiveBrowserLimitError",
+            limit: "elapsed",
+          });
+          const cdp: BrowserRunInteractiveCdpSession = {
+            send: async () => ({ active: false }),
+            detach: async () => {
+              fixture.calls.push("late-cdp.detach");
+            },
+          };
+          gate.resolve(cdp);
+          yield* Effect.yieldNow;
+          yield* Effect.yieldNow;
+        }),
+      );
+      expect(fixture.calls.filter((call) => call === "late-cdp.detach")).toHaveLength(1);
     }),
   );
 });
