@@ -191,6 +191,10 @@ and connection-time exclusion of private, reserved, and internal destinations ac
 traffic sources, including redirects and human navigation. A provider that cannot enforce it must
 fail before acquisition with `InteractiveBrowserUnsupportedError`, `feature: "policy"`. Cloudflare
 currently does so. A wildcard, DNS preflight, or a consumer assertion cannot enable that mode.
+`Unrestricted` is an explicit opt-out from URL/host and private-network containment. Private and
+internal destinations may be reachable, including through redirects, resources, and human
+navigation. It never enables `PublicWeb` and does not relax application authentication,
+conversation authorization, takeover ownership, session limits, or resource cleanup.
 See the [deployment coverage table](./deployment.md#browser-run-interactive-browser-sessions).
 One scoped browser/context/page pass permits bounded navigate, read, fill, click, screenshot, and
 scroll operations; concurrent

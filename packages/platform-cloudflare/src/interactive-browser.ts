@@ -22,11 +22,13 @@ import {
   InteractiveBrowserPolicy,
   InteractiveBrowserPolicyDeniedError,
   InteractiveBrowserProtocolError,
+  InteractiveBrowserTargetUrl,
   InteractiveBrowserUnsupportedError,
   PageScreenshotResult,
   SandboxImplementation,
   type BrowserHandle,
   type InteractiveBrowserError,
+  type InteractiveBrowserNetworkPolicy,
 } from "@effect-agent/sandbox";
 import {
   Context,
@@ -171,7 +173,7 @@ type BrowserFailure = typeof InteractiveBrowserError.Type;
 type BrowserOperation = InteractiveBrowserActionError["operation"];
 
 interface InteractiveBrowserPolicySnapshot {
-  readonly allowedHosts: ReadonlyArray<string>;
+  readonly network: Exclude<InteractiveBrowserNetworkPolicy, { readonly _tag: "PublicWeb" }>;
   readonly maxActions: number;
   readonly maxElapsedMillis: number;
   readonly maxReturnedBytes: number;
@@ -462,7 +464,13 @@ const snapshotPolicy = Effect.fn("BrowserRunInteractive.snapshotPolicy")(functio
     });
   }
   return Object.freeze({
-    allowedHosts: Object.freeze([...decoded.network.allowedHosts]),
+    network:
+      decoded.network._tag === "ExactHosts"
+        ? Object.freeze({
+            _tag: decoded.network._tag,
+            allowedHosts: Object.freeze([...decoded.network.allowedHosts]),
+          })
+        : Object.freeze({ _tag: decoded.network._tag }),
     maxActions: decoded.maxActions,
     maxElapsedMillis: decoded.maxElapsedMillis,
     maxReturnedBytes: decoded.maxReturnedBytes,
@@ -470,13 +478,14 @@ const snapshotPolicy = Effect.fn("BrowserRunInteractive.snapshotPolicy")(functio
 });
 
 const hostAllowed = (policy: InteractiveBrowserPolicySnapshot, value: string): boolean => {
+  if (policy.network._tag === "Unrestricted") return true;
   try {
     const url = new URL(value);
     return (
       url.protocol === "https:" &&
       url.username === "" &&
       url.password === "" &&
-      policy.allowedHosts.some((host) => host === url.host)
+      policy.network.allowedHosts.some((host) => host === url.host)
     );
   } catch {
     return false;
@@ -767,7 +776,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
           return yield* decodeNavigationResult(page, policy);
         }),
         Effect.suspend(() =>
-          hostAllowed(policy, request.url)
+          Schema.is(InteractiveBrowserTargetUrl)(request.url) && hostAllowed(policy, request.url)
             ? Effect.void
             : Effect.fail(policyError("The navigation URL is outside the browser policy")),
         ),

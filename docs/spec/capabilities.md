@@ -450,7 +450,7 @@ Its immutable policy fixes `network`, action-count, elapsed-time, and per-result
 acquisition. Text counts UTF-8 bytes; screenshots count PNG bytes. The network choice is explicit;
 there is no wildcard, default mode, model-selected allowlist, or policy update on an open handle.
 
-`InteractiveBrowserNetworkPolicy` has two alternatives:
+`InteractiveBrowserNetworkPolicy` has three alternatives:
 
 - `{ _tag: "ExactHosts", allowedHosts }` retains the existing URL allowlist for adapter navigation
   and intercepted requests on the owned page. It accepts 1 to 64 unique canonical HTTPS
@@ -468,13 +468,19 @@ there is no wildcard, default mode, model-selected allowlist, or policy update o
   be disabled before they can send traffic or cause acquisition to fail typed. The public policy
   does not grant authority to any application identity, expose provider controls, or prohibit
   human login through cookies and forms on permitted sites.
+- `{ _tag: "Unrestricted" }` explicitly opts out of URL/host and private-network containment.
+  It permits arbitrary sites, redirects, and page resources without a host allowlist. It offers
+  no guarantee that private, internal, loopback, or metadata destinations are blocked. This mode
+  retains the same finite action, elapsed-time, and returned-byte limits and scoped lifecycle.
+  It does not change application authentication, authorization, or takeover ownership.
 
 An adapter that cannot enforce `PublicWeb` must return `InteractiveBrowserUnsupportedError` with
 `feature: "policy"` before acquiring a browser. It must not downgrade to `ExactHosts`, accept a
 host assertion of safety, or use request interception or a DNS preflight as a connection-time
 boundary. Adding a proxy, a second browser subsystem, or a mutable host list is not an implicit
 fallback. Unknown modes and mixed policy fields fail validation. The current Cloudflare adapter
-rejects `PublicWeb`; general public-web browsing is not yet supported by that adapter.
+rejects `PublicWeb`; callers may explicitly select `Unrestricted` to browse arbitrary sites
+without the stronger network guarantee. This is never an automatic fallback.
 
 Existing callers move `allowedHosts` into `network`:
 
@@ -490,6 +496,12 @@ const policy = InteractiveBrowserPolicy.make({
 Changing that field to `network: { _tag: "PublicWeb" }` expresses the stronger requirement but
 currently fails unsupported on Cloudflare, before launch, navigation, or creation of a viewer URL.
 Applications must surface that failure rather than silently choosing a weaker policy.
+
+`BrowserNavigateRequest`, `BrowserNavigationResult`, and `BrowserActionResult` use the exported
+`InteractiveBrowserTargetUrl` schema: absolute HTTP or HTTPS URLs, no embedded credentials,
+at most 8,192 UTF-16 code units. `ExactHosts` continues to require HTTPS at the adapter policy
+boundary. `Unrestricted` admits HTTP and HTTPS navigation and observations but does not constrain
+browser traffic to those schemes. PageCapture and other read-only URL contracts are unchanged.
 
 `screenshot(BrowserScreenshotRequest)` captures the current page without navigation or a new
 browser. The request selects viewport or full-page capture with `fullPage`; the result reuses

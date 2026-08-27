@@ -40298,6 +40298,160 @@ var CodeExecutionError = exports_Schema.Union([
 
 class CodeExecutor extends exports_Context.Service()("@effect-agent/sandbox/CodeExecutor") {
 }
+// packages/sandbox/src/interactive-browser.ts
+var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var BoundedText = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024 * 1024));
+var BoundedMessage2 = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
+var Selector = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
+var FieldValue = exports_Schema.String.check(exports_Schema.isMaxLength(64 * 1024));
+var ScrollDelta = exports_Schema.Int.check(exports_Schema.isBetween({ minimum: -1e5, maximum: 1e5 }));
+var browserUrl = Reflect.get(globalThis, "URL");
+var InteractiveBrowserTargetUrl = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024), exports_Schema.makeFilter((value4) => {
+  if (typeof browserUrl !== "function")
+    return false;
+  try {
+    const url2 = Reflect.construct(browserUrl, [value4]);
+    return typeof url2 === "object" && url2 !== null && (Reflect.get(url2, "protocol") === "http:" || Reflect.get(url2, "protocol") === "https:") && Reflect.get(url2, "hostname") !== "" && Reflect.get(url2, "username") === "" && Reflect.get(url2, "password") === "";
+  } catch {
+    return false;
+  }
+}, { title: "an absolute HTTP or HTTPS URL without embedded credentials" }));
+var InteractiveBrowserHost = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(255), exports_Schema.makeFilter((value4) => {
+  if (typeof browserUrl !== "function" || value4.includes("*"))
+    return false;
+  try {
+    const url2 = Reflect.construct(browserUrl, [`https://${value4}/`]);
+    return typeof url2 === "object" && url2 !== null && Reflect.get(url2, "protocol") === "https:" && Reflect.get(url2, "username") === "" && Reflect.get(url2, "password") === "" && Reflect.get(url2, "host") === value4;
+  } catch {
+    return false;
+  }
+}, { title: "a canonical credential-free HTTPS host authority" }));
+var InteractiveBrowserNetworkPolicy = exports_Schema.Union([
+  exports_Schema.TaggedStruct("ExactHosts", {
+    allowedHosts: exports_Schema.Array(InteractiveBrowserHost).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(64), exports_Schema.isUnique())
+  }),
+  exports_Schema.TaggedStruct("PublicWeb", {}),
+  exports_Schema.TaggedStruct("Unrestricted", {})
+]).pipe(exports_Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
+
+class InteractiveBrowserPolicy extends exports_Schema.Class("InteractiveBrowserPolicy")(exports_Schema.Struct({
+  network: InteractiveBrowserNetworkPolicy,
+  maxActions: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(1000)),
+  maxElapsedMillis: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(10 * 60000)),
+  maxReturnedBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(8 * 1024 * 1024))
+}).pipe(exports_Schema.annotate({ parseOptions: { onExcessProperty: "error" } }))) {
+}
+
+class BrowserNavigateRequest extends exports_Schema.Class("BrowserNavigateRequest")({ url: InteractiveBrowserTargetUrl }) {
+}
+
+class BrowserReadTextRequest extends exports_Schema.Class("BrowserReadTextRequest")({ selector: exports_Schema.optionalKey(Selector) }) {
+}
+
+class BrowserFillRequest extends exports_Schema.Class("BrowserFillRequest")({
+  selector: Selector,
+  value: FieldValue
+}) {
+}
+
+class BrowserClickRequest extends exports_Schema.Class("BrowserClickRequest")({
+  selector: Selector
+}) {
+}
+
+class BrowserScreenshotRequest extends exports_Schema.Class("BrowserScreenshotRequest")({ fullPage: exports_Schema.Boolean }) {
+}
+
+class BrowserScrollRequest extends exports_Schema.Class("BrowserScrollRequest")({
+  deltaX: ScrollDelta,
+  deltaY: ScrollDelta
+}) {
+}
+
+class BrowserNavigationResult extends exports_Schema.Class("BrowserNavigationResult")({ url: InteractiveBrowserTargetUrl }) {
+}
+
+class BrowserTextResult extends exports_Schema.Class("BrowserTextResult")({
+  text: BoundedText
+}) {
+}
+
+class BrowserActionResult extends exports_Schema.Class("BrowserActionResult")({
+  url: InteractiveBrowserTargetUrl
+}) {
+}
+
+class InteractiveBrowserPolicyDeniedError extends exports_Schema.TaggedError()("InteractiveBrowserPolicyDeniedError", { implementation: SandboxImplementation, message: BoundedMessage2 }) {
+}
+
+class InteractiveBrowserBusyError extends exports_Schema.TaggedError()("InteractiveBrowserBusyError", { implementation: SandboxImplementation, message: BoundedMessage2 }) {
+}
+
+class InteractiveBrowserCapacityError extends exports_Schema.TaggedError()("InteractiveBrowserCapacityError", { implementation: SandboxImplementation, message: BoundedMessage2 }) {
+}
+
+class InteractiveBrowserExpiredError extends exports_Schema.TaggedError()("InteractiveBrowserExpiredError", { implementation: SandboxImplementation, message: BoundedMessage2 }) {
+}
+
+class InteractiveBrowserActionError extends exports_Schema.TaggedError()("InteractiveBrowserActionError", {
+  implementation: SandboxImplementation,
+  operation: exports_Schema.Literals([
+    "navigate",
+    "read-text",
+    "fill",
+    "click",
+    "screenshot",
+    "scroll",
+    "close"
+  ]),
+  message: BoundedMessage2,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class InteractiveBrowserProtocolError extends exports_Schema.TaggedError()("InteractiveBrowserProtocolError", {
+  implementation: SandboxImplementation,
+  message: BoundedMessage2,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class InteractiveBrowserLimitError extends exports_Schema.TaggedError()("InteractiveBrowserLimitError", {
+  implementation: SandboxImplementation,
+  limit: exports_Schema.Literals(["actions", "elapsed", "returned-bytes"]),
+  maximum: PositiveInt4,
+  observed: exports_Schema.Natural,
+  message: BoundedMessage2
+}) {
+}
+
+class InteractiveBrowserUnsupportedError extends exports_Schema.TaggedError()("InteractiveBrowserUnsupportedError", {
+  implementation: SandboxImplementation,
+  feature: exports_Schema.Literals([
+    "navigation",
+    "read-text",
+    "fill",
+    "click",
+    "screenshot",
+    "scroll",
+    "policy"
+  ]),
+  message: BoundedMessage2
+}) {
+}
+var InteractiveBrowserError = exports_Schema.Union([
+  InteractiveBrowserPolicyDeniedError,
+  InteractiveBrowserBusyError,
+  InteractiveBrowserCapacityError,
+  InteractiveBrowserExpiredError,
+  InteractiveBrowserActionError,
+  InteractiveBrowserProtocolError,
+  InteractiveBrowserLimitError,
+  InteractiveBrowserUnsupportedError
+]);
+
+class InteractiveBrowser extends exports_Context.Service()("@effect-agent/sandbox/InteractiveBrowser") {
+}
 // packages/sandbox/src/page-capture.ts
 var MAX_OUTPUT_BYTES2 = 8 * 1024 * 1024;
 var MAX_LINKS = 4096;
@@ -40318,13 +40472,13 @@ var BoundedAttributeValue = exports_Schema.String.check(exports_Schema.isMaxLeng
 var BoundedScrapeText = exports_Schema.String.check(exports_Schema.isMaxLength(1024 * 1024));
 var BoundedScrapeHtml = exports_Schema.String.check(exports_Schema.isMaxLength(2 * 1024 * 1024));
 var BoundedPattern = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
-var BoundedMessage2 = exports_Schema.String.check(exports_Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
+var BoundedMessage3 = exports_Schema.String.check(exports_Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
 var BoundedInferenceProvider = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
 var BoundedSchemaProperty = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
 var BoundedSchemaText = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
 var BoundedSchemaReference = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024));
-var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
-var BoundedTimeoutMillis = PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(60000));
+var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var BoundedTimeoutMillis = PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(60000));
 var pageUrlConstructor = Reflect.get(globalThis, "URL");
 var isCredentialFreeWebUrl = (value4, allowHttp) => {
   if (typeof pageUrlConstructor !== "function")
@@ -40537,8 +40691,8 @@ class PageNavigationOptions extends exports_Schema.Class("PageNavigationOptions"
 }
 
 class PageViewport extends exports_Schema.Class("PageViewport")({
-  width: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(7680)),
-  height: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(7680))
+  width: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(7680)),
+  height: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(7680))
 }) {
 }
 
@@ -40563,7 +40717,7 @@ class PageResourcePolicy extends exports_Schema.Class("PageResourcePolicy")({
 }
 
 class PageCaptureLimits extends exports_Schema.Class("PageCaptureLimits")({
-  maxOutputBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES2))
+  maxOutputBytes: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES2))
 }) {
 }
 
@@ -40636,7 +40790,7 @@ var PageCaptureOutput = exports_Schema.Union([
 
 class PageCaptureInferenceUse extends exports_Schema.Class("PageCaptureInferenceUse")({
   provider: BoundedInferenceProvider,
-  modelCalls: PositiveInt4
+  modelCalls: PositiveInt5
 }) {
 }
 
@@ -40657,14 +40811,14 @@ class PageCaptureRateLimitedError extends exports_Schema.TaggedError()("PageCapt
   implementation: SandboxImplementation,
   reason: exports_Schema.Literals(["rate", "quota"]),
   retryAfterMillis: exports_Schema.optionalKey(exports_Schema.Natural),
-  message: BoundedMessage2,
+  message: BoundedMessage3,
   cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
 
 class PageCaptureNavigationError extends exports_Schema.TaggedError()("PageCaptureNavigationError", {
   implementation: SandboxImplementation,
-  message: BoundedMessage2,
+  message: BoundedMessage3,
   cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
@@ -40673,7 +40827,7 @@ class PageCaptureInferencePolicyError extends exports_Schema.TaggedError()("Page
   implementation: SandboxImplementation,
   provider: BoundedInferenceProvider,
   reason: exports_Schema.Literals(["authorization", "accounting"]),
-  message: BoundedMessage2,
+  message: BoundedMessage3,
   cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
@@ -40688,20 +40842,20 @@ class PageCaptureUnsupportedError extends exports_Schema.TaggedError()("PageCapt
     "viewport",
     "resource-policy"
   ]),
-  message: BoundedMessage2
+  message: BoundedMessage3
 }) {
 }
 
 class PageCaptureOutputLimitError extends exports_Schema.TaggedError()("PageCaptureOutputLimitError", {
   implementation: SandboxImplementation,
-  limit: PositiveInt4,
+  limit: PositiveInt5,
   observed: exports_Schema.Natural
 }) {
 }
 
 class PageCaptureProtocolError extends exports_Schema.TaggedError()("PageCaptureProtocolError", {
   implementation: SandboxImplementation,
-  message: BoundedMessage2,
+  message: BoundedMessage3,
   cause: exports_Schema.optionalKey(exports_Schema.Defect())
 }) {
 }
@@ -40715,150 +40869,6 @@ var PageCaptureError = exports_Schema.Union([
 ]);
 
 class PageCapture extends exports_Context.Service()("@effect-agent/sandbox/PageCapture") {
-}
-
-// packages/sandbox/src/interactive-browser.ts
-var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
-var BoundedText = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024 * 1024));
-var BoundedMessage3 = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
-var Selector = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
-var FieldValue = exports_Schema.String.check(exports_Schema.isMaxLength(64 * 1024));
-var ScrollDelta = exports_Schema.Int.check(exports_Schema.isBetween({ minimum: -1e5, maximum: 1e5 }));
-var browserUrl = Reflect.get(globalThis, "URL");
-var InteractiveBrowserHost = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(255), exports_Schema.makeFilter((value4) => {
-  if (typeof browserUrl !== "function" || value4.includes("*"))
-    return false;
-  try {
-    const url2 = Reflect.construct(browserUrl, [`https://${value4}/`]);
-    return typeof url2 === "object" && url2 !== null && Reflect.get(url2, "protocol") === "https:" && Reflect.get(url2, "username") === "" && Reflect.get(url2, "password") === "" && Reflect.get(url2, "host") === value4;
-  } catch {
-    return false;
-  }
-}, { title: "a canonical credential-free HTTPS host authority" }));
-var InteractiveBrowserNetworkPolicy = exports_Schema.Union([
-  exports_Schema.TaggedStruct("ExactHosts", {
-    allowedHosts: exports_Schema.Array(InteractiveBrowserHost).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(64), exports_Schema.isUnique())
-  }),
-  exports_Schema.TaggedStruct("PublicWeb", {})
-]).pipe(exports_Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
-
-class InteractiveBrowserPolicy extends exports_Schema.Class("InteractiveBrowserPolicy")(exports_Schema.Struct({
-  network: InteractiveBrowserNetworkPolicy,
-  maxActions: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(1000)),
-  maxElapsedMillis: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(10 * 60000)),
-  maxReturnedBytes: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(8 * 1024 * 1024))
-}).pipe(exports_Schema.annotate({ parseOptions: { onExcessProperty: "error" } }))) {
-}
-
-class BrowserNavigateRequest extends exports_Schema.Class("BrowserNavigateRequest")({ url: PageCaptureTargetUrl }) {
-}
-
-class BrowserReadTextRequest extends exports_Schema.Class("BrowserReadTextRequest")({ selector: exports_Schema.optionalKey(Selector) }) {
-}
-
-class BrowserFillRequest extends exports_Schema.Class("BrowserFillRequest")({
-  selector: Selector,
-  value: FieldValue
-}) {
-}
-
-class BrowserClickRequest extends exports_Schema.Class("BrowserClickRequest")({
-  selector: Selector
-}) {
-}
-
-class BrowserScreenshotRequest extends exports_Schema.Class("BrowserScreenshotRequest")({ fullPage: exports_Schema.Boolean }) {
-}
-
-class BrowserScrollRequest extends exports_Schema.Class("BrowserScrollRequest")({
-  deltaX: ScrollDelta,
-  deltaY: ScrollDelta
-}) {
-}
-
-class BrowserNavigationResult extends exports_Schema.Class("BrowserNavigationResult")({ url: PageCaptureTargetUrl }) {
-}
-
-class BrowserTextResult extends exports_Schema.Class("BrowserTextResult")({
-  text: BoundedText
-}) {
-}
-
-class BrowserActionResult extends exports_Schema.Class("BrowserActionResult")({
-  url: PageCaptureTargetUrl
-}) {
-}
-
-class InteractiveBrowserPolicyDeniedError extends exports_Schema.TaggedError()("InteractiveBrowserPolicyDeniedError", { implementation: SandboxImplementation, message: BoundedMessage3 }) {
-}
-
-class InteractiveBrowserBusyError extends exports_Schema.TaggedError()("InteractiveBrowserBusyError", { implementation: SandboxImplementation, message: BoundedMessage3 }) {
-}
-
-class InteractiveBrowserCapacityError extends exports_Schema.TaggedError()("InteractiveBrowserCapacityError", { implementation: SandboxImplementation, message: BoundedMessage3 }) {
-}
-
-class InteractiveBrowserExpiredError extends exports_Schema.TaggedError()("InteractiveBrowserExpiredError", { implementation: SandboxImplementation, message: BoundedMessage3 }) {
-}
-
-class InteractiveBrowserActionError extends exports_Schema.TaggedError()("InteractiveBrowserActionError", {
-  implementation: SandboxImplementation,
-  operation: exports_Schema.Literals([
-    "navigate",
-    "read-text",
-    "fill",
-    "click",
-    "screenshot",
-    "scroll",
-    "close"
-  ]),
-  message: BoundedMessage3,
-  cause: exports_Schema.optionalKey(exports_Schema.Defect())
-}) {
-}
-
-class InteractiveBrowserProtocolError extends exports_Schema.TaggedError()("InteractiveBrowserProtocolError", {
-  implementation: SandboxImplementation,
-  message: BoundedMessage3,
-  cause: exports_Schema.optionalKey(exports_Schema.Defect())
-}) {
-}
-
-class InteractiveBrowserLimitError extends exports_Schema.TaggedError()("InteractiveBrowserLimitError", {
-  implementation: SandboxImplementation,
-  limit: exports_Schema.Literals(["actions", "elapsed", "returned-bytes"]),
-  maximum: PositiveInt5,
-  observed: exports_Schema.Natural,
-  message: BoundedMessage3
-}) {
-}
-
-class InteractiveBrowserUnsupportedError extends exports_Schema.TaggedError()("InteractiveBrowserUnsupportedError", {
-  implementation: SandboxImplementation,
-  feature: exports_Schema.Literals([
-    "navigation",
-    "read-text",
-    "fill",
-    "click",
-    "screenshot",
-    "scroll",
-    "policy"
-  ]),
-  message: BoundedMessage3
-}) {
-}
-var InteractiveBrowserError = exports_Schema.Union([
-  InteractiveBrowserPolicyDeniedError,
-  InteractiveBrowserBusyError,
-  InteractiveBrowserCapacityError,
-  InteractiveBrowserExpiredError,
-  InteractiveBrowserActionError,
-  InteractiveBrowserProtocolError,
-  InteractiveBrowserLimitError,
-  InteractiveBrowserUnsupportedError
-]);
-
-class InteractiveBrowser extends exports_Context.Service()("@effect-agent/sandbox/InteractiveBrowser") {
 }
 // packages/sandbox/src/page-crawl.ts
 var MAX_PAGE_BYTES = 8 * 1024 * 1024;

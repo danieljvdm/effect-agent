@@ -9,6 +9,7 @@ import {
   InteractiveBrowserError,
   InteractiveBrowserPolicy,
   type BrowserHandle,
+  type InteractiveBrowserNetworkPolicy,
 } from "@effect-agent/sandbox";
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Exit, Fiber, Layer, Logger, Redacted, Schema, type Scope } from "effect";
@@ -338,6 +339,7 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
 
 const policy = (
   overrides: Partial<{
+    readonly network: InteractiveBrowserNetworkPolicy;
     readonly allowedHosts: ReadonlyArray<string>;
     readonly maxActions: number;
     readonly maxElapsedMillis: number;
@@ -345,13 +347,20 @@ const policy = (
   }> = {},
 ) =>
   InteractiveBrowserPolicy.make({
-    network: { _tag: "ExactHosts", allowedHosts: overrides.allowedHosts ?? ["example.com"] },
+    network: overrides.network ?? {
+      _tag: "ExactHosts",
+      allowedHosts: overrides.allowedHosts ?? ["example.com"],
+    },
     maxActions: overrides.maxActions ?? 8,
     maxElapsedMillis: overrides.maxElapsedMillis ?? 5_000,
     maxReturnedBytes: overrides.maxReturnedBytes ?? 1_024,
   });
 
 const navigate = (url = "https://example.com/page") => BrowserNavigateRequest.make({ url });
+const supportedNetworks = [
+  { _tag: "ExactHosts", allowedHosts: ["example.com"] },
+  { _tag: "Unrestricted" },
+] satisfies ReadonlyArray<InteractiveBrowserNetworkPolicy>;
 const readText = (selector?: string) =>
   BrowserReadTextRequest.make(selector === undefined ? {} : { selector });
 const fill = () => BrowserFillRequest.make({ selector: "#query", value: "effect" });
@@ -555,6 +564,7 @@ describe("Browser Run interactive browser adapter", () => {
         expect(initial.calls.some((call) => call.startsWith("page.goto:"))).toBe(false);
 
         for (const deniedUrl of [
+          "http://example.com/",
           "https://redirect.invalid/final",
           "https://cdn.invalid/script.js",
           "not a valid URL",
@@ -601,9 +611,9 @@ describe("Browser Run interactive browser adapter", () => {
     }),
   );
 
-  it.effect(
-    "rejects concurrent operations immediately without queueing or consuming an action",
-    () =>
+  it.effect.each(supportedNetworks)(
+    "rejects concurrent operations immediately without queueing or consuming an action ($_tag)",
+    (network) =>
       Effect.gen(function* () {
         const gate = makeGate<void>();
         const fixture = makeFixture({
@@ -634,14 +644,14 @@ describe("Browser Run interactive browser adapter", () => {
                 observed: 2,
               });
             }),
-          policy({ maxActions: 1 }),
+          policy({ network, maxActions: 1 }),
         );
       }),
   );
 
-  it.effect(
-    "bounds text before it crosses the page boundary and rejects malformed observations",
-    () =>
+  it.effect.each(supportedNetworks)(
+    "bounds text before it crosses the page boundary and rejects malformed observations ($_tag)",
+    (network) =>
       Effect.gen(function* () {
         const overLimit = makeFixture({
           readText: async () => ({ _tag: "OverLimit", observed: 9 }),
@@ -649,7 +659,7 @@ describe("Browser Run interactive browser adapter", () => {
         const limit = yield* withBrowser(
           overLimit,
           (handle) => handle.readText(readText()),
-          policy({ maxReturnedBytes: 8 }),
+          policy({ network, maxReturnedBytes: 8 }),
         ).pipe(Effect.flip);
         expect(limit).toMatchObject({
           _tag: "InteractiveBrowserLimitError",
@@ -664,7 +674,7 @@ describe("Browser Run interactive browser adapter", () => {
         const byteLimit = yield* withBrowser(
           multibyte,
           (handle) => handle.readText(readText()),
-          policy({ maxReturnedBytes: 3 }),
+          policy({ network, maxReturnedBytes: 3 }),
         ).pipe(Effect.flip);
         expect(byteLimit).toMatchObject({
           _tag: "InteractiveBrowserLimitError",
@@ -678,46 +688,50 @@ describe("Browser Run interactive browser adapter", () => {
           { _tag: "Unknown" },
         ]) {
           const malformed = makeFixture({ readText: async () => observation });
-          const error = yield* withBrowser(malformed, (handle) => handle.readText(readText())).pipe(
-            Effect.flip,
-          );
+          const error = yield* withBrowser(
+            malformed,
+            (handle) => handle.readText(readText()),
+            policy({ network }),
+          ).pipe(Effect.flip);
           expect(error).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
         }
       }),
   );
 
-  it.effect("enforces elapsed time in flight and expires an uncertain handle", () =>
-    Effect.gen(function* () {
-      const gate = makeGate<void>();
-      const fixture = makeFixture({
-        goto: async () => {
-          gate.markStarted();
-          await gate.promise;
-        },
-      });
+  it.effect.each(supportedNetworks)(
+    "enforces elapsed time in flight and expires an uncertain handle ($_tag)",
+    (network) =>
+      Effect.gen(function* () {
+        const gate = makeGate<void>();
+        const fixture = makeFixture({
+          goto: async () => {
+            gate.markStarted();
+            await gate.promise;
+          },
+        });
 
-      yield* withBrowser(
-        fixture,
-        (handle) =>
-          Effect.gen(function* () {
-            const navigating = yield* handle.navigate(navigate()).pipe(Effect.forkChild);
-            yield* awaitPromise(gate.started);
-            yield* TestClock.adjust(Duration.millis(100));
-            const elapsed = yield* Fiber.join(navigating).pipe(Effect.flip);
-            expect(elapsed).toMatchObject({
-              _tag: "InteractiveBrowserLimitError",
-              limit: "elapsed",
-              maximum: 100,
-              observed: 100,
-            });
-            gate.resolve(undefined);
-            const expired = yield* handle.readText(readText()).pipe(Effect.flip);
-            expect(expired).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
-          }),
-        policy({ maxElapsedMillis: 100 }),
-      );
-      expectResourcesClosedOnce(fixture);
-    }),
+        yield* withBrowser(
+          fixture,
+          (handle) =>
+            Effect.gen(function* () {
+              const navigating = yield* handle.navigate(navigate()).pipe(Effect.forkChild);
+              yield* awaitPromise(gate.started);
+              yield* TestClock.adjust(Duration.millis(100));
+              const elapsed = yield* Fiber.join(navigating).pipe(Effect.flip);
+              expect(elapsed).toMatchObject({
+                _tag: "InteractiveBrowserLimitError",
+                limit: "elapsed",
+                maximum: 100,
+                observed: 100,
+              });
+              gate.resolve(undefined);
+              const expired = yield* handle.readText(readText()).pipe(Effect.flip);
+              expect(expired).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
+            }),
+          policy({ network, maxElapsedMillis: 100 }),
+        );
+        expectResourcesClosedOnce(fixture);
+      }),
   );
 
   it.effect("closes every remote resource that arrives after acquisition has timed out", () =>
@@ -955,32 +969,43 @@ describe("Browser Run interactive browser adapter", () => {
     }),
   );
 
-  it.effect(
-    "finalizes acquired resources after success, failure, defect, timeout, and interruption",
-    () =>
+  it.effect.each(supportedNetworks)(
+    "finalizes acquired resources after success, failure, defect, timeout, and interruption ($_tag)",
+    (network) =>
       Effect.gen(function* () {
+        const browserPolicy = policy({ network });
         const success = makeFixture();
-        yield* withBrowser(success, () => Effect.void);
+        yield* withBrowser(success, () => Effect.void, browserPolicy);
         expectResourcesClosedOnce(success);
 
-        const failure = makeFixture();
-        const failureExit = yield* withBrowser(failure, (handle) =>
-          handle.navigate(navigate("https://denied.invalid/")),
+        const failure = makeFixture({
+          goto: async () => {
+            throw new Error("navigation failed");
+          },
+        });
+        const failureExit = yield* withBrowser(
+          failure,
+          (handle) => handle.navigate(navigate("https://denied.invalid/")),
+          browserPolicy,
         ).pipe(Effect.exit);
         expect(Exit.isFailure(failureExit)).toBe(true);
         expectResourcesClosedOnce(failure);
 
         const defect = makeFixture();
-        const defectExit = yield* withBrowser(defect, () => Effect.die("test defect")).pipe(
-          Effect.exit,
-        );
+        const defectExit = yield* withBrowser(
+          defect,
+          () => Effect.die("test defect"),
+          browserPolicy,
+        ).pipe(Effect.exit);
         expect(Exit.isFailure(defectExit)).toBe(true);
         expectResourcesClosedOnce(defect);
 
         const timeoutReady = makeGate<void>();
         const timeout = makeFixture();
-        const timeoutFiber = yield* withBrowser(timeout, () =>
-          Effect.sync(timeoutReady.markStarted).pipe(Effect.andThen(Effect.never)),
+        const timeoutFiber = yield* withBrowser(
+          timeout,
+          () => Effect.sync(timeoutReady.markStarted).pipe(Effect.andThen(Effect.never)),
+          browserPolicy,
         ).pipe(Effect.timeout(Duration.millis(100)), Effect.forkChild);
         yield* awaitPromise(timeoutReady.started);
         yield* TestClock.adjust(Duration.millis(100));
@@ -989,8 +1014,10 @@ describe("Browser Run interactive browser adapter", () => {
 
         const interruptReady = makeGate<void>();
         const interrupted = makeFixture();
-        const interruptedFiber = yield* withBrowser(interrupted, () =>
-          Effect.sync(interruptReady.markStarted).pipe(Effect.andThen(Effect.never)),
+        const interruptedFiber = yield* withBrowser(
+          interrupted,
+          () => Effect.sync(interruptReady.markStarted).pipe(Effect.andThen(Effect.never)),
+          browserPolicy,
         ).pipe(Effect.forkChild);
         yield* awaitPromise(interruptReady.started);
         yield* Fiber.interrupt(interruptedFiber);
@@ -1198,81 +1225,108 @@ describe("Browser Run interactive browser adapter", () => {
     }),
   );
 
-  it.effect("keeps exact-host navigation, resources, and human handoff on the same page", () =>
-    Effect.gen(function* () {
-      const parameters: Array<unknown> = [];
-      const fixture = makeFixture({
-        goto: async (url, controls) => {
-          controls.emitRequest(url);
-          controls.emitRequest("https://cdn.example.net/app.js");
-        },
-        cdpSend: async (command, input) => {
-          parameters.push(input);
-          if (command === "Cloudflare.getLiveView") {
-            return {
-              devtoolsFrontendUrl:
-                "https://live.browser.run/ui/view?mode=tab&wss=live.browser.run/api/devtools/browser/session/page/target?jwt=secret",
-            };
-          }
-          if (command === "Cloudflare.handoff") return { handoffId: "private-handoff" };
-          return { active: false, handoffId: "private-handoff", durationMs: 25 };
-        },
-      });
+  it.effect.each([
+    {
+      network: {
+        _tag: "ExactHosts",
+        allowedHosts: ["example.com", "example.org", "cdn.example.net"],
+      },
+      destination: "https://example.org/",
+      resource: "https://cdn.example.net/app.js",
+    },
+    {
+      network: { _tag: "Unrestricted" },
+      destination: "http://127.0.0.1:8080/",
+      resource: "http://169.254.169.254/resource",
+    },
+  ] satisfies ReadonlyArray<{
+    network: InteractiveBrowserNetworkPolicy;
+    destination: string;
+    resource: string;
+  }>)(
+    "keeps navigation, resources, and human handoff on the same page ($network._tag)",
+    ({ network, destination, resource }) =>
+      Effect.gen(function* () {
+        const parameters: Array<unknown> = [];
+        const fixture = makeFixture({
+          goto: async (url, controls) => {
+            controls.emitRequest(url);
+            controls.emitRequest(resource);
+            controls.emitRequest(destination);
+            controls.setUrl(destination);
+          },
+          cdpSend: async (command, input) => {
+            parameters.push(input);
+            if (command === "Cloudflare.getLiveView") {
+              return {
+                devtoolsFrontendUrl:
+                  "https://live.browser.run/ui/view?mode=tab&wss=live.browser.run/api/devtools/browser/session/page/target?jwt=secret",
+              };
+            }
+            if (command === "Cloudflare.handoff") return { handoffId: "private-handoff" };
+            return { active: false, handoffId: "private-handoff", durationMs: 25 };
+          },
+        });
 
-      yield* withHost(fixture, (host) =>
-        Effect.gen(function* () {
-          const session = yield* host.open(
-            policy({
-              allowedHosts: ["example.com", "example.org", "cdn.example.net"],
-              maxActions: 6,
-              maxElapsedMillis: 90_000,
-            }),
-          );
-          expect(Redacted.isRedacted(session.sessionId)).toBe(true);
-          expect(Redacted.value(session.sessionId)).toBe("session-id");
-          yield* session.handle.navigate(navigate("https://example.com/"));
-          yield* session.handle.navigate(navigate("https://example.org/"));
-          const liveView = yield* session.getLiveView(
-            BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 }),
-          );
-          const handoff = yield* session.handoff(
-            BrowserRunHandoffRequest.make({ instructions: "Complete MFA", timeout: 1_000 }),
-          );
-          fixture.controls.emitRequest("https://example.org/after-human");
-          fixture.controls.setUrl("https://example.org/after-human");
-          const state = yield* session.getHandoffState;
-          expect(Redacted.isRedacted(liveView.devtoolsFrontendUrl)).toBe(true);
-          expect(Redacted.value(liveView.devtoolsFrontendUrl)).toContain("jwt=secret");
-          expect(Redacted.value(handoff.handoffId)).toBe("private-handoff");
-          expect(Redacted.value(state.handoffId!)).toBe("private-handoff");
-          expect(state.active).toBe(false);
-          const resumed = yield* session.handle.scroll(
-            BrowserScrollRequest.make({ deltaX: 0, deltaY: 10 }),
-          );
-          expect(resumed.url).toBe("https://example.org/after-human");
-          const limit = yield* session.handle.readText(readText()).pipe(Effect.flip);
-          expect(limit).toMatchObject({
-            _tag: "InteractiveBrowserLimitError",
-            limit: "actions",
-            observed: 7,
-          });
-          yield* session.close;
-        }),
-      );
+        yield* withHost(fixture, (host) =>
+          Effect.gen(function* () {
+            const session = yield* host.open(
+              policy({
+                network,
+                maxActions: 6,
+                maxElapsedMillis: 90_000,
+              }),
+            );
+            expect(Redacted.isRedacted(session.sessionId)).toBe(true);
+            expect(Redacted.value(session.sessionId)).toBe("session-id");
+            expect((yield* session.handle.navigate(navigate("https://example.com/"))).url).toBe(
+              destination,
+            );
+            yield* session.handle.navigate(navigate(destination));
+            const liveView = yield* session.getLiveView(
+              BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 }),
+            );
+            const handoff = yield* session.handoff(
+              BrowserRunHandoffRequest.make({ instructions: "Complete MFA", timeout: 1_000 }),
+            );
+            fixture.controls.emitRequest(`${destination}after-human`);
+            fixture.controls.setUrl(`${destination}after-human`);
+            const state = yield* session.getHandoffState;
+            expect(Redacted.isRedacted(liveView.devtoolsFrontendUrl)).toBe(true);
+            expect(Redacted.value(liveView.devtoolsFrontendUrl)).toContain("jwt=secret");
+            expect(Redacted.value(handoff.handoffId)).toBe("private-handoff");
+            expect(Redacted.value(state.handoffId!)).toBe("private-handoff");
+            expect(state.active).toBe(false);
+            const resumed = yield* session.handle.scroll(
+              BrowserScrollRequest.make({ deltaX: 0, deltaY: 10 }),
+            );
+            expect(resumed.url).toBe(`${destination}after-human`);
+            const limit = yield* session.handle.readText(readText()).pipe(Effect.flip);
+            expect(limit).toMatchObject({
+              _tag: "InteractiveBrowserLimitError",
+              limit: "actions",
+              observed: 7,
+            });
+            yield* session.close;
+            expect(
+              yield* session.handle.navigate(navigate(destination)).pipe(Effect.flip),
+            ).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
+          }),
+        );
 
-      expect(parameters).toEqual([
-        { mode: "tab", expiresInMs: 60_000 },
-        { instructions: "Complete MFA", timeout: 1_000 },
-        {},
-      ]);
-      expect(fixture.calls.filter((call) => call === "cdp.close")).toHaveLength(3);
-      expect(fixture.calls.filter((call) => call === "binding.launch")).toHaveLength(1);
-      expect(fixture.calls.filter((call) => call === "context.newPage")).toHaveLength(1);
-      expect(
-        fixture.calls.filter((call) => call === "request.continue:https://cdn.example.net/app.js"),
-      ).toHaveLength(2);
-      expectResourcesClosedOnce(fixture);
-    }),
+        expect(parameters).toEqual([
+          { mode: "tab", expiresInMs: 60_000 },
+          { instructions: "Complete MFA", timeout: 1_000 },
+          {},
+        ]);
+        expect(fixture.calls.filter((call) => call === "cdp.close")).toHaveLength(3);
+        expect(fixture.calls.filter((call) => call === "binding.launch")).toHaveLength(1);
+        expect(fixture.calls.filter((call) => call === "context.newPage")).toHaveLength(1);
+        expect(
+          fixture.calls.filter((call) => call === `request.continue:${resource}`),
+        ).toHaveLength(2);
+        expectResourcesClosedOnce(fixture);
+      }),
   );
 
   it.effect("rejects unsafe Live View responses and requests beyond the remaining pass", () =>
