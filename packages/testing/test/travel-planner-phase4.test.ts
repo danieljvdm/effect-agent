@@ -206,6 +206,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
           expect(logTags(records)).toEqual([
             "ConversationCreated",
             "UserInputRecorded",
+            "RunStarted",
             ...RUN_TAGS,
             "SubmissionSettled",
           ]);
@@ -281,6 +282,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
           expect(logTags(records)).toEqual([
             "ConversationCreated",
             "UserInputRecorded",
+            "RunStarted",
             "UserInputRecorded",
             ...RUN_TAGS,
             "SubmissionSettled",

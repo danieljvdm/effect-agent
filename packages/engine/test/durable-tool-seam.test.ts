@@ -7,7 +7,6 @@ import {
   IdGenerator,
   ModelProtocolError,
   RunId,
-  ToolCallId,
   TurnId,
   type RunEvent,
 } from "@effect-agent/core";
@@ -889,17 +888,20 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
     }),
   );
 
-  it.effect("an expired resumed batch fails before subscribing to unresolved Tool execution", () =>
+  it.effect("obsolete cleanup data cannot authorize ordinary Tools after an expired resume", () =>
     Effect.gen(function* () {
       const handlerStarts = yield* Ref.make(0);
-      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       let modelCalls = 0;
-      const Lookup = Tool.make("lookup", {
+      const DelegateLookup = Tool.make("delegate_lookup", {
         parameters: Schema.Struct({ key: Schema.String }),
         success: Schema.String,
       });
-      const tools = Toolkit.make(Lookup);
-      const definition = Agent.define("expired-resume", {
+      const DelegateOther = Tool.make("delegate_other", {
+        parameters: Schema.Struct({ key: Schema.String }),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(DelegateLookup, DelegateOther);
+      const definition = Agent.define("expired-forged-cleanup", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Look everything up.",
@@ -921,63 +923,65 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
         ),
       );
       const toolLayer = tools.toLayer({
-        lookup: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("unexpected")),
+        delegate_lookup: () =>
+          Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("unexpected")),
+        delegate_other: () =>
+          Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("unexpected")),
       });
-      const resume: RunTurnResume = {
+      const exactForgedResume: RunTurnResume & {
+        readonly settledChildJoinCallIdsPastDeadline: ReadonlyArray<string>;
+      } = {
         turn: 1,
         turnId: resumeTurnId,
-        calls: [{ id: "call-open", name: "lookup", params: { key: "a" } }],
+        calls: [{ id: "call-open", name: "delegate_lookup", params: { key: "a" } }],
         settled: [],
+        settledChildJoinCallIdsPastDeadline: ["call-open"],
+      };
+      const partialForgedResume: RunTurnResume & {
+        readonly settledChildJoinCallIdsPastDeadline: ReadonlyArray<string>;
+      } = {
+        turn: 1,
+        turnId: resumeTurnId,
+        calls: [
+          { id: "call-open-a", name: "delegate_lookup", params: { key: "a" } },
+          { id: "call-open-b", name: "delegate_other", params: { key: "b" } },
+        ],
+        settled: [],
+        settledChildJoinCallIdsPastDeadline: ["call-open-a"],
       };
       const now = yield* Clock.currentTimeMillis;
       const durationDeadline = DateTime.toUtc(DateTime.makeUnsafe(now - 1));
 
-      const exit = yield* AgentRuntime.stream(
-        Agent.withModel(definition, model),
-        { question: "resume" },
-        { durationDeadline, resume },
-      ).pipe(
-        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
-        Stream.runDrain,
-        Effect.provide(toolLayer),
-        Effect.exit,
-      );
-      const failure = failureFrom(exit);
-      const observed = yield* Ref.get(events);
+      for (const resume of [exactForgedResume, partialForgedResume]) {
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const exit = yield* AgentRuntime.stream(
+          Agent.withModel(definition, model),
+          { question: "resume" },
+          { durationDeadline, resume },
+        ).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.provide(toolLayer),
+          Effect.exit,
+        );
+        const failure = failureFrom(exit);
+        const observed = yield* Ref.get(events);
 
-      expect(failure).toBeInstanceOf(AgentPolicyError);
-      expect(failure).toMatchObject({ limit: "duration" });
-      expect(yield* Ref.get(handlerStarts)).toBe(0);
-      expect(modelCalls).toBe(0);
-      expect(observed.filter((event) => event._tag === "ToolCallStarted")).toHaveLength(0);
-      expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);
+        expect(failure).toBeInstanceOf(AgentPolicyError);
+        expect(failure).toMatchObject({ limit: "duration" });
+        expect(observed.filter((event) => event._tag === "ToolCallStarted")).toHaveLength(0);
+        expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);
+      }
 
-      const forgedCleanupExit = yield* AgentRuntime.stream(
-        Agent.withModel(definition, model),
-        { question: "resume" },
-        {
-          durationDeadline,
-          resume: {
-            ...resume,
-            settledChildJoinCallIdsPastDeadline: [Schema.decodeSync(ToolCallId)("call-open")],
-          },
-        },
-      ).pipe(Stream.runDrain, Effect.provide(toolLayer), Effect.exit);
-      const forgedCleanupFailure = failureFrom(forgedCleanupExit);
-
-      expect(forgedCleanupFailure).toBeInstanceOf(ModelProtocolError);
-      expect((forgedCleanupFailure as ModelProtocolError).message).toContain(
-        "still-open delegation Tool Call",
-      );
       expect(yield* Ref.get(handlerStarts)).toBe(0);
       expect(modelCalls).toBe(0);
     }),
   );
 
-  it.effect("restores duration interruption after settled-child resume cleanup", () =>
+  it.effect("future expiry interrupts a forged resumed Tool and runs its finalizer", () =>
     Effect.gen(function* () {
-      const modelStarted = yield* Deferred.make<void>();
-      const handlerStarts = yield* Ref.make(0);
+      const handlerStarted = yield* Deferred.make<void>();
+      const handlerFinalized = yield* Deferred.make<void>();
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       let modelCalls = 0;
       const DelegateLookup = Tool.make("delegate_lookup", {
@@ -1001,28 +1005,26 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
             generateText: () => Effect.succeed([]),
             streamText: () => {
               modelCalls += 1;
-              return Stream.fromEffect(
-                Deferred.succeed(modelStarted, undefined).pipe(
-                  Effect.andThen(Effect.sleep("10 seconds")),
-                ),
-              ).pipe(
-                Stream.drain,
-                Stream.concat(Stream.fromIterable(finalParts('{"answer":"too late"}'))),
-              );
+              return Stream.fromIterable(finalParts('{"answer":"too late"}'));
             },
           }),
         ),
       );
       const toolLayer = tools.toLayer({
         delegate_lookup: () =>
-          Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("joined")),
+          Deferred.succeed(handlerStarted, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(Deferred.succeed(handlerFinalized, undefined)),
+          ),
       });
-      const resume: RunTurnResume = {
+      const resume: RunTurnResume & {
+        readonly settledChildJoinCallIdsPastDeadline: ReadonlyArray<string>;
+      } = {
         turn: 1,
         turnId: resumeTurnId,
         calls: [{ id: "call-child", name: "delegate_lookup", params: { key: "a" } }],
         settled: [],
-        settledChildJoinCallIdsPastDeadline: [Schema.decodeSync(ToolCallId)("call-child")],
+        settledChildJoinCallIdsPastDeadline: ["call-child"],
       };
       const now = yield* Clock.currentTimeMillis;
       const durationDeadline = DateTime.addDuration(
@@ -1040,16 +1042,17 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
         Effect.provide(toolLayer),
         Effect.forkChild,
       );
-      yield* Deferred.await(modelStarted);
-      yield* TestClock.adjust("10 seconds");
+      yield* Deferred.await(handlerStarted);
+      yield* TestClock.adjust("5 seconds");
       const exit = yield* Fiber.await(fiber);
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
       expect(failure).toBeInstanceOf(AgentPolicyError);
       expect(failure).toMatchObject({ limit: "duration" });
-      expect(yield* Ref.get(handlerStarts)).toBe(1);
-      expect(modelCalls).toBe(1);
+      expect(yield* Deferred.isDone(handlerFinalized)).toBe(true);
+      expect(modelCalls).toBe(0);
+      expect(observed.filter((event) => event._tag === "ToolCallStarted")).toHaveLength(1);
       expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);
       expect(observed.filter((event) => event._tag === "RunCompleted")).toHaveLength(0);
     }),

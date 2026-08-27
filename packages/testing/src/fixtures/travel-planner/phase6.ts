@@ -704,8 +704,24 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
     },
   },
   {
-    batchId: "turn-response:run:{submissionId}:1",
+    batchId: "run-start:run:{submissionId}",
     sequence: 3,
+    record: {
+      recordId: "run-start:run:{submissionId}",
+      family: "conversation",
+      schemaVersion: 1,
+      createdAt: "{timestamp}",
+      deploymentId: "{deploymentId}",
+      payload: {
+        _tag: "RunStarted",
+        runId: "run:{submissionId}",
+        maxDurationMillis: 30_000,
+      },
+    },
+  },
+  {
+    batchId: "turn-response:run:{submissionId}:1",
+    sequence: 4,
     record: {
       recordId: "model-response:run:{submissionId}:1",
       family: "conversation",
@@ -805,7 +821,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
   },
   {
     batchId: "turn-results:run:{submissionId}:1",
-    sequence: 4,
+    sequence: 5,
     record: {
       recordId: "tool-settled:run:{submissionId}:1:flight-call-1",
       family: "conversation",
@@ -829,7 +845,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
   },
   {
     batchId: "turn-results:run:{submissionId}:1",
-    sequence: 5,
+    sequence: 6,
     record: {
       recordId: "tool-settled:run:{submissionId}:1:lodging-call-1",
       family: "conversation",
@@ -852,7 +868,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
   },
   {
     batchId: "turn-results:run:{submissionId}:1",
-    sequence: 6,
+    sequence: 7,
     record: {
       recordId: "tool-settled:run:{submissionId}:1:activity-call-1",
       family: "conversation",
@@ -873,7 +889,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
   },
   {
     batchId: "turn:run:{submissionId}:2",
-    sequence: 7,
+    sequence: 8,
     record: {
       recordId: "model-response:run:{submissionId}:2",
       family: "conversation",
@@ -921,7 +937,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
   },
   {
     batchId: "turn:run:{submissionId}:2",
-    sequence: 8,
+    sequence: 9,
     record: {
       recordId: "run-completed:run:{submissionId}",
       family: "conversation",
@@ -959,7 +975,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
   },
   {
     batchId: "submission-settlement:{submissionId}",
-    sequence: 9,
+    sequence: 10,
     record: {
       recordId: "settlement:{submissionId}",
       family: "conversation",

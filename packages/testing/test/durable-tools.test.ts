@@ -463,6 +463,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(logTags(records)).toEqual([
         "ConversationCreated",
         "UserInputRecorded",
+        "RunStarted",
         "ModelResponseRecorded",
         "ToolCallPrepared",
         "ToolCallSettled",
@@ -527,6 +528,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(logTags(records)).toEqual([
         "ConversationCreated",
         "UserInputRecorded",
+        "RunStarted",
         "ModelResponseRecorded",
         "ToolCallSettled",
         "ModelResponseRecorded",
@@ -617,6 +619,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(logTags(committed)).toEqual([
           "ConversationCreated",
           "UserInputRecorded",
+          "RunStarted",
           "ModelResponseRecorded",
         ]);
         expect(yield* desk.count("r-resume")).toBe(0);
@@ -896,6 +899,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(logTags(records)).toEqual([
         "ConversationCreated",
         "UserInputRecorded",
+        "RunStarted",
         "ModelResponseRecorded",
         "SubmissionSettled",
       ]);

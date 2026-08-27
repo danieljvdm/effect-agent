@@ -187,6 +187,7 @@ import {
   RecordEnvelope,
   RecordId,
   RepairAnnotated,
+  RunStartedRecord,
   SettlementFailureDiagnostic,
   SubagentJoined,
   SubagentLineageRecorded,
@@ -232,6 +233,8 @@ import {
   projectRunJournal,
   runCompletedRecordId,
   runIdForSubmission,
+  runStartedBatchId,
+  runStartedRecordId,
   subagentJoinBatchId,
   subagentJoinedRecordId,
   subagentLineageBatchId,
@@ -1988,6 +1991,72 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const canonicalRunStartFromRecords = Effect.fn(
+    "DurableAgentRuntime.canonicalRunStartFromRecords",
+  )(function* (records: ReadonlyArray<CanonicalRecordEnvelope>, runId: RunId) {
+    const recordId = runStartedRecordId(runId);
+    const starts = records.filter(
+      ({ record }) => record.payload._tag === "RunStarted" && record.payload.runId === runId,
+    );
+    const existing = records.find(({ record }) => record.recordId === recordId);
+    if (
+      starts.length > 1 ||
+      (starts.length === 1 && starts[0]?.record.recordId !== recordId) ||
+      (existing !== undefined &&
+        (existing.record.payload._tag !== "RunStarted" || existing.record.payload.runId !== runId))
+    ) {
+      return yield* RunJournalError.make({
+        message: `Run ${runId} has conflicting start evidence`,
+      });
+    }
+    return existing?.record;
+  });
+
+  const ensureRunStarted = Effect.fn("DurableAgentRuntime.ensureRunStarted")(function* (
+    ctx: AttemptAppendContext,
+    submission: SubmissionSnapshot,
+    maxDurationMillis: number,
+  ) {
+    const runId = runIdForSubmission(submission.submissionId);
+    const recordId = runStartedRecordId(runId);
+    const records = yield* readAll(submission.conversationId);
+    const existing = yield* canonicalRunStartFromRecords(records, runId);
+    let start: RecordEnvelope;
+    if (existing !== undefined && existing.payload._tag === "RunStarted") {
+      if (existing.payload.maxDurationMillis !== maxDurationMillis) {
+        return yield* RunJournalError.make({
+          message: `Run ${runId} started with a ${existing.payload.maxDurationMillis}ms duration allowance; the replacement Binding supplies ${maxDurationMillis}ms`,
+        });
+      }
+      start = existing;
+    } else {
+      const executionStarted = records.some(
+        ({ record: { payload } }) =>
+          payload._tag !== "UserInputRecorded" && "runId" in payload && payload.runId === runId,
+      );
+      if (executionStarted) {
+        return yield* RunJournalError.make({
+          message: `Run ${runId} has execution records but no canonical start; reset incompatible private-development data`,
+        });
+      }
+      start = yield* makeEnvelope(recordId, RunStartedRecord.make({ runId, maxDurationMillis }));
+      yield* hit("run:before-start-append");
+      yield* appendBatch(
+        ctx,
+        CanonicalBatch.make({
+          batchId: runStartedBatchId(runId),
+          producerId: config.producerId,
+          records: [start],
+        }),
+      );
+      yield* hit("run:after-start-append");
+    }
+    return {
+      startedAt: start.createdAt,
+      deadline: DateTime.addDuration(start.createdAt, Duration.millis(maxDurationMillis)),
+    };
+  });
+
   /**
    * Settle ONE joined Submission with its host Run's outcome (plan §2.5, DUR-002: every accepted
    * Submission is owed its own settlement). The same recoverable reserve → append → finalize
@@ -2408,6 +2477,7 @@ const make = Effect.gen(function* () {
     function* (
       parent: SubmissionSnapshot,
       request: SubagentRequested,
+      allowAdmission = true,
     ): Effect.fn.Return<ChildAdmissionOutcome, DurableWorkerFailure> {
       const principal = decodePrincipalSync(request.childPrincipal);
       const idempotencyKey = decodeIdempotencyKeySync(request.childIdempotencyKey);
@@ -2425,6 +2495,12 @@ const make = Effect.gen(function* () {
           return { _tag: "indeterminate", reason: resolution.reason };
         }
         case "NotAdmitted": {
+          if (!allowAdmission) {
+            return {
+              _tag: "indeterminate",
+              reason: "The expired parent cannot admit a new child",
+            };
+          }
           const admitted: AdmissionResult = yield* ledger
             .admit(
               AdmissionRequest.make({
@@ -2704,103 +2780,101 @@ const make = Effect.gen(function* () {
   );
 
   /**
-   * Coordinator-side settlement join of one settled child under a parent ABORT (spec §13.1):
-   * the parent settles aborted only after every attached child's terminal outcome is joined,
-   * and no delegation handler runs on the abort path, so the framework itself appends the
-   * atomic `[SubagentJoined, ToolCallSettled]` batch with the bounded parent-aborted projection
-   * and the deterministic conservative accounting derived from the stored allocation.
+   * Join a settled child after parent abort or expiry without running application handlers.
+   * The canonical child outcome stays intact; the parent result records why it cannot continue.
    */
-  const joinSettledChildForAbort = Effect.fn("DurableAgentRuntime.joinSettledChildForAbort")(
-    function* (
-      ctx: AttemptAppendContext,
-      parent: SubmissionSnapshot,
-      knownIds: Set<string>,
-      subagent: SubagentCallRecords,
-      reservation: ChildBudgetReservationSnapshot,
-      toolCallId: ToolCallId,
-      childSubmissionId: SubmissionId,
-    ): Effect.fn.Return<void, DurableWorkerFailure> {
-      const runId = runIdForSubmission(parent.submissionId);
-      const request = subagent.requested.get(toolCallId);
-      if (request === undefined) {
+  const joinSettledChildForClosedParent = Effect.fn(
+    "DurableAgentRuntime.joinSettledChildForClosedParent",
+  )(function* (
+    ctx: AttemptAppendContext,
+    parent: SubmissionSnapshot,
+    knownIds: Set<string>,
+    subagent: SubagentCallRecords,
+    reservation: ChildBudgetReservationSnapshot,
+    toolCallId: ToolCallId,
+    childSubmissionId: SubmissionId,
+    reason: "aborted" | "duration",
+  ): Effect.fn.Return<void, DurableWorkerFailure> {
+    const runId = runIdForSubmission(parent.submissionId);
+    const request = subagent.requested.get(toolCallId);
+    if (request === undefined) {
+      return yield* LedgerError.make({
+        operation: "joinSettledChildForClosedParent",
+        message: `Tool Call ${toolCallId} has an attached child but no canonical SubagentRequested record`,
+      });
+    }
+    const joinedRecordId = subagentJoinedRecordId(runId, toolCallId);
+    let finalAccounting: PersistedJson;
+    const existing = subagent.joined.get(toolCallId);
+    if (existing !== undefined) {
+      finalAccounting = existing.finalAccounting;
+    } else {
+      const verification = yield* verifySettledChild(parent, request, childSubmissionId);
+      if (verification._tag === "mismatch") {
         return yield* LedgerError.make({
-          operation: "joinSettledChildForAbort",
-          message: `Tool Call ${toolCallId} has an attached child but no canonical SubagentRequested record`,
+          operation: "joinSettledChildForClosedParent",
+          message: `Child Settlement verification failed for Tool Call ${toolCallId}: ${verification.message}`,
         });
       }
-      const joinedRecordId = subagentJoinedRecordId(runId, toolCallId);
-      let finalAccounting: PersistedJson;
-      const existing = subagent.joined.get(toolCallId);
-      if (existing !== undefined) {
-        finalAccounting = existing.finalAccounting;
-      } else {
-        const verification = yield* verifySettledChild(parent, request, childSubmissionId);
-        if (verification._tag === "mismatch") {
-          return yield* LedgerError.make({
-            operation: "joinSettledChildForAbort",
-            message: `Child Settlement verification failed for Tool Call ${toolCallId}: ${verification.message}`,
-          });
-        }
-        const verified = verification.value;
-        // Static-shape projections; a bounds failure is a defect, matching `annotateRepair`.
-        const boundedResult = yield* decodePersisted({
-          errorTag: "SubagentParentAborted",
-          message: boundedText(
-            `The parent Submission aborted; attached child ${childSubmissionId} settled ${verified.outcome}`,
-          ),
-        }).pipe(Effect.orDie);
-        finalAccounting = yield* decodePersisted({
-          basis: "aborted-conservative",
-          allocation: reservation.allocation,
-        }).pipe(Effect.orDie);
-        const childRunId = runIdForSubmission(childSubmissionId);
-        const joinedPayload = SubagentJoined.make({
+      const verified = verification.value;
+      // Static-shape projections; a bounds failure is a defect, matching `annotateRepair`.
+      const boundedResult = yield* decodePersisted({
+        errorTag: reason === "aborted" ? "SubagentParentAborted" : "SubagentParentDurationExceeded",
+        message: boundedText(
+          `The parent Submission ${reason === "aborted" ? "aborted" : "exceeded its duration"}; attached child ${childSubmissionId} settled ${verified.outcome}`,
+        ),
+      }).pipe(Effect.orDie);
+      finalAccounting = yield* decodePersisted({
+        basis: reason === "aborted" ? "aborted-conservative" : "duration-conservative",
+        allocation: reservation.allocation,
+      }).pipe(Effect.orDie);
+      const childRunId = runIdForSubmission(childSubmissionId);
+      const joinedPayload = SubagentJoined.make({
+        runId,
+        toolCallId,
+        childSubmissionId,
+        childSettlementId: verified.settlement.settlementId,
+        childOutcome: verified.outcome,
+        childResultDigest: yield* withCrypto(digestJson(verified.settlement.result ?? null)),
+        projectedResultDigest: yield* withCrypto(digestJson(boundedResult)),
+        usageSummary: yield* childUsageSummaryOf(verified.childRecords, childRunId),
+        reservationId: reservation.reservationId,
+        finalAccounting,
+      });
+      const settledRecordId = toolCallSettledRecordId(runId, request.turn, toolCallId);
+      const joinedEnvelope = yield* makeEnvelope(joinedRecordId, joinedPayload);
+      const settledEnvelope = yield* makeEnvelope(
+        settledRecordId,
+        ToolCallSettled.make({
           runId,
           toolCallId,
-          childSubmissionId,
-          childSettlementId: verified.settlement.settlementId,
-          childOutcome: verified.outcome,
-          childResultDigest: yield* withCrypto(digestJson(verified.settlement.result ?? null)),
-          projectedResultDigest: yield* withCrypto(digestJson(boundedResult)),
-          usageSummary: yield* childUsageSummaryOf(verified.childRecords, childRunId),
-          reservationId: reservation.reservationId,
-          finalAccounting,
-        });
-        const settledRecordId = toolCallSettledRecordId(runId, request.turn, toolCallId);
-        const joinedEnvelope = yield* makeEnvelope(joinedRecordId, joinedPayload);
-        const settledEnvelope = yield* makeEnvelope(
-          settledRecordId,
-          ToolCallSettled.make({
-            runId,
-            toolCallId,
-            toolName: subagent.preparedNames.get(toolCallId) ?? request.delegationId,
-            result: boundedResult,
-            isFailure: true,
+          toolName: subagent.preparedNames.get(toolCallId) ?? request.delegationId,
+          result: boundedResult,
+          isFailure: true,
+        }),
+      );
+      if (!knownIds.has(joinedRecordId)) {
+        yield* appendBatch(
+          ctx,
+          CanonicalBatch.make({
+            batchId: subagentJoinBatchId(runId, toolCallId),
+            producerId: config.producerId,
+            records: [joinedEnvelope, settledEnvelope],
           }),
+        ).pipe(
+          Effect.catch((error) =>
+            error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
+          ),
+          Effect.asVoid,
         );
-        if (!knownIds.has(joinedRecordId)) {
-          yield* appendBatch(
-            ctx,
-            CanonicalBatch.make({
-              batchId: subagentJoinBatchId(runId, toolCallId),
-              producerId: config.producerId,
-              records: [joinedEnvelope, settledEnvelope],
-            }),
-          ).pipe(
-            Effect.catch((error) =>
-              error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-            ),
-            Effect.asVoid,
-          );
-          knownIds.add(joinedRecordId);
-          knownIds.add(settledRecordId);
-          subagent.joined.set(toolCallId, joinedPayload);
-          yield* hit("subagent:after-join-append");
-        }
+        knownIds.add(joinedRecordId);
+        knownIds.add(settledRecordId);
+        subagent.joined.set(toolCallId, joinedPayload);
+        yield* hit("subagent:after-join-append");
       }
-      yield* applyReservationRelease(reservation.reservationId, finalAccounting);
-    },
-  );
+    }
+    yield* applyReservationRelease(reservation.reservationId, finalAccounting);
+  });
 
   /**
    * Complete every joined-but-unreleased reservation BEFORE the parent settles (spec §12 join
@@ -2835,6 +2909,143 @@ const make = Effect.gen(function* () {
     }
     return open;
   });
+
+  /** Release unused reservations or repair and join existing children, never admit new work. */
+  const reconcileExpiredChildren = Effect.fn("DurableAgentRuntime.reconcileExpiredChildren")(
+    function* (
+      ctx: AttemptAppendContext,
+      parent: SubmissionSnapshot,
+      ownershipToken: OwnershipToken,
+    ) {
+      const snapshot = yield* ledger.loadRecoverySnapshot(
+        RecoverySnapshotRequest.make({ submissionId: parent.submissionId }),
+      );
+      const records = yield* readAll(parent.conversationId);
+      const runId = runIdForSubmission(parent.submissionId);
+      const pending = yield* pendingToolBatchFor(records, runId);
+      const knownIds = knownRecordIdsOf(records);
+      const subagent = subagentRecordsOf(records, runId);
+      for (const reservation of snapshot.childReservations) {
+        const toolCallId = reservation.parentToolCallId;
+        if (reservation.status !== "reserved" || subagent.joined.has(toolCallId)) continue;
+        let started = subagent.started.get(toolCallId);
+        const request = subagent.requested.get(toolCallId);
+        if (
+          started === undefined &&
+          request === undefined &&
+          reservation.childSubmissionId === undefined
+        ) {
+          yield* releaseOrphanReservation(reservation.reservationId);
+          continue;
+        }
+        const call = pending?.calls.find((candidate) => candidate.id === toolCallId);
+        if (
+          pending === undefined ||
+          call === undefined ||
+          request === undefined ||
+          subagent.preparedNames.get(toolCallId) !== call.name ||
+          request.delegationId !== call.name ||
+          reservation.parentSubmissionId !== parent.submissionId ||
+          request.reservationId !== reservation.reservationId ||
+          request.reservationDigest !== reservation.allocationDigest ||
+          request.turn !== pending.turn ||
+          request.turnId !== pending.turnId
+        ) {
+          return yield* LedgerError.make({
+            operation: "reconcileExpiredChildren",
+            message: `Tool Call ${toolCallId} has inconsistent canonical child request evidence`,
+          });
+        }
+        if (started === undefined) {
+          const resolution = yield* ledger.resolveAdmission(
+            SubmissionLookupByKey.make({
+              conversationId: request.childConversationId,
+              principal: decodePrincipalSync(request.childPrincipal),
+              idempotencyKey: decodeIdempotencyKeySync(request.childIdempotencyKey),
+            }),
+          );
+          if (resolution._tag === "Indeterminate") continue;
+          if (resolution._tag === "NotAdmitted") {
+            if (reservation.childSubmissionId !== undefined) {
+              return yield* LedgerError.make({
+                operation: "reconcileExpiredChildren",
+                message: `Tool Call ${toolCallId} has an attachment but no admitted child`,
+              });
+            }
+            yield* releaseOrphanReservation(reservation.reservationId);
+            continue;
+          }
+          // Finish only the already-admitted child's materialization and readiness. A second
+          // authoritative lookup must still never turn a stale observation into a new admission.
+          const admission = yield* establishChildFromRequest(parent, request, false);
+          if (admission._tag === "indeterminate") continue;
+          started = SubagentStarted.make({
+            runId,
+            toolCallId,
+            childConversationId: request.childConversationId,
+            childSubmissionId: admission.childSubmissionId,
+            childReceiptId: admission.receiptId,
+            childRunId: runIdForSubmission(admission.childSubmissionId),
+          });
+          const startRecordId = subagentStartedRecordId(runId, toolCallId);
+          const envelope = yield* makeEnvelope(startRecordId, started);
+          yield* appendBatch(
+            ctx,
+            CanonicalBatch.make({
+              batchId: subagentStartedBatchId(runId, toolCallId),
+              producerId: config.producerId,
+              records: [envelope],
+            }),
+          );
+          knownIds.add(startRecordId);
+          subagent.started.set(toolCallId, started);
+          yield* hit("subagent:after-start-append");
+        }
+        const child = yield* ledger.lookup(
+          SubmissionLookupById.make({ submissionId: started.childSubmissionId }),
+        );
+        if (
+          Option.isNone(child) ||
+          (reservation.childSubmissionId !== undefined &&
+            reservation.childSubmissionId !== started.childSubmissionId) ||
+          request.childConversationId !== started.childConversationId ||
+          started.childConversationId !== child.value.conversationId ||
+          started.childReceiptId !== child.value.receiptId ||
+          started.childRunId !== runIdForSubmission(started.childSubmissionId)
+        ) {
+          return yield* LedgerError.make({
+            operation: "reconcileExpiredChildren",
+            message: `Tool Call ${call.id} has inconsistent canonical child attachment evidence`,
+          });
+        }
+        yield* ledger
+          .attachChildToReservation(
+            AttachChildToReservationRequest.make({
+              reservationId: reservation.reservationId,
+              ownershipToken,
+              childSubmissionId: started.childSubmissionId,
+            }),
+          )
+          .pipe(
+            Effect.catchTag(
+              "ChildReservationConflict",
+              conflictToLedgerError("attachChildToReservation"),
+            ),
+          );
+        if (child.value.state !== "settled") continue;
+        yield* joinSettledChildForClosedParent(
+          ctx,
+          parent,
+          knownIds,
+          subagent,
+          reservation,
+          started.toolCallId,
+          started.childSubmissionId,
+          "duration",
+        );
+      }
+    },
+  );
 
   /** Where the request-abort-and-join pass over attached children ended (spec §13.1). */
   type ChildAbortDisposition = "clear" | "waiting" | "blocked";
@@ -2912,7 +3123,7 @@ const make = Effect.gen(function* () {
           });
         }
         if (child.value.state === "settled") {
-          yield* joinSettledChildForAbort(
+          yield* joinSettledChildForClosedParent(
             ctx,
             parent,
             knownIds,
@@ -2920,6 +3131,7 @@ const make = Effect.gen(function* () {
             reservation,
             toolCallId,
             childSubmissionId,
+            "aborted",
           );
           continue;
         }
@@ -3072,26 +3284,11 @@ const make = Effect.gen(function* () {
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     lineage: AttemptLineage,
     approvalDecisions: ReadonlyArray<ApprovalDecisionIntent>,
-    childAttachments: RecoverySnapshot["childAttachments"],
+    runTiming: { readonly startedAt: DateTime.Utc; readonly deadline: DateTime.Utc },
   ) =>
     Effect.gen(function* () {
       const submissionId = submission.submissionId;
       const runId = runIdForSubmission(submissionId);
-      const inputRecord = records.find(
-        (envelope) => envelope.record.recordId === submissionInputRecordId(submissionId),
-      );
-      if (inputRecord === undefined) {
-        return yield* RunJournalError.make({
-          message: `Run ${runId} has no canonical input record for its duration deadline`,
-        });
-      }
-      // RUN-030: the first canonical input append is the logical Run-start
-      // authority. Queue/admission time precedes it; every later Attempt uses
-      // this same absolute deadline, including after durable suspension.
-      const durationDeadline = DateTime.addDuration(
-        inputRecord.record.createdAt,
-        agent.definition.policy.maxDuration,
-      );
       const journal = yield* projectRunJournal(records, runId);
       const pending = yield* pendingToolBatchFor(records, runId);
       const resumeProjection =
@@ -3524,32 +3721,6 @@ const make = Effect.gen(function* () {
         for (const call of pending.calls) {
           encodedParamsByCallId.set(call.id, call.params);
           declaredNamesByCallId.set(call.id, call.name);
-        }
-      }
-      let settledChildJoinCallIdsPastDeadline: ReadonlyArray<ToolCallId> | undefined;
-      if (pending !== undefined) {
-        const joinCallIds: Array<ToolCallId> = [];
-        let everyOpenCallIsSettledChild = true;
-        for (const call of pending.calls) {
-          if (pending.settled.some((settled) => settled.id === call.id)) continue;
-          const started = [...subagentState.started.values()].find(
-            (candidate) => candidate.toolCallId === call.id,
-          );
-          const settledChild = childAttachments.find(
-            (child) =>
-              started !== undefined &&
-              child.toolCallId === started.toolCallId &&
-              child.childSubmissionId === started.childSubmissionId &&
-              child.childState === "settled",
-          );
-          if (started === undefined || settledChild === undefined) {
-            everyOpenCallIsSettledChild = false;
-            break;
-          }
-          joinCallIds.push(settledChild.toolCallId);
-        }
-        if (everyOpenCallIsSettledChild && joinCallIds.length > 0) {
-          settledChildJoinCallIdsPastDeadline = joinCallIds;
         }
       }
       // Task #12 (WP1 `resume.leadingMessages`): the pending canonical response's messages
@@ -4621,7 +4792,8 @@ const make = Effect.gen(function* () {
         ...(toolAuthorization === undefined ? {} : { toolAuthorization }),
         durability,
         subagent,
-        durationDeadline,
+        runStartedAt: runTiming.startedAt,
+        durationDeadline: runTiming.deadline,
         ...(pending === undefined
           ? {}
           : {
@@ -4630,9 +4802,6 @@ const make = Effect.gen(function* () {
                 turnId: pending.turnId,
                 calls: pending.calls,
                 settled: pending.settled,
-                ...(settledChildJoinCallIdsPastDeadline === undefined
-                  ? {}
-                  : { settledChildJoinCallIdsPastDeadline }),
                 ...(resumeLeadingMessages === undefined
                   ? {}
                   : { leadingMessages: resumeLeadingMessages }),
@@ -5175,16 +5344,38 @@ const make = Effect.gen(function* () {
         );
       }
       yield* applyCanonicalInput(ctx, submission, tokenRef, records, snapshot.inputApplied);
+      const runTiming = yield* ensureRunStarted(
+        ctx,
+        submission,
+        Duration.toMillis(agent.definition.policy.maxDuration),
+      );
+      let expiredChildObligation = false;
+      if ((yield* Clock.currentTimeMillis) >= DateTime.toEpochMillis(runTiming.deadline)) {
+        yield* reconcileExpiredChildren(ctx, submission, yield* Ref.get(tokenRef));
+        expiredChildObligation = yield* completeJoinedReleases(submission);
+      }
 
-      // Open ordinary Tool Calls gate the Run (DUR-009): reconcile-then-mark, never auto-replay.
-      if (evidence.openToolCalls.length > 0) {
+      // Recheck after duration interruption too: that Attempt may have prepared new ordinary calls.
+      const ordinaryCallsResolved = Effect.gen(function* () {
+        const reconciliationRecords = yield* readAll(conversationId);
+        const reconciliationSnapshot = yield* ledger.loadRecoverySnapshot(
+          RecoverySnapshotRequest.make({ submissionId }),
+        );
+        const reconciliationEvidence = yield* evidenceFor(
+          reconciliationRecords,
+          submissionId,
+          true,
+          reconciliationSnapshot.hostSubmissionId,
+        );
+        if (reconciliationEvidence.openToolCalls.length === 0) return true;
+        for (const envelope of reconciliationRecords) knownIds.add(envelope.record.recordId);
         const tools: Record<string, Tool.Any> = agent.definition.toolkit.tools;
         const review = yield* reconcileOpenCalls(
           ctx,
           submission,
-          snapshot,
-          records,
-          evidence.openToolCalls,
+          reconciliationSnapshot,
+          reconciliationRecords,
+          reconciliationEvidence.openToolCalls,
           knownIds,
           (toolName) => {
             const tool = tools[toolName];
@@ -5207,9 +5398,12 @@ const make = Effect.gen(function* () {
           yield* ledger
             .releaseOwnership(ReleaseOwnershipRequest.make({ submissionId, ownershipToken }))
             .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
-          return Option.none<Settlement>();
+          return false;
         }
-      }
+        return true;
+      });
+      if (!expiredChildObligation && !(yield* ordinaryCallsResolved))
+        return Option.none<Settlement>();
 
       const lineage: AttemptLineage = {
         attemptId: claim.attemptId,
@@ -5219,9 +5413,6 @@ const make = Effect.gen(function* () {
       let approvalDecisionIntents = snapshot.approvalDecisions;
       while (true) {
         const currentRecords = yield* readAll(conversationId);
-        const currentSnapshot = yield* ledger.loadRecoverySnapshot(
-          RecoverySnapshotRequest.make({ submissionId }),
-        );
         const outcome = yield* runModel(
           agent,
           ctx,
@@ -5230,7 +5421,7 @@ const make = Effect.gen(function* () {
           currentRecords,
           lineage,
           approvalDecisionIntents,
-          currentSnapshot.childAttachments,
+          runTiming,
         );
         if (outcome._tag === "suspendedChild") {
           // Durable waitingForChild suspension (spec §12 step 10, SUB-030): the sibling
@@ -5311,6 +5502,9 @@ const make = Effect.gen(function* () {
         // Canonical joins drive their reservation release BEFORE the parent settles (a settled
         // lane would strand the repair); a reserved row WITHOUT a canonical join is an open
         // attached-child obligation and the parent never settles across it (spec §13).
+        if (outcome._tag === "failed" && outcome.policyLimit === "duration") {
+          yield* reconcileExpiredChildren(ctx, submission, yield* Ref.get(tokenRef));
+        }
         const openObligation = yield* completeJoinedReleases(submission);
         if (openObligation) {
           if (outcome._tag === "failed") {
@@ -5328,6 +5522,13 @@ const make = Effect.gen(function* () {
             operation: "runAttempt",
             message: `Submission ${submissionId} completed with an unjoined child budget reservation; the settlement is withheld fail-closed (spec 13)`,
           });
+        }
+        if (
+          outcome._tag === "failed" &&
+          outcome.policyLimit === "duration" &&
+          !(yield* ordinaryCallsResolved)
+        ) {
+          return Option.none<Settlement>();
         }
         return Option.some(yield* terminalize(ctx, submission, tokenRef, outcome, true));
       }
@@ -5950,6 +6151,44 @@ const make = Effect.gen(function* () {
       records: ReadonlyArray<CanonicalRecordEnvelope>,
     ): Effect.fn.Return<"repaired" | "deferred" | "none" | "unknown", DurableWorkerFailure> {
       const submission = snapshot.submission;
+      const runId = runIdForSubmission(submission.submissionId);
+      const start = yield* canonicalRunStartFromRecords(records, runId);
+      if (
+        start?.payload._tag === "RunStarted" &&
+        start.payload.runId === runId &&
+        (yield* Clock.currentTimeMillis) >=
+          DateTime.toEpochMillis(start.createdAt) + start.payload.maxDurationMillis &&
+        (decision._tag === "CompleteChildAdmission" ||
+          decision._tag === "RepairSubagentStartLink" ||
+          decision._tag === "AwaitChildAdmissionResolution" ||
+          (decision._tag === "MarkUnknown" &&
+            snapshot.childReservations.some((reservation) => reservation.status !== "released")))
+      ) {
+        // A closed admission window must release provably-unused reservations or restore the
+        // existing child's link. Do this before ordinary Unknown Outcomes make the lane
+        // unclaimable, and never let binding-free recovery admit new work after expiry.
+        const claimed = yield* claimFor(submission);
+        if (Option.isNone(claimed)) return "deferred";
+        const claim = claimed.value;
+        yield* store.materialize(
+          ConversationMaterialization.make({
+            conversationId: submission.conversationId,
+            producerEpoch: claim.producerEpoch,
+          }),
+        );
+        const ctx = yield* attemptContextFor(submission.conversationId, claim.producerEpoch);
+        yield* reconcileExpiredChildren(ctx, submission, claim.ownershipToken);
+        const open = yield* completeJoinedReleases(submission);
+        yield* ledger
+          .releaseOwnership(
+            ReleaseOwnershipRequest.make({
+              submissionId: submission.submissionId,
+              ownershipToken: claim.ownershipToken,
+            }),
+          )
+          .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+        return open ? "deferred" : "repaired";
+      }
       switch (decision._tag) {
         case "NoAction": {
           return "none";

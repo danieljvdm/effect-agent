@@ -24,7 +24,6 @@ import {
   IdGenerator,
   InputTokenUsage,
   type InstructionSource,
-  isDelegationToolName,
   type RunDispositionDeclaration,
   ModelStarted,
   ModelCallUsage,
@@ -623,6 +622,21 @@ const inspectModelResponsePartCapacity = (
       : Effect.succeed(bytes);
   });
 
+/**
+ * `disableToolCallResolution` keeps model Tool Call parameters in their
+ * encoded wire form. Build the response ownership codec from those encoded
+ * parameter Schemas; the engine decodes and canonically re-encodes each call
+ * against the Definition-owned Schema before it enters history or executes.
+ */
+const encodedToolParameterToolkit = <Tools extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.Toolkit<Tools>,
+): Toolkit.Any =>
+  Toolkit.make(
+    ...Object.values(toolkit.tools).map((tool) =>
+      tool.setParameters(Schema.toEncoded(tool.parametersSchema)),
+    ),
+  );
+
 const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(function* <
   Tools extends Record<string, Tool.Any>,
 >(
@@ -646,7 +660,7 @@ const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(func
   } else {
     yield* inspectModelResponsePartCapacity(usage, part, limits);
   }
-  const codec = Schema.toCodecJson(Response.StreamPart(toolkit));
+  const codec = Schema.toCodecJson(Response.StreamPart(encodedToolParameterToolkit(toolkit)));
   const encodingFailure = ModelProtocolError.make({
     message: "Model response part failed canonical encoding",
   });
@@ -791,13 +805,7 @@ const firstOpenPart = (trace: TurnTrace): string | undefined => {
   return undefined;
 };
 
-/**
- * `LanguageModel.streamText` has already decoded a complete Tool Call against
- * the owning parameter Schema, so transformed values must be encoded back to
- * the native runtime boundary before they can cross it again. These private
- * function-type assertions restore correlation lost by dynamic record lookup
- * only around a successful Schema encode; they never bypass validation.
- */
+/** Canonically encode already-decoded Tool Call parameters for history and execution. */
 const encodeToolCallParameters = <Tools extends Record<string, Tool.Any>>(
   tool: ToolUnion<Tools>,
   toolName: string,
@@ -3250,10 +3258,15 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
       }
       const toolCallId = yield* decodeToolCallId(part.id);
       const tool = tools[part.name] as ToolUnion<Tools>;
+      const decodedParameters = yield* decodeToolCallParameters<Tools>(
+        tool,
+        part.name,
+        part.params,
+      );
       const encodedParameters = yield* encodeToolCallParameters<Tools>(
         tool,
         part.name,
-        part.params as Tool.Parameters<ToolUnion<Tools>>,
+        decodedParameters,
       );
       const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
       const canonicalCall = Response.makePart("tool-call", {
@@ -4825,24 +4838,6 @@ const makeResumeTurn = <
           isFailure: settledCall.isFailure,
         };
       }
-      const settledChildJoinCallIds = resume.settledChildJoinCallIdsPastDeadline;
-      if (settledChildJoinCallIds !== undefined) {
-        const cleanupIds = new Set<string>(settledChildJoinCallIds);
-        const openCalls = resume.calls.filter((call) => !settledIds.has(call.id));
-        if (
-          settledChildJoinCallIds.length === 0 ||
-          cleanupIds.size !== settledChildJoinCallIds.length ||
-          openCalls.length !== cleanupIds.size ||
-          openCalls.some((call) => !cleanupIds.has(call.id) || !isDelegationToolName(call.name))
-        ) {
-          return failRunEventStream(
-            ModelProtocolError.make({
-              message:
-                "Past-deadline cleanup authority must identify every and only still-open delegation Tool Call",
-            }),
-          );
-        }
-      }
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
       const toolCalls = trace.toolCalls.size;
@@ -4915,24 +4910,8 @@ const makeResumeTurn = <
           ] satisfies ReadonlyArray<RunEvent>;
         }).pipe(Effect.withLogSpan("AgentRuntime.resume")),
       ).pipe(Stream.flatMap(Stream.fromIterable));
-      const continueAfterBatch = () => {
-        const continuation = toolBatchContinuation(
-          agent,
-          context,
-          trace,
-          resumedPrompt,
-          turn,
-          toolCalls,
-          options,
-        );
-        return settledChildJoinCallIds === undefined
-          ? continuation
-          : enforceDurationDeadline(
-              continuation,
-              context.durationDeadlineMillis,
-              durationLimitError(policy),
-            );
-      };
+      const continueAfterBatch = () =>
+        toolBatchContinuation(agent, context, trace, resumedPrompt, turn, toolCalls, options);
 
       // RUN-018 on the resume path: a canonically declared over-budget batch
       // settles synthetically under final-answer mode — recorded settled
@@ -5067,7 +5046,12 @@ const stream = <
         options.durationDeadline === undefined
           ? attemptDeadlineMillis
           : Math.min(attemptDeadlineMillis, DateTime.toEpochMillis(options.durationDeadline));
-      const startedAtMillis = durationDeadlineMillis - maxDurationMillis;
+      // Elapsed status tracks the logical Run's actual start. A shorter
+      // deadline tightens execution without inventing time that never passed.
+      const startedAtMillis =
+        options.runStartedAt === undefined
+          ? attemptStartedAtMillis
+          : DateTime.toEpochMillis(options.runStartedAt);
       const ids = yield* IdGenerator;
       const conversationId =
         options.conversationId === undefined
@@ -5188,14 +5172,7 @@ const stream = <
       );
 
       const durationLimit = durationLimitError(agent.definition.policy);
-      // A coordinator-proven resume of exact already-settled attached-child
-      // Calls is mandatory accepted-work cleanup. `makeResumeTurn` validates
-      // and runs only that join batch past expiry, then restores this same
-      // deadline guard around its continuation.
-      const deadline =
-        options.resume?.settledChildJoinCallIdsPastDeadline !== undefined
-          ? execution
-          : enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
+      const deadline = enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
 
       // Engine-provided Tool services for this Run: a real `AgentSpawner`
       // bound to the Run's immutable identity and delegation depth, plus the

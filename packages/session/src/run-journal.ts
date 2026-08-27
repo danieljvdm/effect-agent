@@ -52,6 +52,11 @@ const decodeRecordId = Schema.decodeSync(RecordId);
 export const runIdForSubmission = (submissionId: SubmissionId): RunId =>
   decodeRunId(`run:${submissionId}`);
 
+/** Stable canonical clock identity shared by every Attempt of one Run. */
+export const runStartedRecordId = (runId: RunId): RecordId => decodeRecordId(`run-start:${runId}`);
+
+export const runStartedBatchId = (runId: RunId): BatchId => decodeBatchId(`run-start:${runId}`);
+
 /** Deterministic Turn identity: Attempt-independent for one (Run, canonical turn) pair. */
 export const turnIdForRun = (runId: RunId, turn: number): TurnId =>
   decodeTurnId(`turn:${runId}:${turn}`);
@@ -457,6 +462,7 @@ const withoutApplicationToolCallMessages = (prompt: Prompt.Prompt): ReadonlyArra
  * child-log lineage record is not model input.
  */
 const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
+  "RunStarted",
   "ToolCallPrepared",
   "ToolCallUnknown",
   "ToolCallResolved",

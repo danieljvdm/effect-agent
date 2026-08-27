@@ -12,13 +12,13 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
-// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeRuntime.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.111+1c5a24aacf2db9bb/node_modules/@effect/platform-node/dist/NodeRuntime.js
 var exports_NodeRuntime = {};
 __export(exports_NodeRuntime, {
   runMain: () => runMain2
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Cause.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Cause.js
 var exports_Cause = {};
 __export(exports_Cause, {
   squash: () => squash,
@@ -82,7 +82,7 @@ __export(exports_Cause, {
   AsyncFiberError: () => AsyncFiberError2
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Context.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Context.js
 var exports_Context = {};
 __export(exports_Context, {
   pick: () => pick,
@@ -110,7 +110,7 @@ __export(exports_Context, {
   Reference: () => Reference
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Pipeable.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Pipeable.js
 var pipeArguments = (self, args) => {
   switch (args.length) {
     case 0:
@@ -153,7 +153,7 @@ var Class = /* @__PURE__ */ function() {
   return PipeableBase;
 }();
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Function.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Function.js
 var dual = function(arity, body) {
   if (typeof arity === "function") {
     return function() {
@@ -267,7 +267,7 @@ function memoizeIdempotent(f) {
   };
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/equal.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/equal.js
 var getAllObjectKeys = (obj) => {
   const keys = new Set(Reflect.ownKeys(obj));
   if (obj.constructor === Object)
@@ -291,7 +291,7 @@ var getAllObjectKeys = (obj) => {
 };
 var byReferenceInstances = /* @__PURE__ */ new WeakSet;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Predicate.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Predicate.js
 var exports_Predicate = {};
 __export(exports_Predicate, {
   xor: () => xor,
@@ -487,7 +487,7 @@ function some(collection) {
   };
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Hash.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Hash.js
 var symbol = "~effect/interfaces/Hash";
 var hash = (self) => {
   switch (typeof self) {
@@ -611,7 +611,7 @@ function withVisitedTracking(obj, fn) {
   return result;
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Equal.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Equal.js
 var symbol2 = "~effect/interfaces/Equal";
 function equals() {
   if (arguments.length === 1) {
@@ -813,7 +813,7 @@ var byReferenceUnsafe = (obj) => {
   return obj;
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Redactable.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Redactable.js
 var symbolRedactable = /* @__PURE__ */ Symbol.for("~effect/Redactable");
 var isRedactable = (u) => hasProperty(u, symbolRedactable);
 function redact(u) {
@@ -836,7 +836,7 @@ var emptyContext = {
   }
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Formatter.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Formatter.js
 function format(input, options) {
   const space = options?.space ?? 0;
   const ancestors = new WeakSet;
@@ -943,7 +943,7 @@ function formatJson(input, options) {
   }, options?.space) ?? "null";
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Inspectable.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Inspectable.js
 var NodeInspectSymbol = /* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom");
 var toJson = (input) => {
   try {
@@ -993,7 +993,7 @@ class Class2 {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Utils.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Utils.js
 class SingleShotGen {
   called = false;
   self;
@@ -1032,7 +1032,7 @@ var pickInternalCall = () => {
 };
 var internalCall = /* @__PURE__ */ pickInternalCall();
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/record.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/record.js
 function assignProperty(self, key, value) {
   if (key === "__proto__") {
     Object.defineProperty(self, key, {
@@ -1053,7 +1053,7 @@ function assignProperties(self, source) {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/core.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/core.js
 var EffectTypeId = `~effect/Effect`;
 var ExitTypeId = `~effect/Exit`;
 var effectVariance = {
@@ -1426,13 +1426,13 @@ var done = (value) => {
   return exitFail(Done(value));
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Effectable.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Effectable.js
 var Prototype2 = (options) => makePrimitiveProto({
   op: options.label,
   [evaluate]: options.evaluate
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Option.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Option.js
 var exports_Option = {};
 __export(exports_Option, {
   zipWith: () => zipWith,
@@ -1497,7 +1497,7 @@ __export(exports_Option, {
   Do: () => Do
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Combiner.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Combiner.js
 function make(combine2) {
   return {
     combine: combine2
@@ -1510,7 +1510,7 @@ function max(order) {
   return make((self, that) => order(self, that) === 1 ? self : that);
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Reducer.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Reducer.js
 function make2(combine2, initialValue, combineAll) {
   return {
     combine: combine2,
@@ -1525,7 +1525,7 @@ function make2(combine2, initialValue, combineAll) {
   };
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Equivalence.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Equivalence.js
 var make3 = (isEquivalent) => (self, that) => self === that || isEquivalent(self, that);
 var isStrictEquivalent = (x, y) => x === y;
 var strictEqual = () => isStrictEquivalent;
@@ -1554,7 +1554,7 @@ function Array_(item) {
   });
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/doNotation.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/doNotation.js
 var let_ = (map) => dual(3, (self, name, f) => map(self, (a) => ({
   ...a,
   [name]: f(a)
@@ -1567,7 +1567,7 @@ var bind = (map, flatMap) => dual(3, (self, name, f) => flatMap(self, (a) => map
   [name]: b
 }))));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/option.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/option.js
 var TypeId = "~effect/data/Option";
 var CommonProto = {
   [TypeId]: {
@@ -1633,7 +1633,7 @@ var some2 = (value) => {
   return a;
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/result.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/result.js
 var TypeId2 = "~effect/data/Result";
 var CommonProto2 = {
   [TypeId2]: {
@@ -1702,7 +1702,7 @@ var getFailure = (self) => isSuccess(self) ? none : some2(self.failure);
 var getSuccess = (self) => isFailure(self) ? none : some2(self.success);
 var fromOption = /* @__PURE__ */ dual(2, (self, onNone) => isNone(self) ? fail(onNone()) : succeed(self.value));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Order.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Order.js
 function make4(compare) {
   return (self, that) => self === that ? 0 : compare(self, that);
 }
@@ -1728,7 +1728,7 @@ var max2 = (O) => dual(2, (self, that) => self === that || O(self, that) > -1 ? 
 var clamp = (O) => dual(2, (self, options) => min2(O)(options.maximum, max2(O)(options.minimum, self)));
 var isBetween = (O) => dual(2, (self, options) => !isLessThan(O)(self, options.minimum) && !isGreaterThan(O)(self, options.maximum));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Option.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Option.js
 var none2 = () => none;
 var some3 = some2;
 var isOption2 = isOption;
@@ -1910,7 +1910,7 @@ function makeReducerFailFast(reducer) {
   });
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Context.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Context.js
 var ServiceTypeId = "~effect/Context/Service";
 var Service = function() {
   function KeyClass() {}
@@ -2013,12 +2013,12 @@ var lookup = (self, key) => {
 };
 var makeUnsafe = (mapUnsafe) => makeImpl(undefined, mapUnsafe, undefined, 0);
 var Proto = {
+  get mapUnsafe() {
+    return flatten2(this);
+  },
   ...PipeInspectableProto,
   [TypeId3]: {
     _Services: (_) => _
-  },
-  get mapUnsafe() {
-    return flatten2(this);
   },
   toJSON() {
     return {
@@ -2144,10 +2144,10 @@ var omit = (...keys) => (self) => withFlat(self, (map2) => {
 });
 var Reference = Service;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/array.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/array.js
 var isArrayNonEmpty = (self) => self.length > 0;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Result.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Result.js
 var exports_Result = {};
 __export(exports_Result, {
   void: () => void_2,
@@ -2302,10 +2302,10 @@ var tap2 = /* @__PURE__ */ dual(2, (self, f) => {
   return self;
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Tuple.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Tuple.js
 var makeEquivalence3 = Tuple2;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Iterable.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Iterable.js
 var makeBy = (f, options) => {
   const max3 = options?.length !== undefined ? Math.max(1, Math.floor(options.length)) : Infinity;
   return {
@@ -2403,7 +2403,7 @@ var filter2 = /* @__PURE__ */ dual(2, (self, predicate) => ({
   }
 }));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Record.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Record.js
 var isEmptyRecord = (self) => Object.keys(self).length === 0;
 var has = /* @__PURE__ */ dual(2, (self, key) => Object.hasOwn(self, key));
 var map3 = /* @__PURE__ */ dual(2, (self, f) => {
@@ -2437,7 +2437,7 @@ var makeEquivalence4 = (equivalence) => {
   return (self, that) => is(self, that) && is(that, self);
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Array.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Array.js
 var Array2 = globalThis.Array;
 var allocate = (n) => new Array2(n);
 var makeBy2 = /* @__PURE__ */ dual(2, (n, f) => {
@@ -2577,7 +2577,7 @@ function makeReducerConcat() {
   return reducer;
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Duration.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Duration.js
 var exports_Duration = {};
 __export(exports_Duration, {
   zero: () => zero,
@@ -3191,7 +3191,7 @@ var ReducerSum = /* @__PURE__ */ make2(sum, zero);
 var CombinerMax = /* @__PURE__ */ max(Order);
 var CombinerMin = /* @__PURE__ */ min(Order);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Filter.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Filter.js
 var toPredicate = (self) => (input) => !isFailure2(self(input));
 var has2 = (key) => (input) => input.has(key) ? succeed2(input) : fail2(input);
 var compose2 = /* @__PURE__ */ dual(2, (left, right) => (input) => {
@@ -3214,7 +3214,7 @@ var toOption = (self) => (input) => {
   return isFailure2(result) ? none2() : some3(result.success);
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Scheduler.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Scheduler.js
 var Scheduler = /* @__PURE__ */ Reference("effect/Scheduler", {
   fiberCached: true,
   defaultValue: () => new MixedScheduler
@@ -3324,7 +3324,7 @@ var PreventSchedulerYield = /* @__PURE__ */ Reference("effect/Scheduler/PreventS
   defaultValue: () => false
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Tracer.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Tracer.js
 var exports_Tracer = {};
 __export(exports_Tracer, {
   make: () => make7,
@@ -3339,7 +3339,7 @@ __export(exports_Tracer, {
   CurrentTraceLevel: () => CurrentTraceLevel
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Encoding.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Encoding.js
 var exports_Encoding = {};
 __export(exports_Encoding, {
   randomHex: () => randomHex,
@@ -3357,7 +3357,7 @@ __export(exports_Encoding, {
   EncodingError: () => EncodingError
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Data.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Data.js
 var Class3 = class extends Class {
   constructor(props) {
     super();
@@ -3372,7 +3372,7 @@ var TaggedClass = (tag) => class extends Class3 {
 var Error3 = Error2;
 var TaggedError2 = TaggedError;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Encoding.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Encoding.js
 var EncodingErrorTypeId = "~effect/encoding/EncodingError";
 
 class EncodingError extends (/* @__PURE__ */ TaggedError2("EncodingError")) {
@@ -3546,7 +3546,7 @@ var fromHexChar = (byte) => {
   throw new TypeError("Invalid input");
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Tracer.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Tracer.js
 var ParentSpanKey = "effect/Tracer/ParentSpan";
 
 class ParentSpan extends (/* @__PURE__ */ Service()(ParentSpanKey, {
@@ -3627,10 +3627,10 @@ class NativeSpan {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/metric.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/metric.js
 var FiberRuntimeMetricsKey = "effect/observability/Metric/FiberRuntimeMetricsKey";
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/references.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/references.js
 var CurrentErrorReporters = /* @__PURE__ */ Reference("effect/ErrorReporter/CurrentErrorReporters", {
   defaultValue: () => new Set
 });
@@ -3665,7 +3665,7 @@ var CurrentLogSpans = /* @__PURE__ */ Reference("effect/References/CurrentLogSpa
   defaultValue: () => []
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/stackTraceLimit.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/stackTraceLimit.js
 var isStackTraceLimitWritable = () => {
   const desc = Object.getOwnPropertyDescriptor(Error, "stackTraceLimit");
   if (desc === undefined) {
@@ -3681,7 +3681,7 @@ var setStackTraceLimit = (value) => {
   }
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/tracer.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/tracer.js
 var addSpanStackTrace = (options) => {
   if (options?.captureStackTrace === false) {
     return options;
@@ -3715,7 +3715,7 @@ var makeStackCleaner = (line) => (stack) => {
 };
 var spanCleaner = /* @__PURE__ */ makeStackCleaner(3);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/effect.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/effect.js
 class Interrupt extends ReasonBase {
   fiberId;
   constructor(fiberId, annotations = constEmptyAnnotations) {
@@ -4053,6 +4053,8 @@ class FiberImpl {
     }
     this._observers.push(cb);
     return () => {
+      if (this._exit)
+        return;
       const index = this._observers.indexOf(cb);
       if (index >= 0) {
         this._observers.splice(index, 1);
@@ -4487,7 +4489,7 @@ var fn = function() {
   return makeFn(name, arguments[0], defError, Array.prototype.slice.call(arguments, 1), nameFirst, spanOptions);
 };
 var makeFn = (name, bodyOrOptions, defError, pipeables, addSpan, spanOptions) => {
-  const body = typeof bodyOrOptions === "function" ? bodyOrOptions : pipeables.pop().bind(bodyOrOptions.self);
+  const body = typeof bodyOrOptions === "function" ? bodyOrOptions : pipeables.shift().bind(bodyOrOptions.self);
   return defineFunctionLength(body.length, function(...args2) {
     let result = suspend(() => {
       const iter = body.apply(this, arguments);
@@ -5084,6 +5086,7 @@ var scopeCloseUnsafe = (self, exit_) => {
   }
   return scopeCloseFinalizers(self, finalizers, exit_);
 };
+var combineFinalizerCause = (exit_, finalizer) => exitIsSuccess(exit_) ? finalizer : catchCause(finalizer, (cause) => failCause(causeCombine(exit_.cause, cause)));
 var scopeCloseFinalizers = /* @__PURE__ */ fnUntraced(function* (self, finalizers, exit_) {
   let exits = [];
   const fibers = [];
@@ -5188,7 +5191,7 @@ var onExitPrimitive = /* @__PURE__ */ makePrimitive({
   [contE](cause, _, exit2) {
     exit2 ??= exitFailCause(cause);
     const eff = this[args][1](exit2);
-    return eff ? flatMap3(eff, (_2) => exit2) : exit2;
+    return eff ? flatMap3(combineFinalizerCause(exit2, eff), (_2) => exit2) : exit2;
   }
 });
 var onExit = /* @__PURE__ */ dual(2, onExitPrimitive);
@@ -6399,7 +6402,7 @@ var reportCauseUnsafe = (fiber2, cause, defectsOnly) => {
   reporters.forEach((reporter) => reporter.report(opts));
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Cause.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Cause.js
 var TypeId5 = CauseTypeId;
 var ReasonTypeId = CauseReasonTypeId;
 var isCause2 = isCause;
@@ -6464,7 +6467,7 @@ class StackTrace extends (/* @__PURE__ */ Service()("effect/Cause/StackTrace")) 
 class InterruptorStackTrace2 extends (/* @__PURE__ */ Service()("effect/Cause/InterruptorStackTrace")) {
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Effect.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Effect.js
 var exports_Effect = {};
 __export(exports_Effect, {
   zipWith: () => zipWith3,
@@ -6697,7 +6700,7 @@ __export(exports_Effect, {
   Do: () => Do4
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Exit.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Exit.js
 var exports_Exit = {};
 __export(exports_Exit, {
   void: () => void_4,
@@ -6756,7 +6759,7 @@ var getSuccess4 = exitGetSuccess;
 var getCause = exitGetCause;
 var findErrorOption3 = exitFindErrorOption;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Layer.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Layer.js
 var exports_Layer = {};
 __export(exports_Layer, {
   withSpan: () => withSpan2,
@@ -6805,7 +6808,7 @@ __export(exports_Layer, {
   CurrentMemoMap: () => CurrentMemoMap
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Deferred.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Deferred.js
 var exports_Deferred = {};
 __export(exports_Deferred, {
   sync: () => sync2,
@@ -6886,22 +6889,23 @@ var doneUnsafe = (self, effect) => {
     return false;
   self.effect = effect;
   if (self.resumes) {
-    for (let i = 0;i < self.resumes.length; i++) {
-      self.resumes[i](effect);
-    }
+    const resumes = self.resumes;
     self.resumes = undefined;
+    for (let i = 0;i < resumes.length; i++) {
+      resumes[i](effect);
+    }
   }
   return true;
 };
 var into = /* @__PURE__ */ dual(2, (self, deferred) => uninterruptibleMask((restore) => flatMap3(exit(restore(self)), (exit2) => done3(deferred, exit2))));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/References.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/References.js
 var CurrentLogAnnotations2 = CurrentLogAnnotations;
 var CurrentLogSpans2 = CurrentLogSpans;
 var CurrentStackFrame2 = CurrentStackFrame;
 var TracerTimingEnabled2 = TracerTimingEnabled;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Scope.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Scope.js
 var exports_Scope = {};
 __export(exports_Scope, {
   use: () => use,
@@ -6928,7 +6932,7 @@ var close = scopeClose;
 var closeUnsafe = scopeCloseUnsafe;
 var use = scopeUse;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Layer.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Layer.js
 var TypeId7 = "~effect/Layer";
 var MemoMapTypeId = "~effect/Layer/MemoMap";
 var memoMapReuse = (entry, scope2) => {
@@ -7158,7 +7162,7 @@ var provideSpanStackFrame2 = (name, stack) => {
   }));
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/ExecutionPlan.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/ExecutionPlan.js
 var TypeId8 = "~effect/ExecutionPlan";
 var Proto2 = {
   [TypeId8]: TypeId8,
@@ -7185,7 +7189,7 @@ var CurrentMetadata = /* @__PURE__ */ Reference("effect/ExecutionPlan/CurrentMet
   })
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Clock.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Clock.js
 var exports_Clock = {};
 __export(exports_Clock, {
   monotonicTimeNanos: () => monotonicTimeNanos2,
@@ -7200,7 +7204,7 @@ var currentTimeMillis2 = currentTimeMillis;
 var currentTimeNanos2 = currentTimeNanos;
 var monotonicTimeNanos2 = monotonicTimeNanos;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/dateTime.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/dateTime.js
 var TypeId9 = "~effect/time/DateTime";
 var TimeZoneTypeId = "~effect/time/DateTime/TimeZone";
 var Proto3 = {
@@ -7849,7 +7853,7 @@ var formatIsoOffset = (self) => {
 };
 var formatIsoZoned = (self) => self.zone._tag === "Offset" ? formatIsoOffset(self) : `${formatIsoOffset(self)}[${self.zone.id}]`;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Number.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Number.js
 var Number3 = globalThis.Number;
 var remainder = /* @__PURE__ */ dual(2, (self, divisor) => {
   const selfString = self.toString();
@@ -7910,14 +7914,14 @@ var parse = (s) => {
 var ReducerMax = /* @__PURE__ */ make2((a, b) => Math.max(a, b), -Infinity);
 var ReducerMin = /* @__PURE__ */ make2((a, b) => Math.min(a, b), Infinity);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/String.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/String.js
 var String3 = globalThis.String;
 var isString2 = isString;
 var Order3 = String2;
 var trim = (self) => self.trim();
 var camelToSnake = (self) => self.replace(/([A-Z])/g, "_$1").toLowerCase();
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/random.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/random.js
 var Random = /* @__PURE__ */ Reference("effect/Random", {
   defaultValue: () => ({
     nextIntUnsafe() {
@@ -7929,12 +7933,28 @@ var Random = /* @__PURE__ */ Reference("effect/Random", {
   })
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Pull.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Pull.js
 var catchDone = /* @__PURE__ */ dual(2, (effect2, f) => catchCauseFilter(effect2, filterDoneLeftover, (l) => f(l)));
 var isDoneCause = (cause) => cause.reasons.some(isDoneFailure);
 var isDoneFailure = (failure) => failure._tag === "Fail" && isDone2(failure.error);
-var filterDone = /* @__PURE__ */ composePassthrough(findError2, (e) => isDone2(e) ? succeed2(e) : fail2(e));
-var filterDoneLeftover = /* @__PURE__ */ composePassthrough(findError2, (e) => isDone2(e) ? succeed2(e.value) : fail2(e));
+var filterDone = (cause) => {
+  let done4;
+  let hasFailure = false;
+  for (const reason of cause.reasons) {
+    if (isDoneFailure(reason)) {
+      done4 ??= reason.error;
+    } else if (reason._tag !== "Interrupt") {
+      hasFailure = true;
+    }
+  }
+  if (done4 === undefined)
+    return fail2(cause);
+  return hasFailure ? fail2(fromReasons(cause.reasons.filter((reason) => !isDoneFailure(reason)))) : succeed2(done4);
+};
+var filterDoneLeftover = (cause) => {
+  const done4 = filterDone(cause);
+  return isFailure2(done4) ? done4 : succeed2(done4.success.value);
+};
 var doneExitFromCause = (cause) => {
   const halt = filterDone(cause);
   return !isFailure2(halt) ? succeed4(halt.success.value) : failCause2(halt.failure);
@@ -7947,7 +7967,7 @@ var matchEffect2 = /* @__PURE__ */ dual(2, (self, options) => matchCauseEffect(s
   }
 }));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Schedule.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Schedule.js
 var TypeId10 = "~effect/Schedule";
 var CurrentMetadata2 = /* @__PURE__ */ Reference("effect/Schedule/CurrentMetadata", {
   defaultValue: /* @__PURE__ */ constant({
@@ -8041,11 +8061,11 @@ var while_ = /* @__PURE__ */ dual(2, (self, predicate) => fromStep(map5(toStep(s
 })));
 var forever3 = /* @__PURE__ */ spaced(zero);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/layer.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/layer.js
 var provideLayer = (self, layer, options) => scopedWith((scope2) => flatMap3(options?.local ? buildWithMemoMap(layer, makeMemoMapUnsafe(), scope2) : buildWithScope(layer, scope2), (context2) => provideContext(self, context2)));
 var provide3 = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, source, options) => isContext(source) ? provideContext(self, source) : provideLayer(self, Array.isArray(source) ? mergeAll2(...source) : source, options));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schedule.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/schedule.js
 var repeatOrElse = /* @__PURE__ */ dual(3, (self, schedule, orElse3) => flatMap3(toStepWithMetadata(schedule), (step) => {
   let meta = CurrentMetadata2.defaultValue();
   return catch_(forever2(tap3(flatMap3(suspend(() => provideService(self, CurrentMetadata2, meta)), step), (meta_) => sync(() => {
@@ -8116,7 +8136,7 @@ var buildFromOptions = (options) => {
   return schedule;
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/executionPlan.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/executionPlan.js
 var makeEventEmitter = (onEvent, currentMetadata) => {
   let lastStepIndex = -1;
   let stepAttempt = 0;
@@ -8222,7 +8242,7 @@ var scheduleFromStep = (step, first) => {
 };
 var scheduleOnce = /* @__PURE__ */ recurs(1);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Request.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Request.js
 var TypeId11 = "~effect/Request";
 var requestVariance = /* @__PURE__ */ byReferenceUnsafe({
   _E: (_) => _,
@@ -8235,7 +8255,7 @@ var RequestPrototype = {
 };
 var makeEntry = (options) => options;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/request.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/request.js
 var request = /* @__PURE__ */ dual(2, (self, resolver) => {
   const withResolver = (resolver2) => callback((resume) => {
     const entry = addEntry(resolver2, self, resume, getCurrentFiber());
@@ -8351,7 +8371,7 @@ function runBatch(batch) {
   return batch.run;
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Metric.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Metric.js
 var exports_Metric = {};
 __export(exports_Metric, {
   withConstantInput: () => withConstantInput,
@@ -8896,7 +8916,7 @@ function addAttributesToContext(context2, attributes) {
   return add(context2, CurrentMetricAttributes, updated);
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Effect.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Effect.js
 var TypeId13 = EffectTypeId;
 var isEffect2 = isEffect;
 var all4 = all3;
@@ -9255,7 +9275,7 @@ var flatMapEager2 = flatMapEager;
 var catchEager2 = catchEager;
 var fnUntracedEager2 = fnUntracedEager;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Runtime.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Runtime.js
 var defaultTeardown = (exit3, onExit3) => {
   if (isSuccess4(exit3))
     return onExit3(0);
@@ -9303,7 +9323,7 @@ var getErrorReported = (u) => {
   return true;
 };
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeRuntime.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.112+def9bb16a7ea1143/node_modules/@effect/platform-node-shared/dist/NodeRuntime.js
 var runMain = /* @__PURE__ */ makeRunMain(({
   fiber: fiber3,
   teardown
@@ -9326,15 +9346,15 @@ var runMain = /* @__PURE__ */ makeRunMain(({
   process.on("SIGTERM", onSigint);
 });
 
-// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeRuntime.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.111+1c5a24aacf2db9bb/node_modules/@effect/platform-node/dist/NodeRuntime.js
 var runMain2 = runMain;
-// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeServices.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.111+1c5a24aacf2db9bb/node_modules/@effect/platform-node/dist/NodeServices.js
 var exports_NodeServices = {};
 __export(exports_NodeServices, {
   layer: () => layer13
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/FileSystem.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/FileSystem.js
 var exports_FileSystem = {};
 __export(exports_FileSystem, {
   makeNoop: () => makeNoop,
@@ -9352,7 +9372,7 @@ __export(exports_FileSystem, {
   FileSystem: () => FileSystem
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/PlatformError.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/PlatformError.js
 var TypeId14 = "~effect/platform/PlatformError";
 
 class BadArgument extends (/* @__PURE__ */ TaggedError2("BadArgument")) {
@@ -9388,7 +9408,7 @@ class PlatformError extends (/* @__PURE__ */ TaggedError2("PlatformError")) {
 var systemError = (options) => new PlatformError(new SystemError(options));
 var badArgument = (options) => new PlatformError(new BadArgument(options));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Chunk.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Chunk.js
 var TypeId15 = "~effect/collections/Chunk";
 function copy(src, srcPos, dest, destPos, len) {
   for (let i = srcPos;i < Math.min(src.length, srcPos + len); i++) {
@@ -9572,7 +9592,7 @@ var getUnsafe3 = /* @__PURE__ */ dual(2, (self, index) => {
 });
 var size = (self) => self.length;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Fiber.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Fiber.js
 var exports_Fiber = {};
 __export(exports_Fiber, {
   runIn: () => runIn,
@@ -9599,11 +9619,11 @@ var isFiber = (u) => hasProperty(u, FiberTypeId);
 var getCurrent = getCurrentFiber;
 var runIn = fiberRunIn;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Latch.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Latch.js
 var makeUnsafe5 = makeLatchUnsafe;
 var make11 = makeLatch;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/MutableRef.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/MutableRef.js
 var TypeId16 = "~effect/MutableRef";
 var MutableRefProto = {
   [TypeId16]: TypeId16,
@@ -9626,7 +9646,7 @@ var set = /* @__PURE__ */ dual(2, (self, value2) => {
   return self;
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/PubSub.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/PubSub.js
 var exports_PubSub = {};
 __export(exports_PubSub, {
   unbounded: () => unbounded,
@@ -9660,7 +9680,7 @@ __export(exports_PubSub, {
   BackPressureStrategy: () => BackPressureStrategy
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/MutableList.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/MutableList.js
 var Empty = /* @__PURE__ */ Symbol.for("effect/MutableList/Empty");
 var make13 = () => ({
   head: undefined,
@@ -9832,7 +9852,7 @@ var filter6 = (self, f) => {
 };
 var remove2 = (self, value2) => filter6(self, (v) => v !== value2);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/PubSub.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/PubSub.js
 var TypeId17 = "~effect/PubSub";
 var SubscriptionTypeId = "~effect/PubSub/Subscription";
 var make14 = (options) => sync4(() => makePubSubUnsafe(options.atomicPubSub(), new Map, makeUnsafe3(), makeUnsafe5(false), make12(false), options.strategy()));
@@ -11016,7 +11036,7 @@ var emptyReplayWindow = {
   }
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Queue.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Queue.js
 var exports_Queue = {};
 __export(exports_Queue, {
   unbounded: () => unbounded2,
@@ -11474,7 +11494,7 @@ var finalize = (self, exit3) => {
   openState.awaiters.clear();
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Semaphore.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Semaphore.js
 var exports_Semaphore = {};
 __export(exports_Semaphore, {
   withPermitsIfAvailable: () => withPermitsIfAvailable,
@@ -11609,10 +11629,10 @@ var takeIfAvailable = /* @__PURE__ */ dual(2, (self, permits) => self.takeIfAvai
 var release = /* @__PURE__ */ dual(2, (self, permits) => self.release(permits));
 var releaseAll = (self) => self.releaseAll;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Take.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Take.js
 var toPull = (take5) => isExit2(take5) ? isSuccess4(take5) ? done2(take5.value) : take5 : succeed7(take5);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Channel.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Channel.js
 var TypeId19 = "~effect/Channel";
 var isChannel = (u) => hasProperty(u, TypeId19);
 var ChannelProto = {
@@ -11781,7 +11801,7 @@ var mapEffectConcurrent = (self, f, options) => fromTransformBracket(fnUntraced2
     }), catchCause3((cause) => semaphore.withPermits(concurrencyN - 1)(failCause5(queue, cause))), forkIn2(forkedScope));
   } else {
     const effects = yield* bounded2(concurrencyN - 2);
-    yield* addFinalizer2(forkedScope, shutdown2(queue));
+    yield* addFinalizer2(forkedScope, shutdown2(effects));
     yield* take3(effects).pipe(flatten5, flatMap5((value2) => offer(queue, value2)), forever4({
       disableYield: true
     }), catchCause3((cause) => failCause5(queue, cause)), forkIn2(forkedScope));
@@ -12473,7 +12493,7 @@ var toPubSubTake = /* @__PURE__ */ dual(2, /* @__PURE__ */ fnUntraced2(function*
   return pubsub;
 }));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/stream.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/stream.js
 var TypeId20 = "~effect/Stream";
 var streamVariance = {
   _R: identity,
@@ -12492,7 +12512,7 @@ var fromChannel = (channel) => {
   return self;
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Sink.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Sink.js
 var TypeId21 = "~effect/Sink";
 var endVoid = /* @__PURE__ */ succeed7([undefined]);
 var sinkVariance = {
@@ -12570,7 +12590,7 @@ var forEachArray = (f) => fromTransform2((upstream) => upstream.pipe(flatMap5(f)
 }), catchDone(() => endVoid)));
 var unwrap3 = (effect2) => fromChannel2(unwrap2(map8(effect2, toChannel)));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Stream.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Stream.js
 var exports_Stream = {};
 __export(exports_Stream, {
   zipWithPreviousAndNext: () => zipWithPreviousAndNext,
@@ -12807,7 +12827,7 @@ __export(exports_Stream, {
   DefaultChunkSize: () => DefaultChunkSize2
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/MutableHashMap.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/MutableHashMap.js
 var TypeId22 = "~effect/collections/MutableHashMap";
 var MutableHashMapProto = {
   [TypeId22]: TypeId22,
@@ -12930,7 +12950,7 @@ var clear3 = (self) => {
 };
 var size4 = (self) => self.backing.size;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/RcMap.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/RcMap.js
 var TypeId23 = "~effect/RcMap";
 var makeUnsafe7 = (options) => ({
   [TypeId23]: TypeId23,
@@ -13049,7 +13069,7 @@ var touch = /* @__PURE__ */ dual(2, (self, key) => clockWith3((clock) => {
   return void_5;
 }));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/rcRef.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/rcRef.js
 var TypeId24 = "~effect/RcRef";
 var stateEmpty = {
   _tag: "Empty"
@@ -13169,12 +13189,12 @@ var invalidate = (self_) => {
   }));
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/RcRef.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/RcRef.js
 var make19 = make18;
 var get6 = get5;
 var invalidate2 = invalidate;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Stream.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Stream.js
 var TypeId25 = "~effect/Stream";
 var isStream = (u) => hasProperty(u, TypeId25);
 var DefaultChunkSize2 = DefaultChunkSize;
@@ -14709,7 +14729,7 @@ var toPubSubTake2 = /* @__PURE__ */ dual(2, (self, options) => toPubSubTake(self
 var toQueue = /* @__PURE__ */ dual(2, (self, options) => toQueueArray(self.channel, options));
 var runIntoQueue = /* @__PURE__ */ dual(2, (self, queue) => runIntoQueueArray(self.channel, queue));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/FileSystem.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/FileSystem.js
 var TypeId26 = "~effect/platform/FileSystem";
 var Size = (bytes) => typeof bytes === "bigint" ? bytes : BigInt(bytes);
 var KiB = (n) => Size(n * 1024);
@@ -14879,7 +14899,7 @@ var isFile = (u) => hasProperty(u, FileTypeId);
 class WatchBackend extends (/* @__PURE__ */ Service()("effect/platform/FileSystem/WatchBackend")) {
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Path.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Path.js
 var exports_Path = {};
 __export(exports_Path, {
   layer: () => layer,
@@ -15370,7 +15390,7 @@ var posixImpl = /* @__PURE__ */ Path.of({
 });
 var layer = /* @__PURE__ */ succeed6(Path)(posixImpl);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/process/ChildProcess.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/process/ChildProcess.js
 var exports_ChildProcess = {};
 __export(exports_ChildProcess, {
   setEnv: () => setEnv,
@@ -15385,7 +15405,7 @@ __export(exports_ChildProcess, {
   fdName: () => fdName
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/process/ChildProcessSpawner.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/process/ChildProcessSpawner.js
 var exports_ChildProcessSpawner = {};
 __export(exports_ChildProcessSpawner, {
   makeHandle: () => makeHandle,
@@ -15395,7 +15415,7 @@ __export(exports_ChildProcessSpawner, {
   ChildProcessSpawner: () => ChildProcessSpawner
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/annotations.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/schema/annotations.js
 function resolve3(ast) {
   return ast.checks ? ast.checks[ast.checks.length - 1].annotations : ast.annotations;
 }
@@ -15420,7 +15440,7 @@ var getExpected = /* @__PURE__ */ memoize((ast) => {
 });
 var annotationExcludedKeys = /* @__PURE__ */ new Set([SENTINELS_ANNOTATION_KEY, STRUCTURAL_ANNOTATION_KEY, "representation", "arbitrary", "brands", "toJsonSchema", "toCode", "toArbitrary", "toEquivalence", "toFormatter", "toCodec", "toCodecJson", "toCodecStringTree", "toCodecIso"]);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/parser.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/schema/parser.js
 var missing = /* @__PURE__ */ Symbol();
 var succeed10 = succeed4;
 var missingExit = /* @__PURE__ */ succeed10(missing);
@@ -15428,7 +15448,7 @@ var sameExit = /* @__PURE__ */ succeed10(missing);
 var toOption2 = (value2) => value2 === missing ? none2() : some3(value2);
 var fromOptionExit = (option3) => option3._tag === "None" ? missingExit : succeed10(option3.value);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/SchemaIssue.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/SchemaIssue.js
 var TypeId28 = "~effect/SchemaIssue/Issue";
 function isIssue(u) {
   return hasProperty(u, TypeId28) && u[TypeId28] === TypeId28;
@@ -15739,7 +15759,7 @@ function findMessage(issue) {
     return message;
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/cause.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/schema/cause.js
 function getSchemaIssue(cause) {
   let issue;
   for (const reason of cause.reasons) {
@@ -15760,7 +15780,7 @@ function getSchemaIssueOrThrow(cause, message) {
   return issue;
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/DateTime.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/DateTime.js
 var exports_DateTime = {};
 __export(exports_DateTime, {
   zonedOffsetIso: () => zonedOffsetIso2,
@@ -15945,7 +15965,7 @@ var layerCurrentZoneOffset = (offset) => succeed6(CurrentTimeZone)(zoneMakeOffse
 var layerCurrentZoneNamed = /* @__PURE__ */ flow(zoneMakeNamedEffect, /* @__PURE__ */ effect(CurrentTimeZone));
 var layerCurrentZoneLocal = /* @__PURE__ */ sync3(CurrentTimeZone)(zoneMakeLocal2);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/SchemaGetter.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/SchemaGetter.js
 class Getter extends Class {
   run;
   constructor(run2) {
@@ -16252,7 +16272,7 @@ function collectBracketPathEntries(isLeaf) {
   };
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/BigDecimal.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/BigDecimal.js
 var FINITE_INT_REGEXP = /^[+-]?\d+$/;
 var TypeId29 = "~effect/BigDecimal";
 var BigDecimalProto = {
@@ -16481,7 +16501,7 @@ var floor = /* @__PURE__ */ dual(isBigDecimalArgs, (self, scale2 = 0) => {
   return truncated;
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/SchemaTransformation.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/SchemaTransformation.js
 class Middleware {
   _tag = "Middleware";
   decode;
@@ -16728,7 +16748,7 @@ var dateTimeZonedFromString = /* @__PURE__ */ transformOrFail2({
   encode: (zoned) => succeed7(formatIsoZoned2(zoned))
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/SchemaAST.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/SchemaAST.js
 function makeGuard(tag) {
   return (ast) => ast._tag === tag;
 }
@@ -17091,7 +17111,7 @@ class Number5 extends Base2 {
     if (this.checks && (hasCheck(this.checks, "effect/schema/isFinite") || hasCheck(this.checks, "effect/schema/isInt"))) {
       return this;
     }
-    return replaceEncoding(this, [numberToJson(this.checks)]);
+    return replaceEncoding(this, [numberToJson]);
   }
   toCodecStringTree() {
     if (this.toCodecJson() === this) {
@@ -17105,10 +17125,6 @@ class Number5 extends Base2 {
 }
 function hasCheck(checks, id) {
   return checks.some((check) => check.annotations?.representation?.id === id || check._tag === "FilterGroup" && hasCheck(check.checks, id));
-}
-function numberToJson(checks) {
-  const encodedFinite = !checks ? finite : appendChecks(finite, checks);
-  return new Link(new Union([encodedFinite, nonFiniteLiterals], "anyOf"), new Transformation(Number4(), transform((n) => globalThis.Number.isFinite(n) ? n : globalThis.String(n))));
 }
 var number2 = /* @__PURE__ */ new Number5;
 
@@ -18161,6 +18177,7 @@ function isFinite2(annotations2) {
   });
 }
 var finite = /* @__PURE__ */ appendChecks(number2, [/* @__PURE__ */ isFinite2()]);
+var numberToJson = /* @__PURE__ */ new Link(/* @__PURE__ */ new Union([finite, nonFiniteLiterals], "anyOf"), /* @__PURE__ */ new Transformation(/* @__PURE__ */ Number4(), /* @__PURE__ */ transform((n) => globalThis.Number.isFinite(n) ? n : globalThis.String(n))));
 function isPattern(regExp, annotations2) {
   const source = regExp.source;
   const pattern = new globalThis.RegExp(source, regExp.flags);
@@ -18745,7 +18762,7 @@ var StringTree = /* @__PURE__ */ new Declaration([], () => (input, ast, options)
 });
 var unknownToStringTree = /* @__PURE__ */ new Link(StringTree, /* @__PURE__ */ passthrough3());
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Brand.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Brand.js
 function nominal() {
   return Object.assign((input) => input, {
     option: (input) => some3(input),
@@ -18754,7 +18771,7 @@ function nominal() {
   });
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/process/ChildProcessSpawner.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/process/ChildProcessSpawner.js
 var ExitCode = /* @__PURE__ */ nominal();
 var ProcessId = /* @__PURE__ */ nominal();
 var HandleTypeId = "~effect/ChildProcessSpawner/ChildProcessHandle";
@@ -18787,7 +18804,7 @@ var make25 = (spawn) => {
 class ChildProcessSpawner extends (/* @__PURE__ */ Service()("effect/process/ChildProcessSpawner")) {
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/process/ChildProcess.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/process/ChildProcess.js
 var TypeId32 = "~effect/unstable/process/ChildProcess";
 var Proto4 = {
   .../* @__PURE__ */ Prototype2({
@@ -18988,11 +19005,11 @@ var splitByWhitespaces = (template, rawTemplate) => {
 };
 var concatTokens = (prevTokens, nextTokens, isSeparated) => isSeparated || prevTokens.length === 0 || nextTokens.length === 0 ? [...prevTokens, ...nextTokens] : [...prevTokens.slice(0, -1), `${prevTokens.at(-1)}${nextTokens.at(0)}`, ...nextTokens.slice(1)];
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeChildProcessSpawner.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.112+def9bb16a7ea1143/node_modules/@effect/platform-node-shared/dist/NodeChildProcessSpawner.js
 import * as NodeChildProcess from "node:child_process";
 import { PassThrough } from "node:stream";
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/internal/nodeChildProcessSpawner.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.112+def9bb16a7ea1143/node_modules/@effect/platform-node-shared/dist/internal/nodeChildProcessSpawner.js
 var buildSpawnOptions = (options, base, platform) => {
   const detached = options.detached ?? platform !== "win32";
   return {
@@ -19003,7 +19020,7 @@ var buildSpawnOptions = (options, base, platform) => {
   };
 };
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/internal/utils.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.112+def9bb16a7ea1143/node_modules/@effect/platform-node-shared/dist/internal/utils.js
 var handleErrnoException = (module, method) => (err, [path]) => {
   let reason = "Unknown";
   switch (err.code) {
@@ -19039,7 +19056,7 @@ var handleErrnoException = (module, method) => (err, [path]) => {
   });
 };
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeSink.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.112+def9bb16a7ea1143/node_modules/@effect/platform-node-shared/dist/NodeSink.js
 var fromWritable = (options) => fromChannel2(mapDone(fromWritableChannel(options), (_) => [_]));
 var fromWritableChannel = (options) => fromTransform((pull) => {
   const writable = options.evaluate();
@@ -19079,7 +19096,7 @@ var pullIntoWritable = (options) => options.pull.pipe(flatMap5((chunk) => {
   });
 }) : identity);
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeStream.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.112+def9bb16a7ea1143/node_modules/@effect/platform-node-shared/dist/NodeStream.js
 var fromReadable = (options) => fromChannel3(fromReadableChannel(options));
 var fromReadableChannel = (options) => fromTransform((_, scope3) => readableToPullUnsafe({
   scope: scope3,
@@ -19139,7 +19156,7 @@ var readableToPullUnsafe = (options) => {
 };
 var defaultOnError = (error) => new UnknownError2(error);
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeChildProcessSpawner.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.112+def9bb16a7ea1143/node_modules/@effect/platform-node-shared/dist/NodeChildProcessSpawner.js
 var toError = (error) => error instanceof globalThis.Error ? error : new globalThis.Error(String(error));
 var toPlatformError = (method, error, command) => {
   const {
@@ -19623,14 +19640,14 @@ var flattenCommand = (command) => {
   };
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Crypto.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Crypto.js
 var exports_Crypto = {};
 __export(exports_Crypto, {
   make: () => make29,
   Crypto: () => Crypto
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/uuid.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/uuid.js
 var hex = (byte) => byte.toString(16).padStart(2, "0");
 var stringify = (bytes) => {
   const segments = [bytes.subarray(0, 4), bytes.subarray(4, 6), bytes.subarray(6, 8), bytes.subarray(8, 10), bytes.subarray(10, 16)];
@@ -19658,7 +19675,7 @@ function v7Bytes(timestampMillis, bytes = randomBytes()) {
 }
 var v7String = (timestampMillis, bytes) => stringify(bytes === undefined ? v7Bytes(timestampMillis) : v7Bytes(timestampMillis, bytes));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Crypto.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Crypto.js
 var TypeId33 = "~effect/platform/Crypto";
 var Crypto = /* @__PURE__ */ Service("effect/Crypto");
 var make29 = (impl) => {
@@ -19716,7 +19733,7 @@ var validateSize = (method, size5) => Number.isSafeInteger(size5) && size5 >= 0 
   description: "size must be a non-negative safe integer"
 }));
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeCrypto.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.112+def9bb16a7ea1143/node_modules/@effect/platform-node-shared/dist/NodeCrypto.js
 import * as NodeCrypto from "node:crypto";
 var toHashAlgorithm = (algorithm) => {
   switch (algorithm) {
@@ -19746,10 +19763,10 @@ var make30 = /* @__PURE__ */ make29({
 });
 var layer3 = /* @__PURE__ */ succeed6(Crypto, make30);
 
-// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeCrypto.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.111+1c5a24aacf2db9bb/node_modules/@effect/platform-node/dist/NodeCrypto.js
 var layer4 = layer3;
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeFileSystem.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.112+def9bb16a7ea1143/node_modules/@effect/platform-node-shared/dist/NodeFileSystem.js
 import * as Crypto2 from "node:crypto";
 import * as NFS from "node:fs";
 import * as OS from "node:os";
@@ -20134,10 +20151,10 @@ var makeFileSystem = /* @__PURE__ */ map8(/* @__PURE__ */ serviceOption2(WatchBa
 }));
 var layer5 = /* @__PURE__ */ effect(FileSystem)(makeFileSystem);
 
-// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeFileSystem.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.111+1c5a24aacf2db9bb/node_modules/@effect/platform-node/dist/NodeFileSystem.js
 var layer6 = layer5;
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodePath.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.112+def9bb16a7ea1143/node_modules/@effect/platform-node-shared/dist/NodePath.js
 import * as NodePath from "node:path";
 import * as NodeUrl from "node:url";
 var fileUrlOps = (windows) => ({
@@ -20178,10 +20195,10 @@ var layer7 = /* @__PURE__ */ succeed6(Path)({
   .../* @__PURE__ */ fileUrlOps(undefined)
 });
 
-// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodePath.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.111+1c5a24aacf2db9bb/node_modules/@effect/platform-node/dist/NodePath.js
 var layer8 = layer7;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Stdio.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Stdio.js
 var TypeId34 = "~effect/Stdio";
 var Stdio = /* @__PURE__ */ Service(TypeId34);
 var make31 = (options) => ({
@@ -20191,7 +20208,7 @@ var make31 = (options) => ({
   ...options
 });
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeStdio.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.112+def9bb16a7ea1143/node_modules/@effect/platform-node-shared/dist/NodeStdio.js
 var layer9 = /* @__PURE__ */ succeed6(Stdio, /* @__PURE__ */ make31({
   args: /* @__PURE__ */ sync4(() => process.argv.slice(2)),
   stdinIsTerminal: /* @__PURE__ */ sync4(() => process.stdin.isTTY === true),
@@ -20228,10 +20245,10 @@ var layer9 = /* @__PURE__ */ succeed6(Stdio, /* @__PURE__ */ make31({
   })
 }));
 
-// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeStdio.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.111+1c5a24aacf2db9bb/node_modules/@effect/platform-node/dist/NodeStdio.js
 var layer10 = layer9;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Schema.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Schema.js
 var exports_Schema = {};
 __export(exports_Schema, {
   withDecodingDefaultTypeKey: () => withDecodingDefaultTypeKey,
@@ -20525,6 +20542,7 @@ __export(exports_Schema, {
   Literals: () => Literals,
   Literal: () => Literal2,
   JsonReviver: () => JsonReviver,
+  JsonObject: () => JsonObject,
   Json: () => Json2,
   Int: () => Int,
   HashSetReviver: () => HashSetReviver,
@@ -20583,7 +20601,7 @@ __export(exports_Schema, {
   Any: () => Any2
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/graph.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/graph.js
 var TypeId35 = "~effect/collections/Graph";
 var toImpl = (graph) => graph;
 var edgeEquals = (type, self, that) => (type === "directed" ? self.source === that.source && self.target === that.target : self.source === that.source && self.target === that.target || self.source === that.target && self.target === that.source) && equals(self.data, that.data);
@@ -20652,6 +20670,7 @@ var make32 = (type, mutable) => {
   const graph = Object.create(ProtoGraph);
   graph.type = type;
   graph.mutable = mutable;
+  graph.transforming = false;
   graph.nodes = new Map;
   graph.edges = new Map;
   graph.adjacency = new Map;
@@ -20703,11 +20722,11 @@ var hydrate = (snapshot3) => {
   return graph;
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Graph.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Graph.js
 var TypeId36 = TypeId35;
 var isGraph = (u) => hasProperty(u, TypeId36);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/hashMap.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/hashMap.js
 var HashMapTypeId = "~effect/collections/HashMap";
 var SHIFT = 5;
 var BUCKET_SIZE = 1 << SHIFT;
@@ -21356,14 +21375,14 @@ var entries = (self) => {
 };
 var size5 = (self) => self.size;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/HashMap.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/HashMap.js
 var isHashMap2 = isHashMap;
 var fromIterable6 = fromIterable5;
 var entries2 = entries;
 var toEntries = (self) => Array.from(entries2(self));
 var size6 = size5;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/hashSet.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/hashSet.js
 var HashSetTypeId = "~effect/collections/HashSet";
 var HashSetProto = {
   [symbol]() {
@@ -21417,12 +21436,12 @@ var every3 = (self, predicate) => {
   return true;
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/HashSet.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/HashSet.js
 var fromIterable8 = fromIterable7;
 var isHashSet2 = isHashSet;
 var size8 = size7;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/SchemaParser.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/SchemaParser.js
 function makeEffect(schema) {
   const parser = runWithCompiler(constructorCompiler, toType(schema.ast));
   return (input, options) => {
@@ -21724,7 +21743,7 @@ function makeParser(ast, compile, compileConstructorDefault2, constructorDefault
   };
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/schema.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/schema/schema.js
 var TypeId37 = "~effect/Schema/Schema";
 function makeDeclarationReviver(id, payloadSchema, revive) {
   return {
@@ -21768,11 +21787,11 @@ function make36(ast, options) {
   return self;
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Boolean.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Boolean.js
 var Boolean2 = globalThis.Boolean;
 var ReducerOr = /* @__PURE__ */ make2((a, b) => a || b, false);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Struct.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Struct.js
 var pick2 = /* @__PURE__ */ dual(2, (self, keys4) => {
   return buildStruct(self, (k, v) => keys4.includes(k) ? [k, v] : undefined);
 });
@@ -21817,7 +21836,7 @@ function makeCombiner(combiners, options) {
   });
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/UndefinedOr.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/UndefinedOr.js
 function makeReducer2(combiner) {
   return make2((self, that) => {
     if (self === undefined)
@@ -21828,7 +21847,7 @@ function makeReducer2(combiner) {
   }, undefined);
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/errors.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/errors.js
 function errorWithPath(message, path) {
   if (path.length > 0) {
     message += `
@@ -21837,7 +21856,7 @@ function errorWithPath(message, path) {
   return new Error(message);
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/toArbitrary.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/schema/toArbitrary.js
 var arbitraryMemoMap = /* @__PURE__ */ new WeakMap;
 var suspendDepthIdentifierMap = /* @__PURE__ */ new WeakMap;
 var emptyRecursionStack = [];
@@ -22500,7 +22519,7 @@ function base(ast, path) {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/toEquivalence.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/schema/toEquivalence.js
 var toEquivalence = /* @__PURE__ */ memoize((ast) => {
   return recur2(ast, []);
 });
@@ -22624,7 +22643,7 @@ function recur2(ast, path) {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/JsonPointer.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/JsonPointer.js
 function escapeToken(token) {
   return token.replace(/~/g, "~0").replace(/\//g, "~1");
 }
@@ -22632,7 +22651,7 @@ function unescapeToken(token) {
   return token.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/JsonSchema.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/JsonSchema.js
 var exports_JsonSchema = {};
 __export(exports_JsonSchema, {
   toMultiDocumentOpenApi3_1: () => toMultiDocumentOpenApi3_1,
@@ -23091,15 +23110,12 @@ function resolveTopLevel$ref(document) {
   return document;
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/RegExp.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/RegExp.js
 var RegExp2 = globalThis.RegExp;
 var escape = (string3) => string3.replace(/[/\\^$*+?.()|[\]{}]/g, "\\$&");
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/toJsonSchemaDocument.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/schema/toJsonSchemaDocument.js
 var jsonSchemaAnnotationExcludedKeys = /* @__PURE__ */ new Set([...annotationExcludedKeys, IDENTIFIER_FALLBACK_KEY, ...jsonSchemaAnnotationKeys]);
-var toRepresentationOptions = {
-  isAnonymousReferenceAllowed: (ast) => !isDeclaration(ast)
-};
 function collectJsonSchemaAnnotations(annotations2, options) {
   if (annotations2 === undefined)
     return;
@@ -23189,7 +23205,16 @@ function extractJsonSchemaNumberType(schema) {
 function isJsonSchemaNumberEncoding(schema) {
   return Array.isArray(schema.anyOf) && schema.anyOf.length === 4 && schema.anyOf[0]?.type === "number" && schema.anyOf.slice(1).every((member) => member.type === "string");
 }
-function appendJsonSchema(left, right) {
+var inlineableCheckKeywords = "|type|format|pattern|multipleOf|minimum|maximum|exclusiveMinimum|exclusiveMaximum|minLength|maxLength|minItems|maxItems|uniqueItems|minProperties|maxProperties|propertyNames|";
+function hasOnlyKeywords(schema, allowed) {
+  return Object.keys(schema).every((key) => allowed.includes(`|${key}|`));
+}
+function hasNoCollisions(left, rightKeys) {
+  return typeof left.$ref !== "string" && rightKeys.every((key) => !Object.hasOwn(left, key));
+}
+var promotableAnnotationKeywords = "|title|description|default|examples|readOnly|writeOnly|";
+var inlineableAnnotatedCheckKeywords = inlineableCheckKeywords + promotableAnnotationKeywords;
+function appendJsonSchema(left, right, inlineCheck) {
   if (Object.keys(left).length === 0)
     return right;
   const rightKeys = Object.keys(right);
@@ -23207,8 +23232,20 @@ function appendJsonSchema(left, right) {
       };
       if (isNumberEncoding)
         delete base2.anyOf;
-      return Object.keys(extracted.schema).length === 0 ? base2 : appendJsonSchema(base2, extracted.schema);
+      const extractedKeys = Object.keys(extracted.schema);
+      if (extractedKeys.length === 0)
+        return base2;
+      return hasOnlyKeywords(extracted.schema, promotableAnnotationKeywords) && hasNoCollisions(base2, extractedKeys) ? {
+        ...base2,
+        ...extracted.schema
+      } : appendJsonSchema(base2, extracted.schema, inlineCheck);
     }
+  }
+  if (inlineCheck && hasNoCollisions(left, rightKeys)) {
+    return {
+      ...left,
+      ...right
+    };
   }
   const members = Array.isArray(right.allOf) && rightKeys.length === 1 ? right.allOf : [right];
   if (Array.isArray(left.allOf)) {
@@ -23304,10 +23341,12 @@ function compileJsonSchema(representations, rootPaths, references, options) {
         schemas: schemas2
       });
       const ordinary2 = collectJsonSchemaAnnotations(annotations2, options);
-      return ordinary2 === undefined ? fragment : {
+      const schema = ordinary2 === undefined ? fragment : {
         ...fragment,
         ...ordinary2
       };
+      const allowed = ordinary2 === undefined ? inlineableCheckKeywords : inlineableAnnotatedCheckKeywords;
+      return check._tag === "Filter" && hasOnlyKeywords(schema, allowed) && (ordinary2 === undefined || hasOnlyKeywords(ordinary2, promotableAnnotationKeywords)) ? [schema, true] : [schema];
     }
     if (check._tag === "Filter")
       return;
@@ -23315,12 +23354,13 @@ function compileJsonSchema(representations, rootPaths, references, options) {
     if (children.length === 0)
       return;
     const ordinary = collectJsonSchemaAnnotations(annotations2, options);
-    return ordinary === undefined ? {
-      allOf: children
+    const allOf = children.map(([schema]) => schema);
+    return [ordinary === undefined ? {
+      allOf
     } : {
-      allOf: children,
+      allOf,
       ...ordinary
-    };
+    }];
   }
   function recur3(representation, path) {
     if (representation._tag === "Reference") {
@@ -23344,7 +23384,7 @@ function compileJsonSchema(representations, rootPaths, references, options) {
       const type = typeof output.type === "string" && isJsonSchemaType(output.type) ? output.type : undefined;
       const check = compileCheck(representation.checks[index2], type, [...path, "checks", index2]);
       if (check !== undefined) {
-        output = appendJsonSchema(output, check);
+        output = appendJsonSchema(output, ...check);
       }
     }
     compiledRepresentations.set(representation, output);
@@ -23511,8 +23551,8 @@ function compileJsonSchema(representations, rootPaths, references, options) {
           out.properties = properties;
         if (required.length > 0)
           out.required = required;
-        out.additionalProperties = options?.additionalProperties ?? false;
         const patternProperties = {};
+        const additionalProperties = [];
         for (let index2 = 0;index2 < representation.indexSignatures.length; index2++) {
           const signature = representation.indexSignatures[index2];
           let type = recur3(signature.type, [...path, "indexSignatures", index2, "type"]);
@@ -23520,15 +23560,27 @@ function compileJsonSchema(representations, rootPaths, references, options) {
             type = false;
           const patterns = getParameterPatterns(signature.parameter, [...path, "indexSignatures", index2, "parameter"], new Set);
           if (patterns.length === 0) {
-            out.additionalProperties = type;
+            additionalProperties.push(type);
           } else {
-            for (const pattern of patterns)
-              assignProperty(patternProperties, pattern, type);
+            for (const pattern of patterns) {
+              const previous = patternProperties[pattern];
+              assignProperty(patternProperties, pattern, previous === undefined ? type : previous === false || type === false ? false : appendJsonSchema(previous, type));
+            }
           }
         }
-        if (Object.keys(patternProperties).length > 0) {
+        const hasPatternProperties = Object.keys(patternProperties).length > 0;
+        if (hasPatternProperties) {
           out.patternProperties = patternProperties;
-          delete out.additionalProperties;
+        }
+        if (representation.indexSignatures.length === 0) {
+          out.additionalProperties = options?.additionalProperties ?? false;
+        } else if (additionalProperties.length === 1 && representation.propertySignatures.length === 0 && !hasPatternProperties) {
+          out.additionalProperties = additionalProperties[0];
+        } else if (additionalProperties.length > 0) {
+          out.allOf = additionalProperties.map((type) => ({
+            type: "object",
+            additionalProperties: type
+          }));
         }
         if (typeof out.additionalProperties === "object" && out.additionalProperties !== null && Object.keys(out.additionalProperties).length === 0) {
           delete out.additionalProperties;
@@ -23640,7 +23692,15 @@ function toJsonSchemaDocument(document, options) {
   };
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/toRepresentation.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/schema/toRepresentation.js
+var defaultReferencePolicy = ({
+  identifier: identifier2
+}) => identifier2;
+function annotationsField(annotations2) {
+  return annotations2 === undefined ? undefined : {
+    annotations: annotations2
+  };
+}
 function toRepresentation(ast, options) {
   const {
     references,
@@ -23652,72 +23712,29 @@ function toRepresentation(ast, options) {
   };
 }
 function toRepresentations(asts, options) {
-  return fromASTs(asts, options);
-}
-function annotationsField(annotations2) {
-  return annotations2 === undefined ? undefined : {
-    annotations: annotations2
-  };
-}
-function hasShareableStructure(ast, isAnonymousReferenceAllowed) {
-  if (isAnonymousReferenceAllowed?.(ast) === false)
-    return false;
-  switch (ast._tag) {
-    case "Arrays":
-    case "Objects":
-    case "Suspend":
-      return true;
-    case "Declaration":
-      return true;
-    case "Union":
-      return ast.types.some((ast2) => hasShareableStructure(ast2, isAnonymousReferenceAllowed));
-    default:
-      return false;
-  }
-}
-function isWorthReferencing(bodyCost, occurrences) {
-  return occurrences * bodyCost > bodyCost + occurrences + 1;
-}
-function isAnonymousReferenceEligible(ast, occurrences, isAnonymousReferenceAllowed) {
-  if (isAnonymousReferenceAllowed?.(ast) === false)
-    return false;
-  if (hasShareableStructure(ast, isAnonymousReferenceAllowed))
-    return true;
-  switch (ast._tag) {
-    case "Union":
-      return isWorthReferencing(ast.types.length + 1, occurrences);
-    case "Enum":
-      return isWorthReferencing(ast.enums.length + 1, occurrences);
-    case "TemplateLiteral":
-      return isWorthReferencing(ast.parts.length + 1, occurrences);
-    case "Literal":
-      return typeof ast.literal === "string" && isWorthReferencing(ast.literal.length / 32 + 1, occurrences);
-    default:
-      return false;
-  }
-}
-function resolveReferenceIdentifier(input, encoded) {
-  const identifier2 = resolveIdentifier(encoded);
-  if (identifier2 !== undefined)
-    return {
-      identifier: identifier2
-    };
-  const fallback = (encoded !== input ? resolveIdentifier(input) : undefined) ?? resolveIdentifierFallback(encoded);
-  return fallback === undefined ? undefined : {
-    identifier: `${fallback}Encoded`,
-    fallback
-  };
-}
-function fromASTs(asts, options) {
   const references = {};
-  const anonymousReferences = new Map;
   const referenceOwners = new Map;
   const buildingReferences = new Set;
-  const visiting = new Set;
-  const occurrences = new Map;
-  const shared = new Set;
+  const candidates = new Map;
+  const visitingCandidates = new Set;
   for (const ast of asts)
     visit(ast);
+  const referencePolicy = options?.referencePolicy ?? defaultReferencePolicy;
+  for (const candidatesByIdentifier of candidates.values()) {
+    for (const candidate of candidatesByIdentifier.values()) {
+      const requestedReference = referencePolicy({
+        ast: candidate.ast,
+        occurrences: candidate.occurrences,
+        identifier: candidate.identifier
+      });
+      if (requestedReference !== undefined) {
+        const separator = requestedReference === candidate.identifier || !requestedReference.endsWith("_") ? "_" : "";
+        candidate.reference = getReference(requestedReference, candidate, separator);
+      } else if (candidate.isRecursive) {
+        candidate.reference = getReference(`${candidate.ast._tag}_`, candidate, "");
+      }
+    }
+  }
   const representations = map4(asts, (ast) => recur3(ast));
   return {
     representations,
@@ -23734,14 +23751,14 @@ function fromASTs(asts, options) {
     referenceOwners.set(candidate, owner);
     return candidate;
   }
-  function annotateReference(ast, referenceIdentifier, reference) {
-    const fallback = referenceIdentifier.fallback;
+  function annotateReference(ast, candidate, reference) {
+    const fallback = candidate.fallback;
     if (fallback !== undefined) {
       return resolveIdentifierFallback(ast) === fallback ? ast : annotate2(ast, {
         [IDENTIFIER_FALLBACK_KEY]: fallback
       });
     }
-    return reference === referenceIdentifier.identifier ? ast : annotate2(ast, {
+    return reference === candidate.identifier ? ast : annotate2(ast, {
       identifier: reference
     });
   }
@@ -23757,16 +23774,43 @@ function fromASTs(asts, options) {
       $ref: reference
     };
   }
-  function visit(input) {
+  function getCandidate(input) {
     const ast = getLastEncoding(input);
     const owner = getContextOwner(ast);
-    const count = (occurrences.get(owner) ?? 0) + 1;
-    occurrences.set(owner, count);
-    if (count > 1) {
-      if (!shared.has(owner) && isAnonymousReferenceEligible(owner, count, options?.isAnonymousReferenceAllowed))
-        shared.add(owner);
+    let identifier2 = resolveIdentifier(ast);
+    const fallback = identifier2 === undefined ? (ast !== input ? resolveIdentifier(input) : undefined) ?? resolveIdentifierFallback(ast) : undefined;
+    if (fallback !== undefined)
+      identifier2 = `${fallback}Encoded`;
+    let candidatesByIdentifier = candidates.get(owner);
+    if (candidatesByIdentifier === undefined) {
+      candidatesByIdentifier = new Map;
+      candidates.set(owner, candidatesByIdentifier);
+    }
+    let candidate = candidatesByIdentifier.get(identifier2);
+    if (candidate === undefined) {
+      candidate = {
+        ast: owner,
+        identifier: identifier2,
+        fallback,
+        occurrences: 0,
+        isRecursive: false,
+        reference: undefined
+      };
+      candidatesByIdentifier.set(identifier2, candidate);
+    }
+    return candidate;
+  }
+  function visit(input) {
+    const candidate = getCandidate(input);
+    const ast = candidate.ast;
+    candidate.occurrences++;
+    if (visitingCandidates.has(candidate)) {
+      candidate.isRecursive = true;
       return;
     }
+    if (candidate.occurrences > 1)
+      return;
+    visitingCandidates.add(candidate);
     visitChecks(ast.checks);
     switch (ast._tag) {
       case "Declaration":
@@ -23785,6 +23829,7 @@ function fromASTs(asts, options) {
         visit(ast.thunk());
         break;
     }
+    visitingCandidates.delete(candidate);
   }
   function visitChecks(checks) {
     checks?.forEach((check) => {
@@ -23794,41 +23839,14 @@ function fromASTs(asts, options) {
     });
   }
   function recur3(input) {
-    const ast = getLastEncoding(input);
-    const owner = getContextOwner(ast);
-    const referenceIdentifier = resolveReferenceIdentifier(input, ast);
-    if (referenceIdentifier !== undefined) {
-      const reference2 = getReference(referenceIdentifier.identifier, owner);
-      return makeReference(reference2, annotateReference(ast, referenceIdentifier, reference2));
-    }
-    const found = anonymousReferences.get(owner);
-    if (found !== undefined) {
-      return {
-        _tag: "Reference",
-        $ref: found
-      };
-    }
-    const isShared = shared.has(owner);
-    if (isShared || visiting.has(owner)) {
-      const reference2 = getReference(`${ast._tag}_`, owner, "");
-      anonymousReferences.set(owner, reference2);
-      return isShared ? makeReference(reference2, ast) : {
-        _tag: "Reference",
-        $ref: reference2
-      };
-    }
-    visiting.add(owner);
-    const representation = on(ast);
-    visiting.delete(owner);
-    const reference = anonymousReferences.get(owner);
+    const candidate = getCandidate(input);
+    const ast = candidate.ast;
+    const reference = candidate.reference;
     if (reference !== undefined) {
-      assignProperty(references, reference, representation);
-      return {
-        _tag: "Reference",
-        $ref: reference
-      };
+      const annotated = candidate.identifier === undefined ? ast : annotateReference(ast, candidate, reference);
+      return makeReference(reference, annotated);
     }
-    return representation;
+    return on(ast);
   }
   function on(ast) {
     const checks = fromChecks(ast.checks);
@@ -23996,7 +24014,7 @@ function fromASTs(asts, options) {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/JsonPatch.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/JsonPatch.js
 function get8(oldValue, newValue) {
   const patches = [];
   getLoop(oldValue, newValue, "", patches);
@@ -24189,7 +24207,7 @@ function rebuildFromStack(stack, newParent) {
   return acc;
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Optic.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Optic.js
 function makeIso(get9, set4) {
   return make37(primitiveNode("Iso", get9, set4));
 }
@@ -24542,7 +24560,7 @@ function id() {
   return identityIso;
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Redacted.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Redacted.js
 var exports_Redacted = {};
 __export(exports_Redacted, {
   wipeUnsafe: () => wipeUnsafe,
@@ -24552,7 +24570,7 @@ __export(exports_Redacted, {
   isRedacted: () => isRedacted
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/redacted.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/redacted.js
 var redactedRegistry = /* @__PURE__ */ new WeakMap;
 var value2 = (self) => {
   if (redactedRegistry.has(self)) {
@@ -24563,7 +24581,7 @@ var value2 = (self) => {
 };
 var stringOrRedacted = (val) => typeof val === "string" ? val : value2(val);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Redacted.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Redacted.js
 var TypeId38 = "~effect/data/Redacted";
 var isRedacted = (u) => hasProperty(u, TypeId38);
 var make38 = (value3, options) => {
@@ -24597,7 +24615,7 @@ var value3 = value2;
 var wipeUnsafe = (self) => redactedRegistry.delete(self);
 var makeEquivalence7 = (isEquivalent) => make3((x, y) => isEquivalent(value3(x), value3(y)));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Schema.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Schema.js
 var TypeId39 = TypeId37;
 function declareConstructor() {
   return (typeParameters, run3, annotations2) => {
@@ -28495,11 +28513,11 @@ function overrideToEquivalence(toEquivalence2) {
 function toEquivalence2(schema) {
   return toEquivalence(schema.ast);
 }
-function toRepresentation2(schema) {
-  return toRepresentation(schema.ast);
+function toRepresentation2(schema, options) {
+  return toRepresentation(schema.ast, options);
 }
 function toJsonSchemaDocument2(schema, options) {
-  const document = toRepresentation(toCodecJsonAST(schema.ast), toRepresentationOptions);
+  const document = toRepresentation(toCodecJsonAST(schema.ast), options);
   return toJsonSchemaDocument(document, options);
 }
 function toCodecJson(schema) {
@@ -28935,6 +28953,7 @@ var Json2 = /* @__PURE__ */ make39(/* @__PURE__ */ annotate2(Json, {
     Type: "Schema.Json"
   })
 }));
+var JsonObject = /* @__PURE__ */ Record(String6, Json2);
 var JsonReviver = /* @__PURE__ */ makeFixedDeclarationReviver("effect/schema/Json", Json2);
 var JsonError = /* @__PURE__ */ Struct2({
   message: String6,
@@ -28956,7 +28975,7 @@ function resolveAnnotationsKey(schema) {
   return schema.ast.context?.annotations;
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Terminal.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Terminal.js
 var TypeId40 = "~effect/platform/Terminal";
 var QuitErrorTypeId = "effect/platform/Terminal/QuitError";
 
@@ -28971,7 +28990,7 @@ var make40 = (impl) => Terminal.of({
   [TypeId40]: TypeId40
 });
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeTerminal.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.112+def9bb16a7ea1143/node_modules/@effect/platform-node-shared/dist/NodeTerminal.js
 import * as readline from "node:readline";
 var make41 = /* @__PURE__ */ fnUntraced2(function* (shouldQuit = defaultShouldQuit) {
   const stdin = process.stdin;
@@ -29091,12 +29110,12 @@ function defaultShouldQuit(input) {
   return input.key.ctrl && (input.key.name === "c" || input.key.name === "d");
 }
 
-// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeTerminal.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.111+1c5a24aacf2db9bb/node_modules/@effect/platform-node/dist/NodeTerminal.js
 var layer12 = layer11;
 
-// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeServices.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.111+1c5a24aacf2db9bb/node_modules/@effect/platform-node/dist/NodeServices.js
 var layer13 = /* @__PURE__ */ provideMerge(layer2, /* @__PURE__ */ mergeAll2(layer6, layer4, layer8, layer10, layer12));
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Config.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Config.js
 var exports_Config = {};
 __export(exports_Config, {
   withDefault: () => withDefault2,
@@ -29135,7 +29154,7 @@ __export(exports_Config, {
   Array: () => ArrayConfig
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/ConfigProvider.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/ConfigProvider.js
 function makeValue(value4) {
   return {
     _tag: "Value",
@@ -29239,10 +29258,10 @@ function trieNodeAt(root, path) {
   return node;
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/LogLevel.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/LogLevel.js
 var values2 = ["All", "Fatal", "Error", "Warn", "Info", "Debug", "Trace", "None"];
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Config.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Config.js
 var TypeId41 = "~effect/Config";
 var isConfig = (u) => hasProperty(u, TypeId41);
 
@@ -29587,7 +29606,7 @@ function date(name) {
   return schema(Date4, name);
 }
 var nested = /* @__PURE__ */ dual(2, (self, name) => make43((provider, pathPrefix) => evaluateAt(self, provider, [...pathPrefix, name])));
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Console.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Console.js
 var exports_Console = {};
 __export(exports_Console, {
   withTime: () => withTime,
@@ -29683,7 +29702,7 @@ var withTime = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, label)
 }), () => self, () => sync(() => {
   console.timeEnd(label);
 }))));
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/ErrorReporter.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/ErrorReporter.js
 var exports_ErrorReporter = {};
 __export(exports_ErrorReporter, {
   severity: () => severity,
@@ -29757,7 +29776,7 @@ var getAttributes = (error2) => {
   return attributes in error2 ? error2[attributes] : emptyAttributes;
 };
 var emptyAttributes = {};
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Ref.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Ref.js
 var exports_Ref = {};
 __export(exports_Ref, {
   updateSomeAndGet: () => updateSomeAndGet,
@@ -29843,7 +29862,7 @@ var updateSomeAndGet = /* @__PURE__ */ dual(2, (self, pf) => sync4(() => {
   return self.ref.current;
 }));
 var getUnsafe5 = (self) => self.ref.current;
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/FetchHttpClient.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/FetchHttpClient.js
 var exports_FetchHttpClient = {};
 __export(exports_FetchHttpClient, {
   layer: () => layer15,
@@ -29851,7 +29870,7 @@ __export(exports_FetchHttpClient, {
   Fetch: () => Fetch
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/Headers.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/Headers.js
 var TypeId44 = /* @__PURE__ */ Symbol.for("~effect/http/Headers");
 var Proto8 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.create(null), {
   [TypeId44]: {
@@ -29971,7 +29990,7 @@ var CurrentRedactedNames = /* @__PURE__ */ Reference("effect/Headers/CurrentReda
   defaultValue: () => ["authorization", "cookie", "set-cookie", "x-api-key"]
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClient.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpClient.js
 var exports_HttpClient = {};
 __export(exports_HttpClient, {
   withScope: () => withScope,
@@ -30015,7 +30034,7 @@ __export(exports_HttpClient, {
   HttpClient: () => HttpClient
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/Cookies.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/Cookies.js
 var TypeId45 = "~effect/http/Cookies";
 var CookieTypeId = "~effect/http/Cookies/Cookie";
 var Proto9 = {
@@ -30204,7 +30223,7 @@ var tryDecodeURIComponent = (str) => {
   }
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/UrlParams.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/UrlParams.js
 var TypeId46 = "~effect/http/UrlParams";
 var isUrlParams = (u) => hasProperty(u, TypeId46);
 var Proto10 = {
@@ -30329,7 +30348,7 @@ var schemaRecord = /* @__PURE__ */ UrlParamsSchema.pipe(/* @__PURE__ */ decodeTo
   encode: fromInput3
 })));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpBody.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpBody.js
 var TypeId47 = "~effect/http/HttpBody";
 var HttpBodyErrorTypeId = "~effect/http/HttpBody/HttpBodyError";
 
@@ -30502,7 +30521,7 @@ var fileContentLength = (size9, options) => {
 };
 var file = (path, options) => flatMap5(FileSystem, (fs) => map8(fs.stat(path), (info2) => stream(fs.stream(path, options), options?.contentType, fileContentLength(info2.size, options))));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientError.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpClientError.js
 var TypeId48 = "~effect/http/HttpClientError";
 var isHttpClientError = (u) => hasProperty(u, TypeId48);
 
@@ -30578,7 +30597,7 @@ class EmptyBodyError extends (/* @__PURE__ */ TaggedError2("EmptyBodyError")) {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientRequest.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpClientRequest.js
 var exports_HttpClientRequest = {};
 __export(exports_HttpClientRequest, {
   updateUrl: () => updateUrl,
@@ -30630,11 +30649,11 @@ __export(exports_HttpClientRequest, {
   accept: () => accept
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpMethod.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpMethod.js
 var hasBody = (method) => method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && method !== "TRACE";
 var allShort = [["GET", "get"], ["POST", "post"], ["PUT", "put"], ["DELETE", "del"], ["PATCH", "patch"], ["HEAD", "head"], ["OPTIONS", "options"], ["TRACE", "trace"]];
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/internal/httpBody.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/internal/httpBody.js
 var updateHeaders = (headers, body) => {
   if (body._tag === "Empty" || body._tag === "FormData") {
     return remove7(remove7(headers, "content-type"), "content-length");
@@ -30643,7 +30662,7 @@ var updateHeaders = (headers, body) => {
   return body.contentLength === undefined ? remove7(headers, "content-length") : set5(headers, "content-length", body.contentLength.toString());
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/Url.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/Url.js
 class UrlError extends (/* @__PURE__ */ TaggedError2("UrlError")) {
 }
 var make48 = (url2, params, hash2) => try_({
@@ -30671,7 +30690,7 @@ var baseUrl = () => {
   return;
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientRequest.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpClientRequest.js
 var TypeId49 = "~effect/http/HttpClientRequest";
 var isHttpClientRequest = (u) => hasProperty(u, TypeId49);
 var Proto12 = {
@@ -30888,7 +30907,7 @@ var toWeb = (self, options2) => contextWith2((context3) => fromResult2(toWebResu
   signal: options2?.signal
 })));
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientResponse.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpClientResponse.js
 var exports_HttpClientResponse = {};
 __export(exports_HttpClientResponse, {
   stream: () => stream2,
@@ -30904,7 +30923,7 @@ __export(exports_HttpClientResponse, {
   TypeId: () => TypeId51
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpIncomingMessage.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpIncomingMessage.js
 var TypeId50 = "~effect/http/HttpIncomingMessage";
 var schemaBodyJson2 = (schema2, options2) => {
   const decode2 = decodeEffect2(toCodecJson(schema2));
@@ -30942,7 +30961,7 @@ var inspect = (self, that) => {
   return obj;
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientResponse.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpClientResponse.js
 var TypeId51 = "~effect/http/HttpClientResponse";
 var fromWeb2 = (request3, source) => new WebHttpClientResponse(request3, source);
 var schemaJson = (schema2, options2) => {
@@ -31112,7 +31131,7 @@ class WebHttpClientResponse extends Class2 {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpTraceContext.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpTraceContext.js
 var toHeaders = (span2) => fromRecordUnsafe({
   b3: `${span2.traceId}-${span2.spanId}-${span2.sampled ? "1" : "0"}${match(span2.parent, {
     onNone: () => "",
@@ -31121,7 +31140,7 @@ var toHeaders = (span2) => fromRecordUnsafe({
   traceparent: `00-${span2.traceId}-${span2.spanId}-${span2.sampled ? "01" : "00"}`
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClient.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpClient.js
 var TypeId52 = "~effect/http/HttpClient";
 var isHttpClient = (u) => hasProperty(u, TypeId52);
 var HttpClient = /* @__PURE__ */ Service("effect/HttpClient");
@@ -31617,7 +31636,7 @@ var isTransientHttpError = (error2) => isHttpClientError(error2) && (error2.reas
 var isTooManyRequestsHttpClientError = (error2) => isHttpClientError(error2) && error2.reason._tag === "StatusCodeError" && error2.reason.response.status === 429;
 var isTransientResponse = (response) => response.status === 408 || response.status === 429 || response.status === 500 || response.status === 502 || response.status === 503 || response.status === 504;
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/FetchHttpClient.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/FetchHttpClient.js
 var Fetch = /* @__PURE__ */ Reference("effect/http/FetchHttpClient/Fetch", {
   defaultValue: () => globalThis.fetch
 });
@@ -32044,8 +32063,6 @@ var AgentError = exports_Schema.Union([
 // packages/core/src/subagent.ts
 var DelegationDepth = exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(1));
 var delegationToolPrefix = "delegate_";
-var isDelegationToolName = (toolName) => toolName.startsWith(delegationToolPrefix);
-
 class SubagentParentLink extends exports_Schema.Class("SubagentParentLink")({
   delegationId: DelegationId,
   parentAgentId: AgentId,
@@ -32462,7 +32479,7 @@ class AgentPolicy extends exports_Schema.Class("AgentPolicy")(AgentPolicyFields)
     });
   }
 }
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/AiError.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/AiError.js
 var exports_AiError = {};
 __export(exports_AiError, {
   reasonFromHttpStatus: () => reasonFromHttpStatus,
@@ -32494,7 +32511,7 @@ __export(exports_AiError, {
   AiError: () => AiError
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Response.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/Response.js
 var exports_Response = {};
 __export(exports_Response, {
   toolResultPart: () => toolResultPart,
@@ -32807,7 +32824,7 @@ var ErrorPart = /* @__PURE__ */ Struct2({
   identifier: "ErrorPart"
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/AiError.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/AiError.js
 var ReasonTypeId2 = "~effect/unstable/ai/AiError/Reason";
 var providerMetadataWithDefaults = () => ProviderMetadata2.pipe(withConstructorDefault2(succeed7({})), withDecodingDefault(succeed7({})));
 var redactHeaders = (headers) => {
@@ -33233,7 +33250,7 @@ var reasonFromHttpStatus = (params) => {
       return new UnknownError3(common);
   }
 };
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/IdGenerator.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/IdGenerator.js
 var exports_IdGenerator = {};
 __export(exports_IdGenerator, {
   make: () => make52,
@@ -33242,12 +33259,12 @@ __export(exports_IdGenerator, {
   IdGenerator: () => IdGenerator
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Random.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Random.js
 var Random3 = Random;
 var randomWith = (f) => withFiber2((fiber3) => succeed7(f(fiber3.getRef(Random3))));
 var next = /* @__PURE__ */ randomWith((r) => r.nextDoubleUnsafe());
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/IdGenerator.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/IdGenerator.js
 class IdGenerator extends (/* @__PURE__ */ Service()("@effect/ai/IdGenerator")) {
 }
 var DEFAULT_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -33299,7 +33316,7 @@ var make52 = /* @__PURE__ */ fnUntraced2(function* ({
   };
 });
 var layer16 = (options3) => effect(IdGenerator)(make52(options3));
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/LanguageModel.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/LanguageModel.js
 var exports_LanguageModel = {};
 __export(exports_LanguageModel, {
   streamText: () => streamText,
@@ -33313,7 +33330,7 @@ __export(exports_LanguageModel, {
   GenerateObjectResponse: () => GenerateObjectResponse
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/FiberSet.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/FiberSet.js
 var TypeId54 = "~effect/FiberSet";
 var isFiberSet = (u) => hasProperty(u, TypeId54);
 var Proto14 = {
@@ -33414,7 +33431,7 @@ var awaitEmpty = (self) => whileLoop2({
   step: constVoid
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/internal/codec-transformer.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/internal/codec-transformer.js
 var makeDefaultCodecTransformer = (toJsonSchemaDocument3) => {
   return (codec) => {
     const document = resolveTopLevel$ref(toJsonSchemaDocument3(codec));
@@ -33432,7 +33449,7 @@ var makeDefaultCodecTransformer = (toJsonSchemaDocument3) => {
 };
 var defaultCodecTransformer = /* @__PURE__ */ makeDefaultCodecTransformer(toJsonSchemaDocument2);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Prompt.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/Prompt.js
 var exports_Prompt = {};
 __export(exports_Prompt, {
   userMessage: () => userMessage,
@@ -33856,7 +33873,7 @@ var appendSystem = /* @__PURE__ */ dual(2, (self, content) => {
   return makePrompt([system, ...self.content]);
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/ResponseIdTracker.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/ResponseIdTracker.js
 class ResponseIdTracker extends (/* @__PURE__ */ Service()("effect/ai/ResponseIdTracker")) {
 }
 var make55 = /* @__PURE__ */ sync4(() => {
@@ -33915,7 +33932,7 @@ var make55 = /* @__PURE__ */ sync4(() => {
   };
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Telemetry.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/Telemetry.js
 var addSpanAttributes = (keyPrefix, transformKey) => (span2, attributes2) => {
   for (const [key, value4] of Object.entries(attributes2)) {
     if (isNotNullish(value4)) {
@@ -33948,7 +33965,7 @@ var addGenAIAnnotations = /* @__PURE__ */ dual(2, (span2, options3) => {
 class CurrentSpanTransformer extends (/* @__PURE__ */ Service()("effect/ai/Telemetry/CurrentSpanTransformer")) {
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Toolkit.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/Toolkit.js
 var exports_Toolkit = {};
 __export(exports_Toolkit, {
   merge: () => merge8,
@@ -34124,7 +34141,7 @@ var merge8 = (...toolkits) => {
   return makeProto2(tools);
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/LanguageModel.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/LanguageModel.js
 class LanguageModel extends (/* @__PURE__ */ Service()("effect/unstable/ai/LanguageModel")) {
 }
 var defaultCodecTransformer2 = defaultCodecTransformer;
@@ -34434,7 +34451,7 @@ var make57 = /* @__PURE__ */ fnUntraced2(function* (params) {
         providerOptions.incrementalPrompt = prepared.value.prompt;
       }
     }
-    const ResponseSchema = mutable(ArraySchema(Part(toolkit)));
+    const ResponseSchema = mutable(ArraySchema(Part(options3.disableToolCallResolution === true ? makeToolkitWithEncodedParameters(toolkit) : toolkit)));
     if (options3.disableToolCallResolution === true) {
       const rawContent2 = yield* generateWithNonIncrementalFallback();
       const content2 = yield* decodeEffect2(ResponseSchema)(rawContent2);
@@ -34590,10 +34607,10 @@ var make57 = /* @__PURE__ */ fnUntraced2(function* (params) {
         providerOptions.incrementalPrompt = prepared.value.prompt;
       }
     }
+    const ResponseSchema = NonEmptyArray(StreamPart(options3.disableToolCallResolution === true ? makeToolkitWithEncodedParameters(toolkit) : toolkit));
+    const decodeParts = decodeEffect2(ResponseSchema);
     if (options3.disableToolCallResolution === true) {
-      const schema2 = NonEmptyArray(StreamPart(toolkit));
-      const decodeParts2 = decodeEffect2(schema2);
-      return streamWithNonIncrementalFallback().pipe(mapArrayEffect((parts2) => decodeParts2(parts2).pipe(tracker ? tap5((decodedParts) => {
+      return streamWithNonIncrementalFallback().pipe(mapArrayEffect((parts2) => decodeParts(parts2).pipe(tracker ? tap5((decodedParts) => {
         for (const part of decodedParts) {
           if (part.type === "response-metadata" && isNotUndefined(part.id)) {
             tracker.markParts(providerOptions.prompt.content, part.id);
@@ -34602,8 +34619,6 @@ var make57 = /* @__PURE__ */ fnUntraced2(function* (params) {
         return void_5;
       }) : identity)));
     }
-    const ResponseSchema = NonEmptyArray(StreamPart(toolkit));
-    const decodeParts = decodeEffect2(ResponseSchema);
     const queue = yield* make15();
     const deferredFinishParts = [];
     if (preResolvedStreamParts.length > 0) {
@@ -34896,6 +34911,7 @@ var resolveToolCalls = (content, toolkit, messages, concurrency) => {
     concurrency
   });
 };
+var makeToolkitWithEncodedParameters = (toolkit) => make56(...Object.values(toolkit.tools).map((tool) => tool.setParameters(toEncoded2(tool.parametersSchema))));
 var resolveToolkit = (toolkit) => isEffect2(toolkit) ? toolkit : succeed7(toolkit);
 var getObjectName = (objectName, schema2) => {
   if (isNotUndefined(objectName)) {
@@ -34943,7 +34959,7 @@ var applySpanTransformer = (transformer, response, options3) => {
     });
   }
 };
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Model.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/Model.js
 var exports_Model = {};
 __export(exports_Model, {
   make: () => make58,
@@ -34979,7 +34995,7 @@ var Proto17 = {
 var make58 = (provider, modelName, layer17) => Object.assign(Object.create(Proto17), {
   provider
 }, merge3(layer17, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Tool.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/Tool.js
 var exports_Tool = {};
 __export(exports_Tool, {
   unsafeSecureJsonParse: () => unsafeSecureJsonParse,
@@ -37249,6 +37265,7 @@ var inspectModelResponsePartCapacity = (usage2, part, limits, knownSafePrototype
     message: `Model response exceeded the ${limits.maxModelResponseBytes}-byte retained response limit`
   })) : exports_Effect.succeed(bytes);
 });
+var encodedToolParameterToolkit = (toolkit) => exports_Toolkit.make(...Object.values(toolkit.tools).map((tool) => tool.setParameters(exports_Schema.toEncoded(tool.parametersSchema))));
 var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart")(function* (part, toolkit, usage2, limits) {
   const directInputBytes = boundedValueFootprint(part, limits.maxModelResponseBytes - usage2.responsePartBytes, knownSafeModelResponsePrototypes);
   if (directInputBytes === undefined) {
@@ -37257,7 +37274,7 @@ var ownModelResponsePart = exports_Effect.fn("AgentRuntime.ownModelResponsePart"
   } else {
     yield* inspectModelResponsePartCapacity(usage2, part, limits);
   }
-  const codec = exports_Schema.toCodecJson(exports_Response.StreamPart(toolkit));
+  const codec = exports_Schema.toCodecJson(exports_Response.StreamPart(encodedToolParameterToolkit(toolkit)));
   const encodingFailure = ModelProtocolError.make({
     message: "Model response part failed canonical encoding"
   });
@@ -38645,7 +38662,8 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
       }
       const toolCallId = yield* decodeToolCallId(part.id);
       const tool = tools[part.name];
-      const encodedParameters = yield* encodeToolCallParameters(tool, part.name, part.params);
+      const decodedParameters = yield* decodeToolCallParameters(tool, part.name, part.params);
+      const encodedParameters = yield* encodeToolCallParameters(tool, part.name, decodedParameters);
       const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
       const canonicalCall = exports_Response.makePart("tool-call", {
         id: part.id,
@@ -39408,16 +39426,6 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
       isFailure: settledCall.isFailure
     };
   }
-  const settledChildJoinCallIds = resume.settledChildJoinCallIdsPastDeadline;
-  if (settledChildJoinCallIds !== undefined) {
-    const cleanupIds = new Set(settledChildJoinCallIds);
-    const openCalls = resume.calls.filter((call) => !settledIds.has(call.id));
-    if (settledChildJoinCallIds.length === 0 || cleanupIds.size !== settledChildJoinCallIds.length || openCalls.length !== cleanupIds.size || openCalls.some((call) => !cleanupIds.has(call.id) || !isDelegationToolName(call.name))) {
-      return failRunEventStream(ModelProtocolError.make({
-        message: "Past-deadline cleanup authority must identify every and only still-open delegation Tool Call"
-      }));
-    }
-  }
   const policy2 = agent2.definition.policy;
   const bounds = effectiveRunBounds(policy2, options3);
   const toolCalls = trace3.toolCalls.size;
@@ -39462,10 +39470,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
       })
     ];
   }).pipe(exports_Effect.withLogSpan("AgentRuntime.resume"))).pipe(exports_Stream.flatMap(exports_Stream.fromIterable));
-  const continueAfterBatch = () => {
-    const continuation = toolBatchContinuation(agent2, context3, trace3, resumedPrompt, turn, toolCalls, options3);
-    return settledChildJoinCallIds === undefined ? continuation : enforceDurationDeadline(continuation, context3.durationDeadlineMillis, durationLimitError(policy2));
-  };
+  const continueAfterBatch = () => toolBatchContinuation(agent2, context3, trace3, resumedPrompt, turn, toolCalls, options3);
   if (overToolBudget && !(completionBatch && policy2.onExhaustion === "final-answer")) {
     const rejection = yield* settleRejectedBatch(context3, turnId, trace3, AgentPolicyError.make({
       limit: "tool-calls",
@@ -39500,7 +39505,7 @@ var stream3 = (agent2, input, options3 = {}) => {
     const maxDurationMillis = exports_Duration.toMillis(agent2.definition.policy.maxDuration);
     const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
     const durationDeadlineMillis = options3.durationDeadline === undefined ? attemptDeadlineMillis : Math.min(attemptDeadlineMillis, exports_DateTime.toEpochMillis(options3.durationDeadline));
-    const startedAtMillis = durationDeadlineMillis - maxDurationMillis;
+    const startedAtMillis = options3.runStartedAt === undefined ? attemptStartedAtMillis : exports_DateTime.toEpochMillis(options3.runStartedAt);
     const ids = yield* IdGenerator2;
     const conversationId = options3.conversationId === undefined ? yield* ids.nextConversationId : options3.conversationId;
     const runId = options3.runId === undefined ? yield* ids.nextRunId : options3.runId;
@@ -39581,7 +39586,7 @@ var stream3 = (agent2, input, options3 = {}) => {
       return makeTurn(agent2, context3, initialPrompt, 1, 0, options3);
     }));
     const durationLimit = durationLimitError(agent2.definition.policy);
-    const deadline = options3.resume?.settledChildJoinCallIdsPastDeadline !== undefined ? execution : enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
+    const deadline = enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
     const engineToolServices = exports_Context.make(AgentSpawner, makeAgentSpawner({
       agentId: context3.agentId,
       conversationId: context3.conversationId,
@@ -41873,10 +41878,10 @@ var RunApprovalAdapterPolicySchema = exports_Schema.Struct({
   risk: exports_Schema.Literals(["low", "medium", "high", "critical"]),
   denial: exports_Schema.Literals(["terminal", "recoverable"])
 });
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/PrimaryKey.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/PrimaryKey.js
 var symbol4 = "~effect/interfaces/PrimaryKey";
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/rpc/RpcSchema.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/RpcSchema.js
 var StreamSchemaTypeId = "~effect/rpc/RpcSchema/StreamSchema";
 var schema2 = /* @__PURE__ */ declare(isStream);
 function Stream2(success, error2) {
@@ -41887,7 +41892,7 @@ function Stream2(success, error2) {
   });
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/rpc/Rpc.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/Rpc.js
 var TypeId59 = "~effect/rpc/Rpc";
 var Proto19 = {
   [TypeId59]: TypeId59,
@@ -42004,7 +42009,7 @@ var make60 = (tag2, options3) => {
   });
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/McpSchema.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/McpSchema.js
 var optionalWithDefault = (schema3, defaultValue) => {
   const effect2 = sync4(defaultValue);
   return optionalKey2(schema3).pipe(decode({
@@ -42027,12 +42032,12 @@ class RequestMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
 }
 
 class ResultMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 }))) {
 }
 
 class NotificationMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 }))) {
 }
 var Cursor = String6;
@@ -42212,7 +42217,7 @@ class Resource2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Resource")
   annotations: /* @__PURE__ */ optional3(Annotations),
   icons: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(Icon)),
   size: /* @__PURE__ */ optional3(Int),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 })) {
 }
 
@@ -42224,14 +42229,14 @@ class ResourceTemplate extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Res
   mimeType: /* @__PURE__ */ optional3(String6),
   annotations: /* @__PURE__ */ optional3(Annotations),
   icons: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(Icon)),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 })) {
 }
 
 class ResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   uri: String6,
   mimeType: /* @__PURE__ */ optional3(String6),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 }))) {
 }
 
@@ -42314,7 +42319,7 @@ class Prompt2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Prompt")({
   description: /* @__PURE__ */ optional3(String6),
   arguments: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(PromptArgument)),
   icons: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(Icon)),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 })) {
 }
 
@@ -42322,7 +42327,7 @@ class TextContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ tag("text"),
   text: String6,
   annotations: /* @__PURE__ */ optional3(Annotations),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 }))) {
 }
 
@@ -42331,7 +42336,7 @@ class ImageContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   data: Uint8ArrayFromBase64,
   mimeType: String6,
   annotations: /* @__PURE__ */ optional3(Annotations),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 }))) {
 }
 
@@ -42340,7 +42345,7 @@ class AudioContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   data: Uint8ArrayFromBase64,
   mimeType: String6,
   annotations: /* @__PURE__ */ optional3(Annotations),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 }))) {
 }
 
@@ -42348,7 +42353,7 @@ class EmbeddedResource extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2
   type: /* @__PURE__ */ tag("resource"),
   resource: /* @__PURE__ */ Union2([TextResourceContents, BlobResourceContents]),
   annotations: /* @__PURE__ */ optional3(Annotations),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 }))) {
 }
 
@@ -42398,9 +42403,9 @@ class ToolAnnotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2(
 }
 var ToolJsonSchema = /* @__PURE__ */ StructWithRest(/* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("object"),
-  properties: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Record(String6, Json2))),
+  properties: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, JsonObject)),
   required: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6))
-}), [/* @__PURE__ */ Record(String6, Json2)]);
+}), [JsonObject]);
 
 class Tool extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
   name: String6,
@@ -42410,7 +42415,7 @@ class Tool extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
   outputSchema: /* @__PURE__ */ optional3(ToolJsonSchema),
   annotations: /* @__PURE__ */ optional3(ToolAnnotations),
   icons: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(Icon)),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 })) {
 }
 
@@ -42464,7 +42469,7 @@ class ToolUseContent extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ToolU
   id: String6,
   name: String6,
   input: /* @__PURE__ */ Record(String6, Unknown2),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 })) {
 }
 
@@ -42474,7 +42479,7 @@ class ToolResultContent extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/To
   content: /* @__PURE__ */ ArraySchema(ContentBlock),
   structuredContent: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Unknown2)),
   isError: /* @__PURE__ */ optional3(Boolean3),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 })) {
 }
 var SamplingMessageContentBlock = /* @__PURE__ */ Union2([TextContent, ImageContent, AudioContent, ToolUseContent, ToolResultContent]);
@@ -42482,7 +42487,7 @@ var SamplingMessageContentBlock = /* @__PURE__ */ Union2([TextContent, ImageCont
 class SamplingMessage extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   role: Role,
   content: /* @__PURE__ */ Union2([SamplingMessageContentBlock, /* @__PURE__ */ ArraySchema(SamplingMessageContentBlock)]),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+  _meta: /* @__PURE__ */ optional3(JsonObject)
 }))) {
 }
 
@@ -42516,7 +42521,7 @@ class ModelPreferences extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Mod
 class CreateMessageResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CreateMessageResult")({
   role: Role,
   content: /* @__PURE__ */ Union2([SamplingMessageContentBlock, /* @__PURE__ */ ArraySchema(SamplingMessageContentBlock)]),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2)),
+  _meta: /* @__PURE__ */ optional3(JsonObject),
   model: String6,
   stopReason: /* @__PURE__ */ optional3(String6)
 })) {
@@ -44260,7 +44265,7 @@ var localGitWorkOrderHostLayer = (config) => exports_Layer.effect(WorkOrderHost,
     withWorktree
   });
 })).pipe(exports_Layer.provide(localGitLayer(config.gitExecutable ?? "/usr/bin/git")));
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
 var exports_AnthropicClient = {};
 __export(exports_AnthropicClient, {
   make: () => make62,
@@ -44269,13 +44274,13 @@ __export(exports_AnthropicClient, {
   AnthropicClient: () => AnthropicClient
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/ChannelSchema.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/ChannelSchema.js
 var decode2 = (schema3) => () => {
   const decode3 = decodeEffect2(NonEmptyArray(schema3));
   return fromTransform((upstream, _scope) => succeed7(flatMap5(upstream, (chunk) => decode3(chunk))));
 };
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/encoding/Sse.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/encoding/Sse.js
 var SseErrorTypeId = "~effect/encoding/Sse/SseError";
 
 class EventTooLarge extends (/* @__PURE__ */ TaggedError2("EventTooLarge")) {
@@ -44476,12 +44481,12 @@ class Retry extends (/* @__PURE__ */ TaggedClass("Retry")) {
   }
 }
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicConfig.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-anthropic/dist/AnthropicConfig.js
 class AnthropicConfig extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicConfig")) {
   static getOrUndefined = /* @__PURE__ */ map8(/* @__PURE__ */ context2(), /* @__PURE__ */ getOrUndefined2(AnthropicConfig));
 }
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/Generated.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-anthropic/dist/Generated.js
 var APIError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
@@ -48534,7 +48539,7 @@ var AnthropicClientError = (tag2, cause, response) => new AnthropicClientErrorIm
   request: response.request
 });
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/internal/errors.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-anthropic/dist/internal/errors.js
 var AnthropicErrorBody = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("error"),
   error: /* @__PURE__ */ Struct2({
@@ -48845,7 +48850,7 @@ var mapStatusCodeToReason = ({
   }
 };
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
 class AnthropicClient extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicClient")) {
 }
 var RedactedAnthropicHeaders = {
@@ -48922,7 +48927,7 @@ var layerConfig = (options3) => effect(AnthropicClient, gen4(function* () {
     transformClient: options3?.transformClient
   });
 }));
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicLanguageModel.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-anthropic/dist/AnthropicLanguageModel.js
 var exports_AnthropicLanguageModel = {};
 __export(exports_AnthropicLanguageModel, {
   withConfigOverride: () => withConfigOverride,
@@ -48932,7 +48937,7 @@ __export(exports_AnthropicLanguageModel, {
   Config: () => Config
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/internal/structured-output.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/internal/structured-output.js
 var REST_PROPERTY_NAME = "__rest__";
 var TAIL_PROPERTY_PREFIX = "__tail_";
 var RECORD_DESCRIPTION = "Object encoded as array of [key, value] pairs. Apply object constraints to the decoded object";
@@ -49241,7 +49246,7 @@ function isJsonSchema(input) {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/OpenAiStructuredOutput.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/OpenAiStructuredOutput.js
 function toCodecOpenAI(schema3) {
   const codec = toCodec(schema3);
   const document = resolveTopLevel$ref(toJsonSchemaDocument2(codec, {
@@ -49461,7 +49466,7 @@ var supportedKeywords = /* @__PURE__ */ new Set(["$ref", "type", "title", "descr
 var normalizableAllOfKeywords = /* @__PURE__ */ new Set(["$ref", "title", "enum", "anyOf", "format", "multipleOf"]);
 var formats = /* @__PURE__ */ new Set(["date-time", "time", "date", "duration", "email", "hostname", "ipv4", "ipv6", "uuid"]);
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/AnthropicStructuredOutput.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/AnthropicStructuredOutput.js
 function toCodecAnthropic(schema3) {
   const codec = toCodec(schema3);
   const unresolvedDocument = toJsonSchemaDocument2(codec, {
@@ -49566,7 +49571,7 @@ function hoistAllOfDescriptions(schema3) {
 var supportedKeywords2 = /* @__PURE__ */ new Set(["$ref", "type", "title", "description", "enum", "const", "anyOf", "allOf", "properties", "required", "additionalProperties", "items", "pattern"]);
 var formats2 = /* @__PURE__ */ new Set(["date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid"]);
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicTelemetry.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-anthropic/dist/AnthropicTelemetry.js
 var addAnthropicRequestAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.anthropic.request", camelToSnake);
 var addAnthropicResponseAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.anthropic.response", camelToSnake);
 var addGenAIAnnotations2 = /* @__PURE__ */ dual(2, (span2, options3) => {
@@ -49581,7 +49586,7 @@ var addGenAIAnnotations2 = /* @__PURE__ */ dual(2, (span2, options3) => {
   }
 });
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/internal/utilities.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-anthropic/dist/internal/utilities.js
 var finishReasonMap = {
   end_turn: "stop",
   max_tokens: "length",
@@ -49601,7 +49606,7 @@ var resolveFinishReason = (finishReason, isJsonResponse = false) => {
   return reason;
 };
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicLanguageModel.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-anthropic/dist/AnthropicLanguageModel.js
 var formatIssue2 = /* @__PURE__ */ makeFormatterDefault();
 
 class Config extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicLanguageModel/Config")) {
@@ -51517,7 +51522,7 @@ var transformToolCallParams = /* @__PURE__ */ fnUntraced2(function* (tools, tool
     })
   })));
 });
-// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiClient.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-openai/dist/OpenAiClient.js
 var exports_OpenAiClient = {};
 __export(exports_OpenAiClient, {
   withWebSocketMode: () => withWebSocketMode,
@@ -51529,7 +51534,7 @@ __export(exports_OpenAiClient, {
   OpenAiClient: () => OpenAiClient
 });
 
-// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/socket/Socket.js
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/socket/Socket.js
 var TypeId60 = "~effect/socket/Socket";
 var Socket = /* @__PURE__ */ Service("effect/socket/Socket");
 var make64 = (options3) => Socket.of({
@@ -51728,7 +51733,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
   }));
 });
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/internal/errors.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-openai/dist/internal/errors.js
 var OpenAiErrorBody = /* @__PURE__ */ Struct2({
   error: /* @__PURE__ */ Struct2({
     message: String6,
@@ -52017,12 +52022,12 @@ var mapStatusCodeToReason2 = ({
   }
 };
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiConfig.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-openai/dist/OpenAiConfig.js
 class OpenAiConfig extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiConfig")) {
   static getOrUndefined = /* @__PURE__ */ map8(/* @__PURE__ */ context2(), /* @__PURE__ */ getOrUndefined2(OpenAiConfig));
 }
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiSchema.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-openai/dist/OpenAiSchema.js
 var UnknownRecord = /* @__PURE__ */ Record(String6, Unknown2);
 var ImageDetail = /* @__PURE__ */ Literals(["low", "high", "auto"]);
 var MessageStatus = /* @__PURE__ */ Literals(["in_progress", "completed", "incomplete"]);
@@ -52356,12 +52361,43 @@ var ResponseErrorEvent = /* @__PURE__ */ Struct2({
   sequence_number: Int,
   status: /* @__PURE__ */ optionalKey2(Int)
 });
+var NestedResponseErrorEvent = /* @__PURE__ */ Struct2({
+  type: Literal2("error"),
+  error: Struct2({
+    code: NullOr(String6),
+    message: String6,
+    param: NullOr(String6)
+  }),
+  sequence_number: Int,
+  status: optionalKey2(Int)
+}).pipe(/* @__PURE__ */ decodeTo2(ResponseErrorEvent, /* @__PURE__ */ transform2({
+  decode: ({
+    error: error2,
+    ...rest
+  }) => ({
+    ...rest,
+    ...error2
+  }),
+  encode: ({
+    code,
+    message,
+    param,
+    ...rest
+  }) => ({
+    ...rest,
+    error: {
+      code,
+      message,
+      param
+    }
+  })
+})));
 var knownResponseStreamEventTypes = /* @__PURE__ */ new Set(["response.created", "response.completed", "response.incomplete", "response.failed", "response.output_item.added", "response.output_item.done", "response.output_text.delta", "response.output_text.annotation.added", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.reasoning_summary_text.delta", "response.function_call_arguments.delta", "response.function_call_arguments.done", "response.code_interpreter_call_code.delta", "response.code_interpreter_call_code.done", "response.apply_patch_call_operation_diff.delta", "response.apply_patch_call_operation_diff.done", "response.image_generation_call.partial_image", "error"]);
 var UnknownResponseStreamEvent = /* @__PURE__ */ declare((value4) => hasProperty(value4, "type") && typeof value4.type === "string" && !knownResponseStreamEventTypes.has(value4.type), {
   identifier: "UnknownResponseStreamEvent",
   description: "Fallback for unknown future stream events"
 });
-var ResponseStreamEvent = /* @__PURE__ */ Union2([ResponseCreatedEvent, ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent, ResponseOutputItemAddedEvent, ResponseOutputItemDoneEvent, ResponseOutputTextDeltaEvent, ResponseOutputTextAnnotationAddedEvent, ResponseReasoningSummaryPartAddedEvent, ResponseReasoningSummaryPartDoneEvent, ResponseReasoningSummaryTextDeltaEvent, ResponseFunctionCallArgumentsDeltaEvent, ResponseFunctionCallArgumentsDoneEvent, ResponseCodeInterpreterCallCodeDeltaEvent, ResponseCodeInterpreterCallCodeDoneEvent, ResponseApplyPatchCallOperationDiffDeltaEvent, ResponseApplyPatchCallOperationDiffDoneEvent, ResponseImageGenerationCallPartialImageEvent, ResponseErrorEvent, UnknownResponseStreamEvent]);
+var ResponseStreamEvent = /* @__PURE__ */ Union2([ResponseCreatedEvent, ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent, ResponseOutputItemAddedEvent, ResponseOutputItemDoneEvent, ResponseOutputTextDeltaEvent, ResponseOutputTextAnnotationAddedEvent, ResponseReasoningSummaryPartAddedEvent, ResponseReasoningSummaryPartDoneEvent, ResponseReasoningSummaryTextDeltaEvent, ResponseFunctionCallArgumentsDeltaEvent, ResponseFunctionCallArgumentsDoneEvent, ResponseCodeInterpreterCallCodeDeltaEvent, ResponseCodeInterpreterCallCodeDoneEvent, ResponseApplyPatchCallOperationDiffDeltaEvent, ResponseApplyPatchCallOperationDiffDoneEvent, ResponseImageGenerationCallPartialImageEvent, ResponseErrorEvent, NestedResponseErrorEvent, UnknownResponseStreamEvent]);
 var Embedding = /* @__PURE__ */ Struct2({
   embedding: /* @__PURE__ */ Union2([/* @__PURE__ */ ArraySchema(Finite), String6]),
   index: Int,
@@ -52377,7 +52413,7 @@ var CreateEmbeddingResponse = /* @__PURE__ */ Struct2({
   }))
 });
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiClient.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-openai/dist/OpenAiClient.js
 class OpenAiClient extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiClient")) {
 }
 var RedactedOpenAiHeaders = {
@@ -52592,7 +52628,7 @@ var AllEvents = /* @__PURE__ */ Union2([ErrorEvent, ResponseStreamEvent]);
 var decodeEvent = /* @__PURE__ */ decodeUnknownSync2(/* @__PURE__ */ fromJsonString2(AllEvents));
 var withWebSocketMode = (effect2) => scopedWith2((scope3) => flatMap5(provide(makeSocket, scope3), (services2) => provideContext2(effect2, services2)));
 var layerWebSocketMode = /* @__PURE__ */ effectContext(makeSocket);
-// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiLanguageModel.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-openai/dist/OpenAiLanguageModel.js
 var exports_OpenAiLanguageModel = {};
 __export(exports_OpenAiLanguageModel, {
   withConfigOverride: () => withConfigOverride2,
@@ -52602,11 +52638,11 @@ __export(exports_OpenAiLanguageModel, {
   Config: () => Config2
 });
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/Generated.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-openai/dist/Generated.js
 var ModelIdsShared = /* @__PURE__ */ Union2([String6, /* @__PURE__ */ Literals(["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.4-mini-2026-03-17", "gpt-5.4-nano-2026-03-17", "gpt-5.3-chat-latest", "gpt-5.2", "gpt-5.2-2025-12-11", "gpt-5.2-chat-latest", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11", "gpt-5.1", "gpt-5.1-2025-11-13", "gpt-5.1-codex", "gpt-5.1-mini", "gpt-5.1-chat-latest", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-2025-08-07", "gpt-5-mini-2025-08-07", "gpt-5-nano-2025-08-07", "gpt-5-chat-latest", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4.1-2025-04-14", "gpt-4.1-mini-2025-04-14", "gpt-4.1-nano-2025-04-14", "o4-mini", "o4-mini-2025-04-16", "o3", "o3-2025-04-16", "o3-mini", "o3-mini-2025-01-31", "o1", "o1-2024-12-17", "o1-preview", "o1-preview-2024-09-12", "o1-mini", "o1-mini-2024-09-12", "gpt-4o", "gpt-4o-2024-11-20", "gpt-4o-2024-08-06", "gpt-4o-2024-05-13", "gpt-4o-audio-preview", "gpt-4o-audio-preview-2024-10-01", "gpt-4o-audio-preview-2024-12-17", "gpt-4o-audio-preview-2025-06-03", "gpt-4o-mini-audio-preview", "gpt-4o-mini-audio-preview-2024-12-17", "gpt-4o-search-preview", "gpt-4o-mini-search-preview", "gpt-4o-search-preview-2025-03-11", "gpt-4o-mini-search-preview-2025-03-11", "chatgpt-4o-latest", "codex-mini-latest", "gpt-4o-mini", "gpt-4o-mini-2024-07-18", "gpt-4-turbo", "gpt-4-turbo-2024-04-09", "gpt-4-0125-preview", "gpt-4-turbo-preview", "gpt-4-1106-preview", "gpt-4-vision-preview", "gpt-4", "gpt-4-0314", "gpt-4-0613", "gpt-4-32k", "gpt-4-32k-0314", "gpt-4-32k-0613", "gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-3.5-turbo-0301", "gpt-3.5-turbo-0613", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-0125", "gpt-3.5-turbo-16k-0613"])]);
 var ModelIdsResponses = /* @__PURE__ */ Union2([ModelIdsShared, /* @__PURE__ */ Literals(["o1-pro", "o1-pro-2025-03-19", "o3-pro", "o3-pro-2025-06-10", "o3-deep-research", "o3-deep-research-2025-06-26", "o4-mini-deep-research", "o4-mini-deep-research-2025-06-26", "computer-use-preview", "computer-use-preview-2025-03-11", "gpt-5-codex", "gpt-5-pro", "gpt-5-pro-2025-10-06", "gpt-5.1-codex-max"]).annotate({ title: "ResponsesOnlyModel" })]);
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/internal/utilities.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-openai/dist/internal/utilities.js
 var finishReasonMap2 = {
   content_filter: "content-filter",
   function_call: "tool-calls",
@@ -52626,7 +52662,7 @@ var resolveFinishReason2 = (finishReason, hasToolCalls) => {
   return reason;
 };
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiTelemetry.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-openai/dist/OpenAiTelemetry.js
 var addOpenAiRequestAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.openai.request", camelToSnake);
 var addOpenAiResponseAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.openai.response", camelToSnake);
 var addGenAIAnnotations3 = /* @__PURE__ */ dual(2, (span2, options3) => {
@@ -52641,7 +52677,7 @@ var addGenAIAnnotations3 = /* @__PURE__ */ dual(2, (span2, options3) => {
   }
 });
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiLanguageModel.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-openai/dist/OpenAiLanguageModel.js
 var formatIssue3 = /* @__PURE__ */ makeFormatterDefault();
 var ResponseModelIds = ModelIdsResponses.members[1];
 var SharedModelIds = ModelIdsShared.members[1];

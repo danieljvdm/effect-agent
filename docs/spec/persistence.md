@@ -149,6 +149,7 @@ The canonical log supports, at minimum:
 
 - conversation created/closed;
 - user, steering, and follow-up input;
+- immutable Run start with its original duration allowance;
 - model request metadata and per-call normalized provider/model/tier/token/cost usage;
 - model text/reasoning deltas, completion, signature/redaction metadata, or structured item;
 - tool call requested, prepared, approved/rejected, settled, unknown;
@@ -161,6 +162,13 @@ The canonical log supports, at minimum:
 
 Partial Tool-argument deltas, queue depth changes, heartbeats, and debug spans are
 not canonical events.
+
+`RunStarted` stores the Run ID and finite positive `maxDurationMillis`; its envelope `createdAt`
+is the start timestamp. The deterministic `run-start:{runId}` record and batch identities admit
+one start per logical Run. Input remains a separate fact because binding-free recovery may apply
+it before execution, and joined input can later become a standalone Run. Conflicting starts,
+changed duration policies, and execution history without start evidence fail recovery rather than
+resetting the clock. No migration reconstructs missing timing from current code.
 
 ## 6. Optimistic and idempotent writes
 

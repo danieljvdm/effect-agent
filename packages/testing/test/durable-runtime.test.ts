@@ -50,6 +50,7 @@ import {
   recoveryRepairRecordId,
   runCompletedRecordId,
   runIdForSubmission,
+  runStartedRecordId,
   submissionInputRecordId,
   submissionSettlementRecordId,
   toolCallSettledRecordId,
@@ -1142,6 +1143,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       expect(logTags(records)).toEqual([
         "ConversationCreated",
         "UserInputRecorded",
+        "RunStarted",
         "ModelResponseRecorded",
         "ToolCallSettled",
         "ModelResponseRecorded",
@@ -1151,6 +1153,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       expect(records.map((envelope) => envelope.record.recordId)).toEqual([
         `conversation-created:${conversation}`,
         submissionInputRecordId(submissionId),
+        runStartedRecordId(runId),
         modelResponseRecordId(runId, 1),
         `tool-settled:${runId}:1:search-1`,
         modelResponseRecordId(runId, 2),
@@ -1585,6 +1588,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         expect(logTags(records)).toEqual([
           "ConversationCreated",
           "UserInputRecorded",
+          "RunStarted",
           "ModelResponseRecorded",
           "ToolCallSettled",
           "ToolCallSettled",
@@ -1595,7 +1599,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         // Exact synthetic settlements: identities in declaration order, each
         // carrying the encoded policy failure — replay correlation for the
         // model-declared calls, not just an isFailure bit.
-        expect(records.map((envelope) => envelope.record.recordId).slice(2, 5)).toEqual([
+        expect(records.map((envelope) => envelope.record.recordId).slice(3, 6)).toEqual([
           modelResponseRecordId(runId, 1),
           toolCallSettledRecordId(runId, 1, Schema.decodeSync(ToolCallId)("probe-1")),
           toolCallSettledRecordId(runId, 1, Schema.decodeSync(ToolCallId)("probe-2")),
@@ -2407,6 +2411,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       expect(logTags(committed)).toEqual([
         "ConversationCreated",
         "UserInputRecorded",
+        "RunStarted",
         "ModelResponseRecorded",
         "ToolCallSettled",
       ]);
@@ -3232,6 +3237,172 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       expect(payload.inputTokens).toBe(900);
       expect(payload.outputTokens).toBe(50);
     }),
+  );
+});
+
+layer(testLayer)("RUN-030 canonical duration", (it) => {
+  it.effect("refuses executed history whose original start evidence is missing", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const store = yield* ConversationStore;
+      const scripted = yield* makeScriptedModel(() => toolCallParts);
+      const agent = Agent.withModel(searchDefinition, scripted.model);
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: "missing clock" },
+        submitOptions("missing-run-start", "start"),
+      );
+      yield* armFailpoint("turn:after-response-append");
+      expect(
+        failureTag(
+          yield* Effect.exit(
+            runtime
+              .processConversation(agent, receipt.conversationId)
+              .pipe(Effect.provide(searchToolLayer)),
+          ),
+        ),
+      ).toBe("DurableRuntimeFailpointError");
+      yield* clearFailpoint;
+      const withoutStart = ConversationStore.of({
+        ...store,
+        read: (request) =>
+          store
+            .read(request)
+            .pipe(Stream.filter(({ record }) => record.payload._tag !== "RunStarted")),
+      });
+      const recovered = yield* Effect.exit(
+        Effect.flatMap(DurableAgentRuntime, (fresh) =>
+          fresh.processConversation(agent, receipt.conversationId),
+        ).pipe(
+          Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+          Effect.provideService(ConversationStore, withoutStart),
+          Effect.provide(searchToolLayer),
+        ),
+      );
+      expect(failureTag(recovered)).toBe("RunJournalError");
+      expect(scripted.prompts).toHaveLength(1);
+    }),
+  );
+
+  it.effect("starts the clock once across both Run-start append failpoints", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      for (const location of ["run:before-start-append", "run:after-start-append"] as const) {
+        const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"done"}'));
+        const agent = Agent.withModel(plannerDefinition, scripted.model);
+        const conversation = `conversation-${location}`;
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "clock" },
+          submitOptions(conversation, location),
+        );
+        yield* armFailpoint(location);
+        const crashed = yield* Effect.exit(
+          runtime.processConversation(agent, receipt.conversationId),
+        );
+        expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+        expect(scripted.prompts).toHaveLength(0);
+        yield* TestClock.adjust(Duration.seconds(31));
+        const settlements = yield* runtime.processConversation(agent, receipt.conversationId);
+        const alreadyStarted = location === "run:after-start-append";
+        expect(settlements.map((entry) => entry.outcome)).toEqual([
+          alreadyStarted ? "failed" : "completed",
+        ]);
+        expect(scripted.prompts).toHaveLength(alreadyStarted ? 0 : 1);
+        const records = yield* readLog(conversation);
+        const starts = records.filter(({ record }) => record.payload._tag === "RunStarted");
+        expect(starts).toHaveLength(1);
+        expect(starts[0]?.record.payload).toMatchObject({
+          runId: runIdForSubmission(receipt.submissionId),
+          maxDurationMillis: 30_000,
+        });
+        expect(yield* runtime.processConversation(agent, receipt.conversationId)).toEqual([]);
+      }
+    }),
+  );
+
+  it.effect(
+    "rejects a changed duration after process loss without moving the canonical deadline",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0 ? toolCallParts : finalParts('{"answer":"done"}'),
+        );
+        const agent = Agent.withModel(searchDefinition, scripted.model);
+        const conversation = "conversation-replacement-duration";
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "recover" },
+          submitOptions(conversation, "duration"),
+        );
+        yield* armFailpoint("turn:after-response-append");
+        const crashed = yield* Effect.exit(
+          runtime
+            .processConversation(agent, receipt.conversationId)
+            .pipe(Effect.provide(searchToolLayer)),
+        );
+        expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+        const before = yield* readLog(conversation);
+        const start = before.find(({ record }) => record.payload._tag === "RunStarted");
+        yield* TestClock.adjust(Duration.seconds(31));
+        const wider = Agent.withModel(
+          Agent.define(searchDefinition.id, {
+            input: searchDefinition.input,
+            output: searchDefinition.output,
+            instructions: searchDefinition.instructions,
+            toolkit: searchDefinition.toolkit,
+            policy: AgentPolicy.make({ ...searchDefinition.policy, maxDuration: "5 minutes" }),
+          }),
+          scripted.model,
+        );
+        const rejected = yield* Effect.exit(
+          runtime
+            .processConversation(wider, receipt.conversationId)
+            .pipe(Effect.provide(searchToolLayer)),
+        );
+        expect(failureTag(rejected)).toBe("RunJournalError");
+        expect(scripted.prompts).toHaveLength(1);
+        const after = yield* readLog(conversation);
+        expect(after.find(({ record }) => record.payload._tag === "RunStarted")).toEqual(start);
+        const settlements = yield* runtime
+          .processConversation(agent, receipt.conversationId)
+          .pipe(Effect.provide(searchToolLayer));
+        expect(settlements.map((entry) => entry.outcome)).toEqual(["failed"]);
+        expect(scripted.prompts).toHaveLength(1);
+        const settlement = (yield* readLog(conversation)).at(-1)?.record.payload;
+        expect(settlement).toMatchObject({ _tag: "SubmissionSettled", policyLimit: "duration" });
+      }),
+  );
+
+  it.effect(
+    "binding-free input recovery does not start a Run or spend its duration allowance",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"fresh"}'));
+        const agent = Agent.withModel(plannerDefinition, scripted.model);
+        const conversation = "conversation-input-before-start";
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "queued" },
+          submitOptions(conversation, "queued"),
+        );
+        yield* armFailpoint("claim:after-claim");
+        yield* Effect.exit(runtime.processConversation(agent, receipt.conversationId));
+        yield* clearFailpoint;
+        yield* runtime.runRecovery;
+        expect(logTags(yield* readLog(conversation))).not.toContain("RunStarted");
+        yield* TestClock.adjust(Duration.minutes(5));
+        expect(
+          (yield* runtime.processConversation(agent, receipt.conversationId)).map(
+            (entry) => entry.outcome,
+          ),
+        ).toEqual(["completed"]);
+        expect(scripted.prompts).toHaveLength(1);
+      }),
   );
 });
 

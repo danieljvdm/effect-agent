@@ -99,6 +99,19 @@ The submitted user input is not yet part of canonical Conversation history. When
 Submission is claimed, the worker appends that input idempotently and marks it
 applied before the model can consume it.
 
+Input application does not require an Agent Binding and does not start its clock. Before the first
+engine execution, the binding-aware worker appends one `RunStarted` record with the Run ID and
+finite positive `maxDurationMillis`. Its envelope timestamp fixes the logical start. Every later
+Attempt uses that timestamp and allowance; a replacement Binding with a different `maxDuration`
+fails with `RunJournalError` before execution. This applies to the single-binding worker as well as
+the exact-digest resolver. Status receives the start timestamp separately from the deadline.
+
+The start append has before/after failpoints and a deterministic Run-scoped identity. A crash before
+it commits has not started the Run; a crash after it commits cannot reset its clock. Input-only
+history may acquire its first start record, including input previously joined to another Run.
+History with evidence of agent execution but no start record fails clearly as incompatible private
+development data. Recovery never invents an earlier allowance from the replacement policy.
+
 If the process stops after ledger admission but before readiness, recovery completes
 materialization. A client retry with the same idempotency key resumes or returns the
 same Receipt. A conflicting payload under the same key fails.
@@ -425,6 +438,8 @@ authoritative for every repair and later pass.
 | After readiness, before receipt observed                      | Ready                                                             | Idempotent retry returns same receipt             |
 | After claim, before canonical input append                    | Running, input not applied                                        | Apply input idempotently                          |
 | After canonical input append, before applied marker           | Input canonical                                                   | Detect exact input and repair marker              |
+| Before canonical Run start append                             | Input applied; no agent execution                                 | Append the first start under the resolved Binding |
+| After canonical Run start append                              | Original start and duration allowance canonical                   | Preserve the deadline; reject a changed allowance |
 | After claim, before Attempt start                             | Ready/owned                                                       | Reclaim after ownership loss                      |
 | Mid-provider stream                                           | Canonical partial text/reasoning may exist; no completed response | Record interruption and retry as a new response   |
 | After model item commit, before tool authorization            | Model item canonical                                              | Reauthorize from canonical authority              |
