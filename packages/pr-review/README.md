@@ -33,16 +33,6 @@ bounds, and treat source content as untrusted data. The reviewer exposes this
 dependency in its Effect requirements; it has no ambient filesystem or network
 access and does not cache review answers.
 
-Before the model reasons, the reviewer reads changed files breadth-first at both
-revisions through that same port. This private context is capped at sixteen
-attempted 200-line reads and 160,000 source characters. Failures and truncation
-remain explicit, and the model keeps the source Tools for omitted ranges and
-deeper dependencies. Whole optional chunks are removed when the framework's
-estimate of the exact serialized initial prompt exceeds 80,000 tokens, leaving
-room under the 128,000-token context target for the output contract and Tool
-continuation. Authoritative patches are never removed. Source preparation and
-the single model Run share the five-minute invocation deadline.
-
 `ReviewSource.fromText(request, text)` applies the shared line and character
 bounds after the host authorizes and reads a file.
 

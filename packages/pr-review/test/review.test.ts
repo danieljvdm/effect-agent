@@ -1,6 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer, Ref, Result, Stream, Struct } from "effect";
-import { TestClock } from "effect/testing";
 import {
   type AiError,
   LanguageModel,
@@ -203,51 +202,6 @@ describe("review output boundary", () => {
     }),
   );
 
-  it.effect("PRR-002 supplies deterministic immutable changed-file context before reasoning", () =>
-    Effect.gen(function* () {
-      const reads = yield* Ref.make<ReadonlyArray<Parameters<typeof emptyRepository.readFile>[0]>>(
-        [],
-      );
-      const repository = ReviewRepository.of({
-        ...emptyRepository,
-        readFile: (input) =>
-          Ref.update(reads, (current) => [...current, input]).pipe(
-            Effect.as(
-              ReviewSource.make({
-                path: input.path,
-                revision: input.revision,
-                startLine: input.startLine,
-                totalLines: 2,
-                content: input.revision === "base" ? "before\nshared" : "after\nshared",
-              }),
-            ),
-          ),
-      });
-      const model = scriptedModel((prompt) => {
-        const text = reviewInput(prompt);
-        expect(text).toContain('"prefetchedContext"');
-        expect(text).toContain('"revision":"base"');
-        expect(text).toContain('"content":"before\\nshared"');
-        expect(text).toContain('"revision":"head"');
-        expect(text).toContain('"content":"after\\nshared"');
-        expect(text).toContain('"truncated":false');
-        expect(text).toContain('"formattedDiff"');
-        expect(text).toContain("2 +new");
-        expect(text.indexOf('"revision":"base"')).toBeLessThan(text.indexOf('"revision":"head"'));
-        return response({ findings: [] });
-      });
-
-      yield* makeReviewer({ model })
-        .review(request)
-        .pipe(Effect.provideService(ReviewRepository, repository));
-
-      expect(yield* Ref.get(reads)).toEqual([
-        { path: "src/index.ts", revision: "base", startLine: 1, lineCount: 200 },
-        { path: "src/index.ts", revision: "head", startLine: 1, lineCount: 200 },
-      ]);
-    }),
-  );
-
   it.effect(
     "PRR-002 reads immutable base and head source and recovers from a bounded failure",
     () =>
@@ -288,12 +242,6 @@ describe("review output boundary", () => {
         };
         const model = scriptedModel((prompt) => {
           const results = sourceResults(prompt);
-          if (results.length === 0) {
-            const text = reviewInput(prompt);
-            expect(text).toContain('"prefetchedContext"');
-            expect(text).toContain('"unavailable"');
-            expect(text).not.toContain("Sensitive provider failure");
-          }
           if (results.length < failedInputs.length) {
             if (results.length > 0) {
               expect(results.at(-1)).toMatchObject({
@@ -339,11 +287,6 @@ describe("review output boundary", () => {
           readFile: (input) =>
             Effect.gen(function* () {
               yield* Ref.update(reads, (current) => [...current, input]);
-              if (input.lineCount === 200) {
-                return yield* ReviewContextError.make({
-                  message: "Sensitive provider failure",
-                });
-              }
               if (input.path !== "src/index.ts" || input.startLine !== 1) {
                 return yield* ReviewContextError.make({ message: "Source range unavailable" });
               }
@@ -361,13 +304,7 @@ describe("review output boundary", () => {
           .review(request)
           .pipe(Effect.provideService(ReviewRepository, repository));
 
-        expect(yield* Ref.get(reads)).toEqual([
-          { path: "src/index.ts", revision: "base", startLine: 1, lineCount: 200 },
-          { path: "src/index.ts", revision: "head", startLine: 1, lineCount: 200 },
-          ...failedInputs,
-          base,
-          head,
-        ]);
+        expect(yield* Ref.get(reads)).toEqual([...failedInputs, base, head]);
         expect(outcome).toMatchObject({
           turns: 6,
           report: { findings: [] },
@@ -380,90 +317,6 @@ describe("review output boundary", () => {
           },
         });
       }),
-  );
-
-  it.effect("PRR-002 bounds breadth-first changed-file context without truncating source", () =>
-    Effect.gen(function* () {
-      const paths = ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"] as const;
-      const reads = yield* Ref.make<ReadonlyArray<Parameters<typeof emptyRepository.readFile>[0]>>(
-        [],
-      );
-      const boundedRequest = ReviewRequest.make({
-        ...request,
-        changes: paths.map((path) => ReviewChange.make({ path, patch })),
-      });
-      const repository = ReviewRepository.of({
-        ...emptyRepository,
-        readFile: (input) => {
-          const marker = `${input.path}:${input.revision}:${String(input.startLine)}`;
-          return Ref.update(reads, (current) => [...current, input]).pipe(
-            Effect.as(
-              ReviewSource.make({
-                path: input.path,
-                revision: input.revision,
-                startLine: input.startLine,
-                totalLines: 401,
-                content: marker.padEnd(10_001, "x"),
-              }),
-            ),
-          );
-        },
-      });
-      const model = scriptedModel((prompt) => {
-        const text = reviewInput(prompt);
-        expect(text.match(/"content":/g) ?? []).toHaveLength(15);
-        expect(text).toContain('"truncated":true');
-        expect(text.indexOf("src/a.ts:base:1")).toBeLessThan(text.indexOf("src/c.ts:base:1"));
-        expect(text.indexOf("src/c.ts:base:1")).toBeLessThan(text.indexOf("src/a.ts:base:201"));
-        expect(text).not.toContain("src/d.ts:head:201");
-        return response({ findings: [] });
-      });
-
-      yield* makeReviewer({ model })
-        .review(boundedRequest)
-        .pipe(Effect.provideService(ReviewRepository, repository));
-
-      const attempted = yield* Ref.get(reads);
-      expect(attempted).toHaveLength(16);
-      expect(attempted.filter((input) => input.startLine === 1)).toHaveLength(8);
-      expect(attempted.filter((input) => input.startLine === 201)).toHaveLength(8);
-      expect(attempted.some((input) => input.startLine === 401)).toBe(false);
-    }),
-  );
-
-  it.effect("PRR-002 packs escaped source without dropping the authoritative patch", () =>
-    Effect.gen(function* () {
-      const escapedRequest = ReviewRequest.make({
-        ...request,
-        changes: ["src/a.ts", "src/b.ts"].map((path) => ReviewChange.make({ path, patch })),
-      });
-      const escapedSource = Array.from({ length: 801 }, (_, index) =>
-        (index + 1) % 200 === 0 ? "\\".repeat(19_800) : index === 800 ? "tail" : "",
-      ).join("\n");
-      const repository = ReviewRepository.of({
-        ...emptyRepository,
-        readFile: (input) => ReviewSource.fromText(input, escapedSource),
-      });
-      const modelCalls = yield* Ref.make(0);
-      const model = scriptedModel((prompt) => {
-        const text = reviewInput(prompt);
-        const sourceCount = (text.match(/"content":/g) ?? []).length;
-        expect(sourceCount).toBeGreaterThan(0);
-        expect(sourceCount).toBeLessThan(8);
-        expect(text).toContain('"truncated":true');
-        expect(text).toContain('"formattedDiff"');
-        expect(text).toContain("2 +new");
-        return Stream.unwrap(
-          Ref.update(modelCalls, (count) => count + 1).pipe(Effect.as(response({ findings: [] }))),
-        );
-      });
-
-      yield* makeReviewer({ model })
-        .review(escapedRequest)
-        .pipe(Effect.provideService(ReviewRepository, repository));
-
-      expect(yield* Ref.get(modelCalls)).toBe(1);
-    }),
   );
 
   it.effect("PRR-002 rejects a finding that does not name a causative changed path", () =>
@@ -630,42 +483,6 @@ new mode 100755`;
       yield* Fiber.interrupt(fiber);
       expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
       expect(yield* Ref.get(finalized)).toBe(true);
-    }),
-  );
-
-  it.effect("PRR-002 includes source preparation in the deadline and finalizes stalled reads", () =>
-    Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const startedReads = yield* Ref.make(0);
-      const finalized = yield* Ref.make(0);
-      const modelCalls = yield* Ref.make(0);
-      const repository = ReviewRepository.of({
-        ...emptyRepository,
-        readFile: () =>
-          Ref.updateAndGet(startedReads, (count) => count + 1).pipe(
-            Effect.flatMap((count) =>
-              count === 2 ? Deferred.succeed(started, undefined) : Effect.void,
-            ),
-            Effect.andThen(Effect.never),
-            Effect.ensuring(Ref.update(finalized, (count) => count + 1)),
-          ),
-      });
-      const model = scriptedModel(() =>
-        Stream.unwrap(
-          Ref.update(modelCalls, (count) => count + 1).pipe(Effect.as(response({ findings: [] }))),
-        ),
-      );
-      const fiber = yield* makeReviewer({ model })
-        .review(request)
-        .pipe(Effect.provideService(ReviewRepository, repository), Effect.forkChild);
-
-      yield* Deferred.await(started);
-      yield* TestClock.adjust("5 minutes");
-      const result = yield* Fiber.join(fiber).pipe(Effect.result);
-
-      expect(Result.isFailure(result) && result.failure._tag).toBe("ReviewVerificationError");
-      expect(yield* Ref.get(finalized)).toBe(2);
-      expect(yield* Ref.get(modelCalls)).toBe(0);
     }),
   );
 
