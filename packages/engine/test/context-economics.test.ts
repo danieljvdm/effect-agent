@@ -975,6 +975,16 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
           finishReason: "budget-exhausted",
           exhausted: "tokens",
         });
+        const request = requests[0];
+        if (request === undefined) throw new Error("Missing completion Tool request");
+        const prompt = promptText(request.prompt);
+        expect(prompt).toContain('without calling the "post_message" completion Tool');
+        expect(prompt).toContain(
+          'When calling the "post_message" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool\'s parameter schema instead.',
+        );
+        expect(prompt).toContain(
+          "The engine projects the successful completion Tool result into the Agent output.",
+        );
       }),
   );
 

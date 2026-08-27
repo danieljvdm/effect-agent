@@ -35,10 +35,14 @@ export type OutputContract =
       readonly reason: string;
     };
 
-const contractDirective =
-  "Final output contract: when the task is complete, the final assistant message must be only " +
-  "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " +
-  "before or after the JSON.";
+const contractDirective = (definition: Agent.AnyDefinition): string =>
+  definition.completion === undefined
+    ? "Final output contract: when the task is complete, the final assistant message must be only " +
+      "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " +
+      "before or after the JSON."
+    : `Final output contract: when the task is complete without calling the "${definition.completion.tool}" completion Tool, the final assistant message must be only ` +
+      "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " +
+      `before or after the JSON. When calling the "${definition.completion.tool}" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool's parameter schema instead. The engine projects the successful completion Tool result into the Agent output.`;
 
 /**
  * Render the model-visible final-output contract for one definition. The
@@ -54,7 +58,7 @@ export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputCon
     const jsonSchema = Tool.getJsonSchemaFromSchema(definition.output);
     return {
       _tag: "rendered",
-      message: `${contractDirective}\n\n${JSON.stringify(jsonSchema, undefined, 2)}`,
+      message: `${contractDirective(definition)}\n\n${JSON.stringify(jsonSchema, undefined, 2)}`,
     };
   } catch (cause) {
     return {

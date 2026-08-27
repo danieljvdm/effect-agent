@@ -3053,7 +3053,7 @@ const makeInitialPrompt = Effect.fn("AgentRuntime.makeInitialPrompt")(
     }),
 );
 
-const decodeToolCallId = Effect.fn("AgentRuntime.decodeToolCallId")((id: string) =>
+const decodeToolCallId = Effect.fn((id: string) =>
   Schema.decodeEffect(ToolCallId)(id).pipe(
     Effect.mapError((cause) =>
       ModelProtocolError.make({
@@ -3063,7 +3063,7 @@ const decodeToolCallId = Effect.fn("AgentRuntime.decodeToolCallId")((id: string)
   ),
 );
 
-const decodeProviderToolCallId = Effect.fn("AgentRuntime.decodeProviderToolCallId")((id: string) =>
+const decodeProviderToolCallId = Effect.fn((id: string) =>
   Schema.decodeEffect(ProviderToolCallId)(id).pipe(
     Effect.mapError(() =>
       ModelProtocolError.make({
@@ -3074,16 +3074,15 @@ const decodeProviderToolCallId = Effect.fn("AgentRuntime.decodeProviderToolCallI
   ),
 );
 
-const decodeProviderResponsePartId = Effect.fn("AgentRuntime.decodeProviderResponsePartId")(
-  (id: string) =>
-    Schema.decodeEffect(ProviderResponsePartId)(id).pipe(
-      Effect.mapError(() =>
-        ModelProtocolError.make({
-          message:
-            "Model supplied an invalid response part ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens",
-        }),
-      ),
+const decodeProviderResponsePartId = Effect.fn((id: string) =>
+  Schema.decodeEffect(ProviderResponsePartId)(id).pipe(
+    Effect.mapError(() =>
+      ModelProtocolError.make({
+        message:
+          "Model supplied an invalid response part ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens",
+      }),
     ),
+  ),
 );
 
 const validateProviderPartIdentifiers = Effect.fnUntraced(function* (part: Response.AnyPart) {

@@ -35990,13 +35990,13 @@ var boundedValueFootprint = (root, maxBytes, knownSafePrototypes = new Set, maxD
 };
 
 // packages/engine/src/output-contract-internal.ts
-var contractDirective = "Final output contract: when the task is complete, the final assistant message must be only " + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + "before or after the JSON.";
+var contractDirective = (definition) => definition.completion === undefined ? "Final output contract: when the task is complete, the final assistant message must be only " + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + "before or after the JSON." : `Final output contract: when the task is complete without calling the "${definition.completion.tool}" completion Tool, the final assistant message must be only ` + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + `before or after the JSON. When calling the "${definition.completion.tool}" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool's parameter schema instead. The engine projects the successful completion Tool result into the Agent output.`;
 var outputSchemaContract = (definition) => {
   try {
     const jsonSchema2 = exports_Tool.getJsonSchemaFromSchema(definition.output);
     return {
       _tag: "rendered",
-      message: `${contractDirective}
+      message: `${contractDirective(definition)}
 
 ${JSON.stringify(jsonSchema2, undefined, 2)}`
     };
@@ -38186,13 +38186,13 @@ var makeInitialPrompt = exports_Effect.fn("AgentRuntime.makeInitialPrompt")((ins
     message: `Unable to materialize Agent input: ${errorMessage(cause)}`
   })
 }));
-var decodeToolCallId = exports_Effect.fn("AgentRuntime.decodeToolCallId")((id2) => exports_Schema.decodeEffect(ToolCallId)(id2).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
+var decodeToolCallId = exports_Effect.fn((id2) => exports_Schema.decodeEffect(ToolCallId)(id2).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
   message: `Invalid Tool Call ID: ${cause.message}`
 }))));
-var decodeProviderToolCallId = exports_Effect.fn("AgentRuntime.decodeProviderToolCallId")((id2) => exports_Schema.decodeEffect(ProviderToolCallId)(id2).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+var decodeProviderToolCallId = exports_Effect.fn((id2) => exports_Schema.decodeEffect(ProviderToolCallId)(id2).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
   message: "Model supplied an invalid Tool Call ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens"
 }))));
-var decodeProviderResponsePartId = exports_Effect.fn("AgentRuntime.decodeProviderResponsePartId")((id2) => exports_Schema.decodeEffect(ProviderResponsePartId)(id2).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+var decodeProviderResponsePartId = exports_Effect.fn((id2) => exports_Schema.decodeEffect(ProviderResponsePartId)(id2).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
   message: "Model supplied an invalid response part ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens"
 }))));
 var validateProviderPartIdentifiers = exports_Effect.fnUntraced(function* (part) {

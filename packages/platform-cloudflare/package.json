@@ -43,6 +43,7 @@
     "@cloudflare/workers-types": "catalog:",
     "@effect-agent/capabilities": "workspace:*",
     "@effect-agent/testing": "workspace:*",
+    "@effect/sql-d1": "catalog:",
     "@effect/vitest": "catalog:",
     "effect-cf": "catalog:",
     "esbuild": "catalog:",
@@ -52,6 +53,6 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "effect-cf": "^0.27.0"
+    "effect-cf": "^0.34.0"
   }
 }
