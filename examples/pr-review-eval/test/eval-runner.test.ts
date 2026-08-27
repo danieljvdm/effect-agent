@@ -205,7 +205,7 @@ describe("PR-review model eval", () => {
         guidance: "  Keep the public error channel typed.  ",
       });
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
-      expect(variant.configuration.reviewerProfile).toBe("source-review-v9");
+      expect(variant.configuration.reviewerProfile).toBe("source-review-v4");
       expect(variant.configuration.guidanceDigest).toBe(
         yield* digestGuidance("Keep the public error channel typed."),
       );
