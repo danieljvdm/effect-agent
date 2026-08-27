@@ -540,10 +540,47 @@ vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
 The scoped `InteractiveBrowser` adapter uses the explicitly supplied Browser Run `browser`
 binding and `@cloudflare/puppeteer` 1.1.0. It launches one browser pass, context, and page under
 Scope, with immediate reverse-order finalizers. `keep_alive` is only Cloudflare's inactivity
-setting; the caller's elapsed-time deadline is authoritative. Navigation, redirects, and every
-subrequest use the immutable exact-host policy. Capacity refusal and remote expiry remain typed;
+setting; the caller's elapsed-time deadline is authoritative. `network: { _tag: "ExactHosts",
+allowedHosts }` preserves URL checks for navigation and intercepted requests on the owned page.
+This is a page-request policy, not session-wide network containment. Capacity refusal and remote
+expiry remain typed;
 uncertain actions are never retried or replayed. This capability has no durable session, registry,
 execution reconnect, or model Tool.
+
+`network: { _tag: "PublicWeb" }` fails with `InteractiveBrowserUnsupportedError`, `feature: "policy"`,
+before any binding operation. The adapter does not launch a browser, navigate a test URL, connect
+for execution, or issue a viewer capability to probe support. This refusal is deliberate. The
+pinned client has no session guardrails, and even Cloudflare's newer API describes only hostname
+patterns and named hostname lists for HTTP/S traffic. That does not establish a public-address
+check at connection time, credential rejection, or coverage of every traffic source. Upgrading
+the client alone therefore cannot enable this policy.
+
+The current boundary is:
+
+| Traffic or action                      | `ExactHosts` behavior                                                                                                                                                                              | `PublicWeb` requirement                                                                                        |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Adapter navigation                     | Check credential-free HTTPS and exact `URL.host` before `goto`; validate the returned URL.                                                                                                         | Permit unrelated public HTTPS sites without replacing the pass.                                                |
+| Redirects and page resources           | Check URLs delivered to the original page's request interceptor; abort denied requests and invalidate subsequent operations. Third-party authorities must be listed too.                           | Enforce destination safety before each request and connection, including every redirect.                       |
+| DNS and connection addresses           | No connection-time address classification or DNS rebinding protection. Explicit hosts can resolve to non-public addresses.                                                                         | Reject private, reserved, and internal destinations using the address actually connected to.                   |
+| Popups and new targets                 | No interceptor is installed on other targets. Owning one automation page does not prevent a page from creating others.                                                                             | Enforce before a target can send traffic, or prevent target creation.                                          |
+| Dedicated, shared, and service workers | Bypass service-worker handling for requests from the owned page; this does not stop workers from issuing their own traffic.                                                                        | Enforce worker traffic or disable it before activity.                                                          |
+| WebSockets and other channels          | No socket or non-HTTP traffic boundary is established by page request interception.                                                                                                                | Enforce the public-destination rules for secure sockets and disable other unsupported channels before traffic. |
+| Hosted viewer navigation               | Ordinary requests observed on the owned page use its interceptor, including during handoff. The viewer is a CDP capability and tab mode does not prevent bypass through other commands or targets. | Retain enforcement independently of viewer commands for the whole pass.                                        |
+
+Only the `ExactHosts` column describes a currently supported execution mode. It requires trusted
+pages and trusted operators. The adapter makes no claim that this mode confines hostile browser
+content or a viewer recipient. A host that requires the right-hand boundary must request
+`PublicWeb` and handle its typed refusal. No local IP blacklist, one-time DNS resolution, wildcard,
+page script patch, or after-the-fact target closure can establish the missing boundary.
+
+This assessment uses the [Cloudflare acquisition API](https://developers.cloudflare.com/api/resources/browser_rendering/subresources/devtools/subresources/browser/methods/create/)
+and the [provider's guardrail contract](https://github.com/cloudflare/puppeteer/blob/253f9082f4f5ad93d11a1b56d85ea4757a799d99/packages/puppeteer-core/src/cloudflare/utils.ts),
+checked on 2026-08-27. The latter latches hostname policy for the session lifetime but does not
+specify the stronger public-address boundary. A supported implementation needs a provider
+contract and verification of every row above, including human navigation, before this refusal
+can be removed. The [Live View documentation](https://developers.cloudflare.com/browser-run/features/live-view/)
+describes the viewer's CDP connection and [Human in the Loop](https://developers.cloudflare.com/browser-run/features/human-in-the-loop/)
+describes handoff on the same target.
 
 `fill` replaces the value of input, textarea, and select controls. It focuses the element,
 invokes a callable `value` setter from the element's prototype chain, then dispatches bubbling

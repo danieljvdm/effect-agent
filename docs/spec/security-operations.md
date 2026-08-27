@@ -183,9 +183,17 @@ or included in an executor binding, and the deterministic test substitute identi
 `unisolated` rather than masquerading as a boundary.
 
 Page capture output is a rendered web page and therefore untrusted, attacker-influenced input.
-Interactive browser sessions carry the same fail-closed egress posture: an immutable exact-host
-HTTPS policy is checked for navigation, redirects, and subrequests. One scoped browser/context/page
-pass permits bounded navigate, read, fill, click, screenshot, and scroll operations; concurrent
+Interactive browser sessions require an explicit immutable network policy. `ExactHosts` retains
+URL checks for adapter navigation and intercepted requests on the owned page. It does not classify
+connection addresses or contain traffic from other targets, workers, sockets, or arbitrary viewer
+commands. Use it only with trusted pages and operators. `PublicWeb` requires credential-free HTTPS
+and connection-time exclusion of private, reserved, and internal destinations across all those
+traffic sources, including redirects and human navigation. A provider that cannot enforce it must
+fail before acquisition with `InteractiveBrowserUnsupportedError`, `feature: "policy"`. Cloudflare
+currently does so. A wildcard, DNS preflight, or a consumer assertion cannot enable that mode.
+See the [deployment coverage table](./deployment.md#browser-run-interactive-browser-sessions).
+One scoped browser/context/page pass permits bounded navigate, read, fill, click, screenshot, and
+scroll operations; concurrent
 calls fail busy, and action, elapsed-time, and per-result byte limits fail at the first violation.
 Handles are never persisted, replayed, reconnected for execution, or exposed to models. Explicit
 closure remains available after interruption or a policy violation and invalidates all further

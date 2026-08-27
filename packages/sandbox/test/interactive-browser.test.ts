@@ -18,6 +18,7 @@ import {
   InteractiveBrowserExpiredError,
   InteractiveBrowserHost,
   InteractiveBrowserLimitError,
+  type InteractiveBrowserNetworkPolicy,
   InteractiveBrowserPolicy,
   InteractiveBrowserPolicyDeniedError,
   InteractiveBrowserProtocolError,
@@ -41,17 +42,22 @@ describe("InteractiveBrowser schemas", () => {
       isolation: "isolated",
       identity: "interactive-test",
     });
-    const policy = InteractiveBrowserPolicy.make({
-      allowedHosts: ["example.com", "example.com:8443"],
-      maxActions: 3,
-      maxElapsedMillis: 1_000,
-      maxReturnedBytes: 1_024,
-    });
-    expect(
-      Schema.decodeSync(InteractiveBrowserPolicy)(
-        Schema.encodeSync(InteractiveBrowserPolicy)(policy),
-      ),
-    ).toEqual(policy);
+    for (const network of [
+      { _tag: "ExactHosts", allowedHosts: ["example.com", "example.com:8443"] },
+      { _tag: "PublicWeb" },
+    ] satisfies ReadonlyArray<InteractiveBrowserNetworkPolicy>) {
+      const policy = InteractiveBrowserPolicy.make({
+        network,
+        maxActions: 3,
+        maxElapsedMillis: 1_000,
+        maxReturnedBytes: 1_024,
+      });
+      expect(
+        Schema.decodeSync(InteractiveBrowserPolicy)(
+          Schema.encodeSync(InteractiveBrowserPolicy)(policy),
+        ),
+      ).toEqual(policy);
+    }
     expect(BrowserNavigateRequest.make({ url: "https://example.com/" }).url).toBe(
       "https://example.com/",
     );
@@ -115,18 +121,32 @@ describe("InteractiveBrowser schemas", () => {
       "user@example.com",
       "example.com:443",
       "example.com/",
+      "*",
+      "*.example.com",
+      "example.*",
     ])
       expect(Schema.decodeUnknownExit(InteractiveBrowserHost)(host)._tag).toBe("Failure");
     const valid = {
-      allowedHosts: ["example.com"],
+      network: { _tag: "ExactHosts", allowedHosts: ["example.com"] },
       maxActions: 1,
       maxElapsedMillis: 1,
       maxReturnedBytes: 1,
     };
     for (const value of [
-      { ...valid, allowedHosts: [] },
-      { ...valid, allowedHosts: ["example.com", "example.com"] },
-      { ...valid, allowedHosts: Array.from({ length: 65 }, (_, index) => `h${index}.example`) },
+      { ...valid, allowedHosts: ["other.example"] },
+      { ...valid, network: undefined },
+      { ...valid, network: { _tag: "ExactHosts", allowedHosts: [] } },
+      { ...valid, network: { _tag: "ExactHosts", allowedHosts: ["example.com", "example.com"] } },
+      {
+        ...valid,
+        network: {
+          _tag: "ExactHosts",
+          allowedHosts: Array.from({ length: 65 }, (_, index) => `h${index}.example`),
+        },
+      },
+      { ...valid, network: { _tag: "PublicWeb", allowedHosts: ["example.com"] } },
+      { ...valid, network: { _tag: "PublicWeb", allowPrivate: true } },
+      { ...valid, network: { _tag: "Unknown" } },
       { ...valid, maxActions: 0 },
       { ...valid, maxActions: 1_001 },
       { ...valid, maxElapsedMillis: 0 },

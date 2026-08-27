@@ -444,12 +444,52 @@ fixed bounded warning without provider detail and never defects, masks, or chang
 ## 9.5 Interactive browser
 
 `InteractiveBrowser` is a separate, provider-neutral, scoped service for one browser pass. The
-pass owns exactly one browser, context, and page. Its handle supports navigation, bounded text
+pass owns one browser, context, and automation page. Its handle supports navigation, bounded text
 reads, field filling, element clicks, PNG screenshots, viewport scrolling, and explicit closure.
-Its immutable policy fixes an exact HTTPS host allowlist, one page, action-count, elapsed-time,
-and per-result byte limits before acquisition. Text counts UTF-8 bytes; screenshots count PNG
-bytes. The same policy governs initial navigation, redirects, and every page subrequest;
-violations fail closed.
+Its immutable policy fixes `network`, action-count, elapsed-time, and per-result byte limits before
+acquisition. Text counts UTF-8 bytes; screenshots count PNG bytes. The network choice is explicit;
+there is no wildcard, default mode, model-selected allowlist, or policy update on an open handle.
+
+`InteractiveBrowserNetworkPolicy` has two alternatives:
+
+- `{ _tag: "ExactHosts", allowedHosts }` retains the existing URL allowlist for adapter navigation
+  and intercepted requests on the owned page. It accepts 1 to 64 unique canonical HTTPS
+  authorities, including non-default ports, and rejects URL credentials and wildcard patterns.
+  It does not classify resolved addresses or promise containment of every browser traffic source.
+  Adapters must document their request coverage. This mode is for trusted pages and operators;
+  it is not a public-network safety boundary.
+- `{ _tag: "PublicWeb" }` requests browsing across unrelated public HTTPS sites and their ordinary
+  third-party resources in the same pass. URL usernames and passwords are forbidden. Every
+  connection must exclude private, loopback, link-local, reserved, multicast, metadata, and
+  internal destinations, including IPv4, IPv6, redirects, DNS changes, and alternative address
+  representations. Enforcement must use the address actually connected to, not an earlier DNS
+  lookup. HTTPS navigation and resources, and secure WebSockets where supported, must retain
+  these restrictions across new targets, workers, and human navigation. Other traffic paths must
+  be disabled before they can send traffic or cause acquisition to fail typed. The public policy
+  does not grant authority to any application identity, expose provider controls, or prohibit
+  human login through cookies and forms on permitted sites.
+
+An adapter that cannot enforce `PublicWeb` must return `InteractiveBrowserUnsupportedError` with
+`feature: "policy"` before acquiring a browser. It must not downgrade to `ExactHosts`, accept a
+host assertion of safety, or use request interception or a DNS preflight as a connection-time
+boundary. Adding a proxy, a second browser subsystem, or a mutable host list is not an implicit
+fallback. Unknown modes and mixed policy fields fail validation. The current Cloudflare adapter
+rejects `PublicWeb`; general public-web browsing is not yet supported by that adapter.
+
+Existing callers move `allowedHosts` into `network`:
+
+```ts
+const policy = InteractiveBrowserPolicy.make({
+  network: { _tag: "ExactHosts", allowedHosts: ["example.com", "example.org"] },
+  maxActions: 20,
+  maxElapsedMillis: 120_000,
+  maxReturnedBytes: 64 * 1024,
+});
+```
+
+Changing that field to `network: { _tag: "PublicWeb" }` expresses the stronger requirement but
+currently fails unsupported on Cloudflare, before launch, navigation, or creation of a viewer URL.
+Applications must surface that failure rather than silently choosing a weaker policy.
 
 `screenshot(BrowserScreenshotRequest)` captures the current page without navigation or a new
 browser. The request selects viewport or full-page capture with `fullPage`; the result reuses

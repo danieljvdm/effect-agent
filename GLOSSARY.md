@@ -167,9 +167,11 @@ consumer's Scope exits.
 **Interactive Browser**
 
 A scoped, provider-neutral browser pass owning one browser, context, and page. Its immutable
-policy fixes the exact HTTPS host set, action count, elapsed time, and per-result byte budget;
-navigation, redirects, and subrequests are all subject to that policy. Handles are ephemeral and
-uncertain: they are never persisted, replayed, reconnected for execution, or exposed as model Tools.
+policy fixes an explicit network mode, action count, elapsed time, and per-result byte budget.
+`ExactHosts` checks page-request URLs against a fixed HTTPS host set; `PublicWeb` requires a
+connection-time public-network boundary and fails unsupported where an adapter cannot enforce it.
+Handles are ephemeral and uncertain: they are never persisted, replayed, reconnected for execution,
+or exposed as model Tools.
 Screenshots and scrolling operate on that same page, and explicit closure ends the pass early.
 Provider session identity and operator controls remain private host capabilities.
 

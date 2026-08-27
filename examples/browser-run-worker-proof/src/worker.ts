@@ -63,7 +63,7 @@ const screenshotRequest = PageScreenshotRequest.make({
 });
 
 const interactivePolicy = InteractiveBrowserPolicy.make({
-  allowedHosts: ["example.com"],
+  network: { _tag: "ExactHosts", allowedHosts: ["example.com"] },
   maxActions: 7,
   maxElapsedMillis: 90_000,
   maxReturnedBytes: SCREENSHOT_MAX_OUTPUT_BYTES,
