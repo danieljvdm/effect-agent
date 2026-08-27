@@ -126,11 +126,11 @@ const ReviewPriority = Schema.Literals([0, 1, 2, 3]).annotate({
 });
 
 const SubmittedFinding = Schema.Struct({
+  body: ReviewFinding.fields.body,
   path: ReviewFinding.fields.path,
   line: ReviewFinding.fields.line,
   category: ReviewFinding.fields.category,
   title: ReviewFinding.fields.title,
-  body: ReviewFinding.fields.body,
   priority: ReviewPriority,
 });
 
