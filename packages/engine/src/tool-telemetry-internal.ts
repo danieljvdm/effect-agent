@@ -12,6 +12,8 @@ import {
 } from "effect";
 import { AiError } from "effect/unstable/ai";
 
+import { isolateToolDerivative } from "./tool-derivative-internal.ts";
+
 /**
  * @internal Payload-free control signal used only to close the canonical Tool span with a failed
  * Exit. It is removed immediately outside that span and never enters the public error channel.
@@ -55,61 +57,6 @@ export const annotateToolSpanTerminalOutcome = (
   });
 };
 
-/**
- * @internal Emit one canonical value from the first pull, then run derivative work from either the
- * next pull or structured stream finalization when the downstream owner stops after that value.
- * The synchronous phase transition gives the action one owner across the pull/finalizer race, and
- * a started action is never retried after interruption.
- */
-export const emitThenAfter = <A, E, R, E2, R2>(
-  event: Effect.Effect<A, E, R>,
-  after: Effect.Effect<void, E2, R2>,
-): Stream.Stream<A, E | E2, R | R2> =>
-  Stream.unwrap(
-    Effect.sync(() => {
-      let firstPull = true;
-      let afterPhase: "unarmed" | "pending" | "running" | "completed" = "unarmed";
-      const runAfter = Effect.suspend((): Effect.Effect<void, E2, R2> => {
-        if (afterPhase !== "pending") return Effect.void;
-        afterPhase = "running";
-        return after.pipe(
-          Effect.onExit(() =>
-            Effect.sync(() => {
-              afterPhase = "completed";
-            }),
-          ),
-        );
-      });
-      const pull = Effect.suspend(
-        (): Effect.Effect<readonly [A], E | E2 | Cause.Done<void>, R | R2> => {
-          if (firstPull) {
-            return Effect.map(event, (value) => {
-              firstPull = false;
-              afterPhase = "pending";
-              return [value] as const;
-            });
-          }
-          return Effect.andThen(runAfter, Cause.done());
-        },
-      );
-      return Stream.fromPull(Effect.succeed(pull)).pipe(
-        Stream.ensuring(
-          // A typed `after` failure remains visible to an ordinary second pull. Cleanup only owns
-          // the otherwise-unobservable early-close path, so capture its Exit after the action has
-          // annotated the canonical span. `IsolatedToolSpan.end` derives a failed export status
-          // from that bounded outcome when cleanup consumes the private span marker. Only
-          // derivative failure/defect Reasons are suppressed; external interruption is restored.
-          Effect.exit(Effect.interruptible(runAfter)).pipe(
-            Effect.flatMap((exit) => {
-              if (Exit.isSuccess(exit)) return Effect.void;
-              return reportDerivativeCause(exit.cause);
-            }),
-          ),
-        ),
-      );
-    }),
-  );
-
 export const stripToolSpanFailures = <E>(
   cause: Cause.Cause<E | ToolSpanFailure>,
   marker: ToolSpanFailure,
@@ -147,39 +94,6 @@ export const restoreToolSpanFailureCause = <E, Original>(
     restored: original === undefined ? residual : Cause.combine(original, residual),
   };
 };
-
-/**
- * @internal Report derivative terminal-telemetry failures without consuming external
- * interruption. Reporter defects are isolated, while interruption of either the measurement or
- * reporter is restored as interruption instead of allowing Tool settlement to continue.
- */
-const reportDerivativeCause = <E>(cause: Cause.Cause<E>): Effect.Effect<void> => {
-  const reportableReasons: Array<Cause.Reason<E>> = [];
-  const interruptionReasons: Array<Cause.Interrupt> = [];
-  for (const reason of cause.reasons) {
-    if (Cause.isInterruptReason(reason)) interruptionReasons.push(reason);
-    else reportableReasons.push(reason);
-  }
-
-  const reportExit =
-    reportableReasons.length === 0
-      ? Effect.succeed(Exit.succeed(undefined))
-      : Effect.exit(ErrorReporter.report(Cause.fromReasons(reportableReasons)));
-  return Effect.flatMap(reportExit, (exit) => {
-    if (Exit.isFailure(exit)) {
-      for (const reason of exit.cause.reasons) {
-        if (Cause.isInterruptReason(reason)) interruptionReasons.push(reason);
-      }
-    }
-    return interruptionReasons.length === 0
-      ? Effect.void
-      : Effect.failCause(Cause.fromReasons<never>(interruptionReasons));
-  });
-};
-
-export const isolateToolTerminalTelemetry = <R>(
-  telemetry: Effect.Effect<void, never, R>,
-): Effect.Effect<void, never, R> => telemetry.pipe(Effect.catchCause(reportDerivativeCause));
 
 const MAX_REPORTED_SPAN_LIFECYCLE_DEFECTS = 16;
 
@@ -417,7 +331,7 @@ export const makeIsolatedToolTracer = (delegate: Tracer.Tracer): IsolatedToolTra
     const pending = defects.splice(0);
     return Effect.forEach(
       pending,
-      (defect) => isolateToolTerminalTelemetry(ErrorReporter.report(Cause.die(defect))),
+      (defect) => isolateToolDerivative(ErrorReporter.report(Cause.die(defect))),
       { discard: true },
     );
   });

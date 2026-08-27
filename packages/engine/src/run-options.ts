@@ -11,10 +11,88 @@ import type {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
-import { type Effect, Context, type DateTime, Layer, Schema } from "effect";
+import { type Cause, type Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
 import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
+
+/** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
+interface ToolFailureIdentity {
+  readonly agentId: AgentId;
+  readonly conversationId: ConversationId;
+  readonly runId: RunId;
+  readonly turnId: TurnId;
+  readonly toolName: string;
+  /** Best-effort error tag, with the existing `UnknownError` fallback. */
+  readonly tag: string;
+}
+
+/** A model-declared Handler returned a declared failure instead of failing the Run. */
+export interface ModelToolFailure extends ToolFailureIdentity {
+  readonly _tag: "ModelToolFailure";
+  readonly kind: "declared-failure";
+  /** Raw provider identity, without the telemetry ID filter. */
+  readonly toolCallId: ToolCallId;
+  readonly executionClass: ToolExecutionClassValue;
+  readonly message?: never;
+  readonly cause?: never;
+}
+
+/** A programmatic Handler started and its failure became a broker outcome. */
+export interface ProgrammaticToolFailure extends ToolFailureIdentity {
+  readonly _tag: "ProgrammaticToolFailure";
+  readonly kind: "declared-failure" | "handler-error" | "infrastructure" | "protocol";
+  /** `${parentToolCallId}#${sequenceIndex}`, raw and unique only within this in-memory pass. */
+  readonly toolCallId: string;
+  readonly parentToolCallId: ToolCallId;
+  /** Presence means the Handler started and consumed budget; side effects may exist. */
+  readonly sequenceIndex: number;
+  readonly executionClass: ToolExecutionClassValue;
+  /** Infrastructure/protocol only, at most 4096 UTF-8 bytes. Never a declared payload. */
+  readonly message?: string | undefined;
+  /** Original Cause when one exists; always for handler-error, never for declared-failure. */
+  readonly cause?: Cause.Cause<unknown> | undefined;
+}
+
+/** A programmatic invocation was rejected before its Handler started. No inner identity exists. */
+export interface ProgrammaticPreflightFailure extends ToolFailureIdentity {
+  readonly _tag: "ProgrammaticPreflightFailure";
+  readonly kind: "infrastructure" | "protocol";
+  readonly parentToolCallId: ToolCallId;
+  /** Absent if the Tool could not be resolved. */
+  readonly executionClass?: ToolExecutionClassValue | undefined;
+  /** At most 4096 UTF-8 bytes. */
+  readonly message?: string | undefined;
+  /** Original Cause only for Cause-backed rejection, never fabricated from an outcome. */
+  readonly cause?: Cause.Cause<unknown> | undefined;
+}
+
+/** Plain readonly interfaces, intentionally not persisted or transported Schemas (RUN-036). */
+export type ToolFailureObservation =
+  | ModelToolFailure
+  | ProgrammaticToolFailure
+  | ProgrammaticPreflightFailure;
+
+/**
+ * Trusted in-process observation of non-propagating application Tool failures (RUN-036).
+ * Capture reporting dependencies before installation. Delivery is inline under the existing
+ * Tool permit, at most once per in-memory attempt, with isolated observer/reporter defects.
+ * External interruption may end delivery. Replacement Attempts may repeat IDs and observations.
+ * Never reenter ToolBroker, RunEventSink, or Agent execution, or intentionally self-interrupt.
+ */
+export interface RunToolFailureObserver {
+  readonly observe: (observation: ToolFailureObservation) => Effect.Effect<void>;
+}
+
+/** Resolved once per Run; durable coordinators capture it at Layer acquisition. Default absent. */
+export const CurrentToolFailureObserver = Context.Reference<RunToolFailureObserver | undefined>(
+  "@effect-agent/engine/CurrentToolFailureObserver",
+  { defaultValue: () => undefined },
+);
+
+/** The sole installation seam, shared by ephemeral Runs and durable platform options. */
+export const toolFailureObserverLayer = (observer: RunToolFailureObserver): Layer.Layer<never> =>
+  Layer.succeed(CurrentToolFailureObserver)(observer);
 
 /** Number of queued inputs consumed at one documented Turn seam. */
 export type CommandDrainPolicy = "one" | "all";

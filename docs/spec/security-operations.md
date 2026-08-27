@@ -128,17 +128,27 @@ the narrow service that needs them.
 
 ## 8. Data classification and redaction
 
-Every event field is classified as one of:
+Every event field and live diagnostic is classified as one of:
 
 - public metadata;
 - tenant content;
 - sensitive;
 - secret;
-- prohibited from persistence.
+- prohibited from persistence;
+- prohibited from automatic persistence and telemetry export.
 
 Redaction occurs before telemetry export and before optional debug capture.
 Redaction is structural, based on Schema annotations and event types rather than
 regular expressions alone.
+
+Raw Effect Causes delivered through the opt-in Tool failure observer are sensitive live diagnostics
+in the last category (RUN-036). The engine never serializes, persists, logs, span-attaches, or
+forwards them to the model or public events. Only the explicitly installed trusted in-process
+observer receives them. Its raw correlation IDs are not filtered as telemetry IDs; the service is
+not an export boundary. Applications own any deliberate reporting and its redaction policy.
+Declared failure messages and payloads never enter this observer, including inner Code Mode
+results. Observer defects may reach the configured `ErrorReporter` through the isolated delivery
+boundary; installing an observer does not automatically report application Tool Causes there.
 
 Reasoning content, signatures, and redaction markers exposed through Effect AI are persisted as
 canonical model content. This data is sensitive and requires the same tenant isolation,
@@ -372,7 +382,9 @@ Malformed provider or tool streams must not grow unbounded buffers.
 - **SEC-005**: Tool risk, retry, interruption, and redaction metadata are explicit.
 - **SEC-006**: Secrets use handles and never enter canonical events as raw values.
 - **SEC-007**: Model and retrieved content are treated as untrusted.
-- **SEC-008**: Sensitive telemetry is structurally redacted.
+- **SEC-008**: Sensitive telemetry is structurally redacted. Raw Tool failure Causes are prohibited
+  from automatic persistence and telemetry export; only an explicitly installed trusted local
+  observer may receive them, without declared failure payloads (RUN-036).
 - **SEC-009**: Provider-returned reasoning is treated as sensitive canonical content; hidden
   chain-of-thought is neither requested nor invented.
 - **SEC-010**: Untrusted execution uses a genuine isolation adapter.

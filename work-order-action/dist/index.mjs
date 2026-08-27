@@ -36508,29 +36508,29 @@ var snapshotJson = (root, maxBytes, maxDepth, rejectNonFiniteNumbers) => {
 var boundedJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => snapshotJson(root, maxBytes, maxDepth, false);
 var boundedCanonicalJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => snapshotJson(root, maxBytes, maxDepth, true);
 
-// packages/engine/src/tool-telemetry-internal.ts
-class ToolSpanFailure extends exports_AiError.AiError.extend("@effect-agent/engine/ToolSpanFailure")({}) {
-  name = "ToolCallFailed";
-  static marker() {
-    return ToolSpanFailure.make({
-      module: "effect-agent",
-      method: "execute_tool",
-      reason: exports_AiError.UnknownError.make({
-        description: "Tool execution reached a failed terminal state"
-      })
-    });
+// packages/engine/src/tool-derivative-internal.ts
+var deliverToolFailure = (observer, observation) => isolateToolDerivative(exports_Effect.suspend(() => observer.observe(observation)));
+var reportDerivativeCause = (cause) => {
+  const reportableReasons = [];
+  const interruptionReasons = [];
+  for (const reason of cause.reasons) {
+    if (exports_Cause.isInterruptReason(reason))
+      interruptionReasons.push(reason);
+    else
+      reportableReasons.push(reason);
   }
-}
-var TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE = "@effect-agent/engine/ToolSpanFailureMarker";
-var terminalOutcomeTokens = new WeakMap;
-var annotateToolSpanTerminalOutcome = (outcome, failureMarker) => {
-  const token = {};
-  terminalOutcomeTokens.set(token, { outcome, failureMarker });
-  return exports_Effect.annotateCurrentSpan({
-    "effect_agent.tool.outcome": outcome,
-    [TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE]: token
+  const reportExit = reportableReasons.length === 0 ? exports_Effect.succeed(exports_Exit.succeed(undefined)) : exports_Effect.exit(exports_ErrorReporter.report(exports_Cause.fromReasons(reportableReasons)));
+  return exports_Effect.flatMap(reportExit, (exit3) => {
+    if (exports_Exit.isFailure(exit3)) {
+      for (const reason of exit3.cause.reasons) {
+        if (exports_Cause.isInterruptReason(reason))
+          interruptionReasons.push(reason);
+      }
+    }
+    return interruptionReasons.length === 0 ? exports_Effect.void : exports_Effect.failCause(exports_Cause.fromReasons(interruptionReasons));
   });
 };
+var isolateToolDerivative = (effect2) => effect2.pipe(exports_Effect.catchCause(reportDerivativeCause));
 var emitThenAfter = (event, after) => exports_Stream.unwrap(exports_Effect.sync(() => {
   let firstPull = true;
   let afterPhase = "unarmed";
@@ -36558,6 +36558,30 @@ var emitThenAfter = (event, after) => exports_Stream.unwrap(exports_Effect.sync(
     return reportDerivativeCause(exit3.cause);
   }))));
 }));
+
+// packages/engine/src/tool-telemetry-internal.ts
+class ToolSpanFailure extends exports_AiError.AiError.extend("@effect-agent/engine/ToolSpanFailure")({}) {
+  name = "ToolCallFailed";
+  static marker() {
+    return ToolSpanFailure.make({
+      module: "effect-agent",
+      method: "execute_tool",
+      reason: exports_AiError.UnknownError.make({
+        description: "Tool execution reached a failed terminal state"
+      })
+    });
+  }
+}
+var TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE = "@effect-agent/engine/ToolSpanFailureMarker";
+var terminalOutcomeTokens = new WeakMap;
+var annotateToolSpanTerminalOutcome = (outcome, failureMarker) => {
+  const token = {};
+  terminalOutcomeTokens.set(token, { outcome, failureMarker });
+  return exports_Effect.annotateCurrentSpan({
+    "effect_agent.tool.outcome": outcome,
+    [TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE]: token
+  });
+};
 var stripToolSpanFailures = (cause, marker) => {
   const found = cause.reasons.some((reason) => exports_Cause.isFailReason(reason) && reason.error === marker);
   if (!found) {
@@ -36578,27 +36602,6 @@ var restoreToolSpanFailureCause = (cause, marker, original) => {
     restored: original === undefined ? residual : exports_Cause.combine(original, residual)
   };
 };
-var reportDerivativeCause = (cause) => {
-  const reportableReasons = [];
-  const interruptionReasons = [];
-  for (const reason of cause.reasons) {
-    if (exports_Cause.isInterruptReason(reason))
-      interruptionReasons.push(reason);
-    else
-      reportableReasons.push(reason);
-  }
-  const reportExit = reportableReasons.length === 0 ? exports_Effect.succeed(exports_Exit.succeed(undefined)) : exports_Effect.exit(exports_ErrorReporter.report(exports_Cause.fromReasons(reportableReasons)));
-  return exports_Effect.flatMap(reportExit, (exit3) => {
-    if (exports_Exit.isFailure(exit3)) {
-      for (const reason of exit3.cause.reasons) {
-        if (exports_Cause.isInterruptReason(reason))
-          interruptionReasons.push(reason);
-      }
-    }
-    return interruptionReasons.length === 0 ? exports_Effect.void : exports_Effect.failCause(exports_Cause.fromReasons(interruptionReasons));
-  });
-};
-var isolateToolTerminalTelemetry = (telemetry) => telemetry.pipe(exports_Effect.catchCause(reportDerivativeCause));
 var MAX_REPORTED_SPAN_LIFECYCLE_DEFECTS = 16;
 
 class ToolSpanLifecycleFailure extends Error {
@@ -36782,7 +36785,7 @@ var makeIsolatedToolTracer = (delegate) => {
   });
   const reportLifecycleDefects = exports_Effect.suspend(() => {
     const pending = defects.splice(0);
-    return exports_Effect.forEach(pending, (defect) => isolateToolTerminalTelemetry(exports_ErrorReporter.report(exports_Cause.die(defect))), { discard: true });
+    return exports_Effect.forEach(pending, (defect) => isolateToolDerivative(exports_ErrorReporter.report(exports_Cause.die(defect))), { discard: true });
   });
   return { tracer: tracer3, reportLifecycleDefects };
 };
@@ -37130,6 +37133,9 @@ var errorMessage = (error2) => {
 var errorTag = (error2) => ownStringDiagnostic(error2, "_tag", DIAGNOSTIC_TAG_LIMIT) ?? "UnknownError";
 
 // packages/engine/src/run-options.ts
+var CurrentToolFailureObserver = exports_Context.Reference("@effect-agent/engine/CurrentToolFailureObserver", { defaultValue: () => {
+  return;
+} });
 class RunContextPreparationError extends exports_Schema.TaggedError()("RunContextPreparationError", {
   preparerId: exports_Schema.NonEmptyString,
   message: exports_Schema.String.check(exports_Schema.isMaxLength(4096)),
@@ -37706,8 +37712,21 @@ var terminalToolTelemetry = (descriptor, outcome, failureMarker) => annotateTool
   toolExecutionClass: descriptor.executionClass,
   toolOutcome: outcome
 }))));
+var toolFailureMessage = (message) => {
+  let bytes = 0;
+  let end3 = 0;
+  for (const character of message) {
+    const size9 = utf8ByteLength2(character);
+    if (bytes + size9 > 4096)
+      break;
+    bytes += size9;
+    end3 += character.length;
+  }
+  return message.slice(0, end3);
+};
 var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace3, resultBounds, onWaiting) => {
   const call = prepared.call;
+  const observer = context3.toolFailureObserver;
   const telemetryToolCallId = isTelemetryToolCallId(call.id) ? call.id : undefined;
   const executionClass = getToolExecutionClass(prepared.tool);
   const telemetryDescriptor = {
@@ -37724,9 +37743,14 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace3, resu
   let terminalOutcome;
   let terminalResult;
   let propagatedFailure;
+  let failureObservation;
   const terminalTelemetry = (outcome) => terminalToolTelemetry(telemetryDescriptor, outcome, outcome === "failure" ? toolSpanFailure : undefined);
-  const isolatedTerminalTelemetry = (outcome) => isolateToolTerminalTelemetry(terminalTelemetry(outcome));
-  const terminalEventThenTelemetry = (event, outcome, failSpan) => emitThenAfter(event, isolatedTerminalTelemetry(outcome).pipe(exports_Effect.andThen(failSpan ? exports_Effect.fail(toolSpanFailure) : exports_Effect.void)));
+  const isolatedTerminalTelemetry = (outcome) => isolateToolDerivative(terminalTelemetry(outcome));
+  const terminalEventThenAfter = (event, outcome, failSpan) => {
+    const telemetry = isolatedTerminalTelemetry(outcome);
+    const after = observer === undefined ? telemetry : telemetry.pipe(exports_Effect.andThen(exports_Effect.suspend(() => failureObservation === undefined ? exports_Effect.void : deliverToolFailure(observer, failureObservation))));
+    return emitThenAfter(event, after.pipe(exports_Effect.andThen(failSpan ? exports_Effect.fail(toolSpanFailure) : exports_Effect.void)));
+  };
   const started = exports_Stream.fromEffect(exports_Effect.gen(function* () {
     const toolCallId = yield* decodeToolCallId(call.id);
     yield* exports_Effect.logDebug("agent tool handler started").pipe(exports_Effect.annotateLogs({
@@ -37805,16 +37829,30 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace3, resu
         isFailure: result4.isFailure
       };
       terminalResultCommitted = true;
+      if (observer !== undefined && event._tag === "ToolCallFailed") {
+        failureObservation = {
+          _tag: "ModelToolFailure",
+          kind: "declared-failure",
+          agentId: context3.agentId,
+          conversationId: context3.conversationId,
+          runId: context3.runId,
+          turnId,
+          toolCallId,
+          toolName: call.name,
+          executionClass,
+          tag: event.errorTag
+        };
+      }
       return event;
     });
   });
-  const finalizeTerminalResult = exports_Stream.unwrap(exports_Effect.sync(() => terminalEventThenTelemetry(commitTerminalResult, terminalOutcome ?? "failure", terminalOutcome === "failure")));
+  const finalizeTerminalResult = exports_Stream.unwrap(exports_Effect.sync(() => terminalEventThenAfter(commitTerminalResult, terminalOutcome ?? "failure", terminalOutcome === "failure")));
   const failTerminalResult = (cause) => {
     terminal = true;
     terminalOutcome = "failure";
     terminalResult = undefined;
     propagatedFailure = cause;
-    return terminalEventThenTelemetry(makeToolFailedEvent(context3, turnId, call, exports_Cause.squash(cause)).pipe(exports_Effect.tap(() => exports_Effect.sync(() => {
+    return terminalEventThenAfter(makeToolFailedEvent(context3, turnId, call, exports_Cause.squash(cause)).pipe(exports_Effect.tap(() => exports_Effect.sync(() => {
       trace3.finalToolResultIds.add(call.id);
       terminalResultCommitted = true;
     }))), "failure", true);
@@ -39513,6 +39551,7 @@ var stream3 = (agent2, input, options3 = {}) => {
       agentId: agent2.definition.id,
       conversationId,
       runId,
+      toolFailureObserver: yield* CurrentToolFailureObserver,
       input: undefined,
       pendingFollowUps: [],
       startedAtMillis,
@@ -39706,8 +39745,10 @@ var programmaticOutcomeError = (index2, tag2, message) => ({
 
 class BrokerHandlerFailure {
   error;
-  constructor(error2) {
+  cause;
+  constructor(error2, cause) {
     this.error = error2;
+    this.cause = cause;
   }
 }
 var stripProgrammaticToolSpanFailure = (cause, marker) => {
@@ -39726,7 +39767,7 @@ var stripProgrammaticToolSpanFailure = (cause, marker) => {
   }
   return { found, residual: exports_Cause.fromReasons(residual) };
 };
-var observeProgrammaticToolCall = (telemetry, descriptor, effect2) => exports_Effect.suspend(() => {
+var measureProgrammaticToolCall = (telemetry, descriptor, effect2) => exports_Effect.suspend(() => {
   const marker = ToolSpanFailure.marker();
   let terminalResult;
   let propagatedFailure;
@@ -39736,11 +39777,11 @@ var observeProgrammaticToolCall = (telemetry, descriptor, effect2) => exports_Ef
         return exports_Effect.failCause(exit3.cause);
       }
       propagatedFailure = exit3.cause;
-      return isolateToolTerminalTelemetry(terminalToolTelemetry(descriptor, "failure", marker)).pipe(exports_Effect.andThen(exports_Effect.fail(marker)));
+      return isolateToolDerivative(terminalToolTelemetry(descriptor, "failure", marker)).pipe(exports_Effect.andThen(exports_Effect.fail(marker)));
     }
     terminalResult = exit3.value;
     const outcome = exit3.value._tag === "ProgrammaticCallSuccess" ? "success" : "failure";
-    return isolateToolTerminalTelemetry(terminalToolTelemetry(descriptor, outcome, outcome === "failure" ? marker : undefined)).pipe(exports_Effect.andThen(outcome === "failure" ? exports_Effect.fail(marker) : exports_Effect.succeed(exit3.value)));
+    return isolateToolDerivative(terminalToolTelemetry(descriptor, outcome, outcome === "failure" ? marker : undefined)).pipe(exports_Effect.andThen(outcome === "failure" ? exports_Effect.fail(marker) : exports_Effect.succeed(exit3.value)));
   }), exports_Effect.withSpan(`execute_tool ${descriptor.toolName}`, {
     kind: "internal",
     attributes: toolTelemetryAttributes(descriptor)
@@ -39774,6 +39815,7 @@ var brokerDecodeJson = (value4) => {
 var makeToolBrokerService = (binding) => exports_Effect.map(ToolSpanTelemetry, (toolSpanTelemetry) => makeToolBrokerServiceWithTelemetry(binding, toolSpanTelemetry));
 var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
   const lifecycle = { closed: false };
+  const observer = binding.context.toolFailureObserver;
   const service4 = {
     openPass: (toolkit, passOptions) => exports_Effect.gen(function* () {
       if (lifecycle.closed) {
@@ -39788,25 +39830,44 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
       }
       const handlerServices = yield* exports_Effect.context();
       const state = { nextIndex: 0, inFlight: false };
+      const preflightFailure = (input, kind, tag2, message, cause) => {
+        const outcome = programmaticOutcomeError(undefined, tag2, message);
+        if (observer === undefined)
+          return exports_Effect.succeed(outcome);
+        return deliverToolFailure(observer, {
+          _tag: "ProgrammaticPreflightFailure",
+          agentId: binding.context.agentId,
+          conversationId: binding.context.conversationId,
+          runId: binding.context.runId,
+          turnId: binding.turnId,
+          parentToolCallId: binding.outerToolCallId,
+          toolName: input.toolName,
+          ...hasTool(toolkit.tools, input.toolName) ? { executionClass: getToolExecutionClass(toolkit.tools[input.toolName]) } : {},
+          kind,
+          tag: tag2,
+          message: toolFailureMessage(message),
+          ...cause === undefined ? {} : { cause }
+        }).pipe(exports_Effect.as(outcome));
+      };
       const body = (input) => exports_Effect.gen(function* () {
         if (!hasTool(toolkit.tools, input.toolName)) {
-          return programmaticOutcomeError(undefined, "ProgrammaticToolUnknownError", `Tool ${input.toolName} is not part of this pass's allowlisted Toolkit`);
+          return yield* preflightFailure(input, "infrastructure", "ProgrammaticToolUnknownError", `Tool ${input.toolName} is not part of this pass's allowlisted Toolkit`);
         }
         const tool = toolkit.tools[input.toolName];
         const approval = tool.needsApproval;
         if (approval !== undefined && approval !== false) {
-          return programmaticOutcomeError(undefined, "ProgrammaticApprovalUnsupportedError", `Tool ${input.toolName} requires approval; approval-requiring Tools never start programmatically in the ephemeral slice`);
+          return yield* preflightFailure(input, "infrastructure", "ProgrammaticApprovalUnsupportedError", `Tool ${input.toolName} requires approval; approval-requiring Tools never start programmatically in the ephemeral slice`);
         }
         const decodeParameters = exports_Schema.decodeUnknownEffect(tool.parametersSchema);
         const invalidParameters = yield* decodeParameters(input.encodedArguments).pipe(exports_Effect.map(() => {
           return;
-        }), exports_Effect.catch((cause) => exports_Effect.succeed(programmaticOutcomeError(undefined, "ModelProtocolError", `Invalid parameters for Tool ${input.toolName}: ${cause.message}`))));
+        }), exports_Effect.catchCauseFilter(exports_Cause.findError, (error2, cause) => preflightFailure(input, "protocol", "ModelProtocolError", `Invalid parameters for Tool ${input.toolName}: ${error2.message}`, cause)));
         if (invalidParameters !== undefined) {
           return invalidParameters;
         }
         const used = binding.declaredToolCalls + binding.context.programmaticToolCalls;
         if (used + 1 > binding.maxToolCalls) {
-          return programmaticOutcomeError(undefined, "AgentPolicyError", `Agent exceeded its ${binding.maxToolCalls} Tool Call limit`);
+          return yield* preflightFailure(input, "infrastructure", "AgentPolicyError", `Agent exceeded its ${binding.maxToolCalls} Tool Call limit`);
         }
         binding.context.programmaticToolCalls += 1;
         if (binding.budget !== undefined) {
@@ -39820,25 +39881,49 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
             usage: emptyProgrammaticUsage
           }), binding.hookServices).pipe(exports_Effect.map(() => {
             return;
-          }), exports_Effect.catch((error2) => exports_Effect.succeed(programmaticOutcomeError(undefined, errorTag(error2), errorMessage(error2)))));
+          }), exports_Effect.catchCauseFilter(exports_Cause.findError, (error2, cause) => exports_Effect.succeed({ error: error2, cause })));
           if (exhausted !== undefined) {
             binding.context.programmaticToolCalls -= 1;
-            return exhausted;
+            return yield* preflightFailure(input, "infrastructure", errorTag(exhausted.error), errorMessage(exhausted.error), exhausted.cause);
           }
         }
         const index2 = state.nextIndex++;
         const handleId = `${binding.outerToolCallId}#${index2}`;
+        const executionClass = getToolExecutionClass(tool);
+        let failureObservation;
+        const startedFailure = (kind, tag2, message, cause) => {
+          const outcome = programmaticOutcomeError(index2, tag2, message);
+          if (observer === undefined)
+            return exports_Effect.succeed(outcome);
+          failureObservation = {
+            _tag: "ProgrammaticToolFailure",
+            agentId: binding.context.agentId,
+            conversationId: binding.context.conversationId,
+            runId: binding.context.runId,
+            turnId: binding.turnId,
+            toolCallId: handleId,
+            parentToolCallId: binding.outerToolCallId,
+            sequenceIndex: index2,
+            toolName: input.toolName,
+            executionClass,
+            kind,
+            tag: tag2,
+            ...kind === "handler-error" ? {} : { message: toolFailureMessage(message) },
+            ...cause === undefined ? {} : { cause }
+          };
+          return exports_Effect.succeed(outcome);
+        };
         const telemetryDescriptor = {
           context: binding.context,
           turnId: binding.turnId,
           toolCallId: handleId,
           toolName: input.toolName,
-          executionClass: getToolExecutionClass(tool),
+          executionClass,
           invocationKind: "programmatic",
           parentToolCallId: binding.outerToolCallId,
           sequenceIndex: index2
         };
-        return yield* observeProgrammaticToolCall(toolSpanTelemetry, telemetryDescriptor, exports_Effect.gen(function* () {
+        const execution = measureProgrammaticToolCall(toolSpanTelemetry, telemetryDescriptor, exports_Effect.gen(function* () {
           yield* exports_Effect.logDebug("agent programmatic tool handler started").pipe(exports_Effect.annotateLogs({
             agentId: binding.context.agentId,
             runId: binding.context.runId,
@@ -39859,22 +39944,39 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
             if (!result4.preliminary) {
               terminal = {
                 encodedResult: result4.encodedResult,
-                isFailure: result4.isFailure
+                isFailure: result4.isFailure,
+                tag: observer === undefined || !result4.isFailure ? undefined : errorTag(result4.result)
               };
             }
           })), exports_Effect.map(() => {
             return;
-          }), exports_Effect.catch((error2) => exports_Effect.succeed(new BrokerHandlerFailure(error2))));
+          }), exports_Effect.catchCauseFilter(exports_Cause.findError, (error2, cause) => exports_Effect.succeed(new BrokerHandlerFailure(error2, cause))));
           if (handlerFailed instanceof BrokerHandlerFailure) {
-            return programmaticOutcomeError(index2, errorTag(handlerFailed.error), errorMessage(handlerFailed.error));
+            return yield* startedFailure("handler-error", errorTag(handlerFailed.error), errorMessage(handlerFailed.error), handlerFailed.cause);
           }
           if (resultAfterTerminal) {
-            return programmaticOutcomeError(index2, "ModelProtocolError", `Tool Call ${handleId} produced more than one terminal result`);
+            return yield* startedFailure("protocol", "ModelProtocolError", `Tool Call ${handleId} produced more than one terminal result`);
           }
           if (terminal === undefined) {
-            return programmaticOutcomeError(index2, "ModelProtocolError", `Tool Call ${handleId} completed without a terminal result`);
+            return yield* startedFailure("protocol", "ModelProtocolError", `Tool Call ${handleId} completed without a terminal result`);
           }
           if (terminal.isFailure) {
+            if (observer !== undefined) {
+              failureObservation = {
+                _tag: "ProgrammaticToolFailure",
+                agentId: binding.context.agentId,
+                conversationId: binding.context.conversationId,
+                runId: binding.context.runId,
+                turnId: binding.turnId,
+                toolCallId: handleId,
+                parentToolCallId: binding.outerToolCallId,
+                sequenceIndex: index2,
+                toolName: input.toolName,
+                executionClass,
+                kind: "declared-failure",
+                tag: terminal.tag ?? "UnknownError"
+              };
+            }
             return {
               _tag: "ProgrammaticCallFailure",
               index: index2,
@@ -39882,30 +39984,31 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
             };
           }
           if (exports_Option.isNone(exports_Schema.decodeUnknownOption(exports_Schema.Json)(terminal.encodedResult))) {
-            return programmaticOutcomeError(index2, "ModelProtocolError", `Tool ${input.toolName} produced a success encoding outside JSON`);
+            return yield* startedFailure("protocol", "ModelProtocolError", `Tool ${input.toolName} produced a success encoding outside JSON`);
           }
           let encodedResult = terminal.encodedResult;
           if (passOptions.redactResult !== undefined) {
             const redacted2 = brokerDecodeJson(yield* passOptions.redactResult(encodedResult));
             if (exports_Option.isNone(redacted2)) {
-              return programmaticOutcomeError(index2, "ModelProtocolError", `The redacted result for Tool ${input.toolName} is outside the JSON surface`);
+              return yield* startedFailure("protocol", "ModelProtocolError", `The redacted result for Tool ${input.toolName} is outside the JSON surface`);
             }
             encodedResult = redacted2.value;
           }
           const bytes = brokerEncodedByteLength(encodedResult);
           if (bytes === undefined || bytes > passOptions.maxResultBytes) {
-            return programmaticOutcomeError(index2, "ProgrammaticResultLimitError", `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`);
+            return yield* startedFailure("infrastructure", "ProgrammaticResultLimitError", `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`);
           }
           return { _tag: "ProgrammaticCallSuccess", index: index2, encodedResult };
         }));
+        return yield* observer === undefined ? execution : execution.pipe(exports_Effect.tap(() => failureObservation === undefined ? exports_Effect.void : deliverToolFailure(observer, failureObservation)));
       }).pipe(exports_Effect.provideContext(handlerServices));
       const pass = {
         invoke: (input) => exports_Effect.suspend(() => {
           if (lifecycle.closed) {
-            return exports_Effect.succeed(programmaticOutcomeError(undefined, "ToolBrokerUnavailableError", "The outer Tool Call for this pass has already settled"));
+            return preflightFailure(input, "infrastructure", "ToolBrokerUnavailableError", "The outer Tool Call for this pass has already settled");
           }
           if (state.inFlight) {
-            return exports_Effect.succeed(programmaticOutcomeError(undefined, "ProgrammaticCallConcurrencyError", `Host call ${input.toolName} was issued while another call from this pass is unsettled; in-program Tool calls are strictly sequential`));
+            return preflightFailure(input, "infrastructure", "ProgrammaticCallConcurrencyError", `Host call ${input.toolName} was issued while another call from this pass is unsettled; in-program Tool calls are strictly sequential`);
           }
           state.inFlight = true;
           return body(input).pipe(exports_Effect.ensuring(exports_Effect.sync(() => {

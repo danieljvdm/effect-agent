@@ -1,5 +1,9 @@
 import type { SubmissionId } from "@effect-agent/core";
-import type { RunCostEstimator } from "@effect-agent/engine";
+import {
+  toolFailureObserverLayer,
+  type RunCostEstimator,
+  type RunToolFailureObserver,
+} from "@effect-agent/engine";
 import {
   type ConversationStore,
   type WakeScheduler,
@@ -109,6 +113,8 @@ export interface NodeDurableRuntimeOptions {
   readonly abortPollInterval?: number | undefined;
   /** Deployment-owned pricing authority used by durable cost budgets and settlements. */
   readonly estimateCostMicrousd?: RunCostEstimator | undefined;
+  /** Trusted in-process Tool failure reporting, closed over host dependencies. Default absent. */
+  readonly toolFailureObserver?: RunToolFailureObserver | undefined;
   /** Milliseconds; default 5000. */
   readonly busyTimeout?: number | undefined;
   /** Milliseconds; default 25. */
@@ -371,6 +377,10 @@ export class NodeDurableRuntime {
             ? DurableRuntimeFailpoint.layer
             : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint });
         const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
+        const observerLayer =
+          options.toolFailureObserver === undefined
+            ? Layer.empty
+            : toolFailureObserverLayer(options.toolFailureObserver);
         const bindingResolverLayer = AgentBindingResolver.layer(options.bindings ?? []);
         const ports = Layer.mergeAll(
           conversationStoreLayer,
@@ -387,7 +397,12 @@ export class NodeDurableRuntime {
             ),
           ),
           Layer.provide(
-            Layer.mergeAll(wakeSchedulerConfigLayer, runtimeFailpointLayer, reconcilerLayer),
+            Layer.mergeAll(
+              wakeSchedulerConfigLayer,
+              runtimeFailpointLayer,
+              reconcilerLayer,
+              observerLayer,
+            ),
           ),
           Layer.provideMerge(infrastructure),
           Layer.provideMerge(nodeConfigLayer),

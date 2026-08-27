@@ -79,6 +79,11 @@ All Tool Calls declared by one assistant message. The default scheduler executes
 finite Effect Semaphore. Canonical results commit in declaration order and the batch becomes
 model-visible atomically.
 
+**Invocation kind**
+
+How an application Tool is called: `model` for a model-declared call, or `programmatic` for an
+inner broker invocation. This is independent of execution class and of whether its Handler started.
+
 **Steering**  
 Input delivered to an active Run after a complete assistant response and Tool Batch, before the
 next model request. Steering never mutates in-flight work.

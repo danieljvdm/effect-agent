@@ -943,6 +943,8 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
       abortPollInterval: Duration.millis(50),
     }),
   );
+  // RUN-036: certification uses the default-none Tool failure observer. Trusted application
+  // reporting adds no durable transition and is verified separately from adapter certification.
   const environment = DurableAgentRuntime.layer.pipe(Layer.provideMerge(support));
 
   const leaseAdvance = Duration.millis(

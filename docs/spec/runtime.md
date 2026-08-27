@@ -235,6 +235,108 @@ Only success and failure receive a bounded terminal telemetry outcome. Interrupt
 terminal outcome log. Denied and provider-executed calls remain solely call-level classifications:
 neither creates an application-handler attempt.
 
+### Tool failure observation
+
+**Invocation kind** identifies how an application Tool is called: `model` for a model-declared
+call, or `programmatic` for an inner `ToolBroker` invocation. It is independent of execution
+class, whose values are `readonly`, `idempotent`, and `uncertain`. Unannotated Tools default to
+`uncertain`; this observation interface grants no new replay authority.
+
+`CurrentToolFailureObserver` is one engine-owned, default-none `Context.Reference`.
+`toolFailureObserverLayer` installs a closed `RunToolFailureObserver`, whose `observe` method
+returns `Effect<void>` with no typed error or requirements. Applications capture their reporting
+dependencies before installation. There is no `RunOptions` installation path or precedence rule.
+With no observer installed, outcomes, events, canonical records, logs, and spans remain unchanged.
+
+The engine captures the reference once per Run and passes that value to direct Tool execution and
+the broker. `DurableAgentRuntime` captures it once at Layer acquisition and explicitly re-provides
+that value, including absence, around each interpreter invocation. Caller context cannot replace
+the captured host choice. Node and Cloudflare accept the same closed `toolFailureObserver` option.
+Adapter certification uses the default-none observer.
+
+Observations are plain readonly interfaces, deliberately not persisted or transported Schemas.
+Every observation carries `agentId`, `conversationId`, `runId`, `turnId`, `toolName`, `kind`, and
+`tag`. Identity fields are raw, unconditionally. The telemetry ID filter does not apply to this
+trusted local service. Fresh provider responses still pass the ordinary protocol ID validation.
+
+| Variant                        | Extra identity                                                                                 | Execution class             | Allowed kinds                |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- | --------------------------- | ---------------------------- |
+| `ModelToolFailure`             | Raw `toolCallId`                                                                               | Always                      | `declared-failure`           |
+| `ProgrammaticToolFailure`      | `toolCallId = parentToolCallId + "#" + sequenceIndex`, raw `parentToolCallId`, `sequenceIndex` | Always                      | All four kinds               |
+| `ProgrammaticPreflightFailure` | Raw `parentToolCallId` only                                                                    | Only when the Tool resolved | `infrastructure`, `protocol` |
+
+Presence of `sequenceIndex` means the Handler started, budget was consumed, and side effects may
+exist. A preflight observation has neither an inner Tool Call ID nor an index. The engine never
+fabricates either.
+
+The following taxonomy is normative (RUN-036).
+
+| Source                                                                                                      | Variant      | Kind               | Cause                            |
+| ----------------------------------------------------------------------------------------------------------- | ------------ | ------------------ | -------------------------------- |
+| Direct returned failure, `commitTerminalResult` failure branch                                              | Model        | `declared-failure` | Never                            |
+| `ProgrammaticCallFailure` after a started handler                                                           | Programmatic | `declared-failure` | Never                            |
+| Started handler's typed error                                                                               | Programmatic | `handler-error`    | Always, original and uncollapsed |
+| Result byte-bound rejection                                                                                 | Programmatic | `infrastructure`   | No                               |
+| JSON-surface / missing / duplicate terminal result                                                          | Programmatic | `protocol`         | No                               |
+| Budget-hook typed failure                                                                                   | Preflight    | `infrastructure`   | Yes, captured before projection  |
+| Unknown Tool, approval-unsupported, policy limit, call already in flight, pass retained past the outer call | Preflight    | `infrastructure`   | No                               |
+| Invalid encoded arguments, `SchemaError`                                                                    | Preflight    | `protocol`         | Yes                              |
+
+`tag` uses the existing bounded error-tag projection, with `UnknownError` as fallback. Only
+`infrastructure` and `protocol` carry `message`, bounded to 4096 UTF-8 bytes without splitting a
+code point. `handler-error` carries no message. A Cause-backed observation retains the exact
+Effect Cause held by the engine, with its Reasons and annotations; source-less outcomes never
+acquire a fabricated Cause.
+
+Declared failures expose only their tag, never their message, Cause, decoded result, or encoded
+payload. For Code Mode this follows CAP-016. For direct Tools it is a deliberate uniform policy,
+not a claim that their declared values are secret: those values already belong to the ordinary
+model-visible Tool result. The observer is not an implicit Code Mode output channel.
+
+Raw Causes are sensitive live diagnostics. The engine MUST NOT automatically serialize, persist,
+log, attach them to spans or public events, or send them to the model. Only the explicitly installed
+observer receives them; the application owns any further reporting and redaction policy (SEC-008).
+
+Direct observation runs after the failure event and in-memory result are authoritative, before
+ordinary continuation. Telemetry and observation share one delivery owner across the next-pull
+and early-close race. Delivery runs inline under that call's own batch permit, so a slow observer
+occupies one `toolConcurrency` slot. Started broker calls use the outer call's already-held permit.
+Their outcome and terminal telemetry are fixed before delivery, which finishes before `pass.invoke`
+returns. The original Cause is retained before the broker's diagnostic projection.
+Preflight rejections also deliver inline, without acquiring a new execution permit. There is no
+queue, background fiber, or daemon.
+
+Observer defects go to `ErrorReporter`; reporter defects are isolated too. Neither may replace
+the authoritative Tool result or alter the Run outcome. External interruption of observation or
+reporting remains interruption and may stop the Run, but never rolls back or reclassifies an
+already-authoritative Tool terminal value. Observation is independent of Logger/Tracer telemetry.
+An observer MUST NOT reenter `ToolBroker`, emit through `RunEventSink`, start nested Agent
+execution, or intentionally self-interrupt. This is a documented application contract, not a
+type-enforced capability restriction.
+
+Delivery is at most once per in-memory attempt. An interrupted delivery is never retried in that
+attempt. Across replacement Attempts one logical call may be observed zero, one, or multiple
+times. Synthetic inner IDs collide across Attempts because the sequence counter restarts, so IDs
+alone cannot deduplicate incidents. Inner and outer Code Mode observations correlate through
+`parentToolCallId`; the engine does not infer causal attribution or incident deduplication.
+
+No observation is a durable fact. There is no happened-before guarantee with a later canonical
+record commit, no journal or ledger field, no checkpoint data, and no observation replay. This
+adds no durable mutation or mutation failpoint and makes no exactly-once delivery claim.
+
+The following exclusions are normative; none fires an observation.
+
+- Direct typed handler errors, defects, and direct protocol errors propagate to the ordinary Run
+  failure boundary with their Cause. Observing them again would duplicate that channel.
+- Inner programmatic defects and interruption escape `pass.invoke` through the outer call. They
+  are not `handler-error` observations.
+- Direct approval/authorization denial and direct preflight failure start no application attempt.
+- Synthetic budget rejection starts no application attempt even though it produces a Tool result.
+- Interruption, waiting, and provider-executed results have no eligible application failure.
+- Resume-injected settled calls run no Handler and possess no live Cause.
+- `openPass` errors, `ToolBrokerUnavailableError` and `ToolBrokerConfigurationError`, describe zero
+  inner calls. They may be visible only through the outer declared failure Code Mode returns.
+
 ### Provider-executed Tools
 
 A provider-hosted built-in Tool does not run an application Handler. Its complete Effect AI call
@@ -562,6 +664,8 @@ interpreter supplies them itself; an application Layer must not provide them.
 
 ## 12.1 Code Mode programmatic invocation seam
 
+Programmatic calls emit no Run events and create no inner-call Canonical Records.
+
 This section documents the engine API for Code Mode programmatic Tool invocation
 ([capability specification §9.1](./capabilities.md)). The engine owns a broker seam in
 the same pattern as `AgentSpawner` and `DurableStep`: provided locally by the interpreter, bound
@@ -741,3 +845,10 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   cost aggregation that would exceed safe-integer accounting fails typed before settlement.
   Summary pricing identities are unique, and every top-level total exactly equals the checked sum
   of its per-model groups.
+- **RUN-036:** The opt-in trusted Tool failure observer receives exactly the non-propagating
+  failures classified in §5, with raw correlation identities, original Causes wherever held,
+  tag-only declared failures, and byte-bounded infrastructure/protocol messages. Delivery is
+  inline and at most once per in-memory attempt; observer/reporter defects are isolated and
+  external interruption remains effective. Durable hosts capture the same default-none service
+  at composition and never observe replay-injected settled calls. Observations add no automatic
+  export, public event, canonical record, durable state, or replay guarantee.

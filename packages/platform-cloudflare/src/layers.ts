@@ -1,6 +1,10 @@
 import { ConversationId } from "@effect-agent/core";
-import type { RunContextPreparation, RunCostEstimator } from "@effect-agent/engine";
-import { RunContextPreparationPassthrough } from "@effect-agent/engine";
+import type {
+  RunContextPreparation,
+  RunCostEstimator,
+  RunToolFailureObserver,
+} from "@effect-agent/engine";
+import { RunContextPreparationPassthrough, toolFailureObserverLayer } from "@effect-agent/engine";
 import {
   AgentBindingResolver,
   DurableAgentRuntime,
@@ -82,6 +86,8 @@ export interface CloudflareDurableRuntimeOptions {
   readonly abortPollInterval?: number | undefined;
   /** Deployment-owned pricing authority used by durable cost budgets and settlements. */
   readonly estimateCostMicrousd?: RunCostEstimator | undefined;
+  /** Trusted in-process Tool failure reporting, closed over host dependencies. Default absent. */
+  readonly toolFailureObserver?: RunToolFailureObserver | undefined;
   /** Milliseconds; default 25. */
   readonly observationPollInterval?: number | undefined;
   /** Bytes; default just under the 2 MB platform value limit. */
@@ -382,6 +388,10 @@ export class CloudflareDurableRuntime {
           options.operationAuthorizer === undefined
             ? Layer.empty
             : operationAuthorizerLayer(options.operationAuthorizer);
+        const observerLayer =
+          options.toolFailureObserver === undefined
+            ? Layer.empty
+            : toolFailureObserverLayer(options.toolFailureObserver);
         const bindingResolverLayer = Layer.effect(AgentBindingResolver)(
           Effect.map(
             resolveBindings(options.bindings, { ctx, env, conversationId, producerId }),
@@ -413,6 +423,7 @@ export class CloudflareDurableRuntime {
               runtimeFailpointLayer,
               reconcilerLayer,
               authorizerLayer,
+              observerLayer,
               runContextLayer,
               BrowserCrypto.layer,
             ),

@@ -299,6 +299,14 @@ non-negative microdollar estimate plus optional service-tier/pricing-version ide
 captures it in `DurableRuntimeConfig`, so every replacement Attempt applies the same authority;
 configured `costBudgetMicrousd` policies fail typed when no estimator exists.
 
+`NodeDurableRuntimeOptions.toolFailureObserver` and
+`CloudflareDurableRuntimeOptions.toolFailureObserver` install the same engine-owned closed
+observer through `toolFailureObserverLayer` (RUN-036). Both default to absence. These are trusted
+in-process construction values, outside the serialized configuration Schemas. The coordinator
+captures the reference once and explicitly provides it to each interpreter Attempt; ambient
+worker context cannot substitute another observer. Delivery adds no durable mutation or replay
+and does not change Code Mode's deployment class.
+
 Durable Object storage is the only correctness-critical store for that Conversation. In-memory
 object state is a cache because objects may stop unexpectedly. Alarm work is idempotent because
 alarms execute at least once.
