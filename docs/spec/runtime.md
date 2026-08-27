@@ -531,6 +531,15 @@ no transform can remove or alter it. A Definition whose output Schema cannot ren
 Schema produces no contract. The field is absent and the request is unchanged, with one Turn-1
 diagnostic per Attempt.
 
+When a Definition designates a completion Tool, the directive distinguishes that Tool's parameter
+Schema from the private Agent output Schema. A model calling the completion Tool follows its
+parameter Schema and never places the private output JSON in a Tool argument; the engine projects
+the successful Tool result into the Agent output. A final assistant response without that Tool
+call must still be JSON conforming to the Agent output Schema. The output Schema therefore remains
+in the request even for Definitions with a completion Tool. Definitions without a completion Tool retain
+the original final-text directive. This guidance changes neither Tool execution nor canonical
+history.
+
 ## 10. Event interface
 
 Every semantic Run Event carries:

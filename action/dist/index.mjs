@@ -35990,13 +35990,13 @@ var boundedValueFootprint = (root, maxBytes, knownSafePrototypes = new Set, maxD
 };
 
 // packages/engine/src/output-contract-internal.ts
-var contractDirective = "Final output contract: when the task is complete, the final assistant message must be only " + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + "before or after the JSON.";
+var contractDirective = (definition) => definition.completion === undefined ? "Final output contract: when the task is complete, the final assistant message must be only " + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + "before or after the JSON." : `Final output contract: when the task is complete without calling the "${definition.completion.tool}" completion Tool, the final assistant message must be only ` + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + `before or after the JSON. When calling the "${definition.completion.tool}" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool's parameter schema instead. The engine projects the successful completion Tool result into the Agent output.`;
 var outputSchemaContract = (definition) => {
   try {
     const jsonSchema2 = exports_Tool.getJsonSchemaFromSchema(definition.output);
     return {
       _tag: "rendered",
-      message: `${contractDirective}
+      message: `${contractDirective(definition)}
 
 ${JSON.stringify(jsonSchema2, undefined, 2)}`
     };
