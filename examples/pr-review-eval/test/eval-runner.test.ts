@@ -133,32 +133,28 @@ describe("PR-review model eval", () => {
     Effect.gen(function* () {
       const suite = yield* makeSuite();
       const scripted = yield* Layer.build(
-        ScriptedModel.layer(
-          [{ findings: [] }, { findings: [] }, { decisions: [], additionalFindings: [] }].map(
-            (params) => ({
-              _tag: "Stream",
-              parts: [
-                {
-                  type: "tool-call",
-                  id: "review",
-                  name: "submit_review",
-                  params: {
-                    ...params,
-                  },
+        ScriptedModel.layer([
+          {
+            _tag: "Stream",
+            parts: [
+              {
+                type: "tool-call",
+                id: "review",
+                name: "submit_review",
+                params: { findings: [] },
+              },
+              {
+                type: "finish",
+                reason: "tool-calls",
+                usage: {
+                  inputTokens: { total: 10, uncached: 10, cacheRead: 0, cacheWrite: 0 },
+                  outputTokens: { total: 4 },
                 },
-                {
-                  type: "finish",
-                  reason: "tool-calls",
-                  usage: {
-                    inputTokens: { total: 10, uncached: 10, cacheRead: 0, cacheWrite: 0 },
-                    outputTokens: { total: 4 },
-                  },
-                },
-              ],
-              termination: { _tag: "Complete" },
-            }),
-          ),
-        ),
+              },
+            ],
+            termination: { _tag: "Complete" },
+          },
+        ]),
       );
       const model = Model.make("scripted", "eval", Layer.succeedContext(scripted));
       const reviewer = makeReviewer({ model });

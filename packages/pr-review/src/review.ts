@@ -360,7 +360,7 @@ const reviewSummary = (request: ReviewRequest, findings: ReadonlyArray<ReviewFin
   const summary =
     findings.length === 0
       ? "No concrete defects found in the supplied change."
-      : `Found ${findings.length} independent defect(s), including ${blocking} blocking finding(s).`;
+      : `Reported ${findings.length} finding(s), including ${blocking} blocking finding(s).`;
   return `${summary}${request.scope === "incremental" ? " This incremental review does not resolve earlier findings or establish that merging is safe." : ""}${request.unreviewedPaths.length > 0 ? " Coverage is incomplete because some changed paths were unavailable." : ""}`;
 };
 
