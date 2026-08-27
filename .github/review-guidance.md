@@ -9,5 +9,3 @@ Review this Effect v4 framework for concrete defects, not style.
 - Bound concurrency and use structured Effect concurrency. Security decisions fail closed; model output is untrusted.
 - Flag a new abstraction only when deleting it would remove real ownership, policy, or behavior.
 - Tests must cover a concrete regression. Do not request speculative cleanup or unrelated hardening.
-
-Severity: blocking only for a real ship-stopper; important for an actionable non-blocking defect; nit sparingly. Prefer no finding to a weak one.
