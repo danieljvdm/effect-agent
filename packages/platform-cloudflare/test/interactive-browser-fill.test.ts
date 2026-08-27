@@ -65,7 +65,7 @@ const open = Effect.gen(function* () {
 
   return yield* browser.open(
     InteractiveBrowserPolicy.make({
-      allowedHosts: ["example.com"],
+      network: { _tag: "ExactHosts", allowedHosts: ["example.com"] },
       maxActions: 8,
       maxElapsedMillis: 5_000,
       maxReturnedBytes: 1_024,

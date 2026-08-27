@@ -40726,7 +40726,7 @@ var FieldValue = exports_Schema.String.check(exports_Schema.isMaxLength(64 * 102
 var ScrollDelta = exports_Schema.Int.check(exports_Schema.isBetween({ minimum: -1e5, maximum: 1e5 }));
 var browserUrl = Reflect.get(globalThis, "URL");
 var InteractiveBrowserHost = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(255), exports_Schema.makeFilter((value4) => {
-  if (typeof browserUrl !== "function")
+  if (typeof browserUrl !== "function" || value4.includes("*"))
     return false;
   try {
     const url2 = Reflect.construct(browserUrl, [`https://${value4}/`]);
@@ -40735,13 +40735,19 @@ var InteractiveBrowserHost = exports_Schema.NonEmptyString.check(exports_Schema.
     return false;
   }
 }, { title: "a canonical credential-free HTTPS host authority" }));
+var InteractiveBrowserNetworkPolicy = exports_Schema.Union([
+  exports_Schema.TaggedStruct("ExactHosts", {
+    allowedHosts: exports_Schema.Array(InteractiveBrowserHost).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(64), exports_Schema.isUnique())
+  }),
+  exports_Schema.TaggedStruct("PublicWeb", {})
+]).pipe(exports_Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
 
-class InteractiveBrowserPolicy extends exports_Schema.Class("InteractiveBrowserPolicy")({
-  allowedHosts: exports_Schema.Array(InteractiveBrowserHost).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(64), exports_Schema.isUnique()),
+class InteractiveBrowserPolicy extends exports_Schema.Class("InteractiveBrowserPolicy")(exports_Schema.Struct({
+  network: InteractiveBrowserNetworkPolicy,
   maxActions: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(1000)),
   maxElapsedMillis: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(10 * 60000)),
   maxReturnedBytes: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(8 * 1024 * 1024))
-}) {
+}).pipe(exports_Schema.annotate({ parseOptions: { onExcessProperty: "error" } }))) {
 }
 
 class BrowserNavigateRequest extends exports_Schema.Class("BrowserNavigateRequest")({ url: PageCaptureTargetUrl }) {

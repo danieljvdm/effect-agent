@@ -267,6 +267,11 @@ so the capability is rejected instead of simulated. Selector scrape is tested at
 Schema and public adapter seams for grouped success, malformed output, and every collection and
 byte bound.
 
+Interactive browser tests prove policy decoding and refusal of unsupported `PublicWeb` before any
+provider operation through both the generic and host services. Exact-host tests preserve same-page
+navigation, listed third-party resources, handoff return, limits, and cleanup. These scripted tests
+do not certify a provider network boundary or successful public-web browsing.
+
 Broker semantics are asserted once against the engine seam: direct and programmatic invocation
 of the same Tool preserve parameter, handler, success, failure, requirement, and interruption
 behavior; typed handler failures stay typed; approval or policy denial prevents handler start;

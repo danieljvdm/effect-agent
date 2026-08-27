@@ -22,6 +22,7 @@ import {
   InteractiveBrowserPolicy,
   InteractiveBrowserPolicyDeniedError,
   InteractiveBrowserProtocolError,
+  InteractiveBrowserUnsupportedError,
   PageScreenshotResult,
   SandboxImplementation,
   type BrowserHandle,
@@ -443,20 +444,30 @@ const isRemoteClosure = (cause: unknown): boolean =>
     causeText(cause),
   );
 
-const snapshotPolicy = (
+const snapshotPolicy = Effect.fn("BrowserRunInteractive.snapshotPolicy")(function* (
   input: InteractiveBrowserPolicy,
-): Effect.Effect<InteractiveBrowserPolicySnapshot, InteractiveBrowserPolicyDeniedError> =>
-  Schema.decodeUnknownEffect(InteractiveBrowserPolicy)(input).pipe(
+): Effect.fn.Return<
+  InteractiveBrowserPolicySnapshot,
+  InteractiveBrowserPolicyDeniedError | InteractiveBrowserUnsupportedError
+> {
+  const decoded = yield* Schema.decodeUnknownEffect(InteractiveBrowserPolicy)(input).pipe(
     Effect.mapError(() => policyError("The interactive browser policy is malformed")),
-    Effect.map((decoded) =>
-      Object.freeze({
-        allowedHosts: Object.freeze([...decoded.allowedHosts]),
-        maxActions: decoded.maxActions,
-        maxElapsedMillis: decoded.maxElapsedMillis,
-        maxReturnedBytes: decoded.maxReturnedBytes,
-      }),
-    ),
   );
+  if (decoded.network._tag === "PublicWeb") {
+    return yield* InteractiveBrowserUnsupportedError.make({
+      implementation: browserRunInteractiveImplementation,
+      feature: "policy",
+      message:
+        "Cloudflare Browser Run cannot enforce the PublicWeb network policy for all session traffic",
+    });
+  }
+  return Object.freeze({
+    allowedHosts: Object.freeze([...decoded.network.allowedHosts]),
+    maxActions: decoded.maxActions,
+    maxElapsedMillis: decoded.maxElapsedMillis,
+    maxReturnedBytes: decoded.maxReturnedBytes,
+  });
+});
 
 const hostAllowed = (policy: InteractiveBrowserPolicySnapshot, value: string): boolean => {
   try {

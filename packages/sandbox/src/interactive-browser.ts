@@ -17,7 +17,7 @@ export const InteractiveBrowserHost = Schema.NonEmptyString.check(
   Schema.isMaxLength(255),
   Schema.makeFilter(
     (value) => {
-      if (typeof browserUrl !== "function") return false;
+      if (typeof browserUrl !== "function" || value.includes("*")) return false;
       try {
         const url: unknown = Reflect.construct(browserUrl, [`https://${value}/`]);
         return (
@@ -37,18 +37,34 @@ export const InteractiveBrowserHost = Schema.NonEmptyString.check(
 );
 export type InteractiveBrowserHost = typeof InteractiveBrowserHost.Type;
 
+/**
+ * ExactHosts retains the page-request URL allowlist, not a public-network boundary.
+ * PublicWeb requires connection-time public-address enforcement for all session
+ * traffic, including human navigation. Adapters that cannot enforce it must fail
+ * with InteractiveBrowserUnsupportedError before acquiring a browser.
+ */
+export const InteractiveBrowserNetworkPolicy = Schema.Union([
+  Schema.TaggedStruct("ExactHosts", {
+    allowedHosts: Schema.Array(InteractiveBrowserHost).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(64),
+      Schema.isUnique(),
+    ),
+  }),
+  Schema.TaggedStruct("PublicWeb", {}),
+]).pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
+export type InteractiveBrowserNetworkPolicy = typeof InteractiveBrowserNetworkPolicy.Type;
+
 export class InteractiveBrowserPolicy extends Schema.Class<InteractiveBrowserPolicy>(
   "InteractiveBrowserPolicy",
-)({
-  allowedHosts: Schema.Array(InteractiveBrowserHost).check(
-    Schema.isMinLength(1),
-    Schema.isMaxLength(64),
-    Schema.isUnique(),
-  ),
-  maxActions: PositiveInt.check(Schema.isLessThanOrEqualTo(1_000)),
-  maxElapsedMillis: PositiveInt.check(Schema.isLessThanOrEqualTo(10 * 60_000)),
-  maxReturnedBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(8 * 1024 * 1024)),
-}) {}
+)(
+  Schema.Struct({
+    network: InteractiveBrowserNetworkPolicy,
+    maxActions: PositiveInt.check(Schema.isLessThanOrEqualTo(1_000)),
+    maxElapsedMillis: PositiveInt.check(Schema.isLessThanOrEqualTo(10 * 60_000)),
+    maxReturnedBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(8 * 1024 * 1024)),
+  }).pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } })),
+) {}
 
 export class BrowserNavigateRequest extends Schema.Class<BrowserNavigateRequest>(
   "BrowserNavigateRequest",

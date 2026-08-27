@@ -6,11 +6,12 @@ import {
   BrowserScreenshotRequest,
   BrowserScrollRequest,
   InteractiveBrowser,
+  InteractiveBrowserError,
   InteractiveBrowserPolicy,
   type BrowserHandle,
 } from "@effect-agent/sandbox";
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Exit, Fiber, Layer, Logger, Redacted, type Scope } from "effect";
+import { Duration, Effect, Exit, Fiber, Layer, Logger, Redacted, Schema, type Scope } from "effect";
 import { TestClock } from "effect/testing";
 
 import {
@@ -344,7 +345,7 @@ const policy = (
   }> = {},
 ) =>
   InteractiveBrowserPolicy.make({
-    allowedHosts: overrides.allowedHosts ?? ["example.com"],
+    network: { _tag: "ExactHosts", allowedHosts: overrides.allowedHosts ?? ["example.com"] },
     maxActions: overrides.maxActions ?? 8,
     maxElapsedMillis: overrides.maxElapsedMillis ?? 5_000,
     maxReturnedBytes: overrides.maxReturnedBytes ?? 1_024,
@@ -406,7 +407,7 @@ describe("Browser Run interactive browser adapter", () => {
     expect(proof && scoped).toBe(true);
   });
 
-  it.effect("runs the bounded public flow and closes page, context, then browser", () =>
+  it.effect("runs the bounded exact-host flow and closes page, context, then browser", () =>
     Effect.gen(function* () {
       const fixture = makeFixture({
         goto: async (url, controls) => {
@@ -460,8 +461,12 @@ describe("Browser Run interactive browser adapter", () => {
         (handle) =>
           Effect.gen(function* () {
             expect(
-              Reflect.set(browserPolicy, "allowedHosts", ["example.com", "widened.invalid"]),
+              Reflect.set(browserPolicy.network, "allowedHosts", [
+                "example.com",
+                "widened.invalid",
+              ]),
             ).toBe(true);
+            expect(Reflect.set(browserPolicy, "network", { _tag: "PublicWeb" })).toBe(true);
             expect(Reflect.set(browserPolicy, "maxActions", 100)).toBe(true);
 
             const denied = yield* handle
@@ -482,13 +487,43 @@ describe("Browser Run interactive browser adapter", () => {
       );
 
       const malformedPolicy = policy();
-      expect(Reflect.set(malformedPolicy, "allowedHosts", [])).toBe(true);
+      expect(Reflect.set(malformedPolicy.network, "allowedHosts", [])).toBe(true);
       const malformed = makeFixture();
       const error = yield* withBrowser(malformed, () => Effect.void, malformedPolicy).pipe(
         Effect.flip,
       );
       expect(error).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
       expect(malformed.calls).not.toContain("binding.launch");
+    }),
+  );
+
+  it.effect("rejects PublicWeb through both public services before any provider operation", () =>
+    Effect.gen(function* () {
+      const publicWeb = InteractiveBrowserPolicy.make({
+        network: { _tag: "PublicWeb" },
+        maxActions: 8,
+        maxElapsedMillis: 120_000,
+        maxReturnedBytes: 1_024,
+      });
+      const fixture = makeFixture({ launchError: new Error("provider must not be reached") });
+      const genericError = yield* withBrowser(fixture, () => Effect.void, publicWeb).pipe(
+        Effect.flip,
+      );
+      const hostError = yield* withHost(fixture, (host) => host.open(publicWeb)).pipe(Effect.flip);
+      for (const error of [genericError, hostError]) {
+        const encoded = yield* Schema.encodeEffect(InteractiveBrowserError)(error);
+        expect(encoded).toEqual({
+          _tag: "InteractiveBrowserUnsupportedError",
+          implementation: {
+            isolation: "isolated",
+            identity: "cloudflare-browser-run-interactive",
+          },
+          feature: "policy",
+          message:
+            "Cloudflare Browser Run cannot enforce the PublicWeb network policy for all session traffic",
+        });
+      }
+      expect(fixture.calls).toEqual([]);
     }),
   );
 
@@ -1163,10 +1198,14 @@ describe("Browser Run interactive browser adapter", () => {
     }),
   );
 
-  it.effect("keeps Cloudflare controls redacted, bounded, single-flight, and scoped", () =>
+  it.effect("keeps exact-host navigation, resources, and human handoff on the same page", () =>
     Effect.gen(function* () {
       const parameters: Array<unknown> = [];
       const fixture = makeFixture({
+        goto: async (url, controls) => {
+          controls.emitRequest(url);
+          controls.emitRequest("https://cdn.example.net/app.js");
+        },
         cdpSend: async (command, input) => {
           parameters.push(input);
           if (command === "Cloudflare.getLiveView") {
@@ -1176,33 +1215,46 @@ describe("Browser Run interactive browser adapter", () => {
             };
           }
           if (command === "Cloudflare.handoff") return { handoffId: "private-handoff" };
-          return { active: true, handoffId: "private-handoff", durationMs: 25 };
+          return { active: false, handoffId: "private-handoff", durationMs: 25 };
         },
       });
 
       yield* withHost(fixture, (host) =>
         Effect.gen(function* () {
-          const session = yield* host.open(policy({ maxActions: 3, maxElapsedMillis: 90_000 }));
+          const session = yield* host.open(
+            policy({
+              allowedHosts: ["example.com", "example.org", "cdn.example.net"],
+              maxActions: 6,
+              maxElapsedMillis: 90_000,
+            }),
+          );
           expect(Redacted.isRedacted(session.sessionId)).toBe(true);
           expect(Redacted.value(session.sessionId)).toBe("session-id");
+          yield* session.handle.navigate(navigate("https://example.com/"));
+          yield* session.handle.navigate(navigate("https://example.org/"));
           const liveView = yield* session.getLiveView(
             BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 }),
           );
           const handoff = yield* session.handoff(
             BrowserRunHandoffRequest.make({ instructions: "Complete MFA", timeout: 1_000 }),
           );
+          fixture.controls.emitRequest("https://example.org/after-human");
+          fixture.controls.setUrl("https://example.org/after-human");
           const state = yield* session.getHandoffState;
           expect(Redacted.isRedacted(liveView.devtoolsFrontendUrl)).toBe(true);
           expect(Redacted.value(liveView.devtoolsFrontendUrl)).toContain("jwt=secret");
           expect(Redacted.value(handoff.handoffId)).toBe("private-handoff");
           expect(Redacted.value(state.handoffId!)).toBe("private-handoff");
-          const limit = yield* session.handle
-            .scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: 10 }))
-            .pipe(Effect.flip);
+          expect(state.active).toBe(false);
+          const resumed = yield* session.handle.scroll(
+            BrowserScrollRequest.make({ deltaX: 0, deltaY: 10 }),
+          );
+          expect(resumed.url).toBe("https://example.org/after-human");
+          const limit = yield* session.handle.readText(readText()).pipe(Effect.flip);
           expect(limit).toMatchObject({
             _tag: "InteractiveBrowserLimitError",
             limit: "actions",
-            observed: 4,
+            observed: 7,
           });
           yield* session.close;
         }),
@@ -1214,6 +1266,11 @@ describe("Browser Run interactive browser adapter", () => {
         {},
       ]);
       expect(fixture.calls.filter((call) => call === "cdp.close")).toHaveLength(3);
+      expect(fixture.calls.filter((call) => call === "binding.launch")).toHaveLength(1);
+      expect(fixture.calls.filter((call) => call === "context.newPage")).toHaveLength(1);
+      expect(
+        fixture.calls.filter((call) => call === "request.continue:https://cdn.example.net/app.js"),
+      ).toHaveLength(2);
       expectResourcesClosedOnce(fixture);
     }),
   );

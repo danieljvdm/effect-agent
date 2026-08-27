@@ -56,7 +56,10 @@ It also exports the sibling `PageScreenshot` port for one bounded caller-owned P
 The scoped `InteractiveBrowser` port is a distinct programmatic capability: one ephemeral
 browser/context/page pass with navigation, bounded reads, fills, clicks, PNG screenshots, viewport
 scrolling, and explicit early closure. Its handle is not transportable or persistable, and its
-immutable exact-host policy covers redirects and subrequests. Screenshot bytes reuse
+immutable `network` policy selects `ExactHosts` for page-request URL checks or `PublicWeb` for a
+connection-time public-network boundary. Cloudflare rejects `PublicWeb` before acquisition with
+`InteractiveBrowserUnsupportedError`, `feature: "policy"`; exact-host mode is not network
+containment for hostile pages or viewers. Screenshot bytes reuse
 `PageScreenshotResult` and share the handle's per-result byte limit.
 
 ### `@effect-agent/sandbox-local`
