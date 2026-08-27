@@ -75,9 +75,14 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
   const recordedAt = yield* DateTime.now;
   const startedAt = yield* clock.monotonicTimeNanos;
   const result = yield* Effect.result(
-    job.variant
-      .review(job.evalCase.request)
-      .pipe(Effect.provide(repositoryLayer(job.evalCase.repository))),
+    job.variant.review(job.evalCase.request).pipe(
+      Effect.provide(repositoryLayer(job.evalCase.repository)),
+      Effect.annotateLogs({
+        evalCaseId: job.evalCase.id,
+        evalTrial: job.trial,
+        evalVariantId: job.variant.configuration.id,
+      }),
+    ),
   );
   const finishedAt = yield* clock.monotonicTimeNanos;
   return EvalObservation.make({
