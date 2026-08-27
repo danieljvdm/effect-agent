@@ -1,5 +1,15 @@
 # @effect-agent/platform-node
 
+## 0.1.0-beta.33
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.33
+  - @effect-agent/engine@0.1.0-beta.33
+  - @effect-agent/session@0.1.0-beta.33
+  - @effect-agent/storage-sqlite@0.1.0-beta.33
+
 ## 0.1.0-beta.32
 
 ### Patch Changes

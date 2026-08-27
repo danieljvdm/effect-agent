@@ -68,6 +68,7 @@
     "preserve-first-pass-findings",
     "pure-session-boundaries",
     "quiescent-conversation-maintenance",
+    "react-controlled-browser-fill",
     "reliable-review-category",
     "reliable-terminal-delivery",
     "remove-legacy-review-surfaces",

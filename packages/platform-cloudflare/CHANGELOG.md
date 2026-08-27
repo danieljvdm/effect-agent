@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.33
+
+### Patch Changes
+
+- [#196](https://github.com/danieljvdm/effect-agent/pull/196) [`2aa8713`](https://github.com/danieljvdm/effect-agent/commit/2aa8713d943e20faedfae029551b6faa2f8b08d4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Update controlled React form state when filling interactive browser fields.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.33
+  - @effect-agent/engine@0.1.0-beta.33
+  - @effect-agent/sandbox@0.1.0-beta.33
+  - @effect-agent/session@0.1.0-beta.33
+  - @effect-agent/storage-cloudflare@0.1.0-beta.33
+
 ## 0.1.0-beta.32
 
 ### Minor Changes
