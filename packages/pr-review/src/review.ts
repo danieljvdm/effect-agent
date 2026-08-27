@@ -1,17 +1,18 @@
-import { Effect, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import {
   Agent,
   AgentPolicy,
   AgentRuntime,
+  estimatePromptTokens,
   IdGenerator,
   makeUsageBudget,
   type RunCostEstimator,
   toRunBudgetHook,
   UsageBudgetLimits,
 } from "effect-agent";
-import { type LanguageModel, type Model, Tool, Toolkit } from "effect/unstable/ai";
+import { type LanguageModel, type Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 
-import { reviewToolkit, reviewToolkitLayer } from "./repository.ts";
+import { ReviewRepository, ReviewSource, reviewToolkit, reviewToolkitLayer } from "./repository.ts";
 
 export type { RunCostEstimator };
 
@@ -110,7 +111,7 @@ const REVIEW_INSTRUCTIONS = `Review the exact change from baseRevision to headRe
 
 Each patch may be shown as separate __new hunk__ and __old hunk__ sections. Their leading numbers are source line numbers, not code. A + line is added, a - line is removed, and a space is unchanged context. Review every supplied change, including deletions and reverts. First identify each changed entry point, branch, interface, selector, guard, default, and collection producer. Enumerate the full admitted and excluded membership of changed selectors, trace each class through downstream consumers, limits, filters, ordering, transformations, side effects, completion, and relevant unchanged callees, and calculate concrete capacity boundaries after representation changes. Finding one defect is not a stopping condition; keep looking for independent causes, including multiple causes on one line.
 
-Use read_file and find_files when the patch does not prove a caller, dependency, contract, or guard. Compare base and head when causation or existing behavior is uncertain. Establish a reachable trigger through a real caller, repository specification, test, or supported input contract. At an owned untrusted-input or model-output Schema boundary, every admitted value requires safe downstream handling, including adversarial values at field and collection bounds. A permissive local decoder alone does not prove that an external third-party producer can emit a value; establish its actual producer contract. Do not invent unseen checks, provider behavior, or guarantees from the previous implementation alone.
+Use prefetchedContext before reading the same changed-file ranges again. It is bounded and may be unavailable or truncated; use read_file and find_files for omitted ranges and when the patch and prefetched source do not prove a caller, dependency, contract, or guard. Compare base and head when causation or existing behavior is uncertain. Establish a reachable trigger through a real caller, repository specification, test, or supported input contract. At an owned untrusted-input or model-output Schema boundary, every admitted value requires safe downstream handling, including adversarial values at field and collection bounds. A permissive local decoder alone does not prove that an external third-party producer can emit a value; establish its actual producer contract. Do not invent unseen checks, provider behavior, or guarantees from the previous implementation alone.
 
 Report only defects introduced, exposed, or materially affected by this exact delta. For novelty, hold the same supported upstream operation input and state constant and trace them end to end through base and head. An unchanged downstream failure is eligible when the delta changes which members or conditions reach that boundary, removes a protection, or materially changes its impact. It is not pre-existing merely because the helper could fail when invoked directly with the same formal arguments, or because a different upstream input could already fail: establish what the base operation actually delivered to the affected boundary. Conversely, a new spelling or equivalent route to the same operation alone is not new exposure. In incremental reviews, unrelated old bugs and target-branch-only changes are out of scope. A revert remains eligible even when its path disappears from a broader pull-request diff. Anchor every finding to its causative path in changes, not an unchanged callee. Set line only to a RIGHT-side added or context line; otherwise omit it.
 
@@ -147,6 +148,23 @@ class FormattedReviewChange extends Schema.Class<FormattedReviewChange>(
   formattedDiff: Schema.NonEmptyString.check(Schema.isMaxLength(80_000)),
 }) {}
 
+class PrefetchUnavailable extends Schema.Class<PrefetchUnavailable>(
+  "@effect-agent/pr-review/PrefetchUnavailable",
+)({
+  path: ReviewPath,
+  revision: ReviewSource.fields.revision,
+  startLine: Schema.Int.check(Schema.isGreaterThan(0)),
+  lineCount: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 })),
+}) {}
+
+class PrefetchedReviewContext extends Schema.Class<PrefetchedReviewContext>(
+  "@effect-agent/pr-review/PrefetchedReviewContext",
+)({
+  sources: Schema.Array(ReviewSource).check(Schema.isMaxLength(16)),
+  unavailable: Schema.Array(PrefetchUnavailable).check(Schema.isMaxLength(16)),
+  truncated: Schema.Boolean,
+}) {}
+
 class FormattedReviewRequest extends Schema.Class<FormattedReviewRequest>(
   "@effect-agent/pr-review/FormattedReviewRequest",
 )({
@@ -157,6 +175,7 @@ class FormattedReviewRequest extends Schema.Class<FormattedReviewRequest>(
   scope: Schema.optionalKey(Schema.Literals(["full", "incremental"])),
   changes: Schema.Array(FormattedReviewChange).check(Schema.isMaxLength(100)),
   unreviewedPaths: Schema.Array(ReviewPath).check(Schema.isMaxLength(300)),
+  prefetchedContext: PrefetchedReviewContext,
 }) {}
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
@@ -238,7 +257,10 @@ const formatPatch = (path: string, patch: string): string => {
   return foundHunk && formatted.length <= 80_000 ? formatted : patch;
 };
 
-const formatRequest = (request: ReviewRequest): FormattedReviewRequest =>
+const formatRequest = (
+  request: ReviewRequest,
+  prefetchedContext: PrefetchedReviewContext,
+): FormattedReviewRequest =>
   FormattedReviewRequest.make({
     title: request.title,
     description: request.description,
@@ -252,7 +274,133 @@ const formatRequest = (request: ReviewRequest): FormattedReviewRequest =>
       }),
     ),
     unreviewedPaths: request.unreviewedPaths,
+    prefetchedContext,
   });
+
+const MAX_PREFETCH_READS = 16;
+const MAX_PREFETCH_CHARACTERS = 160_000;
+const MAX_INITIAL_PROMPT_TOKENS = 80_000;
+const PREFETCH_LINE_COUNT = 200;
+const PREFETCH_CONCURRENCY = 4;
+
+type PrefetchInput = Parameters<ReviewRepository["Service"]["readFile"]>[0];
+
+const prefetchReviewContext = Effect.fn("prefetchReviewContext")(function* (
+  request: ReviewRequest,
+) {
+  const repository = yield* ReviewRepository;
+  const paths = [...new Set(request.changes.map((change) => change.path))];
+  const queue: Array<PrefetchInput> = paths.flatMap((path) => [
+    { path, revision: "base", startLine: 1, lineCount: PREFETCH_LINE_COUNT },
+    { path, revision: "head", startLine: 1, lineCount: PREFETCH_LINE_COUNT },
+  ]);
+  const sources: Array<ReviewSource> = [];
+  const unavailable: Array<PrefetchUnavailable> = [];
+  let attempted = 0;
+  let sourceCharacters = 0;
+  let truncated = false;
+
+  while (queue.length > 0 && attempted < MAX_PREFETCH_READS && !truncated) {
+    const batch = queue.splice(0, Math.min(PREFETCH_CONCURRENCY, MAX_PREFETCH_READS - attempted));
+    attempted += batch.length;
+    const results = yield* Effect.forEach(
+      batch,
+      (input) => repository.readFile(input).pipe(Effect.result),
+      { concurrency: PREFETCH_CONCURRENCY },
+    );
+
+    for (let index = 0; index < results.length; index += 1) {
+      const input = batch[index];
+      const result = results[index];
+      if (input === undefined || result === undefined) continue;
+      if (Result.isFailure(result)) {
+        unavailable.push(PrefetchUnavailable.make(input));
+        continue;
+      }
+      const source = result.success;
+      if (
+        source.path !== input.path ||
+        source.revision !== input.revision ||
+        source.startLine !== input.startLine
+      ) {
+        unavailable.push(PrefetchUnavailable.make(input));
+        continue;
+      }
+      if (sourceCharacters + source.content.length > MAX_PREFETCH_CHARACTERS) {
+        truncated = true;
+        break;
+      }
+      sources.push(source);
+      sourceCharacters += source.content.length;
+      const nextStartLine = input.startLine + input.lineCount;
+      if (nextStartLine <= source.totalLines) {
+        queue.push({ ...input, startLine: nextStartLine });
+      }
+    }
+  }
+
+  return PrefetchedReviewContext.make({
+    sources,
+    unavailable,
+    truncated: truncated || queue.length > 0,
+  });
+});
+
+const estimateInitialPromptTokens = Effect.fn("estimateInitialPromptTokens")(function* (
+  input: FormattedReviewRequest,
+  reviewerInstructions: string,
+) {
+  const encoded = yield* Schema.encodeEffect(FormattedReviewRequest)(input).pipe(
+    Effect.mapError(() =>
+      ReviewVerificationError.make({ message: "Could not encode the review model input" }),
+    ),
+  );
+  const encodedInput = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+    encoded,
+  ).pipe(
+    Effect.mapError(() =>
+      ReviewVerificationError.make({ message: "Could not serialize the review model input" }),
+    ),
+  );
+  return estimatePromptTokens([
+    Prompt.makeMessage("system", { content: reviewerInstructions }),
+    Prompt.makeMessage("user", {
+      content: [Prompt.makePart("text", { text: encodedInput })],
+    }),
+  ]);
+});
+
+const packFormattedRequest = Effect.fn("packFormattedRequest")(function* (
+  request: ReviewRequest,
+  prefetchedContext: PrefetchedReviewContext,
+  reviewerInstructions: string,
+) {
+  const formatted = formatRequest(request, prefetchedContext);
+  let sources = [...prefetchedContext.sources];
+  let unavailable = [...prefetchedContext.unavailable];
+  let packed = formatted;
+
+  while (
+    (yield* estimateInitialPromptTokens(packed, reviewerInstructions)) > MAX_INITIAL_PROMPT_TOKENS
+  ) {
+    if (sources.length > 0) {
+      sources = sources.slice(0, -1);
+    } else if (unavailable.length > 0) {
+      unavailable = [];
+    } else {
+      return packed;
+    }
+    packed = FormattedReviewRequest.make({
+      ...formatted,
+      prefetchedContext: PrefetchedReviewContext.make({
+        sources,
+        unavailable,
+        truncated: true,
+      }),
+    });
+  }
+  return packed;
+});
 
 export class ReviewVerificationError extends Schema.TaggedError<ReviewVerificationError>()(
   "ReviewVerificationError",
@@ -396,11 +544,12 @@ const validatedFindings = Effect.fn("validatedFindings")(function* (
 export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
   options: ReviewerOptions<Provider, ModelProvides, ModelRequires>,
 ) => {
+  const reviewerInstructions = instructions(options.guidance);
   const reviewer = Agent.withModel(
     Agent.define("pr-review", {
       input: FormattedReviewRequest,
       output: ReviewSubmission,
-      instructions: instructions(options.guidance),
+      instructions: reviewerInstructions,
       toolkit: Toolkit.merge(reviewToolkit, reviewCompletion),
       completion: {
         tool: "submit_review",
@@ -416,13 +565,19 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
   const review = Effect.fn("Reviewer.review")(
     function* (request: ReviewRequest) {
       const budget = yield* makeUsageBudget(reviewBudgetLimits);
+      const prefetchedContext = yield* prefetchReviewContext(request);
+      const formattedRequest = yield* packFormattedRequest(
+        request,
+        prefetchedContext,
+        reviewerInstructions,
+      );
       const runOptions = {
         budget: toRunBudgetHook(budget),
         ...(options.estimateCostMicrousd === undefined
           ? {}
           : { estimateCostMicrousd: options.estimateCostMicrousd }),
       };
-      const result = yield* AgentRuntime.run(reviewer, formatRequest(request), runOptions);
+      const result = yield* AgentRuntime.run(reviewer, formattedRequest, runOptions);
       // Diagnostics deliberately contain counts only, never source or model-authored prose.
       yield* Effect.logDebug("Review completed", { findingCount: result.output.findings.length });
       const report = yield* validatedFindings(request, result.output.findings.map(toReviewFinding));
@@ -445,6 +600,15 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         }),
       });
     },
+    Effect.timeoutOrElse({
+      duration: "5 minutes",
+      orElse: () =>
+        Effect.fail(
+          ReviewVerificationError.make({
+            message: "Review source preparation and model run exceeded five minutes",
+          }),
+        ),
+    }),
     Effect.provide([
       IdGenerator.layer,
       reviewToolkitLayer,
