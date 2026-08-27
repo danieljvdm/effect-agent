@@ -323,6 +323,13 @@ Call and its bounded final result, with inner-call evidence in telemetry counts 
 audit metadata. Code Mode claims deployment class `E` only; the `DN` and `DC` assemblies make
 no Code Mode claim until this specification says otherwise.
 
+The trusted, non-persisted, in-process Tool failure observer is one explicit diagnostic channel
+(RUN-036). It may receive an inner Handler's original live Cause, but never a declared failure
+value or intermediate result payload. Declared failures expose their tag only. Applications own
+any reporting and incident deduplication; the engine adds no automatic telemetry export. Inner
+calls emit no Run events. Installing the observer on a durable host does not change Code Mode's
+deployment class or add inner-call canonical evidence.
+
 ## 9.2 Page capture and the PageCapture port
 
 Page capture renders one page — a navigated https URL or supplied HTML — in a managed headless
@@ -544,7 +551,9 @@ default and are excluded from ordinary span attributes.
   resource on success, failure, timeout, and interruption.
 - **CAP-016**: Code Mode applies one byte budget and redaction policy to all model-visible output,
   including the final result, captured logs, and thrown values. Intermediate results never
-  leave a pass implicitly.
+  leave a pass implicitly. The explicitly installed trusted in-process observer may receive live
+  failure Causes, never declared values or result payloads, and is neither persisted nor
+  automatically exported through telemetry (RUN-036).
 - **CAP-017**: Budget snapshots are cache-aware and context-aware: `UsageTotals` and
   `UsageDelta` carry cache-read and cache-write input tokens distinctly (with `inputTokens`
   remaining the total), and totals expose the most recent call's input/output tokens as the

@@ -273,6 +273,16 @@ behavior; typed handler failures stay typed; approval or policy denial prevents 
 budget exhaustion prevents the next call; sequential identities are deterministic; and
 non-allowlisted or sanitized-name collision cases fail closed.
 
+The trusted Tool failure observer intentionally distinguishes direct, started programmatic, and
+programmatic preflight failures (RUN-036). Focused tests cover its taxonomy and exclusions, Cause
+and Reason fidelity, raw identity correlation, at-most-once attempt delivery, isolated
+observer/reporter defects, interruption and permit ownership, UTF-8 message bounds, and secret
+sentinels on automatic export and durable records. Compile-time proofs retain the inferred
+`run`/`stream`/`start` error and requirement channels. Durable tests prove construction-time
+capture and settled-call replay exclusion, and one composition test per host proves the option.
+The Code Mode regression observes an inner Handler failure while the outer Run completes.
+No durable transition is added, so this seam does not duplicate the full crash matrix.
+
 ## 8.2 Pull-request work-order evidence
 
 The private `examples/pr-work-orders` leaf runs one work order against a
@@ -452,7 +462,9 @@ Successful task results survive another task's failure; a failed task is never c
   executable fixture for the full framework API; its ordinary suite is deterministic and
   offline, while live provider profiles are opt-in.
 - **TEST-015**: Every `CodeExecutor` adapter passes the shared executor conformance suite, and
-  direct versus programmatic invocation of the same Tool is observably equivalent.
+  direct versus programmatic invocation of the same Tool is observably equivalent except for
+  the documented broker failure projection and the intentionally different trusted observer
+  shapes and exclusions in RUN-036.
 - **TEST-016**: The engine's final-output path is exercised against a live-shaped LanguageModel
   substitute that derives its responses only from the model-visible request (prompt text,
   advertised Schemas and Tools), never from test-known expected values. This lets offline suites catch

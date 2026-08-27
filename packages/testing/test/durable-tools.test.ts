@@ -4,6 +4,8 @@ import {
   DurableStepError,
   RunContextPreparation,
   ToolExecutionClass,
+  toolFailureObserverLayer,
+  type ToolFailureObservation,
   type RunToolAuthorizationDecision,
   type RunToolAuthorizationRequest,
 } from "@effect-agent/engine";
@@ -433,6 +435,191 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 };
 
 layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknown)", (it) => {
+  it.effect(
+    "RUN-036 captures the host observer for fresh and replacement Attempts and skips settled replay",
+    () => {
+      const observations: Array<ToolFailureObservation> = [];
+      const ambient: Array<ToolFailureObservation> = [];
+      const observerLayer = toolFailureObserverLayer({
+        observe: (observation) =>
+          Effect.sync(() => {
+            observations.push(observation);
+          }),
+      });
+      const ambientLayer = toolFailureObserverLayer({
+        observe: (observation) =>
+          Effect.sync(() => {
+            ambient.push(observation);
+          }),
+      });
+      const Failed = Tool.make("failed", {
+        parameters: Schema.Struct({ ref: Schema.String }),
+        success: Schema.String,
+        failure: Schema.Struct({ _tag: Schema.Literal("LookupFailure"), message: Schema.String }),
+        failureMode: "return",
+      });
+      const tools = Toolkit.make(Failed);
+      const definition = Agent.define("durable-observed-failure", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Use the lookup, then answer.",
+        toolkit: tools,
+        policy,
+      });
+      const starts: Array<string> = [];
+      const handlers = tools.toLayer({
+        failed: ({ ref }) =>
+          Effect.sync(() => {
+            starts.push(ref);
+          }).pipe(
+            Effect.andThen(
+              Effect.fail({ _tag: "LookupFailure" as const, message: "lookup unavailable" }),
+            ),
+          ),
+      });
+      return Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const freshModel = yield* makeScriptedModel((n) =>
+          n === 0
+            ? toolTurn(toolCall("fresh", "failed", { ref: "fresh" }))
+            : finalParts('{"answer":"fallback"}'),
+        );
+        const fresh = Agent.withModel(definition, freshModel.model);
+        yield* runtime.submit(
+          fresh,
+          { question: "lookup" },
+          submitOptions("observer-fresh", "fresh"),
+        );
+        const completed = yield* runtime
+          .processConversation(fresh, decodeConversationId("observer-fresh"))
+          .pipe(Effect.provide(Layer.merge(handlers, ambientLayer)));
+        expect(completed[0]?.outcome).toBe("completed");
+        expect(
+          observations.map((value) =>
+            value._tag === "ModelToolFailure" ? value.toolCallId : undefined,
+          ),
+        ).toEqual(["fresh"]);
+
+        const replacementModel = yield* makeScriptedModel((n) =>
+          n === 0
+            ? toolTurn(
+                toolCall("settled", "failed", { ref: "settled" }),
+                toolCall("open", "failed", { ref: "open" }),
+              )
+            : finalParts('{"answer":"recovered"}'),
+        );
+        const replacement = Agent.withModel(definition, replacementModel.model);
+        const conversationId = decodeConversationId("observer-replacement");
+        const receipt = yield* runtime.submit(
+          replacement,
+          { question: "lookup both" },
+          submitOptions(conversationId, "replacement"),
+        );
+        yield* armFailpoint("tools:after-prepared-append");
+        const interrupted = yield* runtime
+          .processConversation(replacement, conversationId)
+          .pipe(Effect.provide(Layer.merge(handlers, ambientLayer)), Effect.exit);
+        expect(failureTag(interrupted)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+        yield* runtime.runRecovery;
+        yield* runtime.resolveUnknown(
+          UnknownResolutionCommand.make({
+            submissionId: receipt.submissionId,
+            toolCallId: decodeToolCallId("settled"),
+            author: "operator",
+            reason: "Recovered external failure",
+            resolution: ResolutionCompletedWithResult.make({
+              result: { _tag: "LookupFailure", message: "already settled" },
+              isFailure: true,
+            }),
+          }),
+        );
+        yield* runtime.resolveUnknown(
+          UnknownResolutionCommand.make({
+            submissionId: receipt.submissionId,
+            toolCallId: decodeToolCallId("open"),
+            author: "operator",
+            reason: "No Handler started",
+            resolution: ResolutionNeverHappened.make(),
+          }),
+        );
+        const resumed = yield* runtime
+          .processConversation(replacement, conversationId)
+          .pipe(Effect.provide(Layer.merge(handlers, ambientLayer)));
+        expect(resumed[0]?.outcome).toBe("completed");
+        expect(starts).toEqual(["fresh", "open"]);
+        expect(
+          observations.map((value) =>
+            value._tag === "ModelToolFailure" ? value.toolCallId : undefined,
+          ),
+        ).toEqual(["fresh", "open"]);
+        expect(ambient).toEqual([]);
+        expect(
+          (yield* readLog(conversationId)).filter(
+            (envelope) => envelope.record.payload._tag === "ToolCallSettled",
+          ),
+        ).toHaveLength(2);
+      }).pipe(
+        Effect.provide(
+          DurableAgentRuntime.layerWithContext.pipe(
+            Layer.provideMerge(baseLayer),
+            Layer.provide(observerLayer),
+          ),
+          { local: true },
+        ),
+      );
+    },
+  );
+
+  it.effect("RUN-036 captured absence ignores an ambient worker observer", () =>
+    Effect.gen(function* () {
+      const observations: Array<ToolFailureObservation> = [];
+      const Failed = Tool.make("failed", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+        failure: Schema.String,
+        failureMode: "return",
+      });
+      const tools = Toolkit.make(Failed);
+      const scripted = yield* makeScriptedModel((n) =>
+        n === 0 ? toolTurn(toolCall("failed", "failed", {})) : finalParts('{"answer":"fallback"}'),
+      );
+      const agent = Agent.withModel(
+        Agent.define("observer-absent", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Try the lookup.",
+          toolkit: tools,
+          policy,
+        }),
+        scripted.model,
+      );
+      const runtime = yield* DurableAgentRuntime;
+      yield* runtime.submit(
+        agent,
+        { question: "lookup" },
+        submitOptions("observer-absent", "absent"),
+      );
+      const settlements = yield* runtime
+        .processConversation(agent, decodeConversationId("observer-absent"))
+        .pipe(
+          Effect.provide(
+            Layer.merge(
+              tools.toLayer({ failed: () => Effect.fail("unavailable") }),
+              toolFailureObserverLayer({
+                observe: (observation) =>
+                  Effect.sync(() => {
+                    observations.push(observation);
+                  }),
+              }),
+            ),
+          ),
+        );
+      expect(settlements[0]?.outcome).toBe("completed");
+      expect(observations).toEqual([]);
+    }),
+  );
+
   it.effect("splits a tool Turn into response, prepared, and results commits", () =>
     Effect.gen(function* () {
       yield* resetReconciler;

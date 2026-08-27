@@ -74,6 +74,14 @@ events. They do not participate in state transitions through arbitrary callbacks
 Steering, approval, follow-up, durable abort, and operator recovery are explicit command/service
 interfaces. Observation cannot secretly become control flow.
 
+The opt-in `RunToolFailureObserver` covers failures that become Tool results or broker outcomes,
+so they may never reach the application's ordinary Run failure boundary. It is a trusted local
+observation interface, not callback middleware: its closed `Effect<void>` returns no decision,
+has no typed failure channel, and cannot change a Tool result. Observer and reporter defects are
+isolated. Delivery runs inline under the existing Tool permit, so it consumes time and remains
+externally interruptible. The observer must not reenter the engine. Its live Causes never enter
+events, canonical records, or automatic telemetry; see [Tool failure observation](../spec/runtime#tool-failure-observation).
+
 ## Bounded concurrency
 
 Each complete Tool batch runs through finite `Semaphore` permits. Live progress may follow actual

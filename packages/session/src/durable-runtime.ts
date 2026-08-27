@@ -28,6 +28,7 @@ import {
 import {
   AgentChildPending,
   AgentRuntime,
+  CurrentToolFailureObserver,
   getToolExecutionClass,
   RunContextPreparation,
   RunContextPreparationPassthrough,
@@ -916,6 +917,9 @@ const make = Effect.gen(function* () {
   // exactly the pre-P7 service-possession boundary — and a host-supplied non-default Layer is
   // consulted fail-closed by observe, the admin operations, and the two resolution paths.
   const operationAuthorizer = yield* OperationAuthorizer;
+  // RUN-036: capture once with the runtime, including explicit absence. A worker caller's ambient
+  // observer must never replace this host choice on a fresh or replacement Attempt.
+  const toolFailureObserver = yield* CurrentToolFailureObserver;
 
   const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>): Effect.Effect<A, E> =>
     Effect.provideService(effect, Crypto.Crypto, crypto);
@@ -5115,7 +5119,9 @@ const make = Effect.gen(function* () {
       }
 
       const consume = Stream.runForEach(
-        AgentRuntime.stream(agent, submission.inputPayload, options),
+        AgentRuntime.stream(agent, submission.inputPayload, options).pipe(
+          Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
+        ),
         (event) => halt(handleEvent(event)),
       ).pipe(Effect.as({ _tag: "run" as const }));
 

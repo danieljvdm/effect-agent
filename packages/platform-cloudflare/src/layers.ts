@@ -1,6 +1,14 @@
 import { ConversationId } from "@effect-agent/core";
-import type { RunContextPreparation, RunCostEstimator } from "@effect-agent/engine";
-import { RunContextPreparationPassthrough } from "@effect-agent/engine";
+import type {
+  RunContextPreparation,
+  RunCostEstimator,
+  RunToolFailureObserver,
+} from "@effect-agent/engine";
+import {
+  CurrentToolFailureObserver,
+  RunContextPreparationPassthrough,
+  toolFailureObserverLayer,
+} from "@effect-agent/engine";
 import {
   AgentBindingResolver,
   DurableAgentRuntime,
@@ -82,6 +90,8 @@ export interface CloudflareDurableRuntimeOptions {
   readonly abortPollInterval?: number | undefined;
   /** Deployment-owned pricing authority used by durable cost budgets and settlements. */
   readonly estimateCostMicrousd?: RunCostEstimator | undefined;
+  /** Closed trusted Tool failure reporting. Omission masks ambient observers at construction. */
+  readonly toolFailureObserver?: RunToolFailureObserver | undefined;
   /** Milliseconds; default 25. */
   readonly observationPollInterval?: number | undefined;
   /** Bytes; default just under the 2 MB platform value limit. */
@@ -382,6 +392,10 @@ export class CloudflareDurableRuntime {
           options.operationAuthorizer === undefined
             ? Layer.empty
             : operationAuthorizerLayer(options.operationAuthorizer);
+        const observerLayer =
+          options.toolFailureObserver === undefined
+            ? Layer.succeed(CurrentToolFailureObserver)(undefined)
+            : toolFailureObserverLayer(options.toolFailureObserver);
         const bindingResolverLayer = Layer.effect(AgentBindingResolver)(
           Effect.map(
             resolveBindings(options.bindings, { ctx, env, conversationId, producerId }),
@@ -413,6 +427,7 @@ export class CloudflareDurableRuntime {
               runtimeFailpointLayer,
               reconcilerLayer,
               authorizerLayer,
+              observerLayer,
               runContextLayer,
               BrowserCrypto.layer,
             ),

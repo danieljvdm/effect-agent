@@ -31,6 +31,10 @@ Owns the one ephemeral interpreter, Turn loop, Effect AI Response reduction, Too
 policy enforcement, semantic events, and narrow `RunOptions` seams.
 
 Exports include `AgentRuntime`, `DetachedRun`, `RunOptions`, and the operational hook interfaces.
+`CurrentToolFailureObserver`, `toolFailureObserverLayer`, `RunToolFailureObserver`, and
+`ToolFailureObservation` provide the opt-in trusted local interface for non-propagating Tool
+failures. The default is absent, installation is service-only, and observations are never
+persisted or automatically exported. See [Tool failure observation](../spec/runtime#tool-failure-observation).
 
 ### `@effect-agent/capabilities`
 
@@ -68,6 +72,8 @@ the run journal, and the `DurableAgentRuntime` coordinator (Receipt, Attempt, Se
 the conversation-keyed `awaitProgress` boundary that subscribes before its authoritative canonical
 read. It
 depends on `@effect-agent/engine` to drive the interpreter through its public seams.
+The coordinator captures the Tool failure observer at construction and explicitly provides it to
+fresh and replacement Attempts. Already-settled calls injected on resume bypass observation.
 It also owns the durable Subagent protocol: the requested/started/joined/lineage record
 Schemas, the child budget reservation and `waitingForChild` ledger operations, and the
 host-supplied `AgentBindingResolver` port for exact-digest Binding resolution.
@@ -96,6 +102,8 @@ ownership drain, Agent Binding registration for durable workers
 roster fails every claim closed), and the `NodeDurableHost` startup gates (storage compatibility,
 recovery before admission) and shutdown order (close admission → release ownership → close
 storage). It is a Layer-assembly library, not an application entrypoint.
+`NodeDurableRuntimeOptions.toolFailureObserver` installs the engine's closed trusted observer in
+that durable coordinator; it is not a serialized configuration value.
 
 ### `@effect-agent/storage-cloudflare`
 
@@ -139,6 +147,8 @@ port and `browserRunInteractiveHostLayer` for host-only Live View, handoff, reda
 identity, and explicit cleanup by identity. Both require `BrowserRunInteractiveBinding`; neither
 adds a registry, execution reconnect, or durable browser state.
 This is a Layer-assembly library, not an application entrypoint.
+`CloudflareDurableRuntimeOptions.toolFailureObserver` installs the same closed trusted observer
+for the Object's coordinator. It adds no journal data or Code Mode durability claim.
 
 ### `@effect-agent/pr-review`
 
