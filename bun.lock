@@ -333,6 +333,7 @@
         "@effect-agent/pr-review": "workspace:*",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-node": "catalog:",
+        "diff": "catalog:",
         "effect": "catalog:",
       },
       "devDependencies": {
@@ -488,6 +489,7 @@
     "ai": "7.0.42",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
+    "diff": "8.0.4",
     "effect": "4.0.0-rc.111",
     "effect-cf": "0.37.0",
     "esbuild": "0.28.1",

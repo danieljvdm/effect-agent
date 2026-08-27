@@ -1,5 +1,5 @@
 name: "Effect Agent PR Review"
-description: "Run one bounded parallel review wave and publish its validated findings to GitHub."
+description: "Investigate a pull request independently, verify its findings, and publish one review."
 branding:
   icon: "eye"
   color: "purple"
@@ -19,11 +19,11 @@ inputs:
     required: false
     default: "github-actions[bot]"
   mode:
-    description: 'Scope policy: "auto", "incremental", or "full".'
+    description: 'Scope policy: "auto", "incremental", or "full". Incremental review fails closed after target merge-base movement; use full to establish a new baseline.'
     required: false
     default: "auto"
   command:
-    description: "Optional raw collaborator command. Accepts @effect-agent review, @effect-agent review full, and the legacy slash forms."
+    description: "Optional raw collaborator command. Accepts @effect-agent review or @effect-agent review full, with surrounding whitespace ignored."
     required: false
   comment-id:
     description: "Issue comment ID for a manual command. Required when command is set so the action can acknowledge it with an eyes reaction."
@@ -43,7 +43,7 @@ inputs:
   effort:
     description: 'Reasoning effort: "low", "medium", "high", or "xhigh".'
     required: false
-    default: "medium"
+    default: "high"
   guidance-file:
     description: "Optional committed repository guidance file."
     required: false
@@ -69,6 +69,8 @@ outputs:
     description: "Estimated model cost in US dollars when the configured model has known pricing."
   blocking-findings:
     description: "Number of published blocking findings."
+  unresolved-change-requests:
+    description: "Trusted earlier change requests still awaiting maintainer dismissal. These fail the action even when no new blocker is found."
   review-url:
     description: "URL of the published review."
 runs:

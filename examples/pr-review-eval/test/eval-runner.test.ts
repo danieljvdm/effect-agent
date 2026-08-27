@@ -6,9 +6,11 @@ import {
   ReviewChange,
   ReviewOutcome,
   ReviewReport,
+  type ReviewRepository,
   ReviewRequest,
 } from "@effect-agent/pr-review";
 import { ScriptedModel } from "@effect-agent/testing";
+import { OpenAiClient } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -16,8 +18,10 @@ import {
   Effect,
   Fiber,
   FileSystem,
+  Layer,
   Option,
   PlatformError,
+  Redacted,
   Ref,
   Schema,
   type Scope,
@@ -25,6 +29,7 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import { Model } from "effect/unstable/ai";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import {
   decodeObservationLines,
@@ -123,36 +128,37 @@ describe("PR-review model eval", () => {
   it.effect("replays the real reviewer and round-trips its JSONL observation", () =>
     Effect.gen(function* () {
       const suite = yield* makeSuite();
-      const model = Model.make(
-        "scripted",
-        "eval",
-        ScriptedModel.layer([
-          {
-            _tag: "Stream",
-            parts: [
-              { type: "text-start", id: "review" },
-              {
-                type: "text-delta",
-                id: "review",
-                delta:
-                  '{"summary":"One blocker.","findings":[{"path":"src/read.ts","line":1,"severity":"blocking","category":"correctness","title":"Optional value is dereferenced","body":"Calling read without a value now throws."}]}',
-              },
-              { type: "text-end", id: "review" },
-              {
-                type: "finish",
-                reason: "stop",
-                usage: {
-                  inputTokens: { total: 10, uncached: 10, cacheRead: 0, cacheWrite: 0 },
-                  outputTokens: { total: 4 },
+      const scripted = yield* Layer.build(
+        ScriptedModel.layer(
+          [{ findings: [] }, { findings: [] }, { decisions: [], additionalFindings: [] }].map(
+            (params) => ({
+              _tag: "Stream",
+              parts: [
+                {
+                  type: "tool-call",
+                  id: "review",
+                  name: "submit_review",
+                  params: {
+                    ...params,
+                  },
                 },
-              },
-            ],
-            termination: { _tag: "Complete" },
-          },
-        ]),
+                {
+                  type: "finish",
+                  reason: "tool-calls",
+                  usage: {
+                    inputTokens: { total: 10, uncached: 10, cacheRead: 0, cacheWrite: 0 },
+                    outputTokens: { total: 4 },
+                  },
+                },
+              ],
+              termination: { _tag: "Complete" },
+            }),
+          ),
+        ),
       );
+      const model = Model.make("scripted", "eval", Layer.succeedContext(scripted));
       const reviewer = makeReviewer({ model });
-      const variant: EvalVariant<never> = {
+      const variant: EvalVariant<ReviewRepository> = {
         configuration: configuration("scripted"),
         review: (input) =>
           reviewer.review(input).pipe(
@@ -173,9 +179,7 @@ describe("PR-review model eval", () => {
       expect(observations[0]?.runnerVersion).toBe("0.1.1");
       expect(observations[0]?.result._tag).toBe("Succeeded");
       if (observations[0]?.result._tag === "Succeeded") {
-        expect(observations[0].result.outcome.report.findings[0]?.title).toBe(
-          "Optional value is dereferenced",
-        );
+        expect(observations[0].result.outcome.report.findings).toEqual([]);
       }
 
       const fs = yield* FileSystem.FileSystem;
@@ -201,10 +205,51 @@ describe("PR-review model eval", () => {
         guidance: "  Keep the public error channel typed.  ",
       });
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
-      expect(variant.configuration.reviewerProfile).toBe("single-pass-v1");
+      expect(variant.configuration.reviewerProfile).toBe("investigated-review-v1");
       expect(variant.configuration.guidanceDigest).toBe(
         yield* digestGuidance("Keep the public error channel typed."),
       );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("records actionable AI error categories without provider payloads or credentials", () =>
+    Effect.gen(function* () {
+      const suite = yield* makeSuite();
+      const variant = yield* makeCurrentOpenAiVariant({
+        id: Schema.decodeSync(EvalVariantId)("provider-failure"),
+        model: "gpt-5.6-sol",
+        reasoningEffort: "medium",
+      });
+      const privateText = "private-source-and-provider-payload";
+      const client = HttpClient.make((request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(
+              JSON.stringify({ error: { type: "invalid_request_error", message: privateText } }),
+              { status: 400, headers: { "content-type": "application/json" } },
+            ),
+          ),
+        ),
+      );
+      const observations = yield* runEvalSuite(suite, [variant], {
+        trials: 1,
+        concurrency: 1,
+        caseIds: [],
+      }).pipe(
+        Effect.provide(
+          OpenAiClient.layer({ apiKey: Redacted.make("private-api-key") }).pipe(
+            Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
+          ),
+        ),
+      );
+      expect(observations[0]?.result).toEqual({
+        _tag: "Failed",
+        errorTag: "AiError/InvalidRequestError",
+        message: "AI failure; retryable=false",
+      });
+      expect(JSON.stringify(observations)).not.toContain(privateText);
+      expect(JSON.stringify(observations)).not.toContain("private-api-key");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -413,6 +458,7 @@ describe("PR-review model eval", () => {
           EvalReviewerFailure.make({
             errorTag: "RateLimitError",
             message: "Provider declined the trial",
+            estimatedCostMicrousd: 13,
           }),
       };
       const observations = yield* runEvalSuite(suite, [successful, failing], {
@@ -431,7 +477,8 @@ describe("PR-review model eval", () => {
           .every(
             (observation) =>
               observation.result._tag === "Failed" &&
-              observation.result.errorTag === "RateLimitError",
+              observation.result.errorTag === "RateLimitError" &&
+              observation.result.estimatedCostMicrousd === 13,
           ),
       ).toBe(true);
     }).pipe(Effect.provide(NodeServices.layer)),

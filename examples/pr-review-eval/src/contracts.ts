@@ -15,7 +15,7 @@ export const EvalRunnerVersion = Schema.String.check(
 export type EvalRunnerVersion = typeof EvalRunnerVersion.Type;
 
 export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.1.1");
-export const CURRENT_REVIEWER_PROFILE = "single-pass-v1";
+export const CURRENT_REVIEWER_PROFILE = "investigated-review-v1";
 
 export const EvalCaseId = BoundedIdentifier.pipe(
   Schema.brand("@effect-agent/example-pr-review-eval/EvalCaseId"),
@@ -59,6 +59,26 @@ export class EvalExpectedDefect extends Schema.Class<EvalExpectedDefect>(
   evidence: Schema.Array(EvalEvidence).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
 }) {}
 
+export class EvalRepositoryFile extends Schema.Class<EvalRepositoryFile>(
+  "@effect-agent/example-pr-review-eval/EvalRepositoryFile",
+)({
+  path: BoundedPath,
+  revision: Schema.Literals(["base", "head"]),
+  content: Schema.String.check(Schema.isMaxLength(200_000)),
+}) {}
+
+const EvalRepositorySnapshotUnsigned = Schema.Struct({
+  version: Schema.Literal(1),
+  files: Schema.Array(EvalRepositoryFile).check(Schema.isMaxLength(200)),
+});
+
+export class EvalRepositorySnapshot extends Schema.Class<EvalRepositorySnapshot>(
+  "@effect-agent/example-pr-review-eval/EvalRepositorySnapshot",
+)({
+  ...EvalRepositorySnapshotUnsigned.fields,
+  digest: EvalInputDigest,
+}) {}
+
 export const EvalCaseKind = Schema.Literals(["known-defects", "clean-control"]);
 export type EvalCaseKind = typeof EvalCaseKind.Type;
 
@@ -70,14 +90,19 @@ const EvalCaseFields = Schema.Struct({
   sourceUrl: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2_048))),
   inputDigest: EvalInputDigest,
   request: ReviewRequest,
+  repository: Schema.optionalKey(EvalRepositorySnapshot),
   expectedDefects: Schema.Array(EvalExpectedDefect).check(Schema.isMaxLength(12)),
 }).check(
   Schema.makeFilter(
     (evalCase) => {
       const defectIds = evalCase.expectedDefects.map((defect) => defect.id);
+      const repositoryKeys = (evalCase.repository?.files ?? []).map(
+        (file) => `${file.revision}\0${file.path}`,
+      );
       const admittedPaths = new Set(evalCase.request.changes.map((change) => change.path));
       return (
         new Set(defectIds).size === defectIds.length &&
+        new Set(repositoryKeys).size === repositoryKeys.length &&
         (evalCase.kind === "clean-control"
           ? evalCase.expectedDefects.length === 0
           : evalCase.expectedDefects.length > 0) &&
@@ -88,7 +113,7 @@ const EvalCaseFields = Schema.Struct({
     },
     {
       title:
-        "Defect IDs are unique, case kind matches expected defects, and evidence uses admitted paths",
+        "Defect IDs and repository files are unique, case kind matches expected defects, and evidence uses admitted paths",
     },
   ),
 );
@@ -133,6 +158,7 @@ export class EvalReviewerFailure extends Schema.TaggedError<EvalReviewerFailure>
   {
     errorTag: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
     message: Schema.NonEmptyString.check(Schema.isMaxLength(4_096)),
+    estimatedCostMicrousd: Schema.optionalKey(Schema.Natural),
   },
 ) {}
 
@@ -143,6 +169,7 @@ export class EvalTrialSucceeded extends Schema.TaggedClass<EvalTrialSucceeded>()
 export class EvalTrialFailed extends Schema.TaggedClass<EvalTrialFailed>()("Failed", {
   errorTag: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   message: Schema.NonEmptyString.check(Schema.isMaxLength(4_096)),
+  estimatedCostMicrousd: Schema.optionalKey(Schema.Natural),
 }) {}
 
 export const EvalTrialResult = Schema.Union([EvalTrialSucceeded, EvalTrialFailed]);
@@ -156,6 +183,7 @@ export class EvalObservation extends Schema.Class<EvalObservation>(
   caseId: EvalCaseId,
   caseVersion: Schema.Literal(1),
   inputDigest: EvalInputDigest,
+  repositoryDigest: Schema.optionalKey(EvalInputDigest),
   variant: EvalVariantConfiguration,
   trial: Schema.Int.check(Schema.isGreaterThan(0)),
   recordedAt: Schema.DateTimeUtcFromString,

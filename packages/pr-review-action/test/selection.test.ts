@@ -5,6 +5,7 @@ import {
   reviewModeFromCommand,
   reviewPauseMarker,
   selectReview,
+  unresolvedChangeRequestCount,
   type ReviewHistoryItem,
 } from "../src/selection.ts";
 
@@ -21,6 +22,7 @@ const item = (
   body: reviewMarker(automatic, completed),
   commitId: head,
   submittedAt: `2026-01-0${String(id)}T00:00:00Z`,
+  state: "COMMENTED",
   ...overrides,
 });
 
@@ -31,15 +33,21 @@ const pauseItem = (id: number, head: string, limit: number): ReviewHistoryItem =
   body: reviewPauseMarker(limit),
   commitId: head,
   submittedAt: `2026-01-0${String(id)}T00:00:00Z`,
+  state: "COMMENTED",
 });
 
 describe("GitHub review selection", () => {
-  it("PRR-007 trims manual commands without accepting trailing prose", () => {
+  it("PRR-007 trims manual commands without accepting prose or obsolete aliases", () => {
     expect(reviewModeFromCommand("@effect-agent review\r\n")).toBe("incremental");
     expect(reviewModeFromCommand("  @effect-agent review full\n")).toBe("full");
-    expect(reviewModeFromCommand("@effect-agent review please")).toBeUndefined();
-    expect(reviewModeFromCommand("/effect-agent review")).toBe("incremental");
-    expect(reviewModeFromCommand("/effect-agent review full")).toBe("full");
+    for (const command of [
+      "please @effect-agent review",
+      "@effect-agent review please",
+      "/effect-agent review",
+      "/effect-agent review full",
+    ]) {
+      expect(reviewModeFromCommand(command)).toBeUndefined();
+    }
   });
 
   it("PRR-006 reviews the initial head and one automatic follow-up, then pauses", () => {
@@ -118,6 +126,19 @@ describe("GitHub review selection", () => {
     ).toMatchObject({ _tag: "review", scope: "incremental", baseRevision: "head-2" });
   });
 
+  it("retains only trusted GitHub change requests that have not been dismissed", () => {
+    const history = [
+      item(1, "head-1", true, true, { state: "CHANGES_REQUESTED" }),
+      item(2, "head-2", false, true, { state: "DISMISSED" }),
+      item(3, "head-3", true, true, {
+        authorLogin: "someone-else",
+        state: "CHANGES_REQUESTED",
+      }),
+    ];
+
+    expect(unresolvedChangeRequestCount({ reviewAuthor: "effect-agent[bot]", history })).toBe(1);
+  });
+
   it("PRR-007 permits an explicit full review while automatic reviews are paused", () => {
     expect(
       selectReview({
@@ -159,6 +180,23 @@ describe("GitHub review selection", () => {
     ).toEqual({ _tag: "skip", reason: "head-already-reviewed" });
   });
 
+  it("PRR-006 keeps a failed or incomplete same-head attempt failing without retrying it", () => {
+    for (const body of [
+      `Review execution failed.\n\n${reviewMarker(true, false)}`,
+      `Review coverage is incomplete.\n\n${reviewMarker(true, false)}`,
+    ]) {
+      expect(
+        selectReview({
+          mode: "auto",
+          currentHead: "head-1",
+          reviewAuthor: "effect-agent[bot]",
+          automaticReviewLimit: 2,
+          history: [item(1, "head-1", true, false, { body })],
+        }),
+      ).toEqual({ _tag: "skip", reason: "head-review-incomplete" });
+    }
+  });
+
   it("PRR-006 counts failed automatic attempts but does not use them as baselines", () => {
     expect(
       selectReview({
@@ -183,6 +221,38 @@ describe("GitHub review selection", () => {
       automaticAttempts: 2,
       lastCompletedRevision: undefined,
     });
+  });
+
+  it("counts legacy v2 attempts and blockers without trusting them as complete baselines", () => {
+    const legacy = item(1, "head-1", true, true, {
+      body: "<!-- effect-agent-review:v2 automatic=true completed=true -->",
+      state: "CHANGES_REQUESTED",
+    });
+
+    expect(
+      selectReview({
+        mode: "auto",
+        currentHead: "head-2",
+        reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
+        history: [legacy],
+      }),
+    ).toMatchObject({ _tag: "review", scope: "full", automaticReviewsRemaining: 0 });
+    expect(
+      selectReview({
+        mode: "incremental",
+        currentHead: "head-2",
+        reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
+        history: [legacy],
+      }),
+    ).toEqual({ _tag: "skip", reason: "incremental-baseline-unavailable" });
+    expect(
+      unresolvedChangeRequestCount({
+        reviewAuthor: "effect-agent[bot]",
+        history: [legacy],
+      }),
+    ).toBe(1);
   });
 
   it("PRR-006 trusts only the terminal host marker", () => {

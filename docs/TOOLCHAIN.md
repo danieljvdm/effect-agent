@@ -83,7 +83,7 @@ packages/
   storage-cloudflare/   Durable Object SQLite persistence adapter and routed port protocol
   platform-node/        Class DN Node/SQLite Layer assembly and durable host
   platform-cloudflare/  Class DC Cloudflare Layer assembly (Conversation Objects, alarms)
-  pr-review/            Provider-neutral, single-pass pull-request review agent
+  pr-review/            Provider-neutral pull-request investigation and verification
   pr-review-action/     Private GitHub adapter for pr-review
   testing/              Scripted model, fixtures, and conformance test kit
 examples/

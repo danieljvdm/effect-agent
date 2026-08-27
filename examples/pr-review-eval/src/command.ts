@@ -69,7 +69,7 @@ const trials = Flag.integer("trials").pipe(
 const concurrency = Flag.integer("concurrency").pipe(
   Flag.withDefault(1),
   Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4 }))),
-  Flag.withDescription("Maximum live model calls, between 1 and 4."),
+  Flag.withDescription("Maximum concurrent reviewer invocations, between 1 and 4."),
 );
 const model = Flag.string("model").pipe(
   Flag.withDefault("gpt-5.6-sol"),
@@ -77,7 +77,7 @@ const model = Flag.string("model").pipe(
   Flag.withDescription("OpenAI model ID. Defaults to the current PR-review Action model."),
 );
 const effort = Flag.choice("effort", ["low", "medium", "high", "xhigh"]).pipe(
-  Flag.withDefault("medium"),
+  Flag.withDefault("high"),
   Flag.withDescription("Reasoning effort. Defaults to the current PR-review Action effort."),
 );
 const guidance = Flag.file("guidance").pipe(
