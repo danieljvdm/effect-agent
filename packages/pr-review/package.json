@@ -1,7 +1,7 @@
 {
   "name": "@effect-agent/pr-review",
-    "version": "0.1.0-beta.36",
-  "description": "A provider-neutral pull-request reviewer with independent investigation and source verification.",
+  "version": "0.1.0-beta.36",
+  "description": "A provider-neutral, source-backed pull-request reviewer.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -10,7 +10,8 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "NOTICE"
   ],
   "type": "module",
   "exports": {

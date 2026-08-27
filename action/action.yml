@@ -1,5 +1,5 @@
 name: "Effect Agent PR Review"
-description: "Investigate a pull request independently, verify its findings, and publish one review."
+description: "Review exact pull-request changes with repository context and publish one validated review."
 branding:
   icon: "eye"
   color: "purple"
