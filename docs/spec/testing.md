@@ -269,8 +269,11 @@ byte bound.
 
 Interactive browser tests prove policy decoding and refusal of unsupported `PublicWeb` before any
 provider operation through both the generic and host services. Exact-host tests preserve same-page
-navigation, listed third-party resources, handoff return, limits, and cleanup. These scripted tests
-do not certify a provider network boundary or successful public-web browsing.
+navigation, listed third-party resources, handoff return, limits, and cleanup. Unrestricted cases
+admit HTTP navigation, private-address redirects and resources, and preserve same-page host
+controls, concurrency, finite budgets, and finalizers on success, failure, defect, timeout, and
+interruption. Schema cases reject credentials and non-HTTP(S) navigation and observations.
+These scripted tests do not certify provider reachability or a network containment boundary.
 
 Broker semantics are asserted once against the engine seam: direct and programmatic invocation
 of the same Tool preserve parameter, handler, success, failure, requirement, and interruption

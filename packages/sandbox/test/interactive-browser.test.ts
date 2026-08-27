@@ -22,6 +22,7 @@ import {
   InteractiveBrowserPolicy,
   InteractiveBrowserPolicyDeniedError,
   InteractiveBrowserProtocolError,
+  InteractiveBrowserTargetUrl,
   InteractiveBrowserUnsupportedError,
   SandboxImplementation,
   type BrowserHandle,
@@ -45,6 +46,7 @@ describe("InteractiveBrowser schemas", () => {
     for (const network of [
       { _tag: "ExactHosts", allowedHosts: ["example.com", "example.com:8443"] },
       { _tag: "PublicWeb" },
+      { _tag: "Unrestricted" },
     ] satisfies ReadonlyArray<InteractiveBrowserNetworkPolicy>) {
       const policy = InteractiveBrowserPolicy.make({
         network,
@@ -61,6 +63,12 @@ describe("InteractiveBrowser schemas", () => {
     expect(BrowserNavigateRequest.make({ url: "https://example.com/" }).url).toBe(
       "https://example.com/",
     );
+    for (const url of ["http://example.com/", "https://example.org/", "http://127.0.0.1:8080/"]) {
+      expect(InteractiveBrowserTargetUrl.make(url)).toBe(url);
+      expect(BrowserNavigateRequest.make({ url }).url).toBe(url);
+      expect(BrowserNavigationResult.make({ url }).url).toBe(url);
+      expect(BrowserActionResult.make({ url }).url).toBe(url);
+    }
     expect(BrowserReadTextRequest.make({ selector: "main" }).selector).toBe("main");
     expect(BrowserFillRequest.make({ selector: "#q", value: "value" }).value).toBe("value");
     expect(BrowserClickRequest.make({ selector: "button" }).selector).toBe("button");
@@ -146,6 +154,7 @@ describe("InteractiveBrowser schemas", () => {
       },
       { ...valid, network: { _tag: "PublicWeb", allowedHosts: ["example.com"] } },
       { ...valid, network: { _tag: "PublicWeb", allowPrivate: true } },
+      { ...valid, network: { _tag: "Unrestricted", allowedHosts: ["example.com"] } },
       { ...valid, network: { _tag: "Unknown" } },
       { ...valid, maxActions: 0 },
       { ...valid, maxActions: 1_001 },
@@ -155,8 +164,21 @@ describe("InteractiveBrowser schemas", () => {
       { ...valid, maxReturnedBytes: 8 * 1024 * 1024 + 1 },
     ])
       expect(Schema.decodeUnknownExit(InteractiveBrowserPolicy)(value)._tag).toBe("Failure");
-    for (const value of [{ url: "http://example.com" }, { url: "https://u:p@example.com" }])
-      expect(Schema.decodeUnknownExit(BrowserNavigateRequest)(value)._tag).toBe("Failure");
+    for (const url of [
+      "https://u:p@example.com",
+      "http://u:p@example.com",
+      "file:///tmp/page",
+      "about:blank",
+      "javascript:alert(1)",
+      "data:text/html,hello",
+      "ftp://example.com/",
+      "/relative",
+      `https://example.com/${"a".repeat(8192)}`,
+    ]) {
+      expect(Schema.decodeUnknownExit(BrowserNavigateRequest)({ url })._tag).toBe("Failure");
+      expect(Schema.decodeUnknownExit(BrowserNavigationResult)({ url })._tag).toBe("Failure");
+      expect(Schema.decodeUnknownExit(BrowserActionResult)({ url })._tag).toBe("Failure");
+    }
     for (const value of [{ selector: "" }, { selector: "x".repeat(1_025) }])
       expect(Schema.decodeUnknownExit(BrowserClickRequest)(value)._tag).toBe("Failure");
     for (const value of [{ selector: "" }, { selector: "x".repeat(1_025) }])
@@ -168,9 +190,6 @@ describe("InteractiveBrowser schemas", () => {
     expect(
       Schema.decodeUnknownExit(BrowserTextResult)({ text: "x".repeat(8 * 1024 * 1024 + 1) })._tag,
     ).toBe("Failure");
-    expect(Schema.decodeUnknownExit(BrowserActionResult)({ url: "http://example.com" })._tag).toBe(
-      "Failure",
-    );
     for (const value of [{}, { fullPage: "true" }]) {
       expect(Schema.decodeUnknownExit(BrowserScreenshotRequest)(value)._tag).toBe("Failure");
     }

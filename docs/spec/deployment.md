@@ -547,6 +547,14 @@ expiry remain typed;
 uncertain actions are never retried or replayed. This capability has no durable session, registry,
 execution reconnect, or model Tool.
 
+`network: { _tag: "Unrestricted" }` opens the same scoped browser/context/page without URL/host
+allowlist enforcement. Agent navigation and URL observations accept credential-free HTTP and
+HTTPS through `InteractiveBrowserTargetUrl`; intercepted requests continue without a network
+policy check. There is no URL/host or private-network containment guarantee, including for
+redirects, page resources, and human navigation. The finite action, elapsed-time, and per-result
+byte limits, receipts, live view, handoff, handoff state, and close behavior remain unchanged.
+This explicit opt-out does not satisfy the stronger `PublicWeb` requirement or issue #207.
+
 `network: { _tag: "PublicWeb" }` fails with `InteractiveBrowserUnsupportedError`, `feature: "policy"`,
 before any binding operation. The adapter does not launch a browser, navigate a test URL, connect
 for execution, or issue a viewer capability to probe support. This refusal is deliberate. The
@@ -567,7 +575,7 @@ The current boundary is:
 | WebSockets and other channels          | No socket or non-HTTP traffic boundary is established by page request interception.                                                                                                                | Enforce the public-destination rules for secure sockets and disable other unsupported channels before traffic. |
 | Hosted viewer navigation               | Ordinary requests observed on the owned page use its interceptor, including during handoff. The viewer is a CDP capability and tab mode does not prevent bypass through other commands or targets. | Retain enforcement independently of viewer commands for the whole pass.                                        |
 
-Only the `ExactHosts` column describes a currently supported execution mode. It requires trusted
+Of the table's two columns, only `ExactHosts` describes a supported execution mode. It requires trusted
 pages and trusted operators. The adapter makes no claim that this mode confines hostile browser
 content or a viewer recipient. A host that requires the right-hand boundary must request
 `PublicWeb` and handle its typed refusal. No local IP blacklist, one-time DNS resolution, wildcard,

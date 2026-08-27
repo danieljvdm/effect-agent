@@ -1,6 +1,5 @@
 import { Context, Schema, type Effect, type Scope } from "effect";
 
-import { PageCaptureTargetUrl } from "./page-capture.ts";
 import type { PageScreenshotResult } from "./page-screenshot.ts";
 import { SandboxImplementation } from "./sandbox.ts";
 
@@ -11,6 +10,31 @@ const Selector = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 const FieldValue = Schema.String.check(Schema.isMaxLength(64 * 1024));
 const ScrollDelta = Schema.Int.check(Schema.isBetween({ minimum: -100_000, maximum: 100_000 }));
 const browserUrl = Reflect.get(globalThis, "URL");
+
+/** Absolute, bounded HTTP(S) navigation URL without embedded credentials. */
+export const InteractiveBrowserTargetUrl = Schema.NonEmptyString.check(
+  Schema.isMaxLength(8 * 1024),
+  Schema.makeFilter(
+    (value) => {
+      if (typeof browserUrl !== "function") return false;
+      try {
+        const url: unknown = Reflect.construct(browserUrl, [value]);
+        return (
+          typeof url === "object" &&
+          url !== null &&
+          (Reflect.get(url, "protocol") === "http:" || Reflect.get(url, "protocol") === "https:") &&
+          Reflect.get(url, "hostname") !== "" &&
+          Reflect.get(url, "username") === "" &&
+          Reflect.get(url, "password") === ""
+        );
+      } catch {
+        return false;
+      }
+    },
+    { title: "an absolute HTTP or HTTPS URL without embedded credentials" },
+  ),
+);
+export type InteractiveBrowserTargetUrl = typeof InteractiveBrowserTargetUrl.Type;
 
 /** Canonical HTTPS host authority, optionally carrying a non-default port. */
 export const InteractiveBrowserHost = Schema.NonEmptyString.check(
@@ -42,6 +66,7 @@ export type InteractiveBrowserHost = typeof InteractiveBrowserHost.Type;
  * PublicWeb requires connection-time public-address enforcement for all session
  * traffic, including human navigation. Adapters that cannot enforce it must fail
  * with InteractiveBrowserUnsupportedError before acquiring a browser.
+ * Unrestricted explicitly opts out of URL/host and private-network containment.
  */
 export const InteractiveBrowserNetworkPolicy = Schema.Union([
   Schema.TaggedStruct("ExactHosts", {
@@ -52,6 +77,7 @@ export const InteractiveBrowserNetworkPolicy = Schema.Union([
     ),
   }),
   Schema.TaggedStruct("PublicWeb", {}),
+  Schema.TaggedStruct("Unrestricted", {}),
 ]).pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
 export type InteractiveBrowserNetworkPolicy = typeof InteractiveBrowserNetworkPolicy.Type;
 
@@ -68,7 +94,7 @@ export class InteractiveBrowserPolicy extends Schema.Class<InteractiveBrowserPol
 
 export class BrowserNavigateRequest extends Schema.Class<BrowserNavigateRequest>(
   "BrowserNavigateRequest",
-)({ url: PageCaptureTargetUrl }) {}
+)({ url: InteractiveBrowserTargetUrl }) {}
 export class BrowserReadTextRequest extends Schema.Class<BrowserReadTextRequest>(
   "BrowserReadTextRequest",
 )({ selector: Schema.optionalKey(Selector) }) {}
@@ -92,13 +118,13 @@ export class BrowserScrollRequest extends Schema.Class<BrowserScrollRequest>(
 }) {}
 export class BrowserNavigationResult extends Schema.Class<BrowserNavigationResult>(
   "BrowserNavigationResult",
-)({ url: PageCaptureTargetUrl }) {}
+)({ url: InteractiveBrowserTargetUrl }) {}
 export class BrowserTextResult extends Schema.Class<BrowserTextResult>("BrowserTextResult")({
   text: BoundedText,
 }) {}
 /** Post-action URL observation; no provider session state crosses this boundary. */
 export class BrowserActionResult extends Schema.Class<BrowserActionResult>("BrowserActionResult")({
-  url: PageCaptureTargetUrl,
+  url: InteractiveBrowserTargetUrl,
 }) {}
 
 export class InteractiveBrowserPolicyDeniedError extends Schema.TaggedError<InteractiveBrowserPolicyDeniedError>()(
