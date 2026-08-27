@@ -121,6 +121,14 @@ Private source and raw live results are not committed. Expected defects are huma
 invariants with bounded evidence, not strings that model output must copy. Human adjudication is
 the initial source of truth.
 
+Public historical cases preserve the reviewed head and comparison base, source attribution, and
+the complete patches selected for that input. Other changed paths remain explicitly unreviewed;
+an unavailable or oversized patch cannot contribute an expected defect. This partial input must
+not be described as the full input seen by the original human reviewer. Provenance distinguishes
+retained defects from introduced regressions. Human review links and proposed reference labels
+stay outside the `ReviewRequest` sent to the model. Comment counts do not establish defect counts,
+and proposed labels require human review before supporting a quality claim.
+
 The primary quality claim concerns the first trial. Later identical trials measure instability and
 cannot convert a first-trial miss into a pass. The leaf may report recall, precision, later-only
 expected blockers, typed failures, tokens, cost when supplied by the host, and elapsed time. It does

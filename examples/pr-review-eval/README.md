@@ -19,6 +19,22 @@ under `results/`; both directories are ignored in this workspace.
 `fixtures/smoke-suite.json` is a synthetic known-defect/control pair for exercising the bench. It
 is not a model-quality benchmark.
 
+`fixtures/effect-v3-type-tests-suite.json` contains a public case from
+[Effect v3 PR #4467](https://github.com/Effect-TS/effect/pull/4467#pullrequestreview-2621463670).
+It preserves 16 complete patches from the reviewed revision, covering eight reviewed TypeScript
+files and their predecessors, and lists the other 113 changed paths as unreviewed. The original
+review has 13 inline comments. Three defects supply proposed reference labels; coverage advice,
+cleanup, and discussion do not become expected defects. One reference defect is a retained
+readonly-test flaw, not a regression introduced by this PR. The oversized Schema test patch is
+unavailable and its missing-assertion finding is excluded. The PR description is omitted because
+its historical text was not frozen.
+
+This case is a partial input from the original revision, not a replay of everything the human
+reviewer saw. Review the proposed labels before making a quality claim, and adjudicate model
+findings through the existing judgment workflow. No live results or quality measurements are
+included. The case's provenance and evidence link the human feedback and fixes. Its source is
+covered by the adjacent [Effect MIT license](fixtures/effect-v3-type-tests.LICENSE).
+
 Validate a suite without credentials or model calls:
 
 ```sh
@@ -27,6 +43,13 @@ vp run pr-review-eval -- \
 ```
 
 Use `fixtures/smoke-suite.json` in place of the private path for a credential-free smoke check.
+
+Validate the public Effect case with the same offline command:
+
+```sh
+vp run pr-review-eval -- \
+  --cases fixtures/effect-v3-type-tests-suite.json validate
+```
 
 ## Live trials
 
