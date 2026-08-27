@@ -333,6 +333,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       expect(logTags(records)).toEqual([
         "ConversationCreated",
         "UserInputRecorded",
+        "RunStarted",
         "ModelResponseRecorded",
         "ToolApprovalRequested",
       ]);

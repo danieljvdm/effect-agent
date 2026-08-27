@@ -104,21 +104,22 @@ completion preserves the honest `budget-exhausted` metadata. Fail mode rejects t
 its Handler starts. Mixed batches fail before any Handler starts.
 
 `maxDuration` bounds wall clock for one logical Run, not one process Attempt and not cumulative
-worker-active time. In the durable assemblies the clock starts when the Submission's initial
-`UserInputRecorded` record becomes canonical: admission and queue delay precede the Run clock,
-while process loss, recovery gaps, approval suspension, unknown-outcome suspension, and
-`waitingForChild` suspension do not reset or pause it. The coordinator derives one absolute
-deadline from that canonical timestamp and supplies it to every replacement Attempt; the engine
-accepts only a deadline that preserves or tightens its fresh policy allowance (RUN-030).
+worker-active time. In the durable assemblies the coordinator appends one canonical `RunStarted`
+record before the first engine execution. Its envelope timestamp is the logical start and its
+payload fixes the Run ID and admitted duration allowance. Admission, queue delay, and binding-free
+input recovery precede the Run clock, while process loss, recovery gaps, approval suspension,
+unknown-outcome suspension, and `waitingForChild` suspension do not reset or pause it. The
+coordinator derives one absolute deadline from that timestamp plus the stored allowance and
+supplies it to every replacement Attempt; the engine accepts only a deadline that preserves or
+tightens its fresh policy allowance (RUN-030).
 An ordinary replacement Attempt whose deadline is already expired fails before subscribing to
 unresolved Tool or model execution; deadline interruption then handles only future expiry.
-If the deadline expires while attached children are suspended, the coordinator still completes
-the mandatory joins of children whose Settlements are already canonical before failing the
-parent. The coordinator supplies the exact still-open child Call IDs, the engine verifies they
-are every and only the resumed delegation calls, and duration interruption is restored around
-the continuation after those joins. That recovery cleanup authorizes no new child, ordinary
-Tool, or model execution and cannot turn the expired Run into success, including when the
-deadline expires during the post-join continuation (SUB-019).
+The coordinator also supplies the `RunStarted` record timestamp separately from the deadline, so
+elapsed status reports actual wall-clock age when a deadline is tightened or an Attempt is
+replaced. Before invoking an expired Run, the coordinator may use its canonical attachment and
+Settlement evidence to commit mandatory settled-child joins and release their reservations. That
+cleanup happens outside the interpreter. The engine has no past-deadline execution capability and
+always blocks ordinary Tools, new children, and model continuation after expiry (SUB-019).
 
 Note on durable Attempts: the batch-resume seam counts Tool Calls from the resumed batch onward,
 so `maxToolCalls` is enforced per Attempt under the durable coordinator. This is existing,
@@ -695,12 +696,14 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   budget-exhausted Runs carry none; invalid values fail typed, and consumers never infer a
   disposition from prose or Tool output.
 - **RUN-030:** `maxDuration` is one wall-clock allowance per logical Run. DN and DC derive its
-  absolute deadline from the first canonical input record and preserve that deadline across
-  Attempt replacement and every durable suspension; admission and queue delay are excluded, and
-  no Run option may widen the Definition's fresh duration allowance. Already-settled attached
-  children still join as mandatory recovery cleanup before the expired parent fails. The engine
-  verifies the coordinator's exact open delegation Call IDs and restores duration interruption
-  before continuation, without authorizing a new model, ordinary Tool, or child execution.
+  absolute deadline from one canonical `RunStarted` record whose timestamp fixes the logical start
+  and whose payload stores the admitted duration allowance. They preserve that deadline across
+  Attempt replacement and every durable suspension; admission, queue delay, and binding-free input
+  recovery are excluded, and no Run option may widen the Definition's fresh duration allowance.
+  The record timestamp separately fixes elapsed-time reporting, so a tightened deadline does not
+  fabricate elapsed time. The coordinator commits verified settled-child joins before invoking an
+  expired Run. The engine exposes no past-deadline capability and authorizes no model, ordinary
+  Tool, or child execution after expiry.
 - **RUN-031:** Optional host Tool authorization runs for each model-declared call in the complete
   still-executable application batch before durable preparation or any Handler. Fresh and
   durable-resumed calls present the same canonical Run/Turn/input authority and stable call

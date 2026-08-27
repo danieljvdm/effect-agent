@@ -357,6 +357,55 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
     );
 
     it.effect(
+      "RUN-030: process loss on either side of Run-start append preserves one canonical clock",
+      () =>
+        Effect.forEach(
+          ["run:before-start-append", "run:after-start-append"] as const,
+          (killAt) =>
+            withCrashSite((site) =>
+              Effect.gen(function* () {
+                const conversation = `conversation-${killAt}`;
+                const key = "run-clock";
+                expectKilled(
+                  yield* runWorkerToExit({
+                    db: site.db,
+                    scenario: "run",
+                    conversation,
+                    key,
+                    killAt,
+                    leaseMillis: CHILD_LEASE_MS,
+                  }),
+                );
+                yield* waitOutChildLease;
+                yield* withHost(
+                  site.db,
+                  Effect.gen(function* () {
+                    const snapshot = yield* lookupByKey(conversation, key);
+                    const before = (yield* readLog(conversation)).filter(
+                      ({ record }) => record.payload._tag === "RunStarted",
+                    );
+                    expect(before).toHaveLength(killAt === "run:after-start-append" ? 1 : 0);
+                    expect(
+                      (yield* drainPlanner(conversation, CHILD_ANSWER)).map(
+                        (entry) => entry.outcome,
+                      ),
+                    ).toEqual(["completed"]);
+                    const after = (yield* readLog(conversation)).filter(
+                      ({ record }) => record.payload._tag === "RunStarted",
+                    );
+                    expect(after).toHaveLength(1);
+                    if (before.length > 0) expect(after).toEqual(before);
+                    yield* assertConvergence(conversation, [snapshot.submissionId]);
+                  }),
+                );
+              }),
+            ),
+          { discard: true },
+        ),
+      30_000,
+    );
+
+    it.effect(
       "kill at input:after-canonical-append: the marker is repaired and FIFO holds for the queued Submission",
       () =>
         withCrashSite((site) =>
@@ -473,6 +522,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(logTags(committed)).toEqual([
                   "ConversationCreated",
                   "UserInputRecorded",
+                  "RunStarted",
                   "ModelResponseRecorded",
                   "ToolCallSettled",
                 ]);
@@ -1036,6 +1086,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(logTags(committed)).toEqual([
                   "ConversationCreated",
                   "UserInputRecorded",
+                  "RunStarted",
                   "ModelResponseRecorded",
                 ]);
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(0);

@@ -358,6 +358,7 @@ describe("NodeDurableRuntime", () => {
             expect(yield* readLogTags(conversation)).toEqual([
               "ConversationCreated",
               "UserInputRecorded",
+              "RunStarted",
               "ModelResponseRecorded",
               "RunCompleted",
               "SubmissionSettled",

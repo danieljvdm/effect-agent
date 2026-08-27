@@ -1149,6 +1149,7 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
           expect(logTags(records)).toEqual([
             "ConversationCreated",
             "UserInputRecorded",
+            "RunStarted",
             "ModelResponseRecorded",
             "ToolCallPrepared",
             "ToolStepSettled",

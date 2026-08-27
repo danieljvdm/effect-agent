@@ -38,6 +38,7 @@ import {
   ProducerEpoch,
   ReconciliationDecision,
   RecordEnvelope,
+  RunStartedRecord,
   RecoverySnapshot,
   replayConversation,
   replayConversationFromCheckpoint,
@@ -112,6 +113,17 @@ const decodeEnvelope = (sequence: number, record: RecordEnvelope): CanonicalReco
   });
 
 describe("session canonical contracts", () => {
+  it("round-trips the immutable Run duration and rejects invalid allowances", () => {
+    const encoded = { _tag: "RunStarted", runId: "duration-run", maxDurationMillis: 30_000 };
+    const start = Schema.decodeUnknownSync(RunStartedRecord)(encoded);
+    expect(Schema.encodeSync(RunStartedRecord)(start)).toEqual(encoded);
+    for (const maxDurationMillis of [0, -1, NaN, Infinity, -Infinity, "30000", undefined]) {
+      expect(
+        Schema.decodeUnknownExit(RunStartedRecord)({ ...encoded, maxDurationMillis })._tag,
+      ).toBe("Failure");
+    }
+  });
+
   const createdRecord = decodeRecord("record-created", {
     _tag: "ConversationCreated",
     agentId: "travel-planner",

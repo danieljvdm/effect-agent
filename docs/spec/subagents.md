@@ -604,11 +604,22 @@ open budget reservation, but holds no worker, provider, model, Tool, or child-co
 It does not pause the parent logical Run's wall-clock `maxDuration` (RUN-030). Child Settlement
 durably wakes the parent. The child uses its separate Conversation lane. S2 MUST prove this
 suspension/wakeup path at the smallest worker-pool size. If the parent deadline has expired by
-then, its replacement Attempt may complete only the already-settled child join and reservation
-release before recording the typed duration failure. The coordinator names the exact open child
-Call IDs, the engine rejects a cleanup claim covering any ordinary or non-open call, and duration
-interruption resumes around the post-join continuation; it may not invoke another model,
-ordinary Tool, or child.
+then, the coordinator completes only existing child obligations before recording the typed
+duration failure. A reservation with no request or authoritative `notAdmitted` evidence releases
+its unused allocation. An already-admitted child with a lost start link gets the same link,
+materialization, and readiness repaired; an `indeterminate` admission stays pending. Binding-free
+recovery follows the same rules and cannot admit a new child after expiry. The coordinator verifies the pending call,
+canonical request/start, reservation and attachment identities, and the child's canonical lineage
+and Settlement. It joins this verified subset even when ordinary unresolved calls share the batch.
+No application handler or result projector runs during expired cleanup: the parent Tool result is
+the bounded `SubagentParentDurationExceeded` failure, while `SubagentJoined` preserves the child's
+actual outcome and result digest. The allocation is conservatively accounted with
+`duration-conservative`, then released through the existing idempotent release protocol.
+Child cleanup precedes making an uncertain ordinary call Unknown, because an Unknown lane cannot
+be claimed for cleanup. The ordinary call remains unresolved under the normal recovery rules. There is no public
+engine option that grants execution after expiry. A cleanup failure or interruption leaves the
+canonical join and release progress available for the next Attempt; no new child, ordinary Tool,
+model continuation, or successful parent completion is authorized.
 
 Joining is also recoverable:
 
