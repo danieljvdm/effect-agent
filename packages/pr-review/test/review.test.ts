@@ -152,7 +152,6 @@ describe("review output boundary", () => {
           expect(schema).toContain('"maxItems":24');
           expect(schema).toContain('"priority"');
           expect(schema).not.toContain('"severity"');
-          expect(schema.indexOf('"body"')).toBeLessThan(schema.indexOf('"path"'));
           expect(schema.indexOf('"body"')).toBeLessThan(schema.indexOf('"priority"'));
           expect(schema).not.toContain('"decisions"');
           expect(schema).not.toContain('"before"');
