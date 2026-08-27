@@ -466,6 +466,12 @@ subrequest use the immutable exact-host policy. Capacity refusal and remote expi
 uncertain actions are never retried or replayed. This capability has no durable session, registry,
 execution reconnect, or model Tool.
 
+`fill` replaces the value of input, textarea, and select controls. It focuses the element,
+invokes a callable `value` setter from the element's prototype chain, then dispatches bubbling
+`input` and `change` events. Bypassing instance setters lets controlled React fields detect the
+change through `onChange` and update component state. A missing selector match or an element
+without a callable prototype setter fails with `InteractiveBrowserActionError` for `fill`.
+
 Arbitrary CDP execution is intentionally absent. The pinned browser client cannot enforce an immutable
 session egress boundary, and Cloudflare's newer hostname-only guardrail cannot express the exact
 HTTPS-origin policy required by the portable contract. Request interception is not sufficient
