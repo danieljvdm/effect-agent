@@ -985,6 +985,89 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       }),
   );
 
+  it.effect("RUN-030: recovery rejects conflicting canonical Run starts before child cleanup", () =>
+    Effect.gen(function* () {
+      yield* clearFailpoint;
+      const runtime = yield* DurableAgentRuntime;
+      const ledger = yield* SubmissionLedger;
+      const store = yield* ConversationStore;
+      const harness = yield* makeSiblingHarnessWith(true, false);
+      const run = drive(harness);
+      const parent = yield* harness.submitParent("expired-conflicting-run-start", "parent");
+      const childConversationId = childConversationIdFor(parent.submissionId, DELEGATE_CALL);
+
+      const firstAttempt = yield* Effect.forkChild(run(parent.conversationId));
+      yield* TestClock.adjust(Duration.seconds(31));
+      expect(yield* Fiber.join(firstAttempt)).toEqual([]);
+      expect(yield* run(parent.conversationId)).toEqual([]);
+      expect((yield* run(childConversationId)).map((entry) => entry.outcome)).toEqual([
+        "completed",
+      ]);
+
+      const beforeRecords = yield* readLog(parent.conversationId);
+      const canonicalStart = beforeRecords.find(
+        ({ record }) => record.payload._tag === "RunStarted",
+      )?.record.payload;
+      if (canonicalStart?._tag !== "RunStarted") throw new Error("Expected RunStarted");
+      expect(payloadsOf(beforeRecords, "SubagentJoined")).toHaveLength(0);
+      expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
+        "reserved",
+      ]);
+      const beforeSnapshot = yield* ledger.loadRecoverySnapshot(
+        RecoverySnapshotRequest.make({ submissionId: parent.submissionId }),
+      );
+
+      const conflicting = ConversationStore.of({
+        ...store,
+        read: (request) =>
+          store.read(request).pipe(
+            Stream.map((envelope) =>
+              request.conversationId === parent.conversationId &&
+              envelope.record.payload._tag === "ConversationCreated"
+                ? {
+                    ...envelope,
+                    record: RecordEnvelope.make({
+                      ...envelope.record,
+                      payload: canonicalStart,
+                    }),
+                  }
+                : envelope,
+            ),
+          ),
+      });
+      const rejected = yield* Effect.exit(
+        DurableAgentRuntime.pipe(
+          Effect.flatMap((hostileRuntime) => hostileRuntime.runRecovery),
+          Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+          Effect.provideService(ConversationStore, conflicting),
+        ),
+      );
+      expect(failureTag(rejected)).toBe("RunJournalError");
+      if (Exit.isSuccess(rejected)) throw new Error("Expected conflicting recovery to fail");
+      expect(Option.getOrUndefined(Cause.findErrorOption(rejected.cause))).toMatchObject({
+        message: expect.stringContaining("conflicting start evidence"),
+      });
+
+      const afterSnapshot = yield* ledger.loadRecoverySnapshot(
+        RecoverySnapshotRequest.make({ submissionId: parent.submissionId }),
+      );
+      expect(afterSnapshot).toEqual(beforeSnapshot);
+      const afterRejected = yield* readLog(parent.conversationId);
+      expect(afterRejected).toEqual(beforeRecords);
+      expect(payloadsOf(afterRejected, "SubagentJoined")).toHaveLength(0);
+      expect(payloadsOf(afterRejected, "ToolCallUnknown")).toHaveLength(0);
+      expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
+        "reserved",
+      ]);
+
+      yield* runtime.runRecovery;
+      expect(payloadsOf(yield* readLog(parent.conversationId), "SubagentJoined")).toHaveLength(1);
+      expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
+        "released",
+      ]);
+    }),
+  );
+
   it.effect("RUN-030: expired cleanup rejects missing or mismatched canonical Tool identity", () =>
     Effect.gen(function* () {
       const store = yield* ConversationStore;

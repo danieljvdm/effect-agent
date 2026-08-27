@@ -1991,14 +1991,10 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const ensureRunStarted = Effect.fn("DurableAgentRuntime.ensureRunStarted")(function* (
-    ctx: AttemptAppendContext,
-    submission: SubmissionSnapshot,
-    maxDurationMillis: number,
-  ) {
-    const runId = runIdForSubmission(submission.submissionId);
+  const canonicalRunStartFromRecords = Effect.fn(
+    "DurableAgentRuntime.canonicalRunStartFromRecords",
+  )(function* (records: ReadonlyArray<CanonicalRecordEnvelope>, runId: RunId) {
     const recordId = runStartedRecordId(runId);
-    const records = yield* readAll(submission.conversationId);
     const starts = records.filter(
       ({ record }) => record.payload._tag === "RunStarted" && record.payload.runId === runId,
     );
@@ -2013,14 +2009,26 @@ const make = Effect.gen(function* () {
         message: `Run ${runId} has conflicting start evidence`,
       });
     }
+    return existing?.record;
+  });
+
+  const ensureRunStarted = Effect.fn("DurableAgentRuntime.ensureRunStarted")(function* (
+    ctx: AttemptAppendContext,
+    submission: SubmissionSnapshot,
+    maxDurationMillis: number,
+  ) {
+    const runId = runIdForSubmission(submission.submissionId);
+    const recordId = runStartedRecordId(runId);
+    const records = yield* readAll(submission.conversationId);
+    const existing = yield* canonicalRunStartFromRecords(records, runId);
     let start: RecordEnvelope;
-    if (existing !== undefined && existing.record.payload._tag === "RunStarted") {
-      if (existing.record.payload.maxDurationMillis !== maxDurationMillis) {
+    if (existing !== undefined && existing.payload._tag === "RunStarted") {
+      if (existing.payload.maxDurationMillis !== maxDurationMillis) {
         return yield* RunJournalError.make({
-          message: `Run ${runId} started with a ${existing.record.payload.maxDurationMillis}ms duration allowance; the replacement Binding supplies ${maxDurationMillis}ms`,
+          message: `Run ${runId} started with a ${existing.payload.maxDurationMillis}ms duration allowance; the replacement Binding supplies ${maxDurationMillis}ms`,
         });
       }
-      start = existing.record;
+      start = existing;
     } else {
       const executionStarted = records.some(
         ({ record: { payload } }) =>
@@ -6144,9 +6152,7 @@ const make = Effect.gen(function* () {
     ): Effect.fn.Return<"repaired" | "deferred" | "none" | "unknown", DurableWorkerFailure> {
       const submission = snapshot.submission;
       const runId = runIdForSubmission(submission.submissionId);
-      const start = records.find(
-        ({ record }) => record.recordId === runStartedRecordId(runId),
-      )?.record;
+      const start = yield* canonicalRunStartFromRecords(records, runId);
       if (
         start?.payload._tag === "RunStarted" &&
         start.payload.runId === runId &&
