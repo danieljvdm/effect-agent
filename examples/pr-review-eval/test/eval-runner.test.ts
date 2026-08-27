@@ -134,30 +134,28 @@ describe("PR-review model eval", () => {
       const suite = yield* makeSuite();
       const scripted = yield* Layer.build(
         ScriptedModel.layer(
-          [{ findings: [] }, { findings: [] }, { decisions: [], additionalFindings: [] }].map(
-            (params) => ({
-              _tag: "Stream",
-              parts: [
-                {
-                  type: "tool-call",
-                  id: "review",
-                  name: "submit_review",
-                  params: {
-                    ...params,
-                  },
+          [{ findings: [] }, { findings: [] }].map((params) => ({
+            _tag: "Stream",
+            parts: [
+              {
+                type: "tool-call",
+                id: "review",
+                name: "submit_review",
+                params: {
+                  ...params,
                 },
-                {
-                  type: "finish",
-                  reason: "tool-calls",
-                  usage: {
-                    inputTokens: { total: 10, uncached: 10, cacheRead: 0, cacheWrite: 0 },
-                    outputTokens: { total: 4 },
-                  },
+              },
+              {
+                type: "finish",
+                reason: "tool-calls",
+                usage: {
+                  inputTokens: { total: 10, uncached: 10, cacheRead: 0, cacheWrite: 0 },
+                  outputTokens: { total: 4 },
                 },
-              ],
-              termination: { _tag: "Complete" },
-            }),
-          ),
+              },
+            ],
+            termination: { _tag: "Complete" },
+          })),
         ),
       );
       const model = Model.make("scripted", "eval", Layer.succeedContext(scripted));
@@ -184,6 +182,7 @@ describe("PR-review model eval", () => {
       expect(observations[0]?.result._tag).toBe("Succeeded");
       if (observations[0]?.result._tag === "Succeeded") {
         expect(observations[0].result.outcome.report.findings).toEqual([]);
+        expect(observations[0].result.outcome.turns).toBe(2);
       }
 
       const fs = yield* FileSystem.FileSystem;
@@ -209,7 +208,7 @@ describe("PR-review model eval", () => {
         guidance: "  Keep the public error channel typed.  ",
       });
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
-      expect(variant.configuration.reviewerProfile).toBe("source-review-v4");
+      expect(variant.configuration.reviewerProfile).toBe("source-review-v8");
       expect(variant.configuration.guidanceDigest).toBe(
         yield* digestGuidance("Keep the public error channel typed."),
       );

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer, Ref, Result, Stream, Struct } from "effect";
+import type { AgentPolicyError, BudgetExceeded } from "effect-agent";
+import { TestClock } from "effect/testing";
 import {
   type AiError,
   LanguageModel,
@@ -92,6 +94,12 @@ const otherBlocker = ReviewFinding.make({
   body: "The cached return bypasses the owner check; check ownership before returning the record.",
 });
 
+const auditBlocker = ReviewFinding.make({
+  ...blocker,
+  title: "Retained result is never published",
+  body: "A newly retained supported result reaches the unchanged publication limit and is lost; preserve valid results while bounding only unrelated output.",
+});
+
 const importantFinding = ReviewFinding.make({
   ...otherBlocker,
   severity: "important",
@@ -120,6 +128,14 @@ const sourceResults = (prompt: Prompt.Prompt) =>
     .flatMap((message) => message.content)
     .flatMap((part) => (part.type === "tool-result" && part.name === "read_file" ? [part] : []));
 
+const priorSubmissions = (prompt: Prompt.Prompt) =>
+  prompt.content
+    .filter((message) => message.role === "assistant")
+    .flatMap((message) => message.content)
+    .flatMap((part) => (part.type === "tool-call" && part.name === "submit_review" ? [part] : []));
+
+const isAuditPrompt = (prompt: Prompt.Prompt) => priorSubmissions(prompt).length > 0;
+
 const reviewInput = (prompt: Prompt.Prompt): string =>
   prompt.content
     .flatMap((message) =>
@@ -130,17 +146,62 @@ const reviewInput = (prompt: Prompt.Prompt): string =>
     .at(-1) ?? "";
 
 describe("review output boundary", () => {
-  it.effect("PRR-002 completes one native review and keeps independent same-line blockers", () =>
+  it.effect("PRR-002 retains the primary findings and adds an independent audit blocker", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0);
-      const model = scriptedModel((prompt, tools) => {
+      const primaryFindings = [
+        submittedFinding(blocker, 0),
+        submittedFinding(otherBlocker, 1),
+        submittedFinding(importantFinding, 2),
+        submittedFinding(nitFinding, 3),
+      ];
+      const model = scriptedModel((prompt, tools, toolChoice) => {
+        expect(toolChoice).toBe("required");
+        expect(tools.map((tool) => tool.name)).toEqual([
+          "read_file",
+          "find_files",
+          "submit_review",
+        ]);
+        expect(
+          prompt.content
+            .flatMap((message) =>
+              message.role === "system" && message.content.startsWith("Final output contract:")
+                ? [message.content]
+                : [],
+            )
+            .at(-1),
+        ).toBe(
+          'Final output contract: complete only by calling the required completion Tool "submit_review" ' +
+            "as the sole Tool Call in its batch. Do not emit an ordinary final assistant text answer. " +
+            "The Tool's canonical parameters and successful result are projected and validated as the Agent output.",
+        );
         const text = reviewInput(prompt);
-        expect(text).toContain('"formattedDiff"');
-        expect(text).not.toContain('"patch"');
-        expect(text).toContain("__new hunk__");
-        expect(text).toContain("2 +new");
-        expect(text).toContain("__old hunk__");
-        expect(text).toContain("2 -old");
+        const isAudit = isAuditPrompt(prompt);
+        if (!isAudit) {
+          expect(text).toContain('"formattedDiff"');
+          expect(text).not.toContain('"patch"');
+          expect(text).toContain("__new hunk__");
+          expect(text).toContain("2 +new");
+          expect(text).toContain("__old hunk__");
+          expect(text).toContain("2 -old");
+        } else {
+          expect(priorSubmissions(prompt).map((part) => part.params)).toEqual([
+            { findings: primaryFindings },
+          ]);
+          expect(
+            prompt.content
+              .filter((message) => message.role === "tool")
+              .flatMap((message) => message.content),
+          ).toContainEqual(
+            expect.objectContaining({
+              type: "tool-result",
+              id: "review",
+              name: "submit_review",
+              isFailure: false,
+              result: null,
+            }),
+          );
+        }
 
         const completion = tools.find((tool) => tool.name === "submit_review");
         expect(completion).toBeDefined();
@@ -149,24 +210,18 @@ describe("review output boundary", () => {
             Tool.getJsonSchema(completion, { transformer: toCodecOpenAI }),
           );
           expect(schema).toContain('"findings"');
-          expect(schema).toContain('"maxItems":24');
+          expect(schema).toContain(`"maxItems":${isAudit ? "20" : "24"}`);
           expect(schema).toContain('"priority"');
           expect(schema).not.toContain('"severity"');
           expect(schema.indexOf('"body"')).toBeLessThan(schema.indexOf('"priority"'));
-          expect(schema).not.toContain('"decisions"');
-          expect(schema).not.toContain('"before"');
-          expect(schema).not.toContain('"repairSafety"');
         }
         return Stream.unwrap(
           Ref.update(calls, (count) => count + 1).pipe(
             Effect.as(
               response({
-                findings: [
-                  submittedFinding(blocker, 0),
-                  submittedFinding(otherBlocker, 1),
-                  submittedFinding(importantFinding, 2),
-                  submittedFinding(nitFinding, 3),
-                ],
+                findings: isAudit
+                  ? [submittedFinding(blocker, 0), submittedFinding(auditBlocker, 1)]
+                  : primaryFindings,
               }),
             ),
           ),
@@ -181,22 +236,23 @@ describe("review output boundary", () => {
         .review(request)
         .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
-      expect(yield* Ref.get(calls)).toBe(1);
+      expect(yield* Ref.get(calls)).toBe(2);
       expect(outcome.report.findings).toEqual([
         blocker,
         otherBlocker,
         importantFinding,
         nitFinding,
+        auditBlocker,
       ]);
       expect(outcome).toMatchObject({
-        turns: 1,
+        turns: 2,
         usage: {
-          inputTokens: 10,
-          uncachedInputTokens: 7,
-          cachedInputTokens: 2,
-          cacheWriteInputTokens: 1,
-          outputTokens: 4,
-          estimatedCostMicrousd: 123,
+          inputTokens: 20,
+          uncachedInputTokens: 14,
+          cachedInputTokens: 4,
+          cacheWriteInputTokens: 2,
+          outputTokens: 8,
+          estimatedCostMicrousd: 246,
         },
       });
     }),
@@ -242,6 +298,18 @@ describe("review output boundary", () => {
         };
         const model = scriptedModel((prompt) => {
           const results = sourceResults(prompt);
+          if (isAuditPrompt(prompt)) {
+            expect(results).toHaveLength(5);
+            expect(results.at(-2)).toMatchObject({
+              isFailure: false,
+              result: { revision: "base", content: "old" },
+            });
+            expect(results.at(-1)).toMatchObject({
+              isFailure: false,
+              result: { revision: "head", content: "new" },
+            });
+            return response({ findings: [] }, recoveryUsage);
+          }
           if (results.length < failedInputs.length) {
             if (results.length > 0) {
               expect(results.at(-1)).toMatchObject({
@@ -306,17 +374,70 @@ describe("review output boundary", () => {
 
         expect(yield* Ref.get(reads)).toEqual([...failedInputs, base, head]);
         expect(outcome).toMatchObject({
-          turns: 6,
+          turns: 7,
           report: { findings: [] },
           usage: {
-            inputTokens: 240_000,
-            uncachedInputTokens: 240_000,
+            inputTokens: 280_000,
+            uncachedInputTokens: 280_000,
             cachedInputTokens: 0,
             cacheWriteInputTokens: 0,
-            outputTokens: 24,
+            outputTokens: 28,
           },
         });
       }),
+  );
+
+  it.effect("PRR-002 keeps source history and answers local to one public review", () =>
+    Effect.gen(function* () {
+      const initialPrimaryCalls = yield* Ref.make(0);
+      const reads = yield* Ref.make(0);
+      const read = {
+        path: "src/index.ts",
+        revision: "head",
+        startLine: 1,
+        lineCount: 1,
+      } as const;
+      const model = scriptedModel((prompt) => {
+        const results = sourceResults(prompt);
+        if (isAuditPrompt(prompt)) {
+          expect(results).toHaveLength(1);
+          return response({ findings: [] });
+        }
+        if (results.length === 0) {
+          return Stream.unwrap(
+            Ref.update(initialPrimaryCalls, (count) => count + 1).pipe(
+              Effect.as(
+                Stream.fromIterable([
+                  { type: "tool-call", id: "head", name: "read_file", params: read } as const,
+                  { type: "finish", reason: "tool-calls", usage } as const,
+                ]),
+              ),
+            ),
+          );
+        }
+        return response({ findings: [] });
+      });
+      const repository = ReviewRepository.of({
+        ...emptyRepository,
+        readFile: (input) =>
+          Ref.update(reads, (count) => count + 1).pipe(
+            Effect.as(
+              ReviewSource.make({
+                ...input,
+                totalLines: 1,
+                content: "head source",
+              }),
+            ),
+          ),
+      });
+      const reviewer = makeReviewer({ model });
+
+      yield* reviewer.review(request).pipe(Effect.provideService(ReviewRepository, repository));
+      yield* reviewer.review(request).pipe(Effect.provideService(ReviewRepository, repository));
+
+      expect(yield* Ref.get(initialPrimaryCalls)).toBe(2);
+      expect(yield* Ref.get(reads)).toBe(2);
+    }),
   );
 
   it.effect("PRR-002 rejects a finding that does not name a causative changed path", () =>
@@ -335,19 +456,37 @@ describe("review output boundary", () => {
     }),
   );
 
+  it.effect("PRR-002 fails when the audit names a non-causative path", () =>
+    Effect.gen(function* () {
+      const model = scriptedModel((prompt) =>
+        response({
+          findings: isAuditPrompt(prompt)
+            ? [submittedFinding(ReviewFinding.make({ ...blocker, path: "src/unchanged.ts" }), 0)]
+            : [],
+        }),
+      );
+      const result = yield* makeReviewer({ model })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
+      expect(Result.isFailure(result) && result.failure._tag).toBe("ReviewVerificationError");
+    }),
+  );
+
   it.effect("PRR-002 demotes invalid anchors and removes only exact duplicates", () =>
     Effect.gen(function* () {
       const topLevel = ReviewFinding.make(Struct.omit(otherBlocker, ["line"]));
       const invalid = ReviewFinding.make({ ...otherBlocker, line: 999 });
-      const model = scriptedModel(() =>
+      const model = scriptedModel((prompt) =>
         response({
-          findings: [
-            submittedFinding(blocker, 0),
-            submittedFinding(invalid, 1),
-            submittedFinding(topLevel, 1),
-            submittedFinding(invalid, 1),
-            submittedFinding(blocker, 0),
-          ],
+          findings: isAuditPrompt(prompt)
+            ? []
+            : [
+                submittedFinding(blocker, 0),
+                submittedFinding(invalid, 1),
+                submittedFinding(topLevel, 1),
+                submittedFinding(invalid, 1),
+                submittedFinding(blocker, 0),
+              ],
         }),
       );
       const outcome = yield* makeReviewer({ model })
@@ -359,6 +498,7 @@ describe("review output boundary", () => {
 
   it.effect.each([24, 25])("PRR-002 enforces the native finding bound: %s", (count) =>
     Effect.gen(function* () {
+      const calls = yield* Ref.make(0);
       const findings = Array.from({ length: count }, (_, index) =>
         ReviewFinding.make({
           ...Struct.omit(blocker, ["line"]),
@@ -367,7 +507,13 @@ describe("review output boundary", () => {
       );
       const result = yield* makeReviewer({
         model: scriptedModel(() =>
-          response({ findings: findings.map((finding) => submittedFinding(finding, 1)) }),
+          Stream.unwrap(
+            Ref.update(calls, (total) => total + 1).pipe(
+              Effect.as(
+                response({ findings: findings.map((finding) => submittedFinding(finding, 1)) }),
+              ),
+            ),
+          ),
         ),
       })
         .review(request)
@@ -377,6 +523,7 @@ describe("review output boundary", () => {
       } else {
         expect(Result.isFailure(result) && result.failure._tag).toBe("AiError");
       }
+      expect(yield* Ref.get(calls)).toBe(1);
     }),
   );
 
@@ -393,6 +540,57 @@ describe("review output boundary", () => {
         .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
       expect(Result.isFailure(result) && result.failure._tag).toBe("AiError");
       expect(yield* Ref.get(calls)).toBe(1);
+    }),
+  );
+
+  it.effect("PRR-002 shares one usage budget across the primary and audit Runs", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0);
+      const largeUsage = {
+        inputTokens: { total: 200_000, uncached: 200_000, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 4 },
+      };
+      const model = scriptedModel(() =>
+        Stream.unwrap(
+          Ref.update(calls, (count) => count + 1).pipe(
+            Effect.as(response({ findings: [] }, largeUsage)),
+          ),
+        ),
+      );
+
+      const result = yield* makeReviewer({ model })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
+
+      expect(Result.isFailure(result) && result.failure._tag).toBe("BudgetExceeded");
+      expect(yield* Ref.get(calls)).toBe(2);
+    }),
+  );
+
+  it.effect("PRR-002 shares one deadline and finalizes a stalled audit Run", () =>
+    Effect.gen(function* () {
+      const auditStarted = yield* Deferred.make<void>();
+      const auditFinalized = yield* Ref.make(false);
+      const model = scriptedModel((prompt) =>
+        isAuditPrompt(prompt)
+          ? Stream.fromEffect(Deferred.succeed(auditStarted, undefined)).pipe(
+              Stream.flatMap(() => Stream.never),
+              Stream.ensuring(Ref.set(auditFinalized, true)),
+            )
+          : Stream.unwrap(
+              TestClock.adjust("4 minutes").pipe(Effect.as(response({ findings: [] }))),
+            ),
+      );
+      const fiber = yield* makeReviewer({ model })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.forkChild);
+
+      yield* Deferred.await(auditStarted);
+      yield* TestClock.adjust("1 minute");
+      expect(yield* Ref.get(auditFinalized)).toBe(true);
+      const result = yield* Fiber.join(fiber).pipe(Effect.result);
+
+      expect(Result.isFailure(result) && result.failure._tag).toBe("AgentPolicyError");
     }),
   );
 
@@ -418,6 +616,9 @@ new mode 100755`;
       });
       const model = scriptedModel((prompt) => {
         const text = reviewInput(prompt);
+        if (isAuditPrompt(prompt)) {
+          return response({ findings: [] });
+        }
         expect(text).toContain("old mode 100644");
         expect(text).toContain("new mode 100755");
         expect(text).toContain("__new hunk__");
@@ -443,6 +644,9 @@ new mode 100755`;
       });
       const model = scriptedModel((prompt) => {
         const text = reviewInput(prompt);
+        if (isAuditPrompt(prompt)) {
+          return response({ findings: [] });
+        }
         expect(text).not.toContain("__new hunk__");
         expect(text).toContain("7001 @@\\n");
         expect(text).toContain("-old\\n+new");
@@ -466,7 +670,7 @@ new mode 100755`;
     }),
   );
 
-  it.effect("PRR-002 closes the single run on interruption", () =>
+  it.effect("PRR-002 closes the active Run on interruption", () =>
     Effect.gen(function* () {
       const finalized = yield* Ref.make(false);
       const started = yield* Deferred.make<void>();
@@ -547,5 +751,7 @@ const pricingTypeProofs: readonly [
       ReviewVerificationError
     >
   >,
-] = [true, true, true, true];
+  Assert<Equal<Extract<EffectError<TypedReviews["priced"]>, AgentPolicyError>, AgentPolicyError>>,
+  Assert<Equal<Extract<EffectError<TypedReviews["priced"]>, BudgetExceeded>, BudgetExceeded>>,
+] = [true, true, true, true, true, true];
 void pricingTypeProofs;
