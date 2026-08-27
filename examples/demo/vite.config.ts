@@ -18,6 +18,10 @@ export default defineConfig(({ mode }) => {
       tsconfigPaths: true,
     },
     plugins: [tailwindcss(), tanstackStart(), viteReact()],
+    test: {
+      cache: false,
+      silent: "passed-only",
+    },
     run: {
       tasks: {
         check: {

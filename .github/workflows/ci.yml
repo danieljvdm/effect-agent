@@ -2,20 +2,14 @@
 # tests, build) with a fan-in `ready` job so the branch-protection check name
 # stays `ready`.
 #
-# Each job restores and saves a Vite Task cache (node_modules/.vite/task-cache)
-# so later synchronize events on the same PR can replay per-package gates
-# whose fingerprinted inputs did not change. The jobs use separate key
-# namespaces because each saves only the task entries it ran; a shared prefix
-# would let one job's snapshot shadow the others'. Keys are per-run (cache
-# entries are immutable) with restore-keys prefixes that pick the newest
-# baseline, scoped first to the current lockfile and falling back across
-# dependency bumps (Vite Task fingerprints inputs itself, so a stale baseline
-# is ignored per task, never trusted). GitHub scopes PR caches to that PR's
-# merge ref; first runs may therefore be cold now that duplicate main-push CI
-# no longer publishes a shared default-branch baseline.
+# Main runs only tests to publish a baseline that new PRs can restore.
+# PR caches remain scoped to their merge refs. Each job has a separate cache
+# namespace, and Vite Task checks each task's inputs before replaying it.
 name: CI
 
 on:
+  push:
+    branches: [main]
   # Changesets release PRs contain only these generated paths. They receive a
   # `ready` check from the trusted main-branch Release workflow after exact
   # regeneration. GITHUB_TOKEN updates cannot trigger this workflow, so the
@@ -32,7 +26,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Let main finish publishing a baseline while newer PR runs supersede old ones.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -42,6 +37,7 @@ env:
 jobs:
   checks:
     name: Static checks
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -57,7 +53,7 @@ jobs:
         run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Patch Effect TypeScript-Go
-        run: bun run patch:tsgo
+        run: ./node_modules/.bin/vp run patch:tsgo
 
       # Restored after the install because a reinstall can recreate
       # node_modules, which would drop a cache restored earlier.
@@ -72,7 +68,7 @@ jobs:
             vite-task-checks-${{ runner.os }}-
 
       - name: Format, lint, type checks, and action-bundle freshness
-        run: bun run check
+        run: ./node_modules/.bin/vp run check
 
       - name: Save Vite Task cache
         if: success()
@@ -98,40 +94,31 @@ jobs:
         run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Patch Effect TypeScript-Go
-        run: bun run patch:tsgo
+        run: ./node_modules/.bin/vp run patch:tsgo
 
-      # The test tasks' fingerprints include Vitest's own per-package cache
-      # directories (node_modules/.vite/vitest); when those are absent on a
-      # fresh runner every test task misses with "<hash> removed", so they are
-      # persisted alongside the task cache.
       - name: Restore Vite Task cache
         id: task-cache
         uses: actions/cache/restore@v4
         with:
-          path: |
-            node_modules/.vite/task-cache
-            packages/*/node_modules/.vite/vitest
-            examples/*/node_modules/.vite/vitest
-          key: vite-task-test-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: node_modules/.vite/task-cache
+          key: vite-task-test-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vite-task-test-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
-            vite-task-test-${{ runner.os }}-
+            vite-task-test-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-
+            vite-task-test-v2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Run workspace test suites
-        run: bun run test
+        run: ./node_modules/.bin/vp run -v test
 
       - name: Save Vite Task cache
         if: success()
         uses: actions/cache/save@v4
         with:
-          path: |
-            node_modules/.vite/task-cache
-            packages/*/node_modules/.vite/vitest
-            examples/*/node_modules/.vite/vitest
+          path: node_modules/.vite/task-cache
           key: ${{ steps.task-cache.outputs.cache-primary-key }}
 
   build:
     name: Build
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -147,7 +134,7 @@ jobs:
         run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Patch Effect TypeScript-Go
-        run: bun run patch:tsgo
+        run: ./node_modules/.bin/vp run patch:tsgo
 
       - name: Restore Vite Task cache
         id: task-cache
@@ -160,7 +147,7 @@ jobs:
             vite-task-build-${{ runner.os }}-
 
       - name: Build packages, examples, and docs
-        run: bun run build
+        run: ./node_modules/.bin/vp run build
 
       - name: Save Vite Task cache
         if: success()
@@ -170,11 +157,11 @@ jobs:
           key: ${{ steps.task-cache.outputs.cache-primary-key }}
 
   # Fan-in for branch protection: the required status check is named `ready`.
-  # It runs unconditionally and asserts every ordinary-PR gate succeeded.
+  # It runs even after a PR gate fails, and never posts a main-push ready check.
   ready:
     name: ready
     needs: [checks, test, build]
-    if: ${{ always() }}
+    if: ${{ always() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

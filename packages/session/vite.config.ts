@@ -8,4 +8,8 @@ export default defineConfig({
     dts: true,
     sourcemap: true,
   },
+  test: {
+    cache: false,
+    silent: "passed-only",
+  },
 });

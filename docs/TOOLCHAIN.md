@@ -58,7 +58,8 @@ therefore install one Effect runtime. The Vitest override matches the version bu
 Vitest remains supplied by Vite+ rather than becoming a separate workspace dependency, with one
 probed exception: `vp test` cannot drive the Cloudflare Workers pool runner, so
 `storage-cloudflare` and `platform-cloudflare` declare the catalog-pinned `vitest` directly and
-run `vitest run` as their `test` scripts.
+define `vitest run` test tasks in their Vite configs. The Code Mode Cloudflare example uses the
+same task configuration for its programmatic Miniflare tests.
 
 ## Current workspace
 
@@ -118,25 +119,40 @@ them, and they add no deployment or durability claim.
 
 Run commands from the repository root:
 
-| Command                                       | Meaning                                                                        |
-| --------------------------------------------- | ------------------------------------------------------------------------------ |
-| `bun install`                                 | Install dependencies and run repository setup                                  |
-| `bun run check`                               | Run Vite+ format/lint/type checks, package type checks, and script type checks |
-| `bun run test`                                | Run package and example test tasks in dependency order                         |
-| `bun run build`                               | Build packages, runnable examples, and the VitePress documentation site        |
-| `bun run docs:dev`                            | Run the local VitePress documentation server                                   |
-| `bun run docs:build`                          | Build and validate the Markdown documentation site                             |
-| `bun run docs:preview`                        | Preview the built documentation site                                           |
-| `bun --filter @effect-agent/example-demo dev` | Run the chat-first demo and Phase 2 simulator on port 4173                     |
-| `bun run ready`                               | Run check, test, and build; this is the local and CI handoff gate              |
-| `bun run format:write`                        | Apply repository formatting                                                    |
+| Command                                    | Meaning                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------ |
+| `vp install`                               | Install dependencies and run repository setup                                  |
+| `vp run check`                             | Run Vite+ format/lint/type checks, package type checks, and script type checks |
+| `vp run test`                              | Run all package and example test tasks, with at most four tasks at once        |
+| `vp run build`                             | Build packages, runnable examples, and the VitePress documentation site        |
+| `vp run docs:dev`                          | Run the local VitePress documentation server                                   |
+| `vp run docs:build`                        | Build and validate the Markdown documentation site                             |
+| `vp run docs:preview`                      | Preview the built documentation site                                           |
+| `vp run -F @effect-agent/example-demo dev` | Run the chat-first demo and Phase 2 simulator on port 4173                     |
+| `vp run ready`                             | Run check, test, and build; this is the local and CI handoff gate              |
+| `vp fmt`                                   | Apply repository formatting                                                    |
 
-Vite+ owns shared configuration in `vite.config.ts`. Package-specific scripts remain in each
-package manifest so Vite+ can order and cache them from the actual workspace dependency graph.
+Vite+ owns shared configuration in `vite.config.ts`. Package commands remain in their manifests
+or Vite task configs so Vite+ can discover and cache them from the workspace dependency graph.
 The root declares the catalog's Vite+ core alias as `vite` as well as `vite-plus`; Bun needs that
 direct peer provider for the Vite+ toolchain. VitePress intentionally resolves the official Vite
 implementation as its nested dependency; the repository therefore does not use a global `vite`
 override. The documentation build is part of the root `build` and `ready` gates.
+
+Tests import workspace source directly and do not consume other test tasks' outputs. The test
+command therefore removes package dependency ordering while retaining a four-task concurrency
+limit. Build tasks still run in dependency order. Every existing suite, including process-kill,
+soak, and adapter conformance tests, remains in the ordinary test command.
+
+Vite Task caches successful suites and fingerprints the files they read, including imported
+workspace source and installed dependencies. Vitest's on-disk result cache is disabled in each test
+config: its mutable `results.json` otherwise prevents tasks from being cached or reused on a fresh
+runner. CI transfers only `node_modules/.vite/task-cache`, not Vitest result directories.
+The direct Vitest tasks exclude generated Vite files and `node_modules` directory listings from
+their inputs. Installed dependency files remain tracked, and the lockfile additionally invalidates
+results when dependencies are added or removed. These tasks restore no generated files.
+Use `vp run -v test` to see each cache decision, `vp run --last-details` to inspect the last run,
+and `vp run --no-cache test` to execute every suite again.
 
 ## Releasing to npm
 
@@ -327,9 +343,9 @@ automation are deferred until open-source preparation.
 
 ## CI and hooks
 
-The CI workflow runs on pull requests, not again after their merge to `main`. Ordinary PRs install
+The CI workflow runs the full gate on pull requests. Ordinary PRs install
 the exact Bun version with a frozen-lockfile install, then run the `ready` gate as three parallel
-jobs for static checks (`bun run check`), tests (`bun run test`), and builds (`bun run build`) with
+jobs for static checks (`vp run check`), tests (`vp run test`), and builds (`vp run build`) with
 a fan-in job that keeps the required branch-protection check named `ready`. The exact internal
 Changesets release PR is the only exception: CI and PR Review path-filter the exact set of files
 Changesets may generate. GitHub suppresses `pull_request` workflows caused by `GITHUB_TOKEN`, so
@@ -345,10 +361,12 @@ strict up-to-date branch rule before reporting. Both cases are fail-closed.
 Each ordinary-PR job restores and saves the Vite Task cache
 (`node_modules/.vite/task-cache`), so later synchronize events on the same PR can replay
 per-package gates whose fingerprinted inputs did not change. GitHub scopes those caches to the
-PR's merge ref; removing duplicate `main` CI intentionally trades the previous cross-PR
-default-branch baseline for lower post-merge compute, so a PR's first run may be cold. The CI
-workflow does not initialize any source submodule. On `main`, the Release workflow is the sole
-push-triggered package automation and owns version-PR maintenance and publishing.
+PR's merge ref. Main pushes run only the test job to publish a shared baseline for new PRs;
+static checks, builds, and the `ready` fan-in remain PR-only. Main test runs finish independently
+so a newer push cannot repeatedly cancel cache publication. No test is skipped based on a changed-path
+list: Vite Task validates each restored task's inputs before replay. The CI workflow does not
+initialize any source submodule. The separate Release workflow continues to own version-PR
+maintenance and publishing.
 
 The Vite+ pre-commit hook runs `vp check --fix` on staged JavaScript and
 TypeScript. CI remains authoritative for the full `check` gate, including

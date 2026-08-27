@@ -29,9 +29,9 @@
     "lint": "vp lint",
     "action:build": "bun scripts/build-action.ts",
     "check": "vp check && vp run -r --concurrency-limit 1 check && tsc --noEmit -p scripts/tsconfig.json && bun scripts/verify-package-purity.ts && bun scripts/build-action.ts --check",
-    "test": "vp run -r test",
-    "build": "vp run -r build && bun run docs:build",
-    "ready": "bun run check && bun run test && bun run build"
+    "test": "vp run -r --parallel --concurrency-limit 4 test",
+    "build": "vp run -r build && vp run docs:build",
+    "ready": "vp run check && vp run test && vp run build"
   },
   "devDependencies": {
     "@changesets/changelog-github": "0.7.0",
