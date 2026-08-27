@@ -44,10 +44,13 @@ const usage = {
   outputTokens: { total: 4 },
 };
 
-const response = (value: object): Stream.Stream<Response.StreamPartEncoded> =>
+const response = (
+  value: object,
+  responseUsage: typeof usage = usage,
+): Stream.Stream<Response.StreamPartEncoded> =>
   Stream.fromIterable([
     { type: "tool-call", id: "review", name: "submit_review", params: value },
-    { type: "finish", reason: "tool-calls", usage },
+    { type: "finish", reason: "tool-calls", usage: responseUsage },
   ]);
 
 const scriptedModel = (
@@ -233,6 +236,10 @@ describe("review output boundary", () => {
           lineCount: 4,
         } as const;
         const head = { ...base, revision: "head" } as const;
+        const recoveryUsage = {
+          inputTokens: { total: 40_000, uncached: 40_000, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 4 },
+        };
         const model = scriptedModel((prompt) => {
           const results = sourceResults(prompt);
           if (results.length < failedInputs.length) {
@@ -249,14 +256,14 @@ describe("review output boundary", () => {
                 name: "read_file",
                 params: failedInputs[results.length] ?? base,
               },
-              { type: "finish", reason: "tool-calls", usage },
+              { type: "finish", reason: "tool-calls", usage: recoveryUsage },
             ]);
           }
           if (results.length === failedInputs.length) {
             expect(results.map((result) => result.isFailure)).toEqual([true, true, true]);
             return Stream.fromIterable([
               { type: "tool-call", id: "base", name: "read_file", params: base },
-              { type: "finish", reason: "tool-calls", usage },
+              { type: "finish", reason: "tool-calls", usage: recoveryUsage },
             ]);
           }
           if (results.length === failedInputs.length + 1) {
@@ -266,14 +273,14 @@ describe("review output boundary", () => {
             });
             return Stream.fromIterable([
               { type: "tool-call", id: "head", name: "read_file", params: head },
-              { type: "finish", reason: "tool-calls", usage },
+              { type: "finish", reason: "tool-calls", usage: recoveryUsage },
             ]);
           }
           expect(results.at(-1)).toMatchObject({
             isFailure: false,
             result: { revision: "head", content: "new" },
           });
-          return response({ findings: [] });
+          return response({ findings: [] }, recoveryUsage);
         });
         const repository = ReviewRepository.of({
           ...emptyRepository,
@@ -298,7 +305,17 @@ describe("review output boundary", () => {
           .pipe(Effect.provideService(ReviewRepository, repository));
 
         expect(yield* Ref.get(reads)).toEqual([...failedInputs, base, head]);
-        expect(outcome).toMatchObject({ turns: 6, report: { findings: [] } });
+        expect(outcome).toMatchObject({
+          turns: 6,
+          report: { findings: [] },
+          usage: {
+            inputTokens: 240_000,
+            uncachedInputTokens: 240_000,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            outputTokens: 24,
+          },
+        });
       }),
   );
 
@@ -454,10 +471,9 @@ new mode 100755`;
       const finalized = yield* Ref.make(false);
       const started = yield* Deferred.make<void>();
       const model = scriptedModel(() =>
-        Stream.unwrap(
-          Deferred.succeed(started, undefined).pipe(
-            Effect.as(Stream.never.pipe(Stream.ensuring(Ref.set(finalized, true)))),
-          ),
+        Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+          Stream.flatMap(() => Stream.never),
+          Stream.ensuring(Ref.set(finalized, true)),
         ),
       );
       const fiber = yield* makeReviewer({ model })

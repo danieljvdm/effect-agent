@@ -54,6 +54,6 @@ jobs:
           comment-id: ${{ github.event.comment.id || 0 }}
           automatic-review-limit: 2
           expected-head: ${{ github.event.pull_request.head.sha || '' }}
-          effort: high
+          effort: xhigh
           guidance-file: .github/review-guidance.md
           ignore: "bun.lock,action/dist/**,work-order-action/dist/**,**/CHANGELOG.md,.agents/skills/**,.claude/skills/**"

@@ -265,8 +265,6 @@ const reviewPolicy = AgentPolicy.make({
   maxDuration: "5 minutes",
   toolConcurrency: 4,
   repeatedFailureLimit: 0,
-  tokenBudget: 256_000,
-  completionReserveTokens: 32_000,
   contextTokenLimit: 128_000,
   onExhaustion: "fail",
   runStatus: "off",
@@ -290,10 +288,8 @@ const completionToolkit = <Output extends Schema.Top>(output: Output) =>
 const reviewCompletion = completionToolkit(ReviewSubmission);
 
 const reviewBudgetLimits = UsageBudgetLimits.make({
-  maxInputTokens: 256_000,
+  maxInputTokens: 384_000,
   maxOutputTokens: 32_000,
-  maxToolCalls: 64,
-  maxDurationMillis: 300_000,
 });
 
 /** Return every RIGHT-side line on which GitHub can place a diff comment. */

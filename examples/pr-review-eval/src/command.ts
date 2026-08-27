@@ -77,7 +77,7 @@ const model = Flag.string("model").pipe(
   Flag.withDescription("OpenAI model ID. Defaults to the current PR-review Action model."),
 );
 const effort = Flag.choice("effort", ["low", "medium", "high", "xhigh"]).pipe(
-  Flag.withDefault("high"),
+  Flag.withDefault("xhigh"),
   Flag.withDescription("Reasoning effort. Defaults to the current PR-review Action effort."),
 );
 const guidance = Flag.file("guidance").pipe(

@@ -43,7 +43,7 @@ inputs:
   effort:
     description: 'Reasoning effort: "low", "medium", "high", or "xhigh".'
     required: false
-    default: "high"
+    default: "xhigh"
   guidance-file:
     description: "Optional committed repository guidance file."
     required: false

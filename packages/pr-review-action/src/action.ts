@@ -618,7 +618,7 @@ export const reviewActionProgram = Effect.gen(function* () {
   const effort = yield* Config.literals(
     ["low", "medium", "high", "xhigh"],
     "PR_REVIEW_EFFORT",
-  ).pipe(Config.withDefault("high"));
+  ).pipe(Config.withDefault("xhigh"));
   const guidanceFile = yield* Config.string("PR_REVIEW_GUIDANCE_FILE").pipe(Config.withDefault(""));
   const ignore = (yield* Config.string("PR_REVIEW_IGNORE").pipe(Config.withDefault("")))
     .split(",")
