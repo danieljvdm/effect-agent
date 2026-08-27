@@ -28,11 +28,12 @@ The root `package.json` is the only version source for shared dependencies.
 | Effect                            |       `4.0.0-rc.111` | Runtime, Schema, services, and Effect AI                                          |
 | `@effect/platform-node`           |       `4.0.0-rc.111` | Node services used by repository scripts                                          |
 | `@effect/platform-browser`        |       `4.0.0-rc.111` | `BrowserCrypto` for the workerd runtime (Cloudflare packages)                     |
+| `@effect/sql-d1`                  |       `4.0.0-rc.111` | Required D1 peer of the Cloudflare runtime boundary                               |
 | `@effect/sql-sqlite-do`           |       `4.0.0-rc.111` | Durable Object SQLite `SqlClient` and Migrator (Cloudflare packages)              |
 | `@effect/vitest`                  |       `4.0.0-rc.111` | Effect-aware test execution and scoped Layer composition                          |
-| `effect-cf`                       |             `0.27.0` | Effect-native Cloudflare runtime boundary used by `platform-cloudflare`           |
+| `effect-cf`                       |             `0.34.0` | Effect-native Cloudflare runtime boundary used by `platform-cloudflare`           |
 | `@cloudflare/vitest-pool-workers` |             `0.21.3` | In-workerd Vitest pool for the Cloudflare package suites (vendors wrangler)       |
-| `@cloudflare/workers-types`       |       `5.20260813.1` | Cloudflare runtime types (types-only devDependency)                               |
+| `@cloudflare/workers-types`       |       `5.20260825.1` | Cloudflare runtime types (types-only devDependency)                               |
 | Miniflare                         | `5.20260811.1-alpha` | Programmatic workerd runtimes for Code Mode and restart-persistence test lanes    |
 | esbuild                           |             `0.28.1` | Bundles the Miniflare-lane worker entry (Miniflare no longer bundles)             |
 | Node.js                           |   `22.18+ or 24.11+` | Runtime range compatible with Vite+                                               |
@@ -47,9 +48,12 @@ Workspace packages refer to shared versions with `catalog:`. They must not intro
 Effect version. The Bun lockfile is committed and CI installs it with `--frozen-lockfile`.
 
 The root catalog selects one exact `effect-cf` version for reproducible workspace installs.
-`@effect-agent/platform-cloudflare` publishes `effect-cf` as the compatible `^0.27.0` host peer
+`@effect-agent/platform-cloudflare` publishes `effect-cf` as the compatible `^0.34.0` host peer
 and uses the catalog entry only as a development dependency. Consumers therefore provide one
 shared runtime instance without needing a root override to replace a nested exact dependency.
+Version `0.34.0` supplies native RPC trace validation and propagation, shared span helpers, and
+typed invocation hooks. The platform's development dependencies align its required D1 peer with
+the Effect catalog; the D1 driver does not become an Effect Agent runtime dependency.
 
 Root overrides align the contributor skills CLI with the repository's Effect and
 `@effect/platform-node` versions. Framework packages, repository scripts, and contributor tooling

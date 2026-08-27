@@ -244,15 +244,39 @@ describe("DEPLOY-016 opt-in native Conversation RPC tracing", () => {
     );
   });
 
+  it.effect.each([
+    { reason: "DisablePropagation", disabled: true, traceId: "1234567890abcdef1234567890abcdef" },
+    { reason: "an invalid trace ID", disabled: false, traceId: "invalid-trace-id" },
+  ])("omits native context for $reason without dropping the client span", (scenario) => {
+    const fixture = clientFixture(() => Promise.resolve(observedPage), { rpcTracing: true });
+    return Effect.gen(function* () {
+      const client = yield* CloudflareConversationClient;
+      expect(yield* client.readPage(conversationId)).toEqual([]);
+      expect(fixture.calls[0]?.args).toHaveLength(1);
+      const spans = fixture.spans.filter((span) => span.kind === "client");
+      expect(spans).toHaveLength(1);
+      expect(spans[0]?.status._tag).toBe("Ended");
+    }).pipe(
+      Effect.provide(fixture.layer),
+      Effect.provideService(Tracer.Tracer, fixture.tracer),
+      Effect.provideService(Tracer.DisablePropagation, scenario.disabled),
+      Effect.withParentSpan(
+        Tracer.externalSpan({ traceId: scenario.traceId, spanId: "1234567890abcdef" }),
+      ),
+      Effect.withTracerEnabled(true),
+    );
+  });
+
   it.effect.each(["transport", "decode"] as const)(
-    "keeps %s failures typed and closes the failed client span",
+    "keeps %s failures typed without exporting their payload in the client span",
     (failureMode) => {
-      const rejected = new Error("fixture native rejection");
+      const secret = "private payload https://capability.invalid/?token=secret";
+      const rejected = new Error(secret);
       const fixture = clientFixture(
         () =>
           failureMode === "transport"
             ? Promise.reject(rejected)
-            : Promise.resolve({ _tag: "ObservedPage", records: [{}] }),
+            : Promise.resolve({ _tag: "ObservedPage", records: [secret] }),
         { rpcTracing: true },
       );
       return Effect.gen(function* () {
@@ -268,7 +292,11 @@ describe("DEPLOY-016 opt-in native Conversation RPC tracing", () => {
         if (span?.status._tag !== "Ended" || !Exit.isFailure(span.status.exit)) {
           throw new Error("Expected a closed, failed client span");
         }
-        expect(Option.getOrUndefined(Cause.findErrorOption(span.status.exit.cause))).toBe(failure);
+        expect(Option.getOrUndefined(Cause.findErrorOption(span.status.exit.cause))).toBe(
+          "RPC failed",
+        );
+        expect(Cause.pretty(span.status.exit.cause)).not.toContain(secret);
+        expect(span.attributes.get("error.type")).toBe("_OTHER");
       }).pipe(
         Effect.provide(fixture.layer),
         Effect.provideService(Tracer.Tracer, fixture.tracer),

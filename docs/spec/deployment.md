@@ -367,7 +367,7 @@ Native RPC trace propagation is disabled by default. A host enables both ends ex
 
 ```ts
 conversationNamespaceLayer(env, "TASK_ORCHESTRATORS", { rpcTracing: true });
-makeConversationObjectClass(
+const ConversationBase = makeConversationObjectClass(
   { ...runtimeOptions, namespaceBinding: "TASK_ORCHESTRATORS", rpcTracing: true },
   observability,
 );
@@ -387,10 +387,42 @@ propagation disabled, including Effect's non-propagating no-op spans, retain the
 argument count. They do not append `undefined`. The ordinary disabled namespace retains its prior
 client instrumentation.
 
-The Object factory passes `rpcTracing: { service: namespaceBinding }` to effect-cf. This requires
-an effect-cf release implementing the opt-in v1 native contract. effect-cf validates and strips the
-argument and exposes event metadata; application observability owns server roots. The library does
-not create durable invocation roots or exporter policy.
+The Object factory passes `rpcTracing: { service: namespaceBinding }` to effect-cf `0.34.0` or a
+compatible release. The client uses effect-cf's `RpcTracing.withRpcTraceContext` and
+`withRpcClientSpan`: they validate span IDs, honor `Tracer.DisablePropagation`, and preserve the
+original failure while recording safe RPC failure status without its payload. effect-cf validates
+and strips the argument and exposes event metadata; application observability owns server roots.
+The library does not create durable invocation roots or exporter policy.
+
+The factory's public return type retains `DurableObject.RunSymbol`, including the runtime and
+event Layer service requirements. An application can wrap the complete receiver effect through
+that hook, then delegate to effect-cf:
+
+```ts
+import { Effect } from "effect";
+import { DurableObject, RpcTracing } from "effect-cf";
+
+type Services = Effect.Services<
+  Parameters<InstanceType<typeof ConversationBase>[typeof DurableObject.RunSymbol]>[0]
+>;
+
+export class ConversationObject extends ConversationBase {
+  override [DurableObject.RunSymbol]<A, E>(
+    effect: Effect.Effect<A, E, Services>,
+    options: DurableObject.RunOptions = {},
+  ): Promise<A> {
+    return super[DurableObject.RunSymbol](
+      options.rpc === undefined ? effect : RpcTracing.withRpcServerSpan(effect, options.rpc),
+      options,
+    );
+  }
+}
+```
+
+`options.event` distinguishes RPC, alarm, and other native events; `options.rpc` supplies transient
+RPC metadata before the event Layer starts. Its arguments remain private and must not be logged.
+No invocation service is required by the observability Layer. Applications can separately root
+alarm and other durable invocations using `options.event` without reusing a prior caller's parent.
 
 Trace context never enters a Submission, Receipt, canonical record, checkpoint, queued wake, alarm,
 or durable retry. A native progress reset creates a new client span for each retry and does not

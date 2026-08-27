@@ -1,5 +1,7 @@
 import { OperationDenied } from "@effect-agent/session";
 import { Effect } from "effect";
+import { DurableObject, RpcTracing } from "effect-cf";
+import { OtlpExporter } from "effect/unstable/observability";
 
 import {
   makeConversationObjectClass,
@@ -17,7 +19,12 @@ import {
   runtimeEvictionFailpoint,
   storageEvictionFailpoint,
 } from "./fixtures.ts";
-import { failNextFlush, flushCount, observabilityProbeLayer } from "./observability-fixture.ts";
+import {
+  failNextFlush,
+  flushCount,
+  observabilityProbeLayer,
+  telemetryProbe,
+} from "./observability-fixture.ts";
 import { makeSubagentTestBindings, transportFaultReason } from "./subagent-fixtures.ts";
 
 /**
@@ -216,14 +223,44 @@ export class ContextCompactorConversationObject extends makeConversationObjectCl
 }) {}
 
 /** Minimal integration proof that effect-cf owns native RPC event scopes and OTLP flushing. */
-export class TelemetryConversationObject extends makeConversationObjectClass(
+const TelemetryConversationObjectBase = makeConversationObjectClass(
   {
     ...baseOptions,
     namespaceBinding: "TELEMETRY",
     wakeScanInterval: 60_000,
+    rpcTracing: true,
   },
   observabilityProbeLayer,
-) {
+);
+
+type TelemetryServices = Effect.Services<
+  Parameters<
+    InstanceType<typeof TelemetryConversationObjectBase>[typeof DurableObject.RunSymbol]
+  >[0]
+>;
+
+export class TelemetryConversationObject extends TelemetryConversationObjectBase {
+  override [DurableObject.RunSymbol]<A, E>(
+    effect: Effect.Effect<A, E, TelemetryServices>,
+    options: DurableObject.RunOptions = {},
+  ): Promise<A> {
+    const event = options.event;
+    if (event === undefined) return super[DurableObject.RunSymbol](effect, options);
+    const conversationId = this.ctx.id.name ?? this.ctx.id.toString();
+    const observed = Effect.gen(function* () {
+      // Also proves that the factory's public hook retains the event Layer's service type.
+      yield* OtlpExporter.Flusher;
+      telemetryProbe(conversationId).invocations.push(options);
+      return yield* effect;
+    });
+    return super[DurableObject.RunSymbol](
+      options.rpc === undefined
+        ? Effect.withSpan(observed, `TELEMETRY/${event}`, { kind: "server", root: true })
+        : RpcTracing.withRpcServerSpan(observed, options.rpc),
+      options,
+    );
+  }
+
   failNextFlush(): void {
     failNextFlush(this.ctx.id.name ?? this.ctx.id.toString());
   }

@@ -30,7 +30,8 @@ import {
   type DurableSubmitAgent,
   type DurableSubmitOptions,
 } from "@effect-agent/session";
-import { Context, Crypto, Duration, Effect, Layer, Option, Schema, Tracer } from "effect";
+import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect";
+import { RpcTracing } from "effect-cf";
 
 import { DurableAlarmError } from "./alarm.ts";
 import { ConversationObjectNamespace, type ConversationObjectRpc } from "./bindings.ts";
@@ -318,14 +319,6 @@ const outOfContract = (
     ),
   });
 
-// Native RPC metadata is separate from every host request and durable Schema. effect-cf owns
-// validation and removal on the receiver; the client copies only its current span's identity.
-const RpcTraceContext = Schema.TaggedStruct("effect-cf/RpcTraceContext/v1", {
-  traceId: Schema.String,
-  spanId: Schema.String,
-  sampled: Schema.Boolean,
-});
-
 const hostRpcMethods = {
   submit: "submitEncoded",
   awaitSettlement: "awaitSettlementEncoded",
@@ -407,20 +400,9 @@ export class CloudflareConversationClient extends Context.Service<
           operation: keyof typeof hostRpcMethods,
           encoded: unknown,
         ): Effect.fn.Return<HostResponse, ConversationClientError | HostProtocolError> {
-          const current = yield* Effect.serviceOption(Tracer.ParentSpan);
-          // An empty tuple preserves native arity. Passing `undefined` still adds an argument.
-          const traceArgs: [] | [typeof RpcTraceContext.Type] =
-            rpcTracing !== undefined &&
-            Option.isSome(current) &&
-            !Context.get(current.value.annotations, Tracer.DisablePropagation)
-              ? [
-                  RpcTraceContext.make({
-                    traceId: current.value.traceId,
-                    spanId: current.value.spanId,
-                    sampled: current.value.sampled,
-                  }),
-                ]
-              : [];
+          // Empty arguments preserve native arity. Passing `undefined` still adds an argument.
+          const traceArgs =
+            rpcTracing === undefined ? [] : yield* RpcTracing.withRpcTraceContext([]);
           const raw = yield* Effect.tryPromise({
             try: () => {
               const stub = namespace.get(namespace.idFromName(conversationId));
@@ -451,23 +433,11 @@ export class CloudflareConversationClient extends Context.Service<
           );
         },
         (effect, conversationId, operation) =>
-          Effect.withSpan(
-            effect,
-            rpcTracing === undefined
-              ? "CloudflareConversationClient.call"
-              : `${rpcTracing}/${hostRpcMethods[operation]}`,
-            rpcTracing === undefined
-              ? { attributes: { conversationId, operation } }
-              : {
-                  kind: "client",
-                  attributes: {
-                    "sentry.op": "rpc",
-                    "rpc.system.name": "cloudflare",
-                    "rpc.method": `${rpcTracing}/${hostRpcMethods[operation]}`,
-                    "server.address": rpcTracing,
-                  },
-                },
-          ),
+          rpcTracing === undefined
+            ? Effect.withSpan(effect, "CloudflareConversationClient.call", {
+                attributes: { conversationId, operation },
+              })
+            : RpcTracing.withRpcClientSpan(effect, rpcTracing, hostRpcMethods[operation]),
       );
 
       const expect = <ResultSchema extends Schema.Top, FailureSchema extends Schema.Top>(

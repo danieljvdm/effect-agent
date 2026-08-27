@@ -35,7 +35,6 @@ import {
   encodePortResponse,
   type PortRequest,
 } from "@effect-agent/storage-cloudflare";
-import type { DurableObject as CloudflareDurableObject } from "cloudflare:workers";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import {
   DurableObject as EffectCfDurableObject,
@@ -704,8 +703,10 @@ const effectCfPlatformLayer = (
   return Layer.merge(context, namespace);
 };
 
-/** The public endpoint surface of one Conversation Object instance. */
-export interface ConversationObjectInstance extends CloudflareDurableObject {
+/** The public endpoints and effect-cf invocation hook of one Conversation Object instance. */
+export interface ConversationObjectInstance<EventServices = never> extends InstanceType<
+  EffectCfDurableObject.DurableObjectClass<Record<never, never>, RuntimeServices | EventServices>
+> {
   submitEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   awaitSettlementEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   awaitProgressEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
@@ -724,8 +725,8 @@ export interface ConversationObjectInstance extends CloudflareDurableObject {
 }
 
 /** The constructor shape workerd instantiates for each Conversation Object. */
-export interface ConversationObjectClass {
-  new (ctx: DurableObjectState, env: Cloudflare.Env): ConversationObjectInstance;
+export interface ConversationObjectClass<EventServices = never> {
+  new (ctx: DurableObjectState, env: Cloudflare.Env): ConversationObjectInstance<EventServices>;
 }
 
 /**
@@ -745,7 +746,7 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
     | EffectCfDurableObjectState.DurableObjectState
     | WorkerEnvironment
   >,
-): ConversationObjectClass => {
+): ConversationObjectClass<EventServices> => {
   const application: Layer.Layer<
     RuntimeServices,
     CloudflareDurableRuntimeInitializationError | CloudflareBindingError,
