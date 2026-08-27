@@ -39563,7 +39563,7 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
         const handleId = `${binding.outerToolCallId}#${index2}`;
         const executionClass = getToolExecutionClass(tool);
         let failureObservation;
-        const startedFailure = (kind, tag2, message, cause) => {
+        const startedFailure = (kind, tag2, message) => {
           const outcome = programmaticOutcomeError(index2, tag2, message);
           if (observer === undefined)
             return exports_Effect.succeed(outcome);
@@ -39580,8 +39580,7 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
             executionClass,
             kind,
             tag: tag2,
-            ...kind === "handler-error" ? {} : { message: toolFailureMessage(message) },
-            ...cause === undefined ? {} : { cause }
+            message: toolFailureMessage(message)
           };
           return exports_Effect.succeed(outcome);
         };
@@ -39624,7 +39623,25 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
             return;
           }), exports_Effect.catchCauseFilter(exports_Cause.findError, (error2, cause) => exports_Effect.succeed(new BrokerHandlerFailure(error2, cause))));
           if (handlerFailed instanceof BrokerHandlerFailure) {
-            return yield* startedFailure("handler-error", errorTag(handlerFailed.error), errorMessage(handlerFailed.error), handlerFailed.cause);
+            const tag2 = errorTag(handlerFailed.error);
+            if (observer !== undefined) {
+              failureObservation = {
+                _tag: "ProgrammaticToolFailure",
+                agentId: binding.context.agentId,
+                conversationId: binding.context.conversationId,
+                runId: binding.context.runId,
+                turnId: binding.turnId,
+                toolCallId: handleId,
+                parentToolCallId: binding.outerToolCallId,
+                sequenceIndex: index2,
+                toolName: input.toolName,
+                executionClass,
+                kind: "handler-error",
+                tag: tag2,
+                cause: handlerFailed.cause
+              };
+            }
+            return programmaticOutcomeError(index2, tag2, errorMessage(handlerFailed.error));
           }
           if (resultAfterTerminal) {
             return yield* startedFailure("protocol", "ModelProtocolError", `Tool Call ${handleId} produced more than one terminal result`);

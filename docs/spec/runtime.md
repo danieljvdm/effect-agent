@@ -290,6 +290,8 @@ The following taxonomy is normative (RUN-036).
 code point. `handler-error` carries no message. A Cause-backed observation retains the exact
 Effect Cause held by the engine, with its Reasons and annotations; source-less outcomes never
 acquire a fabricated Cause.
+The public types encode these guarantees through `kind`: handler errors require `cause`,
+infrastructure/protocol observations require `message`, and declared failures allow neither.
 
 Declared failures expose only their tag, never their message, Cause, decoded result, or encoded
 payload. For Code Mode this follows CAP-016. For direct Tools it is a deliberate uniform policy,

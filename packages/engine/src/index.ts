@@ -5865,10 +5865,9 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
             const executionClass = getToolExecutionClass(tool);
             let failureObservation: ProgrammaticToolFailure | undefined;
             const startedFailure = (
-              kind: Exclude<ProgrammaticToolFailure["kind"], "declared-failure">,
+              kind: "infrastructure" | "protocol",
               tag: string,
               message: string,
-              cause?: Cause.Cause<unknown>,
             ): Effect.Effect<ProgrammaticCallOutcome> => {
               const outcome = programmaticOutcomeError(index, tag, message);
               if (observer === undefined) return Effect.succeed(outcome);
@@ -5885,8 +5884,7 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                 executionClass,
                 kind,
                 tag,
-                ...(kind === "handler-error" ? {} : { message: toolFailureMessage(message) }),
-                ...(cause === undefined ? {} : { cause }),
+                message: toolFailureMessage(message),
               };
               return Effect.succeed(outcome);
             };
@@ -5967,12 +5965,25 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                   ),
                 );
                 if (handlerFailed instanceof BrokerHandlerFailure) {
-                  return yield* startedFailure(
-                    "handler-error",
-                    errorTag(handlerFailed.error),
-                    errorMessage(handlerFailed.error),
-                    handlerFailed.cause,
-                  );
+                  const tag = errorTag(handlerFailed.error);
+                  if (observer !== undefined) {
+                    failureObservation = {
+                      _tag: "ProgrammaticToolFailure",
+                      agentId: binding.context.agentId,
+                      conversationId: binding.context.conversationId,
+                      runId: binding.context.runId,
+                      turnId: binding.turnId,
+                      toolCallId: handleId,
+                      parentToolCallId: binding.outerToolCallId,
+                      sequenceIndex: index,
+                      toolName: input.toolName,
+                      executionClass,
+                      kind: "handler-error",
+                      tag,
+                      cause: handlerFailed.cause,
+                    };
+                  }
+                  return programmaticOutcomeError(index, tag, errorMessage(handlerFailed.error));
                 }
                 if (resultAfterTerminal) {
                   return yield* startedFailure(

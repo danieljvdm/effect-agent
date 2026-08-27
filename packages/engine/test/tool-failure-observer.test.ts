@@ -1174,12 +1174,28 @@ layer(identifiers)("RUN-036 trusted Tool failure observation", (it) => {
     }),
   );
 
-  it("preserves inferred run/stream/start error and requirement channels", () => {
+  it("narrows diagnostics by kind and preserves inferred run/stream/start error and requirement channels", () => {
+    type HandlerError = Extract<ToolFailureObservation, { readonly kind: "handler-error" }>;
+    type DeclaredFailure = Extract<ToolFailureObservation, { readonly kind: "declared-failure" }>;
+    type Diagnostic = Extract<
+      ToolFailureObservation,
+      { readonly kind: "infrastructure" | "protocol" }
+    >;
+    expectTypeOf<HandlerError["cause"]>().toEqualTypeOf<Cause.Cause<unknown>>();
+    expectTypeOf<HandlerError["message"]>().toEqualTypeOf<undefined>();
+    expectTypeOf<DeclaredFailure["cause"]>().toEqualTypeOf<undefined>();
+    expectTypeOf<DeclaredFailure["message"]>().toEqualTypeOf<undefined>();
+    expectTypeOf<Diagnostic["message"]>().toEqualTypeOf<string>();
     const agent = binding(queries, [call("query")]);
     const options: RunOptions<QueryFailure, DiagnosticSource> = {
       budget: { guard: (effect) => effect, consume: () => Effect.asVoid(DiagnosticSource) },
     };
-    const observer = toolFailureObserverLayer({ observe: () => Effect.void });
+    const observer = toolFailureObserverLayer({
+      observe: (observation) =>
+        observation.kind === "handler-error"
+          ? ErrorReporter.report(observation.cause)
+          : Effect.void,
+    });
     const run = AgentRuntime.run(agent, "go", options);
     const observedRun = run.pipe(Effect.provide(observer));
     const stream = AgentRuntime.stream(agent, "go", options);

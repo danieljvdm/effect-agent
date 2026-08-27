@@ -38,21 +38,42 @@ export interface ModelToolFailure extends ToolFailureIdentity {
   readonly cause?: never;
 }
 
-/** A programmatic Handler started and its failure became a broker outcome. */
-export interface ProgrammaticToolFailure extends ToolFailureIdentity {
+interface ProgrammaticToolFailureIdentity extends ToolFailureIdentity {
   readonly _tag: "ProgrammaticToolFailure";
-  readonly kind: "declared-failure" | "handler-error" | "infrastructure" | "protocol";
   /** `${parentToolCallId}#${sequenceIndex}`, raw and unique only within this in-memory pass. */
   readonly toolCallId: string;
   readonly parentToolCallId: ToolCallId;
   /** Presence means the Handler started and consumed budget; side effects may exist. */
   readonly sequenceIndex: number;
   readonly executionClass: ToolExecutionClassValue;
-  /** Infrastructure/protocol only, at most 4096 UTF-8 bytes. Never a declared payload. */
-  readonly message?: string | undefined;
-  /** Original Cause when one exists; always for handler-error, never for declared-failure. */
+}
+
+interface ProgrammaticDeclaredFailure extends ProgrammaticToolFailureIdentity {
+  readonly kind: "declared-failure";
+  readonly message?: never;
+  readonly cause?: never;
+}
+
+interface ProgrammaticHandlerFailure extends ProgrammaticToolFailureIdentity {
+  readonly kind: "handler-error";
+  readonly message?: never;
+  /** The original, uncollapsed Cause captured before the broker's diagnostic projection. */
+  readonly cause: Cause.Cause<unknown>;
+}
+
+interface ProgrammaticDiagnosticFailure extends ProgrammaticToolFailureIdentity {
+  readonly kind: "infrastructure" | "protocol";
+  /** At most 4096 UTF-8 bytes. Never a declared payload. */
+  readonly message: string;
+  /** Original Cause when one exists; never fabricated from a source-less rejection. */
   readonly cause?: Cause.Cause<unknown> | undefined;
 }
+
+/** A programmatic Handler started and its failure became a broker outcome. */
+export type ProgrammaticToolFailure =
+  | ProgrammaticDeclaredFailure
+  | ProgrammaticHandlerFailure
+  | ProgrammaticDiagnosticFailure;
 
 /** A programmatic invocation was rejected before its Handler started. No inner identity exists. */
 export interface ProgrammaticPreflightFailure extends ToolFailureIdentity {
@@ -62,7 +83,7 @@ export interface ProgrammaticPreflightFailure extends ToolFailureIdentity {
   /** Absent if the Tool could not be resolved. */
   readonly executionClass?: ToolExecutionClassValue | undefined;
   /** At most 4096 UTF-8 bytes. */
-  readonly message?: string | undefined;
+  readonly message: string;
   /** Original Cause only for Cause-backed rejection, never fabricated from an outcome. */
   readonly cause?: Cause.Cause<unknown> | undefined;
 }
