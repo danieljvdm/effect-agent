@@ -1,5 +1,21 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.34
+
+### Patch Changes
+
+- [#202](https://github.com/danieljvdm/effect-agent/pull/202) [`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Align the Effect family with rc.111 to decode nested OpenAI error events, and preserve transformed Tool parameters under its encoded response contract.
+
+- Updated dependencies [[`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee), [`baecd08`](https://github.com/danieljvdm/effect-agent/commit/baecd08f1d6f2c0698e16487cdcccf2f6ffcebca), [`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee), [`baecd08`](https://github.com/danieljvdm/effect-agent/commit/baecd08f1d6f2c0698e16487cdcccf2f6ffcebca), [`aa3ebfb`](https://github.com/danieljvdm/effect-agent/commit/aa3ebfb4fd1e69be77c433a881ddecb3567c36c2)]:
+  - @effect-agent/engine@0.1.0-beta.34
+  - @effect-agent/session@0.1.0-beta.34
+  - @effect-agent/core@0.1.0-beta.34
+  - @effect-agent/capabilities@0.1.0-beta.34
+  - @effect-agent/sandbox@0.1.0-beta.34
+  - @effect-agent/storage-memory@0.1.0-beta.34
+  - @effect-agent/storage-sqlite@0.1.0-beta.34
+  - @effect-agent/platform-node@0.1.0-beta.34
+
 ## 0.1.0-beta.33
 
 ### Patch Changes
