@@ -416,14 +416,18 @@ No durability milestone is complete while its crash tests are skipped.
 
 All ordinary test suites remain required, including crash, soak, and adapter conformance suites.
 Tests import source directly, so package test tasks may run without dependency ordering under a
-bounded concurrency limit. A cached success may replace execution only when Vite Task's input
-fingerprint still matches. Imported workspace source and dependencies must remain tracked; changing
+bounded concurrency limit. CI must account for each task's own worker pool: expensive package
+suites run on separate runners, and the remaining-workspace job must include new packages by
+default. Every matrix job remains required by the `ready` gate. A cached success may replace
+execution only when Vite Task's input fingerprint still matches. Imported workspace source and
+dependencies must remain tracked; changing
 either must invalidate affected results. Mutable runner result files are not test inputs.
 Changing only the config loader does not stabilize the cache, because other package tasks still
 create Vite's temporary directories and change their parent directory listings.
 
 Main pushes publish the shared test cache used by later PRs, without repeating static checks,
 builds, or the PR-only `ready` check. PR runs can also retain results for their own later commits.
+Successful task results survive another task's failure; a failed task is never cached as success.
 `vp run --no-cache test` bypasses result reuse and runs every ordinary suite.
 
 ## 14. Requirements

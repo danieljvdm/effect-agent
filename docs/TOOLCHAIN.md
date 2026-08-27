@@ -344,10 +344,13 @@ automation are deferred until open-source preparation.
 ## CI and hooks
 
 The CI workflow runs the full gate on pull requests. Ordinary PRs install
-the exact Bun version with a frozen-lockfile install, then run the `ready` gate as three parallel
-jobs for static checks (`vp run check`), tests (`vp run test`), and builds (`vp run build`) with
-a fan-in job that keeps the required branch-protection check named `ready`. The exact internal
-Changesets release PR is the only exception: CI and PR Review path-filter the exact set of files
+the exact Bun version with a frozen-lockfile install, then run static checks, tests, and builds
+in parallel, with a fan-in job that keeps the required branch-protection check named `ready`.
+The test matrix gives `platform-node`, `testing`, `platform-cloudflare`, and `storage-cloudflare`
+separate runners. Its remaining-workspace job includes every other package, including new
+packages. Each runner executes one package test task at a time, because every task already
+starts its own Vitest worker pool. File isolation, test counts, and timeouts remain unchanged.
+The exact internal Changesets release PR is the only exception: CI and PR Review path-filter the exact set of files
 Changesets may generate. GitHub suppresses `pull_request` workflows caused by `GITHUB_TOKEN`, so
 the trusted Release run validates the PR lineage, regenerates the complete tree from its checked-out
 `main` commit, and creates the required `ready` check on the verified head through the Checks API.
@@ -360,8 +363,10 @@ strict up-to-date branch rule before reporting. Both cases are fail-closed.
 
 Each ordinary-PR job restores and saves the Vite Task cache
 (`node_modules/.vite/task-cache`), so later synchronize events on the same PR can replay
-per-package gates whose fingerprinted inputs did not change. GitHub scopes those caches to the
-PR's merge ref. Main pushes run only the test job to publish a shared baseline for new PRs;
+per-package gates whose fingerprinted inputs did not change. Test matrix jobs have separate
+cache keys so their snapshots cannot shadow each other. They also save successful task results
+when another task fails; Vite Task never caches the failed task. GitHub scopes those caches to the
+PR's merge ref. Main pushes run only the test matrix to publish shared baselines for new PRs;
 static checks, builds, and the `ready` fan-in remain PR-only. Main test runs finish independently
 so a newer push cannot repeatedly cancel cache publication. No test is skipped based on a changed-path
 list: Vite Task validates each restored task's inputs before replay. The CI workflow does not

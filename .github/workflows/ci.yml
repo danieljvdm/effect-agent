@@ -78,9 +78,32 @@ jobs:
           key: ${{ steps.task-cache.outputs.cache-primary-key }}
 
   test:
-    name: Tests
+    name: Tests (${{ matrix.suite }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Each suite already starts a full Vitest/workerd worker pool. Running
+    # the heavy suites together oversubscribes one runner and can starve the
+    # crash fixtures' ownership-lease renewals. Keep their runners separate.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: workspace
+            filters: >-
+              -F './packages/*'
+              -F './examples/*'
+              -F '!@effect-agent/platform-node'
+              -F '!@effect-agent/testing'
+              -F '!@effect-agent/platform-cloudflare'
+              -F '!@effect-agent/storage-cloudflare'
+          - suite: platform-node
+            filters: -F @effect-agent/platform-node
+          - suite: testing
+            filters: -F @effect-agent/testing
+          - suite: platform-cloudflare
+            filters: -F @effect-agent/platform-cloudflare
+          - suite: storage-cloudflare
+            filters: -F @effect-agent/storage-cloudflare
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -101,16 +124,21 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: node_modules/.vite/task-cache
-          key: vite-task-test-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: vite-task-test-v2-${{ matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vite-task-test-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-
-            vite-task-test-v2-${{ runner.os }}-${{ runner.arch }}-
+            vite-task-test-v2-${{ matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-
+            vite-task-test-v2-${{ matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Run workspace test suites
-        run: ./node_modules/.bin/vp run -v test
+        id: tests
+        run: >-
+          ./node_modules/.bin/vp run -v --parallel --concurrency-limit 1
+          --fail-if-no-match ${{ matrix.filters }} test
 
+      # Vite Task never caches failed tasks. Retain successful siblings so
+      # fixing one failure does not force the entire suite to run cold again.
       - name: Save Vite Task cache
-        if: success()
+        if: ${{ !cancelled() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
         uses: actions/cache/save@v4
         with:
           path: node_modules/.vite/task-cache
