@@ -342,12 +342,23 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
       await page.$eval(
         selector,
         (element, nextValue) => {
-          if (!("value" in element)) {
+          // Bypass instance setters so React can detect the change when events fire.
+          let prototype = Reflect.getPrototypeOf(element);
+          let setValue: ((value: string) => void) | undefined;
+          while (prototype !== null) {
+            const setter = Reflect.getOwnPropertyDescriptor(prototype, "value")?.set;
+            if (typeof setter === "function") {
+              setValue = setter;
+              break;
+            }
+            prototype = Reflect.getPrototypeOf(prototype);
+          }
+          if (setValue === undefined) {
             throw new Error("The selector did not resolve to a fillable field");
           }
           const focus = Reflect.get(element, "focus");
           if (typeof focus === "function") Reflect.apply(focus, element, []);
-          Reflect.set(element, "value", nextValue);
+          Reflect.apply(setValue, element, [nextValue]);
           const dispatchEvent = Reflect.get(element, "dispatchEvent");
           if (typeof dispatchEvent === "function") {
             Reflect.apply(dispatchEvent, element, [new Event("input", { bubbles: true })]);
