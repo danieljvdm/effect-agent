@@ -252,6 +252,9 @@ The engine captures the reference once per Run and passes that value to direct T
 the broker. `DurableAgentRuntime` captures it once at Layer acquisition and explicitly re-provides
 that value, including absence, around each interpreter invocation. Caller context cannot replace
 the captured host choice. Node and Cloudflare accept the same closed `toolFailureObserver` option.
+Omitting that platform option explicitly provides absence, masking an observer in the surrounding
+Layer-acquisition context. Direct users of `DurableAgentRuntime.layer` install the engine Layer
+at acquisition instead.
 Adapter certification uses the default-none observer.
 
 Observations are plain readonly interfaces, deliberately not persisted or transported Schemas.
@@ -303,7 +306,10 @@ and early-close race. Delivery runs inline under that call's own batch permit, s
 occupies one `toolConcurrency` slot. Started broker calls use the outer call's already-held permit.
 Their outcome and terminal telemetry are fixed before delivery, which finishes before `pass.invoke`
 returns. The original Cause is retained before the broker's diagnostic projection.
-Preflight rejections also deliver inline, without acquiring a new execution permit. There is no
+Preflight rejections also deliver inline. They share one reporting Semaphore permit per broker,
+across all its passes, including passes retained after close. This bounds simultaneous reporting
+even though rejections consume no execution budget. Waiting callers remain interruptible in their
+own structured fibers and acquire no additional Tool-execution permit. There is no observation
 queue, background fiber, or daemon.
 
 Observer defects go to `ErrorReporter`; reporter defects are isolated too. Neither may replace

@@ -1,5 +1,6 @@
 import type { SubmissionId } from "@effect-agent/core";
 import {
+  CurrentToolFailureObserver,
   toolFailureObserverLayer,
   type RunCostEstimator,
   type RunToolFailureObserver,
@@ -113,7 +114,7 @@ export interface NodeDurableRuntimeOptions {
   readonly abortPollInterval?: number | undefined;
   /** Deployment-owned pricing authority used by durable cost budgets and settlements. */
   readonly estimateCostMicrousd?: RunCostEstimator | undefined;
-  /** Trusted in-process Tool failure reporting, closed over host dependencies. Default absent. */
+  /** Closed trusted Tool failure reporting. Omission masks ambient observers at construction. */
   readonly toolFailureObserver?: RunToolFailureObserver | undefined;
   /** Milliseconds; default 5000. */
   readonly busyTimeout?: number | undefined;
@@ -379,7 +380,7 @@ export class NodeDurableRuntime {
         const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
         const observerLayer =
           options.toolFailureObserver === undefined
-            ? Layer.empty
+            ? Layer.succeed(CurrentToolFailureObserver)(undefined)
             : toolFailureObserverLayer(options.toolFailureObserver);
         const bindingResolverLayer = AgentBindingResolver.layer(options.bindings ?? []);
         const ports = Layer.mergeAll(

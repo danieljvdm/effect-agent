@@ -76,7 +76,8 @@ export type ToolFailureObservation =
 /**
  * Trusted in-process observation of non-propagating application Tool failures (RUN-036).
  * Capture reporting dependencies before installation. Delivery is inline under the existing
- * Tool permit, at most once per in-memory attempt, with isolated observer/reporter defects.
+ * Tool permit for started calls; preflight reporting is serialized per broker. Delivery is at
+ * most once per in-memory attempt, with isolated observer/reporter defects.
  * External interruption may end delivery. Replacement Attempts may repeat IDs and observations.
  * Never reenter ToolBroker, RunEventSink, or Agent execution, or intentionally self-interrupt.
  */

@@ -301,7 +301,8 @@ configured `costBudgetMicrousd` policies fail typed when no estimator exists.
 
 `NodeDurableRuntimeOptions.toolFailureObserver` and
 `CloudflareDurableRuntimeOptions.toolFailureObserver` install the same engine-owned closed
-observer through `toolFailureObserverLayer` (RUN-036). Both default to absence. These are trusted
+observer through `toolFailureObserverLayer` (RUN-036). Omitting either option explicitly provides
+absence, masking any observer in the surrounding Layer-acquisition context. These are trusted
 in-process construction values, outside the serialized configuration Schemas. The coordinator
 captures the reference once and explicitly provides it to each interpreter Attempt; ambient
 worker context cannot substitute another observer. Delivery adds no durable mutation or replay

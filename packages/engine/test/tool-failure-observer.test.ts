@@ -545,11 +545,13 @@ layer(identifiers)("RUN-036 trusted Tool failure observation", (it) => {
   );
 
   it.effect(
-    "observes concurrent and retained-pass rejections without allocating an inner identity",
+    "serializes concurrent and retained-pass preflight observation and cancels waiting delivery",
     () =>
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
+        let observationEntered = yield* Deferred.make<void>();
+        let observationRelease = yield* Deferred.make<void>();
         const inner = yield* queries.pipe(
           Effect.provide(
             queries.toLayer({
@@ -562,25 +564,89 @@ layer(identifiers)("RUN-036 trusted Tool failure observation", (it) => {
           ),
         );
         const observations: Array<ToolFailureObservation> = [];
-        let retained: ToolBrokerPass | undefined;
-        yield* runPass(inner, (pass) =>
+        let active = 0;
+        let peak = 0;
+        let finalized = 0;
+        const observer: RunToolFailureObserver = {
+          observe: (observation) =>
+            Effect.gen(function* () {
+              active += 1;
+              peak = Math.max(peak, active);
+              observations.push(observation);
+              yield* Deferred.succeed(observationEntered, undefined);
+              yield* Deferred.await(observationRelease);
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  active -= 1;
+                  finalized += 1;
+                }),
+              ),
+            ),
+        };
+        const burst = (passes: ReadonlyArray<ToolBrokerPass>, tag: string) =>
           Effect.gen(function* () {
-            retained = pass;
-            const active = yield* invoke(pass).pipe(Effect.forkChild);
+            observationEntered = yield* Deferred.make<void>();
+            observationRelease = yield* Deferred.make<void>();
+            const fibers = yield* Effect.forEach(passes, (pass) =>
+              invoke(pass).pipe(Effect.forkChild),
+            );
+            yield* Deferred.await(observationEntered);
+            yield* TestClock.adjust("0 millis");
+            expect(active).toBe(1);
+            const cancelled = fibers.at(-1);
+            if (cancelled === undefined) throw new Error("Expected a waiting preflight invocation");
+            cancelled.interruptUnsafe(7_335);
+            const interrupted = yield* Fiber.await(cancelled);
+            if (Exit.isSuccess(interrupted))
+              throw new Error("Expected interrupted preflight observation");
+            expect(Cause.hasInterrupts(interrupted.cause)).toBe(true);
+            yield* Deferred.succeed(observationRelease, undefined);
+            const outcomes = yield* Effect.forEach(fibers.slice(0, -1), Fiber.join);
+            expect(outcomes).toEqual(
+              Array.from({ length: 3 }, () =>
+                expect.objectContaining({
+                  _tag: "ProgrammaticCallError",
+                  index: undefined,
+                  errorTag: tag,
+                }),
+              ),
+            );
+            expect(active).toBe(0);
+          });
+        let retained: readonly [ToolBrokerPass, ToolBrokerPass] | undefined;
+        yield* runBroker((broker) =>
+          Effect.gen(function* () {
+            const pass = yield* broker
+              .openPass(inner, { maxResultBytes: 1_024 })
+              .pipe(Effect.orDie);
+            const otherPass = yield* broker
+              .openPass(inner, { maxResultBytes: 1_024 })
+              .pipe(Effect.orDie);
+            retained = [pass, otherPass];
+            const handler = yield* invoke(pass).pipe(Effect.forkChild);
             yield* Deferred.await(entered);
-            yield* invoke(pass);
+            yield* burst([pass, pass, pass, pass], "ProgrammaticCallConcurrencyError");
             yield* Deferred.succeed(release, undefined);
-            yield* Fiber.join(active);
+            yield* Fiber.join(handler);
             return null;
           }),
-        ).pipe(Effect.provide(toolFailureObserverLayer(collect(observations))));
+        ).pipe(Effect.provide(toolFailureObserverLayer(observer)));
         if (retained === undefined) throw new Error("Expected a retained pass");
-        // Even after the providing context closes, the broker retains the Run's captured observer.
-        yield* invoke(retained);
+        // All passes from this broker retain the same bounded delivery owner after the Run closes.
+        yield* burst(
+          [retained[0], retained[1], retained[0], retained[1]],
+          "ToolBrokerUnavailableError",
+        );
         expect(observations.map(({ tag }) => tag)).toEqual([
           "ProgrammaticCallConcurrencyError",
+          "ProgrammaticCallConcurrencyError",
+          "ProgrammaticCallConcurrencyError",
+          "ToolBrokerUnavailableError",
+          "ToolBrokerUnavailableError",
           "ToolBrokerUnavailableError",
         ]);
+        expect({ peak, finalized }).toEqual({ peak: 1, finalized: 6 });
         for (const observation of observations) {
           expect(observation).toMatchObject({
             _tag: "ProgrammaticPreflightFailure",

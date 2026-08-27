@@ -4,7 +4,11 @@ import type {
   RunCostEstimator,
   RunToolFailureObserver,
 } from "@effect-agent/engine";
-import { RunContextPreparationPassthrough, toolFailureObserverLayer } from "@effect-agent/engine";
+import {
+  CurrentToolFailureObserver,
+  RunContextPreparationPassthrough,
+  toolFailureObserverLayer,
+} from "@effect-agent/engine";
 import {
   AgentBindingResolver,
   DurableAgentRuntime,
@@ -86,7 +90,7 @@ export interface CloudflareDurableRuntimeOptions {
   readonly abortPollInterval?: number | undefined;
   /** Deployment-owned pricing authority used by durable cost budgets and settlements. */
   readonly estimateCostMicrousd?: RunCostEstimator | undefined;
-  /** Trusted in-process Tool failure reporting, closed over host dependencies. Default absent. */
+  /** Closed trusted Tool failure reporting. Omission masks ambient observers at construction. */
   readonly toolFailureObserver?: RunToolFailureObserver | undefined;
   /** Milliseconds; default 25. */
   readonly observationPollInterval?: number | undefined;
@@ -390,7 +394,7 @@ export class CloudflareDurableRuntime {
             : operationAuthorizerLayer(options.operationAuthorizer);
         const observerLayer =
           options.toolFailureObserver === undefined
-            ? Layer.empty
+            ? Layer.succeed(CurrentToolFailureObserver)(undefined)
             : toolFailureObserverLayer(options.toolFailureObserver);
         const bindingResolverLayer = Layer.effect(AgentBindingResolver)(
           Effect.map(

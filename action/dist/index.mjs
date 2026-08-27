@@ -39487,6 +39487,7 @@ var makeToolBrokerService = (binding) => exports_Effect.map(ToolSpanTelemetry, (
 var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
   const lifecycle = { closed: false };
   const observer = binding.context.toolFailureObserver;
+  const preflightObserver = observer === undefined ? undefined : { observer, permits: exports_Semaphore.makeUnsafe(1) };
   const service4 = {
     openPass: (toolkit, passOptions) => exports_Effect.gen(function* () {
       if (lifecycle.closed) {
@@ -39503,9 +39504,9 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
       const state = { nextIndex: 0, inFlight: false };
       const preflightFailure = (input, kind, tag2, message, cause) => {
         const outcome = programmaticOutcomeError(undefined, tag2, message);
-        if (observer === undefined)
+        if (preflightObserver === undefined)
           return exports_Effect.succeed(outcome);
-        return deliverToolFailure(observer, {
+        return deliverToolFailure(preflightObserver.observer, {
           _tag: "ProgrammaticPreflightFailure",
           agentId: binding.context.agentId,
           conversationId: binding.context.conversationId,
@@ -39518,7 +39519,7 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
           tag: tag2,
           message: toolFailureMessage(message),
           ...cause === undefined ? {} : { cause }
-        }).pipe(exports_Effect.as(outcome));
+        }).pipe(preflightObserver.permits.withPermits(1), exports_Effect.as(outcome));
       };
       const body = (input) => exports_Effect.gen(function* () {
         if (!hasTool(toolkit.tools, input.toolName)) {

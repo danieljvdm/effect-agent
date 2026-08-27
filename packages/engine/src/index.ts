@@ -5712,6 +5712,11 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
 ): LiveToolBroker => {
   const lifecycle = { closed: false };
   const observer = binding.context.toolFailureObserver;
+  // Rejections consume no execution budget and may arrive concurrently, even through retained
+  // passes after close. Share one reporting permit across every pass from this broker. Callers
+  // wait in their own structured fibers; there is no observation queue or consumer fiber.
+  const preflightObserver =
+    observer === undefined ? undefined : { observer, permits: Semaphore.makeUnsafe(1) };
   const service: ToolBrokerService = {
     openPass: (toolkit, passOptions) =>
       Effect.gen(function* () {
@@ -5745,8 +5750,8 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
           cause?: Cause.Cause<unknown>,
         ): Effect.Effect<ProgrammaticCallOutcome> => {
           const outcome = programmaticOutcomeError(undefined, tag, message);
-          if (observer === undefined) return Effect.succeed(outcome);
-          return deliverToolFailure(observer, {
+          if (preflightObserver === undefined) return Effect.succeed(outcome);
+          return deliverToolFailure(preflightObserver.observer, {
             _tag: "ProgrammaticPreflightFailure",
             agentId: binding.context.agentId,
             conversationId: binding.context.conversationId,
@@ -5761,7 +5766,7 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
             tag,
             message: toolFailureMessage(message),
             ...(cause === undefined ? {} : { cause }),
-          }).pipe(Effect.as(outcome));
+          }).pipe(preflightObserver.permits.withPermits(1), Effect.as(outcome));
         };
 
         const body = (input: ProgrammaticToolInput): Effect.Effect<ProgrammaticCallOutcome> =>

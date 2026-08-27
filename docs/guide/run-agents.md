@@ -150,6 +150,7 @@ IDs and observations, and replay-injected settled calls are not observed.
 Durable hosts pass the same closed value as `NodeDurableRuntimeOptions.toolFailureObserver` or
 `CloudflareDurableRuntimeOptions.toolFailureObserver`. The coordinator captures it when its Layer
 is built and uses that choice for each Attempt, independently of the worker caller's context.
+Omitting the platform option disables observation even if an observer surrounds Layer construction.
 See the [full taxonomy and exclusions](../spec/runtime#tool-failure-observation).
 
 ## Interruption is ownership
