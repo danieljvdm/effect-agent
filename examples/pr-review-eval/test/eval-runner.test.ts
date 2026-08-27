@@ -205,7 +205,7 @@ describe("PR-review model eval", () => {
         guidance: "  Keep the public error channel typed.  ",
       });
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
-      expect(variant.configuration.reviewerProfile).toBe("source-review-v4");
+      expect(variant.configuration.reviewerProfile).toBe("source-review-v10");
       expect(variant.configuration.guidanceDigest).toBe(
         yield* digestGuidance("Keep the public error channel typed."),
       );
@@ -268,6 +268,24 @@ describe("PR-review model eval", () => {
               paths: [],
               truncated: false,
             });
+            expect(
+              yield* source.searchFile({
+                path: privatePath,
+                revision: "head",
+                query: privateQuery,
+                startLine: 1,
+              }),
+            ).toMatchObject({ totalLines: 2, matches: [], nextLine: null });
+            expect(
+              yield* Effect.result(
+                source.searchFile({
+                  path: privateMissingPath,
+                  revision: "base",
+                  query: privateQuery,
+                  startLine: 2,
+                }),
+              ),
+            ).toMatchObject({ _tag: "Failure" });
             return successfulOutcome;
           }).pipe(
             Effect.mapError((error) =>
@@ -298,7 +316,7 @@ describe("PR-review model eval", () => {
       const access = logs.filter(
         (entry) => entry.annotations.evalRepositoryOperation !== undefined,
       );
-      expect(access).toHaveLength(6);
+      expect(access).toHaveLength(10);
       expect(new Set(access.map((entry) => entry.annotations.evalTrial))).toEqual(new Set([1, 2]));
       expect(
         access.every(
@@ -308,7 +326,11 @@ describe("PR-review model eval", () => {
         ),
       ).toBe(true);
       expect(
-        access.filter((entry) => entry.annotations.evalRepositoryOutcome === "failure"),
+        access.filter(
+          (entry) =>
+            entry.annotations.evalRepositoryOutcome === "failure" &&
+            entry.annotations.evalRepositoryOperation === "read_file",
+        ),
       ).toEqual([
         expect.objectContaining({
           annotations: expect.objectContaining({
@@ -316,6 +338,25 @@ describe("PR-review model eval", () => {
             evalRepositoryRevision: "base",
             evalRepositoryStartLine: 2,
             evalRepositoryLineCount: 3,
+          }),
+        }),
+        expect.objectContaining({
+          annotations: expect.objectContaining({ evalRepositoryFileIndex: -1 }),
+        }),
+      ]);
+      expect(
+        access.filter(
+          (entry) =>
+            entry.annotations.evalRepositoryOperation === "search_file" &&
+            entry.annotations.evalRepositoryOutcome === "failure",
+        ),
+      ).toEqual([
+        expect.objectContaining({
+          annotations: expect.objectContaining({
+            evalRepositoryFileIndex: -1,
+            evalRepositoryRevision: "base",
+            evalRepositoryStartLine: 2,
+            evalRepositoryQueryLength: privateQuery.length,
           }),
         }),
         expect.objectContaining({

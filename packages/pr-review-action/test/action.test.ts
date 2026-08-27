@@ -61,11 +61,13 @@ describe("immutable review source", () => {
         : Effect.die(`unexpected source read for ${path}`),
   });
 
-  it.effect("reads the requested range from the exact revision through the Effect service", () =>
+  it.effect("reads and searches the exact requested revision through the Effect service", () =>
     Effect.gen(function* () {
       const repository = makeReviewRepository({
-        base: snapshot("base-sha", { "src/value.ts": "base one\nbase two\nbase three\n" }),
-        head: snapshot("head-sha", { "src/value.ts": "head one\nhead two\n" }),
+        base: snapshot("base-sha", {
+          "src/value.ts": "base one\nbase two\nneedle in base\n",
+        }),
+        head: snapshot("head-sha", { "src/value.ts": "head one\nneedle in head\n" }),
         ignore: [],
         unavailablePaths: new Set(),
       });
@@ -85,6 +87,33 @@ describe("immutable review source", () => {
         startLine: 2,
         totalLines: 3,
         content: "base two",
+      });
+      const baseMatches = yield* repository.searchFile({
+        path: "src/value.ts",
+        revision: "base",
+        query: "needle",
+        startLine: 2,
+      });
+      const headMatches = yield* repository.searchFile({
+        path: "src/value.ts",
+        revision: "head",
+        query: "needle",
+        startLine: 1,
+      });
+
+      expect(baseMatches).toMatchObject({
+        path: "src/value.ts",
+        revision: "base",
+        totalLines: 3,
+        matches: [{ line: 3, excerpt: "needle in base" }],
+        nextLine: null,
+      });
+      expect(headMatches).toMatchObject({
+        path: "src/value.ts",
+        revision: "head",
+        totalLines: 2,
+        matches: [{ line: 2, excerpt: "needle in head" }],
+        nextLine: null,
       });
     }),
   );
@@ -151,6 +180,69 @@ describe("immutable review source", () => {
 
       expect(ignored.message).toBe("The requested path is outside this review's source scope.");
       expect(wide.message).toContain("request fewer lines");
+    }),
+  );
+
+  it.effect("rejects excluded source before I/O and sanitizes provider failures", () =>
+    Effect.gen(function* () {
+      const reads = yield* Ref.make<ReadonlyArray<string>>([]);
+      const guardedSnapshot: RepositorySnapshot = {
+        revision: "head",
+        paths: ["ignored/secret.ts", "src/fail.ts", "src/link.ts", "src/unavailable.ts"],
+        entry: (path) =>
+          path === "src/link.ts"
+            ? { sha: "link", mode: "120000", type: "blob" }
+            : path.endsWith(".ts")
+              ? { sha: path, mode: "100644", type: "blob" }
+              : undefined,
+        readTextFile: (path) =>
+          Ref.update(reads, (all) => [...all, path]).pipe(
+            Effect.andThen(
+              Effect.fail(
+                GitHubApiFailure.make({
+                  operation: "get Git blob",
+                  reason: "provider detail must not cross the review boundary",
+                }),
+              ),
+            ),
+          ),
+      };
+      const repository = makeReviewRepository({
+        base: snapshot("base", {}),
+        head: guardedSnapshot,
+        ignore: ["ignored/**"],
+        unavailablePaths: new Set(["src/unavailable.ts"]),
+      });
+      const readFailureFor = (path: string) =>
+        repository
+          .readFile({ path, revision: "head", startLine: 1, lineCount: 1 })
+          .pipe(Effect.flip);
+      const searchFailureFor = (path: string) =>
+        repository
+          .searchFile({ path, revision: "head", query: "needle", startLine: 1 })
+          .pipe(Effect.flip);
+
+      const ignored = yield* readFailureFor("ignored/secret.ts");
+      const unavailable = yield* searchFailureFor("src/unavailable.ts");
+      const symlink = yield* searchFailureFor("src/link.ts");
+      const readFailure = yield* readFailureFor("src/fail.ts");
+      const searchFailure = yield* searchFailureFor("src/fail.ts");
+
+      expect(ignored).toMatchObject({
+        _tag: "ReviewContextError",
+        message: "The requested path is outside this review's source scope.",
+      });
+      expect(unavailable).toEqual(ignored);
+      expect(symlink).toMatchObject({
+        _tag: "ReviewContextError",
+        message: "Text source is unavailable for the requested path and revision.",
+      });
+      expect(readFailure).toMatchObject({
+        _tag: "ReviewContextError",
+        message: "Text source could not be read for the requested path and revision.",
+      });
+      expect(searchFailure).toEqual(readFailure);
+      expect(yield* Ref.get(reads)).toEqual(["src/fail.ts", "src/fail.ts"]);
     }),
   );
 });

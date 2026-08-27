@@ -16,6 +16,7 @@ import {
   ReviewChange,
   ReviewContextError,
   ReviewFileList,
+  ReviewFileMatches,
   ReviewFinding,
   ReviewRepository,
   ReviewRequest,
@@ -74,6 +75,7 @@ const scriptedModel = (
 const emptyRepository = ReviewRepository.of({
   readFile: () => Effect.fail(ReviewContextError.make({ message: "Source unavailable" })),
   findFiles: () => Effect.succeed(ReviewFileList.make({ paths: [], truncated: false })),
+  searchFile: () => Effect.fail(ReviewContextError.make({ message: "Source unavailable" })),
 });
 
 const blocker = ReviewFinding.make({
@@ -114,11 +116,11 @@ const submittedFinding = (
   priority,
 });
 
-const sourceResults = (prompt: Prompt.Prompt) =>
+const sourceResults = (prompt: Prompt.Prompt, toolName = "read_file") =>
   prompt.content
     .filter((message) => message.role === "tool")
     .flatMap((message) => message.content)
-    .flatMap((part) => (part.type === "tool-result" && part.name === "read_file" ? [part] : []));
+    .flatMap((part) => (part.type === "tool-result" && part.name === toolName ? [part] : []));
 
 const reviewInput = (prompt: Prompt.Prompt): string =>
   prompt.content
@@ -138,6 +140,7 @@ describe("review output boundary", () => {
         expect(tools.map((tool) => tool.name)).toEqual([
           "read_file",
           "find_files",
+          "search_file",
           "submit_review",
         ]);
         expect(
@@ -219,121 +222,145 @@ describe("review output boundary", () => {
     }),
   );
 
-  it.effect(
-    "PRR-002 reads immutable base and head source and recovers from a bounded failure",
-    () =>
-      Effect.gen(function* () {
-        const reads = yield* Ref.make<
-          ReadonlyArray<Parameters<typeof emptyRepository.readFile>[0]>
-        >([]);
-        const failedInputs = [
-          {
-            path: "src/missing.ts",
-            revision: "base",
-            startLine: 1,
-            lineCount: 4,
-          },
-          {
-            path: "src/index.ts",
-            revision: "base",
-            startLine: 99,
-            lineCount: 4,
-          },
-          {
-            path: "src/index.ts",
-            revision: "head",
-            startLine: 99,
-            lineCount: 4,
-          },
-        ] as const;
-        const base = {
-          path: "src/index.ts",
+  it.effect("PRR-002 searches and reads immutable source after bounded failures", () =>
+    Effect.gen(function* () {
+      const reads = yield* Ref.make<ReadonlyArray<Parameters<typeof emptyRepository.readFile>[0]>>(
+        [],
+      );
+      const failedInputs = [
+        {
+          path: "src/missing.ts",
           revision: "base",
           startLine: 1,
           lineCount: 4,
-        } as const;
-        const head = { ...base, revision: "head" } as const;
-        const recoveryUsage = {
-          inputTokens: { total: 40_000, uncached: 40_000, cacheRead: 0, cacheWrite: 0 },
-          outputTokens: { total: 4 },
-        };
-        const model = scriptedModel((prompt) => {
-          const results = sourceResults(prompt);
-          if (results.length < failedInputs.length) {
-            if (results.length > 0) {
-              expect(results.at(-1)).toMatchObject({
-                isFailure: true,
-                result: { _tag: "ReviewContextError", message: "Source range unavailable" },
-              });
-            }
+        },
+        {
+          path: "src/index.ts",
+          revision: "base",
+          startLine: 99,
+          lineCount: 4,
+        },
+        {
+          path: "src/index.ts",
+          revision: "head",
+          startLine: 99,
+          lineCount: 4,
+        },
+      ] as const;
+      const base = {
+        path: "src/index.ts",
+        revision: "base",
+        startLine: 1,
+        lineCount: 4,
+      } as const;
+      const head = { ...base, revision: "head" } as const;
+      const recoveryUsage = {
+        inputTokens: { total: 40_000, uncached: 40_000, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 4 },
+      };
+      const model = scriptedModel((prompt) => {
+        const results = sourceResults(prompt);
+        if (results.length < failedInputs.length) {
+          if (results.length > 0) {
+            expect(results.at(-1)).toMatchObject({
+              isFailure: true,
+              result: { _tag: "ReviewContextError", message: "Source range unavailable" },
+            });
+          }
+          return Stream.fromIterable([
+            {
+              type: "tool-call",
+              id: `failed-${String(results.length)}`,
+              name: "read_file",
+              params: failedInputs[results.length] ?? base,
+            },
+            { type: "finish", reason: "tool-calls", usage: recoveryUsage },
+          ]);
+        }
+        if (results.length === failedInputs.length) {
+          expect(results.map((result) => result.isFailure)).toEqual([true, true, true]);
+          return Stream.fromIterable([
+            { type: "tool-call", id: "base", name: "read_file", params: base },
+            { type: "finish", reason: "tool-calls", usage: recoveryUsage },
+          ]);
+        }
+        if (results.length === failedInputs.length + 1) {
+          expect(results.at(-1)).toMatchObject({
+            isFailure: false,
+            result: { revision: "base", content: "old" },
+          });
+          const searches = sourceResults(prompt, "search_file");
+          if (searches.length === 0) {
             return Stream.fromIterable([
               {
                 type: "tool-call",
-                id: `failed-${String(results.length)}`,
-                name: "read_file",
-                params: failedInputs[results.length] ?? base,
+                id: "locate-head",
+                name: "search_file",
+                params: {
+                  path: "src/index.ts",
+                  revision: "head",
+                  query: "new",
+                  startLine: 1,
+                },
               },
               { type: "finish", reason: "tool-calls", usage: recoveryUsage },
             ]);
           }
-          if (results.length === failedInputs.length) {
-            expect(results.map((result) => result.isFailure)).toEqual([true, true, true]);
-            return Stream.fromIterable([
-              { type: "tool-call", id: "base", name: "read_file", params: base },
-              { type: "finish", reason: "tool-calls", usage: recoveryUsage },
-            ]);
-          }
-          if (results.length === failedInputs.length + 1) {
-            expect(results.at(-1)).toMatchObject({
-              isFailure: false,
-              result: { revision: "base", content: "old" },
-            });
-            return Stream.fromIterable([
-              { type: "tool-call", id: "head", name: "read_file", params: head },
-              { type: "finish", reason: "tool-calls", usage: recoveryUsage },
-            ]);
-          }
-          expect(results.at(-1)).toMatchObject({
+          expect(searches.at(-1)).toMatchObject({
             isFailure: false,
-            result: { revision: "head", content: "new" },
+            result: {
+              revision: "head",
+              matches: [{ line: 1, excerpt: "new" }],
+              nextLine: null,
+            },
           });
-          return response({ findings: [] }, recoveryUsage);
+          return Stream.fromIterable([
+            { type: "tool-call", id: "head", name: "read_file", params: head },
+            { type: "finish", reason: "tool-calls", usage: recoveryUsage },
+          ]);
+        }
+        expect(results.at(-1)).toMatchObject({
+          isFailure: false,
+          result: { revision: "head", content: "new" },
         });
-        const repository = ReviewRepository.of({
-          ...emptyRepository,
-          readFile: (input) =>
-            Effect.gen(function* () {
-              yield* Ref.update(reads, (current) => [...current, input]);
-              if (input.path !== "src/index.ts" || input.startLine !== 1) {
-                return yield* ReviewContextError.make({ message: "Source range unavailable" });
-              }
-              return ReviewSource.make({
-                path: input.path,
-                revision: input.revision,
-                startLine: input.startLine,
-                totalLines: 1,
-                content: input.revision === "base" ? "old" : "new",
-              });
-            }),
-        });
+        return response({ findings: [] }, recoveryUsage);
+      });
+      const repository = ReviewRepository.of({
+        ...emptyRepository,
+        searchFile: (input) => ReviewFileMatches.fromText(input, "new"),
+        readFile: (input) =>
+          Effect.gen(function* () {
+            yield* Ref.update(reads, (current) => [...current, input]);
+            if (input.path !== "src/index.ts" || input.startLine !== 1) {
+              return yield* ReviewContextError.make({ message: "Source range unavailable" });
+            }
+            return ReviewSource.make({
+              path: input.path,
+              revision: input.revision,
+              startLine: input.startLine,
+              totalLines: 1,
+              content: input.revision === "base" ? "old" : "new",
+            });
+          }),
+      });
 
-        const outcome = yield* makeReviewer({ model })
-          .review(request)
-          .pipe(Effect.provideService(ReviewRepository, repository));
+      const outcome = yield* makeReviewer({ model })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, repository));
 
-        expect(yield* Ref.get(reads)).toEqual([...failedInputs, base, head]);
-        expect(outcome).toMatchObject({
-          turns: 6,
-          report: { findings: [] },
-          usage: {
-            inputTokens: 240_000,
-            uncachedInputTokens: 240_000,
-            cachedInputTokens: 0,
-            cacheWriteInputTokens: 0,
-            outputTokens: 24,
-          },
-        });
-      }),
+      expect(yield* Ref.get(reads)).toEqual([...failedInputs, base, head]);
+      expect(outcome).toMatchObject({
+        turns: 7,
+        report: { findings: [] },
+        usage: {
+          inputTokens: 280_000,
+          uncachedInputTokens: 280_000,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          outputTokens: 28,
+        },
+      });
+    }),
   );
 
   it.effect("PRR-002 rejects a finding that does not name a causative changed path", () =>
@@ -523,6 +550,63 @@ new mode 100755`;
         ReviewSource.fromText(input, "x".repeat(20_001)),
       ]) {
         const result = yield* Effect.result(read);
+        expect(Result.isFailure(result) && result.failure._tag).toBe("ReviewContextError");
+      }
+    }),
+  );
+
+  it.effect("PRR-003 searches literal source with bounded excerpts and lossless continuation", () =>
+    Effect.gen(function* () {
+      const input = {
+        path: "src/index.ts",
+        revision: "head",
+        query: "result[0]",
+        startLine: 1,
+      } as const;
+      const literal = yield* ReviewFileMatches.fromText(
+        input,
+        `Result[0]\nresult0\nuse(result[0]);\n${"x".repeat(25_000)}result[0]${"y".repeat(2_000)}\n`,
+      );
+      expect(literal).toEqual({
+        path: input.path,
+        revision: "head",
+        totalLines: 4,
+        matches: [
+          { line: 3, excerpt: "use(result[0]);" },
+          { line: 4, excerpt: `${"x".repeat(200)}result[0]${"y".repeat(791)}` },
+        ],
+        nextLine: null,
+      });
+      const text = [
+        "other",
+        ...Array.from({ length: 20 }, (_, index) => `use${String(index)}(result[0]);`),
+        "not found",
+        "final(result[0]);",
+        "",
+      ].join("\n");
+      const first = yield* ReviewFileMatches.fromText(input, text);
+      expect(first.matches.map((match) => match.line)).toEqual(
+        Array.from({ length: 20 }, (_, index) => index + 2),
+      );
+      expect(first.nextLine).toBe(23);
+      const rest = yield* ReviewFileMatches.fromText({ ...input, startLine: 23 }, text);
+      expect(rest).toMatchObject({
+        totalLines: 23,
+        matches: [{ line: 23, excerpt: "final(result[0]);" }],
+        nextLine: null,
+      });
+      expect(yield* ReviewFileMatches.fromText(input, "")).toMatchObject({
+        totalLines: 0,
+        matches: [],
+        nextLine: null,
+      });
+      for (const invalid of [
+        { ...input, query: "" },
+        { ...input, query: "result\n[0]" },
+        { ...input, startLine: 0 },
+        { ...input, startLine: 24 },
+      ]) {
+        const result = yield* Effect.result(ReviewFileMatches.fromText(invalid, text));
         expect(Result.isFailure(result) && result.failure._tag).toBe("ReviewContextError");
       }
     }),

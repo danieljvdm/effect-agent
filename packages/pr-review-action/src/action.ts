@@ -4,6 +4,7 @@ import {
   ReviewChange,
   ReviewContextError,
   ReviewFileList,
+  ReviewFileMatches,
   ReviewFinding,
   ReviewReport,
   ReviewRepository,
@@ -482,6 +483,7 @@ const reviewContextFailure = (message: string): ReviewContextError =>
 
 type ReviewReadFileInput = Parameters<ReviewRepository["Service"]["readFile"]>[0];
 type ReviewFindFilesInput = Parameters<ReviewRepository["Service"]["findFiles"]>[0];
+type ReviewSearchFileInput = Parameters<ReviewRepository["Service"]["searchFile"]>[0];
 
 /** Bind model context reads to the exact verified base and head trees. */
 export const makeReviewRepository = (input: {
@@ -497,7 +499,9 @@ export const makeReviewRepository = (input: {
   const isReadableEntry = (entry: ReturnType<RepositorySnapshot["entry"]>) =>
     entry?.type === "blob" && entry.mode !== "120000";
 
-  const readFile = Effect.fn("ReviewRepository.readFile")(function* (request: ReviewReadFileInput) {
+  const readText = Effect.fn("ReviewRepository.readText")(function* (
+    request: Pick<ReviewReadFileInput, "path" | "revision">,
+  ) {
     if (outsideScope(request.path)) {
       return yield* reviewContextFailure(
         "The requested path is outside this review's source scope.",
@@ -518,7 +522,19 @@ export const makeReviewRepository = (input: {
           ),
         ),
       );
+    return content;
+  });
+
+  const readFile = Effect.fn("ReviewRepository.readFile")(function* (request: ReviewReadFileInput) {
+    const content = yield* readText(request);
     return yield* ReviewSource.fromText(request, content);
+  });
+
+  const searchFile = Effect.fn("ReviewRepository.searchFile")(function* (
+    request: ReviewSearchFileInput,
+  ) {
+    const content = yield* readText(request);
+    return yield* ReviewFileMatches.fromText(request, content);
   });
 
   const findFiles = (request: ReviewFindFilesInput) => {
@@ -537,7 +553,7 @@ export const makeReviewRepository = (input: {
     );
   };
 
-  return ReviewRepository.of({ readFile, findFiles });
+  return ReviewRepository.of({ readFile, findFiles, searchFile });
 };
 
 export const reviewEventFor = (blockingFindings: number): "COMMENT" | "REQUEST_CHANGES" =>

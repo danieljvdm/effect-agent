@@ -1,6 +1,7 @@
 import {
   ReviewContextError,
   ReviewFileList,
+  ReviewFileMatches,
   ReviewRepository,
   ReviewSource,
 } from "@effect-agent/pr-review";
@@ -37,6 +38,34 @@ export const repositoryLayer = (snapshot: EvalRepositorySnapshot | undefined) =>
               evalRepositoryRevision: revision,
               evalRepositoryStartLine: input.startLine,
               evalRepositoryLineCount: input.lineCount,
+              evalRepositoryOutcome: outcome,
+            }),
+          );
+        return yield* access.pipe(
+          Effect.tap(() => log("success")),
+          Effect.tapError(() => log("failure")),
+        );
+      }),
+      searchFile: Effect.fn("EvalRepository.searchFile")(function* (
+        input: Parameters<ReviewRepository["Service"]["searchFile"]>[0],
+      ) {
+        const files = snapshot?.files ?? [];
+        const fileIndex = files.findIndex(
+          (candidate) => candidate.path === input.path && candidate.revision === input.revision,
+        );
+        const file = files[fileIndex];
+        const access =
+          file === undefined
+            ? Effect.fail(missing(input.path, input.revision))
+            : ReviewFileMatches.fromText(input, file.content);
+        const log = (outcome: "success" | "failure") =>
+          Effect.logDebug("Eval repository source access").pipe(
+            Effect.annotateLogs({
+              evalRepositoryOperation: "search_file",
+              evalRepositoryFileIndex: fileIndex,
+              evalRepositoryRevision: input.revision,
+              evalRepositoryStartLine: input.startLine,
+              evalRepositoryQueryLength: input.query.length,
               evalRepositoryOutcome: outcome,
             }),
           );
