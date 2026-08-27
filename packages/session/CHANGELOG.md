@@ -1,5 +1,13 @@
 # @effect-agent/session
 
+## 0.1.0-beta.35
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.35
+  - @effect-agent/engine@0.1.0-beta.35
+
 ## 0.1.0-beta.34
 
 ### Minor Changes
