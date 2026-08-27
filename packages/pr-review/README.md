@@ -27,17 +27,14 @@ const reviewer = makeReviewer({ model, guidance, estimateCostMicrousd });
 const program = reviewer.review(request).pipe(Effect.provideService(ReviewRepository, repository));
 ```
 
-`repository.readFile`, `repository.findFiles`, and `repository.searchFile` return typed Effects. Hosts must
+`repository.readFile` and `repository.findFiles` return typed Effects. Hosts must
 authorize the source sent to their model, enforce immutable revisions and read
 bounds, and treat source content as untrusted data. The reviewer exposes this
 dependency in its Effect requirements; it has no ambient filesystem or network
 access and does not cache review answers.
 
 `ReviewSource.fromText(request, text)` applies the shared line and character
-bounds after the host authorizes and reads a file. `ReviewFileMatches.fromText(request, text)`
-searches literal text in that file, returning at most 20 matching lines with bounded excerpts
-and a continuation line when more matches exist. Search never executes repository code or
-fetches other files; use the matching line numbers to read complete surrounding source.
+bounds after the host authorizes and reads a file.
 
 The numbered hunk presentation and portions of the review instructions are adapted from
 [PR-Agent](https://github.com/The-PR-Agent/pr-agent). See `NOTICE` for its MIT license attribution.
