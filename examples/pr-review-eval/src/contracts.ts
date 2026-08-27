@@ -136,7 +136,7 @@ export class EvalSuite extends Schema.Class<EvalSuite>(
   "@effect-agent/example-pr-review-eval/EvalSuite",
 )(EvalSuiteFields) {}
 
-export const EvalReasoningEffort = Schema.Literals(["low", "medium", "high", "xhigh"]);
+export const EvalReasoningEffort = Schema.Literals(["low", "medium", "high", "xhigh", "max"]);
 export type EvalReasoningEffort = typeof EvalReasoningEffort.Type;
 
 export class EvalVariantConfiguration extends Schema.Class<EvalVariantConfiguration>(

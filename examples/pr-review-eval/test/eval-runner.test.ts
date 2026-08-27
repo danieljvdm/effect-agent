@@ -201,7 +201,7 @@ describe("PR-review model eval", () => {
       const variant = yield* makeCurrentOpenAiVariant({
         id: Schema.decodeSync(EvalVariantId)("candidate-guidance-v1"),
         model: "gpt-5.6-sol",
-        reasoningEffort: "medium",
+        reasoningEffort: "max",
         guidance: "  Keep the public error channel typed.  ",
       });
       expect(variant.configuration.id).toBe("candidate-guidance-v1");

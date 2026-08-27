@@ -76,7 +76,7 @@ const model = Flag.string("model").pipe(
   Flag.withSchema(Schema.NonEmptyString.check(Schema.isMaxLength(200))),
   Flag.withDescription("OpenAI model ID. Defaults to the current PR-review Action model."),
 );
-const effort = Flag.choice("effort", ["low", "medium", "high", "xhigh"]).pipe(
+const effort = Flag.choice("effort", ["low", "medium", "high", "xhigh", "max"]).pipe(
   Flag.withDefault("xhigh"),
   Flag.withDescription("Reasoning effort. Defaults to the current PR-review Action effort."),
 );
