@@ -361,6 +361,44 @@ workerd/Miniflare; the hosted production service, its observability adapters, an
 remain explicitly unclaimed (see the certification suites), and hosted-service operation stays
 outside the claims until open-source preparation revisits it.
 
+### Native Conversation RPC tracing
+
+Native RPC trace propagation is disabled by default. A host enables both ends explicitly:
+
+```ts
+conversationNamespaceLayer(env, "TASK_ORCHESTRATORS", { rpcTracing: true });
+makeConversationObjectClass(
+  { ...runtimeOptions, namespaceBinding: "TASK_ORCHESTRATORS", rpcTracing: true },
+  observability,
+);
+```
+
+The namespace service retains the stable binding name, not a trace context. Each enabled
+`CloudflareConversationClient` call creates a `client` span named `binding/actualMethod`, such as
+`TASK_ORCHESTRATORS/submitEncoded` or `PERSONA_ADVISORS/observePage`. It covers the native wait and
+host-response Schema decoding. The span records `rpc.system.name = cloudflare`, the fully qualified
+`rpc.method`, `server.address = binding`, and `sentry.op = rpc`. Names and these attributes contain
+no Conversation IDs, messages, Tool arguments, or capability URLs.
+
+Inside that span, the client appends exactly one native argument carrying
+`{ _tag: "effect-cf/RpcTraceContext/v1", traceId, spanId, sampled }`. It copies the current client
+span, including an unsampled decision, rather than the enclosing application span. Calls with
+propagation disabled, including Effect's non-propagating no-op spans, retain their exact original
+argument count. They do not append `undefined`. The ordinary disabled namespace retains its prior
+client instrumentation.
+
+The Object factory passes `rpcTracing: { service: namespaceBinding }` to effect-cf. This requires
+an effect-cf release implementing the opt-in v1 native contract. effect-cf validates and strips the
+argument and exposes event metadata; application observability owns server roots. The library does
+not create durable invocation roots or exporter policy.
+
+Trace context never enters a Submission, Receipt, canonical record, checkpoint, queued wake, alarm,
+or durable retry. A native progress reset creates a new client span for each retry and does not
+cache trace context in its request. Recovery and resumed work obtain fresh roots from the host's
+current event, not the original caller. Cross-Object port calls and wake hints keep their existing
+wire arguments. Scope ownership, cancellation, typed failures, and effect-cf's bounded flush
+lifecycle are unchanged.
+
 ### Dynamic Worker Code Mode executor
 
 The first isolated `CodeExecutor` adapter is a Cloudflare Dynamic Worker Layer in
@@ -640,3 +678,7 @@ Current platform references:
   creates one private job, applies an absolute deadline across polling and lazy bounded pagination,
   performs no retries or reattachment, and cancels a known-running job exactly once when its Scope
   exits; cancellation failure emits a fixed warning without changing the primary `Exit`.
+- **DEPLOY-016**: Native Conversation RPC tracing requires explicit client and receiver opt-in,
+  spans the native wait and response decoding with stable binding/method client spans, preserves
+  disabled argument counts, and transports only transient current-span identity. It never resumes
+  an old caller's trace from durable state or takes ownership of application roots and exporters.

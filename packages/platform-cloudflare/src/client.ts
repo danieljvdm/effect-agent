@@ -30,7 +30,7 @@ import {
   type DurableSubmitAgent,
   type DurableSubmitOptions,
 } from "@effect-agent/session";
-import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect";
+import { Context, Crypto, Duration, Effect, Layer, Option, Schema, Tracer } from "effect";
 
 import { DurableAlarmError } from "./alarm.ts";
 import { ConversationObjectNamespace, type ConversationObjectRpc } from "./bindings.ts";
@@ -318,6 +318,25 @@ const outOfContract = (
     ),
   });
 
+// Native RPC metadata is separate from every host request and durable Schema. effect-cf owns
+// validation and removal on the receiver; the client copies only its current span's identity.
+const RpcTraceContext = Schema.TaggedStruct("effect-cf/RpcTraceContext/v1", {
+  traceId: Schema.String,
+  spanId: Schema.String,
+  sampled: Schema.Boolean,
+});
+
+const hostRpcMethods = {
+  submit: "submitEncoded",
+  awaitSettlement: "awaitSettlementEncoded",
+  awaitProgress: "awaitProgressEncoded",
+  cancelProgress: "cancelProgressEncoded",
+  observePage: "observePage",
+  abort: "abortEncoded",
+  resolveApproval: "resolveApprovalEncoded",
+  resolveUnknown: "resolveUnknownEncoded",
+} as const satisfies Record<string, keyof ConversationObjectRpc>;
+
 /** Worker-side client over the Conversation Object namespace (DEPLOY-010). */
 export class CloudflareConversationClient extends Context.Service<
   CloudflareConversationClient,
@@ -379,45 +398,77 @@ export class CloudflareConversationClient extends Context.Service<
     ConversationObjectNamespace | Crypto.Crypto
   > = Layer.effect(CloudflareConversationClient)(
     Effect.gen(function* () {
-      const { namespace } = yield* ConversationObjectNamespace;
+      const { namespace, rpcTracing } = yield* ConversationObjectNamespace;
       const crypto = yield* Crypto.Crypto;
 
-      const call = (
-        conversationId: string,
-        operation: string,
-        invoke: (stub: DurableObjectStub<ConversationObjectRpc>) => Promise<unknown>,
-      ): Effect.Effect<HostResponse, ConversationClientError | HostProtocolError> =>
-        Effect.tryPromise({
-          try: () => invoke(namespace.get(namespace.idFromName(conversationId))),
-          catch: (cause) =>
-            ConversationClientError.make({
-              conversationId,
-              message: boundHostDiagnostic(
-                `${operation} did not reach the Conversation Object: ${safeCauseMessage(
-                  cause,
-                  "the RPC failed without a diagnostic",
-                )}`,
-              ),
-              cause,
-              ...cloudflareFailureSignals(cause),
-            }),
-        }).pipe(
-          Effect.flatMap((raw) =>
-            decodeHostResponse(raw).pipe(
-              Effect.mapError(
-                (error): HostProtocolError =>
-                  HostProtocolError.make({
-                    message: boundHostDiagnostic(
-                      `The ${operation} answer could not be decoded: ${error.message}`,
-                    ),
+      const call = Effect.fn(
+        function* (
+          conversationId: string,
+          operation: keyof typeof hostRpcMethods,
+          encoded: unknown,
+        ): Effect.fn.Return<HostResponse, ConversationClientError | HostProtocolError> {
+          const current = yield* Effect.serviceOption(Tracer.ParentSpan);
+          // An empty tuple preserves native arity. Passing `undefined` still adds an argument.
+          const traceArgs: [] | [typeof RpcTraceContext.Type] =
+            rpcTracing !== undefined &&
+            Option.isSome(current) &&
+            !Context.get(current.value.annotations, Tracer.DisablePropagation)
+              ? [
+                  RpcTraceContext.make({
+                    traceId: current.value.traceId,
+                    spanId: current.value.spanId,
+                    sampled: current.value.sampled,
                   }),
-              ),
+                ]
+              : [];
+          const raw = yield* Effect.tryPromise({
+            try: () => {
+              const stub = namespace.get(namespace.idFromName(conversationId));
+              return stub[hostRpcMethods[operation]](encoded, ...traceArgs);
+            },
+            catch: (cause) =>
+              ConversationClientError.make({
+                conversationId,
+                message: boundHostDiagnostic(
+                  `${operation} did not reach the Conversation Object: ${safeCauseMessage(
+                    cause,
+                    "the RPC failed without a diagnostic",
+                  )}`,
+                ),
+                cause,
+                ...cloudflareFailureSignals(cause),
+              }),
+          });
+          return yield* decodeHostResponse(raw).pipe(
+            Effect.mapError(
+              (error): HostProtocolError =>
+                HostProtocolError.make({
+                  message: boundHostDiagnostic(
+                    `The ${operation} answer could not be decoded: ${error.message}`,
+                  ),
+                }),
             ),
+          );
+        },
+        (effect, conversationId, operation) =>
+          Effect.withSpan(
+            effect,
+            rpcTracing === undefined
+              ? "CloudflareConversationClient.call"
+              : `${rpcTracing}/${hostRpcMethods[operation]}`,
+            rpcTracing === undefined
+              ? { attributes: { conversationId, operation } }
+              : {
+                  kind: "client",
+                  attributes: {
+                    "sentry.op": "rpc",
+                    "rpc.system.name": "cloudflare",
+                    "rpc.method": `${rpcTracing}/${hostRpcMethods[operation]}`,
+                    "server.address": rpcTracing,
+                  },
+                },
           ),
-          Effect.withSpan("CloudflareConversationClient.call", {
-            attributes: { conversationId, operation },
-          }),
-        );
+      );
 
       const expect = <ResultSchema extends Schema.Top, FailureSchema extends Schema.Top>(
         conversationId: string,
@@ -464,9 +515,7 @@ export class CloudflareConversationClient extends Context.Service<
               }),
             ),
           );
-          const response = yield* call(conversationId, "observePage", (stub) =>
-            stub.observePage(encoded),
-          );
+          const response = yield* call(conversationId, "observePage", encoded);
           const page = yield* expect(
             conversationId,
             "observePage",
@@ -482,9 +531,7 @@ export class CloudflareConversationClient extends Context.Service<
       ): Effect.Effect<void> =>
         encodeCancelProgressRequest(CancelProgressRequest.make({ waiterId })).pipe(
           Effect.mapError(() => undefined),
-          Effect.flatMap((encoded) =>
-            call(conversationId, "cancelProgress", (stub) => stub.cancelProgressEncoded(encoded)),
-          ),
+          Effect.flatMap((encoded) => call(conversationId, "cancelProgress", encoded)),
           Effect.asVoid,
           Effect.ignore,
         );
@@ -526,9 +573,7 @@ export class CloudflareConversationClient extends Context.Service<
                 }),
               ),
             );
-            const response = yield* call(options.conversationId, "submit", (stub) =>
-              stub.submitEncoded(encoded),
-            );
+            const response = yield* call(options.conversationId, "submit", encoded);
             const succeeded = yield* expect(
               options.conversationId,
               "submit",
@@ -547,9 +592,7 @@ export class CloudflareConversationClient extends Context.Service<
                 }),
               ),
             );
-            const response = yield* call(receipt.conversationId, "awaitSettlement", (stub) =>
-              stub.awaitSettlementEncoded(encoded),
-            );
+            const response = yield* call(receipt.conversationId, "awaitSettlement", encoded);
             const settled = yield* expect(
               receipt.conversationId,
               "awaitSettlement",
@@ -582,9 +625,7 @@ export class CloudflareConversationClient extends Context.Service<
             );
 
             const attempt = (retry: number): Effect.Effect<void, ClientProgressFailure> =>
-              call(conversationId, "awaitProgress", (stub) =>
-                stub.awaitProgressEncoded(encoded),
-              ).pipe(
+              call(conversationId, "awaitProgress", encoded).pipe(
                 Effect.flatMap(
                   expect(
                     conversationId,
@@ -632,9 +673,7 @@ export class CloudflareConversationClient extends Context.Service<
                 }),
               ),
             );
-            const response = yield* call(conversationId, "abort", (stub) =>
-              stub.abortEncoded(encoded),
-            );
+            const response = yield* call(conversationId, "abort", encoded);
             const recorded = yield* expect(
               conversationId,
               "abort",
@@ -653,9 +692,7 @@ export class CloudflareConversationClient extends Context.Service<
                 }),
               ),
             );
-            const response = yield* call(conversationId, "resolveApproval", (stub) =>
-              stub.resolveApprovalEncoded(encoded),
-            );
+            const response = yield* call(conversationId, "resolveApproval", encoded);
             const recorded = yield* expect(
               conversationId,
               "resolveApproval",
@@ -676,9 +713,7 @@ export class CloudflareConversationClient extends Context.Service<
                 }),
               ),
             );
-            const response = yield* call(conversationId, "resolveUnknown", (stub) =>
-              stub.resolveUnknownEncoded(encoded),
-            );
+            const response = yield* call(conversationId, "resolveUnknown", encoded);
             const recorded = yield* expect(
               conversationId,
               "resolveUnknown",

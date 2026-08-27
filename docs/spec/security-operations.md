@@ -309,6 +309,17 @@ OpenTelemetry records:
 
 High-cardinality IDs belong in traces/logs, not unrestricted metric labels.
 
+Cloudflare journal row decoding, Conversation store encoding/decoding and failpoint wrappers, and
+engine Tool/response identifier decoding retain their checks and typed failures without adding a
+named span per value. Storage I/O and
+meaningful operation spans and short events remain observable regardless of their duration. This
+is instrumentation at operation boundaries, not runtime filtering or blanket removal of fast spans.
+
+Opted-in native Conversation RPC tracing carries only current-span identity and sampling metadata
+as a separate native argument. Stable binding and method names identify the call. Context is never
+persisted or reused to parent alarms or resumed work; application observability owns those roots
+and its sampling/export policy. See [the Cloudflare contract](deployment.md#native-conversation-rpc-tracing).
+
 Minimum operational alerts:
 
 - accepted submission without timely settlement;

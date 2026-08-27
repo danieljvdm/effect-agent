@@ -24,25 +24,27 @@ export class CloudflareBindingError extends Schema.TaggedError<CloudflareBinding
  * and the cross-Object transport call it through `DurableObjectNamespace` stubs. Every
  * `encoded` value is a Schema-encoded envelope (`client.ts` wire schemas for host entry
  * points, `@effect-agent/storage-cloudflare` port envelopes for `portCall`), so the RPC
- * boundary carries only structured-cloneable JSON.
+ * boundary carries only structured-cloneable JSON. The optional trailing trace context is
+ * transient native RPC metadata, stripped by an opted-in effect-cf receiver before decoding
+ * the host envelope. It never enters durable state.
  */
 export interface ConversationObjectRpc extends Rpc.DurableObjectBranded {
   /** Admission-limits gate + `DurableAgentRuntime.submit`; answers a `SubmitResponse`. */
-  submitEncoded(encoded: unknown): Promise<unknown>;
+  submitEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Wake-hinted, poll-guaranteed settlement wait; answers an `AwaitSettlementResponse`. */
-  awaitSettlementEncoded(encoded: unknown): Promise<unknown>;
+  awaitSettlementEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Event-driven durable progress wait; answers a `ProgressObserved` host response. */
-  awaitProgressEncoded(encoded: unknown): Promise<unknown>;
+  awaitProgressEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Best-effort cancellation for one in-flight progress wait. */
-  cancelProgressEncoded(encoded: unknown): Promise<unknown>;
+  cancelProgressEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** One bounded page of canonical records; answers an `ObservePageResponse`. */
-  observePage(encoded: unknown): Promise<unknown>;
+  observePage(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Durable abort intent; answers an `AbortResponse`. */
-  abortEncoded(encoded: unknown): Promise<unknown>;
+  abortEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Durable approval decision (plan §2.6); answers a `ResolveApprovalResponse`. */
-  resolveApprovalEncoded(encoded: unknown): Promise<unknown>;
+  resolveApprovalEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Authorized DUR-017 Unknown-Outcome resolution; answers a `ResolveUnknownResponse`. */
-  resolveUnknownEncoded(encoded: unknown): Promise<unknown>;
+  resolveUnknownEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Owner-side cross-Object port endpoint (WP2 envelopes, executed on LOCAL facets). */
   portCall(encoded: unknown): Promise<unknown>;
   /** Droppable liveness hint from another Object: arms an immediate alarm. */
@@ -58,6 +60,8 @@ export class ConversationObjectNamespace extends Context.Service<
   ConversationObjectNamespace,
   {
     readonly namespace: DurableObjectNamespace<ConversationObjectRpc>;
+    /** Stable binding name for opted-in native RPC tracing; absent by default. */
+    readonly rpcTracing?: string;
   }
 >()("@effect-agent/platform-cloudflare/ConversationObjectNamespace") {
   static layer(
@@ -110,13 +114,20 @@ export const conversationNamespaceFromEnv = Effect.fn("conversationNamespaceFrom
   });
 });
 
-/** `ConversationObjectNamespace` built from the untyped Worker `env` (fails typed). */
+/**
+ * Build the namespace from Worker `env` (fails typed). Enable `rpcTracing` only when the
+ * receiver also opts into the effect-cf native RPC trace-context contract.
+ */
 export const conversationNamespaceLayer = (
   env: unknown,
   binding: string,
+  options: { readonly rpcTracing?: boolean } = {},
 ): Layer.Layer<ConversationObjectNamespace, CloudflareBindingError> =>
   Layer.effect(ConversationObjectNamespace)(
-    Effect.map(conversationNamespaceFromEnv(env, binding), (namespace) => ({ namespace })),
+    Effect.map(conversationNamespaceFromEnv(env, binding), (namespace) => ({
+      namespace,
+      ...(options.rpcTracing === true ? { rpcTracing: binding } : {}),
+    })),
   );
 
 /**

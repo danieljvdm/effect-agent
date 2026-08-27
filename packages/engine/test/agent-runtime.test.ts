@@ -754,6 +754,10 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         throw new Error("Expected the successful Tool span to end");
       }
       expect(Exit.isSuccess(succeededSpan.status.exit)).toBe(true);
+      const spanNames = spans.map((span) => span.name);
+      expect(spanNames).not.toContain("AgentRuntime.decodeToolCallId");
+      expect(spanNames).not.toContain("AgentRuntime.decodeProviderToolCallId");
+      expect(spanNames).not.toContain("AgentRuntime.decodeProviderResponsePartId");
 
       const terminalLogs = logs.filter((entry) =>
         ["agent tool execution completed", "agent tool execution failed"].includes(

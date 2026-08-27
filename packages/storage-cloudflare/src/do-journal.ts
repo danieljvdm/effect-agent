@@ -168,7 +168,7 @@ const storageError =
     });
 
 /** Decode raw Durable Object SQLite rows against a Schema, reporting failures as typed corruption. */
-export const decodeRows = Effect.fn("DoJournal.decodeRows")(
+export const decodeRows = Effect.fn(
   <A, I>(
     schema: Schema.Codec<ReadonlyArray<A>, ReadonlyArray<I>>,
     table: string,
@@ -187,7 +187,7 @@ export const decodeRows = Effect.fn("DoJournal.decodeRows")(
 );
 
 /** Decode exactly one raw row against a Schema, reporting failures as typed corruption. */
-export const decodeSingleRow = Effect.fn("DoJournal.decodeSingleRow")(
+export const decodeSingleRow = Effect.fn(
   <A, I>(
     schema: Schema.Codec<ReadonlyArray<A>, ReadonlyArray<I>>,
     table: string,

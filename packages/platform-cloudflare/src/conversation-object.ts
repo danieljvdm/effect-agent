@@ -110,6 +110,8 @@ import { ProgressWaitRegistry } from "./progress-wait.ts";
 
 /** Construction options for one deployed Conversation Object class. */
 export interface ConversationObjectOptions extends CloudflareDurableRuntimeOptions {
+  /** Accept transient native RPC tracing through effect-cf; disabled by default. */
+  readonly rpcTracing?: boolean;
   /**
    * Name of the Worker `env` binding carrying THIS class's `DurableObjectNamespace` — the
    * Object's route back to sibling Conversation Objects for the WP2 cross-Object port calls
@@ -676,6 +678,7 @@ const gateEndpoint: Effect.Effect<void, MaintenancePassFailure, EndpointServices
  */
 const effectCfPlatformLayer = (
   namespaceBinding: string,
+  rpcTracing = false,
 ): Layer.Layer<
   DurableObjectContext | ConversationObjectNamespace,
   CloudflareBindingError,
@@ -692,7 +695,10 @@ const effectCfPlatformLayer = (
     Effect.gen(function* () {
       const env = yield* WorkerEnvironment;
       const binding = yield* conversationNamespaceFromEnv(env, namespaceBinding);
-      return ConversationObjectNamespace.of({ namespace: binding });
+      return ConversationObjectNamespace.of({
+        namespace: binding,
+        ...(rpcTracing === true ? { rpcTracing: namespaceBinding } : {}),
+      });
     }),
   );
   return Layer.merge(context, namespace);
@@ -700,14 +706,14 @@ const effectCfPlatformLayer = (
 
 /** The public endpoint surface of one Conversation Object instance. */
 export interface ConversationObjectInstance extends CloudflareDurableObject {
-  submitEncoded(encoded: unknown): Promise<unknown>;
-  awaitSettlementEncoded(encoded: unknown): Promise<unknown>;
-  awaitProgressEncoded(encoded: unknown): Promise<unknown>;
-  cancelProgressEncoded(encoded: unknown): Promise<unknown>;
-  observePage(encoded: unknown): Promise<unknown>;
-  abortEncoded(encoded: unknown): Promise<unknown>;
-  resolveApprovalEncoded(encoded: unknown): Promise<unknown>;
-  resolveUnknownEncoded(encoded: unknown): Promise<unknown>;
+  submitEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
+  awaitSettlementEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
+  awaitProgressEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
+  cancelProgressEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
+  observePage(encoded: unknown, traceContext?: unknown): Promise<unknown>;
+  abortEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
+  resolveApprovalEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
+  resolveUnknownEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   explainEncoded(encoded: unknown): Promise<unknown>;
   verifyEncoded(encoded: unknown): Promise<unknown>;
   retryEncoded(encoded: unknown): Promise<unknown>;
@@ -745,7 +751,7 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
     CloudflareDurableRuntimeInitializationError | CloudflareBindingError,
     EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
   > = CloudflareDurableRuntime.layer(options).pipe(
-    Layer.provideMerge(effectCfPlatformLayer(options.namespaceBinding)),
+    Layer.provideMerge(effectCfPlatformLayer(options.namespaceBinding, options.rpcTracing)),
   );
 
   // The storage/config Layer must acquire inside Cloudflare's constructor gate. effect-cf owns
@@ -793,6 +799,7 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
     EventLayerError,
     typeof rpc
   >(runtime, {
+    ...(options.rpcTracing === true ? { rpcTracing: { service: options.namespaceBinding } } : {}),
     ...(observability === undefined ? {} : { eventLayer: observability }),
     // Force the gated runtime Layer when Cloudflare loads this Object incarnation. Recovery stays
     // in each bounded pass so cross-Object initialization cannot deadlock.

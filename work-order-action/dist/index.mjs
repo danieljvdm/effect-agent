@@ -38515,13 +38515,13 @@ var makeInitialPrompt = exports_Effect.fn("AgentRuntime.makeInitialPrompt")((ins
     message: `Unable to materialize Agent input: ${errorMessage(cause)}`
   })
 }));
-var decodeToolCallId = exports_Effect.fn("AgentRuntime.decodeToolCallId")((id2) => exports_Schema.decodeEffect(ToolCallId)(id2).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
+var decodeToolCallId = exports_Effect.fn((id2) => exports_Schema.decodeEffect(ToolCallId)(id2).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
   message: `Invalid Tool Call ID: ${cause.message}`
 }))));
-var decodeProviderToolCallId = exports_Effect.fn("AgentRuntime.decodeProviderToolCallId")((id2) => exports_Schema.decodeEffect(ProviderToolCallId)(id2).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+var decodeProviderToolCallId = exports_Effect.fn((id2) => exports_Schema.decodeEffect(ProviderToolCallId)(id2).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
   message: "Model supplied an invalid Tool Call ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens"
 }))));
-var decodeProviderResponsePartId = exports_Effect.fn("AgentRuntime.decodeProviderResponsePartId")((id2) => exports_Schema.decodeEffect(ProviderResponsePartId)(id2).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+var decodeProviderResponsePartId = exports_Effect.fn((id2) => exports_Schema.decodeEffect(ProviderResponsePartId)(id2).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
   message: "Model supplied an invalid response part ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens"
 }))));
 var validateProviderPartIdentifiers = exports_Effect.fnUntraced(function* (part) {
