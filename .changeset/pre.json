@@ -86,6 +86,7 @@
     "transient-native-rpc-tracing",
     "trusted-tool-failure-observer",
     "typed-budget-settlement",
-    "typed-run-disposition"
+    "typed-run-disposition",
+    "unknown-abort-recovery"
   ]
 }

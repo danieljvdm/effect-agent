@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.36
+
+### Patch Changes
+
+- [#214](https://github.com/danieljvdm/effect-agent/pull/214) [`082c258`](https://github.com/danieljvdm/effect-agent/commit/082c2584573c1ffbfa7d5b7166f4243e996816eb) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow durably authorized aborts to settle unknown submissions and release queued followers without replaying uncertain tools. Quiesce Cloudflare maintenance for ready followers behind an unresolved external wait.
+
+- Updated dependencies [[`082c258`](https://github.com/danieljvdm/effect-agent/commit/082c2584573c1ffbfa7d5b7166f4243e996816eb)]:
+  - @effect-agent/session@0.1.0-beta.36
+  - @effect-agent/storage-cloudflare@0.1.0-beta.36
+  - @effect-agent/core@0.1.0-beta.36
+  - @effect-agent/engine@0.1.0-beta.36
+  - @effect-agent/sandbox@0.1.0-beta.36
+
 ## 0.1.0-beta.35
 
 ### Patch Changes

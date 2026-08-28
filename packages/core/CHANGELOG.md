@@ -1,5 +1,7 @@
 # @effect-agent/core
 
+## 0.1.0-beta.36
+
 ## 0.1.0-beta.35
 
 ## 0.1.0-beta.34
