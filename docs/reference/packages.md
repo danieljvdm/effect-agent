@@ -148,9 +148,30 @@ Effect `HttpClient` requirement. The Node-safe `./browser-rest-crawl` export ada
 Cloudflare's REST crawl endpoint with explicit redacted credentials, bounded polling and lazy
 pagination, and scoped remote-job cleanup. Neither REST subpath imports Worker runtime modules.
 The `./interactive-browser` export supplies `browserRunInteractiveLayer` for the generic browser
-port and `browserRunInteractiveHostLayer` for host-only Live View, handoff, redacted session
+port and `browserRunInteractiveHostLayer` for host-only viewport resizing, Live View, handoff, redacted session
 identity, and explicit cleanup by identity. Both require `BrowserRunInteractiveBinding`; neither
 adds a registry, execution reconnect, or durable browser state.
+
+`BrowserRunInteractiveBinding.layer({ browser, viewport: { width: 1440, height: 900 } })`
+sets Puppeteer's launch `defaultViewport`. Omitting `viewport` preserves Puppeteer's default.
+The exported `BrowserRunViewport` Schema accepts integer CSS dimensions in `1..2048`, optional
+finite `deviceScaleFactor` in `1..2`, defaulting to `1`, and requires
+`max(width, height) * deviceScaleFactor <= 2048`. Hosts can impose narrower UI limits.
+Invalid configuration fails Layer construction with `InteractiveBrowserPolicyDeniedError`
+before launching a browser.
+
+`session.resizeViewport({ width: 1024, height: 768, deviceScaleFactor: 2 })` changes host
+presentation state through `page.setViewport`. It spends no agent action and remains available
+after the action budget is exhausted. It shares the session's fail-fast operation lock,
+page-policy preflight, elapsed deadline, and cleanup. Invalid requests are policy failures;
+provider failures are protocol errors, remote closure is an expired-session error, and timeout
+or interruption makes the session unusable without retrying the resize. Width, height, and
+density are the only supported fields. Mobile, touch, and orientation emulation switches are
+rejected, so resizing does not trigger an emulation-mode reload. Page scripts can still react to
+resize events, subject to the existing network policy. The adapter adds no viewport telemetry
+payload or persistence. The consumer must authorize resizing, including viewer ownership and
+handoff fencing.
+
 This is a Layer-assembly library, not an application entrypoint.
 `CloudflareDurableRuntimeOptions.toolFailureObserver` installs the same closed trusted observer
 for the Object's coordinator. It adds no journal data or Code Mode durability claim.
