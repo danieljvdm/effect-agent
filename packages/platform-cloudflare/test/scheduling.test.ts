@@ -1,9 +1,15 @@
-import { ScheduleId, type ScheduleOwner } from "@effect-agent/session";
+import { ScheduleId, type ScheduleAuthorizer, type ScheduleOwner } from "@effect-agent/session";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Effect, Schema } from "effect";
+import { Effect, type Layer, Schema } from "effect";
+import type { DurableObjectState, WorkerEnvironment } from "effect-cf";
 import { describe, expect, it } from "vite-plus/test";
 
-import { CloudflareSchedulingClient } from "../src/index.ts";
+import {
+  CloudflareSchedulingClient,
+  type ConversationObjectNamespace,
+  type ScheduleOwnerIdentity,
+  type makeScheduleOwnerObjectClass,
+} from "../src/index.ts";
 import {
   TEST_DIGESTS,
   TEST_PRINCIPAL,
@@ -128,6 +134,35 @@ const manage = (
   );
 
 describe("Cloudflare Schedule Owner", () => {
+  it("requires host policy and routing Layers with all application dependencies provided", () => {
+    type Host = Parameters<typeof makeScheduleOwnerObjectClass>[0];
+    type Ports = ScheduleAuthorizer | ConversationObjectNamespace;
+    const policyRequired: Layer.Layer<ConversationObjectNamespace> extends Host ? false : true =
+      true;
+    const routingRequired: Layer.Layer<ScheduleAuthorizer> extends Host ? false : true = true;
+    const applicationDependenciesRequired: Layer.Layer<
+      Ports,
+      never,
+      CloudflareSchedulingClient
+    > extends Host
+      ? false
+      : true = true;
+    const nativeDependenciesAccepted: Layer.Layer<
+      Ports,
+      "host-initialization-failed",
+      DurableObjectState.DurableObjectState | WorkerEnvironment | ScheduleOwnerIdentity
+    > extends Host
+      ? true
+      : false = true;
+
+    expect([
+      policyRequired,
+      routingRequired,
+      applicationDependenciesRequired,
+      nativeDependenciesAccepted,
+    ]).toEqual([true, true, true, true]);
+  });
+
   it("stays idle without work and cancels its only alarm", async () => {
     const data = fixture("idle");
     const stub = scheduleStubFor(data.owner);

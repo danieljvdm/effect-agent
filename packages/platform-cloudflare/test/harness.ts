@@ -16,7 +16,6 @@ import {
   CloudflareSchedulingClient,
   ConversationObjectNamespace,
   ScheduleOwnerNamespace,
-  type ScheduleOwnerObjectRpc,
   type ConversationObjectRpc,
 } from "../src/index.ts";
 import { decodeConversationId, supplierCountsFor, supplierValuesFor } from "./fixtures.ts";
@@ -107,11 +106,7 @@ export const runClient = <A, E>(
 ): Promise<A> => Effect.runPromise(effect.pipe(Effect.provide(clientLayer(namespace))));
 
 const scheduleClientLayer = CloudflareSchedulingClient.layer.pipe(
-  Layer.provide(
-    ScheduleOwnerNamespace.layer(
-      env.SCHEDULES as unknown as DurableObjectNamespace<ScheduleOwnerObjectRpc>,
-    ),
-  ),
+  Layer.provide(Layer.succeed(ScheduleOwnerNamespace)({ namespace: env.SCHEDULES })),
 );
 
 export const scheduleStubFor = (owner: { readonly tenantId: string; readonly ownerId: string }) =>

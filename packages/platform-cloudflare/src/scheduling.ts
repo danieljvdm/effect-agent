@@ -4,12 +4,11 @@ import {
   PersistedJson,
   type DurableSubmitAgent,
   ScheduleAuthorizationError,
-  ScheduleAuthorizer,
+  type ScheduleAuthorizer,
   ScheduleCapacityError,
   type ScheduleCreateOptions,
   ScheduleConflict,
   ScheduleDestination,
-  ScheduleFailpoint,
   ScheduleFailpointError,
   ScheduleId,
   type SchedulingLimits,
@@ -30,7 +29,7 @@ import {
   Scheduling,
   defaultSchedulingLimits,
   scheduleOwnerKey,
-  ScheduleWake,
+  ScheduleWakeNoop,
 } from "@effect-agent/session";
 import {
   DoScheduleAlarmControl,
@@ -39,19 +38,15 @@ import {
 } from "@effect-agent/storage-cloudflare";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Clock, Context, DateTime, Effect, Layer, Predicate, Schema, type Scope } from "effect";
+import { Clock, Context, DateTime, Effect, Layer, Schema } from "effect";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectAlarm,
   DurableObjectState as EffectCfDurableObjectState,
-  WorkerEnvironment,
+  type WorkerEnvironment,
 } from "effect-cf";
 
-import {
-  CloudflareBindingError,
-  ConversationObjectNamespace,
-  conversationNamespaceFromEnv,
-} from "./bindings.ts";
+import type { ConversationObjectNamespace } from "./bindings.ts";
 import { CloudflareConversationClient, type ConversationClientError } from "./client.ts";
 
 const SCHEDULE_ALARM_TAG = "effect-agent/ScheduleOwnerWake";
@@ -162,56 +157,7 @@ export interface ScheduleOwnerObjectRpc extends Rpc.DurableObjectBranded {
 export class ScheduleOwnerNamespace extends Context.Service<
   ScheduleOwnerNamespace,
   { readonly namespace: DurableObjectNamespace<ScheduleOwnerObjectRpc> }
->()("@effect-agent/platform-cloudflare/ScheduleOwnerNamespace") {
-  static layer(
-    namespace: DurableObjectNamespace<ScheduleOwnerObjectRpc>,
-  ): Layer.Layer<ScheduleOwnerNamespace> {
-    return Layer.succeed(ScheduleOwnerNamespace)({ namespace });
-  }
-}
-
-export const scheduleOwnerNamespaceFromEnv = Effect.fn("scheduleOwnerNamespaceFromEnv")(function* (
-  env: unknown,
-  binding: string,
-): Effect.fn.Return<DurableObjectNamespace<ScheduleOwnerObjectRpc>, CloudflareBindingError> {
-  if (!Predicate.isObjectKeyword(env)) {
-    return yield* CloudflareBindingError.make({
-      binding,
-      message: "The Worker environment is not an object; no bindings are available.",
-    });
-  }
-  const candidate = yield* Effect.try({
-    try: () => {
-      const value: unknown = Reflect.get(env, binding);
-      if (!Predicate.isObjectKeyword(value)) return undefined;
-      return typeof Reflect.get(value, "idFromName") === "function" &&
-        typeof Reflect.get(value, "get") === "function"
-        ? value
-        : undefined;
-    },
-    catch: () =>
-      CloudflareBindingError.make({
-        binding,
-        message: `env.${binding} could not be inspected as a DurableObjectNamespace binding.`,
-      }),
-  });
-  if (candidate === undefined) {
-    return yield* CloudflareBindingError.make({
-      binding,
-      message: `env.${binding} is not a Schedule Owner DurableObjectNamespace binding.`,
-    });
-  }
-  return candidate as unknown as DurableObjectNamespace<ScheduleOwnerObjectRpc>;
-});
-
-export const scheduleOwnerNamespaceLayer = (
-  env: unknown,
-  binding: string,
-): Layer.Layer<ScheduleOwnerNamespace, CloudflareBindingError> =>
-  Layer.effect(
-    ScheduleOwnerNamespace,
-    Effect.map(scheduleOwnerNamespaceFromEnv(env, binding), (namespace) => ({ namespace })),
-  );
+>()("@effect-agent/platform-cloudflare/ScheduleOwnerNamespace") {}
 
 const passthroughAgent = (agentId: AgentId): DurableSubmitAgent<typeof PersistedJson> => ({
   definition: { id: agentId, input: PersistedJson },
@@ -429,25 +375,6 @@ export class CloudflareSchedulingClient extends Context.Service<
     );
 }
 
-export interface ScheduleOwnerObjectSourceContext {
-  readonly ctx: DurableObjectState;
-  readonly env: unknown;
-  readonly owner: ScheduleOwner;
-}
-
-export interface ScheduleOwnerObjectOptions {
-  readonly conversationNamespaceBinding: string;
-  readonly authorizer:
-    | ScheduleAuthorizer["Service"]
-    | ((context: ScheduleOwnerObjectSourceContext) => ScheduleAuthorizer["Service"]);
-  readonly limits?: SchedulingLimits | undefined;
-  readonly failpoint?:
-    | ((context: ScheduleOwnerObjectSourceContext) => {
-        readonly hit: (point: string) => Effect.Effect<void, ScheduleFailpointError>;
-      })
-    | undefined;
-}
-
 export class ScheduleOwnerIdentity extends Context.Service<
   ScheduleOwnerIdentity,
   { readonly owner: ScheduleOwner }
@@ -578,80 +505,6 @@ type ScheduleRuntimeServices =
   | DoScheduleAlarmControl
   | ScheduleOwnerIdentity
   | DurableObjectAlarm.DurableObjectAlarm;
-
-const makeScheduleRuntimeLayer = (
-  options: ScheduleOwnerObjectOptions,
-): Layer.Layer<
-  ScheduleRuntimeServices,
-  | ScheduleStorageError
-  | ScheduleOwnerProtocolError
-  | CloudflareBindingError
-  | ScheduleValidationError,
-  EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
-> => {
-  const limits = options.limits ?? defaultSchedulingLimits;
-  const ownerLayer = Layer.effect(
-    ScheduleOwnerIdentity,
-    Effect.gen(function* () {
-      const state = yield* EffectCfDurableObjectState.DurableObjectState;
-      return ScheduleOwnerIdentity.of({ owner: yield* decodeOwnerName(state.raw.id.name) });
-    }),
-  );
-  const sqlLayer = Layer.unwrap(
-    Effect.map(EffectCfDurableObjectState.DurableObjectState, (state) =>
-      SqliteClient.layer({ storage: state.raw.storage }),
-    ),
-  );
-  const namespaceLayer = Layer.effect(
-    ConversationObjectNamespace,
-    Effect.gen(function* () {
-      const env = yield* WorkerEnvironment;
-      const namespace = yield* conversationNamespaceFromEnv(
-        env,
-        options.conversationNamespaceBinding,
-      );
-      return ConversationObjectNamespace.of({ namespace });
-    }),
-  );
-  const authorizerLayer = Layer.effect(
-    ScheduleAuthorizer,
-    Effect.gen(function* () {
-      const state = yield* EffectCfDurableObjectState.DurableObjectState;
-      const env = yield* WorkerEnvironment;
-      const { owner } = yield* ScheduleOwnerIdentity;
-      const source = { ctx: state.raw, env, owner };
-      return typeof options.authorizer === "function"
-        ? options.authorizer(source)
-        : options.authorizer;
-    }),
-  );
-  const failpointLayer = Layer.effect(
-    ScheduleFailpoint,
-    Effect.gen(function* () {
-      if (options.failpoint === undefined) return { hit: () => Effect.void };
-      const state = yield* EffectCfDurableObjectState.DurableObjectState;
-      const env = yield* WorkerEnvironment;
-      const { owner } = yield* ScheduleOwnerIdentity;
-      return options.failpoint({ ctx: state.raw, env, owner });
-    }),
-  );
-  const wakeLayer = Layer.succeed(ScheduleWake)({ notify: Effect.void, await: Effect.never });
-  const base = Layer.mergeAll(
-    ownerLayer,
-    sqlLayer,
-    namespaceLayer,
-    DurableObjectAlarm.DurableObjectAlarm.layer,
-    BrowserCrypto.layer,
-  );
-  const withTransaction = transactionLayer.pipe(Layer.provideMerge(base));
-  const withFailpoint = failpointLayer.pipe(Layer.provideMerge(withTransaction));
-  const withStore = scheduleStoreLayer.pipe(Layer.provideMerge(withFailpoint));
-  const withAuthorizer = authorizerLayer.pipe(Layer.provideMerge(withStore));
-  const withWake = wakeLayer.pipe(Layer.provideMerge(withAuthorizer));
-  const withClient = CloudflareConversationClient.layer.pipe(Layer.provideMerge(withWake));
-  const withAdmission = admissionLayer.pipe(Layer.provideMerge(withClient));
-  return Scheduling.layer(limits).pipe(Layer.provideMerge(withAdmission));
-};
 
 const ensureOwner = (
   expected: ScheduleOwner,
@@ -787,23 +640,46 @@ export interface ScheduleOwnerObjectClass {
   new (ctx: DurableObjectState, env: Cloudflare.Env): ScheduleOwnerObjectInstance;
 }
 
-/** Build the one SQLite-backed Schedule Owner Durable Object class per management scope. */
-export const makeScheduleOwnerObjectClass = (
-  options: ScheduleOwnerObjectOptions,
+/** The host Layer supplies authorization and routing; native services belong to effect-cf. */
+export const makeScheduleOwnerObjectClass = <E>(
+  host: Layer.Layer<
+    ScheduleAuthorizer | ConversationObjectNamespace,
+    E,
+    EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment | ScheduleOwnerIdentity
+  >,
+  limits: SchedulingLimits = defaultSchedulingLimits,
 ): ScheduleOwnerObjectClass => {
-  const limits = options.limits ?? defaultSchedulingLimits;
-  const application = makeScheduleRuntimeLayer(options);
+  const ownerLayer = Layer.effect(
+    ScheduleOwnerIdentity,
+    Effect.gen(function* () {
+      const state = yield* EffectCfDurableObjectState.DurableObjectState;
+      return ScheduleOwnerIdentity.of({ owner: yield* decodeOwnerName(state.raw.id.name) });
+    }),
+  );
+  const sqlLayer = Layer.unwrap(
+    Effect.map(EffectCfDurableObjectState.DurableObjectState, (state) =>
+      SqliteClient.layer({ storage: state.raw.storage }),
+    ),
+  );
+  const application = Scheduling.layer(limits).pipe(
+    Layer.provideMerge(
+      scheduleStoreLayer.pipe(Layer.provide(transactionLayer), Layer.provide(sqlLayer)),
+    ),
+    Layer.provide(admissionLayer.pipe(Layer.provide(CloudflareConversationClient.layer))),
+    Layer.provide(ScheduleWakeNoop),
+    Layer.provide(BrowserCrypto.layer),
+    Layer.provideMerge(DurableObjectAlarm.DurableObjectAlarm.layer),
+    Layer.provide(host),
+    Layer.provideMerge(ownerLayer),
+  );
   const runtime: Layer.Layer<
     ScheduleRuntimeServices,
-    | ScheduleStorageError
-    | ScheduleOwnerProtocolError
-    | CloudflareBindingError
-    | ScheduleValidationError,
+    E | ScheduleStorageError | ScheduleOwnerProtocolError | ScheduleValidationError,
     EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
   > = Layer.effectContext(
     Effect.gen(function* () {
       const state = yield* EffectCfDurableObjectState.DurableObjectState;
-      const scope: Scope.Scope = yield* Effect.scope;
+      const scope = yield* Effect.scope;
       return yield* state.blockConcurrencyWhile(Layer.buildWithScope(application, scope));
     }),
   );

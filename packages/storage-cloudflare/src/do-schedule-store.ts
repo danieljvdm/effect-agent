@@ -154,9 +154,8 @@ const encodeRecord = Effect.fn("DoScheduleStore.encodeRecord")(function* (
   );
 });
 
-const initializeScheduleStore = Effect.fn("DoScheduleStore.initialize")(function* (
-  sql: SqlClientService.SqlClient,
-) {
+const initializeScheduleStore = Effect.fn("DoScheduleStore.initialize")(function* () {
+  const sql = yield* SqlClientService.SqlClient;
   const operation = "initialize schedule store";
   const rawTables = yield* sql<Record<string, unknown>>`
     SELECT name
@@ -232,7 +231,7 @@ const makeServices = Effect.gen(function* () {
   const transactions = yield* DoScheduleTransaction;
   const scheduleFailpoint = yield* ScheduleFailpoint;
 
-  yield* initializeScheduleStore(sql);
+  yield* initializeScheduleStore();
 
   const readRows = Effect.fn("DoScheduleStore.readRows")(function* (
     key: ScheduleKey,

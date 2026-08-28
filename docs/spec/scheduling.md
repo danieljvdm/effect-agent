@@ -122,6 +122,13 @@ Schedule Owner Durable Object per management scope, addressed by `ScheduleOwnerN
 `CloudflareSchedulingClient`. The object verifies that every request matches its tenant-qualified
 identity. The caller supplies authenticated principal information and an explicit authorizer.
 
+The class factory accepts a host Layer providing `ScheduleAuthorizer` and
+`ConversationObjectNamespace`. The host Layer may read effect-cf's `WorkerEnvironment` and
+`DurableObjectState`, and the derived `ScheduleOwnerIdentity`. It must provide any other
+application dependencies itself. Bindings come from the application's typed Worker environment;
+the scheduler does not look them up by string or assemble services through callbacks. Optional
+`ScheduleFailpoint` overrides use the same host Layer and reach both scheduling and storage.
+
 `effect-cf` 0.37.0 owns the logical alarm table and native alarm lifecycle. Schedule SQL and
 `tx.scheduleAlarm` or `tx.cancelAlarm` run in the same `DurableObjectAlarm.transaction` callback
 fiber. There is no second alarm queue or nested SQL transaction. Every replacement has a persisted
@@ -142,9 +149,10 @@ An owner needs recovery wake for any pending delivery, including paused or cance
 The compiling [Node example](../../packages/platform-node/test/fixtures/scheduling-example.ts)
 keeps schedule creation and `runResolvedWorkers` in the same process Scope. The
 [Cloudflare example](../../packages/platform-cloudflare/examples/scheduling.ts) provides a
-Schedule Owner class factory and a typed create helper. Both take the application's actual Agent,
-input, exact registered definition digests, owner scope, and authorization policy. Neither
-substitutes fabricated binding digests or a default allow policy.
+Schedule Owner class factory and a typed daily-report workflow. Both workflows yield their
+scheduling service and take the application's actual Agent, input, exact registered definition
+digests, and owner scope as data. The application supplies runtime and authorization Layers at
+its entry point. Neither example substitutes fabricated binding digests or a default allow policy.
 
 ## 7. Evidence
 

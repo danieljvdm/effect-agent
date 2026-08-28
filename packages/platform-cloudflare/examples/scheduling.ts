@@ -4,39 +4,49 @@ import {
   type ScheduleCreateOptions,
 } from "@effect-agent/session";
 import { Effect, Layer, type Schema } from "effect";
+import { WorkerEnvironment } from "effect-cf";
 
 import {
   CloudflareSchedulingClient,
+  ConversationObjectNamespace,
   ScheduleOwnerNamespace,
   makeScheduleOwnerObjectClass,
-  type ConversationObjectRpc,
-  type ScheduleOwnerObjectRpc,
 } from "../src/index.ts";
 
-export interface SchedulingWorkerEnv {
-  readonly CONVERSATIONS: DurableObjectNamespace<ConversationObjectRpc>;
-  readonly SCHEDULES: DurableObjectNamespace<ScheduleOwnerObjectRpc>;
-}
+/** Export the returned class; the application policy Layer owns its dependencies. */
+export const makeSchedulingOwner = <E>(
+  authorizer: Layer.Layer<ScheduleAuthorizer, E, WorkerEnvironment>,
+) =>
+  makeScheduleOwnerObjectClass(
+    Layer.merge(
+      authorizer,
+      Layer.effect(
+        ConversationObjectNamespace,
+        Effect.map(WorkerEnvironment, (env) => ({ namespace: env.CONVERSATIONS })),
+      ),
+    ),
+  );
 
-/** Export the returned class from the Worker and bind it as a SQLite Durable Object. */
-export const makeSchedulingOwner = (authorizer: ScheduleAuthorizer["Service"]) =>
-  makeScheduleOwnerObjectClass({
-    conversationNamespaceBinding: "CONVERSATIONS",
-    authorizer,
-  });
+/** The native Worker entry point provides WorkerEnvironment once. */
+export const schedulingClientLayer = CloudflareSchedulingClient.layer.pipe(
+  Layer.provide(
+    Layer.effect(
+      ScheduleOwnerNamespace,
+      Effect.map(WorkerEnvironment, (env) => ({ namespace: env.SCHEDULES })),
+    ),
+  ),
+);
 
-/** Provide this Layer to Worker-side schedule management Effects. */
-export const schedulingClientLayer = (env: SchedulingWorkerEnv) =>
-  CloudflareSchedulingClient.layer.pipe(Layer.provide(ScheduleOwnerNamespace.layer(env.SCHEDULES)));
-
-/** Input encoding requirements stay visible to the Worker caller. */
-export const createSchedule = <InputSchema extends Schema.Top>(
-  env: SchedulingWorkerEnv,
+export const scheduleDailyReport = Effect.fn("Example.scheduleDailyReport")(function* <
+  InputSchema extends Schema.Top,
+>(
   agent: DurableSubmitAgent<InputSchema>,
   input: InputSchema["Type"],
-  options: ScheduleCreateOptions,
-) =>
-  Effect.gen(function* () {
-    const scheduling = yield* CloudflareSchedulingClient;
-    return yield* scheduling.create(agent, input, options);
-  }).pipe(Effect.provide(schedulingClientLayer(env)));
+  options: Omit<ScheduleCreateOptions, "timing">,
+) {
+  const scheduling = yield* CloudflareSchedulingClient;
+  return yield* scheduling.create(agent, input, {
+    ...options,
+    timing: { _tag: "Cron", expression: "0 8 * * *", timeZone: "UTC" },
+  });
+});
