@@ -320,7 +320,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   const failpoint = yield* SqliteStorageFailpoint;
   const sql = yield* SqlClientService.SqlClient;
   const crypto = yield* Crypto.Crypto;
-  const journal = yield* initializeSqliteJournal(sql, failpoint.hit, config.busyTimeout);
+  const journal = yield* initializeSqliteJournal();
 
   const hitFailpoint = (
     location: SqliteStorageFailpointLocation,

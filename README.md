@@ -68,6 +68,7 @@ The documentation site lives in [`docs/`](docs/index.md); run it locally with
 | Versioning and compatibility                            | [Compatibility](docs/spec/compatibility.md)                 |
 | Pull-request work orders                                | [Work orders](docs/spec/pr-work-orders.md)                  |
 | GitHub work-order dispatch and publication              | [Work-order ingress](docs/spec/pr-work-order-ingress.md)    |
+| Durable typed-input delivery at a specified time        | [Scheduling](docs/spec/scheduling.md)                       |
 | Single-pass pull-request review and GitHub channel      | [PR review](docs/spec/pr-review.md)                         |
 
 ## Architecture decisions

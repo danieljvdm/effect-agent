@@ -5,6 +5,7 @@ import {
   type RunCostEstimator,
   type RunToolFailureObserver,
 } from "@effect-agent/engine";
+import type { ScheduleStore } from "@effect-agent/session";
 import {
   type ConversationStore,
   type WakeScheduler,
@@ -24,6 +25,7 @@ import {
 } from "@effect-agent/session";
 import {
   conversationStoreLayer,
+  scheduleStoreLayer,
   SqliteStorageConfig,
   SqliteStorageConfigValue,
   storageFailpointLayer,
@@ -154,6 +156,7 @@ export type NodeDurableRuntimeServices =
   | DurableAgentRuntime
   | SubmissionLedger
   | ConversationStore
+  | ScheduleStore
   | WakeScheduler
   | DurableRuntimeConfig
   | NodeDurableRuntimeConfig
@@ -385,6 +388,7 @@ export class NodeDurableRuntime {
         const bindingResolverLayer = AgentBindingResolver.layer(options.bindings ?? []);
         const ports = Layer.mergeAll(
           conversationStoreLayer,
+          scheduleStoreLayer,
           nodeWakeSchedulerLayer.pipe(
             Layer.provideMerge(ownershipDrainLayer.pipe(Layer.provide(submissionLedgerLayer))),
           ),

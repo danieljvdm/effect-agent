@@ -209,7 +209,7 @@
     },
     "packages/capabilities": {
       "name": "@effect-agent/capabilities",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -225,7 +225,7 @@
     },
     "packages/core": {
       "name": "@effect-agent/core",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "effect": "catalog:",
       },
@@ -236,7 +236,7 @@
     },
     "packages/effect-agent": {
       "name": "effect-agent",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
@@ -250,7 +250,7 @@
     },
     "packages/engine": {
       "name": "@effect-agent/engine",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "effect": "catalog:",
@@ -263,7 +263,7 @@
     },
     "packages/platform-cloudflare": {
       "name": "@effect-agent/platform-cloudflare",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "@cloudflare/puppeteer": "catalog:",
         "@effect-agent/core": "workspace:*",
@@ -280,6 +280,7 @@
         "@cloudflare/workers-types": "catalog:",
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/testing": "workspace:*",
+        "@effect/platform-node": "catalog:",
         "@effect/sql-d1": "catalog:",
         "@effect/vitest": "catalog:",
         "effect-cf": "catalog:",
@@ -290,12 +291,12 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "effect-cf": "^0.34.0",
+        "effect-cf": "^0.37.0",
       },
     },
     "packages/platform-node": {
       "name": "@effect-agent/platform-node",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -314,7 +315,7 @@
     },
     "packages/pr-review": {
       "name": "@effect-agent/pr-review",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "effect": "catalog:",
         "effect-agent": "workspace:*",
@@ -343,7 +344,7 @@
     },
     "packages/sandbox": {
       "name": "@effect-agent/sandbox",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "effect": "catalog:",
       },
@@ -354,7 +355,7 @@
     },
     "packages/sandbox-local": {
       "name": "@effect-agent/sandbox-local",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "@effect-agent/sandbox": "workspace:*",
         "@effect/platform-node": "catalog:",
@@ -369,7 +370,7 @@
     },
     "packages/session": {
       "name": "@effect-agent/session",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -384,7 +385,7 @@
     },
     "packages/storage-cloudflare": {
       "name": "@effect-agent/storage-cloudflare",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "@effect-agent/session": "workspace:*",
         "@effect/platform-browser": "catalog:",
@@ -403,7 +404,7 @@
     },
     "packages/storage-memory": {
       "name": "@effect-agent/storage-memory",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/session": "workspace:*",
@@ -418,7 +419,7 @@
     },
     "packages/storage-sqlite": {
       "name": "@effect-agent/storage-sqlite",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "@effect-agent/session": "workspace:*",
         "@effect/platform-node": "catalog:",
@@ -433,7 +434,7 @@
     },
     "packages/testing": {
       "name": "@effect-agent/testing",
-      "version": "0.1.0-beta.33",
+      "version": "0.1.0-beta.35",
       "dependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
@@ -488,7 +489,7 @@
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "effect": "4.0.0-rc.111",
-    "effect-cf": "0.34.0",
+    "effect-cf": "0.37.0",
     "esbuild": "0.28.1",
     "lucide-react": "1.27.0",
     "miniflare": "5.20260811.1-alpha",
@@ -1960,7 +1961,7 @@
 
     "effect-agent": ["effect-agent@workspace:packages/effect-agent"],
 
-    "effect-cf": ["effect-cf@0.34.0", "", { "peerDependencies": { "@cloudflare/computer": "^0.2.0", "@cloudflare/sandbox": "^0.13.0-next.738.2", "@cloudflare/vitest-plugin": "^1.0.0", "@cloudflare/workers-types": "^5.20260825.1", "@effect/sql-d1": "^4.0.0-rc.110", "@effect/sql-pg": "^4.0.0-rc.110", "@effect/sql-sqlite-do": "^4.0.0-rc.110", "effect": "^4.0.0-rc.110" }, "optionalPeers": ["@cloudflare/computer", "@cloudflare/sandbox", "@cloudflare/vitest-plugin", "@cloudflare/workers-types", "@effect/sql-pg"] }, "sha512-mi3ErLWFsbF/BSQUEY8QfJ8/QUUUquWm3zrj37/V8T8Iu9TiP7a932i2XKRjLn1kVy2yizxlPs/+smsnTRIYpg=="],
+    "effect-cf": ["effect-cf@0.37.0", "", { "peerDependencies": { "@cloudflare/computer": "^0.2.0", "@cloudflare/sandbox": "^0.13.0-next.738.2", "@cloudflare/vitest-plugin": "^1.0.0", "@cloudflare/workers-types": "^5.20260825.1", "@effect/sql-d1": "^4.0.0-rc.110", "@effect/sql-pg": "^4.0.0-rc.110", "@effect/sql-sqlite-do": "^4.0.0-rc.110", "@modelcontextprotocol/server": "^2.0.0", "effect": "^4.0.0-rc.110" }, "optionalPeers": ["@cloudflare/computer", "@cloudflare/sandbox", "@cloudflare/vitest-plugin", "@cloudflare/workers-types", "@effect/sql-pg", "@modelcontextprotocol/server"] }, "sha512-G6hAnQWt9QD+6H70jVQ1FYO3eqa3QoEst/s1RT7sFkHyQXk/BIhBrKrkrF9TNedoD07Vvqca1L6nVDLKIPuofg=="],
 
     "electron-to-chromium": ["electron-to-chromium@1.5.398", "", {}, "sha512-AsvhAxopJGh6museTDMIjn6JpDYOfgu4RLlygomt87MUwBUqTfd/1EiPtx10/LZE8xpTvkP2E9Gafq7lkLtodQ=="],
 

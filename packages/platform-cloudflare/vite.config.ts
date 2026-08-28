@@ -37,6 +37,7 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/scheduling.ts",
       "src/browser-quick-action.ts",
       "src/interactive-browser.ts",
       "src/browser-rest-capture.ts",
@@ -60,6 +61,7 @@ export default defineConfig({
               compatibilityFlags: ["nodejs_compat"],
               durableObjects: {
                 CONVERSATIONS: { className: "TestConversationObject", useSQLite: true },
+                SCHEDULES: { className: "TestScheduleOwnerObject", useSQLite: true },
                 LIMITED: { className: "LimitedConversationObject", useSQLite: true },
                 TINYDB: { className: "TinyDatabaseConversationObject", useSQLite: true },
                 DENIED: { className: "DeniedConversationObject", useSQLite: true },

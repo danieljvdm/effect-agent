@@ -1,10 +1,13 @@
-import { OperationDenied } from "@effect-agent/session";
-import { Effect } from "effect";
-import { DurableObject, RpcTracing } from "effect-cf";
+import { OperationDenied, ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/session";
+import { Effect, Layer } from "effect";
+import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
 
 import {
   makeConversationObjectClass,
+  makeScheduleOwnerObjectClass,
+  ConversationObjectNamespace,
+  ScheduleOwnerIdentity,
   type ConversationObjectOptions,
   type ConversationObjectRpc,
 } from "../src/index.ts";
@@ -17,6 +20,8 @@ import {
   makeContextCompactorRunContextLayer,
   makeTestBindings,
   runtimeEvictionFailpoint,
+  scheduleAuthorizer,
+  scheduleFailpoint,
   storageEvictionFailpoint,
 } from "./fixtures.ts";
 import {
@@ -54,6 +59,34 @@ const baseOptions: ConversationObjectOptions = {
   runtimeFailpoint: runtimeEvictionFailpoint,
   maintenanceFailpoint: maintenanceRaceFailpoint,
 };
+
+const scheduleHostLayer = Layer.mergeAll(
+  Layer.effect(
+    ScheduleAuthorizer,
+    Effect.map(ScheduleOwnerIdentity, ({ owner }) => scheduleAuthorizer(owner)),
+  ),
+  Layer.effect(
+    ScheduleFailpoint,
+    Effect.map(DurableObjectState.DurableObjectState, (state) => scheduleFailpoint(state.raw)),
+  ),
+  Layer.effect(
+    ConversationObjectNamespace,
+    Effect.map(WorkerEnvironment, (env) => ({ namespace: env.CONVERSATIONS })),
+  ),
+);
+
+/** Real Schedule Owner object routed to the test Conversation namespace. */
+export class TestScheduleOwnerObject extends makeScheduleOwnerObjectClass(scheduleHostLayer, {
+  maxSchedulesPerOwner: 100,
+  minIntervalMillis: 60_000,
+  maxInputBytes: 65_536,
+  dueBatchSize: 16,
+  admissionConcurrency: 4,
+  retryBaseMillis: 10,
+  retryMaxMillis: 100,
+  admissionTimeoutMillis: 5_000,
+  recoveryPollMillis: 100,
+}) {}
 
 interface BindingSourceProbe {
   readonly evaluationCount: number;
