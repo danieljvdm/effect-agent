@@ -887,6 +887,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(reviewWorkflow.on).toEqual({
         pull_request: {
           types: ["opened", "reopened", "ready_for_review", "synchronize"],
+          "paths-ignore": generatedPaths,
         },
         issue_comment: { types: ["created"] },
       });

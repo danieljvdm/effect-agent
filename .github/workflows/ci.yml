@@ -12,9 +12,9 @@ on:
     branches: [main]
   # Changesets release PRs contain only these generated paths. They receive a
   # `ready` check from the trusted main-branch Release workflow after exact
-  # regeneration. GITHUB_TOKEN updates cannot trigger this workflow, so the
-  # verifier itself rejects any unexpected path. A later human update with an
-  # unexpected path stops matching this filter and runs ordinary CI.
+  # regeneration. Filtering before run creation avoids GITHUB_TOKEN's workflow
+  # approval prompt. The verifier itself rejects any unexpected path; an update
+  # with an unexpected path stops matching this filter and triggers ordinary CI.
   pull_request:
     paths-ignore:
       - ".changeset/**"

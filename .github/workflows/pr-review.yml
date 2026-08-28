@@ -3,6 +3,13 @@ name: PR Review
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
+    # Match CI's generated-release filter before GitHub creates a run that
+    # needs approval. The Release workflow owns the release PR's ready check.
+    paths-ignore:
+      - ".changeset/**"
+      - "bun.lock"
+      - "packages/*/CHANGELOG.md"
+      - "packages/*/package.json"
   issue_comment:
     types: [created]
 

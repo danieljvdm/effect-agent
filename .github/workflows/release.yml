@@ -126,9 +126,9 @@ jobs:
       - name: Install trusted verifier dependencies
         run: bun install --frozen-lockfile --ignore-scripts
 
-      # Pull requests created or updated with GITHUB_TOKEN cannot trigger their
-      # own pull_request workflows. Verify the generated head from this trusted
-      # main-branch run and post the required check directly.
+      # Generated paths are filtered out of pull_request workflows, which would
+      # otherwise require approval for GITHUB_TOKEN updates. Verify from this
+      # trusted main-branch run and post the required check directly.
       - name: Resolve the generated release head
         id: release-pr
         env:
