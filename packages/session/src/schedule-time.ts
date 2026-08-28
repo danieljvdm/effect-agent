@@ -133,7 +133,16 @@ export const scheduleNextAfter = (
       const cron = parsedStoredCron(timing);
       if (Result.isFailure(cron)) return Result.fail(cron.failure);
       return Result.try({
-        try: () => Cron.next(cron.success, afterMillis).getTime(),
+        try: () => {
+          let next = Cron.next(cron.success, afterMillis).getTime();
+          // Inside a fall fold Effect may select the first, already elapsed local instant.
+          while (next <= afterMillis) {
+            const following = Cron.next(cron.success, next).getTime();
+            if (following <= next) throw new Error("Cron did not advance");
+            next = following;
+          }
+          return next;
+        },
         catch: () => ScheduleValidationError.make({ message: "Cron has no supported next firing" }),
       }).pipe(Result.flatMap((next) => checkedInstant(next, "Next cron occurrence")));
     }
@@ -153,7 +162,7 @@ export interface DueScheduleOccurrence {
   readonly skippedRange: ScheduleSkippedRange | null;
 }
 
-/** Coalesces due recurring occurrences without walking every missed firing. */
+/** Coalesces recurring occurrences using the same forward sequence as registration. */
 export const scheduleDueOccurrence = (
   timing: ScheduleTiming,
   cursorMillis: number,
@@ -175,17 +184,64 @@ export const scheduleDueOccurrence = (
   } else {
     const cron = parsedStoredCron(timing);
     if (Result.isFailure(cron)) return Result.fail(cron.failure);
-    const exclusiveBoundary = checkedInstant(
-      Math.floor(nowMillis / 1_000) * 1_000 + 1_000,
-      "Cron due boundary",
-    );
-    if (Result.isFailure(exclusiveBoundary)) return Result.fail(exclusiveBoundary.failure);
-    const latest = Result.try({
-      try: () => Cron.prev(cron.success, exclusiveBoundary.success).getTime(),
+    const due = Result.try({
+      try: () => {
+        let intended = cursorMillis;
+        // Reverse traversal is safe only without offset transitions. Named-zone reverse
+        // traversal has different gap/fold semantics from the forward occurrence sequence.
+        const zone = Option.getOrUndefined(cron.success.tz);
+        if (zone !== undefined && (DateTime.isTimeZoneOffset(zone) || zone.id === "UTC")) {
+          intended = Math.max(cursorMillis, Cron.prev(cron.success, nowMillis + 1_000).getTime());
+        } else {
+          // Seek by calendar date in UTC, where reverse traversal has no DST ambiguity.
+          // Include two prior civil days to cover even IANA date-line shifts. There are no
+          // matching dates between this seed day and that boundary, so forward traversal
+          // visits only the seed day and the recent days, regardless of downtime length.
+          const calendar = Cron.make({
+            ...cron.success,
+            seconds: [0],
+            minutes: [0],
+            hours: [0],
+            tz: DateTime.zoneMakeNamedUnsafe("UTC"),
+          });
+          const localDay = DateTime.makeUnsafe(
+            DateTime.toDate(DateTime.makeZonedUnsafe(nowMillis, { timeZone: zone })),
+          ).pipe(DateTime.startOf("day"), DateTime.subtract({ days: 2 }));
+          const seedDay = Cron.prev(calendar, DateTime.toEpochMillis(localDay) + 1_000);
+          const seed =
+            DateTime.makeZonedUnsafe(seedDay, {
+              timeZone: zone,
+              adjustForTimeZone: true,
+            }).pipe(DateTime.toEpochMillis) - 1_000;
+          if (seed > cursorMillis) {
+            const first = Cron.next(cron.success, seed).getTime();
+            if (first <= nowMillis) intended = Math.max(intended, first);
+          }
+        }
+        let next = Cron.next(cron.success, intended).getTime();
+        while (next <= nowMillis) {
+          if (next <= intended) throw new Error("Cron did not advance");
+          intended = next;
+          next = Cron.next(cron.success, intended).getTime();
+        }
+        return { intended, next };
+      },
       catch: () => ScheduleValidationError.make({ message: "Cron has no supported due firing" }),
     });
-    if (Result.isFailure(latest)) return Result.fail(latest.failure);
-    intendedAtMillis = Math.max(cursorMillis, latest.success);
+    if (Result.isFailure(due)) return Result.fail(due.failure);
+    const next = checkedInstant(due.success.next, "Next cron occurrence");
+    if (Result.isFailure(next)) return Result.fail(next.failure);
+    return Result.succeed({
+      intendedAtMillis: due.success.intended,
+      nextAtMillis: next.success,
+      skippedRange:
+        due.success.intended === cursorMillis
+          ? null
+          : {
+              fromMillis: cursorMillis,
+              toMillis: due.success.intended,
+            },
+    });
   }
 
   const next = scheduleNextAfter(timing, nowMillis);

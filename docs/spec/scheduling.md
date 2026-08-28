@@ -61,7 +61,13 @@ Cron follows Effect's named-zone behavior and persists UTC intended instants. A 
 time moves forward across the spring gap. A repeated fall time selects its first occurrence, not
 both. Fixed offsets such as `+05:30` are also supported.
 
-The defaults are: 1,000 Schedules per owner, 60-second minimum recurrence, 64 KiB encoded input, 64 due records per driver pass, 8 concurrent admissions, 1-second retry base, 5-minute retry maximum, 30-second admission timeout, and 30-second recovery poll. Hosts configure finite limits through `SchedulingLimits`. The hard bounds are 100,000 Schedules per owner, a recurrence minimum of at least 60 seconds, at most 64 KiB input, at most 1,024 records per pass, and at most 64 concurrent admissions. A limit violation is typed and occurs before durable mutation. Paused, completed, and cancelled records still count toward the owner quota because they retain creation-idempotency evidence.
+The defaults are: 1,000 Schedules per owner, 60-second minimum recurrence, 64 KiB encoded input, 64 due keys per query page, 8 concurrent admissions, 1-second retry base, 5-minute retry maximum, 30-second admission timeout, and 30-second recovery poll. Hosts configure finite limits through `SchedulingLimits`. The hard bounds are 100,000 Schedules per owner, a positive interval minimum, at most 64 KiB input, at most 1,024 keys per query page, and at most 64 concurrent admissions. A limit violation is typed and occurs before durable mutation. The owner quota bounds operational capacity, not lifetime registrations. A record counts while it
+has pending delivery or a remaining cursor in active or paused state. Cancellation retains capacity
+until pending delivery resolves. Completed and cancelled records without pending work retain their
+creation fingerprint and current record for replay, but do not consume operational capacity.
+Reactivation by update or resume checks capacity atomically with the transition. Retention does
+not expire or reuse Schedule IDs; storage for replay evidence grows with registrations. Deleting
+that evidence would weaken the existing replay guarantee and is not an implicit quota policy.
 
 Building `Scheduling.layer` rejects a recovery interval whose deadline, measured from the current
 Clock, exceeds `ScheduleInstant` with `ScheduleValidationError`. Cloudflare also validates each
@@ -70,7 +76,7 @@ fails with a typed storage error instead of a defect; a failed transaction retai
 
 ## 3. Management and registration
 
-`Scheduling` provides `create`, `get`, `list`, `update`, `pause`, `resume`, and `cancel`. Every management call authorizes `ScheduleScope`. There is no global get or list.
+`Scheduling` provides `create`, `get`, `list`, `update`, `pause`, `resume`, and `cancel`. Every management call authorizes `ScheduleScope`. There is no global get or list. `Scheduling` exposes only these management operations. `ScheduleDriver` is a separate privileged host capability; it MUST NOT be provided to management callers or model Tools.
 
 List is owner-scoped keyset pagination, ordered by `ScheduleId` ascending. `after` is the last ID, and a page limit is at most 100. The service default is 50. Pages are not snapshots, but a cursor chain cannot return an item twice.
 
@@ -78,7 +84,14 @@ Create accepts owner, ID, delivery principal, Agent ID, exact definition digests
 
 Update requires `expectedRevision`. It preserves pending delivery, replaces future configuration, reactivates a paused Schedule, and recalculates next occurrence from one captured update time. A recurring rule selects strictly after that time. A one-shot accepts its supplied time and is immediately due if it is in the past. Configuration revision and the store CAS version are distinct. Management controls also fence the storage version so a concurrent completion cannot let resume restore a consumed one-shot cursor.
 
-Pause stops preparation but does not stop pending recovery. Resume skips recurring firing times missed while paused and selects strictly after resume. A never-prepared overdue one-shot retains its original intended time. Resume does not recreate a completed or conclusively refused one-shot. Update is required. Cancel is irreversible, stops future preparation, preserves pending delivery until it resolves, and does not abort an accepted Submission.
+Pause stops preparation but does not stop pending recovery. Resume on an active Schedule is a no-op after authorization and revision validation, including its cursor, skipped range, timestamps, and storage version. Resume from paused state skips recurring firing times missed while paused and selects strictly after resume. A never-prepared overdue one-shot retains its original intended time. Resume does not recreate a completed or conclusively refused one-shot. Update is required. Cancel is irreversible, stops future preparation, preserves pending delivery until it resolves, and does not abort an accepted Submission.
+
+Public `ScheduleSnapshot` is an explicit projection shared by reads, listings, and management
+responses. It exposes owner and ID, creation/update times, configuration revision, timing,
+destination, Agent ID, delivery principal, state, next time, bounded pending timing/retry status,
+and latest Receipt, refusal, and skipped range. It omits input, definition and input digests,
+creation fingerprints, CAS/storage versions, creation principal, and pending admission envelopes.
+Persistence schema changes do not implicitly extend this consumer contract.
 
 ## 4. Record and protocol
 
@@ -94,7 +107,13 @@ The driver recovers pending work before considering the cursor. It calls `Schedu
 
 ## 5. Downtime, retry, and authorization
 
-At most one pending delivery exists per Schedule. With none pending, missed recurring firings coalesce to the latest eligible intended firing at or before captured `now`, and the cursor advances to the first future firing. Missed firings are not replayed. A one-shot retains its original intended time until preparation.
+At most one pending delivery exists per Schedule. With none pending, missed recurring firings coalesce to the latest eligible intended firing at or before captured `now`, and the cursor advances to the first future firing. Cron due selection follows the forward sequence from the stored cursor, including spring gaps
+and the first occurrence of a fall fold. Reverse named-zone traversal is not its inverse and MUST
+NOT select due instants. A UTC calendar-date query may seek to a matching local date before the
+recent transition window, then forward traversal selects the occurrence and next cursor together.
+The window includes two preceding civil days to cover IANA whole-day date-line shifts. This avoids
+walking all firings missed over long downtime. UTC and fixed-offset rules may use reverse selection
+because they have no offset transitions. Missed firings are not replayed. A one-shot retains its original intended time until preparation.
 
 `lastSkippedRange` is the half-open interval `[fromMillis, toMillis)`. Coalescing excludes the
 selected occurrence at its upper bound; resume excludes the new future cursor. It records a time
@@ -119,7 +138,24 @@ diagnostics containing input, and raw error Causes are not attached to schedulin
 
 ## 6. Ports and deployment
 
-`ScheduleStore` is the inward atomic port. Its methods own insert, owner-scoped reads and pages, revisioned changes, indexed due selection, and next-deadline lookup. `ScheduledInputAdmission` admits only an encoded envelope and returns Receipt without exposing ledger internals. Memory, SQLite, and Cloudflare adapters implement `ScheduleStore`.
+`ScheduleStore` is the inward atomic port. Its methods own insert, owner-scoped reads and pages, revisioned changes, indexed due-key selection, and next-deadline lookup. `ScheduledInputAdmission` admits only an encoded envelope and returns Receipt without exposing ledger internals. Memory, SQLite, and Cloudflare adapters implement `ScheduleStore`.
+
+Both `NodeScheduling.layer()` and `CloudflareSchedulingClient.layer` provide the same `Scheduling`
+management service. Local hosts build `ScheduleDriver.layer` separately. The driver returns internal
+records only to its privileged caller; it is not a management read path. Cloudflare transport and
+protocol failures map to `ScheduleStorageError`, preserving the common management error contract.
+
+A driver pass captures a due-query time and scans keyset pages ordered by deadline, tenant, owner,
+and Schedule ID. `dueBatchSize` bounds each query page, not the total sweep. Each record is read and
+processed independently with bounded concurrency. An expected error or defect is counted and
+logged by tag only, then the sweep continues past its original indexed key. Even a corrupt record
+cannot prevent later records from being read. Query-wide storage failure still fails the pass;
+Scope interruption stops it and preserves pending work. Failed records remain eligible for the
+next sweep. The driver uses no in-memory exclusion list that would lose progress on eviction.
+After a sweep with failures, hosts wait for the recovery poll before retrying instead of spinning
+on the unchanged earliest deadline. Node wake hints can still start a pass earlier. Cloudflare
+re-arms the recovery wake after the sweep because successful transitions may have replaced the
+wake armed at handler entry. Admission continues to use the unchanged pending envelope.
 
 The optional `NodeScheduling.layer()` calls `NodeDurableHost.submit` through its shutdown gate.
 It reuses the host's SQLite `ScheduleStore`. One Scope-owned driver uses indexed due and retry

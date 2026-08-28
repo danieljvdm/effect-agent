@@ -1,4 +1,9 @@
-import { ScheduleId, type ScheduleAuthorizer, type ScheduleOwner } from "@effect-agent/session";
+import {
+  ScheduleId,
+  type ScheduleAuthorizer,
+  type ScheduleOwner,
+  Scheduling,
+} from "@effect-agent/session";
 import { DoScheduleAlarmControl } from "@effect-agent/storage-cloudflare";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, type Layer, Schema } from "effect";
@@ -6,7 +11,6 @@ import { DurableObject, type DurableObjectState, type WorkerEnvironment } from "
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  CloudflareSchedulingClient,
   type ConversationObjectNamespace,
   type ScheduleOwnerIdentity,
   type makeScheduleOwnerObjectClass,
@@ -78,7 +82,7 @@ const storeProbe = (owner: ScheduleOwner) =>
 const snapshotFor = (data: ReturnType<typeof fixture>) =>
   runScheduleClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareSchedulingClient;
+      const client = yield* Scheduling;
       return yield* client.get(data.scope, data.scheduleId);
     }),
   );
@@ -109,7 +113,7 @@ const manage = (
 ) =>
   runScheduleClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareSchedulingClient;
+      const client = yield* Scheduling;
       const options = {
         scope: data.scope,
         scheduleId: data.scheduleId,
@@ -142,11 +146,7 @@ describe("Cloudflare Schedule Owner", () => {
     const policyRequired: Layer.Layer<ConversationObjectNamespace> extends Host ? false : true =
       true;
     const routingRequired: Layer.Layer<ScheduleAuthorizer> extends Host ? false : true = true;
-    const applicationDependenciesRequired: Layer.Layer<
-      Ports,
-      never,
-      CloudflareSchedulingClient
-    > extends Host
+    const applicationDependenciesRequired: Layer.Layer<Ports, never, Scheduling> extends Host
       ? false
       : true = true;
     const nativeDependenciesAccepted: Layer.Layer<
@@ -179,7 +179,7 @@ describe("Cloudflare Schedule Owner", () => {
 
     await runScheduleClient(
       Effect.gen(function* () {
-        const client = yield* CloudflareSchedulingClient;
+        const client = yield* Scheduling;
         return yield* client.cancel(data.scope, data.scheduleId, created.configurationRevision);
       }),
     );
@@ -187,6 +187,31 @@ describe("Cloudflare Schedule Owner", () => {
     expect(
       await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm()),
     ).toBeNull();
+  });
+
+  it("delivers healthy work beside a corrupt record and retains a future recovery alarm", async () => {
+    const broken = fixture("corrupt-a");
+    const healthy = { ...fixture("healthy-b"), owner: broken.owner, scope: broken.scope };
+    await manage(broken, Date.now() + 60_000, "corrupt this record");
+    await manage(healthy, Date.now() + 60_000, "deliver this record");
+    await runInDurableObject(scheduleStubFor(broken.owner), (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE effect_agent_schedules SET deadline_at_millis = 0, record_json = json_set(record_json, '$.nextAtMillis', 0)",
+      );
+      state.storage.sql.exec(
+        "UPDATE effect_agent_schedules SET record_json = ? WHERE schedule_id = ?",
+        "{invalid-json",
+        broken.scheduleId,
+      );
+      state.storage.sql.exec("UPDATE effect_cf_scheduled_alarms SET run_at = 0");
+    });
+    const result = await runAlarmDirectExit(broken.owner);
+    expect(result._tag).toBe("Success");
+    expect((await snapshotFor(healthy)).lastReceipt).not.toBeNull();
+    expect(await laneRows(healthy.conversation)).toHaveLength(1);
+    const alarms = await alarmRows(broken.owner);
+    expect(alarms).toHaveLength(1);
+    expect(alarms[0]?.run_at).toBeGreaterThan(Date.now());
   });
 
   it("rolls back the schedule row and logical/native alarm when alarm mutation fails", async () => {
@@ -319,7 +344,7 @@ describe("Cloudflare Schedule Owner", () => {
 
       const controlled = await runScheduleClient(
         Effect.gen(function* () {
-          const client = yield* CloudflareSchedulingClient;
+          const client = yield* Scheduling;
           return yield* client[operation](
             data.scope,
             data.scheduleId,

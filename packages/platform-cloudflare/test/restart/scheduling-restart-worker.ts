@@ -3,6 +3,7 @@ import {
   ScheduleFailpoint,
   ScheduleFailpointError,
   ScheduleId,
+  Scheduling,
 } from "@effect-agent/session";
 import { Effect, Layer, Schema } from "effect";
 import { WorkerEnvironment } from "effect-cf";
@@ -140,7 +141,7 @@ const handle = Effect.fn("SchedulingRestartWorker.handle")(function* (request: R
   if (url.pathname === "/create") {
     const body = yield* Effect.tryPromise(() => request.json());
     const { deadlineAtMillis } = yield* Schema.decodeUnknownEffect(CreateRequest)(body);
-    const client = yield* CloudflareSchedulingClient;
+    const client = yield* Scheduling;
     const snapshot = yield* client.create(
       { definition: plannerDefinition },
       { question: "persist across Miniflare restart", ref: conversation },
@@ -159,7 +160,7 @@ const handle = Effect.fn("SchedulingRestartWorker.handle")(function* (request: R
     return Response.json({ revision: snapshot.configurationRevision });
   }
   if (url.pathname === "/status") {
-    const client = yield* CloudflareSchedulingClient;
+    const client = yield* Scheduling;
     const snapshot = yield* client.get(scope, scheduleId);
     const env = yield* WorkerEnvironment;
     const submissionIds = yield* Effect.promise(() =>

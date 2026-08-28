@@ -262,6 +262,132 @@ const ownerCapacity = conformanceCase(
     }),
 );
 
+const retainedEvidence = conformanceCase(
+  "releases terminal capacity without deleting replay evidence and fences reactivation",
+  (ensure) =>
+    Effect.gen(function* () {
+      const store = yield* ScheduleStore;
+      const original = pendingRecord("capacity-retained");
+      yield* store.insert(original, 1);
+      const paused = yield* store.change(original, {
+        _tag: "Control",
+        expectedRevision: 1,
+        expectedVersion: original.version,
+        action: "pause",
+        nextAtMillis: null,
+        nowMillis: 120,
+        skippedRange: null,
+      });
+      const cancelled = yield* store.change(original, {
+        _tag: "Control",
+        expectedRevision: 1,
+        expectedVersion: paused.version,
+        action: "cancel",
+        nextAtMillis: null,
+        nowMillis: 130,
+        skippedRange: null,
+      });
+      const blocked = yield* store.insert(record("capacity-next"), 1).pipe(Effect.result);
+      yield* ensure(
+        Result.isFailure(blocked) && blocked.failure._tag === "ScheduleCapacityError",
+        "cancellation released unresolved pending capacity",
+      );
+      const completed = yield* store.change(original, {
+        _tag: "Complete",
+        occurrenceId: original.pending?.envelope.occurrenceId ?? digest,
+        receipt,
+        nowMillis: 140,
+      });
+      yield* ensure(
+        completed.pending === null && cancelled.pending !== null,
+        "completion did not clear pending work",
+      );
+      yield* store.insert(record("capacity-next"), 1);
+      const replay = yield* store.insert(original, 1);
+      yield* ensure(
+        replay.version === completed.version && replay.state === "cancelled",
+        "terminal replay lost its creation evidence",
+      );
+
+      const second = record("capacity-next");
+      const pausedSecond = yield* store.change(second, {
+        _tag: "Control",
+        expectedRevision: 1,
+        expectedVersion: second.version,
+        action: "pause",
+        nextAtMillis: second.nextAtMillis,
+        nowMillis: 150,
+        skippedRange: null,
+      });
+      const pausedCapacity = yield* store.insert(record("capacity-third"), 1).pipe(Effect.result);
+      yield* ensure(
+        Result.isFailure(pausedCapacity) && pausedCapacity.failure._tag === "ScheduleCapacityError",
+        "paused future work did not reserve capacity",
+      );
+      yield* store.change(second, {
+        _tag: "Control",
+        expectedRevision: 1,
+        expectedVersion: pausedSecond.version,
+        action: "cancel",
+        nextAtMillis: null,
+        nowMillis: 160,
+        skippedRange: null,
+      });
+      const admitted = pendingRecord("capacity-completed");
+      yield* store.insert(admitted, 1);
+      const settled = yield* store.change(admitted, {
+        _tag: "Complete",
+        occurrenceId: admitted.pending?.envelope.occurrenceId ?? digest,
+        receipt,
+        nowMillis: 170,
+      });
+      yield* store.insert(record("capacity-third"), 1);
+      const reactivated = yield* store
+        .change(
+          admitted,
+          {
+            _tag: "Update",
+            expectedRevision: 1,
+            configuration: admitted.configuration,
+            nextAtMillis: 200,
+            nowMillis: 180,
+          },
+          1,
+        )
+        .pipe(Effect.result);
+      yield* ensure(
+        Result.isFailure(reactivated) && reactivated.failure._tag === "ScheduleCapacityError",
+        "reactivation exceeded operational capacity",
+      );
+      yield* ensure(
+        (yield* store.get(admitted))?.version === settled.version,
+        "capacity failure mutated the completed record",
+      );
+    }),
+);
+
+const duePagination = conformanceCase(
+  "advances due pagination beyond unchanged rows with equal deadlines",
+  (ensure) =>
+    Effect.gen(function* () {
+      const store = yield* ScheduleStore;
+      for (const name of ["due-a", "due-b", "due-c"]) yield* store.insert(record(name), 10);
+      const first = yield* store.due(100, 1);
+      const second = yield* store.due(100, 1, undefined, first[0]);
+      const third = yield* store.due(100, 1, undefined, second[0]);
+      yield* ensure(
+        first[0]?.scheduleId === id("due-a") &&
+          second[0]?.scheduleId === id("due-b") &&
+          third[0]?.scheduleId === id("due-c"),
+        "due pages repeated or skipped a key",
+      );
+      yield* ensure(
+        (yield* store.due(100, 1, undefined, third[0])).length === 0,
+        "due cursor did not terminate",
+      );
+    }),
+);
+
 const transitionFencing = conformanceCase(
   "fences stale preparation and control while preserving frozen pending work",
   (ensure) =>
@@ -375,5 +501,7 @@ export const scheduleStoreConformanceCases: ReadonlyArray<ScheduleStoreConforman
   staleCompletion,
   isolationAndCloning,
   ownerCapacity,
+  retainedEvidence,
+  duePagination,
   transitionFencing,
 ];

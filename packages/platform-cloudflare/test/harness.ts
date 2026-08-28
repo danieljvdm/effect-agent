@@ -4,6 +4,7 @@ import {
   submissionInputRecordId,
   submissionSettlementRecordId,
   type CanonicalRecordEnvelope,
+  type Scheduling,
 } from "@effect-agent/session";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
@@ -113,9 +114,8 @@ export const scheduleStubFor = (owner: { readonly tenantId: string; readonly own
   env.SCHEDULES.get(env.SCHEDULES.idFromName(scheduleOwnerKey(owner)));
 
 /** Run one management operation through the real Worker-to-Schedule-Owner RPC client. */
-export const runScheduleClient = <A, E>(
-  effect: Effect.Effect<A, E, CloudflareSchedulingClient>,
-): Promise<A> => Effect.runPromise(effect.pipe(Effect.provide(scheduleClientLayer)));
+export const runScheduleClient = <A, E>(effect: Effect.Effect<A, E, Scheduling>): Promise<A> =>
+  Effect.runPromise(effect.pipe(Effect.provide(scheduleClientLayer)));
 
 /** Fork one client Effect so tests can interrupt the real Worker-side caller deterministically. */
 export const runClientFiber = <A, E>(
