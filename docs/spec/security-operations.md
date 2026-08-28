@@ -69,6 +69,13 @@ contract. Authorization performed when instructions were first received is insuf
 later Tool Call.
 Programmatic `ToolBroker` calls are outside this authorization hook.
 
+Durable input [schedules](./scheduling.md) require an explicit `ScheduleAuthorizer` for every
+management call and occurrence preparation. Reads and listing are scoped to a tenant-qualified
+owner. Preparation authorizes completion of that one frozen delivery even if authority is later
+revoked; revocation prevents future preparation, not recovery of input that may already have been
+admitted. This grant does not bypass the Tool action-time checks above. Persist only bounded policy
+and decision identifiers, never credentials or input-bearing diagnostics, as scheduling metadata.
+
 ## 4. Least authority
 
 An Agent Runtime is assembled with only the Layers required for that agent. Tools
@@ -128,17 +135,27 @@ the narrow service that needs them.
 
 ## 8. Data classification and redaction
 
-Every event field is classified as one of:
+Every event field and live diagnostic is classified as one of:
 
 - public metadata;
 - tenant content;
 - sensitive;
 - secret;
-- prohibited from persistence.
+- prohibited from persistence;
+- prohibited from automatic persistence and telemetry export.
 
 Redaction occurs before telemetry export and before optional debug capture.
 Redaction is structural, based on Schema annotations and event types rather than
 regular expressions alone.
+
+Raw Effect Causes delivered through the opt-in Tool failure observer are sensitive live diagnostics
+in the last category (RUN-036). The engine never serializes, persists, logs, span-attaches, or
+forwards them to the model or public events. Only the explicitly installed trusted in-process
+observer receives them. Its raw correlation IDs are not filtered as telemetry IDs; the service is
+not an export boundary. Applications own any deliberate reporting and its redaction policy.
+Declared failure messages and payloads never enter this observer, including inner Code Mode
+results. Observer defects may reach the configured `ErrorReporter` through the isolated delivery
+boundary; installing an observer does not automatically report application Tool Causes there.
 
 Reasoning content, signatures, and redaction markers exposed through Effect AI are persisted as
 canonical model content. This data is sensitive and requires the same tenant isolation,
@@ -173,17 +190,46 @@ or included in an executor binding, and the deterministic test substitute identi
 `unisolated` rather than masquerading as a boundary.
 
 Page capture output is a rendered web page and therefore untrusted, attacker-influenced input.
-Interactive browser sessions carry the same fail-closed egress posture: an immutable exact-host
-HTTPS policy is checked for navigation, redirects, and subrequests. One scoped browser/context/page
-pass permits only bounded navigate, read, fill, and click operations; concurrent calls fail busy,
-and action, elapsed-time, and UTF-8 output limits fail at the first violation. Handles are never
-persisted, replayed, reconnected, or exposed to models. Cloudflare cleanup is best-effort warning-
-only when the remote outcome is uncertain; provider diagnostics remain host-only.
+Interactive browser sessions require an explicit immutable network policy. `ExactHosts` retains
+URL checks for adapter navigation and intercepted requests on the owned page. It does not classify
+connection addresses or contain traffic from other targets, workers, sockets, or arbitrary viewer
+commands. Use it only with trusted pages and operators. `PublicWeb` requires credential-free HTTPS
+and connection-time exclusion of private, reserved, and internal destinations across all those
+traffic sources, including redirects and human navigation. A provider that cannot enforce it must
+fail before acquisition with `InteractiveBrowserUnsupportedError`, `feature: "policy"`. Cloudflare
+currently does so. A wildcard, DNS preflight, or a consumer assertion cannot enable that mode.
+`Unrestricted` is an explicit opt-out from URL/host and private-network containment. Private and
+internal destinations may be reachable, including through redirects, resources, and human
+navigation. It never enables `PublicWeb` and does not relax application authentication,
+conversation authorization, takeover ownership, session limits, or resource cleanup.
+See the [deployment coverage table](./deployment.md#browser-run-interactive-browser-sessions).
+One scoped browser/context/page pass permits bounded navigate, read, fill, click, screenshot, and
+scroll operations; concurrent
+calls fail busy, and action, elapsed-time, and per-result byte limits fail at the first violation.
+Handles are never persisted, replayed, reconnected for execution, or exposed to models. Explicit
+closure remains available after interruption or a policy violation and invalidates all further
+actions. Cloudflare Scope cleanup emits fixed warnings when the remote outcome is uncertain;
+explicit close reports typed failure. Provider diagnostics remain host-only.
+
+Cloudflare session IDs, handoff IDs, and Live View URLs are redacted host values. Live View URLs
+grant access to the remote browser and must be treated as secrets. The generic browser handle
+exposes none of these values or operator controls. Hosts authenticate and authorize recipients,
+serialize human and agent control, and own any private cleanup metadata and durable action
+receipts. A cleanup-only connection by session ID may terminate a leaked session, but must never
+return a usable browser handle or replay an unresolved action. Handoff does not suspend the
+application deadline or grant controller ownership. No provider cancellation or exactly-once
+handoff guarantee is implied.
+Tab mode narrows the viewer UI, not the operator's authorization. Human interaction bypasses the
+framework action counter, and a viewer that connected before URL expiry can remain connected
+until the browser closes. The host must limit viewer recipients to trusted operators and close
+the session to end their access.
 The capture capability is deny-by-default: an immutable construction-time HTTPS host allowlist
 governs navigation, redirects, and every browser subrequest. The request Schema rejects malformed
 URLs, non-HTTPS targets, and embedded credentials; discovered links must be absolute,
 credential-free HTTP(S) URLs and grant no navigation authority. Responses are byte-bounded before
-buffering. Rendered JavaScript may mutate
+buffering. Selector scrape additionally bounds selector count, aggregate elements, attributes,
+strings, and geometry, and rejects malformed or excessive provider output rather than truncating it.
+Rendered JavaScript may mutate
 remote state, so capture Tools remain `uncertain`, are not automatically replayed, and cannot
 enter readonly-only Code Mode. Structured extraction accepts only a bounded object JSON Schema;
 the request rejects malformed or unsupported root and nested keywords, excessive encoded bytes,
@@ -198,8 +244,18 @@ fixed operation or HTTP-status descriptions and never interpolate foreign except
 rate-limit bodies, provider envelopes, or other remote error bodies.
 A page that instructs the model is data, never authority.
 
+Arbitrary CDP is not a constrained browser authority. The pinned Cloudflare client has no
+session-wide egress guardrail, the provider's later hostname-only guardrail cannot distinguish
+scheme or port, and page request interception can be disabled or bypassed by CDP commands that
+create targets or fetch outside the page. Raw CDP therefore remains unsupported unless a future
+provider boundary enforces the exact HTTPS origins or the host explicitly accepts a separately
+named unrestricted browser authority.
+
 Screenshot bytes are untrusted content. `PageScreenshot` bounds them before buffering and keeps
-them out of canonical records, model context, logs, telemetry, and error diagnostics.
+them out of canonical records, model context, logs, telemetry, and error diagnostics. Interactive
+screenshots have the same output privacy rules. Puppeteer buffers their PNG before returning it;
+the interactive adapter checks its signature and byte limit before releasing it to the caller,
+but does not claim an incremental transport or provider-memory bound.
 
 Crawl Markdown and metadata are likewise untrusted content. `PageCrawl` fixes one exact HTTPS host
 and rejects off-host source or redirect metadata before emission. The Cloudflare adapter sends its
@@ -271,6 +327,17 @@ OpenTelemetry records:
 - structured logs for state transitions and operator actions.
 
 High-cardinality IDs belong in traces/logs, not unrestricted metric labels.
+
+Cloudflare journal row decoding, Conversation store encoding/decoding and failpoint wrappers, and
+engine Tool/response identifier decoding retain their checks and typed failures without adding a
+named span per value. Storage I/O and
+meaningful operation spans and short events remain observable regardless of their duration. This
+is instrumentation at operation boundaries, not runtime filtering or blanket removal of fast spans.
+
+Opted-in native Conversation RPC tracing carries only current-span identity and sampling metadata
+as a separate native argument. Stable binding and method names identify the call. Context is never
+persisted or reused to parent alarms or resumed work; application observability owns those roots
+and its sampling/export policy. See [the Cloudflare contract](deployment.md#native-conversation-rpc-tracing).
 
 Minimum operational alerts:
 
@@ -345,7 +412,9 @@ Malformed provider or tool streams must not grow unbounded buffers.
 - **SEC-005**: Tool risk, retry, interruption, and redaction metadata are explicit.
 - **SEC-006**: Secrets use handles and never enter canonical events as raw values.
 - **SEC-007**: Model and retrieved content are treated as untrusted.
-- **SEC-008**: Sensitive telemetry is structurally redacted.
+- **SEC-008**: Sensitive telemetry is structurally redacted. Raw Tool failure Causes are prohibited
+  from automatic persistence and telemetry export; only an explicitly installed trusted local
+  observer may receive them, without declared failure payloads (RUN-036).
 - **SEC-009**: Provider-returned reasoning is treated as sensitive canonical content; hidden
   chain-of-thought is neither requested nor invented.
 - **SEC-010**: Untrusted execution uses a genuine isolation adapter.

@@ -14,7 +14,8 @@ import {
   type RunEvent,
 } from "@effect-agent/core";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import { Cause, DateTime, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import {
   LanguageModel,
   Model,
@@ -562,6 +563,79 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
       }),
   );
 
+  it.effect("RUN-024: a tightened deadline does not fabricate elapsed time or a warning", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("status-tightened-deadline", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 10,
+          maxToolCalls: 10,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const { model, requests } = scriptedModel([finalParts('{"answer":"done"}')]);
+      const attemptStartedAt = yield* DateTime.now;
+      const durationDeadline = DateTime.addDuration(attemptStartedAt, "5 seconds");
+
+      yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "status" },
+        { durationDeadline },
+      );
+
+      const request = requests[0];
+      if (request === undefined) throw new Error("expected one request");
+      expect(messageText(request.prompt.content.at(-1)!)).toBe(
+        "<run-status>turn 1/10 · tool-calls 0/10 · tokens 0/unbounded · last-context 0 · elapsed 0s/30s</run-status>",
+      );
+    }),
+  );
+
+  it.effect("RUN-024: a resumed Run reports elapsed time from its supplied logical start", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("status-resumed-start", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Answer from the restored result.",
+        toolkit: searchToolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 10,
+          maxToolCalls: 10,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const { model, requests } = scriptedModel([finalParts('{"answer":"done"}')]);
+      const toolLayer = searchToolkit.toLayer({ search: () => Effect.succeed("unexpected") });
+      const runStartedAt = yield* DateTime.now;
+      const durationDeadline = DateTime.addDuration(runStartedAt, "30 seconds");
+      const resumedTurnId = yield* Schema.decodeEffect(TurnId)("turn-resumed-status");
+      const resume: RunTurnResume = {
+        turn: 1,
+        turnId: resumedTurnId,
+        calls: [{ id: "search-1", name: "search", params: {} }],
+        settled: [{ id: "search-1", result: "found", isFailure: false }],
+      };
+      yield* TestClock.adjust("12 seconds");
+
+      yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "status" },
+        { runStartedAt, durationDeadline, resume },
+      ).pipe(Effect.provide(toolLayer));
+
+      const request = requests[0];
+      if (request === undefined) throw new Error("expected one request");
+      expect(messageText(request.prompt.content.at(-1)!)).toBe(
+        "<run-status>turn 2/10 · tool-calls 1/10 · tokens 0/unbounded · last-context 0 · elapsed 12s/30s</run-status>",
+      );
+    }),
+  );
+
   it.effect("RUN-024: omits the run-status message when policy runStatus is off", () =>
     Effect.gen(function* () {
       const definition = Agent.define("status-off", {
@@ -901,6 +975,16 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
           finishReason: "budget-exhausted",
           exhausted: "tokens",
         });
+        const request = requests[0];
+        if (request === undefined) throw new Error("Missing completion Tool request");
+        const prompt = promptText(request.prompt);
+        expect(prompt).toContain('without calling the "post_message" completion Tool');
+        expect(prompt).toContain(
+          'When calling the "post_message" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool\'s parameter schema instead.',
+        );
+        expect(prompt).toContain(
+          "The engine projects the successful completion Tool result into the Agent output.",
+        );
       }),
   );
 

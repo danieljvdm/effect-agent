@@ -234,6 +234,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       expect(logTags(records)).toEqual([
         "ConversationCreated",
         "UserInputRecorded",
+        "RunStarted",
         "UserInputRecorded",
         "ModelResponseRecorded",
         "RunCompleted",

@@ -1,5 +1,6 @@
 import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
 import type { SubmissionId } from "@effect-agent/core";
+import { toolFailureObserverLayer, type ToolFailureObservation } from "@effect-agent/engine";
 import {
   type AgentBindingResolver,
   AdmissionRequest,
@@ -48,7 +49,7 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import {
@@ -253,6 +254,97 @@ describe("NodeDurableRuntime", () => {
     ),
   );
 
+  for (const configured of [false, true]) {
+    it.effect(`RUN-036 Node observer option owns installation (configured=${configured})`, () =>
+      withTemporaryDatabase((filename) => {
+        const observations: Array<ToolFailureObservation> = [];
+        const ambient: Array<ToolFailureObservation> = [];
+        const Failed = Tool.make("failed", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+          failure: Schema.String,
+          failureMode: "return",
+        });
+        const tools = Toolkit.make(Failed);
+        return Effect.gen(function* () {
+          const model = yield* makeScriptedModel((n) =>
+            n === 0
+              ? [
+                  {
+                    type: "tool-call",
+                    id: "node-failure",
+                    name: "failed",
+                    params: {},
+                    providerExecuted: false,
+                  },
+                  { type: "finish", reason: "tool-calls", usage },
+                ]
+              : finalParts('{"answer":"fallback"}'),
+          );
+          const agent = Agent.withModel(
+            Agent.define("node-observer", {
+              input: Schema.Struct({ question: Schema.String }),
+              output: Schema.Struct({ answer: Schema.String }),
+              instructions: "Try the Tool, then answer.",
+              toolkit: tools,
+              policy: plannerDefinition.policy,
+            }),
+            model,
+          );
+          const runtime = yield* DurableAgentRuntime;
+          const conversationId = decodeConversationId("node-observer");
+          const receipt = yield* runtime.submit(
+            agent,
+            { question: "try" },
+            submitOptions(conversationId, "node-observer"),
+          );
+          yield* runtime
+            .processConversation(agent, conversationId)
+            .pipe(Effect.provide(tools.toLayer({ failed: () => Effect.fail("unavailable") })));
+          expect((yield* runtime.awaitSettlement(receipt)).outcome).toBe("completed");
+          expect(observations).toEqual(
+            configured
+              ? [
+                  expect.objectContaining({
+                    _tag: "ModelToolFailure",
+                    kind: "declared-failure",
+                    toolName: "failed",
+                    toolCallId: "node-failure",
+                    tag: "UnknownError",
+                  }),
+                ]
+              : [],
+          );
+          expect(ambient).toEqual([]);
+        }).pipe(
+          Effect.provide(
+            NodeDurableRuntime.layer(
+              runtimeOptions(filename, {
+                toolFailureObserver: configured
+                  ? {
+                      observe: (observation) =>
+                        Effect.sync(() => {
+                          observations.push(observation);
+                        }),
+                    }
+                  : undefined,
+              }),
+            ).pipe(
+              Layer.provide(
+                toolFailureObserverLayer({
+                  observe: (observation) =>
+                    Effect.sync(() => {
+                      ambient.push(observation);
+                    }),
+                }),
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+
   it.effect("startup refuses an incompatible v1 storage file without mutating it", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
@@ -358,6 +450,7 @@ describe("NodeDurableRuntime", () => {
             expect(yield* readLogTags(conversation)).toEqual([
               "ConversationCreated",
               "UserInputRecorded",
+              "RunStarted",
               "ModelResponseRecorded",
               "RunCompleted",
               "SubmissionSettled",

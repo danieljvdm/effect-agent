@@ -276,6 +276,54 @@ layer(identifiers)("RUN-028 model-visible output contract", (it) => {
   );
 
   it.effect(
+    "advertises the completion Tool parameter contract and retains final-text JSON completion",
+    () => {
+      const DeliverReply = Tool.make("deliver_reply", {
+        parameters: Schema.Struct({ message: Schema.String }),
+        success: Schema.Struct({ answer: Schema.String, itemCount: Schema.Int }),
+      });
+      const tools = Toolkit.make(DeliverReply);
+      const captured: Array<Prompt.Prompt> = [];
+      const histories: Array<Prompt.Prompt> = [];
+      const definition = Agent.define("contract-completion-tool", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String, itemCount: Schema.Int }),
+        instructions: "Answer the question.",
+        toolkit: tools,
+        policy,
+        completion: { tool: "deliver_reply", project: ({ result }) => result },
+      });
+      const agent = Agent.withModel(definition, liveShapedModel(captured));
+      const toolLayer = tools.toLayer({
+        deliver_reply: () =>
+          Effect.die("A final-text response must not invoke the completion Tool"),
+      });
+
+      return Effect.gen(function* () {
+        const result = yield* AgentRuntime.run(
+          agent,
+          { question: "How many items?" },
+          { onHistory: (history) => Effect.sync(() => void histories.push(history)) },
+        ).pipe(Effect.provide(toolLayer));
+        expect(result.output).toEqual({ answer: "live-shaped", itemCount: 1 });
+        expect(captured).toHaveLength(1);
+        const request = captured[0];
+        if (request === undefined) throw new Error("Missing model request");
+        const contracts = contractMessages(request);
+        expect(contracts).toHaveLength(1);
+        expect(contracts[0]?.split("\n\n")[0]).toBe(
+          'Final output contract: when the task is complete without calling the "deliver_reply" completion Tool, the final assistant message must be only ' +
+            "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " +
+            'before or after the JSON. When calling the "deliver_reply" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool\'s parameter schema instead. The engine projects the successful completion Tool result into the Agent output.',
+        );
+        expect(contracts[0]).toContain('"itemCount"');
+        expect(histories.length).toBeGreaterThan(0);
+        for (const history of histories) expect(contractMessages(history)).toHaveLength(0);
+      });
+    },
+  );
+
+  it.effect(
     "an unrenderable output Schema falls back to the prior behavior and the live-shaped model reproduces the issue #41 failure",
     () => {
       const captured: Array<Prompt.Prompt> = [];
@@ -458,7 +506,11 @@ layer(identifiers)("RUN-028 model-visible output contract", (it) => {
     expect(second).toEqual(first);
     expect(first._tag).toBe("rendered");
     if (first._tag === "rendered") {
-      expect(first.message.startsWith(contractMarker)).toBe(true);
+      expect(first.message.split("\n\n")[0]).toBe(
+        "Final output contract: when the task is complete, the final assistant message must be only " +
+          "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " +
+          "before or after the JSON.",
+      );
       expect(first.message).toContain('"answer"');
     }
     return Effect.void;

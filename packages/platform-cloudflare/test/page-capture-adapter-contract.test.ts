@@ -1,5 +1,6 @@
 import {
   CapturePageMarkdown,
+  CapturePageScrape,
   CapturePageStructured,
   PageCapture,
   PageCaptureLimits,
@@ -35,6 +36,24 @@ const structuredRequest = PageCaptureRequest.make({
   limits: PageCaptureLimits.make({ maxOutputBytes: 1_024 }),
 });
 
+const scrapeRequest = (limit = 1024 * 1024) =>
+  PageCaptureRequest.make({
+    target: PageUrlTarget.make({ url: "https://docs.example.com/page" }),
+    action: CapturePageScrape.make({ selectors: [".plan", "#faq"] }),
+    engine: "chromium",
+    limits: PageCaptureLimits.make({ maxOutputBytes: limit }),
+  });
+
+const scrapeElement = {
+  text: "Pro",
+  html: '<article class="plan">Pro</article>',
+  attributes: [{ name: "class", value: "plan" }],
+  left: 10,
+  top: 20,
+  width: 300,
+  height: 120,
+};
+
 const json = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), { headers: { "content-type": "application/json" }, ...init });
 
@@ -54,19 +73,21 @@ const adapters: ReadonlyArray<Adapter> = [
     name: "Worker binding",
     layer: (responses, denied) => {
       let index = 0;
-      const invoke = (action: "screenshot" | "content" | "markdown" | "links" | "json") => () => {
-        const response = responses[index++];
-        return response === undefined
-          ? Effect.fail(
-              BrowserQuickActionRpcError.make({ action, cause: new Error("missing response") }),
-            )
-          : Effect.succeed(response);
-      };
+      const invoke =
+        (action: "screenshot" | "content" | "markdown" | "links" | "scrape" | "json") => () => {
+          const response = responses[index++];
+          return response === undefined
+            ? Effect.fail(
+                BrowserQuickActionRpcError.make({ action, cause: new Error("missing response") }),
+              )
+            : Effect.succeed(response);
+        };
       const binding: BrowserQuickActionClient = {
         screenshot: invoke("screenshot"),
         content: invoke("content"),
         markdown: invoke("markdown"),
         links: invoke("links"),
+        scrape: invoke("scrape"),
         json: invoke("json"),
       };
       const authorities = Layer.merge(
@@ -136,6 +157,77 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
       const result = yield* capture(harness.layer, markdownRequest());
       expect(result.output).toMatchObject({ _tag: "PageMarkdownCaptured", markdown: "# Page" });
       expect(harness.calls()).toBe(1);
+    }),
+  );
+
+  it.effect("decodes a grouped selector scrape success", () =>
+    Effect.gen(function* () {
+      const harness = adapter.layer([
+        json({
+          success: true,
+          result: [
+            { selector: ".plan", results: [scrapeElement] },
+            { selector: "#faq", results: [] },
+          ],
+        }),
+      ]);
+      const result = yield* capture(harness.layer, scrapeRequest());
+      expect(result.output).toMatchObject({
+        _tag: "PageScrapeCaptured",
+        groups: [
+          { selector: ".plan", results: [{ text: "Pro", width: 300 }] },
+          { selector: "#faq", results: [] },
+        ],
+      });
+      expect(harness.calls()).toBe(1);
+    }),
+  );
+
+  it.effect("rejects malformed and over-count selector scrape responses", () =>
+    Effect.gen(function* () {
+      const malformed = [{ selector: ".plan", results: [{ ...scrapeElement, width: "wide" }] }];
+      const aggregateOverflow = [
+        { selector: ".plan", results: Array.from({ length: 2_048 }, () => scrapeElement) },
+        { selector: "#faq", results: Array.from({ length: 2_049 }, () => scrapeElement) },
+      ];
+      const attributeOverflow = [
+        {
+          selector: ".plan",
+          results: [
+            {
+              ...scrapeElement,
+              attributes: Array.from({ length: 65 }, (_, index) => ({
+                name: `data-${String(index)}`,
+                value: "x",
+              })),
+            },
+          ],
+        },
+      ];
+      for (const result of [malformed, aggregateOverflow, attributeOverflow]) {
+        const error = yield* capture(
+          adapter.layer([json({ success: true, result })]).layer,
+          scrapeRequest(),
+        ).pipe(Effect.flip);
+        expect(error._tag).toBe("PageCaptureProtocolError");
+      }
+    }),
+  );
+
+  it.effect("rejects a selector scrape response over its aggregate byte budget", () =>
+    Effect.gen(function* () {
+      const error = yield* capture(
+        adapter.layer([
+          json({
+            success: true,
+            result: [
+              { selector: ".plan", results: [{ ...scrapeElement, text: "x".repeat(2_048) }] },
+            ],
+          }),
+        ]).layer,
+        scrapeRequest(1_024),
+      ).pipe(Effect.flip);
+      expect(error._tag).toBe("PageCaptureOutputLimitError");
     }),
   );
 

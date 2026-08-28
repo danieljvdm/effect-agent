@@ -17,6 +17,11 @@ import {
   Principal,
   ReconciliationSafeToRetry,
   ReconciliationUncertain,
+  ScheduleFailpointError,
+  type ScheduleOwner,
+  ScheduleRecord,
+  ScheduleStorageError,
+  scheduleOwnerKey,
   ToolReconciler,
   type DurableRuntimeFailpointHandler,
   type DurableRuntimeFailpointLocation,
@@ -285,6 +290,207 @@ export const DEPLOYMENT_ID = "cf-test-deployment";
 export const PRODUCER_PREFIX = "cf-test-producer";
 export const CONVERSATIONS_BINDING = "CONVERSATIONS";
 
+// ---------------------------------------------------------------------------
+// Schedule Owner recovery controls
+// ---------------------------------------------------------------------------
+
+interface SchedulePauseGate {
+  readonly reached: Promise<void>;
+  readonly signalReached: () => void;
+  readonly released: Promise<void>;
+  readonly release: () => void;
+}
+
+const schedulePauseGates = new Map<string, SchedulePauseGate>();
+const scheduleEvictions = new Map<string, string>();
+interface ScheduleAuthorizationFailureHold {
+  held: boolean;
+  failureCount: number;
+  readonly waiters: Array<{
+    readonly minimum: number;
+    readonly resolve: (failureCount: number) => void;
+  }>;
+}
+const scheduleAuthorizationFailureHolds = new Map<string, ScheduleAuthorizationFailureHold>();
+const scheduleFailures = new Map<string, Array<string>>();
+const schedulePrepareEvictionEvidence = new Set<string>();
+const ScheduleRecordJsonRow = Schema.Struct({ record_json: Schema.String });
+const ScheduleAlarmCountRow = Schema.Struct({ alarm_count: Schema.Natural });
+
+const makeSchedulePauseGate = (): SchedulePauseGate => {
+  let signalReached!: () => void;
+  let release!: () => void;
+  return {
+    reached: new Promise<void>((resolve) => {
+      signalReached = resolve;
+    }),
+    signalReached,
+    released: new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+    release,
+  };
+};
+
+export const armScheduleAdmissionPause = (owner: ScheduleOwner) => {
+  const key = scheduleOwnerKey(owner);
+  const gate = makeSchedulePauseGate();
+  schedulePauseGates.set(key, gate);
+  return {
+    reached: gate.reached,
+    release: () => {
+      schedulePauseGates.delete(key);
+      gate.release();
+    },
+  };
+};
+
+export const armScheduleAdmissionEviction = (owner: ScheduleOwner): void => {
+  scheduleEvictions.set(scheduleOwnerKey(owner), "schedule:admission:after");
+};
+
+export const armScheduleEviction = (owner: ScheduleOwner, point: string): void => {
+  scheduleEvictions.set(scheduleOwnerKey(owner), point);
+};
+
+export const observedCommittedPrepareBeforeEviction = (owner: ScheduleOwner): boolean =>
+  schedulePrepareEvictionEvidence.has(scheduleOwnerKey(owner));
+
+export const holdScheduleAuthorizationFailures = (owner: ScheduleOwner) => {
+  const key = scheduleOwnerKey(owner);
+  const hold: ScheduleAuthorizationFailureHold = {
+    held: true,
+    failureCount: 0,
+    waiters: [],
+  };
+  scheduleAuthorizationFailureHolds.set(key, hold);
+  return {
+    reached: (minimum: number): Promise<number> => {
+      if (hold.failureCount >= minimum) return Promise.resolve(hold.failureCount);
+      return new Promise((resolve) => hold.waiters.push({ minimum, resolve }));
+    },
+    release: (): void => {
+      hold.held = false;
+      scheduleAuthorizationFailureHolds.delete(key);
+    },
+  };
+};
+
+export const armScheduleFailure = (owner: ScheduleOwner, point: string): void => {
+  const key = scheduleOwnerKey(owner);
+  const queue = scheduleFailures.get(key) ?? [];
+  queue.push(point);
+  scheduleFailures.set(key, queue);
+};
+
+export const scheduleFailpoint = (ctx: DurableObjectState) => ({
+  hit: (point: string) =>
+    Effect.suspend(() => {
+      const name = ctx.id.name;
+      if (name === undefined) return Effect.void;
+      if (scheduleEvictions.get(name) === point) {
+        scheduleEvictions.delete(name);
+        return Effect.sync((): never => {
+          if (point === "schedule:prepare:after") {
+            const rows = ctx.storage.sql
+              .exec("SELECT record_json FROM effect_agent_schedules")
+              .toArray();
+            const decodedRows = Schema.decodeUnknownSync(Schema.Array(ScheduleRecordJsonRow))(rows);
+            const record = Schema.decodeUnknownSync(Schema.fromJsonString(ScheduleRecord))(
+              decodedRows[0]?.record_json,
+            );
+            const alarmRows = ctx.storage.sql
+              .exec("SELECT COUNT(*) AS alarm_count FROM effect_cf_scheduled_alarms")
+              .toArray();
+            const alarmCount = Schema.decodeUnknownSync(Schema.Array(ScheduleAlarmCountRow))(
+              alarmRows,
+            )[0]?.alarm_count;
+            if (record.pending !== null && alarmCount === 1) {
+              schedulePrepareEvictionEvidence.add(name);
+            }
+          }
+          ctx.abort("armed Schedule Owner eviction");
+          throw new Error("Schedule Owner eviction did not interrupt the failpoint");
+        });
+      }
+      const failures = scheduleFailures.get(name);
+      if (failures?.[0] === point) {
+        failures.shift();
+        if (failures.length === 0) scheduleFailures.delete(name);
+        return Effect.fail(ScheduleFailpointError.make({ point }));
+      }
+      if (point !== "schedule:admission:after") return Effect.void;
+      const gate = schedulePauseGates.get(name);
+      if (gate === undefined) return Effect.void;
+      gate.signalReached();
+      return Effect.promise(() => gate.released);
+    }),
+});
+
+const schedulePolicyResources = new Map<
+  string,
+  {
+    acquired: number;
+    released: number;
+    fail: boolean;
+  }
+>();
+
+export const observeSchedulePolicyResources = (owner: ScheduleOwner) => {
+  const probe = { acquired: 0, released: 0, fail: false };
+  schedulePolicyResources.set(scheduleOwnerKey(owner), probe);
+  return probe;
+};
+
+export const scheduleAuthorizer = (owner: ScheduleOwner) => {
+  // This cached policy acquires no resources during construction. Each operation owns its scope.
+  const scoped = <A, E>(operation: Effect.Effect<A, E>) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const probe = schedulePolicyResources.get(scheduleOwnerKey(owner));
+        if (probe === undefined) return yield* operation;
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            probe.acquired += 1;
+          }),
+          () =>
+            Effect.sync(() => {
+              probe.released += 1;
+            }),
+        );
+        if (probe.fail)
+          return yield* ScheduleStorageError.make({
+            operation: "test scoped Schedule policy",
+            reason: "unavailable",
+          });
+        return yield* operation;
+      }),
+    );
+  return {
+    manage: () => scoped(Effect.void),
+    prepare: () =>
+      Effect.suspend(() => {
+        const key = scheduleOwnerKey(owner);
+        const hold = scheduleAuthorizationFailureHolds.get(key);
+        if (hold?.held === true) {
+          hold.failureCount += 1;
+          const pending = hold.waiters.splice(0);
+          for (const waiter of pending) {
+            if (hold.failureCount >= waiter.minimum) waiter.resolve(hold.failureCount);
+            else hold.waiters.push(waiter);
+          }
+          return Effect.fail(
+            ScheduleStorageError.make({
+              operation: "test Schedule authorization",
+              reason: "unavailable",
+            }),
+          );
+        }
+        return Effect.succeed({ policyId: "cf-test-policy", decisionId: "cf-test-allow" });
+      }).pipe(scoped),
+  };
+};
+
 export const submitOptions = (
   conversation: string,
   idempotencyKey: string,
@@ -545,12 +751,15 @@ const BookTool = Tool.make("book", {
   parameters: Schema.Struct({ ref: Schema.String }),
   success: Schema.Struct({ confirmation: Schema.String }),
 });
-const bookTools = Toolkit.make(BookTool);
+export const bookTools = Toolkit.make(BookTool);
+/** Lose the RPC reply after the external action, without claiming a safe-to-retry failure. */
+export const lostBookReplies = new Set<string>();
 export const bookToolLayer = bookTools.toLayer({
   book: ({ ref }) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       const confirmation = `confirmed-${ref}`;
       recordSupplierCall("book", ref, confirmation);
+      if (lostBookReplies.delete(ref)) return yield* Effect.die("external reply lost");
       return { confirmation };
     }),
 });

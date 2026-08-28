@@ -14,6 +14,7 @@ import {
   TurnId,
   type SubmissionId,
 } from "@effect-agent/core";
+import { ToolExecutionClass } from "@effect-agent/engine";
 import {
   AbortCommand,
   AgentBindingResolver,
@@ -33,11 +34,14 @@ import {
   Principal,
   ProducerId,
   RecoverySnapshotRequest,
+  RecordEnvelope,
   SettlementFinalization,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
   ToolReconciler,
+  ToolCallPrepared,
+  UnknownResolutionCommand,
   WakeScheduler,
   childConversationIdFor,
   runIdForSubmission,
@@ -54,7 +58,7 @@ import {
 } from "@effect-agent/storage-memory";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import { Cause, Duration, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import {
   LanguageModel,
@@ -366,45 +370,62 @@ const makeHarness = (options?: { readonly childRegistrationDigests?: DefinitionD
   });
 
 /** The mixed fixture: the delegation call plus an ordinary uncertain sibling in one batch. */
-const makeSiblingHarness = Effect.gen(function* () {
-  const { childScripted, childBinding } = yield* makeChildFixture;
-  const parentScripted = yield* makeScriptedModel((call) =>
-    call === 0
-      ? toolTurn(
-          toolCall("delegate-1", "delegate_research", { topic: "paris" }),
-          toolCall("lookup-1", "lookup", { key: "hotels" }),
-        )
-      : finalParts('{"report":"done"}'),
-  );
-  const parentBinding = Agent.withModel(mixedCoordinatorDefinition, parentScripted.model);
-  const lookupInvocations = yield* Ref.make(0);
-  const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
-    mapChildFailure,
-    durable: { targetDigests: CHILD_DIGEST_STRINGS },
-  }).pipe(Layer.provide(delegationSupport));
-  const lookupLayer = Toolkit.make(Lookup).toLayer({
-    lookup: ({ key }) =>
-      Ref.update(lookupInvocations, (count) => count + 1).pipe(
-        Effect.as({ value: `found-${key}` }),
-      ),
+const makeSiblingHarnessWith = (pendingSibling = false, retryableSibling = true) =>
+  Effect.gen(function* () {
+    const { childScripted, childBinding } = yield* makeChildFixture;
+    const parentScripted = yield* makeScriptedModel((call) =>
+      call === 0
+        ? toolTurn(
+            toolCall("delegate-1", "delegate_research", { topic: "paris" }),
+            toolCall("lookup-1", "lookup", { key: "hotels" }),
+          )
+        : finalParts('{"report":"done"}'),
+    );
+    const lookupTool =
+      pendingSibling && retryableSibling
+        ? Lookup.annotate(ToolExecutionClass, "idempotent")
+        : Lookup;
+    const definition = Agent.define(mixedCoordinatorDefinition.id, {
+      input: mixedCoordinatorDefinition.input,
+      output: mixedCoordinatorDefinition.output,
+      instructions: mixedCoordinatorDefinition.instructions,
+      toolkit: Toolkit.make(researchDelegation.tool, lookupTool),
+      policy: mixedCoordinatorDefinition.policy,
+    });
+    const parentBinding = Agent.withModel(definition, parentScripted.model);
+    const lookupInvocations = yield* Ref.make(0);
+    const lookupFinalizers = yield* Ref.make(0);
+    const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
+      mapChildFailure,
+      durable: { targetDigests: CHILD_DIGEST_STRINGS },
+    }).pipe(Layer.provide(delegationSupport));
+    const lookupLayer = Toolkit.make(lookupTool).toLayer({
+      lookup: ({ key }) =>
+        Ref.update(lookupInvocations, (count) => count + 1).pipe(
+          Effect.andThen(pendingSibling ? Effect.never : Effect.succeed({ value: `found-${key}` })),
+          Effect.ensuring(Ref.update(lookupFinalizers, (count) => count + 1)),
+        ),
+    });
+    const parentResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
+      parentBinding,
+      PARENT_DIGESTS,
+    ).pipe(Effect.provide(Layer.mergeAll(delegationLayer, lookupLayer)));
+    const childResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
+      childBinding,
+      CHILD_DIGESTS,
+    );
+    const resolver = AgentBindingResolver.fromBindings([parentResolved, childResolved]);
+    return {
+      resolver,
+      childInvocations: childScripted.calls,
+      parentPrompts: parentScripted.prompts,
+      submitParent: submitParentWith(mixedCoordinatorDefinition),
+      lookupInvocations: Ref.get(lookupInvocations),
+      lookupFinalizers: Ref.get(lookupFinalizers),
+    };
   });
-  const parentResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
-    parentBinding,
-    PARENT_DIGESTS,
-  ).pipe(Effect.provide(Layer.mergeAll(delegationLayer, lookupLayer)));
-  const childResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
-    childBinding,
-    CHILD_DIGESTS,
-  );
-  const resolver = AgentBindingResolver.fromBindings([parentResolved, childResolved]);
-  return {
-    resolver,
-    childInvocations: childScripted.calls,
-    parentPrompts: parentScripted.prompts,
-    submitParent: submitParentWith(mixedCoordinatorDefinition),
-    lookupInvocations: Ref.get(lookupInvocations),
-  };
-});
+
+const makeSiblingHarness = makeSiblingHarnessWith();
 
 const DELEGATE_CALL = decodeToolCallId("delegate-1");
 
@@ -592,6 +613,537 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       expect(settled.policyLimit).toBe("duration");
       expect(settled.result).toMatchObject({ errorTag: "AgentPolicyError" });
     }),
+  );
+
+  it.effect(
+    "RUN-030: expired mixed batches join settled children without retrying ordinary Tools",
+    () =>
+      Effect.gen(function* () {
+        const locations: ReadonlyArray<DurableRuntimeFailpointLocation | undefined> = [
+          undefined,
+          "subagent:after-join-append",
+          "subagent:after-release-pending",
+          "subagent:after-release",
+        ];
+        for (const location of locations) {
+          yield* clearFailpoint;
+          const harness = yield* makeSiblingHarnessWith(true);
+          const run = drive(harness);
+          const parent = yield* harness.submitParent(
+            `expired-mixed-${location ?? "complete"}`,
+            "parent",
+          );
+          const childConversationId = childConversationIdFor(parent.submissionId, DELEGATE_CALL);
+          const firstAttempt = yield* Effect.forkChild(run(parent.conversationId));
+          yield* TestClock.adjust(Duration.seconds(31));
+          expect(yield* Fiber.join(firstAttempt)).toEqual([]);
+          expect(yield* harness.lookupInvocations).toBe(1);
+          expect(yield* harness.lookupFinalizers).toBe(1);
+          expect(payloadsOf(yield* readLog(parent.conversationId), "ToolCallSettled")).toHaveLength(
+            0,
+          );
+          expect((yield* run(childConversationId)).map((entry) => entry.outcome)).toEqual([
+            "completed",
+          ]);
+          if (location !== undefined) {
+            yield* armFailpoint(location);
+            expect(failureTag(yield* Effect.exit(run(parent.conversationId)))).toBe(
+              "DurableRuntimeFailpointError",
+            );
+            yield* clearFailpoint;
+          }
+          expect((yield* run(parent.conversationId)).map((entry) => entry.outcome)).toEqual([
+            "failed",
+          ]);
+          expect(yield* run(parent.conversationId)).toEqual([]);
+          expect(yield* harness.lookupInvocations).toBe(1);
+          expect(yield* harness.lookupFinalizers).toBe(1);
+          expect(yield* harness.childInvocations).toBe(1);
+          expect(harness.parentPrompts).toHaveLength(1);
+          const records = yield* readLog(parent.conversationId);
+          expect(payloadsOf(records, "SubagentJoined")).toHaveLength(1);
+          expect(
+            payloadsOf(records, "ToolCallSettled").map(({ record }) => record.payload),
+          ).toMatchObject([
+            {
+              toolCallId: DELEGATE_CALL,
+              isFailure: true,
+              result: { errorTag: "SubagentParentDurationExceeded" },
+            },
+          ]);
+          expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual(
+            ["released"],
+          );
+          expect(records.at(-1)?.record.payload).toMatchObject({
+            _tag: "SubmissionSettled",
+            outcome: "failed",
+            policyLimit: "duration",
+          });
+        }
+      }),
+  );
+
+  it.effect(
+    "RUN-030: expired child cleanup preserves an uncertain ordinary call until operator resolution",
+    () =>
+      Effect.gen(function* () {
+        yield* clearFailpoint;
+        const runtime = yield* DurableAgentRuntime;
+        const harness = yield* makeSiblingHarnessWith(true, false);
+        const run = drive(harness);
+        const parent = yield* harness.submitParent("expired-uncertain-mixed", "parent");
+        const firstAttempt = yield* Effect.forkChild(run(parent.conversationId));
+        yield* TestClock.adjust(Duration.seconds(31));
+        expect(yield* Fiber.join(firstAttempt)).toEqual([]);
+        expect(yield* run(parent.conversationId)).toEqual([]);
+        yield* runtime.runRecovery;
+        expect((yield* parentState(parent.submissionId)).state).not.toBe("unknown");
+        const childConversationId = childConversationIdFor(parent.submissionId, DELEGATE_CALL);
+        expect((yield* run(childConversationId)).map((entry) => entry.outcome)).toEqual([
+          "completed",
+        ]);
+        yield* runtime.runRecovery;
+        expect((yield* parentState(parent.submissionId)).state).not.toBe("unknown");
+        expect(yield* run(parent.conversationId)).toEqual([]);
+        expect((yield* parentState(parent.submissionId)).state).toBe("unknown");
+        const records = yield* readLog(parent.conversationId);
+        expect(payloadsOf(records, "SubagentJoined")).toHaveLength(1);
+        expect(
+          payloadsOf(records, "ToolCallUnknown").map(({ record }) => record.payload),
+        ).toMatchObject([{ toolCallId: "lookup-1" }]);
+        expect(payloadsOf(records, "SubmissionSettled")).toHaveLength(0);
+        expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
+          "released",
+        ]);
+        yield* runtime.resolveUnknown(
+          UnknownResolutionCommand.make({
+            submissionId: parent.submissionId,
+            toolCallId: decodeToolCallId("lookup-1"),
+            author: "test-operator",
+            reason: "The fixture has no external side effect.",
+            resolution: { _tag: "NeverHappened" },
+          }),
+        );
+        expect((yield* run(parent.conversationId)).map((entry) => entry.outcome)).toEqual([
+          "failed",
+        ]);
+        expect(yield* harness.lookupInvocations).toBe(1);
+        expect(yield* harness.lookupFinalizers).toBe(1);
+        expect(harness.parentPrompts).toHaveLength(1);
+      }),
+  );
+
+  it.effect(
+    "RUN-030: expired cleanup releases unstarted reservations before marking an ordinary call Unknown",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const ledger = yield* SubmissionLedger;
+        for (const scenario of [
+          { location: "subagent:after-reserve" as const, requested: false },
+          { location: "subagent:after-request-append" as const, requested: true },
+        ]) {
+          for (const order of ["worker-first", "recovery-first"] as const) {
+            yield* clearFailpoint;
+            const harness = yield* makeSiblingHarnessWith(true, false);
+            const run = drive(harness);
+            const parent = yield* harness.submitParent(
+              `expired-unstarted-${scenario.location.replaceAll(":", "-")}-${order}`,
+              "parent",
+            );
+            const childConversationId = childConversationIdFor(parent.submissionId, DELEGATE_CALL);
+            const childLookup = SubmissionLookupByKey.make({
+              conversationId: childConversationId,
+              principal: PRINCIPAL,
+              idempotencyKey: decodeIdempotencyKey(
+                `subagent:${runIdForSubmission(parent.submissionId)}:delegate-1`,
+              ),
+            });
+
+            yield* armFailpoint(scenario.location);
+            expect(failureTag(yield* Effect.exit(run(parent.conversationId)))).toBe(
+              "DurableRuntimeFailpointError",
+            );
+            yield* clearFailpoint;
+            const lookupStarts = yield* harness.lookupInvocations;
+            const lookupFinalizers = yield* harness.lookupFinalizers;
+            expect(
+              (yield* parentReservations(parent.submissionId)).map((row) => row.status),
+            ).toEqual(["reserved"]);
+            expect(
+              payloadsOf(yield* readLog(parent.conversationId), "SubagentRequested"),
+            ).toHaveLength(scenario.requested ? 1 : 0);
+            expect(yield* ledger.resolveAdmission(childLookup)).toMatchObject({
+              _tag: "NotAdmitted",
+            });
+
+            yield* TestClock.adjust(Duration.seconds(31));
+            if (order === "worker-first") {
+              expect(yield* run(parent.conversationId)).toEqual([]);
+              yield* runtime.runRecovery;
+            } else {
+              yield* runtime.runRecovery;
+              expect(yield* ledger.resolveAdmission(childLookup)).toMatchObject({
+                _tag: "NotAdmitted",
+              });
+              expect(yield* harness.childInvocations).toBe(0);
+              expect(yield* harness.lookupInvocations).toBe(lookupStarts);
+              expect(yield* harness.lookupFinalizers).toBe(lookupFinalizers);
+              expect(harness.parentPrompts).toHaveLength(1);
+              expect(
+                payloadsOf(yield* readLog(parent.conversationId), "SubagentStarted"),
+              ).toHaveLength(0);
+              expect(yield* run(parent.conversationId)).toEqual([]);
+            }
+            for (let pass = 0; pass < 4; pass += 1) {
+              const state = yield* parentState(parent.submissionId);
+              const reservations = yield* parentReservations(parent.submissionId);
+              if (
+                state.state === "unknown" &&
+                reservations.every((row) => row.status === "released")
+              ) {
+                break;
+              }
+              expect(yield* run(parent.conversationId)).toEqual([]);
+              yield* runtime.runRecovery;
+            }
+
+            expect(
+              (yield* parentReservations(parent.submissionId)).map((row) => row.status),
+            ).toEqual(["released"]);
+            expect((yield* parentState(parent.submissionId)).state).toBe("unknown");
+            const beforeResolution = yield* readLog(parent.conversationId);
+            expect(payloadsOf(beforeResolution, "SubagentStarted")).toHaveLength(0);
+            expect(payloadsOf(beforeResolution, "SubagentJoined")).toHaveLength(0);
+            expect(
+              payloadsOf(beforeResolution, "ToolCallUnknown").map(({ record }) => record.payload),
+            ).toMatchObject([{ toolCallId: "lookup-1" }]);
+            expect(payloadsOf(beforeResolution, "SubmissionSettled")).toHaveLength(0);
+
+            yield* runtime.resolveUnknown(
+              UnknownResolutionCommand.make({
+                submissionId: parent.submissionId,
+                toolCallId: decodeToolCallId("lookup-1"),
+                author: "test-operator",
+                reason: "The fixture has no external side effect.",
+                resolution: { _tag: "NeverHappened" },
+              }),
+            );
+            expect((yield* run(parent.conversationId)).map((entry) => entry.outcome)).toEqual([
+              "failed",
+            ]);
+            const settled = payloadsOf(
+              yield* readLog(parent.conversationId),
+              "SubmissionSettled",
+            )[0]?.record.payload;
+            expect(settled).toMatchObject({ outcome: "failed", policyLimit: "duration" });
+            expect(yield* harness.childInvocations).toBe(0);
+            expect(yield* harness.lookupInvocations).toBe(lookupStarts);
+            expect(yield* harness.lookupFinalizers).toBe(lookupFinalizers);
+            expect(harness.parentPrompts).toHaveLength(1);
+            expect(yield* ledger.resolveAdmission(childLookup)).toMatchObject({
+              _tag: "NotAdmitted",
+            });
+          }
+        }
+      }),
+  );
+
+  it.effect(
+    "RUN-030: expired cleanup repairs an admitted child before marking an ordinary call Unknown",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const ledger = yield* SubmissionLedger;
+        for (const order of ["worker-first", "recovery-first"] as const) {
+          yield* clearFailpoint;
+          const harness = yield* makeSiblingHarnessWith(true, false);
+          const run = drive(harness);
+          const parent = yield* harness.submitParent(
+            `expired-admitted-before-start-${order}`,
+            "parent",
+          );
+
+          yield* armFailpoint("subagent:after-admit");
+          expect(failureTag(yield* Effect.exit(run(parent.conversationId)))).toBe(
+            "DurableRuntimeFailpointError",
+          );
+          yield* clearFailpoint;
+          const lookupStarts = yield* harness.lookupInvocations;
+          const lookupFinalizers = yield* harness.lookupFinalizers;
+          const requested = payloadsOf(
+            yield* readLog(parent.conversationId),
+            "SubagentRequested",
+          )[0]?.record.payload;
+          if (requested?._tag !== "SubagentRequested") {
+            throw new Error("Expected SubagentRequested");
+          }
+          const lookup = SubmissionLookupByKey.make({
+            conversationId: requested.childConversationId,
+            principal: PRINCIPAL,
+            idempotencyKey: decodeIdempotencyKey(requested.childIdempotencyKey),
+          });
+          const admittedBefore = yield* ledger.resolveAdmission(lookup);
+          expect(admittedBefore._tag).toBe("Admitted");
+          if (admittedBefore._tag !== "Admitted") throw new Error("Expected admitted child");
+          expect(payloadsOf(yield* readLog(parent.conversationId), "SubagentStarted")).toHaveLength(
+            0,
+          );
+
+          yield* TestClock.adjust(Duration.seconds(31));
+          if (order === "worker-first") {
+            expect(yield* run(parent.conversationId)).toEqual([]);
+            yield* runtime.runRecovery;
+          } else {
+            yield* runtime.runRecovery;
+            const admittedAfterRecovery = yield* ledger.resolveAdmission(lookup);
+            expect(admittedAfterRecovery._tag).toBe("Admitted");
+            if (admittedAfterRecovery._tag !== "Admitted") {
+              throw new Error("Expected admitted child");
+            }
+            expect(admittedAfterRecovery.submission.submissionId).toBe(
+              admittedBefore.submission.submissionId,
+            );
+            expect(admittedAfterRecovery.submission.receiptId).toBe(
+              admittedBefore.submission.receiptId,
+            );
+            expect(yield* harness.childInvocations).toBe(0);
+            expect(yield* harness.lookupInvocations).toBe(lookupStarts);
+            expect(yield* harness.lookupFinalizers).toBe(lookupFinalizers);
+            expect(harness.parentPrompts).toHaveLength(1);
+            expect(yield* run(parent.conversationId)).toEqual([]);
+          }
+          for (let pass = 0; pass < 4; pass += 1) {
+            if (payloadsOf(yield* readLog(parent.conversationId), "SubagentStarted").length === 1) {
+              break;
+            }
+            expect(yield* run(parent.conversationId)).toEqual([]);
+            yield* runtime.runRecovery;
+          }
+          const repairedLog = yield* readLog(parent.conversationId);
+          const started = payloadsOf(repairedLog, "SubagentStarted")[0]?.record.payload;
+          if (started?._tag !== "SubagentStarted") throw new Error("Expected SubagentStarted");
+          expect(started.childSubmissionId).toBe(admittedBefore.submission.submissionId);
+          expect(started.childReceiptId).toBe(admittedBefore.submission.receiptId);
+          expect((yield* parentState(parent.submissionId)).state).not.toBe("unknown");
+
+          expect((yield* run(requested.childConversationId)).map((entry) => entry.outcome)).toEqual(
+            ["completed"],
+          );
+          yield* runtime.runRecovery;
+          for (let pass = 0; pass < 4; pass += 1) {
+            const state = yield* parentState(parent.submissionId);
+            const reservations = yield* parentReservations(parent.submissionId);
+            if (
+              state.state === "unknown" &&
+              reservations.every((row) => row.status === "released")
+            ) {
+              break;
+            }
+            expect(yield* run(parent.conversationId)).toEqual([]);
+            yield* runtime.runRecovery;
+          }
+
+          expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual(
+            ["released"],
+          );
+          expect((yield* parentState(parent.submissionId)).state).toBe("unknown");
+          const joinedLog = yield* readLog(parent.conversationId);
+          expect(payloadsOf(joinedLog, "SubagentStarted")).toHaveLength(1);
+          expect(payloadsOf(joinedLog, "SubagentJoined")).toHaveLength(1);
+          expect(
+            payloadsOf(joinedLog, "ToolCallUnknown").map(({ record }) => record.payload),
+          ).toMatchObject([{ toolCallId: "lookup-1" }]);
+          const admittedAfter = yield* ledger.resolveAdmission(lookup);
+          expect(admittedAfter._tag).toBe("Admitted");
+          if (admittedAfter._tag !== "Admitted") throw new Error("Expected admitted child");
+          expect(admittedAfter.submission.submissionId).toBe(
+            admittedBefore.submission.submissionId,
+          );
+          expect(admittedAfter.submission.receiptId).toBe(admittedBefore.submission.receiptId);
+
+          yield* runtime.resolveUnknown(
+            UnknownResolutionCommand.make({
+              submissionId: parent.submissionId,
+              toolCallId: decodeToolCallId("lookup-1"),
+              author: "test-operator",
+              reason: "The fixture has no external side effect.",
+              resolution: { _tag: "NeverHappened" },
+            }),
+          );
+          expect((yield* run(parent.conversationId)).map((entry) => entry.outcome)).toEqual([
+            "failed",
+          ]);
+          const settled = payloadsOf(yield* readLog(parent.conversationId), "SubmissionSettled")[0]
+            ?.record.payload;
+          expect(settled).toMatchObject({ outcome: "failed", policyLimit: "duration" });
+          expect(yield* harness.childInvocations).toBe(1);
+          expect(yield* harness.lookupInvocations).toBe(lookupStarts);
+          expect(yield* harness.lookupFinalizers).toBe(lookupFinalizers);
+          expect(harness.parentPrompts).toHaveLength(1);
+        }
+      }),
+  );
+
+  it.effect("RUN-030: recovery rejects conflicting canonical Run starts before child cleanup", () =>
+    Effect.gen(function* () {
+      yield* clearFailpoint;
+      const runtime = yield* DurableAgentRuntime;
+      const ledger = yield* SubmissionLedger;
+      const store = yield* ConversationStore;
+      const harness = yield* makeSiblingHarnessWith(true, false);
+      const run = drive(harness);
+      const parent = yield* harness.submitParent("expired-conflicting-run-start", "parent");
+      const childConversationId = childConversationIdFor(parent.submissionId, DELEGATE_CALL);
+
+      const firstAttempt = yield* Effect.forkChild(run(parent.conversationId));
+      yield* TestClock.adjust(Duration.seconds(31));
+      expect(yield* Fiber.join(firstAttempt)).toEqual([]);
+      expect(yield* run(parent.conversationId)).toEqual([]);
+      expect((yield* run(childConversationId)).map((entry) => entry.outcome)).toEqual([
+        "completed",
+      ]);
+
+      const beforeRecords = yield* readLog(parent.conversationId);
+      const canonicalStart = beforeRecords.find(
+        ({ record }) => record.payload._tag === "RunStarted",
+      )?.record.payload;
+      if (canonicalStart?._tag !== "RunStarted") throw new Error("Expected RunStarted");
+      expect(payloadsOf(beforeRecords, "SubagentJoined")).toHaveLength(0);
+      expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
+        "reserved",
+      ]);
+      const beforeSnapshot = yield* ledger.loadRecoverySnapshot(
+        RecoverySnapshotRequest.make({ submissionId: parent.submissionId }),
+      );
+
+      const conflicting = ConversationStore.of({
+        ...store,
+        read: (request) =>
+          store.read(request).pipe(
+            Stream.map((envelope) =>
+              request.conversationId === parent.conversationId &&
+              envelope.record.payload._tag === "ConversationCreated"
+                ? {
+                    ...envelope,
+                    record: RecordEnvelope.make({
+                      ...envelope.record,
+                      payload: canonicalStart,
+                    }),
+                  }
+                : envelope,
+            ),
+          ),
+      });
+      const rejected = yield* Effect.exit(
+        DurableAgentRuntime.pipe(
+          Effect.flatMap((hostileRuntime) => hostileRuntime.runRecovery),
+          Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+          Effect.provideService(ConversationStore, conflicting),
+        ),
+      );
+      expect(failureTag(rejected)).toBe("RunJournalError");
+      if (Exit.isSuccess(rejected)) throw new Error("Expected conflicting recovery to fail");
+      expect(Option.getOrUndefined(Cause.findErrorOption(rejected.cause))).toMatchObject({
+        message: expect.stringContaining("conflicting start evidence"),
+      });
+
+      const afterSnapshot = yield* ledger.loadRecoverySnapshot(
+        RecoverySnapshotRequest.make({ submissionId: parent.submissionId }),
+      );
+      expect(afterSnapshot).toEqual(beforeSnapshot);
+      const afterRejected = yield* readLog(parent.conversationId);
+      expect(afterRejected).toEqual(beforeRecords);
+      expect(payloadsOf(afterRejected, "SubagentJoined")).toHaveLength(0);
+      expect(payloadsOf(afterRejected, "ToolCallUnknown")).toHaveLength(0);
+      expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
+        "reserved",
+      ]);
+
+      yield* runtime.runRecovery;
+      expect(payloadsOf(yield* readLog(parent.conversationId), "SubagentJoined")).toHaveLength(1);
+      expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
+        "released",
+      ]);
+    }),
+  );
+
+  it.effect("RUN-030: expired cleanup rejects missing or mismatched canonical Tool identity", () =>
+    Effect.gen(function* () {
+      const store = yield* ConversationStore;
+      for (const corrupt of ["missing", "mismatched"] as const) {
+        yield* clearFailpoint;
+        const harness = yield* makeHarness();
+        const run = drive(harness);
+        const parent = yield* harness.submitParent(`expired-identity-${corrupt}`, "parent");
+        yield* run(parent.conversationId);
+        yield* run(childConversationIdFor(parent.submissionId, DELEGATE_CALL));
+        yield* TestClock.adjust(Duration.seconds(31));
+        const faulty = ConversationStore.of({
+          ...store,
+          read: (request) =>
+            store.read(request).pipe(
+              Stream.filter(
+                ({ record }) =>
+                  !(corrupt === "missing" && record.payload._tag === "ToolCallPrepared"),
+              ),
+              Stream.map((envelope) =>
+                envelope.record.payload._tag === "ToolCallPrepared"
+                  ? {
+                      ...envelope,
+                      record: RecordEnvelope.make({
+                        ...envelope.record,
+                        payload: ToolCallPrepared.make({
+                          ...envelope.record.payload,
+                          toolName: "ordinary",
+                        }),
+                      }),
+                    }
+                  : envelope,
+              ),
+            ),
+        });
+        const rejected = yield* Effect.exit(
+          run(parent.conversationId).pipe(
+            Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+            Effect.provideService(ConversationStore, faulty),
+          ),
+        );
+        expect(failureTag(rejected)).toBe("LedgerError");
+        expect(payloadsOf(yield* readLog(parent.conversationId), "SubagentJoined")).toHaveLength(0);
+        expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
+          "reserved",
+        ]);
+      }
+    }),
+  );
+
+  it.effect(
+    "RUN-030: canonical child attachment survives loss before the ledger attachment marker",
+    () =>
+      Effect.gen(function* () {
+        yield* clearFailpoint;
+        const harness = yield* makeHarness();
+        const run = drive(harness);
+        const parent = yield* harness.submitParent("expired-before-attachment-marker", "parent");
+        yield* armFailpoint("subagent:after-start-append");
+        expect(failureTag(yield* Effect.exit(run(parent.conversationId)))).toBe(
+          "DurableRuntimeFailpointError",
+        );
+        yield* clearFailpoint;
+        expect(
+          (yield* parentReservations(parent.submissionId))[0]?.childSubmissionId,
+        ).toBeUndefined();
+        yield* run(childConversationIdFor(parent.submissionId, DELEGATE_CALL));
+        yield* TestClock.adjust(Duration.seconds(31));
+        expect((yield* run(parent.conversationId)).map((entry) => entry.outcome)).toEqual([
+          "failed",
+        ]);
+        expect(payloadsOf(yield* readLog(parent.conversationId), "SubagentJoined")).toHaveLength(1);
+        expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
+          "released",
+        ]);
+      }),
   );
 
   it.effect("every establishment failpoint converges on one child Receipt and Conversation", () =>

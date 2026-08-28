@@ -53,6 +53,23 @@ The durable identity returned after ledger admission, Conversation materializati
 attachment storage, and readiness are committed. It is an identifier, not an authorization
 capability.
 
+**Schedule**
+A durable, owner-scoped registration that delivers one Schema-encoded Agent input through ordinary
+Submission admission at a specified time. It owns a firing until it records a Receipt or a
+conclusive refusal; it does not run the Agent itself.
+
+**Schedule Owner**
+The tenant-qualified scope that owns a Schedule and authorizes its management and listing. There is
+no global Schedule listing operation.
+
+**Delivery Principal**
+The stable principal recorded in a Schedule and used to authorize and admit each due occurrence.
+It is distinct from the caller who manages the Schedule.
+
+**Prepared Delivery**
+The single immutable pending admission envelope for one Schedule occurrence. Recovery retries that
+exact envelope until Receipt or conclusive refusal and never rebuilds it from later configuration.
+
 **Settlement**  
 The single durable terminal outcome owed to an accepted Submission: `completed`, `failed`, or
 `aborted`. A failed Settlement always carries the framework's bounded generic diagnostic;
@@ -78,6 +95,11 @@ durable steps, approvals, and reconciliation.
 All Tool Calls declared by one assistant message. The default scheduler executes the batch with a
 finite Effect Semaphore. Canonical results commit in declaration order and the batch becomes
 model-visible atomically.
+
+**Invocation kind**
+
+How an application Tool is called: `model` for a model-declared call, or `programmatic` for an
+inner broker invocation. This is independent of execution class and of whether its Handler started.
 
 **Steering**  
 Input delivered to an active Run after a complete assistant response and Tool Batch, before the
@@ -146,7 +168,8 @@ generic bag of provider SDK methods.
 **Page Capture**
 
 A stateless render of one page in a managed headless browser returning exactly one bounded
-output. Its host allowlist, action set, and byte budget are immutable; the host policy governs
+output, including rendered content, links, structured extraction, or grouped selector scrape.
+Its host allowlist, action set, and byte budget are immutable; the host policy governs
 navigation, redirects, and subrequests. Capture results are untrusted, browser JavaScript makes
 execution uncertain rather than read-only, and separately billed model inference requires
 explicit host authorization and accounting.
@@ -161,9 +184,15 @@ consumer's Scope exits.
 **Interactive Browser**
 
 A scoped, provider-neutral browser pass owning one browser, context, and page. Its immutable
-policy fixes the exact HTTPS host set, action count, elapsed time, and returned UTF-8 byte budget;
-navigation, redirects, and subrequests are all subject to that policy. Handles are ephemeral and
-uncertain: they are never persisted, replayed, reconnected, or exposed as model Tools.
+policy fixes an explicit network mode, action count, elapsed time, and per-result byte budget.
+`ExactHosts` checks page-request URLs against a fixed HTTPS host set; `PublicWeb` requires a
+connection-time public-network boundary and fails unsupported where an adapter cannot enforce it.
+`Unrestricted` explicitly opts out of URL/host and private-network containment while retaining
+the same session limits and lifecycle.
+Handles are ephemeral and uncertain: they are never persisted, replayed, reconnected for execution,
+or exposed as model Tools.
+Screenshots and scrolling operate on that same page, and explicit closure ends the pass early.
+Provider session identity and operator controls remain private host capabilities.
 
 **Approval**  
 A policy decision that suspends or denies a proposed Tool Call before its Handler starts. Approval

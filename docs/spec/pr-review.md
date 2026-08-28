@@ -19,16 +19,18 @@ conversation. Review output is advice, not durable agent state.
   `error-handling`, `testing`, `maintainability`, `style`, or `docs`.
 - **PRR-002**: One invocation performs exactly one `AgentRuntime.run`, with one model turn and an
   empty Toolkit. The package does not fan out, retry model calls, spawn subagents, or resume model
-  context.
+  context. It disables the generic run-status prompt: a fresh one-turn review must not receive an
+  approaching-limits instruction before inspecting its input. Host budget enforcement is unchanged.
 - **PRR-003**: Token, duration, findings, file, and patch bounds are finite. The outcome reports
   observed uncached, cached, cache-write, total input, and output tokens plus an optional host-priced
   cost estimate. A host must identify paths it did not admit rather than imply complete coverage.
   The reviewer must not infer that an absent file was unchanged because the host may have withheld
   generated, ignored, unavailable, or oversized patches.
 - **PRR-004**: Model output is untrusted. Before returning it, the package removes findings for
-  unknown paths, deduplicates them, and removes line anchors that are not RIGHT-side added or
+  unknown paths and removes line anchors that are not RIGHT-side added or
   context lines in the supplied patch. Removing an invalid anchor keeps the finding available for
-  top-level publication.
+  top-level publication. Only identical sanitized findings are deduplicated. A shared path, line,
+  and title do not establish defect identity; differences in severity, category, or body survive.
 
 The package has no provider, platform, GitHub, CLI, or Action dependency. Its only public export is
 the review contract and reviewer constructor.
@@ -77,8 +79,10 @@ the review contract and reviewer constructor.
   failed attempt publishes only an honest failure marker and no findings. A completed attempt
   revalidates inline anchors against that pull-request diff. Other findings remain advisory. The
   no-model closing review is derived only from trusted history and never claims that the current diff
-  was inspected. The channel derives severity and category labels, summary callouts, and agent-ready
-  prompt blocks from the validated report; presentation does not start another model Turn. Visible
+  was inspected. The channel derives severity and category labels, summary callouts, and one
+  consolidated agent-ready prompt block from the validated report. Inline comments render each
+  finding once, so a finding at the package's field bounds fits the publication schema.
+  Presentation does not start another model Turn. Visible
   GitHub Markdown comes from a defaulted Effect reference that an embedding host may replace. The
   channel appends its trusted terminal marker outside that replaceable presentation so overrides
   cannot weaken wave accounting. For the known GPT-5.6 model ids, the default presentation includes
@@ -116,6 +120,14 @@ same explicit opt-in gate as other live-model evidence and do not gate ordinary 
 Private source and raw live results are not committed. Expected defects are semantic invariants
 with bounded source evidence, not strings that model output must copy. Saved judgments name their
 adjudicator and rationale; prior model output is not grading authority.
+
+Public historical cases preserve the reviewed head and comparison base, source attribution, and
+the complete patches selected for that input. Other changed paths remain explicitly unreviewed;
+an unavailable or oversized patch cannot contribute an expected defect. This partial input must
+not be described as the full input seen by the original human reviewer. Provenance distinguishes
+retained defects from introduced regressions. Human review links and proposed reference labels
+stay outside the `ReviewRequest` sent to the model. Comment counts do not establish defect counts,
+and proposed labels require human review before supporting a quality claim.
 
 The primary quality claim concerns the first trial. Later identical trials measure instability and
 cannot convert a first-trial miss into a pass. The leaf reports expected-blocker detection at any

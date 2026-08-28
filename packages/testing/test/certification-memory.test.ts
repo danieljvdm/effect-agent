@@ -51,15 +51,13 @@ const certified = Effect.gen(function* () {
 
 describe("TEST-004 STORE-010 adapter certification — storage-memory reference (Tier 3 N/A)", () => {
   it.effect(
-    "TIER1: all 32 SubmissionLedger and 8 ConversationStore contract cases pass",
+    "TIER1: all SubmissionLedger and ConversationStore contract cases pass",
     () =>
       Effect.gen(function* () {
         const report = yield* certified;
         const ledgerCases = report.tier1.filter((result) => result.suite === "submission-ledger");
         const storeCases = report.tier1.filter((result) => result.suite === "conversation-store");
-        expect(ledgerCases).toHaveLength(32);
         expect(ledgerCases).toHaveLength(submissionLedgerConformanceCases.length);
-        expect(storeCases).toHaveLength(8);
         expect(storeCases).toHaveLength(conversationStoreConformanceCases.length);
         expect(report.tier1.filter((result) => result.status !== "passed")).toEqual([]);
       }),
@@ -72,7 +70,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-memory reference 
       Effect.gen(function* () {
         const report = yield* certified;
         // Full sweep: every location armed in every scenario shape.
-        expect(report.tier2).toHaveLength(29 * CERTIFICATION_SCENARIOS.length);
+        expect(report.tier2).toHaveLength(31 * CERTIFICATION_SCENARIOS.length);
         expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
         // Every cell (fired or clean) verified with a FULLY recomputed digest chain.
         expect(report.tier2.every((row) => row.digestChainVerified)).toBe(true);

@@ -22,7 +22,8 @@ const CLOUDFLARE_API_TOKEN = "CLOUDFLARE_API_TOKEN";
 const CLOUDFLARE_WORKERS_SUBDOMAIN = "CLOUDFLARE_WORKERS_SUBDOMAIN";
 const MAX_PROCESS_OUTPUT_BYTES = 64 * 1_024;
 const PROCESS_TIMEOUT = Duration.seconds(120);
-const INVOCATION_TIMEOUT = Duration.seconds(60);
+const DEPLOYMENT_PROPAGATION_DELAY = Duration.seconds(15);
+const INVOCATION_TIMEOUT = Duration.seconds(150);
 
 const AccountId = Schema.NonEmptyString.check(
   Schema.isMaxLength(64),
@@ -231,6 +232,7 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
       });
 
     const invoke = Effect.fn("BrowserRunWorkerProof.invoke")(function* (name: string) {
+      yield* Effect.sleep(DEPLOYMENT_PROPAGATION_DELAY);
       const response = yield* client
         .execute(HttpClientRequest.get(invocationUrl(name)))
         .pipe(
@@ -266,7 +268,7 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
           workerProofError(
             "response",
             "validate temporary Worker response",
-            "The temporary Worker did not return the expected Browser Run fact, screenshot, and interactive metadata",
+            "The temporary Worker did not return the expected Browser Run fact, scrape, screenshot, and interactive metadata",
             { cause },
           ),
         ),
@@ -352,7 +354,7 @@ export const runWorkerProofWith = Effect.fn("BrowserRunWorkerProof.runWorkerProo
             workerProofError(
               "invocation-timeout",
               "invoke temporary Worker",
-              "The unresolved temporary Worker invocation exceeded 60 seconds and was not retried",
+              "The unresolved temporary Worker invocation exceeded 150 seconds and was not retried",
             ),
         }),
       );

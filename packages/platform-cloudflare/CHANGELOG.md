@@ -1,5 +1,99 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.36
+
+### Patch Changes
+
+- [#214](https://github.com/danieljvdm/effect-agent/pull/214) [`082c258`](https://github.com/danieljvdm/effect-agent/commit/082c2584573c1ffbfa7d5b7166f4243e996816eb) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow durably authorized aborts to settle unknown submissions and release queued followers without replaying uncertain tools. Quiesce Cloudflare maintenance for ready followers behind an unresolved external wait.
+
+- Updated dependencies [[`082c258`](https://github.com/danieljvdm/effect-agent/commit/082c2584573c1ffbfa7d5b7166f4243e996816eb)]:
+  - @effect-agent/session@0.1.0-beta.36
+  - @effect-agent/storage-cloudflare@0.1.0-beta.36
+  - @effect-agent/core@0.1.0-beta.36
+  - @effect-agent/engine@0.1.0-beta.36
+  - @effect-agent/sandbox@0.1.0-beta.36
+
+## 0.1.0-beta.35
+
+### Patch Changes
+
+- [#208](https://github.com/danieljvdm/effect-agent/pull/208) [`065c455`](https://github.com/danieljvdm/effect-agent/commit/065c455d1277f73157f610429de283f41ec83d9c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add an explicit interactive browser network policy and reject `PublicWeb` with a typed unsupported error before Cloudflare launches a browser.
+
+  BEHAVIOR CHANGE: Move `allowedHosts` into `network: { _tag: "ExactHosts", allowedHosts }` for existing page-request allowlist workflows; `PublicWeb` remains unsupported on Cloudflare.
+
+- [#210](https://github.com/danieljvdm/effect-agent/pull/210) [`06d4f88`](https://github.com/danieljvdm/effect-agent/commit/06d4f88c78ad175bb7e4106d53e01a2c6076ebdc) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add an explicit `Unrestricted` interactive browser policy for arbitrary-site browsing without URL/host or private-network containment guarantees, retaining session limits and host controls. Admit credential-free HTTP and HTTPS interactive navigation and URL observations without changing PageCapture contracts.
+
+- Updated dependencies [[`065c455`](https://github.com/danieljvdm/effect-agent/commit/065c455d1277f73157f610429de283f41ec83d9c), [`06d4f88`](https://github.com/danieljvdm/effect-agent/commit/06d4f88c78ad175bb7e4106d53e01a2c6076ebdc)]:
+  - @effect-agent/sandbox@0.1.0-beta.35
+  - @effect-agent/storage-cloudflare@0.1.0-beta.35
+  - @effect-agent/core@0.1.0-beta.35
+  - @effect-agent/engine@0.1.0-beta.35
+  - @effect-agent/session@0.1.0-beta.35
+
+## 0.1.0-beta.34
+
+### Minor Changes
+
+- [#205](https://github.com/danieljvdm/effect-agent/pull/205) [`baecd08`](https://github.com/danieljvdm/effect-agent/commit/baecd08f1d6f2c0698e16487cdcccf2f6ffcebca) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add opt-in native Conversation RPC tracing with binding/method client spans, transient current-span propagation, and typed receiver invocation hooks. Remove routine storage codec, failpoint-wrapper, and engine identifier-helper spans while preserving validation, failures, and I/O tracing.
+
+  BEHAVIOR CHANGE: Upgrade the host's `effect-cf` dependency to `^0.34.0` for the native tracing contract.
+
+- [#206](https://github.com/danieljvdm/effect-agent/pull/206) [`aa3ebfb`](https://github.com/danieljvdm/effect-agent/commit/aa3ebfb4fd1e69be77c433a881ddecb3567c36c2) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose non-propagating Tool failures to an opt-in trusted local observer, preserving live Causes without automatic export. Install the same observer through durable Node and Cloudflare runtime options while excluding settled-call replay.
+
+### Patch Changes
+
+- [#202](https://github.com/danieljvdm/effect-agent/pull/202) [`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Align the Effect family with rc.111 to decode nested OpenAI error events, and preserve transformed Tool parameters under its encoded response contract.
+
+- Updated dependencies [[`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee), [`baecd08`](https://github.com/danieljvdm/effect-agent/commit/baecd08f1d6f2c0698e16487cdcccf2f6ffcebca), [`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee), [`baecd08`](https://github.com/danieljvdm/effect-agent/commit/baecd08f1d6f2c0698e16487cdcccf2f6ffcebca), [`aa3ebfb`](https://github.com/danieljvdm/effect-agent/commit/aa3ebfb4fd1e69be77c433a881ddecb3567c36c2)]:
+  - @effect-agent/engine@0.1.0-beta.34
+  - @effect-agent/session@0.1.0-beta.34
+  - @effect-agent/core@0.1.0-beta.34
+  - @effect-agent/sandbox@0.1.0-beta.34
+  - @effect-agent/storage-cloudflare@0.1.0-beta.34
+
+## 0.1.0-beta.33
+
+### Patch Changes
+
+- [#196](https://github.com/danieljvdm/effect-agent/pull/196) [`2aa8713`](https://github.com/danieljvdm/effect-agent/commit/2aa8713d943e20faedfae029551b6faa2f8b08d4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Update controlled React form state when filling interactive browser fields.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.33
+  - @effect-agent/engine@0.1.0-beta.33
+  - @effect-agent/sandbox@0.1.0-beta.33
+  - @effect-agent/session@0.1.0-beta.33
+  - @effect-agent/storage-cloudflare@0.1.0-beta.33
+
+## 0.1.0-beta.32
+
+### Minor Changes
+
+- [#194](https://github.com/danieljvdm/effect-agent/pull/194) [`7592ded`](https://github.com/danieljvdm/effect-agent/commit/7592deda757e0eeb0243f86bae9c2b15623e3c76) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add same-session PNG screenshots, viewport scrolling, and explicit closure to interactive browser handles. Expose host-only Cloudflare Live View, handoff, and cleanup through redacted session identities.
+
+  BEHAVIOR CHANGE: Custom browser adapters must implement `screenshot`, `scroll`, and the `close` Effect.
+
+### Patch Changes
+
+- Updated dependencies [[`7592ded`](https://github.com/danieljvdm/effect-agent/commit/7592deda757e0eeb0243f86bae9c2b15623e3c76)]:
+  - @effect-agent/sandbox@0.1.0-beta.32
+  - @effect-agent/storage-cloudflare@0.1.0-beta.32
+  - @effect-agent/core@0.1.0-beta.32
+  - @effect-agent/engine@0.1.0-beta.32
+  - @effect-agent/session@0.1.0-beta.32
+
+## 0.1.0-beta.31
+
+### Patch Changes
+
+- [#183](https://github.com/danieljvdm/effect-agent/pull/183) [`d3c42d4`](https://github.com/danieljvdm/effect-agent/commit/d3c42d4e34f27610845863ec29908cd3fce95188) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add bounded selector scrape to `PageCapture`, `WebCapture.makeScrape`, and the Cloudflare binding and REST adapters.
+
+- Updated dependencies [[`d3c42d4`](https://github.com/danieljvdm/effect-agent/commit/d3c42d4e34f27610845863ec29908cd3fce95188)]:
+  - @effect-agent/sandbox@0.1.0-beta.31
+  - @effect-agent/storage-cloudflare@0.1.0-beta.31
+  - @effect-agent/core@0.1.0-beta.31
+  - @effect-agent/engine@0.1.0-beta.31
+  - @effect-agent/session@0.1.0-beta.31
+
 ## 0.1.0-beta.30
 
 ### Patch Changes

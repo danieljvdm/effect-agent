@@ -23,6 +23,8 @@ import {
   armStorageEviction,
   armedEvictionsRemaining,
   decodeConversationId,
+  lostBookReplies,
+  supplierCountsFor,
   submitOptions,
 } from "./fixtures.ts";
 import {
@@ -43,6 +45,7 @@ import {
   releaseChildModel,
   siblingCoordinatorDefinition,
   siblingLookupInvocations,
+  uncertainChildRefs,
 } from "./subagent-fixtures.ts";
 import {
   SUBAGENTS,
@@ -443,55 +446,76 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
   // Abort propagation parent→child across Objects (request-abort-and-join).
   // -------------------------------------------------------------------------
 
-  it("aborting the waiting parent propagates ONE durable abort to the child's Object and settles only after the join", async () => {
-    const ref = lane("abort-propagation");
-    const key = `${ref}-key`;
-    gateChildModel(ref);
-    const receipt = await submitCoordinator("coordinator", ref, key);
-    const child = childConversationOf(receipt, ref);
-    await drainDelegationUntil([ref], anyInState(ref, "suspended", SUBAGENTS));
-    await waitFor(() => {
-      kickWithoutAwaiting(child);
-      return childModelInvocations(ref) === 1;
-    }, "the hanging researcher invocation");
+  it.each(["active", "unknown"])(
+    "aborting the waiting parent joins its %s child before settlement",
+    async (childState) => {
+      const ref = lane(`abort-propagation-${childState}`);
+      const key = `${ref}-key`;
+      gateChildModel(ref);
+      if (childState === "unknown") {
+        uncertainChildRefs.add(ref);
+        lostBookReplies.add(ref);
+      }
+      const receipt = await submitCoordinator("coordinator", ref, key);
+      const child = childConversationOf(receipt, ref);
+      await drainDelegationUntil([ref], anyInState(ref, "suspended", SUBAGENTS));
+      await waitFor(() => {
+        kickWithoutAwaiting(child);
+        return childModelInvocations(ref) === 1;
+      }, "the hanging researcher invocation");
 
-    await abortParent(ref, receipt);
-    // The parent's alarm passes propagate the abort across the Object boundary; the child's
-    // active Attempt observes its durable intent, interrupts the hanging stream, settles
-    // aborted, and the join wakes the parent (spec §13.1).
-    await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
+      if (childState === "unknown") {
+        armStorageEviction(child, "ledger:mark-unknown:after");
+        releaseChildModel(ref);
+        await drainDelegationUntil([child], anyInState(child, "unknown", SUBAGENTS));
+        expect(supplierCountsFor(ref).book).toBe(1);
+      }
 
-    // Exactly one canonical child abort command, authored by the propagation (DUR-012).
-    const childRecords = await readCanonical(child, SUBAGENTS);
-    const abortRecords = payloadsOf(childRecords, "AbortRequested");
-    expect(abortRecords).toHaveLength(1);
-    const abortPayload = abortRecords[0]?.record.payload;
-    if (abortPayload?._tag === "AbortRequested") {
-      expect(abortPayload.author).toBe("subagent-parent-abort");
-    }
-    const childSettled = payloadsOf(childRecords, "SubmissionSettled")[0]?.record.payload;
-    if (childSettled?._tag === "SubmissionSettled") {
-      expect(childSettled.outcome).toBe("aborted");
-    }
+      await abortParent(ref, receipt);
+      // The parent's alarm passes propagate the abort across the Object boundary; the child's
+      // active Attempt observes its durable intent, interrupts the hanging stream, settles
+      // aborted, and the join wakes the parent (spec §13.1).
+      await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
 
-    // The join committed with the child's ACTUAL outcome, strictly BEFORE the parent's
-    // aborted settlement ("the parent settles only after the joins").
-    const parentRecords = await readCanonical(ref, SUBAGENTS);
-    const joined = payloadsOf(parentRecords, "SubagentJoined");
-    expect(joined).toHaveLength(1);
-    const joinedPayload = joined[0]?.record.payload;
-    if (joinedPayload?._tag !== "SubagentJoined") throw new Error("Expected SubagentJoined");
-    expect(joinedPayload.childOutcome).toBe("aborted");
-    const settledEnvelope = payloadsOf(parentRecords, "SubmissionSettled")[0];
-    expect(settledEnvelope).toBeDefined();
-    if (settledEnvelope !== undefined && joined[0] !== undefined) {
-      expect(Number(joined[0].sequence)).toBeLessThan(Number(settledEnvelope.sequence));
-    }
-    expect(await parentOutcomeOf(ref)).toBe("aborted");
-    expect(await reservationStatuses(ref)).toEqual(["released"]);
-    // The interrupted researcher was invoked exactly once and never re-executed to abort it.
-    expect(childModelInvocations(ref)).toBe(1);
-  }, 40_000);
+      // Exactly one canonical child abort command, authored by the propagation (DUR-012).
+      const childRecords = await readCanonical(child, SUBAGENTS);
+      const abortRecords = payloadsOf(childRecords, "AbortRequested");
+      expect(abortRecords).toHaveLength(1);
+      const abortPayload = abortRecords[0]?.record.payload;
+      if (abortPayload?._tag === "AbortRequested") {
+        expect(abortPayload.author).toBe("subagent-parent-abort");
+      }
+      const childSettled = payloadsOf(childRecords, "SubmissionSettled")[0]?.record.payload;
+      if (childSettled?._tag === "SubmissionSettled") {
+        expect(childSettled.outcome).toBe("aborted");
+      }
+
+      // The join committed with the child's ACTUAL outcome, strictly BEFORE the parent's
+      // aborted settlement ("the parent settles only after the joins").
+      const parentRecords = await readCanonical(ref, SUBAGENTS);
+      const joined = payloadsOf(parentRecords, "SubagentJoined");
+      expect(joined).toHaveLength(1);
+      const joinedPayload = joined[0]?.record.payload;
+      if (joinedPayload?._tag !== "SubagentJoined") throw new Error("Expected SubagentJoined");
+      expect(joinedPayload.childOutcome).toBe("aborted");
+      const settledEnvelope = payloadsOf(parentRecords, "SubmissionSettled")[0];
+      expect(settledEnvelope).toBeDefined();
+      if (settledEnvelope !== undefined && joined[0] !== undefined) {
+        expect(Number(joined[0].sequence)).toBeLessThan(Number(settledEnvelope.sequence));
+      }
+      expect(await parentOutcomeOf(ref)).toBe("aborted");
+      expect(await reservationStatuses(ref)).toEqual(["released"]);
+      // The interrupted researcher was invoked exactly once and never re-executed to abort it.
+      expect(childModelInvocations(ref)).toBe(1);
+      if (childState === "unknown") {
+        expect(supplierCountsFor(ref).book).toBe(1);
+        expect(payloadsOf(childRecords, "ToolCallUnknown")).toHaveLength(1);
+        expect(payloadsOf(childRecords, "ToolCallSettled")).toHaveLength(0);
+        expect(armedEvictionsRemaining(child)).toBe(0);
+      }
+    },
+    40_000,
+  );
 
   it("eviction at subagent:after-child-abort-intent: the replayed propagation is a no-op, never a second cross-Object command", async () => {
     const ref = lane("subagent:after-child-abort-intent");

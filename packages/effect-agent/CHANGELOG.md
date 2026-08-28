@@ -1,5 +1,61 @@
 # effect-agent
 
+## 0.1.0-beta.36
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/capabilities@0.1.0-beta.36
+  - @effect-agent/core@0.1.0-beta.36
+  - @effect-agent/engine@0.1.0-beta.36
+
+## 0.1.0-beta.35
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/capabilities@0.1.0-beta.35
+  - @effect-agent/core@0.1.0-beta.35
+  - @effect-agent/engine@0.1.0-beta.35
+
+## 0.1.0-beta.34
+
+### Patch Changes
+
+- [#202](https://github.com/danieljvdm/effect-agent/pull/202) [`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Align the Effect family with rc.111 to decode nested OpenAI error events, and preserve transformed Tool parameters under its encoded response contract.
+
+- Updated dependencies [[`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee), [`baecd08`](https://github.com/danieljvdm/effect-agent/commit/baecd08f1d6f2c0698e16487cdcccf2f6ffcebca), [`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee), [`baecd08`](https://github.com/danieljvdm/effect-agent/commit/baecd08f1d6f2c0698e16487cdcccf2f6ffcebca), [`aa3ebfb`](https://github.com/danieljvdm/effect-agent/commit/aa3ebfb4fd1e69be77c433a881ddecb3567c36c2)]:
+  - @effect-agent/engine@0.1.0-beta.34
+  - @effect-agent/core@0.1.0-beta.34
+  - @effect-agent/capabilities@0.1.0-beta.34
+
+## 0.1.0-beta.33
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/capabilities@0.1.0-beta.33
+  - @effect-agent/core@0.1.0-beta.33
+  - @effect-agent/engine@0.1.0-beta.33
+
+## 0.1.0-beta.32
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/capabilities@0.1.0-beta.32
+  - @effect-agent/core@0.1.0-beta.32
+  - @effect-agent/engine@0.1.0-beta.32
+
+## 0.1.0-beta.31
+
+### Patch Changes
+
+- Updated dependencies [[`d3c42d4`](https://github.com/danieljvdm/effect-agent/commit/d3c42d4e34f27610845863ec29908cd3fce95188)]:
+  - @effect-agent/capabilities@0.1.0-beta.31
+  - @effect-agent/core@0.1.0-beta.31
+  - @effect-agent/engine@0.1.0-beta.31
+
 ## 0.1.0-beta.30
 
 ### Patch Changes

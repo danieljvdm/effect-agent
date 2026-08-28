@@ -1,5 +1,23 @@
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
-import { defineConfig } from "vite-plus";
+import { defineConfig, type UserConfig } from "vite-plus";
+
+// Ignore generated Vite files and node_modules directory listings, while
+// retaining dependency file hashes. The lockfile covers dependency additions.
+const run: NonNullable<UserConfig["run"]> = {
+  tasks: {
+    test: {
+      command: "vitest run",
+      input: [
+        { auto: true },
+        { pattern: "bun.lock", base: "workspace" },
+        { pattern: "!**/node_modules", base: "workspace" },
+        { pattern: "!**/node_modules/.vite*", base: "workspace" },
+        { pattern: "!**/node_modules/.vite*/**", base: "workspace" },
+      ],
+      output: [],
+    },
+  },
+};
 
 // Two lanes, one runner (WP0 probe contract, D-P6-7 Fallback A):
 //
@@ -12,12 +30,14 @@ import { defineConfig } from "vite-plus";
 //   (dispose/reopen over one persist directory); these spawn real runtimes and HTTP
 //   listeners and cannot run inside workerd.
 export default defineConfig({
+  run,
   // A package-level Vite config suppresses `vp pack`'s zero-config library
   // defaults, so the published artifact's declarations and sourcemap are
   // pinned explicitly here.
   pack: {
     entry: [
       "src/index.ts",
+      "src/scheduling.ts",
       "src/browser-quick-action.ts",
       "src/interactive-browser.ts",
       "src/browser-rest-capture.ts",
@@ -27,6 +47,10 @@ export default defineConfig({
     sourcemap: true,
   },
   test: {
+    // Vite Task owns result caching; Vitest's results.json is read and
+    // rewritten by every run, which makes the entire task uncacheable.
+    cache: false,
+    silent: "passed-only",
     projects: [
       {
         plugins: [
@@ -37,6 +61,7 @@ export default defineConfig({
               compatibilityFlags: ["nodejs_compat"],
               durableObjects: {
                 CONVERSATIONS: { className: "TestConversationObject", useSQLite: true },
+                SCHEDULES: { className: "TestScheduleOwnerObject", useSQLite: true },
                 LIMITED: { className: "LimitedConversationObject", useSQLite: true },
                 TINYDB: { className: "TinyDatabaseConversationObject", useSQLite: true },
                 DENIED: { className: "DeniedConversationObject", useSQLite: true },

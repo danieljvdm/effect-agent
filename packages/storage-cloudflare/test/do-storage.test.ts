@@ -12,7 +12,7 @@ import { conversationStoreConformanceCases } from "@effect-agent/session/testing
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { Crypto } from "effect";
-import { Cause, Effect, Exit, Layer, Option, Schema } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Schema, Tracer } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -90,11 +90,41 @@ describe("DoConversationStore", () => {
   // Object per case: the 0.21.x pool shares storage across tests within a run.
   describe("shared ConversationStore conformance", () => {
     for (const conformanceCase of conversationStoreConformanceCases) {
-      it(conformanceCase.name, () =>
-        withConversationStorage(`wp1-store:${conformanceCase.name}`, (storage) =>
-          conformanceCase.run.pipe(Effect.provide(layer({ storage, observationPollInterval: 1 }))),
-        ),
-      );
+      it(conformanceCase.name, () => {
+        const spanNames: Array<string> = [];
+        const tracer = Tracer.make({
+          span(options) {
+            spanNames.push(options.name);
+            return new Tracer.NativeSpan(options);
+          },
+        });
+        return withConversationStorage(`wp1-store:${conformanceCase.name}`, (storage) =>
+          conformanceCase.run.pipe(
+            Effect.provide(layer({ storage, observationPollInterval: 1 })),
+            Effect.provideService(Tracer.Tracer, tracer),
+            Effect.withTracerEnabled(true),
+            Effect.tap(() =>
+              Effect.sync(() => {
+                expect(spanNames).toContain("sql.execute");
+                for (const helper of [
+                  "DoJournal.decodeRows",
+                  "DoJournal.decodeSingleRow",
+                  "DoConversationStore.makeOffset",
+                  "DoConversationStore.parseOffset",
+                  "DoConversationStore.encodeCanonicalRecord",
+                  "DoConversationStore.encodeCanonicalBatch",
+                  "DoConversationStore.encodeCheckpoint",
+                  "DoConversationStore.decodeEnvelope",
+                  "DoConversationStore.decodeCheckpoint",
+                  "DoConversationStore.hitFailpoint",
+                ]) {
+                  expect(spanNames).not.toContain(helper);
+                }
+              }),
+            ),
+          ),
+        );
+      });
     }
   });
 

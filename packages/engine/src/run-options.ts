@@ -11,10 +11,110 @@ import type {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
-import { type Effect, Context, type DateTime, Layer, Schema } from "effect";
+import { type Cause, type Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
 import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
+
+/** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
+interface ToolFailureIdentity {
+  readonly agentId: AgentId;
+  readonly conversationId: ConversationId;
+  readonly runId: RunId;
+  readonly turnId: TurnId;
+  readonly toolName: string;
+  /** Best-effort error tag, with the existing `UnknownError` fallback. */
+  readonly tag: string;
+}
+
+/** A model-declared Handler returned a declared failure instead of failing the Run. */
+export interface ModelToolFailure extends ToolFailureIdentity {
+  readonly _tag: "ModelToolFailure";
+  readonly kind: "declared-failure";
+  /** Raw provider identity, without the telemetry ID filter. */
+  readonly toolCallId: ToolCallId;
+  readonly executionClass: ToolExecutionClassValue;
+  readonly message?: never;
+  readonly cause?: never;
+}
+
+interface ProgrammaticToolFailureIdentity extends ToolFailureIdentity {
+  readonly _tag: "ProgrammaticToolFailure";
+  /** `${parentToolCallId}#${sequenceIndex}`, raw and unique only within this in-memory pass. */
+  readonly toolCallId: string;
+  readonly parentToolCallId: ToolCallId;
+  /** Presence means the Handler started and consumed budget; side effects may exist. */
+  readonly sequenceIndex: number;
+  readonly executionClass: ToolExecutionClassValue;
+}
+
+interface ProgrammaticDeclaredFailure extends ProgrammaticToolFailureIdentity {
+  readonly kind: "declared-failure";
+  readonly message?: never;
+  readonly cause?: never;
+}
+
+interface ProgrammaticHandlerFailure extends ProgrammaticToolFailureIdentity {
+  readonly kind: "handler-error";
+  readonly message?: never;
+  /** The original, uncollapsed Cause captured before the broker's diagnostic projection. */
+  readonly cause: Cause.Cause<unknown>;
+}
+
+interface ProgrammaticDiagnosticFailure extends ProgrammaticToolFailureIdentity {
+  readonly kind: "infrastructure" | "protocol";
+  /** At most 4096 UTF-8 bytes. Never a declared payload. */
+  readonly message: string;
+  /** Original Cause when one exists; never fabricated from a source-less rejection. */
+  readonly cause?: Cause.Cause<unknown> | undefined;
+}
+
+/** A programmatic Handler started and its failure became a broker outcome. */
+export type ProgrammaticToolFailure =
+  | ProgrammaticDeclaredFailure
+  | ProgrammaticHandlerFailure
+  | ProgrammaticDiagnosticFailure;
+
+/** A programmatic invocation was rejected before its Handler started. No inner identity exists. */
+export interface ProgrammaticPreflightFailure extends ToolFailureIdentity {
+  readonly _tag: "ProgrammaticPreflightFailure";
+  readonly kind: "infrastructure" | "protocol";
+  readonly parentToolCallId: ToolCallId;
+  /** Absent if the Tool could not be resolved. */
+  readonly executionClass?: ToolExecutionClassValue | undefined;
+  /** At most 4096 UTF-8 bytes. */
+  readonly message: string;
+  /** Original Cause only for Cause-backed rejection, never fabricated from an outcome. */
+  readonly cause?: Cause.Cause<unknown> | undefined;
+}
+
+/** Plain readonly interfaces, intentionally not persisted or transported Schemas (RUN-036). */
+export type ToolFailureObservation =
+  | ModelToolFailure
+  | ProgrammaticToolFailure
+  | ProgrammaticPreflightFailure;
+
+/**
+ * Trusted in-process observation of non-propagating application Tool failures (RUN-036).
+ * Capture reporting dependencies before installation. Delivery is inline under the existing
+ * Tool permit for started calls; preflight reporting is serialized per broker. Delivery is at
+ * most once per in-memory attempt, with isolated observer/reporter defects.
+ * External interruption may end delivery. Replacement Attempts may repeat IDs and observations.
+ * Never reenter ToolBroker, RunEventSink, or Agent execution, or intentionally self-interrupt.
+ */
+export interface RunToolFailureObserver {
+  readonly observe: (observation: ToolFailureObservation) => Effect.Effect<void>;
+}
+
+/** Resolved once per Run; durable coordinators capture it at Layer acquisition. Default absent. */
+export const CurrentToolFailureObserver = Context.Reference<RunToolFailureObserver | undefined>(
+  "@effect-agent/engine/CurrentToolFailureObserver",
+  { defaultValue: () => undefined },
+);
+
+/** The sole installation seam, shared by ephemeral Runs and durable platform options. */
+export const toolFailureObserverLayer = (observer: RunToolFailureObserver): Layer.Layer<never> =>
+  Layer.succeed(CurrentToolFailureObserver)(observer);
 
 /** Number of queued inputs consumed at one documented Turn seam. */
 export type CommandDrainPolicy = "one" | "all";
@@ -516,14 +616,6 @@ export interface RunTurnResume {
   readonly calls: ReadonlyArray<RunTurnResumeCall>;
   readonly settled: ReadonlyArray<RunTurnResumeSettledCall>;
   /**
-   * Exact still-open delegation Call IDs whose attached child Settlements the
-   * durable coordinator proved canonical. Only this resumed join batch may
-   * finish after the logical Run deadline so accepted-work cleanup cannot be
-   * stranded; duration enforcement resumes before the continuation can start
-   * model, ordinary Tool, or new-child work (RUN-030/SUB-019).
-   */
-  readonly settledChildJoinCallIdsPastDeadline?: ReadonlyArray<ToolCallId> | undefined;
-  /**
    * The pending Turn's committed LEADING messages — the messages the durable
    * coordinator committed inside the pending Turn's canonical response record
    * BEFORE the assistant tool-call message (Turn-1 evaluated instructions +
@@ -609,11 +701,20 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    */
   readonly toolAuthorization?: RunToolAuthorizationHook<HookError, HookRequirements> | undefined;
   /**
+   * Actual wall-clock start of the logical Run, used for elapsed-time status.
+   * Durable coordinators supply the canonical `RunStarted` record timestamp on
+   * every replacement Attempt. It is independent from `durationDeadline`,
+   * which may tighten the remaining allowance without changing how long the
+   * Run has existed (RUN-024/RUN-030).
+   */
+  readonly runStartedAt?: DateTime.Utc | undefined;
+  /**
    * Optional absolute deadline for the Run's `maxDuration` rail. The engine
    * uses the earlier of this value and the fresh policy deadline, so callers
    * may preserve or tighten an existing Run allowance but can never widen it.
-   * Durable coordinators derive this value from canonical Run-start evidence
-   * so replacement Attempts share one wall-clock allowance (RUN-030).
+   * Durable coordinators derive this value from the canonical `RunStarted`
+   * record timestamp and stored duration so replacement Attempts share one
+   * wall-clock allowance (RUN-030).
    */
   readonly durationDeadline?: DateTime.Utc | undefined;
   /**

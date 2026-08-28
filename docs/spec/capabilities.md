@@ -22,6 +22,7 @@ must detect absence explicitly; it must not silently substitute weaker behavior.
 | Code Mode                  | Implemented |                          No |                              No |
 | Page capture               | Implemented |                          No |                              No |
 | Page crawl                 | Implemented |                          No |                              No |
+| Interactive browser        | Implemented |                          No |                              No |
 | Subagents                  | Implemented |                          No |                              No |
 | Persistent agent state     | Implemented |                          No |                              No |
 | Durable steps              | Implemented |                          No |                              No |
@@ -275,7 +276,7 @@ are bounded at the adapter boundary.
 
 Code Mode is distinct from a general code interpreter: one native Effect AI Tool accepts bounded
 JavaScript source written by the model, executes it in one isolated pass, and lets the program
-call an explicit allowlist of existing Effect AI Tools through typed sandbox globals
+call an explicit allowlist of existing Effect AI Tools through typed sandbox globals.
 The generated program is one
 async function expression invoked by a fixed harness entrypoint. The handler never invokes a
 second model.
@@ -322,11 +323,19 @@ Call and its bounded final result, with inner-call evidence in telemetry counts 
 audit metadata. Code Mode claims deployment class `E` only; the `DN` and `DC` assemblies make
 no Code Mode claim until this specification says otherwise.
 
+The trusted, non-persisted, in-process Tool failure observer is one explicit diagnostic channel
+(RUN-036). It may receive an inner Handler's original live Cause, but never a declared failure
+value or intermediate result payload. Declared failures expose their tag only. Applications own
+any reporting and incident deduplication; the engine adds no automatic telemetry export. Inner
+calls emit no Run events. Installing the observer on a durable host does not change Code Mode's
+deployment class or add inner-call canonical evidence.
+
 ## 9.2 Page capture and the PageCapture port
 
 Page capture renders one page — a navigated https URL or supplied HTML — in a managed headless
-browser and returns exactly one bounded output: rendered HTML, Markdown, discovered links, or
-schema-shaped structured data. The port is a stateless sibling of `Sandbox` and `CodeExecutor`
+browser and returns exactly one bounded output: rendered HTML, Markdown, discovered links,
+schema-shaped structured data, or grouped selector scrape results. The port is a stateless sibling
+of `Sandbox` and `CodeExecutor`
 in `@effect-agent/sandbox`: a browser is intrinsically an egress device, so it carries its own
 explicit capture contract instead of widening the sandbox network policy that every existing
 adapter rejects typed.
@@ -349,6 +358,11 @@ node use the explicitly supported, type-checked JSON Schema vocabulary. The docu
 to 64 KiB of encoded data, depth 32, 4,096 total nodes, and 256 entries per collection.
 Malformed keywords, unsupported keywords, cycles, and over-budget documents fail at the request
 Schema boundary.
+Selector scrape requests contain 1 to 64 bounded selectors. Results preserve provider group and
+element order and are limited to 4,096 aggregate elements, 64 bounded attributes per element,
+bounded text and HTML, and finite geometry. Malformed or over-budget scrape results fail typed;
+adapters never truncate them into an apparently successful result. The response byte budget still
+applies to the complete provider response before decoding.
 Adapters reuse the `SandboxImplementation` posture idiom (CAP-010), reject any feature or engine
 they cannot honor, and surface platform rate and quota refusals as one typed failure carrying
 the platform's own backoff hint. Foreign browser or transport failures retain their original live
@@ -368,9 +382,10 @@ redirect destinations, and every rendered-page subrequest. `WebCapture.makeExtra
 platform-side JSON response format from one Effect Schema and decodes the untrusted result
 through that exact Schema; its handler Layer visibly requires both `PageCapture` and the
 Schema's decoding services, and the Tool invocation keeps those decoding services visible in
-its own requirement channel.
+its own requirement channel. `WebCapture.makeScrape` exposes only the target URL and bounded
+selector list while preserving the portable grouped result contract.
 
-Both builders return ordinary Tools with `failureMode: "return"` and execution class
+All three builders return ordinary Tools with `failureMode: "return"` and execution class
 `uncertain`: page JavaScript can mutate remote state, so captures are neither safely replayable
 nor eligible for readonly-only Code Mode. Platform-side model inference is never implicit; the
 host must authorize and account for its provider before extraction starts. Authorization and
@@ -381,6 +396,13 @@ set, and an extraction Schema the deriver cannot express. Stateful browser sessi
 PDFs, snapshot bundles, crawling, and accessibility trees remain outside this one-page port.
 Screenshots and crawling use separate sibling contracts with their own binary and scoped-stream
 semantics. Page capture claims deployment class `E` only.
+
+Raw CDP browser execution is not a supported capability. The pinned Cloudflare browser client has
+no session egress guardrail, and the later provider guardrail accepts hostnames rather than this
+framework's exact HTTPS origins. Page request interception is not a containment boundary for
+arbitrary Target, Runtime, Fetch, and Network commands. A future connector therefore requires
+either a provider-enforced exact-origin boundary or an explicitly accepted, separately named
+unrestricted authority; it must not be hidden inside Code Mode or `InteractiveBrowser`.
 
 ## 9.3 Page screenshots
 
@@ -422,10 +444,72 @@ fixed bounded warning without provider detail and never defects, masks, or chang
 ## 9.5 Interactive browser
 
 `InteractiveBrowser` is a separate, provider-neutral, scoped service for one browser pass. The
-pass owns exactly one browser, context, and page and exposes only navigate, bounded text read, one
-field fill, and one element click. Its immutable policy fixes an exact HTTPS host allowlist, one
-page, action-count, elapsed-time, and returned UTF-8 byte limits before acquisition. The same
-policy governs initial navigation, redirects, and every page subrequest; violations fail closed.
+pass owns one browser, context, and automation page. Its handle supports navigation, bounded text
+reads, field filling, element clicks, PNG screenshots, viewport scrolling, and explicit closure.
+Its immutable policy fixes `network`, action-count, elapsed-time, and per-result byte limits before
+acquisition. Text counts UTF-8 bytes; screenshots count PNG bytes. The network choice is explicit;
+there is no wildcard, default mode, model-selected allowlist, or policy update on an open handle.
+
+`InteractiveBrowserNetworkPolicy` has three alternatives:
+
+- `{ _tag: "ExactHosts", allowedHosts }` retains the existing URL allowlist for adapter navigation
+  and intercepted requests on the owned page. It accepts 1 to 64 unique canonical HTTPS
+  authorities, including non-default ports, and rejects URL credentials and wildcard patterns.
+  It does not classify resolved addresses or promise containment of every browser traffic source.
+  Adapters must document their request coverage. This mode is for trusted pages and operators;
+  it is not a public-network safety boundary.
+- `{ _tag: "PublicWeb" }` requests browsing across unrelated public HTTPS sites and their ordinary
+  third-party resources in the same pass. URL usernames and passwords are forbidden. Every
+  connection must exclude private, loopback, link-local, reserved, multicast, metadata, and
+  internal destinations, including IPv4, IPv6, redirects, DNS changes, and alternative address
+  representations. Enforcement must use the address actually connected to, not an earlier DNS
+  lookup. HTTPS navigation and resources, and secure WebSockets where supported, must retain
+  these restrictions across new targets, workers, and human navigation. Other traffic paths must
+  be disabled before they can send traffic or cause acquisition to fail typed. The public policy
+  does not grant authority to any application identity, expose provider controls, or prohibit
+  human login through cookies and forms on permitted sites.
+- `{ _tag: "Unrestricted" }` explicitly opts out of URL/host and private-network containment.
+  It permits arbitrary sites, redirects, and page resources without a host allowlist. It offers
+  no guarantee that private, internal, loopback, or metadata destinations are blocked. This mode
+  retains the same finite action, elapsed-time, and returned-byte limits and scoped lifecycle.
+  It does not change application authentication, authorization, or takeover ownership.
+
+An adapter that cannot enforce `PublicWeb` must return `InteractiveBrowserUnsupportedError` with
+`feature: "policy"` before acquiring a browser. It must not downgrade to `ExactHosts`, accept a
+host assertion of safety, or use request interception or a DNS preflight as a connection-time
+boundary. Adding a proxy, a second browser subsystem, or a mutable host list is not an implicit
+fallback. Unknown modes and mixed policy fields fail validation. The current Cloudflare adapter
+rejects `PublicWeb`; callers may explicitly select `Unrestricted` to browse arbitrary sites
+without the stronger network guarantee. This is never an automatic fallback.
+
+Existing callers move `allowedHosts` into `network`:
+
+```ts
+const policy = InteractiveBrowserPolicy.make({
+  network: { _tag: "ExactHosts", allowedHosts: ["example.com", "example.org"] },
+  maxActions: 20,
+  maxElapsedMillis: 120_000,
+  maxReturnedBytes: 64 * 1024,
+});
+```
+
+Changing that field to `network: { _tag: "PublicWeb" }` expresses the stronger requirement but
+currently fails unsupported on Cloudflare, before launch, navigation, or creation of a viewer URL.
+Applications must surface that failure rather than silently choosing a weaker policy.
+
+`BrowserNavigateRequest`, `BrowserNavigationResult`, and `BrowserActionResult` use the exported
+`InteractiveBrowserTargetUrl` schema: absolute HTTP or HTTPS URLs, no embedded credentials,
+at most 8,192 UTF-16 code units. `ExactHosts` continues to require HTTPS at the adapter policy
+boundary. `Unrestricted` admits HTTP and HTTPS navigation and observations but does not constrain
+browser traffic to those schemes. PageCapture and other read-only URL contracts are unchanged.
+
+`screenshot(BrowserScreenshotRequest)` captures the current page without navigation or a new
+browser. The request selects viewport or full-page capture with `fullPage`; the result reuses
+`PageScreenshotResult`. Bytes belong to the caller and never enter framework records, model
+context, logs, or telemetry. `scroll(BrowserScrollRequest)` scrolls the current viewport by
+`deltaX` and `deltaY` CSS pixels, each an integer from -100,000 to 100,000, and returns the observed
+page URL. Screenshot and scroll operations consume the same action budget and use the same
+deadline and concurrency gate as navigation, reads, fills, and clicks.
 
 The returned handle is ephemeral and is not a Schema value, durable record, reconnect token, or
 model-facing Tool. A handle permits one operation at a time; concurrent calls fail immediately
@@ -434,14 +518,22 @@ malformed adapter observations remain typed failures. Browser JavaScript and nav
 remote state, so operations are uncertain: no automatic retry or replay is permitted.
 
 Adapters acquire browser, context, and page resources in `Scope`, register finalizers immediately,
-and close them in reverse order on every `Exit`. Cleanup failures are warning-only uncertainty and
-must not mask the primary result. No daemon fiber, module-global registry, persistence, or generic
+and close them in reverse order on every `Exit`. `yield* handle.close` invalidates the handle before
+teardown and remains available after an interrupted action, policy failure, or exhausted budget.
+It shares one teardown attempt with Scope finalization; repeated close calls return that attempt's
+outcome without repeating remote closure. Explicit close reports a typed cleanup failure. Scope
+cleanup emits fixed warnings and must not mask the primary result. An action that finishes after
+closure cannot return success. No daemon fiber, module-global registry, persistence, or generic
 Puppeteer wrapper is allowed. Features the provider cannot enforce fail as typed unsupported.
 
 The Cloudflare adapter uses the explicit Browser Run binding and `@cloudflare/puppeteer` 1.1.0.
 Cloudflare's `keep_alive` controls inactivity only; the application deadline remains authoritative.
 Cloudflare launch capacity refusal and disconnected/expired sessions map to typed capacity or
 expiry errors, retaining provider details only as host-side causes.
+Cloudflare Live View, handoff, and cleanup by private provider identity belong to the separate
+host API in `@effect-agent/platform-cloudflare`, not to `BrowserHandle`. The host owns permissions,
+controller arbitration, and any durable action receipts. This capability adds no durable browser
+state or automatic recovery of uncertain actions.
 
 ## 10. Subagents
 
@@ -511,7 +603,9 @@ default and are excluded from ordinary span attributes.
   resource on success, failure, timeout, and interruption.
 - **CAP-016**: Code Mode applies one byte budget and redaction policy to all model-visible output,
   including the final result, captured logs, and thrown values. Intermediate results never
-  leave a pass implicitly.
+  leave a pass implicitly. The explicitly installed trusted in-process observer may receive live
+  failure Causes, never declared values or result payloads, and is neither persisted nor
+  automatically exported through telemetry (RUN-036).
 - **CAP-017**: Budget snapshots are cache-aware and context-aware: `UsageTotals` and
   `UsageDelta` carry cache-read and cache-write input tokens distinctly (with `inputTokens`
   remaining the total), and totals expose the most recent call's input/output tokens as the
@@ -520,11 +614,17 @@ default and are excluded from ordinary span attributes.
   credential-free HTTPS navigation, redirects, and subrequests; returned links are validated
   credential-free HTTP(S) data; its action set, engine, and byte budget are fixed at capability
   construction; structured extraction accepts only a bounded object JSON Schema and exposes its
-  decoder requirements; browser execution remains `uncertain`; model inference requires explicit
-  host authorization and accounting; and every result is treated as untrusted input.
+  decoder requirements; selector scrape preserves bounded grouped results and rejects malformed or
+  over-budget provider output without truncation; browser execution remains `uncertain`; model
+  inference requires explicit host authorization and accounting; and every result is treated as
+  untrusted input.
 - **CAP-019**: Page screenshots use a separate Schema-first port with fixed PNG output and a
   caller-owned byte lifetime; adapters enforce MIME and byte bounds and never persist or project
   screenshot bytes.
 - **CAP-020**: Page crawls use a scoped, exact-host Stream with immutable page-count, depth,
   per-page, aggregate, and deadline limits; adapters keep job identity private, paginate lazily,
   never retry unresolved work, and cancel a known-running job exactly once when its Scope exits.
+- **CAP-021**: Interactive browser actions share one scoped page, immutable host policy, action
+  budget, deadline, and single-operation gate. Screenshots return bounded caller-owned PNG bytes;
+  scrolls accept bounded pixel deltas. Explicit closure invalidates the handle and shares teardown
+  with Scope finalization. Provider identities and operator controls stay outside the generic handle.

@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  CapturePageScrape,
   CapturePageStructured,
   PageCaptureError,
   PageCaptureInferenceUse,
@@ -11,6 +12,7 @@ import {
   PageCaptureRateLimitedError,
   PageCaptureRequest,
   PageCaptureResult,
+  PageScrapeCaptured,
   PageScreenshotError,
   PageScreenshotLimits,
   PageScreenshotRequest,
@@ -105,6 +107,84 @@ describe("Page capture and screenshot schemas", () => {
     expect(
       Schema.decodeSync(PageCaptureRequest)(Schema.encodeSync(PageCaptureRequest)(request)),
     ).toEqual(request);
+  });
+
+  it("round-trips bounded selector scrape requests and grouped results", () => {
+    const request = PageCaptureRequest.make({
+      target: PageUrlTarget.make({ url: "https://docs.example.com/pricing" }),
+      action: CapturePageScrape.make({ selectors: [".plan", "#faq"] }),
+      engine: "chromium",
+      limits: { maxOutputBytes: 128 * 1024 },
+    });
+    const output = PageScrapeCaptured.make({
+      groups: [
+        {
+          selector: ".plan",
+          results: [
+            {
+              text: "Pro",
+              html: '<article class="plan">Pro</article>',
+              attributes: [{ name: "class", value: "plan" }],
+              left: 10.5,
+              top: 20,
+              width: 300,
+              height: 120,
+            },
+          ],
+        },
+        { selector: "#faq", results: [] },
+      ],
+    });
+
+    expect(
+      Schema.decodeSync(PageCaptureRequest)(Schema.encodeSync(PageCaptureRequest)(request)),
+    ).toEqual(request);
+    expect(
+      Schema.decodeSync(PageScrapeCaptured)(Schema.encodeSync(PageScrapeCaptured)(output)),
+    ).toEqual(output);
+  });
+
+  it("rejects unbounded selector scrape collections and non-finite geometry", () => {
+    for (const selectors of [[], Array.from({ length: 65 }, () => ".item")]) {
+      expect(
+        Schema.decodeUnknownExit(CapturePageScrape)({
+          _tag: "CapturePageScrape",
+          selectors,
+        })._tag,
+      ).toBe("Failure");
+    }
+
+    const element = {
+      text: "item",
+      html: "<div>item</div>",
+      attributes: [],
+      left: 0,
+      top: 0,
+      width: 1,
+      height: 1,
+    };
+    for (const groups of [
+      [{ selector: ".item", results: Array.from({ length: 4_097 }, () => element) }],
+      [
+        {
+          selector: ".item",
+          results: [
+            {
+              ...element,
+              attributes: Array.from({ length: 65 }, () => ({ name: "a", value: "b" })),
+            },
+          ],
+        },
+      ],
+      [{ selector: ".item", results: [{ ...element, width: Number.POSITIVE_INFINITY }] }],
+    ]) {
+      expect(
+        Schema.decodeUnknownExit(PageScrapeCaptured)({
+          _tag: "PageScrapeCaptured",
+          groups,
+        })._tag,
+      ).toBe("Failure");
+    }
   });
 
   it("keeps outputs, results, and expected failures schema-decodable", () => {

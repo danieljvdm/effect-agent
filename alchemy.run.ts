@@ -31,7 +31,7 @@ const stack = Effect.gen(function* () {
     name: "effect-agent-docs",
     command: "bun run docs:build",
     outdir: "docs/.vitepress/dist",
-    domain: "effect-agent.danvdm.com",
+    domain: "effect-agent.com",
     workersDev: false,
     dev: { command: "bun run docs:dev" },
     // VitePress emits 404.html; its cleanUrls links match the default

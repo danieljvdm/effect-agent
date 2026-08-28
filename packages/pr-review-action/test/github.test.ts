@@ -1,8 +1,10 @@
+import { ReviewFinding, ReviewReport } from "@effect-agent/pr-review";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Redacted, Ref } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { makeGitHubClient } from "../src/github.ts";
+import { defaultReviewPresentation } from "../src/presentation.ts";
 
 const repository = "reve-ai/example";
 const baseRevision = "1".repeat(40);
@@ -16,6 +18,73 @@ const entry = (
   mode: "100644" | "100755" | "120000" | "040000" | "160000" = "100644",
   type: "blob" | "tree" | "commit" = "blob",
 ) => ({ path, sha, mode, type });
+
+it.effect("PRR-009 publishes a blocking finding at the review field bounds", () =>
+  Effect.gen(function* () {
+    const finding = ReviewFinding.make({
+      path: `${"src/".repeat(126)}file.txt`,
+      line: 1,
+      severity: "blocking",
+      category: "security",
+      title: "T".repeat(200),
+      body: "B".repeat(2_000),
+    });
+    const published = yield* Ref.make<ReadonlyArray<string>>([]);
+    const reviewUrl = "https://github.test/reve-ai/example/pull/12#pullrequestreview-1";
+    const client = HttpClient.make((request, url) =>
+      Ref.update(published, (requests) => [...requests, `${request.method} ${url.pathname}`]).pipe(
+        Effect.as(
+          HttpClientResponse.fromWeb(
+            request,
+            new globalThis.Response(JSON.stringify({ html_url: reviewUrl }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+          ),
+        ),
+      ),
+    );
+    const github = yield* makeGitHubClient({
+      repository,
+      pullRequest: 12,
+      token: Redacted.make("github-token"),
+      apiUrl: "https://api.github.test",
+    }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+    const reviewBody = defaultReviewPresentation.renderReview({
+      report: ReviewReport.make({ summary: "A blocking defect was found.", findings: [finding] }),
+      automatic: false,
+      automaticReviewsRemaining: 1,
+      scope: "full",
+      reviewedFiles: 1,
+      unreviewedFiles: 0,
+      ignoredFiles: 0,
+      shards: 1,
+      inputTokens: 10,
+      uncachedInputTokens: 10,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      outputTokens: 4,
+      headRevision,
+    });
+    const result = yield* github.publishReview({
+      commitId: headRevision,
+      event: "REQUEST_CHANGES",
+      body: reviewBody,
+      comments: [
+        {
+          path: finding.path,
+          line: 1,
+          body: defaultReviewPresentation.renderFinding(finding, headRevision),
+        },
+      ],
+    });
+
+    expect(result).toBe(reviewUrl);
+    expect(reviewBody).toContain("Prompt for all 1 finding with AI agents");
+    expect(yield* Ref.get(published)).toEqual(["POST /repos/reve-ai/example/pulls/12/reviews"]);
+  }),
+);
 
 describe("GitHub tree comparison", () => {
   it.effect("PRR-008 compares exact contents after rewritten history", () =>

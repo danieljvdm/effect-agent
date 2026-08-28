@@ -1,6 +1,12 @@
 import type { SubmissionId } from "@effect-agent/core";
-import type { RunCostEstimator } from "@effect-agent/engine";
 import {
+  CurrentToolFailureObserver,
+  toolFailureObserverLayer,
+  type RunCostEstimator,
+  type RunToolFailureObserver,
+} from "@effect-agent/engine";
+import {
+  type ScheduleStore,
   type ConversationStore,
   type WakeScheduler,
   AgentBindingResolver,
@@ -19,6 +25,7 @@ import {
 } from "@effect-agent/session";
 import {
   conversationStoreLayer,
+  scheduleStoreLayer,
   SqliteStorageConfig,
   SqliteStorageConfigValue,
   storageFailpointLayer,
@@ -109,6 +116,8 @@ export interface NodeDurableRuntimeOptions {
   readonly abortPollInterval?: number | undefined;
   /** Deployment-owned pricing authority used by durable cost budgets and settlements. */
   readonly estimateCostMicrousd?: RunCostEstimator | undefined;
+  /** Closed trusted Tool failure reporting. Omission masks ambient observers at construction. */
+  readonly toolFailureObserver?: RunToolFailureObserver | undefined;
   /** Milliseconds; default 5000. */
   readonly busyTimeout?: number | undefined;
   /** Milliseconds; default 25. */
@@ -147,6 +156,7 @@ export type NodeDurableRuntimeServices =
   | DurableAgentRuntime
   | SubmissionLedger
   | ConversationStore
+  | ScheduleStore
   | WakeScheduler
   | DurableRuntimeConfig
   | NodeDurableRuntimeConfig
@@ -371,9 +381,14 @@ export class NodeDurableRuntime {
             ? DurableRuntimeFailpoint.layer
             : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint });
         const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
+        const observerLayer =
+          options.toolFailureObserver === undefined
+            ? Layer.succeed(CurrentToolFailureObserver)(undefined)
+            : toolFailureObserverLayer(options.toolFailureObserver);
         const bindingResolverLayer = AgentBindingResolver.layer(options.bindings ?? []);
         const ports = Layer.mergeAll(
           conversationStoreLayer,
+          scheduleStoreLayer,
           nodeWakeSchedulerLayer.pipe(
             Layer.provideMerge(ownershipDrainLayer.pipe(Layer.provide(submissionLedgerLayer))),
           ),
@@ -387,7 +402,12 @@ export class NodeDurableRuntime {
             ),
           ),
           Layer.provide(
-            Layer.mergeAll(wakeSchedulerConfigLayer, runtimeFailpointLayer, reconcilerLayer),
+            Layer.mergeAll(
+              wakeSchedulerConfigLayer,
+              runtimeFailpointLayer,
+              reconcilerLayer,
+              observerLayer,
+            ),
           ),
           Layer.provideMerge(infrastructure),
           Layer.provideMerge(nodeConfigLayer),

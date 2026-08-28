@@ -1966,6 +1966,115 @@ const approvalDecisionIdempotency = conformanceCase(
     }),
 );
 
+const unknownAbortClaim = conformanceCase(
+  "a durable abort makes an unknown head claimable without resolving or replaying its calls",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+      for (const abortFirst of [false, true]) {
+        const conversationId = decodeConversationId(
+          `ledger-conformance-unknown-abort-${abortFirst}`,
+        );
+        const head = yield* admitReady(conversationId, "head", { work: "uncertain" });
+        const original = yield* expectSome(
+          "original claim",
+          yield* claimLane(conversationId, PRODUCER_A),
+        );
+        const follower = yield* admitReady(conversationId, "follower", { work: "later" });
+        const command = AbortCommand.make({
+          submissionId: head.submissionId,
+          author: "first-operator",
+          reason: "stop without asserting external rollback",
+        });
+        if (abortFirst) yield* ledger.requestAbort(command);
+        yield* ledger.markUnknown(
+          MarkUnknownRequest.make({
+            submissionId: head.submissionId,
+            toolCallIds: [decodeToolCallId("uncertain-one"), decodeToolCallId("uncertain-two")],
+            reason: "external replies were lost",
+          }),
+        );
+        if (abortFirst) {
+          yield* ensure(
+            Option.isNone(yield* claimLane(conversationId, PRODUCER_B)),
+            "Abort must not bypass a still-live ownership lease",
+          );
+        }
+        yield* advancePastLease(original.leaseExpiresAt);
+        if (!abortFirst) {
+          yield* ensure(
+            Option.isNone(yield* claimLane(conversationId, PRODUCER_B)),
+            "Unknown work and its follower must wait without an authorized abort",
+          );
+        }
+        const intent = yield* ledger.requestAbort(command);
+        const duplicate = yield* ledger.requestAbort(
+          AbortCommand.make({
+            ...command,
+            author: "later-operator",
+            reason: "lost acknowledgement retry",
+          }),
+        );
+        yield* ensure(
+          duplicate.author === intent.author &&
+            duplicate.reason === intent.reason &&
+            sameInstant(duplicate.requestedAt, intent.requestedAt),
+          "The first abort audit must win",
+        );
+        const reclaimed = yield* expectSome(
+          "unknown head with durable abort",
+          yield* claimLane(conversationId, PRODUCER_B),
+        );
+        yield* ensure(
+          reclaimed.submissionId === head.submissionId &&
+            reclaimed.producerEpoch > original.producerEpoch,
+          "Abort must claim the head with a fresh fence, never skip to its follower",
+        );
+        const snapshot = yield* recoverySnapshot(head.submissionId);
+        yield* ensure(
+          snapshot.submission.state === "unknown" && snapshot.unknownResolutions.length === 0,
+          "Claiming for abort must not erase uncertainty or manufacture tool resolutions",
+        );
+        const stale = yield* expectFailure(
+          "stale owner",
+          ledger.reserveSettlement(
+            yield* settlementReservation({
+              ...head,
+              ownershipToken: original.ownershipToken,
+              outcome: "completed",
+            }),
+          ),
+        );
+        yield* ensure(isOwnershipLost(stale), "The original owner must remain fenced");
+        const reservation = yield* settlementReservation({
+          ...head,
+          ownershipToken: reclaimed.ownershipToken,
+          outcome: "aborted",
+        });
+        yield* ledger.reserveSettlement(reservation);
+        yield* ledger.requestAbort(command);
+        const settled = yield* ledger.finalizeSettlement(SettlementFinalization.make(reservation));
+        yield* ensure(
+          settled.outcome === "aborted",
+          "The abort reservation must survive a duplicate command",
+        );
+        const late = yield* expectFailure("abort after settlement", ledger.requestAbort(command));
+        yield* ensure(
+          isSettlementConflict(late) && late.existingOutcome === "aborted",
+          "A terminal outcome must not change",
+        );
+        const next = yield* expectSome(
+          "follower claim",
+          yield* claimLane(conversationId, PRODUCER_B),
+        );
+        yield* ensure(
+          next.submissionId === follower.submissionId,
+          "Settlement must release the follower",
+        );
+      }
+    }),
+);
+
 const unknownResolutionLifecycle = conformanceCase(
   "unknown resolutions reopen the lane only when no open call remains",
   ({ ensure, expectFailure, expectSome }) =>
@@ -3426,6 +3535,7 @@ export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerCon
   claimNeverGrantsBlockedHead,
   approvalDecisionIdempotency,
   unknownResolutionLifecycle,
+  unknownAbortClaim,
   suspendResumesImmediatelyWhenDecided,
   joinedSettlementLinkageAuthority,
   childReservationIdempotency,

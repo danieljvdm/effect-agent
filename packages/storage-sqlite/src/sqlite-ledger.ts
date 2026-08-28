@@ -320,7 +320,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   const failpoint = yield* SqliteStorageFailpoint;
   const sql = yield* SqlClientService.SqlClient;
   const crypto = yield* Crypto.Crypto;
-  const journal = yield* initializeSqliteJournal(sql, failpoint.hit, config.busyTimeout);
+  const journal = yield* initializeSqliteJournal();
 
   const hitFailpoint = (
     location: SqliteStorageFailpointLocation,
@@ -1146,14 +1146,15 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           if (heads.length === 0) return Option.none<Claim>();
           const head = heads[0];
 
-          // A joining/joined head is host-owned and a suspended/unknown head is durably
-          // blocked (DUR-017); the lane produces no claim and later ready work is never
-          // skipped past the blocked head (DUR-004).
+          // Unknown work is claimable only for a durably requested abort: the coordinator
+          // cleans up children and settles without replaying ordinary Tools. Read the intent
+          // in this claim transaction; retain uncertainty evidence and all ownership fencing.
           if (
             head.state === "joining" ||
             head.state === "joined" ||
             head.state === "suspended" ||
-            head.state === "unknown"
+            (head.state === "unknown" &&
+              Option.isNone(yield* readAbortIntent(operation, head.submission_id)))
           ) {
             return Option.none<Claim>();
           }

@@ -1,11 +1,12 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect";
 
 /**
- * Coordinator-owned failpoint locations (plan §Failpoints). Every location sits immediately
+ * Coordinator-owned failpoint locations (plan §Failpoints). Locations normally sit immediately
  * AFTER one durable mutation of the six-step coordinator flow, so a fault injected there
  * simulates a crash between two durable steps; the matching BEFORE boundary of each mutation is
  * owned by the storage adapters (`ledger:*:before`, `append:before`, ...), giving every durable
- * mutation a failpoint on both sides (change discipline).
+ * mutation a failpoint on both sides (change discipline). Run-start append also exposes its
+ * BEFORE boundary here to distinguish a fresh clock from a committed clock in crash tests.
  *
  * The `subagent:*` family covers every durable mutation of the S2 establishment/join protocol
  * (spec/subagents.md §12/§14): reservation, request append, child admission, child readiness,
@@ -18,6 +19,8 @@ export const DurableRuntimeFailpointLocation = Schema.Literals([
   "submit:after-materialize",
   "claim:after-claim",
   "input:after-canonical-append",
+  "run:before-start-append",
+  "run:after-start-append",
   "turn:after-canonical-append",
   "turn:after-response-append",
   "turn:after-results-append",

@@ -1,5 +1,6 @@
 import {
   CapturePageMarkdown,
+  CapturePageScrape,
   CapturePageStructured,
   PageCapture,
   PageCaptureLimits,
@@ -46,6 +47,13 @@ const request = (engine: "chromium" | "kitesurf" = "chromium", maxOutputBytes = 
 const response = (body: string, status = 200, headers: HeadersInit = {}) =>
   new Response(body, { status, headers: { "content-type": "application/json", ...headers } });
 
+const scrapeRequest = PageCaptureRequest.make({
+  target: PageUrlTarget.make({ url: "https://docs.example.com/page" }),
+  action: CapturePageScrape.make({ selectors: [".plan", "#faq"] }),
+  engine: "chromium",
+  limits: PageCaptureLimits.make({ maxOutputBytes: 16 * 1024 }),
+});
+
 const captureWith = (client: HttpClient.HttpClient, input = request()) =>
   Effect.gen(function* () {
     const capture = yield* PageCapture;
@@ -85,6 +93,33 @@ describe("Browser Run REST PageCapture adapter", () => {
           "https://api.cloudflare.com/client/v4/accounts/account-id/browser-rendering/markdown?browser=kitesurf",
         ]);
       }),
+  );
+
+  it.effect("posts selector elements to the stable scrape endpoint", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<{ readonly url: string; readonly body: unknown } | undefined>(
+        undefined,
+      );
+      const client = HttpClient.make((request, url) =>
+        Effect.gen(function* () {
+          const body =
+            request.body._tag === "Uint8Array"
+              ? JSON.parse(new TextDecoder().decode(request.body.body))
+              : undefined;
+          yield* Ref.set(seen, { url: url.href, body });
+          return HttpClientResponse.fromWeb(request, response('{"success":true,"result":[]}'));
+        }),
+      );
+
+      yield* captureWith(client, scrapeRequest);
+      expect(yield* Ref.get(seen)).toEqual({
+        url: "https://api.cloudflare.com/client/v4/accounts/account-id/browser-rendering/scrape",
+        body: {
+          url: "https://docs.example.com/page",
+          elements: [{ selector: ".plan" }, { selector: "#faq" }],
+        },
+      });
+    }),
   );
 
   it.effect("keeps the token at the fixed origin Authorization boundary", () =>

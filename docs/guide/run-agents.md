@@ -113,6 +113,46 @@ const options: RunOptions<AppError, AppRequirements> = {
 Hook failures join the Run's error channel. Hook requirements join `R`. Capability packages adapt
 richer domain contracts to this narrow engine boundary rather than creating a second runtime.
 
+## Observe recovered Tool failures
+
+A Tool may fail while the model recovers and the Run completes. Install
+`toolFailureObserverLayer` from `@effect-agent/engine` to observe those failures locally. There is
+no `RunOptions` member. Providing the Layer does not change inferred errors or requirements.
+
+```ts
+import { toolFailureObserverLayer } from "@effect-agent/engine";
+import { Effect, ErrorReporter } from "effect";
+
+const failureReporting = toolFailureObserverLayer({
+  observe: (observation) =>
+    observation.cause === undefined ? Effect.void : ErrorReporter.report(observation.cause),
+});
+
+yield * AgentRuntime.run(agent, input).pipe(Effect.provide(failureReporting));
+```
+
+This example explicitly forwards Cause-bearing observations to the application's configured
+`ErrorReporter`. The engine does not do that automatically. Applications choose what to capture
+and how to redact it. Capture any reporting dependencies before installing the closed observer.
+
+`ModelToolFailure` describes a direct declared failure. `ProgrammaticToolFailure` includes a raw
+parent ID and sequence index for a started Handler. `ProgrammaticPreflightFailure` has no inner
+ID or index because no Handler started. Declared failures expose their tag only. Handler errors
+retain the live Cause but no message; infrastructure and protocol messages have a 4096-byte UTF-8
+bound. Propagating direct errors are left to the ordinary Run failure boundary.
+
+Delivery is inline and at most once per in-memory attempt. Observer/reporter defects cannot
+change the Tool result, but a slow observer occupies a Tool permit and external interruption can
+stop delivery. Do not call the broker, emit Run events, run another Agent, or self-interrupt from
+the observer. These values are never serialized or persisted. Replacement Attempts may repeat
+IDs and observations, and replay-injected settled calls are not observed.
+
+Durable hosts pass the same closed value as `NodeDurableRuntimeOptions.toolFailureObserver` or
+`CloudflareDurableRuntimeOptions.toolFailureObserver`. The coordinator captures it when its Layer
+is built and uses that choice for each Attempt, independently of the worker caller's context.
+Omitting the platform option disables observation even if an observer surrounds Layer construction.
+See the [full taxonomy and exclusions](../spec/runtime#tool-failure-observation).
+
 ## Interruption is ownership
 
 A Run Scope owns its Model stream, Tool fibers, input queues, MCP clients, sandbox processes, and

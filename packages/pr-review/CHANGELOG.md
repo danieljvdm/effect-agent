@@ -1,5 +1,51 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.36
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.36
+
+## 0.1.0-beta.35
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.35
+
+## 0.1.0-beta.34
+
+### Patch Changes
+
+- [#202](https://github.com/danieljvdm/effect-agent/pull/202) [`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Align the Effect family with rc.111 to decode nested OpenAI error events, and preserve transformed Tool parameters under its encoded response contract.
+
+- Updated dependencies [[`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee)]:
+  - effect-agent@0.1.0-beta.34
+
+## 0.1.0-beta.33
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.33
+
+## 0.1.0-beta.32
+
+### Patch Changes
+
+- [#192](https://github.com/danieljvdm/effect-agent/pull/192) [`047ac9a`](https://github.com/danieljvdm/effect-agent/commit/047ac9a74faa63dbbb05dafbd39a45a801d09d9c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve distinct findings with matching labels and remove premature wrap-up prompts from single-pass reviews. Publish maximum-length findings without repeating their text in inline agent prompts.
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.32
+
+## 0.1.0-beta.31
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.31
+
 ## 0.1.0-beta.30
 
 ### Patch Changes

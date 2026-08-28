@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
     "deploy": "bunx wrangler deploy",
     "dev": "bunx wrangler dev"
   },

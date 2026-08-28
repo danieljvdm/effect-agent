@@ -299,6 +299,15 @@ non-negative microdollar estimate plus optional service-tier/pricing-version ide
 captures it in `DurableRuntimeConfig`, so every replacement Attempt applies the same authority;
 configured `costBudgetMicrousd` policies fail typed when no estimator exists.
 
+`NodeDurableRuntimeOptions.toolFailureObserver` and
+`CloudflareDurableRuntimeOptions.toolFailureObserver` install the same engine-owned closed
+observer through `toolFailureObserverLayer` (RUN-036). Omitting either option explicitly provides
+absence, masking any observer in the surrounding Layer-acquisition context. These are trusted
+in-process construction values, outside the serialized configuration Schemas. The coordinator
+captures the reference once and explicitly provides it to each interpreter Attempt; ambient
+worker context cannot substitute another observer. Delivery adds no durable mutation or replay
+and does not change Code Mode's deployment class.
+
 Durable Object storage is the only correctness-critical store for that Conversation. In-memory
 object state is a cache because objects may stop unexpectedly. Alarm work is idempotent because
 alarms execute at least once.
@@ -318,6 +327,10 @@ stores a versioned `dirty`/`processed` generation beside its single alarm slot:
   outcome, joined child, or child awaiting parent establishment), the observed generation is
   acknowledged and the alarm clears. Its resolving mutation re-establishes both generation and
   alarm before changing the wait;
+- ready FIFO followers behind a stable external wait do not make the lane actionable. Admission
+  repair, an accepted abort, and pending terminalization still require maintenance, including an
+  abort whose ownership claim was deferred. Neither elapsed time nor queued followers authorize
+  resolving or aborting an unknown outcome;
 - autonomous retry, indeterminate admission/establishment, lease recovery, and other locally
   actionable states leave the generation unprocessed and rearm with bounded backoff;
 - a forced alarm with `processed >= dirty` reads only the maintenance record, clears the alarm,
@@ -352,6 +365,76 @@ workerd/Miniflare; the hosted production service, its observability adapters, an
 remain explicitly unclaimed (see the certification suites), and hosted-service operation stays
 outside the claims until open-source preparation revisits it.
 
+### Native Conversation RPC tracing
+
+Native RPC trace propagation is disabled by default. A host enables both ends explicitly:
+
+```ts
+conversationNamespaceLayer(env, "TASK_ORCHESTRATORS", { rpcTracing: true });
+const ConversationBase = makeConversationObjectClass(
+  { ...runtimeOptions, namespaceBinding: "TASK_ORCHESTRATORS", rpcTracing: true },
+  observability,
+);
+```
+
+The namespace service retains the stable binding name, not a trace context. Each enabled
+`CloudflareConversationClient` call creates a `client` span named `binding/actualMethod`, such as
+`TASK_ORCHESTRATORS/submitEncoded` or `PERSONA_ADVISORS/observePage`. It covers the native wait and
+host-response Schema decoding. The span records `rpc.system.name = cloudflare`, the fully qualified
+`rpc.method`, `server.address = binding`, and `sentry.op = rpc`. Names and these attributes contain
+no Conversation IDs, messages, Tool arguments, or capability URLs.
+
+Inside that span, the client appends exactly one native argument carrying
+`{ _tag: "effect-cf/RpcTraceContext/v1", traceId, spanId, sampled }`. It copies the current client
+span, including an unsampled decision, rather than the enclosing application span. Calls with
+propagation disabled, including Effect's non-propagating no-op spans, retain their exact original
+argument count. They do not append `undefined`. The ordinary disabled namespace retains its prior
+client instrumentation.
+
+The Object factory passes `rpcTracing: { service: namespaceBinding }` to effect-cf `0.34.0` or a
+compatible release. The client uses effect-cf's `RpcTracing.withRpcTraceContext` and
+`withRpcClientSpan`: they validate span IDs, honor `Tracer.DisablePropagation`, and preserve the
+original failure while recording safe RPC failure status without its payload. effect-cf validates
+and strips the argument and exposes event metadata; application observability owns server roots.
+The library does not create durable invocation roots or exporter policy.
+
+The factory's public return type retains `DurableObject.RunSymbol`, including the runtime and
+event Layer service requirements. An application can wrap the complete receiver effect through
+that hook, then delegate to effect-cf:
+
+```ts
+import { Effect } from "effect";
+import { DurableObject, RpcTracing } from "effect-cf";
+
+type Services = Effect.Services<
+  Parameters<InstanceType<typeof ConversationBase>[typeof DurableObject.RunSymbol]>[0]
+>;
+
+export class ConversationObject extends ConversationBase {
+  override [DurableObject.RunSymbol]<A, E>(
+    effect: Effect.Effect<A, E, Services>,
+    options: DurableObject.RunOptions = {},
+  ): Promise<A> {
+    return super[DurableObject.RunSymbol](
+      options.rpc === undefined ? effect : RpcTracing.withRpcServerSpan(effect, options.rpc),
+      options,
+    );
+  }
+}
+```
+
+`options.event` distinguishes RPC, alarm, and other native events; `options.rpc` supplies transient
+RPC metadata before the event Layer starts. Its arguments remain private and must not be logged.
+No invocation service is required by the observability Layer. Applications can separately root
+alarm and other durable invocations using `options.event` without reusing a prior caller's parent.
+
+Trace context never enters a Submission, Receipt, canonical record, checkpoint, queued wake, alarm,
+or durable retry. A native progress reset creates a new client span for each retry and does not
+cache trace context in its request. Recovery and resumed work obtain fresh roots from the host's
+current event, not the original caller. Cross-Object port calls and wake hints keep their existing
+wire arguments. Scope ownership, cancellation, typed failures, and effect-cf's bounded flush
+lifecycle are unchanged.
+
 ### Dynamic Worker Code Mode executor
 
 The first isolated `CodeExecutor` adapter is a Cloudflare Dynamic Worker Layer in
@@ -385,7 +468,7 @@ Action Layer in `@effect-agent/platform-cloudflare` (`browserQuickActionCaptureL
 capture is one stateless `quickAction()` RPC on the Wrangler `browser` binding. The host resolves
 that binding explicitly and supplies it through `BrowserQuickActionBrowserBinding.layer`; both
 capture Layers visibly require the resulting Effect service (DEPLOY-010) and never read ambiently.
-The Layer accepts Cloudflare's pinned native `BrowserRun` and exposes the four supported actions
+The Layer accepts Cloudflare's pinned native `BrowserRun` and exposes the five supported actions
 as Effect methods using the native option types, so incompatible Quick Action options fail
 compilation. Native Promise rejection becomes a typed binding RPC error before the capture adapter
 maps it into the `PageCapture` error union.
@@ -398,6 +481,10 @@ that documented envelope fails typed instead of being reinterpreted as a REST pa
 returned link must satisfy the canonical bounded,
 credential-free HTTP(S) link Schema; malformed entries, unsupported schemes, embedded credentials,
 and over-limit collections fail typed instead of being discarded.
+The `scrape` action projects the portable selector list into Cloudflare's `elements` request and
+decodes the provider's grouped response through the portable scrape Schemas. Malformed groups,
+excess aggregate elements, excess attributes, non-finite geometry, and encoded responses beyond the
+caller budget fail typed; the adapter never returns a truncated scrape as success.
 HTTP 429 becomes a typed rate/quota failure; `Retry-After` is included only when conversion to
 milliseconds remains a safe integer. Foreign browser RPC and response-stream failures retain
 their original cause; provider envelope errors, rate-limit bodies, and non-success HTTP bodies
@@ -439,10 +526,10 @@ The separate private `examples/browser-run-worker-proof` leaf closes the binding
 gap without a model. Its fixed opt-in Effect workflow deploys one collision-resistant temporary
 Worker with a native `BROWSER` binding and compatibility date `2026-03-24`, invokes one bounded
 Markdown `WebCapture.make` handler against `https://example.com/`, validates the stable `Example
-Domain` fact, captures one bounded PNG through `PageScreenshot`, validates its eight-byte PNG
+Domain` fact, invokes `WebCapture.makeScrape` with two selectors and validates the grouped heading,
+captures one bounded PNG through `PageScreenshot`, validates its eight-byte PNG
 signature, discards the image bytes, and deletes the Worker through a Scope finalizer. The Worker
-leaves 11 seconds between its Markdown and screenshot Quick Actions to honor the Free plan request
-interval. The proof
+leaves 11 seconds between each Quick Action to honor the Free plan request interval. The proof
 response contains only bounded validation metadata. The workflow fails if its generated name
 already exists, never retries an unresolved invocation, and surfaces deletion failure. The ordinary
 test suite scripts the deployment operations and verifies finalization without Cloudflare
@@ -457,14 +544,114 @@ vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
 The scoped `InteractiveBrowser` adapter uses the explicitly supplied Browser Run `browser`
 binding and `@cloudflare/puppeteer` 1.1.0. It launches one browser pass, context, and page under
 Scope, with immediate reverse-order finalizers. `keep_alive` is only Cloudflare's inactivity
-setting; the caller's elapsed-time deadline is authoritative. Navigation, redirects, and every
-subrequest use the immutable exact-host policy. Capacity refusal and remote expiry remain typed;
+setting; the caller's elapsed-time deadline is authoritative. `network: { _tag: "ExactHosts",
+allowedHosts }` preserves URL checks for navigation and intercepted requests on the owned page.
+This is a page-request policy, not session-wide network containment. Capacity refusal and remote
+expiry remain typed;
 uncertain actions are never retried or replayed. This capability has no durable session, registry,
-reconnect, or model Tool.
+execution reconnect, or model Tool.
 
-The opt-in Worker proof uses compatibility date 2026-03-24 or later (and remote Browser Run mode
-where required), one allowed public HTTPS page, and bounded metadata/text only. It is not live
-evidence for ordinary checks and is never a required CI gate.
+`network: { _tag: "Unrestricted" }` opens the same scoped browser/context/page without URL/host
+allowlist enforcement. Agent navigation and URL observations accept credential-free HTTP and
+HTTPS through `InteractiveBrowserTargetUrl`; intercepted requests continue without a network
+policy check. There is no URL/host or private-network containment guarantee, including for
+redirects, page resources, and human navigation. The finite action, elapsed-time, and per-result
+byte limits, receipts, live view, handoff, handoff state, and close behavior remain unchanged.
+This explicit opt-out does not satisfy the stronger `PublicWeb` requirement or issue #207.
+
+`network: { _tag: "PublicWeb" }` fails with `InteractiveBrowserUnsupportedError`, `feature: "policy"`,
+before any binding operation. The adapter does not launch a browser, navigate a test URL, connect
+for execution, or issue a viewer capability to probe support. This refusal is deliberate. The
+pinned client has no session guardrails, and even Cloudflare's newer API describes only hostname
+patterns and named hostname lists for HTTP/S traffic. That does not establish a public-address
+check at connection time, credential rejection, or coverage of every traffic source. Upgrading
+the client alone therefore cannot enable this policy.
+
+The current boundary is:
+
+| Traffic or action                      | `ExactHosts` behavior                                                                                                                                                                              | `PublicWeb` requirement                                                                                        |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Adapter navigation                     | Check credential-free HTTPS and exact `URL.host` before `goto`; validate the returned URL.                                                                                                         | Permit unrelated public HTTPS sites without replacing the pass.                                                |
+| Redirects and page resources           | Check URLs delivered to the original page's request interceptor; abort denied requests and invalidate subsequent operations. Third-party authorities must be listed too.                           | Enforce destination safety before each request and connection, including every redirect.                       |
+| DNS and connection addresses           | No connection-time address classification or DNS rebinding protection. Explicit hosts can resolve to non-public addresses.                                                                         | Reject private, reserved, and internal destinations using the address actually connected to.                   |
+| Popups and new targets                 | No interceptor is installed on other targets. Owning one automation page does not prevent a page from creating others.                                                                             | Enforce before a target can send traffic, or prevent target creation.                                          |
+| Dedicated, shared, and service workers | Bypass service-worker handling for requests from the owned page; this does not stop workers from issuing their own traffic.                                                                        | Enforce worker traffic or disable it before activity.                                                          |
+| WebSockets and other channels          | No socket or non-HTTP traffic boundary is established by page request interception.                                                                                                                | Enforce the public-destination rules for secure sockets and disable other unsupported channels before traffic. |
+| Hosted viewer navigation               | Ordinary requests observed on the owned page use its interceptor, including during handoff. The viewer is a CDP capability and tab mode does not prevent bypass through other commands or targets. | Retain enforcement independently of viewer commands for the whole pass.                                        |
+
+Of the table's two columns, only `ExactHosts` describes a supported execution mode. It requires trusted
+pages and trusted operators. The adapter makes no claim that this mode confines hostile browser
+content or a viewer recipient. A host that requires the right-hand boundary must request
+`PublicWeb` and handle its typed refusal. No local IP blacklist, one-time DNS resolution, wildcard,
+page script patch, or after-the-fact target closure can establish the missing boundary.
+
+This assessment uses the [Cloudflare acquisition API](https://developers.cloudflare.com/api/resources/browser_rendering/subresources/devtools/subresources/browser/methods/create/)
+and the [provider's guardrail contract](https://github.com/cloudflare/puppeteer/blob/253f9082f4f5ad93d11a1b56d85ea4757a799d99/packages/puppeteer-core/src/cloudflare/utils.ts),
+checked on 2026-08-27. The latter latches hostname policy for the session lifetime but does not
+specify the stronger public-address boundary. A supported implementation needs a provider
+contract and verification of every row above, including human navigation, before this refusal
+can be removed. The [Live View documentation](https://developers.cloudflare.com/browser-run/features/live-view/)
+describes the viewer's CDP connection and [Human in the Loop](https://developers.cloudflare.com/browser-run/features/human-in-the-loop/)
+describes handoff on the same target.
+
+`fill` replaces the value of input, textarea, and select controls. It focuses the element,
+invokes a callable `value` setter from the element's prototype chain, then dispatches bubbling
+`input` and `change` events. Bypassing instance setters lets controlled React fields detect the
+change through `onChange` and update component state. A missing selector match or an element
+without a callable prototype setter fails with `InteractiveBrowserActionError` for `fill`.
+
+Arbitrary CDP execution is intentionally absent. The pinned browser client cannot enforce an immutable
+session egress boundary, and Cloudflare's newer hostname-only guardrail cannot express the exact
+HTTPS-origin policy required by the portable contract. Request interception is not sufficient
+against arbitrary CDP domains. This deployment therefore makes no constrained-CDP or browser Code
+Mode claim.
+
+The generic handle's `screenshot` and `scroll` use the existing Puppeteer page. Screenshots request
+PNG, check the returned signature and byte count, and reuse `PageScreenshotResult` without invoking
+the stateless capture port. Puppeteer buffers the image before the adapter can inspect it; the
+byte limit bounds returned data, not provider allocation or transport buffering. Scrolling applies
+the Schema-defined viewport deltas, then checks the observed page URL. Both operations use the
+same single-operation gate, action count, and absolute deadline as the other page operations.
+
+`browserRunInteractiveHostLayer()` provides `BrowserRunInteractiveHost` from the same explicit
+`BrowserRunInteractiveBinding`. Its scoped `open(policy)` returns a private host session with
+`handle`, redacted `sessionId`, `getLiveView`, `handoff`, `getHandoffState`, and `close`.
+`browserRunInteractiveLayer()` projects only the generic handle. Hosts that need operator controls
+open through the host service and pass only `session.handle` to their browser workflow.
+
+Live View and handoff use Cloudflare's CDP extensions on the owned page. Live View supports only
+`mode: "tab"`, the UI Cloudflare requires for handoff. Full-browser and DevTools UI modes are
+outside this adapter's contract; tab mode itself is not an authorization boundary.
+Its request supplies `expiresInMs` between 60,000 and 3,600,000 milliseconds; handoff supplies at
+most 1,024 characters of `instructions` and a finite `timeout`.
+Both durations must fit within the pass's remaining time. The result URLs and handoff identifiers
+are redacted values. The pinned Puppeteer package does not type Cloudflare's extension commands,
+so a narrow SDK boundary returns unknown values for Effect Schema decoding. CDP sessions belong
+to Scope and detach during cleanup, including when acquisition completes after interruption.
+The host may initiate handoff and query its state, but the framework does not arbitrate controller
+ownership, await a human decision, or persist action receipts. Closing the session ends the pass;
+there is no separately documented provider command to cancel a handoff.
+URL expiry limits the initial viewer connection, not an already-open viewer. Human interaction
+does not pass through the framework's action counter. Hosts must authorize trusted operators and
+close the session or its Scope to terminate viewer access; checking an automation deadline does
+not revoke an active Live View connection.
+
+`handle.close` and host-session `close` are Effects that invalidate the handle and share one reverse-order
+teardown with Scope cleanup. Explicit close reports typed failure; Scope cleanup logs fixed
+warnings without masking the original `Exit`. `BrowserRunInteractiveHost.closeSession(sessionId)`
+is an explicit cleanup operation for a host-retained redacted identity. It makes one bounded
+`puppeteer.connect(binding, id)` attempt only to close the remote browser, never to expose or
+resume a handle. A still-owned, expired, or unavailable provider session can make this operation
+fail typed. It performs no retry and is not a forced-close guarantee. The host remains responsible
+for authorizing cleanup, retaining private identity where needed, and reconciling failed cleanup
+after process loss. No `effect-cf` change is required.
+
+The opt-in Worker proof uses compatibility date 2026-03-24 or later and one allowed public HTTPS
+page. It navigates, reads, scrolls, captures PNG bytes from the same session, creates a tab Live View,
+starts a bounded handoff, checks its active identity, and explicitly closes the session. It checks
+that the old handle rejects further actions and returns only bounded validation metadata. It
+discards all screenshot bytes and private provider values. Running its scripted tests is not live
+Cloudflare evidence, and the hosted proof is never a required CI gate.
 
 ### Browser Run PNG screenshots
 
@@ -506,10 +693,13 @@ vp run --no-cache -F @effect-agent/example-providers test test/browser-crawl-liv
 Current platform references:
 
 - [Browser Run Quick Actions](https://developers.cloudflare.com/browser-run/quick-actions/)
+- [Browser Run selector scrape](https://developers.cloudflare.com/browser-run/quick-actions/scrape-endpoint/)
 - [Browser Run screenshot Quick Action](https://developers.cloudflare.com/browser-run/quick-actions/screenshot-endpoint/)
 - [Browser Run structured extraction and Workers AI](https://developers.cloudflare.com/browser-run/quick-actions/json-endpoint/)
 - [Browser Run crawl endpoint](https://developers.cloudflare.com/browser-run/quick-actions/crawl-endpoint/)
 - [Browser Run limits](https://developers.cloudflare.com/browser-run/limits/)
+- [Browser Run Puppeteer](https://developers.cloudflare.com/browser-run/puppeteer/)
+- [Browser Run Live View and handoff](https://developers.cloudflare.com/browser-run/features/human-in-the-loop/)
 - [SQLite-backed Durable Object storage](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)
 - [Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)
 - [Durable Object alarms](https://developers.cloudflare.com/durable-objects/api/alarms/)
@@ -561,10 +751,15 @@ Current platform references:
 - **DEPLOY-014**: The Browser Run Quick Action page-capture adapter visibly requires the
   host-provided service for an explicitly resolved browser binding, applies the fixed
   browser-request allowlist, incrementally enforces the response byte budget with scoped reader
-  cleanup, distinguishes response envelopes by trusted metadata, rejects malformed link
-  payloads, keeps platform refusals and safe backoff hints typed, denies Workers AI without its
-  explicit host authorization and accounting service, and claims deployment class `E` only.
+  cleanup, distinguishes response envelopes by trusted metadata, rejects malformed link and
+  selector-scrape payloads, keeps platform refusals and safe backoff hints typed, denies Workers AI
+  without its explicit host authorization and accounting service, and claims deployment class `E`
+  only.
 - **DEPLOY-015**: The Browser Run REST crawl adapter uses one fixed API origin and redacted token,
   creates one private job, applies an absolute deadline across polling and lazy bounded pagination,
   performs no retries or reattachment, and cancels a known-running job exactly once when its Scope
   exits; cancellation failure emits a fixed warning without changing the primary `Exit`.
+- **DEPLOY-016**: Native Conversation RPC tracing requires explicit client and receiver opt-in,
+  spans the native wait and response decoding with stable binding/method client spans, preserves
+  disabled argument counts, and transports only transient current-span identity. It never resumes
+  an old caller's trace from durable state or takes ownership of application roots and exporters.

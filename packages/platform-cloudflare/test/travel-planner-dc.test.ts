@@ -245,6 +245,7 @@ describe("DC Travel Planner — baseline settlement", () => {
     expect(canonicalTags(records)).toEqual([
       "ConversationCreated",
       "UserInputRecorded",
+      "RunStarted",
       "ModelResponseRecorded",
       "ToolCallSettled",
       "ToolCallSettled",

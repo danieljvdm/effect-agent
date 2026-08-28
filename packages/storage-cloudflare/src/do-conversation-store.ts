@@ -120,7 +120,7 @@ const schemaStoreError = (operation: string, error: { readonly message: string }
     message: error.message,
   });
 
-const makeOffset = Effect.fn("DoConversationStore.makeOffset")(function* (
+const makeOffset = Effect.fn(function* (
   conversationId: ConversationMaterialization["conversationId"],
   sequence: number,
 ): Effect.fn.Return<ObservationOffset, ConversationStoreError> {
@@ -134,7 +134,7 @@ const makeOffset = Effect.fn("DoConversationStore.makeOffset")(function* (
   );
 });
 
-const parseOffset = Effect.fn("DoConversationStore.parseOffset")(function* (
+const parseOffset = Effect.fn(function* (
   conversationId: ConversationMaterialization["conversationId"],
   offset: ObservationOffset | undefined,
 ): Effect.fn.Return<CanonicalSequence, ConversationStoreError> {
@@ -172,7 +172,7 @@ const mapFence = (
     attemptedEpoch: error.producerEpoch,
   });
 
-const encodeCanonicalRecord = Effect.fn("DoConversationStore.encodeCanonicalRecord")(function* (
+const encodeCanonicalRecord = Effect.fn(function* (
   record: CanonicalRecord,
 ): Effect.fn.Return<string, ConversationStoreError> {
   return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalRecord))(record).pipe(
@@ -180,7 +180,7 @@ const encodeCanonicalRecord = Effect.fn("DoConversationStore.encodeCanonicalReco
   );
 });
 
-const encodeCanonicalBatch = Effect.fn("DoConversationStore.encodeCanonicalBatch")(function* (
+const encodeCanonicalBatch = Effect.fn(function* (
   batch: CanonicalBatch,
 ): Effect.fn.Return<string, ConversationStoreError> {
   return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalBatch))(batch).pipe(
@@ -188,7 +188,7 @@ const encodeCanonicalBatch = Effect.fn("DoConversationStore.encodeCanonicalBatch
   );
 });
 
-const encodeCheckpoint = Effect.fn("DoConversationStore.encodeCheckpoint")(function* (
+const encodeCheckpoint = Effect.fn(function* (
   checkpoint: ConversationCheckpoint,
 ): Effect.fn.Return<string, ConversationStoreError> {
   return yield* Schema.encodeEffect(Schema.fromJsonString(ConversationCheckpoint))(checkpoint).pipe(
@@ -196,7 +196,7 @@ const encodeCheckpoint = Effect.fn("DoConversationStore.encodeCheckpoint")(funct
   );
 });
 
-const decodeEnvelope = Effect.fn("DoConversationStore.decodeEnvelope")(function* (row: {
+const decodeEnvelope = Effect.fn(function* (row: {
   readonly batch_id: string;
   readonly conversation_id: string;
   readonly record_json: string;
@@ -230,7 +230,7 @@ const decodeEnvelope = Effect.fn("DoConversationStore.decodeEnvelope")(function*
   });
 });
 
-const decodeCheckpoint = Effect.fn("DoConversationStore.decodeCheckpoint")(function* (
+const decodeCheckpoint = Effect.fn(function* (
   checkpointJson: string,
 ): Effect.fn.Return<ConversationCheckpoint, ConversationStoreError> {
   return yield* Schema.decodeEffect(Schema.fromJsonString(ConversationCheckpoint))(
@@ -489,7 +489,7 @@ const makeServices = Effect.fn("DoConversationStore.makeServices")(function* () 
 
   const provideCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
     Effect.provideService(effect, Crypto.Crypto, crypto);
-  const hitFailpoint = Effect.fn("DoConversationStore.hitFailpoint")(
+  const hitFailpoint = Effect.fn(
     (location: DoStorageFailpointLocation): Effect.Effect<void, ConversationStoreError> =>
       failpoint
         .hit(location)

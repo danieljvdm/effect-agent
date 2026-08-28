@@ -35,6 +35,9 @@ export class ConversationStorageObject extends DurableObject {
   }
 }
 
+/** Schedule Store test shell. Contract cases run Layers directly through `runInDurableObject`. */
+export class ScheduleStorageObject extends DurableObject {}
+
 export default {
   fetch(): Response {
     return new Response("effect-agent storage-cloudflare test worker");

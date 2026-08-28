@@ -59,10 +59,9 @@ import {
   type RunUsageDelta,
 } from "../src/index.ts";
 import { boundedJsonSnapshot } from "../src/provider-result-staging-internal.ts";
+import { emitThenAfter, isolateToolDerivative } from "../src/tool-derivative-internal.ts";
 import {
   annotateToolSpanTerminalOutcome,
-  emitThenAfter,
-  isolateToolTerminalTelemetry,
   makeIsolatedToolTracer,
   restoreToolSpanFailureCause,
   stripToolSpanFailures,
@@ -755,6 +754,10 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         throw new Error("Expected the successful Tool span to end");
       }
       expect(Exit.isSuccess(succeededSpan.status.exit)).toBe(true);
+      const spanNames = spans.map((span) => span.name);
+      expect(spanNames).not.toContain("AgentRuntime.decodeToolCallId");
+      expect(spanNames).not.toContain("AgentRuntime.decodeProviderToolCallId");
+      expect(spanNames).not.toContain("AgentRuntime.decodeProviderResponsePartId");
 
       const terminalLogs = logs.filter((entry) =>
         ["agent tool execution completed", "agent tool execution failed"].includes(
@@ -1460,7 +1463,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
       const blocked = yield* Deferred.make<void>();
-      const fiber = yield* isolateToolTerminalTelemetry(
+      const fiber = yield* isolateToolDerivative(
         Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(blocked))),
       ).pipe(Effect.forkChild);
 

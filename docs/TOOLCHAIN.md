@@ -25,14 +25,15 @@ The root `package.json` is the only version source for shared dependencies.
 | Bun                               |             `1.3.14` | Package manager, workspace resolver, and lockfile                                 |
 | Vite+                             |              `0.2.6` | Formatting, linting, tests, library builds, staged checks, and task orchestration |
 | Vitest                            |             `4.1.10` | Vite+ test runtime, pinned through an override so integrations share one instance |
-| Effect                            |     `4.0.0-beta.107` | Runtime, Schema, services, and Effect AI                                          |
-| `@effect/platform-node`           |     `4.0.0-beta.107` | Node services used by repository scripts                                          |
-| `@effect/platform-browser`        |     `4.0.0-beta.107` | `BrowserCrypto` for the workerd runtime (Cloudflare packages)                     |
-| `@effect/sql-sqlite-do`           |     `4.0.0-beta.107` | Durable Object SQLite `SqlClient` and Migrator (Cloudflare packages)              |
-| `@effect/vitest`                  |     `4.0.0-beta.107` | Effect-aware test execution and scoped Layer composition                          |
-| `effect-cf`                       |             `0.27.0` | Effect-native Cloudflare runtime boundary used by `platform-cloudflare`           |
+| Effect                            |       `4.0.0-rc.111` | Runtime, Schema, services, and Effect AI                                          |
+| `@effect/platform-node`           |       `4.0.0-rc.111` | Node services used by repository scripts                                          |
+| `@effect/platform-browser`        |       `4.0.0-rc.111` | `BrowserCrypto` for the workerd runtime (Cloudflare packages)                     |
+| `@effect/sql-d1`                  |       `4.0.0-rc.111` | Required D1 peer of the Cloudflare runtime boundary                               |
+| `@effect/sql-sqlite-do`           |       `4.0.0-rc.111` | Durable Object SQLite `SqlClient` and Migrator (Cloudflare packages)              |
+| `@effect/vitest`                  |       `4.0.0-rc.111` | Effect-aware test execution and scoped Layer composition                          |
+| `effect-cf`                       |             `0.37.0` | Effect-native Cloudflare runtime boundary used by `platform-cloudflare`           |
 | `@cloudflare/vitest-pool-workers` |             `0.21.3` | In-workerd Vitest pool for the Cloudflare package suites (vendors wrangler)       |
-| `@cloudflare/workers-types`       |       `5.20260813.1` | Cloudflare runtime types (types-only devDependency)                               |
+| `@cloudflare/workers-types`       |       `5.20260825.1` | Cloudflare runtime types (types-only devDependency)                               |
 | Miniflare                         | `5.20260811.1-alpha` | Programmatic workerd runtimes for Code Mode and restart-persistence test lanes    |
 | esbuild                           |             `0.28.1` | Bundles the Miniflare-lane worker entry (Miniflare no longer bundles)             |
 | Node.js                           |   `22.18+ or 24.11+` | Runtime range compatible with Vite+                                               |
@@ -47,9 +48,12 @@ Workspace packages refer to shared versions with `catalog:`. They must not intro
 Effect version. The Bun lockfile is committed and CI installs it with `--frozen-lockfile`.
 
 The root catalog selects one exact `effect-cf` version for reproducible workspace installs.
-`@effect-agent/platform-cloudflare` publishes `effect-cf` as the compatible `^0.27.0` host peer
+`@effect-agent/platform-cloudflare` publishes `effect-cf` as the compatible `^0.37.0` host peer
 and uses the catalog entry only as a development dependency. Consumers therefore provide one
 shared runtime instance without needing a root override to replace a nested exact dependency.
+Version `0.37.0` supplies native RPC trace validation and propagation, shared span helpers, and
+typed invocation hooks. The platform's development dependencies align its required D1 peer with
+the Effect catalog; the D1 driver does not become an Effect Agent runtime dependency.
 
 Root overrides align the contributor skills CLI with the repository's Effect and
 `@effect/platform-node` versions. Framework packages, repository scripts, and contributor tooling
@@ -58,7 +62,8 @@ therefore install one Effect runtime. The Vitest override matches the version bu
 Vitest remains supplied by Vite+ rather than becoming a separate workspace dependency, with one
 probed exception: `vp test` cannot drive the Cloudflare Workers pool runner, so
 `storage-cloudflare` and `platform-cloudflare` declare the catalog-pinned `vitest` directly and
-run `vitest run` as their `test` scripts.
+define `vitest run` test tasks in their Vite configs. The Code Mode Cloudflare example uses the
+same task configuration for its programmatic Miniflare tests.
 
 ## Current workspace
 
@@ -118,25 +123,40 @@ them, and they add no deployment or durability claim.
 
 Run commands from the repository root:
 
-| Command                                       | Meaning                                                                        |
-| --------------------------------------------- | ------------------------------------------------------------------------------ |
-| `bun install`                                 | Install dependencies and run repository setup                                  |
-| `bun run check`                               | Run Vite+ format/lint/type checks, package type checks, and script type checks |
-| `bun run test`                                | Run package and example test tasks in dependency order                         |
-| `bun run build`                               | Build packages, runnable examples, and the VitePress documentation site        |
-| `bun run docs:dev`                            | Run the local VitePress documentation server                                   |
-| `bun run docs:build`                          | Build and validate the Markdown documentation site                             |
-| `bun run docs:preview`                        | Preview the built documentation site                                           |
-| `bun --filter @effect-agent/example-demo dev` | Run the chat-first demo and Phase 2 simulator on port 4173                     |
-| `bun run ready`                               | Run check, test, and build; this is the local and CI handoff gate              |
-| `bun run format:write`                        | Apply repository formatting                                                    |
+| Command                                    | Meaning                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------ |
+| `vp install`                               | Install dependencies and run repository setup                                  |
+| `vp run check`                             | Run Vite+ format/lint/type checks, package type checks, and script type checks |
+| `vp run test`                              | Run all package and example test tasks, with at most four tasks at once        |
+| `vp run build`                             | Build packages, runnable examples, and the VitePress documentation site        |
+| `vp run docs:dev`                          | Run the local VitePress documentation server                                   |
+| `vp run docs:build`                        | Build and validate the Markdown documentation site                             |
+| `vp run docs:preview`                      | Preview the built documentation site                                           |
+| `vp run -F @effect-agent/example-demo dev` | Run the chat-first demo and Phase 2 simulator on port 4173                     |
+| `vp run ready`                             | Run check, test, and build; this is the local and CI handoff gate              |
+| `vp fmt`                                   | Apply repository formatting                                                    |
 
-Vite+ owns shared configuration in `vite.config.ts`. Package-specific scripts remain in each
-package manifest so Vite+ can order and cache them from the actual workspace dependency graph.
+Vite+ owns shared configuration in `vite.config.ts`. Package commands remain in their manifests
+or Vite task configs so Vite+ can discover and cache them from the workspace dependency graph.
 The root declares the catalog's Vite+ core alias as `vite` as well as `vite-plus`; Bun needs that
 direct peer provider for the Vite+ toolchain. VitePress intentionally resolves the official Vite
 implementation as its nested dependency; the repository therefore does not use a global `vite`
 override. The documentation build is part of the root `build` and `ready` gates.
+
+Tests import workspace source directly and do not consume other test tasks' outputs. The test
+command therefore removes package dependency ordering while retaining a four-task concurrency
+limit. Build tasks still run in dependency order. Every existing suite, including process-kill,
+soak, and adapter conformance tests, remains in the ordinary test command.
+
+Vite Task caches successful suites and fingerprints the files they read, including imported
+workspace source and installed dependencies. Vitest's on-disk result cache is disabled in each test
+config: its mutable `results.json` otherwise prevents tasks from being cached or reused on a fresh
+runner. CI transfers only `node_modules/.vite/task-cache`, not Vitest result directories.
+The direct Vitest tasks exclude generated Vite files and `node_modules` directory listings from
+their inputs. Installed dependency files remain tracked, and the lockfile additionally invalidates
+results when dependencies are added or removed. These tasks restore no generated files.
+Use `vp run -v test` to see each cache decision, `vp run --last-details` to inspect the last run,
+and `vp run --no-cache test` to execute every suite again.
 
 ## Releasing to npm
 
@@ -327,11 +347,14 @@ automation are deferred until open-source preparation.
 
 ## CI and hooks
 
-The CI workflow runs on pull requests, not again after their merge to `main`. Ordinary PRs install
-the exact Bun version with a frozen-lockfile install, then run the `ready` gate as three parallel
-jobs for static checks (`bun run check`), tests (`bun run test`), and builds (`bun run build`) with
-a fan-in job that keeps the required branch-protection check named `ready`. The exact internal
-Changesets release PR is the only exception: CI and PR Review path-filter the exact set of files
+The CI workflow runs the full gate on pull requests. Ordinary PRs install
+the exact Bun version with a frozen-lockfile install, then run static checks, tests, and builds
+in parallel, with a fan-in job that keeps the required branch-protection check named `ready`.
+The test matrix gives `platform-node`, `testing`, `platform-cloudflare`, and `storage-cloudflare`
+separate runners. Its remaining-workspace job includes every other package, including new
+packages. Each runner executes one package test task at a time, because every task already
+starts its own Vitest worker pool. File isolation, test counts, and timeouts remain unchanged.
+The exact internal Changesets release PR is the only exception: CI and PR Review path-filter the exact set of files
 Changesets may generate. GitHub suppresses `pull_request` workflows caused by `GITHUB_TOKEN`, so
 the trusted Release run validates the PR lineage, regenerates the complete tree from its checked-out
 `main` commit, and creates the required `ready` check on the verified head through the Checks API.
@@ -344,11 +367,15 @@ strict up-to-date branch rule before reporting. Both cases are fail-closed.
 
 Each ordinary-PR job restores and saves the Vite Task cache
 (`node_modules/.vite/task-cache`), so later synchronize events on the same PR can replay
-per-package gates whose fingerprinted inputs did not change. GitHub scopes those caches to the
-PR's merge ref; removing duplicate `main` CI intentionally trades the previous cross-PR
-default-branch baseline for lower post-merge compute, so a PR's first run may be cold. The CI
-workflow does not initialize any source submodule. On `main`, the Release workflow is the sole
-push-triggered package automation and owns version-PR maintenance and publishing.
+per-package gates whose fingerprinted inputs did not change. Test matrix jobs have separate
+cache keys so their snapshots cannot shadow each other. They also save successful task results
+when another task fails; Vite Task never caches the failed task. GitHub scopes those caches to the
+PR's merge ref. Main pushes run only the test matrix to publish shared baselines for new PRs;
+static checks, builds, and the `ready` fan-in remain PR-only. Main test runs finish independently
+so a newer push cannot repeatedly cancel cache publication. No test is skipped based on a changed-path
+list: Vite Task validates each restored task's inputs before replay. The CI workflow does not
+initialize any source submodule. The separate Release workflow continues to own version-PR
+maintenance and publishing.
 
 The Vite+ pre-commit hook runs `vp check --fix` on staged JavaScript and
 TypeScript. CI remains authoritative for the full `check` gate, including

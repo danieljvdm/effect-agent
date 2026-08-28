@@ -1,4 +1,5 @@
 import {
+  AbortCommand,
   ApprovalDecisionCommand,
   ResolutionNeverHappened,
   UnknownResolutionCommand,
@@ -12,6 +13,7 @@ import {
   BOOK_TOOL_CALL_ID,
   approvalDefinition,
   armRuntimeEviction,
+  armStorageEviction,
   armedEvictionsRemaining,
   armedRuntimeFailures,
   bookDefinition,
@@ -19,6 +21,8 @@ import {
   armMaintenancePause,
   awaitMaintenancePause,
   plannerDefinition,
+  lostBookReplies,
+  supplierCountsFor,
   releaseMaintenancePause,
   submitOptions,
 } from "./fixtures.ts";
@@ -30,6 +34,7 @@ import {
   laneRows,
   readCanonical,
   runClient,
+  runClientExit,
   scheduledAlarm,
   stubFor,
 } from "./harness.ts";
@@ -48,6 +53,7 @@ const lane = (label: string): string => `cf-alarm-${label}-${laneCounter++}`;
 const submitTo = (
   definition: typeof plannerDefinition | typeof approvalDefinition | typeof bookDefinition,
   conversation: string,
+  key = `${conversation}-key`,
 ) =>
   runClient(
     Effect.gen(function* () {
@@ -55,7 +61,7 @@ const submitTo = (
       return yield* client.submit(
         { definition },
         { question: "alarm semantics", ref: conversation },
-        submitOptions(conversation, `${conversation}-key`),
+        submitOptions(conversation, key),
       );
     }),
   );
@@ -89,6 +95,7 @@ describe("DC alarm semantics", () => {
     const conversation = lane("issue-93-quiescent-approval");
     const receipt = await submitTo(approvalDefinition, conversation);
     await drainAlarmsUntil(conversation, anyInState(conversation, "suspended"));
+    await submitTo(plannerDefinition, conversation, `${conversation}-follower`);
     await drainAlarmsUntil(conversation, async () => (await scheduledAlarm(conversation)) === null);
 
     const suspendedFingerprint = await canonicalFingerprint(conversation);
@@ -264,6 +271,7 @@ describe("DC alarm semantics", () => {
     armRuntimeEviction(conversation, "tools:after-prepared-append");
     const receipt = await submitTo(bookDefinition, conversation);
     await drainAlarmsUntil(conversation, anyInState(conversation, "unknown"));
+    await submitTo(plannerDefinition, conversation, `${conversation}-follower`);
     await drainAlarmsUntil(conversation, async () => (await scheduledAlarm(conversation)) === null);
     const blockedFingerprint = await canonicalFingerprint(conversation);
     await runDurableObjectAlarm(stubFor(conversation)).catch(() => undefined);
@@ -293,6 +301,75 @@ describe("DC alarm semantics", () => {
     await drainAlarmsUntil(conversation, allSettled(conversation));
     await assertConvergence(conversation);
   }, 30_000);
+
+  it.each([
+    undefined,
+    "abort:after-intent",
+    "terminalize:after-reserve",
+    "terminalize:after-canonical-append",
+  ] as const)(
+    "authorized abort releases an unknown head after lost external reply (eviction=%s)",
+    async (eviction) => {
+      const conversation = lane(`unknown-abort-${eviction ?? "none"}`);
+      lostBookReplies.add(conversation);
+      // Real eviction after recovery has persisted uncertainty. No fake clock races automatic
+      // alarms: both the reply loss and eviction are armed before admission.
+      armStorageEviction(conversation, "ledger:mark-unknown:after");
+      const receipt = await submitTo(bookDefinition, conversation);
+      await drainAlarmsUntil(conversation, anyInState(conversation, "unknown"));
+      const follower = await submitTo(plannerDefinition, conversation, `${conversation}-follower`);
+      expect(supplierCountsFor(conversation)).toEqual({ book: 1 });
+      const unknownBefore = (await readCanonical(conversation)).filter(
+        ({ record }) => record.payload._tag === "ToolCallUnknown",
+      );
+      expect(unknownBefore).toHaveLength(1);
+      if (eviction !== undefined) armRuntimeEviction(conversation, eviction);
+      const command = AbortCommand.make({
+        submissionId: receipt.submissionId,
+        author: "authorized-operator",
+        reason: "stop this submission; the external outcome is still uncertain",
+      });
+      const accepted = await runClientExit(
+        Effect.gen(function* () {
+          const client = yield* CloudflareConversationClient;
+          return yield* client.abort(decodeConversationId(conversation), command);
+        }),
+      );
+      expect(accepted.ok).toBe(eviction !== "abort:after-intent");
+      await drainAlarmsUntil(conversation, allSettled(conversation));
+      await assertConvergence(conversation, {
+        supplier: { ref: conversation, counts: { book: 1 } },
+      });
+      expect(armedEvictionsRemaining(conversation)).toBe(0);
+      const records = await readCanonical(conversation);
+      expect(records.filter(({ record }) => record.payload._tag === "ToolCallUnknown")).toEqual(
+        unknownBefore,
+      );
+      expect(records.filter(({ record }) => record.payload._tag === "ToolCallResolved")).toEqual(
+        [],
+      );
+      expect(records.filter(({ record }) => record.payload._tag === "ToolCallSettled")).toEqual([]);
+      expect(
+        records
+          .filter(({ record }) => record.payload._tag === "AbortRequested")
+          .map(({ record }) => record.payload),
+      ).toEqual([
+        expect.objectContaining({
+          author: command.author,
+          reason: command.reason,
+          submissionId: receipt.submissionId,
+        }),
+      ]);
+      const outcomes = await runClient(
+        Effect.gen(function* () {
+          const client = yield* CloudflareConversationClient;
+          return [yield* client.awaitSettlement(receipt), yield* client.awaitSettlement(follower)];
+        }),
+      );
+      expect(outcomes.map(({ outcome }) => outcome)).toEqual(["aborted", "completed"]);
+    },
+    30_000,
+  );
 
   it("a typed failure inside the pass rejects the delivery and redelivery converges the lane", async () => {
     const conversation = lane("throw-retry");

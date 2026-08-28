@@ -20,6 +20,7 @@ import {
   PageContentCaptured,
   PageLinksCaptured,
   PageMarkdownCaptured,
+  PageScrapeCaptured,
   PageStructuredCaptured,
   SandboxImplementation,
   type PageCaptureAction,
@@ -65,6 +66,9 @@ export interface BrowserQuickActionClient {
   readonly links: (
     options: BrowserRunLinksOptions,
   ) => Effect.Effect<Response, BrowserQuickActionRpcError>;
+  readonly scrape: (
+    options: BrowserRunScrapeOptions,
+  ) => Effect.Effect<Response, BrowserQuickActionRpcError>;
   readonly json: (
     options: BrowserRunJsonOptions,
   ) => Effect.Effect<Response, BrowserQuickActionRpcError>;
@@ -74,7 +78,7 @@ export interface BrowserQuickActionClient {
 export class BrowserQuickActionRpcError extends Schema.TaggedError<BrowserQuickActionRpcError>()(
   "BrowserQuickActionRpcError",
   {
-    action: Schema.Literals(["screenshot", "content", "markdown", "links", "json"]),
+    action: Schema.Literals(["screenshot", "content", "markdown", "links", "scrape", "json"]),
     cause: Schema.Defect(),
   },
 ) {}
@@ -94,7 +98,7 @@ export class BrowserQuickActionBrowserBinding extends Context.Service<
   ): Layer.Layer<BrowserQuickActionBrowserBinding> {
     const browser = options.browser;
     const invoke = Effect.fn("BrowserQuickActionBrowserBinding.invoke")(function* (
-      action: "screenshot" | "content" | "markdown" | "links" | "json",
+      action: "screenshot" | "content" | "markdown" | "links" | "scrape" | "json",
       evaluate: () => Promise<Response>,
     ): Effect.fn.Return<Response, BrowserQuickActionRpcError> {
       return yield* Effect.tryPromise({
@@ -108,6 +112,7 @@ export class BrowserQuickActionBrowserBinding extends Context.Service<
       content: (request) => invoke("content", () => browser.quickAction("content", request)),
       markdown: (request) => invoke("markdown", () => browser.quickAction("markdown", request)),
       links: (request) => invoke("links", () => browser.quickAction("links", request)),
+      scrape: (request) => invoke("scrape", () => browser.quickAction("scrape", request)),
       json: (request) => invoke("json", () => browser.quickAction("json", request)),
     });
   }
@@ -219,6 +224,12 @@ const executeQuickAction = (
         ...(request.action.visibleLinksOnly === undefined
           ? {}
           : { visibleLinksOnly: request.action.visibleLinksOnly }),
+      });
+    }
+    case "CapturePageScrape": {
+      return browser.scrape({
+        ...options,
+        elements: request.action.selectors.map((selector) => ({ selector })),
       });
     }
     case "CapturePageStructured": {
@@ -386,6 +397,18 @@ const parseOutput = (
       });
       if (Option.isNone(decoded)) {
         return protocolError("The links Quick Action did not return a bounded array of valid URLs");
+      }
+      return decoded.value;
+    }
+    case "CapturePageScrape": {
+      const decoded = Schema.decodeUnknownOption(PageScrapeCaptured)({
+        _tag: "PageScrapeCaptured",
+        groups: envelope.value.result,
+      });
+      if (Option.isNone(decoded)) {
+        return protocolError(
+          "The scrape Quick Action did not return bounded grouped element records",
+        );
       }
       return decoded.value;
     }

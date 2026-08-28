@@ -26,18 +26,21 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { DateTime, Effect, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
-import type { ConversationStorageObject } from "./worker.ts";
+import type { ConversationStorageObject, ScheduleStorageObject } from "./worker.ts";
 
 declare global {
   namespace Cloudflare {
     interface Env {
       CONVERSATIONS: DurableObjectNamespace<ConversationStorageObject>;
+      SCHEDULES: DurableObjectNamespace<ScheduleStorageObject>;
     }
   }
 }
 
 export const conversationStub = (name: string) =>
   env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(name));
+
+export const scheduleStub = (name: string) => env.SCHEDULES.get(env.SCHEDULES.idFromName(name));
 
 /**
  * Run one Effect program against a named Conversation Durable Object's real SQLite storage
@@ -53,6 +56,15 @@ export const withConversationStorage = <A, E>(
 ): Promise<A> =>
   runInDurableObject(conversationStub(name), (_instance, state) =>
     Effect.runPromise(build(state.storage, state).pipe(Effect.provide(TestClock.layer()))),
+  );
+
+/** Run one Effect against a fresh Schedule Owner object's real SQLite storage. */
+export const withScheduleStorage = <A, E>(
+  name: string,
+  build: (storage: DurableObjectStorage) => Effect.Effect<A, E>,
+): Promise<A> =>
+  runInDurableObject(scheduleStub(name), (_instance, state) =>
+    Effect.runPromise(build(state.storage)),
   );
 
 export const id = <A>(schema: Schema.Codec<A, string>, value: string): A =>

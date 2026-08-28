@@ -92,6 +92,7 @@ export default defineConfig({
           { text: "Capabilities", link: "/spec/capabilities" },
           { text: "Subagents", link: "/spec/subagents" },
           { text: "Durability", link: "/spec/durability" },
+          { text: "Scheduling", link: "/spec/scheduling" },
           { text: "Persistence", link: "/spec/persistence" },
           { text: "Deployment", link: "/spec/deployment" },
           { text: "Security & operations", link: "/spec/security-operations" },

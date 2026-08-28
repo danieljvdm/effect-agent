@@ -99,6 +99,19 @@ The submitted user input is not yet part of canonical Conversation history. When
 Submission is claimed, the worker appends that input idempotently and marks it
 applied before the model can consume it.
 
+Input application does not require an Agent Binding and does not start its clock. Before the first
+engine execution, the binding-aware worker appends one `RunStarted` record with the Run ID and
+finite positive `maxDurationMillis`. Its envelope timestamp fixes the logical start. Every later
+Attempt uses that timestamp and allowance; a replacement Binding with a different `maxDuration`
+fails with `RunJournalError` before execution. This applies to the single-binding worker as well as
+the exact-digest resolver. Status receives the start timestamp separately from the deadline.
+
+The start append has before/after failpoints and a deterministic Run-scoped identity. A crash before
+it commits has not started the Run; a crash after it commits cannot reset its clock. Input-only
+history may acquire its first start record, including input previously joined to another Run.
+History with evidence of agent execution but no start record fails clearly as incompatible private
+development data. Recovery never invents an earlier allowance from the replacement policy.
+
 If the process stops after ledger admission but before readiness, recovery completes
 materialization. A client retry with the same idempotency key resumes or returns the
 same Receipt. A conflicting payload under the same key fails.
@@ -110,6 +123,11 @@ conversation application independently recoverable.
 
 The default scheduler permits at most one active submission per conversation.
 Different conversations may run concurrently.
+
+Scheduled input uses this same admission and ordering boundary. A Schedule owns a due occurrence
+until ordinary admission returns a Receipt; after that commit, the Submission Ledger owns the
+accepted work. [The scheduling specification](./scheduling.md) defines preparation, recovery, and
+coalescing before admission.
 
 FIFO is defined by the sequence allocated during admission, not wall-clock arrival
 time. Steering addressed to an active run has a separate ordered stream but must be
@@ -383,6 +401,20 @@ Abort is a durable command with identity, author, reason, and target.
 - Repeating the same abort command is idempotent.
 - A completed or failed submission cannot later become aborted.
 
+An `unknown` FIFO head with a durably accepted abort intent MUST be claimable under the normal
+ownership lease and producer fence. The claim authorizes the existing abort recovery path,
+including request-abort-and-join for attached children; it does not authorize ordinary Tool replay.
+The ledger retains the unknown mark and canonical `ToolCallUnknown` evidence. Neither callers nor
+recovery need to manufacture a `ResolutionAbortSubmission` for each open call. Without an abort
+intent or covering authorized resolutions, the head remains blocked.
+
+Claimability reads the intent in the existing atomic claim operation, rather than changing unknown
+state in `requestAbort`. This also covers an abort accepted before a racing unknown mark and an
+acknowledgement lost after either write. Existing claim, abort-intent, reservation, canonical-append,
+and finalization failpoints bound the protocol; no additional durable mutation is introduced.
+The original abort author, reason, and timestamp survive retries. A previously reserved or
+canonical terminal outcome still wins over a later abort.
+
 ## 14. Recovery algorithm
 
 A recovery worker:
@@ -425,6 +457,8 @@ authoritative for every repair and later pass.
 | After readiness, before receipt observed                      | Ready                                                             | Idempotent retry returns same receipt             |
 | After claim, before canonical input append                    | Running, input not applied                                        | Apply input idempotently                          |
 | After canonical input append, before applied marker           | Input canonical                                                   | Detect exact input and repair marker              |
+| Before canonical Run start append                             | Input applied; no agent execution                                 | Append the first start under the resolved Binding |
+| After canonical Run start append                              | Original start and duration allowance canonical                   | Preserve the deadline; reject a changed allowance |
 | After claim, before Attempt start                             | Ready/owned                                                       | Reclaim after ownership loss                      |
 | Mid-provider stream                                           | Canonical partial text/reasoning may exist; no completed response | Record interruption and retry as a new response   |
 | After model item commit, before tool authorization            | Model item canonical                                              | Reauthorize from canonical authority              |

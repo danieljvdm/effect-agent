@@ -1,5 +1,71 @@
 # @effect-agent/platform-node
 
+## 0.1.0-beta.36
+
+### Patch Changes
+
+- Updated dependencies [[`082c258`](https://github.com/danieljvdm/effect-agent/commit/082c2584573c1ffbfa7d5b7166f4243e996816eb)]:
+  - @effect-agent/session@0.1.0-beta.36
+  - @effect-agent/storage-sqlite@0.1.0-beta.36
+  - @effect-agent/core@0.1.0-beta.36
+  - @effect-agent/engine@0.1.0-beta.36
+
+## 0.1.0-beta.35
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.35
+  - @effect-agent/engine@0.1.0-beta.35
+  - @effect-agent/session@0.1.0-beta.35
+  - @effect-agent/storage-sqlite@0.1.0-beta.35
+
+## 0.1.0-beta.34
+
+### Minor Changes
+
+- [#206](https://github.com/danieljvdm/effect-agent/pull/206) [`aa3ebfb`](https://github.com/danieljvdm/effect-agent/commit/aa3ebfb4fd1e69be77c433a881ddecb3567c36c2) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose non-propagating Tool failures to an opt-in trusted local observer, preserving live Causes without automatic export. Install the same observer through durable Node and Cloudflare runtime options while excluding settled-call replay.
+
+### Patch Changes
+
+- [#202](https://github.com/danieljvdm/effect-agent/pull/202) [`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Align the Effect family with rc.111 to decode nested OpenAI error events, and preserve transformed Tool parameters under its encoded response contract.
+
+- Updated dependencies [[`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee), [`baecd08`](https://github.com/danieljvdm/effect-agent/commit/baecd08f1d6f2c0698e16487cdcccf2f6ffcebca), [`cf4a8d9`](https://github.com/danieljvdm/effect-agent/commit/cf4a8d9c645d5d8a2e552f4bb4902af4253d91ee), [`baecd08`](https://github.com/danieljvdm/effect-agent/commit/baecd08f1d6f2c0698e16487cdcccf2f6ffcebca), [`aa3ebfb`](https://github.com/danieljvdm/effect-agent/commit/aa3ebfb4fd1e69be77c433a881ddecb3567c36c2)]:
+  - @effect-agent/engine@0.1.0-beta.34
+  - @effect-agent/session@0.1.0-beta.34
+  - @effect-agent/core@0.1.0-beta.34
+  - @effect-agent/storage-sqlite@0.1.0-beta.34
+
+## 0.1.0-beta.33
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.33
+  - @effect-agent/engine@0.1.0-beta.33
+  - @effect-agent/session@0.1.0-beta.33
+  - @effect-agent/storage-sqlite@0.1.0-beta.33
+
+## 0.1.0-beta.32
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.32
+  - @effect-agent/engine@0.1.0-beta.32
+  - @effect-agent/session@0.1.0-beta.32
+  - @effect-agent/storage-sqlite@0.1.0-beta.32
+
+## 0.1.0-beta.31
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.31
+  - @effect-agent/engine@0.1.0-beta.31
+  - @effect-agent/session@0.1.0-beta.31
+  - @effect-agent/storage-sqlite@0.1.0-beta.31
+
 ## 0.1.0-beta.30
 
 ### Patch Changes

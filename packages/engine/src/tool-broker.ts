@@ -56,7 +56,12 @@ export interface ProgrammaticCallError {
   readonly message: string;
 }
 
-/** Total outcome surface of one programmatic invocation; defects stay defects. */
+/**
+ * Total outcome of one programmatic invocation; defects stay defects. Trusted applications may
+ * install `CurrentToolFailureObserver` to receive non-propagating failures before the outcome
+ * returns, with the live Cause retained before projection. Neither Causes nor observation values
+ * cross the broker boundary.
+ */
 export type ProgrammaticCallOutcome =
   | ProgrammaticCallSuccess
   | ProgrammaticCallFailure

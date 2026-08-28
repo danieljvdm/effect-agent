@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 
 import {
+  isCommentableLine,
   makeReviewer,
   ReviewChange,
   ReviewOutcome,
@@ -436,6 +437,34 @@ describe("PR-review model eval", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect.each(["smoke-suite.json", "effect-v3-type-tests-suite.json"])(
+    "round-trips %s with a valid digest and commentable evidence",
+    (filename) =>
+      Effect.gen(function* () {
+        const suite = yield* loadEvalSuite(
+          fileURLToPath(new URL(`../fixtures/${filename}`, import.meta.url)),
+        );
+        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(EvalSuite))(suite);
+        const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(EvalSuite))(
+          encoded,
+        );
+        expect(decoded).toEqual(suite);
+        for (const evalCase of suite.cases) {
+          const patches = new Map(
+            evalCase.request.changes.map((change) => [change.path, change.patch]),
+          );
+          const invalidEvidence = evalCase.expectedDefects.flatMap((defect) =>
+            defect.evidence.filter(
+              (evidence) =>
+                evidence.line !== undefined &&
+                !isCommentableLine(patches.get(evidence.path) ?? "", evidence.line),
+            ),
+          );
+          expect(invalidEvidence).toEqual([]);
+        }
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("rejects corrupt corpus identity before a model can run", () =>
     Effect.gen(function* () {
       const suite = yield* makeSuite();
@@ -457,10 +486,6 @@ describe("PR-review model eval", () => {
         ReviewRequest.make({ ...request, headRevision: "changed-head" }),
       );
       expect(changedDigest).not.toBe(original.inputDigest);
-      const persisted = yield* loadEvalSuite(
-        fileURLToPath(new URL("../fixtures/smoke-suite.json", import.meta.url)),
-      );
-      expect(persisted.cases).toHaveLength(2);
       const duplicateCases = { ...encoded, cases: [encoded.cases[0], encoded.cases[0]] };
       const duplicateDefects = {
         ...encoded,

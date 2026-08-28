@@ -132,15 +132,20 @@ export default defineConfig({
     format: ["esm"],
     sourcemap: true,
   },
+  test: {
+    // Vite Task caches successful suites. Vitest's mutable results.json
+    // otherwise becomes a task input and prevents reuse on fresh runners.
+    cache: false,
+    silent: "passed-only",
+  },
   run: {
     cache: {
       scripts: true,
-      tasks: false,
     },
     tasks: {
       "pr-review-eval": {
+        cache: false,
         command: "bun --cwd examples/pr-review-eval src/main.ts",
-        untrackedEnv: ["EFFECT_AGENT_LIVE", "OPENAI_API_KEY"],
       },
     },
   },

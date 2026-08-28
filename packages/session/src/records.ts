@@ -196,6 +196,14 @@ export class UserInputRecorded extends Schema.TaggedClass<UserInputRecorded>(
   input: PersistedJson,
 }) {}
 
+/** Immutable clock and duration allowance for one logical Run, before any agent execution. */
+export class RunStartedRecord extends Schema.TaggedClass<RunStartedRecord>(
+  "@effect-agent/session/RunStartedRecord",
+)("RunStarted", {
+  runId: RunId,
+  maxDurationMillis: Schema.Finite.check(Schema.isGreaterThan(0)),
+}) {}
+
 export class ModelCompleted extends Schema.TaggedClass<ModelCompleted>(
   "@effect-agent/session/ModelCompleted",
 )("ModelCompleted", {
@@ -681,6 +689,7 @@ export class SubagentLineageRecorded extends Schema.TaggedClass<SubagentLineageR
 export const CanonicalRecordPayload = Schema.Union([
   ConversationCreated,
   UserInputRecorded,
+  RunStartedRecord,
   ModelCompleted,
   ModelResponseRecorded,
   ToolCallPrepared,

@@ -31,6 +31,10 @@ Owns the one ephemeral interpreter, Turn loop, Effect AI Response reduction, Too
 policy enforcement, semantic events, and narrow `RunOptions` seams.
 
 Exports include `AgentRuntime`, `DetachedRun`, `RunOptions`, and the operational hook interfaces.
+`CurrentToolFailureObserver`, `toolFailureObserverLayer`, `RunToolFailureObserver`, and
+`ToolFailureObservation` provide the opt-in trusted local interface for non-propagating Tool
+failures. The default is absent, installation is service-only, and observations are never
+persisted or automatically exported. See [Tool failure observation](../spec/runtime#tool-failure-observation).
 
 ### `@effect-agent/capabilities`
 
@@ -50,9 +54,15 @@ service, the callback-shaped `CodeExecutor` port, and the stateless `PageCapture
 It also exports the sibling `PageScreenshot` port for one bounded caller-owned PNG and the scoped
 `PageCrawl` Stream port for bounded same-host Markdown records.
 The scoped `InteractiveBrowser` port is a distinct programmatic capability: one ephemeral
-browser/context/page pass with navigate, bounded read, fill, and click operations. Its handle is
-not transportable or persistable, and its immutable exact-host policy covers redirects and
-subrequests.
+browser/context/page pass with navigation, bounded reads, fills, clicks, PNG screenshots, viewport
+scrolling, and explicit early closure. Its handle is not transportable or persistable, and its
+immutable `network` policy selects `ExactHosts` for page-request URL checks, `PublicWeb` for a
+connection-time public-network boundary, or `Unrestricted` for an explicit opt-out from URL/host
+and private-network containment. `InteractiveBrowserTargetUrl` admits credential-free HTTP and
+HTTPS navigation and observations; ExactHosts still checks HTTPS. Cloudflare rejects `PublicWeb` before acquisition with
+`InteractiveBrowserUnsupportedError`, `feature: "policy"`; exact-host mode is not network
+containment for hostile pages or viewers. Screenshot bytes reuse
+`PageScreenshotResult` and share the handle's per-result byte limit.
 
 ### `@effect-agent/sandbox-local`
 
@@ -67,6 +77,8 @@ the run journal, and the `DurableAgentRuntime` coordinator (Receipt, Attempt, Se
 the conversation-keyed `awaitProgress` boundary that subscribes before its authoritative canonical
 read. It
 depends on `@effect-agent/engine` to drive the interpreter through its public seams.
+The coordinator captures the Tool failure observer at construction and explicitly provides it to
+fresh and replacement Attempts. Already-settled calls injected on resume bypass observation.
 It also owns the durable Subagent protocol: the requested/started/joined/lineage record
 Schemas, the child budget reservation and `waitingForChild` ledger operations, and the
 host-supplied `AgentBindingResolver` port for exact-digest Binding resolution.
@@ -95,6 +107,8 @@ ownership drain, Agent Binding registration for durable workers
 roster fails every claim closed), and the `NodeDurableHost` startup gates (storage compatibility,
 recovery before admission) and shutdown order (close admission → release ownership → close
 storage). It is a Layer-assembly library, not an application entrypoint.
+`NodeDurableRuntimeOptions.toolFailureObserver` installs the engine's closed trusted observer in
+that durable coordinator; it is not a serialized configuration value.
 
 ### `@effect-agent/storage-cloudflare`
 
@@ -133,7 +147,13 @@ second `PageCapture` implementation through explicit account/token construction 
 Effect `HttpClient` requirement. The Node-safe `./browser-rest-crawl` export adapts `PageCrawl` to
 Cloudflare's REST crawl endpoint with explicit redacted credentials, bounded polling and lazy
 pagination, and scoped remote-job cleanup. Neither REST subpath imports Worker runtime modules.
+The `./interactive-browser` export supplies `browserRunInteractiveLayer` for the generic browser
+port and `browserRunInteractiveHostLayer` for host-only Live View, handoff, redacted session
+identity, and explicit cleanup by identity. Both require `BrowserRunInteractiveBinding`; neither
+adds a registry, execution reconnect, or durable browser state.
 This is a Layer-assembly library, not an application entrypoint.
+`CloudflareDurableRuntimeOptions.toolFailureObserver` installs the same closed trusted observer
+for the Object's coordinator. It adds no journal data or Code Mode durability claim.
 
 ### `@effect-agent/pr-review`
 

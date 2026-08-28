@@ -262,11 +262,34 @@ cannot honestly prove them and must not pass them by simulation:
 - ambient network denied by default;
 - a synchronous runaway program terminated by an enforced platform CPU limit.
 
+No raw-CDP conformance suite exists: the required exact-origin browser boundary is not available,
+so the capability is rejected instead of simulated. Selector scrape is tested at the portable
+Schema and public adapter seams for grouped success, malformed output, and every collection and
+byte bound.
+
+Interactive browser tests prove policy decoding and refusal of unsupported `PublicWeb` before any
+provider operation through both the generic and host services. Exact-host tests preserve same-page
+navigation, listed third-party resources, handoff return, limits, and cleanup. Unrestricted cases
+admit HTTP navigation, private-address redirects and resources, and preserve same-page host
+controls, concurrency, finite budgets, and finalizers on success, failure, defect, timeout, and
+interruption. Schema cases reject credentials and non-HTTP(S) navigation and observations.
+These scripted tests do not certify provider reachability or a network containment boundary.
+
 Broker semantics are asserted once against the engine seam: direct and programmatic invocation
 of the same Tool preserve parameter, handler, success, failure, requirement, and interruption
 behavior; typed handler failures stay typed; approval or policy denial prevents handler start;
 budget exhaustion prevents the next call; sequential identities are deterministic; and
 non-allowlisted or sanitized-name collision cases fail closed.
+
+The trusted Tool failure observer intentionally distinguishes direct, started programmatic, and
+programmatic preflight failures (RUN-036). Focused tests cover its taxonomy and exclusions, Cause
+and Reason fidelity, raw identity correlation, at-most-once attempt delivery, isolated
+observer/reporter defects, interruption and permit ownership, UTF-8 message bounds, and secret
+sentinels on automatic export and durable records. Compile-time proofs retain the inferred
+`run`/`stream`/`start` error and requirement channels. Durable tests prove construction-time
+capture and settled-call replay exclusion, and one composition test per host proves the option.
+The Code Mode regression observes an inner Handler failure while the outer Run completes.
+No durable transition is added, so this seam does not duplicate the full crash matrix.
 
 ## 8.2 Pull-request work-order evidence
 
@@ -388,8 +411,8 @@ This enables generated requirement coverage reports.
 
 Every pull request:
 
-- `bun install --frozen-lockfile` with the pinned Bun version;
-- `bun run ready`, covering Vite+ formatting, linting, type checks, tests, and package builds;
+- a frozen install with the pinned Bun version;
+- `vp run ready`, covering Vite+ formatting, linting, type checks, tests, and package builds;
 - type-check and compile-time tests;
 - unit and deterministic integration tests;
 - in-memory conformance;
@@ -408,6 +431,22 @@ run databases, process-kill crash tests, security tests, examples, package insta
 tests, and live provider smoke tests.
 
 No durability milestone is complete while its crash tests are skipped.
+
+All ordinary test suites remain required, including crash, soak, and adapter conformance suites.
+Tests import source directly, so package test tasks may run without dependency ordering under a
+bounded concurrency limit. CI must account for each task's own worker pool: expensive package
+suites run on separate runners, and the remaining-workspace job must include new packages by
+default. Every matrix job remains required by the `ready` gate. A cached success may replace
+execution only when Vite Task's input fingerprint still matches. Imported workspace source and
+dependencies must remain tracked; changing
+either must invalidate affected results. Mutable runner result files are not test inputs.
+Changing only the config loader does not stabilize the cache, because other package tasks still
+create Vite's temporary directories and change their parent directory listings.
+
+Main pushes publish the shared test cache used by later PRs, without repeating static checks,
+builds, or the PR-only `ready` check. PR runs can also retain results for their own later commits.
+Successful task results survive another task's failure; a failed task is never cached as success.
+`vp run --no-cache test` bypasses result reuse and runs every ordinary suite.
 
 ## 14. Requirements
 
@@ -431,7 +470,9 @@ No durability milestone is complete while its crash tests are skipped.
   executable fixture for the full framework API; its ordinary suite is deterministic and
   offline, while live provider profiles are opt-in.
 - **TEST-015**: Every `CodeExecutor` adapter passes the shared executor conformance suite, and
-  direct versus programmatic invocation of the same Tool is observably equivalent.
+  direct versus programmatic invocation of the same Tool is observably equivalent except for
+  the documented broker failure projection and the intentionally different trusted observer
+  shapes and exclusions in RUN-036.
 - **TEST-016**: The engine's final-output path is exercised against a live-shaped LanguageModel
   substitute that derives its responses only from the model-visible request (prompt text,
   advertised Schemas and Tools), never from test-known expected values. This lets offline suites catch

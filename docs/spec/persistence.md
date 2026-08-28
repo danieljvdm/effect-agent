@@ -55,6 +55,14 @@ transactional stores contain references.
 
 Stores rebuildable views for UI, search, metrics, and administration.
 
+### 2.8 Schedule Store
+
+Stores one authoritative, versioned Schedule record per owner and Schedule ID. Its atomic
+transitions compare configuration revision and cursor, and conditionally create, retry, clear, or
+refuse one immutable pending delivery. The [scheduling specification](./scheduling.md) defines the
+record and transition rules. Schedule records are operational state, not canonical Conversation
+records or a replacement Submission Ledger.
+
 ## 3. Port shape
 
 The actual TypeScript API may split these services further, but it must preserve the
@@ -115,6 +123,11 @@ operations and also exposes strongly consistent `lookup`, graceful `releaseOwner
 the idempotent `markInputApplied` canonical-input marker, idempotent `requestAbort`, the ordered
 `scanNonterminal` stream, and a `capabilities` durability declaration.
 
+An unknown head is claimable only when its durable abort intent exists, checked atomically with
+the ordinary ownership claim. This exception preserves FIFO, lease checks, producer fencing, and
+uncertainty evidence; it enables cleanup and aborted settlement, never uncertain Tool replay.
+Memory, SQLite, and Durable Object SQLite adapters share this contract.
+
 Each method has an explicit atomic and idempotent contract. Admission and settlement intentionally
 span the two stores through recoverable states:
 
@@ -149,6 +162,7 @@ The canonical log supports, at minimum:
 
 - conversation created/closed;
 - user, steering, and follow-up input;
+- immutable Run start with its original duration allowance;
 - model request metadata and per-call normalized provider/model/tier/token/cost usage;
 - model text/reasoning deltas, completion, signature/redaction metadata, or structured item;
 - tool call requested, prepared, approved/rejected, settled, unknown;
@@ -161,6 +175,13 @@ The canonical log supports, at minimum:
 
 Partial Tool-argument deltas, queue depth changes, heartbeats, and debug spans are
 not canonical events.
+
+`RunStarted` stores the Run ID and finite positive `maxDurationMillis`; its envelope `createdAt`
+is the start timestamp. The deterministic `run-start:{runId}` record and batch identities admit
+one start per logical Run. Input remains a separate fact because binding-free recovery may apply
+it before execution, and joined input can later become a standalone Run. Conflicting starts,
+changed duration policies, and execution history without start evidence fail recovery rather than
+resetting the clock. No migration reconstructs missing timing from current code.
 
 ## 6. Optimistic and idempotent writes
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Ref, Stream } from "effect";
-import { LanguageModel, Model } from "effect/unstable/ai";
+import { LanguageModel, Model, type Prompt } from "effect/unstable/ai";
 
 import {
   commentableLines,
@@ -29,9 +29,9 @@ const request = ReviewRequest.make({
 });
 
 describe("review output boundary", () => {
-  it.effect("PRR-002 performs exactly one model call", () =>
+  it.effect("PRR-002 reviews once without premature budget prompting", () =>
     Effect.gen(function* () {
-      const calls = yield* Ref.make(0);
+      const requests = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([]);
       const model = Model.make(
         "scripted",
         "single-pass",
@@ -39,9 +39,9 @@ describe("review output boundary", () => {
           LanguageModel.LanguageModel,
           LanguageModel.make({
             generateText: () => Effect.succeed([]),
-            streamText: () =>
+            streamText: ({ prompt }) =>
               Stream.unwrap(
-                Ref.update(calls, (value) => value + 1).pipe(
+                Ref.update(requests, (values) => [...values, prompt]).pipe(
                   Effect.as(
                     Stream.fromIterable([
                       { type: "text-start" as const, id: "review" },
@@ -49,7 +49,7 @@ describe("review output boundary", () => {
                         type: "text-delta" as const,
                         id: "review",
                         delta:
-                          '{"summary":"One defect found.","findings":[{"path":"src/index.ts","line":2,"severity":"important","category":"reliability","title":"Dropped acknowledgment","body":"The completed operation can lose its acknowledgment."}]}',
+                          '{"summary":"One defect found.","findings":[{"path":"src/index.ts","line":2,"severity":"important","category":"reliability","title":"Dropped acknowledgment","body":"The completed operation can lose its acknowledgment."},{"path":"src/index.ts","line":2,"severity":"blocking","category":"reliability","title":"Dropped acknowledgment","body":"The completed operation can lose its acknowledgment."}]}',
                       },
                       { type: "text-end" as const, id: "review" },
                       {
@@ -77,7 +77,9 @@ describe("review output boundary", () => {
         model,
         estimateCostMicrousd: () => Effect.succeed(123),
       }).review(request);
-      expect(yield* Ref.get(calls)).toBe(1);
+      const prompts = yield* Ref.get(requests);
+      expect(prompts).toHaveLength(1);
+      expect(JSON.stringify(prompts[0])).not.toContain("<run-status>");
       expect(outcome.turns).toBe(1);
       expect(outcome.usage).toMatchObject({
         inputTokens: 10,
@@ -88,6 +90,10 @@ describe("review output boundary", () => {
         estimatedCostMicrousd: 123,
       });
       expect(outcome.report.findings[0]?.category).toBe("reliability");
+      expect(outcome.report.findings.map((finding) => finding.severity)).toEqual([
+        "important",
+        "blocking",
+      ]);
     }),
   );
 
@@ -95,11 +101,11 @@ describe("review output boundary", () => {
     expect([...commentableLines(patch)]).toEqual([1, 2, 3, 4]);
   });
 
-  it("PRR-004 drops unknown paths, demotes invalid anchors, and deduplicates", () => {
+  it("PRR-004 removes only exact duplicates and preserves same-title blockers", () => {
     const report = sanitizeReviewReport(
       request,
       ReviewReport.make({
-        summary: "Two defects.",
+        summary: "Three findings.",
         findings: [
           ReviewFinding.make({
             path: "src/index.ts",
@@ -123,7 +129,15 @@ describe("review output boundary", () => {
             severity: "important",
             category: "correctness",
             title: "Broken branch",
-            body: "Duplicate.",
+            body: "This branch returns the wrong value.",
+          }),
+          ReviewFinding.make({
+            path: "src/index.ts",
+            line: 2,
+            severity: "blocking",
+            category: "security",
+            title: "Broken branch",
+            body: "This branch also bypasses authorization.",
           }),
           ReviewFinding.make({
             path: "not-in-the-diff.ts",
@@ -136,10 +150,15 @@ describe("review output boundary", () => {
       }),
     );
 
-    expect(report.findings).toHaveLength(2);
+    expect(report.findings).toHaveLength(3);
     expect(report.findings[0]?.line).toBe(2);
     expect(report.findings[0]?.category).toBe("correctness");
     expect(report.findings[1]?.line).toBeUndefined();
+    expect(report.findings[2]).toMatchObject({
+      severity: "blocking",
+      category: "security",
+      body: "This branch also bypasses authorization.",
+    });
   });
 });
 

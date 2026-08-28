@@ -14,7 +14,13 @@ import {
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
-import { TEST_DIGESTS, recordSupplierCall, supplierCountsFor } from "./fixtures.ts";
+import {
+  TEST_DIGESTS,
+  bookTools,
+  bookToolLayer,
+  recordSupplierCall,
+  supplierCountsFor,
+} from "./fixtures.ts";
 
 /**
  * WP4 cross-Object subagent fixtures (plan §4 WP4): the crash-shape coordinator → researcher
@@ -70,6 +76,8 @@ export const transportFaultReason = (name: string | undefined): string | undefin
 // ---------------------------------------------------------------------------
 
 const gatedChildRefs = new Set<string>();
+/** Exercise ordinary Tool uncertainty inside the existing attached child fixture. */
+export const uncertainChildRefs = new Set<string>();
 
 /** Make the researcher model for `ref` HANG mid-stream until released. */
 export const gateChildModel = (ref: string): void => {
@@ -225,11 +233,17 @@ const siblingCoordinatorModel = promptAwareModel("cf-s2-sibling-coordinator", (p
 const researcherModel = promptAwareModel("cf-s2-researcher", (promptJson) => {
   const ref = childRefFromPrompt(promptJson);
   recordSupplierCall(CHILD_MODEL_OP, ref, "invoked");
+  const response = Stream.fromIterable(
+    uncertainChildRefs.has(ref)
+      ? [
+          toolCallPart("book-1", "book", { ref }),
+          { type: "finish", reason: "tool-calls", usage } satisfies Response.StreamPartEncoded,
+        ]
+      : finalParts(CHILD_ANSWER),
+  );
   return gatedChildRefs.has(ref)
-    ? Stream.fromEffectDrain(awaitChildRelease(ref)).pipe(
-        Stream.concat(Stream.fromIterable(finalParts(CHILD_ANSWER))),
-      )
-    : Stream.fromIterable(finalParts(CHILD_ANSWER));
+    ? Stream.fromEffectDrain(awaitChildRelease(ref)).pipe(Stream.concat(response))
+    : response;
 });
 
 // ---------------------------------------------------------------------------
@@ -245,7 +259,7 @@ export const researcherDefinition = Agent.define("cf-s2-researcher", {
   input: ResearcherInput,
   output: ResearcherOutput,
   instructions: ({ question }) => `Answer ${question} as JSON.`,
-  toolkit: Toolkit.empty,
+  toolkit: bookTools,
   policy: AgentPolicy.make({
     maxTurns: 2,
     maxToolCalls: 1,
@@ -331,7 +345,7 @@ export const makeSubagentTestBindings: Effect.Effect<ReadonlyArray<ResolvedBindi
     const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
       mapChildFailure,
       durable: { targetDigests: SUBAGENT_CHILD_DIGEST_STRINGS },
-    }).pipe(Layer.provide(delegationSupport));
+    }).pipe(Layer.provide([delegationSupport, bookToolLayer]));
     const siblingLookupLayer = Toolkit.make(SiblingLookup).toLayer({
       lookup: ({ key }) =>
         Effect.sync(() => {
@@ -352,7 +366,7 @@ export const makeSubagentTestBindings: Effect.Effect<ReadonlyArray<ResolvedBindi
     const researcher: ResolvedBinding = yield* DurableWorkerBinding.make(
       childBinding,
       SUBAGENT_CHILD_DIGESTS,
-    );
+    ).pipe(Effect.provide(bookToolLayer));
     return [coordinator, sibling, researcher];
   },
 );

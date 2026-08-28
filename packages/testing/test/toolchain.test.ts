@@ -863,16 +863,17 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       ];
 
       expect(ciWorkflow.on).toEqual({
+        push: { branches: ["main"] },
         pull_request: { "paths-ignore": generatedPaths },
       });
-      expect(ciWorkflow.jobs.checks?.if).toBeUndefined();
+      expect(ciWorkflow.jobs.checks?.if).toBe("${{ github.event_name == 'pull_request' }}");
       expect(ciWorkflow.jobs.test?.if).toBeUndefined();
-      expect(ciWorkflow.jobs.build?.if).toBeUndefined();
+      expect(ciWorkflow.jobs.build?.if).toBe("${{ github.event_name == 'pull_request' }}");
       expect(ciWorkflow.jobs["release-integrity"]).toBeUndefined();
 
       const readyJob = ciWorkflow.jobs.ready;
       expect(readyJob?.needs).toEqual(["checks", "test", "build"]);
-      expect(readyJob?.if).toBe("${{ always() }}");
+      expect(readyJob?.if).toBe("${{ always() && github.event_name == 'pull_request' }}");
       const readyStep = workflowStep(ciWorkflow, "ready", "Verify all ordinary gates passed");
       expect(readyStep?.env).toEqual({
         BUILD_RESULT: "${{ needs.build.result }}",
