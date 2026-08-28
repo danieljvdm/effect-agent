@@ -1,5 +1,4 @@
-import type { Option } from "effect";
-import { Effect, Layer, Tracer } from "effect";
+import { Effect, Layer, Option, Tracer } from "effect";
 import type { DurableObject } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
 

@@ -5,8 +5,8 @@ import {
   type RunCostEstimator,
   type RunToolFailureObserver,
 } from "@effect-agent/engine";
+import type { ScheduleStore } from "@effect-agent/session";
 import {
-  type ScheduleStore,
   type ConversationStore,
   type WakeScheduler,
   AgentBindingResolver,
