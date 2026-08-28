@@ -1,11 +1,13 @@
 import { type AgentId, ConversationId } from "@effect-agent/core";
 import {
+  Cause,
   Context,
   Crypto,
   DateTime,
   Effect,
   Encoding,
   Layer,
+  Option,
   Result,
   Schema,
   Semaphore,
@@ -32,6 +34,7 @@ import {
   type ScheduleDestination,
   ScheduleFailpoint,
   type ScheduleId,
+  type ScheduleDueCursor,
   ScheduleInstant,
   type ScheduleKey,
   SchedulingLimits,
@@ -94,7 +97,31 @@ const notFound = (key: ScheduleKey) => ScheduleNotFound.make({ key });
 const asSnapshot = (record: ScheduleRecord, observedAtMillis: number): ScheduleSnapshot => {
   const intendedAtMillis = record.pending?.envelope.intendedAtMillis ?? record.nextAtMillis;
   return {
-    ...record,
+    owner: record.owner,
+    scheduleId: record.scheduleId,
+    createdAtMillis: record.createdAtMillis,
+    updatedAtMillis: record.updatedAtMillis,
+    configurationRevision: record.configurationRevision,
+    configuration: {
+      timing: record.configuration.timing,
+      destination: record.configuration.destination,
+      deliveryPrincipal: record.configuration.deliveryPrincipal,
+      agentId: record.configuration.agentId,
+    },
+    state: record.state,
+    nextAtMillis: record.nextAtMillis,
+    pending:
+      record.pending === null
+        ? null
+        : {
+            intendedAtMillis: record.pending.envelope.intendedAtMillis,
+            preparedAtMillis: record.pending.envelope.preparedAtMillis,
+            occurrenceId: record.pending.envelope.occurrenceId,
+            retry: record.pending.retry,
+          },
+    lastReceipt: record.lastReceipt,
+    lastRefusal: record.lastRefusal,
+    lastSkippedRange: record.lastSkippedRange,
     observedAtMillis,
     pendingAgeMillis:
       record.pending === null
@@ -160,7 +187,7 @@ const resolveInput = Effect.fn("Scheduling.resolveInput")(function* <
   return { payload, digest };
 });
 
-const make = (limits: SchedulingLimits) =>
+const makeManagement = (limits: SchedulingLimits) =>
   Effect.gen(function* () {
     const nowMillis = yield* currentMillis;
     yield* Schema.decodeUnknownEffect(ScheduleInstant)(nowMillis + limits.recoveryPollMillis).pipe(
@@ -172,11 +199,8 @@ const make = (limits: SchedulingLimits) =>
     );
     const store = yield* ScheduleStore;
     const authorizer = yield* ScheduleAuthorizer;
-    const admission = yield* ScheduledInputAdmission;
     const wake = yield* ScheduleWake;
-    const failpoint = yield* ScheduleFailpoint;
     const crypto = yield* Crypto.Crypto;
-    const admissionSemaphore = yield* Semaphore.make(limits.admissionConcurrency);
 
     const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
       Effect.provideService(effect, Crypto.Crypto, crypto);
@@ -372,13 +396,17 @@ const make = (limits: SchedulingLimits) =>
         scheduleId: options.scheduleId,
         configuration: nextConfiguration,
       });
-      const changed = yield* store.change(key, {
-        _tag: "Update",
-        expectedRevision: options.expectedRevision,
-        configuration: nextConfiguration,
-        nextAtMillis,
-        nowMillis,
-      });
+      const changed = yield* store.change(
+        key,
+        {
+          _tag: "Update",
+          expectedRevision: options.expectedRevision,
+          configuration: nextConfiguration,
+          nextAtMillis,
+          nowMillis,
+        },
+        limits.maxSchedulesPerOwner,
+      );
       yield* wake.notify;
       return asSnapshot(changed, nowMillis);
     });
@@ -430,6 +458,7 @@ const make = (limits: SchedulingLimits) =>
             if (record.configurationRevision !== expectedRevision) {
               return yield* ScheduleConflict.make({ reason: "revision", key });
             }
+            if (operation === "resume" && record.state === "active") return record;
             const nowMillis = yield* currentMillis;
             const nextAtMillis =
               operation === "resume"
@@ -452,15 +481,19 @@ const make = (limits: SchedulingLimits) =>
                 ? { fromMillis: record.nextAtMillis, toMillis: nextAtMillis }
                 : null;
             return yield* store
-              .change(key, {
-                _tag: "Control",
-                expectedRevision,
-                expectedVersion: record.version,
-                action: operation,
-                nextAtMillis,
-                nowMillis,
-                skippedRange,
-              })
+              .change(
+                key,
+                {
+                  _tag: "Control",
+                  expectedRevision,
+                  expectedVersion: record.version,
+                  action: operation,
+                  nextAtMillis,
+                  nowMillis,
+                  skippedRange,
+                },
+                limits.maxSchedulesPerOwner,
+              )
               .pipe(
                 Effect.catchTag("ScheduleConflict", (error) =>
                   error.reason === "revision" ? attempt() : Effect.fail(error),
@@ -472,6 +505,28 @@ const make = (limits: SchedulingLimits) =>
       yield* wake.notify;
       return asSnapshot(changed, yield* currentMillis);
     });
+
+    return Scheduling.of({
+      create,
+      update,
+      get,
+      list,
+      pause: (scope, id, revision) => control("pause", scope, id, revision),
+      resume: (scope, id, revision) => control("resume", scope, id, revision),
+      cancel: (scope, id, revision) => control("cancel", scope, id, revision),
+    });
+  });
+
+const makeDriver = (limits: SchedulingLimits) =>
+  Effect.gen(function* () {
+    const store = yield* ScheduleStore;
+    const authorizer = yield* ScheduleAuthorizer;
+    const admission = yield* ScheduledInputAdmission;
+    const failpoint = yield* ScheduleFailpoint;
+    const crypto = yield* Crypto.Crypto;
+    const admissionSemaphore = yield* Semaphore.make(limits.admissionConcurrency);
+    const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
+      Effect.provideService(effect, Crypto.Crypto, crypto);
 
     const retry = Effect.fn("Scheduling.retry")(function* (
       key: ScheduleKey,
@@ -737,51 +792,69 @@ const make = (limits: SchedulingLimits) =>
             ),
         ),
       );
-      return asSnapshot(processed, yield* currentMillis);
+      return processed;
     });
 
-    const runDue = Effect.fn("Scheduling.runDue")(function* (owner?: ScheduleOwner) {
+    const runDue = Effect.fn("ScheduleDriver.runDue")(function* (owner?: ScheduleOwner) {
       const nowMillis = yield* currentMillis;
-      const due = yield* store.due(nowMillis, limits.dueBatchSize, owner);
-      const processed = yield* Effect.forEach(
-        due,
-        (record) => {
-          const key = { owner: record.owner, scheduleId: record.scheduleId };
-          return processRecord(key, record, nowMillis).pipe(
-            Effect.catchTag("ScheduleConflict", () =>
-              store
-                .get(key)
-                .pipe(
-                  Effect.flatMap((current) =>
-                    current === null
-                      ? Effect.fail(notFound(key))
-                      : processRecord(key, current, nowMillis),
-                  ),
-                ),
+      let after: ScheduleDueCursor | undefined;
+      let processed = 0;
+      let failed = 0;
+      while (true) {
+        const due = yield* store.due(nowMillis, limits.dueBatchSize, owner, after);
+        if (due.length === 0) break;
+        yield* Effect.forEach(
+          due,
+          (key) =>
+            process(key).pipe(
+              Effect.matchCauseEffect({
+                onSuccess: () =>
+                  Effect.sync(() => {
+                    processed += 1;
+                  }),
+                onFailure: (cause) =>
+                  Cause.hasInterrupts(cause)
+                    ? Effect.interrupt
+                    : Effect.gen(function* () {
+                        failed += 1;
+                        yield* Effect.logWarning("Schedule processing failed").pipe(
+                          Effect.annotateLogs({
+                            failureTag: Option.match(Cause.findErrorOption(cause), {
+                              onNone: () => "Defect",
+                              onSome: (error) => error._tag,
+                            }),
+                          }),
+                        );
+                      }),
+              }),
             ),
-          );
-        },
-        { concurrency: "unbounded" },
-      );
-      const observedAtMillis = yield* currentMillis;
-      return processed.map((record) => asSnapshot(record, observedAtMillis));
+          { concurrency: limits.admissionConcurrency },
+        );
+        after = due.at(-1);
+        if (due.length < limits.dueBatchSize) break;
+      }
+      return { processed, failed };
     });
 
-    return Scheduling.of({
-      create,
-      update,
-      get,
-      list,
-      pause: (scope, id, revision) => control("pause", scope, id, revision),
-      resume: (scope, id, revision) => control("resume", scope, id, revision),
-      cancel: (scope, id, revision) => control("cancel", scope, id, revision),
-      process,
-      runDue,
-    });
+    return ScheduleDriver.of({ process, runDue });
   });
 
 const corrupt = (operation: string): ScheduleStorageError =>
   ScheduleStorageError.make({ operation, reason: "corrupt" });
+
+const validateLimits = (limits: SchedulingLimits) =>
+  Schema.decodeUnknownEffect(SchedulingLimits)(limits).pipe(
+    Effect.mapError((error) =>
+      ScheduleValidationError.make({ message: `Invalid Scheduling limits: ${error.message}` }),
+    ),
+    Effect.filterOrFail(
+      (validated) => validated.retryBaseMillis <= validated.retryMaxMillis,
+      () =>
+        ScheduleValidationError.make({
+          message: "Scheduling retryBaseMillis must not exceed retryMaxMillis",
+        }),
+    ),
+  );
 
 export class Scheduling extends Context.Service<
   Scheduling,
@@ -807,17 +880,11 @@ export class Scheduling extends Context.Service<
     readonly get: (
       scope: ScheduleScope,
       scheduleId: ScheduleId,
-    ) => Effect.Effect<
-      ScheduleSnapshot,
-      ScheduleAuthorizationError | ScheduleStorageError | ScheduleNotFound
-    >;
+    ) => Effect.Effect<ScheduleSnapshot, ScheduleManagementFailure>;
     readonly list: (
       scope: ScheduleScope,
       options?: ScheduleListOptions,
-    ) => Effect.Effect<
-      ScheduleSnapshotPage,
-      ScheduleAuthorizationError | ScheduleStorageError | ScheduleValidationError
-    >;
+    ) => Effect.Effect<ScheduleSnapshotPage, ScheduleManagementFailure>;
     readonly pause: (
       scope: ScheduleScope,
       scheduleId: ScheduleId,
@@ -833,10 +900,6 @@ export class Scheduling extends Context.Service<
       scheduleId: ScheduleId,
       expectedRevision: number,
     ) => Effect.Effect<ScheduleSnapshot, ScheduleManagementFailure>;
-    readonly process: (key: ScheduleKey) => Effect.Effect<ScheduleSnapshot, ScheduleProcessFailure>;
-    readonly runDue: (
-      owner?: ScheduleOwner,
-    ) => Effect.Effect<ReadonlyArray<ScheduleSnapshot>, ScheduleProcessFailure>;
   }
 >()("@effect-agent/session/Scheduling") {
   static layer(
@@ -844,24 +907,9 @@ export class Scheduling extends Context.Service<
   ): Layer.Layer<
     Scheduling,
     ScheduleValidationError,
-    ScheduleStore | ScheduleAuthorizer | ScheduledInputAdmission | ScheduleWake | Crypto.Crypto
+    ScheduleStore | ScheduleAuthorizer | ScheduleWake | Crypto.Crypto
   > {
-    return Layer.effect(
-      Scheduling,
-      Schema.decodeUnknownEffect(SchedulingLimits)(limits).pipe(
-        Effect.mapError((error) =>
-          ScheduleValidationError.make({ message: `Invalid Scheduling limits: ${error.message}` }),
-        ),
-        Effect.filterOrFail(
-          (validated) => validated.retryBaseMillis <= validated.retryMaxMillis,
-          () =>
-            ScheduleValidationError.make({
-              message: "Scheduling retryBaseMillis must not exceed retryMaxMillis",
-            }),
-        ),
-        Effect.flatMap(make),
-      ),
-    );
+    return Layer.effect(Scheduling, validateLimits(limits).pipe(Effect.flatMap(makeManagement)));
   }
 }
 
@@ -869,3 +917,27 @@ export const ScheduleWakeNoop: Layer.Layer<ScheduleWake> = Layer.succeed(Schedul
   notify: Effect.void,
   await: Effect.never,
 });
+
+/** Privileged host capability. Never provide this service to management callers or model tools. */
+export class ScheduleDriver extends Context.Service<
+  ScheduleDriver,
+  {
+    readonly process: (key: ScheduleKey) => Effect.Effect<ScheduleRecord, ScheduleProcessFailure>;
+    readonly runDue: (
+      owner?: ScheduleOwner,
+    ) => Effect.Effect<
+      { readonly processed: number; readonly failed: number },
+      ScheduleStorageError
+    >;
+  }
+>()("@effect-agent/session/ScheduleDriver") {
+  static layer(
+    limits: SchedulingLimits = defaultSchedulingLimits,
+  ): Layer.Layer<
+    ScheduleDriver,
+    ScheduleValidationError,
+    ScheduleStore | ScheduleAuthorizer | ScheduledInputAdmission | Crypto.Crypto
+  > {
+    return Layer.effect(ScheduleDriver, validateLimits(limits).pipe(Effect.flatMap(makeDriver)));
+  }
+}

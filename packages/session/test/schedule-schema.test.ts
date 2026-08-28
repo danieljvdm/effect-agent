@@ -104,6 +104,39 @@ const record = ScheduleRecord.make({
   lastSkippedRange: { fromMillis: 10, toMillis: 50 },
 });
 
+const snapshot = ScheduleSnapshot.make({
+  owner,
+  scheduleId,
+  createdAtMillis: 1,
+  updatedAtMillis: 110,
+  configurationRevision: 1,
+  configuration: {
+    timing: { _tag: "Interval", everyMillis: 60_000, anchorMillis: 100 },
+    destination: { _tag: "ExistingConversation", conversationId },
+    deliveryPrincipal: principal,
+    agentId,
+  },
+  state: "active",
+  nextAtMillis: 60_100,
+  pending: {
+    intendedAtMillis: 100,
+    preparedAtMillis: 110,
+    occurrenceId,
+    retry: {
+      attempts: 1,
+      nextAttemptAtMillis: 1_110,
+      lastAttemptAtMillis: 110,
+      lastFailure: "transport",
+    },
+  },
+  lastReceipt: record.lastReceipt,
+  lastRefusal: record.lastRefusal,
+  lastSkippedRange: record.lastSkippedRange,
+  observedAtMillis: 1_200,
+  pendingAgeMillis: 1_090,
+  latenessMillis: 1_100,
+});
+
 const roundTrip = <A, I>(schema: Schema.Codec<A, I, never, never>, value: A): void => {
   const encoded = Schema.encodeSync(schema)(value);
   expect(Schema.decodeSync(schema)(encoded)).toEqual(value);
@@ -122,25 +155,10 @@ describe("Schedule persisted schemas", () => {
     roundTrip(ScheduleDestination, { _tag: "FreshConversation" });
     roundTrip(ScheduledEnvelope, envelope);
     roundTrip(ScheduleRecord, record);
-    roundTrip(ScheduleSnapshot, {
-      ...record,
-      observedAtMillis: 1_200,
-      pendingAgeMillis: 1_090,
-      latenessMillis: 1_100,
-    });
+    roundTrip(ScheduleSnapshot, snapshot);
     roundTrip(SchedulePageRequest, { owner, after: scheduleId, limit: 25 });
     roundTrip(SchedulePage, { items: [record], next: scheduleId });
-    roundTrip(ScheduleSnapshotPage, {
-      items: [
-        {
-          ...record,
-          observedAtMillis: 1_200,
-          pendingAgeMillis: 1_090,
-          latenessMillis: 1_100,
-        },
-      ],
-      next: null,
-    });
+    roundTrip(ScheduleSnapshotPage, { items: [snapshot], next: null });
     roundTrip(SchedulingLimits, defaultSchedulingLimits);
 
     const changes: ReadonlyArray<typeof ScheduleChange.Type> = [

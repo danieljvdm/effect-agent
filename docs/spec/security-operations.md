@@ -71,7 +71,9 @@ Programmatic `ToolBroker` calls are outside this authorization hook.
 
 Durable input [schedules](./scheduling.md) require an explicit `ScheduleAuthorizer` for every
 management call and occurrence preparation. Reads and listing are scoped to a tenant-qualified
-owner. Preparation authorizes completion of that one frozen delivery even if authority is later
+owner. `Scheduling` contains only management operations and explicit status projections. Driver
+operations belong to the separate privileged `ScheduleDriver`; neither that service nor
+`ScheduleStore` belongs in a management caller or model Tool environment. Preparation authorizes completion of that one frozen delivery even if authority is later
 revoked; revocation prevents future preparation, not recovery of input that may already have been
 admitted. This grant does not bypass the Tool action-time checks above. Persist only bounded policy
 and decision identifiers, never credentials or input-bearing diagnostics, as scheduling metadata.

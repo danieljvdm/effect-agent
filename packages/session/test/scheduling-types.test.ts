@@ -5,16 +5,15 @@ import type { Crypto, Effect, Layer, Schema } from "effect";
 import {
   type DurableSubmitAgent,
   type ScheduleCreateOptions,
-  type ScheduleAuthorizationError,
   type ScheduleAuthorizer,
   type ScheduleListOptions,
   type ScheduleManagementFailure,
-  type ScheduleNotFound,
   type ScheduleProcessFailure,
   type ScheduleScope,
   type ScheduleId,
   type ScheduledInputAdmission,
   Scheduling,
+  ScheduleDriver,
   type ScheduleStorageError,
   type ScheduleStore,
   type ScheduleValidationError,
@@ -46,7 +45,10 @@ declare const scope: ScheduleScope;
 declare const scheduleId: ScheduleId;
 declare const listOptions: ScheduleListOptions;
 
-const proveServiceOperations = (service: Scheduling["Service"]) => {
+const proveServiceOperations = (
+  service: Scheduling["Service"],
+  driver: ScheduleDriver["Service"],
+) => {
   const created = service.create(agent, { value: "value" }, createOptions);
   const updated = service.update(
     agent,
@@ -59,8 +61,8 @@ const proveServiceOperations = (service: Scheduling["Service"]) => {
   const got = service.get(scope, scheduleId);
   const listed = service.list(scope, listOptions);
   const paused = service.pause(scope, scheduleId, 1);
-  const processed = service.process({ owner: scope.owner, scheduleId });
-  const due = service.runDue(scope.owner);
+  const processed = driver.process({ owner: scope.owner, scheduleId });
+  const due = driver.runDue(scope.owner);
 
   type CreateRequirementsProof = Assert<
     Equal<Effect.Services<typeof created>, InputEncodingContext>
@@ -70,21 +72,11 @@ const proveServiceOperations = (service: Scheduling["Service"]) => {
     Equal<Effect.Services<typeof updated>, InputEncodingContext>
   >;
   type UpdateFailureProof = Assert<Equal<Effect.Error<typeof updated>, ScheduleManagementFailure>>;
-  type GetFailureProof = Assert<
-    Equal<
-      Effect.Error<typeof got>,
-      ScheduleAuthorizationError | ScheduleStorageError | ScheduleNotFound
-    >
-  >;
-  type ListFailureProof = Assert<
-    Equal<
-      Effect.Error<typeof listed>,
-      ScheduleAuthorizationError | ScheduleStorageError | ScheduleValidationError
-    >
-  >;
+  type GetFailureProof = Assert<Equal<Effect.Error<typeof got>, ScheduleManagementFailure>>;
+  type ListFailureProof = Assert<Equal<Effect.Error<typeof listed>, ScheduleManagementFailure>>;
   type ControlFailureProof = Assert<Equal<Effect.Error<typeof paused>, ScheduleManagementFailure>>;
   type ProcessFailureProof = Assert<Equal<Effect.Error<typeof processed>, ScheduleProcessFailure>>;
-  type RunDueFailureProof = Assert<Equal<Effect.Error<typeof due>, ScheduleProcessFailure>>;
+  type RunDueFailureProof = Assert<Equal<Effect.Error<typeof due>, ScheduleStorageError>>;
 
   const proofs: readonly [
     CreateRequirementsProof,
@@ -108,7 +100,21 @@ type SchedulingLayerFailureProof = Assert<
 type SchedulingLayerRequirementsProof = Assert<
   Equal<
     Layer.Services<typeof schedulingLayer>,
-    ScheduleStore | ScheduleAuthorizer | ScheduledInputAdmission | ScheduleWake | Crypto.Crypto
+    ScheduleStore | ScheduleAuthorizer | ScheduleWake | Crypto.Crypto
+  >
+>;
+
+const driverLayer = ScheduleDriver.layer();
+type DriverRequirementsProof = Assert<
+  Equal<
+    Layer.Services<typeof driverLayer>,
+    ScheduleStore | ScheduleAuthorizer | ScheduledInputAdmission | Crypto.Crypto
+  >
+>;
+type ManagementKeysProof = Assert<
+  Equal<
+    keyof Scheduling["Service"],
+    "create" | "update" | "get" | "list" | "pause" | "resume" | "cancel"
   >
 >;
 
@@ -119,6 +125,9 @@ describe("Scheduling public types", () => {
     const failureProof: SchedulingLayerFailureProof = true;
     const requirementsProof: SchedulingLayerRequirementsProof = true;
 
+    const driverProof: DriverRequirementsProof = true;
+    const managementProof: ManagementKeysProof = true;
+    expect([driverProof, managementProof]).toEqual([true, true]);
     expect(serviceProof).toBe(proveServiceOperations);
     expect([successProof, failureProof, requirementsProof]).toEqual([true, true, true]);
   });

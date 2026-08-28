@@ -1,5 +1,8 @@
 import {
   ScheduleCapacityError,
+  ScheduleDueCursor,
+  defaultSchedulingLimits,
+  scheduleUsesCapacity,
   ScheduleChange,
   ScheduleConflict,
   ScheduleFailpoint,
@@ -36,6 +39,13 @@ class ScheduleRow extends Schema.Class<ScheduleRow>("@effect-agent/storage-sqlit
   deadline_at_millis: StoredDeadline,
   record_json: StoredScheduleJson,
 }) {}
+
+const ScheduleDueRow = Schema.Struct({
+  tenant_id: ScheduleOwner.fields.tenantId,
+  owner_id: ScheduleOwner.fields.ownerId,
+  schedule_id: ScheduleId,
+  deadline_at_millis: ScheduleInstant,
+});
 
 class ScheduleCountRow extends Schema.Class<ScheduleCountRow>(
   "@effect-agent/storage-sqlite/ScheduleCountRow",
@@ -153,6 +163,8 @@ const makeScheduleStore = Effect.gen(function* () {
             FROM effect_agent_schedules
             WHERE tenant_id = ${canonical.owner.tenantId}
               AND owner_id = ${canonical.owner.ownerId}
+              AND (json_extract(record_json, '$.pending') IS NOT NULL OR
+                (json_extract(record_json, '$.state') != 'cancelled' AND json_extract(record_json, '$.nextAtMillis') IS NOT NULL))
           `.pipe(Effect.mapError(() => unavailable(operation)));
             const counts = yield* decodeRows(Schema.Array(ScheduleCountRow), rawCounts, operation);
             if (counts.length !== 1) return yield* corrupt(operation);
@@ -219,7 +231,7 @@ const makeScheduleStore = Effect.gen(function* () {
   });
 
   const change: ScheduleStore["Service"]["change"] = Effect.fn("SqliteScheduleStore.change")(
-    function* (key, change) {
+    function* (key, change, ownerLimit = defaultSchedulingLimits.maxSchedulesPerOwner) {
       const operation = "change schedule";
       const decodedKey = yield* decodeInput(operation, ScheduleKey, key);
       const decodedChange = yield* decodeInput(operation, ScheduleChange, change);
@@ -231,6 +243,22 @@ const makeScheduleStore = Effect.gen(function* () {
             const transition = applyScheduleChange(current, decodedChange);
             if (Result.isFailure(transition)) return yield* transition.failure;
             const next = transition.success;
+            if (!scheduleUsesCapacity(current) && scheduleUsesCapacity(next)) {
+              const rawCounts = yield* sql<Record<string, unknown>>`
+              SELECT COUNT(*) AS schedule_count FROM effect_agent_schedules
+              WHERE tenant_id = ${key.owner.tenantId} AND owner_id = ${key.owner.ownerId}
+                AND (json_extract(record_json, '$.pending') IS NOT NULL OR
+                  (json_extract(record_json, '$.state') != 'cancelled' AND json_extract(record_json, '$.nextAtMillis') IS NOT NULL))
+            `.pipe(Effect.mapError(() => unavailable(operation)));
+              const counts = yield* decodeRows(
+                Schema.Array(ScheduleCountRow),
+                rawCounts,
+                operation,
+              );
+              if (counts.length !== 1) return yield* corrupt(operation);
+              if (counts[0].schedule_count >= ownerLimit)
+                return yield* ScheduleCapacityError.make({ limit: ownerLimit });
+            }
             if (next === current) return { record: current, changed: false } as const;
             const recordJson = yield* encodeRecord(next);
             yield* scheduleFailpoint.hit(`schedule:${decodedChange._tag.toLowerCase()}:before`);
@@ -256,30 +284,47 @@ const makeScheduleStore = Effect.gen(function* () {
     nowMillis,
     limit,
     owner?: ScheduleOwner,
+    after?: ScheduleDueCursor,
   ) {
     const operation = "query due schedules";
     const decodedOwner =
       owner === undefined ? undefined : yield* decodeInput(operation, ScheduleOwner, owner);
+    const cursor =
+      after === undefined
+        ? undefined
+        : yield* Schema.decodeUnknownEffect(ScheduleDueCursor)(after).pipe(
+            Effect.mapError(() => corrupt(operation)),
+          );
+    const continuation =
+      cursor === undefined
+        ? sql`1 = 1`
+        : sql`
+      (deadline_at_millis, tenant_id, owner_id, schedule_id) >
+      (${cursor.deadlineAtMillis}, ${cursor.owner.tenantId}, ${cursor.owner.ownerId}, ${cursor.scheduleId})`;
     const rows =
       decodedOwner === undefined
         ? yield* sql<Record<string, unknown>>`
-            SELECT tenant_id, owner_id, schedule_id, deadline_at_millis, record_json
+            SELECT tenant_id, owner_id, schedule_id, deadline_at_millis
             FROM effect_agent_schedules
-            WHERE deadline_at_millis <= ${nowMillis}
+            WHERE deadline_at_millis <= ${nowMillis} AND ${continuation}
             ORDER BY deadline_at_millis, tenant_id, owner_id, schedule_id
             LIMIT ${limit}
           `.pipe(Effect.mapError(() => unavailable(operation)))
         : yield* sql<Record<string, unknown>>`
-            SELECT tenant_id, owner_id, schedule_id, deadline_at_millis, record_json
+            SELECT tenant_id, owner_id, schedule_id, deadline_at_millis
             FROM effect_agent_schedules
             WHERE tenant_id = ${decodedOwner.tenantId}
               AND owner_id = ${decodedOwner.ownerId}
-              AND deadline_at_millis <= ${nowMillis}
+              AND deadline_at_millis <= ${nowMillis} AND ${continuation}
             ORDER BY deadline_at_millis, schedule_id
             LIMIT ${limit}
           `.pipe(Effect.mapError(() => unavailable(operation)));
-    const decoded = yield* decodeRows(Schema.Array(ScheduleRow), rows, operation);
-    return yield* Effect.forEach(decoded, decodeRecord);
+    const decoded = yield* decodeRows(Schema.Array(ScheduleDueRow), rows, operation);
+    return decoded.map((row) => ({
+      owner: { tenantId: row.tenant_id, ownerId: row.owner_id },
+      scheduleId: row.schedule_id,
+      deadlineAtMillis: row.deadline_at_millis,
+    }));
   });
 
   const nextDeadline: ScheduleStore["Service"]["nextDeadline"] = Effect.fn(
