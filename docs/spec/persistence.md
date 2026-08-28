@@ -115,6 +115,11 @@ operations and also exposes strongly consistent `lookup`, graceful `releaseOwner
 the idempotent `markInputApplied` canonical-input marker, idempotent `requestAbort`, the ordered
 `scanNonterminal` stream, and a `capabilities` durability declaration.
 
+An unknown head is claimable only when its durable abort intent exists, checked atomically with
+the ordinary ownership claim. This exception preserves FIFO, lease checks, producer fencing, and
+uncertainty evidence; it enables cleanup and aborted settlement, never uncertain Tool replay.
+Memory, SQLite, and Durable Object SQLite adapters share this contract.
+
 Each method has an explicit atomic and idempotent contract. Admission and settlement intentionally
 span the two stores through recoverable states:
 

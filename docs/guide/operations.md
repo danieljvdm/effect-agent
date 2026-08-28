@@ -51,6 +51,95 @@ export the rows as logs or metrics, and alert on:
 - any row with severity `overdue`, which marks accepted work without timely settlement;
 - a growing `approval` backlog.
 
+## Abort unknown work
+
+Call `DurableAgentRuntime.abort(AbortCommand.make({ submissionId, author, reason }))` after the
+host authorizes stopping that Submission. On Cloudflare, use
+`CloudflareConversationClient.abort(receipt.conversationId, command)`. Abort authority remains
+service possession plus the host's authenticated boundary; it does not grant callers broader
+Tool-resolution authority.
+
+Normal recovery/maintenance now claims an unknown head with that durable intent, cleans up and
+joins attached children, and records the aborted settlement. It releases queued followers without
+replaying uncertain ordinary Tools. The original abort audit and unknown evidence remain; abort
+does not claim that an external action was rolled back. Repeated commands preserve the first
+intent. A `SettlementConflict` reports an outcome that already won, including an aborted outcome
+whose acknowledgement was lost.
+
+Remove consumer loops that follow abort with `ResolutionAbortSubmission` for every unresolved
+call, manually clean up children after an accepted parent abort, edit ledger state, or repeatedly
+wake a blocked lane.
+An unknown or approval-waiting head with ready followers quiesces until an authorized mutation
+restores its maintenance alarm. Keep host decisions about whether and when to abort; there is no
+automatic inactivity deadline.
+
+## Observe a Submission outcome
+
+Persist the admission `Receipt`: its `submissionId`, `receiptId`, `conversationId`, and
+`queueSequence` identify the same obligation across retries and replacement Attempts. Existing
+public ports supply the evidence; a separate inspection RPC or recovery classifier is unnecessary.
+
+| Need                         | Public API and evidence                                                                                                                                                                                                 |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Admitted or queued           | `SubmissionLedger.lookup(SubmissionLookupById.make({ submissionId }))`: `admitted` or `ready`; the Receipt proves admission.                                                                                            |
+| Execution stage              | The same lookup returns `running` or `input-applied`. This is durable operational state, not proof that a worker is alive.                                                                                              |
+| Intentional wait             | `loadRecoverySnapshot(RecoverySnapshotRequest.make({ submissionId }))` exposes `suspension` and joined host linkage. `explain(submissionId)` supplies the existing classifier decision.                                 |
+| Unknown outcome              | Lookup returns `unknown`; `explain` adds open calls, uncertainty audits, accepted resolutions, and abort intent.                                                                                                        |
+| Completed, failed, aborted   | `awaitSettlement(receipt)` returns the durable terminal identity/outcome and bounded failure diagnostic. Interrupting the wait detaches the caller; it does not abort the Submission.                                   |
+| Terminal stop/budget details | The canonical `SubmissionSettled` record carries `finishReason`, `exhausted`, and `policyLimit` where applicable. These fields are **not** currently on the returned `Settlement`; read the record through observation. |
+
+For live progress use `DurableAgentRuntime.observe(receipt, { after })`. It is a Conversation
+Stream, so filter by `submissionId` or `runIdForSubmission(submissionId)` as appropriate. Joined
+input shares its host's Run; use the snapshot's `hostSubmissionId` for Run evidence, and the
+original Submission ID for its own terminal record. For example, this Stream yields the exact
+terminal envelope, including budget metadata and its resumable cursor:
+
+```ts
+import { DurableAgentRuntime, type ObservationOffset, type Receipt } from "@effect-agent/session";
+import { Effect, Stream } from "effect";
+
+const observeOutcome = (receipt: Receipt, after?: ObservationOffset) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      return runtime.observe(receipt, { after }).pipe(
+        Stream.filter(
+          ({ record }) =>
+            record.payload._tag === "SubmissionSettled" &&
+            record.payload.submissionId === receipt.submissionId,
+        ),
+        Stream.take(1),
+      );
+    }),
+  );
+```
+
+On Cloudflare, consume bounded `CloudflareConversationClient.readPage` pages and retain the last
+`sequence`; after an empty page, `awaitProgress(conversationId, sequence)` waits for a hint or
+already committed progress before another read. Do not call `readAll` or `explain` in a polling
+loop: `explain` is a diagnostic read of conversation history. For a first run-scoped read inside
+an authorized host, the public recovery snapshot's `inputApplied.sequence` provides a lower
+bound for `ConversationStore.read` (use `sequence - 1` to include the input); a ready follower has
+no Run history yet. Keep subsequent reads incremental and retain only the application's projection.
+Cloudflare already exposes `explainEncoded` for occasional remote diagnosis.
+
+For a queued follower, the ordered public `SubmissionLedger.scanNonterminal` identifies the
+earlier unsettled head in its Conversation; `explain` diagnoses that head without reimplementing
+recovery. Do not infer the follower's state from the Conversation's latest Run.
+
+Canonical records replay from the saved cursor. Consumers own cursor persistence and idempotent
+projection or delivery; checkpointing after a side effect can redeliver it after a crash. Neither
+the Stream, a notification, a callback, nor a process-local finalizer guarantees durable external
+delivery. No exactly-once external delivery is promised. Hosts must authorize public ledger reads
+and observation, and handle typed storage, protocol, and authorization errors without interpreting
+them as a terminal outcome.
+
+Delete custom inspection/classification and outcome-polling code that duplicates these contracts.
+Keep application policy for visible responses, whether an acknowledgement is sufficient,
+destinations and authorization, inactivity thresholds, and delivery retries. Tool success or an
+application result tag is not a library-defined answer obligation; project that policy from
+canonical records without adding it to the runtime.
+
 ## Backup and restore on DN
 
 Any file-consistent snapshot works as a backup: copy the `.sqlite`, `-wal`, and `-shm` files
