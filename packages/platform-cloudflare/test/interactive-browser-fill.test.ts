@@ -16,17 +16,20 @@ const sdk = vi.hoisted(() => ({ launch: vi.fn<() => Promise<object>>() }));
 
 vi.mock("@cloudflare/puppeteer", () => ({ default: sdk }));
 
-// Only the SDK transport is replaced: fill runs the production $eval callback.
+// Only the SDK transport is replaced: fill runs the production element callback.
 const nativeLayer = (element: object) => {
   const page = {
-    $eval: async (
-      selector: string,
-      evaluate: (field: object, value: string) => void,
-      value: string,
-    ) => {
-      if (selector !== "#field") throw new Error("No element matches the selector");
-      evaluate(element, value);
-    },
+    evaluate: async () => ({ matchCount: 1 }),
+    $$: async (selector: string) =>
+      selector === "#field"
+        ? [
+            {
+              evaluate: async (evaluate: (field: object, value: string) => void, value: string) =>
+                evaluate(element, value),
+              dispose: async () => {},
+            },
+          ]
+        : [],
     url: () => "https://example.com/form",
     close: async () => {},
     setBypassServiceWorker: async () => {},

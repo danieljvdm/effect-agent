@@ -151,6 +151,21 @@ const makeGate = <A>(): Gate<A> => {
 };
 
 const makeFixture = (options: FixtureOptions = {}): Fixture => {
+  const observation = {
+    before: { matchCount: 1 },
+    after: { matchCount: 1 },
+    afterUnavailable: false,
+    network: {
+      total: 0,
+      status2xx: 0,
+      status3xx: 0,
+      status4xx: 0,
+      status5xx: 0,
+      failed: 0,
+      pending: 0,
+      settleTimedOut: false,
+    },
+  };
   const calls: Array<string> = [];
   const keepAliveMillis: Array<number> = [];
   let currentUrl: unknown = options.initialUrl ?? "https://example.com/";
@@ -238,13 +253,17 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
         ? { _tag: "Text", text: "Example Domain" }
         : await options.readText(selector, maximumBytes);
     },
-    fill: async (selector, value) => {
+    fill: async (selector, value, _signal, onDispatch) => {
       calls.push(`page.fill:${selector}:${value}`);
+      onDispatch();
       await options.fill?.(selector, value);
+      return observation;
     },
-    click: async (selector) => {
+    click: async (selector, _signal, onDispatch) => {
       calls.push(`page.click:${selector}`);
+      onDispatch();
       await options.click?.(selector);
+      return observation;
     },
     screenshot: async (fullPage) => {
       calls.push(`page.screenshot:${String(fullPage)}`);

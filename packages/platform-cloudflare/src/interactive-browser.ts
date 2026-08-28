@@ -58,6 +58,10 @@ const MAX_HANDOFF_TIMEOUT_MILLIS = 30 * 60_000;
 const MAX_HOST_TEXT_LENGTH = 8 * 1024;
 const CLEANUP_STEP_TIMEOUT_MILLIS = 10_000;
 const CLOSE_SESSION_TIMEOUT_MILLIS = 10_000;
+const ACTION_NETWORK_QUIET_MILLIS = 200;
+const ACTION_NETWORK_SETTLE_MILLIS = 2_000;
+const ACTION_POST_STATE_MILLIS = 250;
+const MAX_OBSERVED_CONTROLS = 64;
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 const BoundedHostText = Schema.String.check(
   Schema.isMinLength(1),
@@ -69,6 +73,55 @@ const TextObservation = Schema.Union([
   Schema.Struct({ _tag: Schema.Literal("MissingElement") }),
   Schema.Struct({ _tag: Schema.Literal("OverLimit"), observed: Schema.Natural }),
 ]);
+const ActionTargetState = Schema.Struct({
+  matchCount: Schema.Natural,
+  invalidSelector: Schema.optionalKey(Schema.Boolean),
+  kind: Schema.optionalKey(
+    Schema.Literals(["button", "checkbox", "radio", "select", "text", "link", "other"]),
+  ),
+  checked: Schema.optionalKey(Schema.Boolean),
+  selected: Schema.optionalKey(Schema.Boolean),
+  disabled: Schema.optionalKey(Schema.Boolean),
+  required: Schema.optionalKey(Schema.Boolean),
+  valid: Schema.optionalKey(Schema.Boolean),
+  formValid: Schema.optionalKey(Schema.Boolean),
+});
+const ActionNetworkState = Schema.Struct({
+  total: Schema.Natural,
+  status2xx: Schema.Natural,
+  status3xx: Schema.Natural,
+  status4xx: Schema.Natural,
+  status5xx: Schema.Natural,
+  failed: Schema.Natural,
+  pending: Schema.Natural,
+  settleTimedOut: Schema.Boolean,
+});
+const ActionObservation = Schema.Struct({
+  before: ActionTargetState,
+  after: Schema.optionalKey(ActionTargetState),
+  afterUnavailable: Schema.Boolean,
+  network: ActionNetworkState,
+});
+const PageObservation = Schema.fromJsonString(
+  Schema.Struct({
+    pageText: BoundedRemoteText,
+    selectorMatchCount: Schema.Natural,
+    controlsTruncated: Schema.Boolean,
+    controls: Schema.Array(
+      Schema.Struct({
+        selector: BoundedRemoteText,
+        kind: BoundedRemoteText,
+        label: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(200))),
+        checked: Schema.optionalKey(Schema.Boolean),
+        selected: Schema.optionalKey(Schema.Boolean),
+        disabled: Schema.optionalKey(Schema.Boolean),
+        required: Schema.optionalKey(Schema.Boolean),
+        valid: Schema.optionalKey(Schema.Boolean),
+        formValid: Schema.optionalKey(Schema.Boolean),
+      }),
+    ).check(Schema.isMaxLength(MAX_OBSERVED_CONTROLS)),
+  }),
+);
 const PngBytes = Schema.Uint8Array.check(
   Schema.isMaxLength(MAX_SCREENSHOT_BYTES),
   Schema.makeFilter(
@@ -209,8 +262,17 @@ export interface BrowserRunInteractivePage {
   readonly goto: (url: string) => Promise<void>;
   readonly url: () => unknown;
   readonly readText: (selector: string | undefined, maximumBytes: number) => Promise<unknown>;
-  readonly fill: (selector: string, value: string) => Promise<void>;
-  readonly click: (selector: string) => Promise<void>;
+  readonly fill: (
+    selector: string,
+    value: string,
+    signal: AbortSignal,
+    onDispatch: () => void,
+  ) => Promise<unknown>;
+  readonly click: (
+    selector: string,
+    signal: AbortSignal,
+    onDispatch: () => void,
+  ) => Promise<unknown>;
   readonly screenshot: (fullPage: boolean) => Promise<unknown>;
   readonly scroll: (deltaX: number, deltaY: number) => Promise<void>;
   readonly createCdpSession: () => Promise<BrowserRunInteractiveCdpSession>;
@@ -294,6 +356,288 @@ const makeProductionCdpSession = (session: CDPSession): BrowserRunInteractiveCdp
   detach: () => session.detach(),
 });
 
+class BrowserRunActionUndispatched extends Error {
+  readonly matchCount: number;
+
+  constructor(matchCount: number) {
+    super("The browser action selector did not resolve to exactly one element");
+    this.matchCount = matchCount;
+  }
+}
+
+const readActionTarget = (page: Page, selector: string): Promise<unknown> =>
+  page.evaluate((requestedSelector) => {
+    const pageDocument = Reflect.get(globalThis, "document");
+    let matches;
+    try {
+      matches = Reflect.apply(Reflect.get(pageDocument, "querySelectorAll"), pageDocument, [
+        requestedSelector,
+      ]);
+    } catch (cause) {
+      if (cause instanceof Error && cause.name === "SyntaxError") {
+        return { matchCount: 0, invalidSelector: true };
+      }
+      throw cause;
+    }
+    if (typeof matches !== "object" || matches === null) throw new Error("Invalid query result");
+    const matchCount = Math.min(10_000, Reflect.get(matches, "length"));
+    const element = Reflect.get(matches, 0);
+    if (element === undefined) return { matchCount };
+
+    const associated = Reflect.get(element, "control") ?? element;
+    const tagName = String(Reflect.get(associated, "tagName") ?? "").toLowerCase();
+    const inputType = String(Reflect.get(associated, "type") ?? "").toLowerCase();
+    const role = String(
+      Reflect.apply(Reflect.get(element, "getAttribute"), element, ["role"]) ?? "",
+    ).toLowerCase();
+    const kind =
+      tagName === "button" || role === "button"
+        ? "button"
+        : inputType === "checkbox" || role === "checkbox" || role === "switch"
+          ? "checkbox"
+          : inputType === "radio" || role === "radio"
+            ? "radio"
+            : tagName === "select"
+              ? "select"
+              : tagName === "input" || tagName === "textarea"
+                ? "text"
+                : tagName === "a"
+                  ? "link"
+                  : "other";
+    const checked = Reflect.get(associated, "checked");
+    const selected =
+      tagName === "select"
+        ? Reflect.get(associated, "selectedIndex") >= 0
+        : Reflect.get(associated, "selected");
+    const disabled = Reflect.get(associated, "disabled");
+    const required = Reflect.get(associated, "required");
+    const validity = Reflect.get(associated, "validity");
+    const form = Reflect.get(associated, "form");
+    const formMatches =
+      form === null || form === undefined ? undefined : Reflect.get(form, "matches");
+    const ariaChecked = Reflect.apply(Reflect.get(element, "getAttribute"), element, [
+      "aria-checked",
+    ]);
+    const ariaDisabled = Reflect.apply(Reflect.get(element, "getAttribute"), element, [
+      "aria-disabled",
+    ]);
+    const ariaSelected = Reflect.apply(Reflect.get(element, "getAttribute"), element, [
+      "aria-selected",
+    ]);
+
+    return {
+      matchCount,
+      kind,
+      ...(typeof checked === "boolean"
+        ? { checked }
+        : ariaChecked === "true" || ariaChecked === "false"
+          ? { checked: ariaChecked === "true" }
+          : {}),
+      ...(typeof selected === "boolean"
+        ? { selected }
+        : ariaSelected === "true" || ariaSelected === "false"
+          ? { selected: ariaSelected === "true" }
+          : {}),
+      disabled: typeof disabled === "boolean" ? disabled : ariaDisabled === "true",
+      ...(typeof required === "boolean" ? { required } : {}),
+      ...(validity !== undefined && typeof Reflect.get(validity, "valid") === "boolean"
+        ? { valid: Reflect.get(validity, "valid") }
+        : {}),
+      ...(typeof formMatches === "function"
+        ? { formValid: Reflect.apply(formMatches, form, [":valid"]) }
+        : {}),
+    };
+  }, selector);
+
+// SDK promises cannot be cancelled. Clear our timer and observe late rejections;
+// the owning browser Scope is responsible for terminating the remote session.
+const boundedBestEffort = async <A>(
+  promise: Promise<A>,
+  millis: number,
+): Promise<A | undefined> => {
+  let timer: ReturnType<typeof setTimeout> | number | undefined;
+  try {
+    return await Promise.race([
+      promise.catch(() => undefined),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(resolve, millis);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const readActionTargetAfter = (page: Page, selector: string) =>
+  boundedBestEffort(
+    readActionTarget(page, selector).then(Schema.decodeUnknownSync(ActionTargetState)),
+    ACTION_POST_STATE_MILLIS,
+  );
+
+const makeActionRequestTracker = (page: Page, signal: AbortSignal) => {
+  const pending = new Set<HTTPRequest>();
+  let total = 0;
+  let status2xx = 0;
+  let status3xx = 0;
+  let status4xx = 0;
+  let status5xx = 0;
+  let failed = 0;
+  let lastChange = performance.now();
+  let closed = false;
+  let wake: (() => void) | undefined;
+  let timer: ReturnType<typeof setTimeout> | number | undefined;
+
+  const relevant = (request: HTTPRequest) => {
+    const resourceType = request.resourceType();
+    return resourceType === "fetch" || resourceType === "xhr";
+  };
+  const onRequest = (request: HTTPRequest) => {
+    if (!relevant(request)) return;
+    pending.add(request);
+    total++;
+    lastChange = performance.now();
+  };
+  const onFinished = (request: HTTPRequest) => {
+    if (!pending.delete(request)) return;
+    let status: number | undefined;
+    try {
+      status = request.response()?.status();
+    } catch {
+      // Provider response details remain intentionally unavailable to diagnostics.
+    }
+    if (status !== undefined) {
+      if (status >= 200 && status < 300) status2xx++;
+      else if (status >= 300 && status < 400) status3xx++;
+      else if (status >= 400 && status < 500) status4xx++;
+      else if (status >= 500 && status < 600) status5xx++;
+    }
+    lastChange = performance.now();
+  };
+  const onFailed = (request: HTTPRequest) => {
+    if (!pending.delete(request)) return;
+    failed++;
+    lastChange = performance.now();
+  };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    page.off("request", onRequest);
+    page.off("requestfinished", onFinished);
+    page.off("requestfailed", onFailed);
+    signal.removeEventListener("abort", close);
+    clearTimeout(timer);
+    wake?.();
+  };
+
+  try {
+    page.on("request", onRequest);
+    page.on("requestfinished", onFinished);
+    page.on("requestfailed", onFailed);
+    signal.addEventListener("abort", close, { once: true });
+    if (signal.aborted) close();
+  } catch (cause) {
+    close();
+    throw cause;
+  }
+
+  const wait = async () => {
+    const startedAt = performance.now();
+    let settleTimedOut = false;
+    while (!closed) {
+      const now = performance.now();
+      if (pending.size === 0 && now - lastChange >= ACTION_NETWORK_QUIET_MILLIS) break;
+      if (now - startedAt >= ACTION_NETWORK_SETTLE_MILLIS) {
+        settleTimedOut = true;
+        break;
+      }
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+        timer = setTimeout(() => resolve(), 50);
+      });
+      wake = undefined;
+    }
+    return {
+      total,
+      status2xx,
+      status3xx,
+      status4xx,
+      status5xx,
+      failed,
+      pending: pending.size,
+      settleTimedOut,
+    };
+  };
+
+  return {
+    wait,
+    close,
+    markActionSettled: () => {
+      lastChange = performance.now();
+    },
+  };
+};
+
+const disposeActionHandles = async (handles: ReadonlyArray<{ dispose: () => Promise<void> }>) => {
+  await boundedBestEffort(
+    Promise.allSettled(handles.map(async (handle) => handle.dispose())),
+    ACTION_POST_STATE_MILLIS,
+  );
+};
+
+const runObservedPageAction = async (
+  page: Page,
+  selector: string,
+  signal: AbortSignal,
+  onDispatch: () => void,
+  action: (element: NonNullable<Awaited<ReturnType<Page["$"]>>>) => Promise<void>,
+): Promise<unknown> => {
+  if (signal.aborted) throw new BrowserRunActionUndispatched(0);
+  const before = Schema.decodeUnknownSync(ActionTargetState)(
+    await readActionTarget(page, selector),
+  );
+  if (before.matchCount !== 1 || before.invalidSelector === true) {
+    throw new BrowserRunActionUndispatched(before.matchCount);
+  }
+  const matches = await page.$$(selector);
+  if (matches.length !== 1 || matches[0] === undefined) {
+    await disposeActionHandles(matches);
+    throw new BrowserRunActionUndispatched(Math.min(10_000, matches.length));
+  }
+  if (signal.aborted) {
+    await disposeActionHandles(matches);
+    throw new BrowserRunActionUndispatched(1);
+  }
+
+  let tracker: ReturnType<typeof makeActionRequestTracker> | undefined;
+  let disposing: Promise<void> | undefined;
+  const dispose = () => (disposing ??= disposeActionHandles(matches));
+  const onAbort = () => {
+    void dispose();
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    tracker = makeActionRequestTracker(page, signal);
+    // No await between the final cancellation fence and SDK dispatch. Once
+    // dispatched, interruption is uncertain, even if the SDK later resolves.
+    if (signal.aborted) throw new BrowserRunActionUndispatched(1);
+    onDispatch();
+    await action(matches[0]);
+    tracker.markActionSettled();
+    const network = await tracker.wait();
+    const after = signal.aborted ? undefined : await readActionTargetAfter(page, selector);
+    return {
+      before,
+      ...(after === undefined ? {} : { after }),
+      afterUnavailable: after === undefined,
+      network,
+    };
+  } finally {
+    tracker?.close();
+    signal.removeEventListener("abort", onAbort);
+    await dispose();
+  }
+};
+
 const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
   const listeners = new Map<BrowserRunInteractiveRequestListener, (request: HTTPRequest) => void>();
   return {
@@ -313,38 +657,234 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
       }
     },
     goto: async (url) => {
-      await page.goto(url, { waitUntil: "networkidle0", timeout: 0 });
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
     },
     url: () => page.url(),
-    readText: (selector, maximumBytes) =>
-      page.evaluate(
-        (requestedSelector, maximum) => {
-          const pageDocument = Reflect.get(globalThis, "document");
-          const element =
-            requestedSelector === undefined
-              ? Reflect.get(pageDocument, "body")
-              : Reflect.apply(Reflect.get(pageDocument, "querySelector"), pageDocument, [
-                  requestedSelector,
-                ]);
-          if (element === null) return { _tag: "MissingElement" };
-          const innerText = Reflect.get(element, "innerText");
-          const textContent = Reflect.get(element, "textContent");
-          const text =
-            typeof innerText === "string"
-              ? innerText
-              : typeof textContent === "string"
-                ? textContent
-                : "";
-          const observed = new TextEncoder().encode(text).byteLength;
-          return observed > maximum ? { _tag: "OverLimit", observed } : { _tag: "Text", text };
-        },
-        selector,
-        maximumBytes,
-      ),
-    fill: async (selector, value) => {
-      await page.$eval(
-        selector,
-        (element, nextValue) => {
+    readText: async (selector, maximumBytes) => {
+      const observation = Schema.decodeUnknownSync(TextObservation)(
+        await page.evaluate(
+          (requestedSelector, maximum, maximumControls) => {
+            const pageDocument = Reflect.get(globalThis, "document");
+            const matches =
+              requestedSelector === undefined
+                ? undefined
+                : Reflect.apply(Reflect.get(pageDocument, "querySelectorAll"), pageDocument, [
+                    requestedSelector,
+                  ]);
+            const selectorMatchCount =
+              matches === undefined || matches === null
+                ? 1
+                : Math.min(10_000, Reflect.get(matches, "length"));
+            const element =
+              matches === undefined || matches === null
+                ? Reflect.get(pageDocument, "body")
+                : Reflect.get(matches, 0);
+            if (element === null) return { _tag: "MissingElement" };
+            if (element === undefined) return { _tag: "MissingElement" };
+            const innerText = Reflect.get(element, "innerText");
+            const textContent = Reflect.get(element, "textContent");
+            const pageText =
+              typeof innerText === "string"
+                ? innerText
+                : typeof textContent === "string"
+                  ? textContent
+                  : "";
+            const primaryControlSelector =
+              'input,select,textarea,label,button,[role="checkbox"],[role="radio"],[role="option"],[role="switch"],[role="tab"],[role="button"]';
+            const optionSelector = "select option";
+            const secondaryControlSelector = "a[href]";
+            const controlSelector = `${primaryControlSelector},${optionSelector},${secondaryControlSelector}`;
+            const selectorFor = (candidate: object) => {
+              const parts: Array<string> = [];
+              let current: object | null = candidate;
+              while (current !== null && current !== undefined) {
+                const tagName = String(Reflect.get(current, "tagName") ?? "").toLowerCase();
+                if (tagName === "") break;
+                const parent: object | null = Reflect.get(current, "parentElement");
+                if (parent === null) {
+                  parts.push(tagName);
+                  break;
+                }
+                let sibling = Reflect.get(current, "previousElementSibling");
+                let index = 1;
+                while (sibling !== null && sibling !== undefined) {
+                  if (String(Reflect.get(sibling, "tagName") ?? "").toLowerCase() === tagName)
+                    index++;
+                  sibling = Reflect.get(sibling, "previousElementSibling");
+                }
+                parts.push(`${tagName}:nth-of-type(${index})`);
+                current = parent;
+              }
+              return parts.reverse().join(" > ");
+            };
+            const visible = (candidate: object) => {
+              const hidden = Reflect.get(candidate, "hidden");
+              const ariaHidden = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
+                "aria-hidden",
+              ]);
+              const rects = Reflect.apply(Reflect.get(candidate, "getClientRects"), candidate, []);
+              return (
+                hidden !== true &&
+                ariaHidden !== "true" &&
+                typeof rects === "object" &&
+                rects !== null &&
+                Reflect.get(rects, "length") > 0
+              );
+            };
+            const candidates: Array<object> = [];
+            let controlsTruncated = false;
+            const consider = (candidate: object) => {
+              const tagName = String(Reflect.get(candidate, "tagName") ?? "").toLowerCase();
+              // Collapsed native options have no client rects. Their owning
+              // select determines visibility; observe text/selection, never value.
+              const visibilityTarget =
+                tagName === "option"
+                  ? Reflect.apply(Reflect.get(candidate, "closest"), candidate, ["select"])
+                  : candidate;
+              const actionable = tagName !== "label" || Reflect.get(candidate, "control") !== null;
+              if (
+                !actionable ||
+                typeof visibilityTarget !== "object" ||
+                visibilityTarget === null ||
+                !visible(visibilityTarget)
+              )
+                return;
+              candidates.push(candidate);
+              if (candidates.length > maximumControls) controlsTruncated = true;
+            };
+            const elementMatches = Reflect.get(element, "matches");
+            if (
+              typeof elementMatches === "function" &&
+              Reflect.apply(elementMatches, element, [controlSelector])
+            ) {
+              consider(element);
+            }
+            const considerSelector = (candidateSelector: string) => {
+              const descendants = Reflect.apply(Reflect.get(element, "querySelectorAll"), element, [
+                candidateSelector,
+              ]);
+              if (typeof descendants !== "object" || descendants === null) return;
+              const descendantCount = Reflect.get(descendants, "length");
+              for (let index = 0; index < descendantCount && !controlsTruncated; index++) {
+                consider(Reflect.get(descendants, index));
+              }
+            };
+            considerSelector(primaryControlSelector);
+            if (!controlsTruncated) considerSelector(optionSelector);
+            if (!controlsTruncated) considerSelector(secondaryControlSelector);
+            const controls = candidates.slice(0, maximumControls).map((candidate) => {
+              const associated = Reflect.get(candidate, "control") ?? candidate;
+              const tagName = String(Reflect.get(candidate, "tagName") ?? "").toLowerCase();
+              const inputType = String(Reflect.get(associated, "type") ?? "").toLowerCase();
+              const role = String(
+                Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, ["role"]) ?? "",
+              ).toLowerCase();
+              const ariaLabel = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
+                "aria-label",
+              ]);
+              const candidateText =
+                tagName === "textarea" || tagName === "input" || tagName === "select"
+                  ? undefined
+                  : Reflect.get(candidate, tagName === "option" ? "label" : "innerText");
+              const associatedLabels = Reflect.get(associated, "labels");
+              const associatedLabel =
+                associatedLabels !== undefined &&
+                associatedLabels !== null &&
+                Reflect.get(associatedLabels, "length") > 0
+                  ? Reflect.get(Reflect.get(associatedLabels, 0), "innerText")
+                  : undefined;
+              const label = String(
+                typeof ariaLabel === "string" && ariaLabel !== ""
+                  ? ariaLabel
+                  : typeof candidateText === "string" && candidateText !== ""
+                    ? candidateText
+                    : (associatedLabel ?? ""),
+              )
+                .replace(/\s+/g, " ")
+                .trim()
+                .slice(0, 200);
+              const checked = Reflect.get(associated, "checked");
+              const selected =
+                tagName === "select"
+                  ? Reflect.get(associated, "selectedIndex") >= 0
+                  : Reflect.get(associated, "selected");
+              const disabled = Reflect.get(associated, "disabled");
+              const required = Reflect.get(associated, "required");
+              const validity = Reflect.get(associated, "validity");
+              const form = Reflect.get(associated, "form");
+              const formMatches =
+                form === null || form === undefined ? undefined : Reflect.get(form, "matches");
+              const ariaChecked = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
+                "aria-checked",
+              ]);
+              const ariaSelected = Reflect.apply(
+                Reflect.get(candidate, "getAttribute"),
+                candidate,
+                ["aria-selected"],
+              );
+              const ariaDisabled = Reflect.apply(
+                Reflect.get(candidate, "getAttribute"),
+                candidate,
+                ["aria-disabled"],
+              );
+
+              return {
+                selector: selectorFor(candidate),
+                kind:
+                  tagName === "label"
+                    ? `label:${inputType || "control"}`
+                    : tagName === "input"
+                      ? `input:${inputType || "text"}`
+                      : role !== ""
+                        ? `role:${role}`
+                        : tagName,
+                ...(label === "" ? {} : { label }),
+                ...(typeof checked === "boolean"
+                  ? { checked }
+                  : ariaChecked === "true" || ariaChecked === "false"
+                    ? { checked: ariaChecked === "true" }
+                    : {}),
+                ...(typeof selected === "boolean"
+                  ? { selected }
+                  : ariaSelected === "true" || ariaSelected === "false"
+                    ? { selected: ariaSelected === "true" }
+                    : {}),
+                ...(typeof disabled === "boolean"
+                  ? { disabled }
+                  : ariaDisabled === "true" || ariaDisabled === "false"
+                    ? { disabled: ariaDisabled === "true" }
+                    : {}),
+                ...(typeof required === "boolean" ? { required } : {}),
+                ...(validity !== undefined && typeof Reflect.get(validity, "valid") === "boolean"
+                  ? { valid: Reflect.get(validity, "valid") }
+                  : {}),
+                ...(typeof formMatches === "function"
+                  ? { formValid: Reflect.apply(formMatches, form, [":valid"]) }
+                  : {}),
+              };
+            });
+            // JSON is the bounded wire representation of this existing text result.
+            // eslint-disable-next-line no-restricted-properties
+            const text = JSON.stringify({
+              pageText,
+              selectorMatchCount,
+              controls,
+              controlsTruncated,
+            });
+            const observed = new TextEncoder().encode(text).byteLength;
+            return observed > maximum ? { _tag: "OverLimit", observed } : { _tag: "Text", text };
+          },
+          selector,
+          maximumBytes,
+          MAX_OBSERVED_CONTROLS,
+        ),
+      );
+      if (observation._tag === "Text") Schema.decodeUnknownSync(PageObservation)(observation.text);
+      return observation;
+    },
+    fill: (selector, value, signal, onDispatch) =>
+      runObservedPageAction(page, selector, signal, onDispatch, (element) =>
+        element.evaluate((element, nextValue) => {
           // Bypass instance setters so React can detect the change when events fire.
           let prototype = Reflect.getPrototypeOf(element);
           let setValue: ((value: string) => void) | undefined;
@@ -367,11 +907,10 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
             Reflect.apply(dispatchEvent, element, [new Event("input", { bubbles: true })]);
             Reflect.apply(dispatchEvent, element, [new Event("change", { bubbles: true })]);
           }
-        },
-        value,
-      );
-    },
-    click: (selector) => page.click(selector),
+        }, value),
+      ),
+    click: (selector, signal, onDispatch) =>
+      runObservedPageAction(page, selector, signal, onDispatch, (element) => element.click()),
     // Puppeteer materializes the complete image before returning. The adapter
     // validates the 8 MiB Schema ceiling and pass limit immediately afterward.
     screenshot: (fullPage) => page.screenshot({ type: "png", fullPage }),
@@ -420,6 +959,20 @@ const actionError = (operation: BrowserOperation, cause?: unknown): InteractiveB
     message: `The interactive browser ${operation} operation failed`,
     ...(cause === undefined ? {} : { cause }),
   });
+
+const undispatchedActionError = (operation: BrowserOperation): InteractiveBrowserActionError =>
+  InteractiveBrowserActionError.make({
+    implementation: browserRunInteractiveImplementation,
+    operation,
+    message: `The interactive browser ${operation} operation was not dispatched`,
+  });
+
+/** Recognizes a local pre-dispatch refusal without exposing selector or page content. */
+export const isBrowserRunUndispatchedActionError = (error: unknown): boolean =>
+  Schema.is(InteractiveBrowserActionError)(error) &&
+  error.implementation.identity === browserRunInteractiveImplementation.identity &&
+  (error.operation === "click" || error.operation === "fill") &&
+  error.message === `The interactive browser ${error.operation} operation was not dispatched`;
 
 const policyError = (message: string): InteractiveBrowserPolicyDeniedError =>
   InteractiveBrowserPolicyDeniedError.make({
@@ -593,6 +1146,14 @@ interface HandleRuntime {
   ) => Effect.Effect<A, BrowserFailure>;
 }
 
+class BrowserRunRemoteFailure {
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    this.cause = cause;
+  }
+}
+
 const awaitPendingRequests = (state: HandleState): Effect.Effect<void> =>
   Effect.suspend(() => {
     const pending = [...state.pendingRequests];
@@ -685,17 +1246,136 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
   const permits = yield* Semaphore.make(1);
   const actions = yield* Ref.make(0);
 
-  const remote = <A>(operation: BrowserOperation, evaluate: () => Promise<A>) =>
+  const remote = <A>(operation: BrowserOperation, evaluate: (signal: AbortSignal) => Promise<A>) =>
     Effect.tryPromise({
       try: evaluate,
-      catch: (cause) => {
-        if (state.disconnected.value || isRemoteClosure(cause)) {
-          state.disconnected.value = true;
-          return expiredError();
-        }
-        return actionError(operation, cause);
-      },
+      catch: (cause) => new BrowserRunRemoteFailure(cause),
+    }).pipe(
+      Effect.catch(
+        (
+          failure,
+        ): Effect.Effect<never, InteractiveBrowserActionError | InteractiveBrowserExpiredError> => {
+          const cause = failure.cause;
+          if (cause instanceof BrowserRunActionUndispatched) {
+            return Effect.logInfo("Browser interactive action was not dispatched").pipe(
+              Effect.annotateLogs({
+                "browser.action": operation,
+                "browser.selector_match_count": cause.matchCount,
+              }),
+              Effect.andThen(Effect.fail(undispatchedActionError(operation))),
+            );
+          }
+          if (state.disconnected.value || isRemoteClosure(cause)) {
+            state.disconnected.value = true;
+            return Effect.fail(expiredError());
+          }
+          return Effect.fail(actionError(operation, cause));
+        },
+      ),
+    );
+
+  const observedAction = (
+    operation: "fill" | "click",
+    evaluate: (signal: AbortSignal, onDispatch: () => void) => Promise<unknown>,
+  ) =>
+    Effect.suspend(() => {
+      let dispatched = false;
+      let pending: Promise<unknown> | undefined;
+      return remote(operation, (signal) => {
+        pending = evaluate(signal, () => {
+          dispatched = true;
+        });
+        return pending;
+      }).pipe(
+        Effect.onInterrupt(() =>
+          Effect.gen(function* () {
+            state.uncertain.value = true;
+            // Retain evidence before Scope teardown, without claiming SDK
+            // cancellation or success. A late completion never makes this replayable.
+            yield* Effect.logWarning("Browser interactive action interrupted").pipe(
+              Effect.annotateLogs({
+                "browser.action": operation,
+                "browser.action_dispatched": dispatched,
+                "browser.action_outcome_unknown": dispatched,
+              }),
+            );
+            const completion = pending;
+            if (completion !== undefined) {
+              yield* Effect.promise(() => boundedBestEffort(completion, 500));
+            }
+          }),
+        ),
+      );
     });
+
+  const decodeActionObservation = Effect.fn("BrowserRunInteractive.decodeActionObservation")(
+    function* (raw: unknown) {
+      return yield* Schema.decodeUnknownEffect(ActionObservation)(raw).pipe(
+        Effect.mapError((cause) =>
+          protocolError("The browser returned a malformed action observation", cause),
+        ),
+      );
+    },
+  );
+
+  const logActionObservation = (
+    operation: "fill" | "click",
+    observation: typeof ActionObservation.Type,
+  ) =>
+    Effect.logInfo("Browser interactive action observed").pipe(
+      Effect.annotateLogs({
+        "browser.action": operation,
+        "browser.selector_match_count": observation.before.matchCount,
+        ...(observation.before.kind === undefined
+          ? {}
+          : { "browser.target_kind": observation.before.kind }),
+        ...(observation.before.checked === undefined
+          ? {}
+          : { "browser.target_checked_before": observation.before.checked }),
+        ...(observation.after?.checked === undefined
+          ? {}
+          : { "browser.target_checked_after": observation.after.checked }),
+        ...(observation.before.selected === undefined
+          ? {}
+          : { "browser.target_selected_before": observation.before.selected }),
+        ...(observation.after?.selected === undefined
+          ? {}
+          : { "browser.target_selected_after": observation.after.selected }),
+        ...(observation.before.disabled === undefined
+          ? {}
+          : { "browser.target_disabled_before": observation.before.disabled }),
+        ...(observation.after?.disabled === undefined
+          ? {}
+          : { "browser.target_disabled_after": observation.after.disabled }),
+        ...(observation.before.required === undefined
+          ? {}
+          : { "browser.target_required_before": observation.before.required }),
+        ...(observation.after?.required === undefined
+          ? {}
+          : { "browser.target_required_after": observation.after.required }),
+        ...(observation.before.valid === undefined
+          ? {}
+          : { "browser.target_valid_before": observation.before.valid }),
+        ...(observation.after?.valid === undefined
+          ? {}
+          : { "browser.target_valid_after": observation.after.valid }),
+        ...(observation.before.formValid === undefined
+          ? {}
+          : { "browser.form_valid_before": observation.before.formValid }),
+        ...(observation.after?.formValid === undefined
+          ? {}
+          : { "browser.form_valid_after": observation.after.formValid }),
+        "browser.target_after_unavailable": observation.afterUnavailable,
+        "browser.fetch_xhr_total": observation.network.total,
+        "browser.fetch_xhr_2xx": observation.network.status2xx,
+        "browser.fetch_xhr_3xx": observation.network.status3xx,
+        "browser.fetch_xhr_4xx": observation.network.status4xx,
+        "browser.fetch_xhr_5xx": observation.network.status5xx,
+        "browser.fetch_xhr_failed": observation.network.failed,
+        "browser.fetch_xhr_pending": observation.network.pending,
+        "browser.network_settle_timed_out": observation.network.settleTimedOut,
+      }),
+    );
 
   const run = <A>(
     effect: Effect.Effect<A, BrowserFailure>,
@@ -750,6 +1430,12 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
                 return Effect.fail(error);
               }
               const failure = stateFailure(state);
+              if (
+                Schema.is(InteractiveBrowserActionError)(error) &&
+                !isBrowserRunUndispatchedActionError(error)
+              ) {
+                state.uncertain.value = true;
+              }
               return Effect.fail(failure ?? error);
             }),
           );
@@ -825,15 +1511,23 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
       ),
     fill: (request) =>
       run(
-        remote("fill", () => page.fill(request.selector, request.value)).pipe(
-          Effect.andThen(decodeActionResult(page, policy)),
-        ),
+        Effect.gen(function* () {
+          const observation = yield* observedAction("fill", (signal, onDispatch) =>
+            page.fill(request.selector, request.value, signal, onDispatch),
+          ).pipe(Effect.flatMap(decodeActionObservation));
+          yield* logActionObservation("fill", observation);
+          return yield* decodeActionResult(page, policy);
+        }),
       ),
     click: (request) =>
       run(
-        remote("click", () => page.click(request.selector)).pipe(
-          Effect.andThen(decodeActionResult(page, policy)),
-        ),
+        Effect.gen(function* () {
+          const observation = yield* observedAction("click", (signal, onDispatch) =>
+            page.click(request.selector, signal, onDispatch),
+          ).pipe(Effect.flatMap(decodeActionObservation));
+          yield* logActionObservation("click", observation);
+          return yield* decodeActionResult(page, policy);
+        }),
       ),
     screenshot: (request) =>
       Schema.decodeUnknownEffect(BrowserScreenshotRequest)(request).pipe(

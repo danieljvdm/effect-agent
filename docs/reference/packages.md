@@ -151,6 +151,34 @@ The `./interactive-browser` export supplies `browserRunInteractiveLayer` for the
 port and `browserRunInteractiveHostLayer` for host-only Live View, handoff, redacted session
 identity, and explicit cleanup by identity. Both require `BrowserRunInteractiveBinding`; neither
 adds a registry, execution reconnect, or durable browser state.
+Navigation waits for DOM content loaded, with a 30-second provider timeout bounded further by
+the pass deadline. `readText().text` contains JSON with `pageText`, `selectorMatchCount`,
+`controls`, and `controlsTruncated`. The inventory prioritizes form controls over links, includes
+visible labels for hidden native radios and options of visible native selects, and caps the list
+at 64 entries. Each entry has an exact structural CSS selector, kind, optional label, and available
+checked, selected, disabled, required, validity, and form-validity booleans. It never reads field
+values or HTML into control diagnostics. The entire JSON text remains subject to the pass byte
+limit; an oversized observation fails with the existing returned-bytes error.
+
+Click and fill require exactly one match, including a second check on acquired element handles.
+`isBrowserRunUndispatchedActionError` recognizes missing, ambiguous, or syntactically invalid CSS
+refusals before a mutation is sent. The handle remains usable after these refusals; callers may
+correct the target, but must not automatically replay a mutation with an unknown outcome.
+Other action failures invalidate the handle. Native option observations expose labels and
+selection, never option values; they do not add a new selection action to the generic port.
+
+Actions observe only fetch/XHR requests started during the action. A 200ms quiet window after
+dispatch completion is capped at two seconds. General logs contain only action names, bounded
+target-kind categories, counts, status-class buckets, and control-state booleans. They omit URLs,
+selectors, labels, values, headers, cookies, bodies, and provider exceptions. Post-action state
+is best-effort and capped at 250ms, so losing the old document during navigation does not fail a
+successful action. Listeners close on completion, failure, and abort; handle disposal waits at
+most 250ms. Interruption fences any dispatch still waiting on a query, invalidates the handle,
+records whether dispatch occurred before teardown, and waits at most 500ms for SDK completion.
+Puppeteer cannot cancel an already dispatched mutation reliably. Its outcome remains unknown
+after interruption, even if the SDK later resolves; the owning Scope closes the remote session.
+These diagnostics add no durable journal records and do not replace the engine's ordinary-tool
+uncertainty and recovery contract.
 This is a Layer-assembly library, not an application entrypoint.
 `CloudflareDurableRuntimeOptions.toolFailureObserver` installs the same closed trusted observer
 for the Object's coordinator. It adds no journal data or Code Mode durability claim.
