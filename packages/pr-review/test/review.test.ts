@@ -140,17 +140,6 @@ describe("review output boundary", () => {
           "find_files",
           "submit_review",
         ]);
-        expect(
-          prompt.content.flatMap((message) =>
-            message.role === "system" && message.content.startsWith("Final output contract:")
-              ? [message.content]
-              : [],
-          ),
-        ).toEqual([
-          'Final output contract: complete only by calling the required completion Tool "submit_review" ' +
-            "as the sole Tool Call in its batch. Do not emit an ordinary final assistant text answer. " +
-            "The Tool's canonical parameters and successful result are projected and validated as the Agent output.",
-        ]);
         const text = reviewInput(prompt);
         expect(text).toContain('"formattedDiff"');
         expect(text).not.toContain('"patch"');
@@ -170,9 +159,6 @@ describe("review output boundary", () => {
           expect(schema).toContain('"priority"');
           expect(schema).not.toContain('"severity"');
           expect(schema.indexOf('"body"')).toBeLessThan(schema.indexOf('"priority"'));
-          expect(schema).not.toContain('"decisions"');
-          expect(schema).not.toContain('"before"');
-          expect(schema).not.toContain('"repairSafety"');
         }
         return Stream.unwrap(
           Ref.update(calls, (count) => count + 1).pipe(

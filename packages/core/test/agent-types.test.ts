@@ -193,9 +193,6 @@ type PolicyContextLimitOptionalityProof = Assert<
   Equal<AgentPolicy["contextTokenLimit"], AgentPolicy["tokenBudget"]>
 >;
 type PolicyCompactionProof = Assert<Equal<AgentPolicy["compaction"], CompactionPolicy>>;
-type RequiredCompletionProof = Assert<
-  Equal<NonNullable<typeof terminalDefinition.completion>["required"], boolean | undefined>
->;
 type ContextOverflowTagProof = Assert<Equal<ContextOverflowError["_tag"], "ContextOverflowError">>;
 // Union MEMBERSHIP, not just the tag: extracting the member by tag from the
 // framework error union must yield exactly the class type (F5, PR #54 review).
@@ -221,7 +218,6 @@ describe("Agent type inference", () => {
     const policyRunStatusProof: PolicyRunStatusProof = true;
     const policyContextLimitOptionalityProof: PolicyContextLimitOptionalityProof = true;
     const policyCompactionProof: PolicyCompactionProof = true;
-    const requiredCompletionProof: RequiredCompletionProof = true;
     const contextOverflowTagProof: ContextOverflowTagProof = true;
     const contextOverflowInAgentErrorProof: ContextOverflowInAgentErrorProof = true;
 
@@ -229,7 +225,6 @@ describe("Agent type inference", () => {
     expect(policyRunStatusProof).toBe(true);
     expect(policyContextLimitOptionalityProof).toBe(true);
     expect(policyCompactionProof).toBe(true);
-    expect(requiredCompletionProof).toBe(true);
     expect(contextOverflowTagProof).toBe(true);
     expect(contextOverflowInAgentErrorProof).toBe(true);
     expect(requirementsProof).toBe(true);

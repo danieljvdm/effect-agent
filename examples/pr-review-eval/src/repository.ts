@@ -20,30 +20,11 @@ export const repositoryLayer = (snapshot: EvalRepositorySnapshot | undefined) =>
         input: Parameters<ReviewRepository["Service"]["readFile"]>[0],
       ) {
         const { path, revision } = input;
-        const files = snapshot?.files ?? [];
-        const fileIndex = files.findIndex(
+        const file = snapshot?.files.find(
           (candidate) => candidate.path === path && candidate.revision === revision,
         );
-        const file = files[fileIndex];
-        const access =
-          file === undefined
-            ? Effect.fail(missing(path, revision))
-            : ReviewSource.fromText(input, file.content);
-        const log = (outcome: "success" | "failure") =>
-          Effect.logDebug("Eval repository source access").pipe(
-            Effect.annotateLogs({
-              evalRepositoryOperation: "read_file",
-              evalRepositoryFileIndex: fileIndex,
-              evalRepositoryRevision: revision,
-              evalRepositoryStartLine: input.startLine,
-              evalRepositoryLineCount: input.lineCount,
-              evalRepositoryOutcome: outcome,
-            }),
-          );
-        return yield* access.pipe(
-          Effect.tap(() => log("success")),
-          Effect.tapError(() => log("failure")),
-        );
+        if (file === undefined) return yield* missing(path, revision);
+        return yield* ReviewSource.fromText(input, file.content);
       }),
       findFiles: ({ query, revision }) => {
         const paths = [
@@ -53,20 +34,8 @@ export const repositoryLayer = (snapshot: EvalRepositorySnapshot | undefined) =>
               .map((file) => file.path),
           ),
         ].sort();
-        const result = ReviewFileList.make({
-          paths: paths.slice(0, 100),
-          truncated: paths.length > 100,
-        });
-        return Effect.logDebug("Eval repository source access").pipe(
-          Effect.annotateLogs({
-            evalRepositoryOperation: "find_files",
-            evalRepositoryRevision: revision,
-            evalRepositoryQueryLength: query.length,
-            evalRepositoryMatchCount: result.paths.length,
-            evalRepositoryTruncated: result.truncated,
-            evalRepositoryOutcome: "success",
-          }),
-          Effect.as(result),
+        return Effect.succeed(
+          ReviewFileList.make({ paths: paths.slice(0, 100), truncated: paths.length > 100 }),
         );
       },
     }),

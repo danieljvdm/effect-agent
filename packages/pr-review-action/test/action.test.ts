@@ -41,6 +41,71 @@ const PublishedReviewBody = Schema.Struct({
   comments: Schema.Array(Schema.Unknown),
 });
 
+type TestHttpRequest = Parameters<typeof HttpClientResponse.fromWeb>[0];
+
+const jsonResponse = (request: TestHttpRequest, body: unknown) =>
+  HttpClientResponse.fromWeb(
+    request,
+    new globalThis.Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  );
+
+const decodePublishedReview = (request: TestHttpRequest) => {
+  const encoded =
+    request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}";
+  return Schema.decodeUnknownSync(PublishedReviewBody)(JSON.parse(encoded));
+};
+
+const actionConfig = (overrides: Record<string, string> = {}) =>
+  ConfigProvider.fromEnv({
+    env: {
+      GITHUB_REPOSITORY: "reve-ai/example",
+      GITHUB_TOKEN: "github-token",
+      GITHUB_API_URL: "https://api.github.test",
+      PR_REVIEW_PULL_REQUEST: "12",
+      PR_REVIEW_AUTHOR: "effect-agent[bot]",
+      ...overrides,
+    },
+  });
+
+const runReviewAction = (client: HttpClient.HttpClient, overrides?: Record<string, string>) =>
+  reviewActionProgram.pipe(
+    Effect.provideService(ConfigProvider.ConfigProvider, actionConfig(overrides)),
+    Effect.provideService(HttpClient.HttpClient, client),
+    Effect.provide(NodeServices.layer),
+  );
+
+const recordJsonResponse = (
+  requests: Ref.Ref<ReadonlyArray<string>>,
+  request: TestHttpRequest,
+  url: URL,
+  body: unknown,
+) =>
+  Ref.update(requests, (current) => [...current, `${request.method} ${url.pathname}`]).pipe(
+    Effect.as(jsonResponse(request, body)),
+  );
+
+const pullRequestWire = (title: string, base: string, head: string, draft = false) => ({
+  number: 12,
+  title,
+  body: null,
+  draft,
+  html_url: "https://github.test/reve-ai/example/pull/12",
+  base: { sha: base },
+  head: { sha: head },
+});
+
+const reviewHistoryWire = (id: number, body: string, commitId: string, submittedAt: string) => ({
+  id,
+  body,
+  commit_id: commitId,
+  submitted_at: submittedAt,
+  state: "COMMENTED",
+  user: { login: "effect-agent[bot]", type: "Bot" },
+});
+
 describe("immutable review source", () => {
   const snapshot = (
     revision: string,
@@ -286,28 +351,19 @@ describe("stale-head publication", () => {
     () =>
       Effect.gen(function* () {
         const pullReads = yield* Ref.make(0);
-        const postBodies = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const postBodies = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
         const client = HttpClient.make((request, url) => {
-          const response = (body: unknown, status = 200) =>
-            HttpClientResponse.fromWeb(
-              request,
-              new globalThis.Response(JSON.stringify(body), {
-                status,
-                headers: { "content-type": "application/json" },
-              }),
-            );
           if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
             return Ref.getAndUpdate(pullReads, (count) => count + 1).pipe(
               Effect.map((count) =>
-                response({
-                  number: 12,
-                  title: "Move during publication",
-                  body: null,
-                  draft: false,
-                  html_url: "https://github.test/reve-ai/example/pull/12",
-                  base: { sha: "base" },
-                  head: { sha: count === 0 ? "inspected-head" : "current-head" },
-                }),
+                jsonResponse(
+                  request,
+                  pullRequestWire(
+                    "Move during publication",
+                    "base",
+                    count === 0 ? "inspected-head" : "current-head",
+                  ),
+                ),
               ),
             );
           }
@@ -315,16 +371,20 @@ describe("stale-head publication", () => {
             request.method === "GET" &&
             (url.pathname.endsWith("/reviews") || url.pathname.endsWith("/files"))
           ) {
-            return Effect.succeed(response([]));
+            return Effect.succeed(jsonResponse(request, []));
           }
           if (request.method === "GET" && url.pathname.includes("/compare/")) {
-            return Effect.succeed(response({ merge_base_commit: { sha: "base" } }));
+            return Effect.succeed(jsonResponse(request, { merge_base_commit: { sha: "base" } }));
           }
           if (request.method === "GET" && url.pathname.endsWith("/git/commits/base")) {
-            return Effect.succeed(response({ sha: "base", tree: { sha: "base-tree" } }));
+            return Effect.succeed(
+              jsonResponse(request, { sha: "base", tree: { sha: "base-tree" } }),
+            );
           }
           if (request.method === "GET" && url.pathname.endsWith("/git/commits/inspected-head")) {
-            return Effect.succeed(response({ sha: "inspected-head", tree: { sha: "head-tree" } }));
+            return Effect.succeed(
+              jsonResponse(request, { sha: "inspected-head", tree: { sha: "head-tree" } }),
+            );
           }
           if (
             request.method === "GET" &&
@@ -332,34 +392,17 @@ describe("stale-head publication", () => {
               url.pathname.endsWith("/git/trees/head-tree"))
           ) {
             const sha = url.pathname.endsWith("base-tree") ? "base-tree" : "head-tree";
-            return Effect.succeed(response({ sha, tree: [], truncated: false }));
+            return Effect.succeed(jsonResponse(request, { sha, tree: [], truncated: false }));
           }
           if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
-            const encoded =
-              request.body._tag === "Uint8Array"
-                ? new TextDecoder().decode(request.body.body)
-                : "{}";
-            return Ref.update(postBodies, (current) => [...current, JSON.parse(encoded)]).pipe(
-              Effect.as(response({ html_url: "https://github.test/review" })),
-            );
+            return Ref.update(postBodies, (current) => [
+              ...current,
+              decodePublishedReview(request),
+            ]).pipe(Effect.as(jsonResponse(request, { html_url: "https://github.test/review" })));
           }
           return Effect.die(`unexpected request ${request.method} ${url.href}`);
         });
-        const provider = ConfigProvider.fromEnv({
-          env: {
-            GITHUB_REPOSITORY: "reve-ai/example",
-            GITHUB_TOKEN: "github-token",
-            GITHUB_API_URL: "https://api.github.test",
-            PR_REVIEW_PULL_REQUEST: "12",
-            PR_REVIEW_AUTHOR: "effect-agent[bot]",
-          },
-        });
-        const exit = yield* reviewActionProgram.pipe(
-          Effect.provideService(ConfigProvider.ConfigProvider, provider),
-          Effect.provideService(HttpClient.HttpClient, client),
-          Effect.provide(NodeServices.layer),
-          Effect.exit,
-        );
+        const exit = yield* runReviewAction(client).pipe(Effect.exit);
 
         expect(Exit.isFailure(exit)).toBe(true);
         expect(yield* Ref.get(pullReads)).toBe(2);
@@ -384,46 +427,14 @@ describe("Manual command acknowledgement", () => {
       const client = HttpClient.make((request, url) => {
         const wire = url.pathname.endsWith("/reactions")
           ? { id: 1, content: "eyes" }
-          : {
-              number: 12,
-              title: "Draft pull request",
-              body: null,
-              draft: true,
-              html_url: "https://github.test/reve-ai/example/pull/12",
-              base: { sha: "base" },
-              head: { sha: "head" },
-            };
-        return Ref.update(requests, (current) => [
-          ...current,
-          `${request.method} ${url.pathname}`,
-        ]).pipe(
-          Effect.as(
-            HttpClientResponse.fromWeb(
-              request,
-              new globalThis.Response(JSON.stringify(wire), {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              }),
-            ),
-          ),
-        );
-      });
-      const provider = ConfigProvider.fromEnv({
-        env: {
-          GITHUB_REPOSITORY: "reve-ai/example",
-          GITHUB_TOKEN: "github-token",
-          GITHUB_API_URL: "https://api.github.test",
-          PR_REVIEW_PULL_REQUEST: "12",
-          PR_REVIEW_COMMAND: "@effect-agent review full",
-          PR_REVIEW_COMMENT_ID: "42",
-        },
+          : pullRequestWire("Draft pull request", "base", "head", true);
+        return recordJsonResponse(requests, request, url, wire);
       });
 
-      yield* reviewActionProgram.pipe(
-        Effect.provideService(ConfigProvider.ConfigProvider, provider),
-        Effect.provideService(HttpClient.HttpClient, client),
-        Effect.provide(NodeServices.layer),
-      );
+      yield* runReviewAction(client, {
+        PR_REVIEW_COMMAND: "@effect-agent review full",
+        PR_REVIEW_COMMENT_ID: "42",
+      });
 
       expect(yield* Ref.get(requests)).toEqual([
         "POST /repos/reve-ai/example/issues/comments/42/reactions",
@@ -474,62 +485,21 @@ describe("Incremental review scope", () => {
           const requests = yield* Ref.make<ReadonlyArray<string>>([]);
           const client = HttpClient.make((request, url) => {
             const response = url.pathname.endsWith("/reviews")
-              ? [
-                  {
-                    id: 1,
-                    body,
-                    commit_id: "head",
-                    submitted_at: "2026-08-25T00:00:00Z",
-                    state: "COMMENTED",
-                    user: { login: "effect-agent[bot]", type: "Bot" },
-                  },
-                ]
+              ? [reviewHistoryWire(1, body, "head", "2026-08-25T00:00:00Z")]
               : url.pathname.endsWith("/pulls/12")
-                ? {
-                    number: 12,
-                    title: "Keep a failed check red",
-                    body: null,
-                    draft: false,
-                    html_url: "https://github.test/reve-ai/example/pull/12",
-                    base: { sha: "base" },
-                    head: { sha: "head" },
-                  }
+                ? pullRequestWire("Keep a failed check red", "base", "head")
                 : undefined;
             if (response === undefined) {
               return Effect.die(`unexpected request ${request.method} ${url.href}`);
             }
-            return Ref.update(requests, (current) => [...current, url.pathname]).pipe(
-              Effect.as(
-                HttpClientResponse.fromWeb(
-                  request,
-                  new globalThis.Response(JSON.stringify(response), {
-                    status: 200,
-                    headers: { "content-type": "application/json" },
-                  }),
-                ),
-              ),
-            );
+            return recordJsonResponse(requests, request, url, response);
           });
-          const provider = ConfigProvider.fromEnv({
-            env: {
-              GITHUB_REPOSITORY: "reve-ai/example",
-              GITHUB_TOKEN: "github-token",
-              GITHUB_API_URL: "https://api.github.test",
-              PR_REVIEW_PULL_REQUEST: "12",
-              PR_REVIEW_AUTHOR: "effect-agent[bot]",
-            },
-          });
-          const exit = yield* reviewActionProgram.pipe(
-            Effect.provideService(ConfigProvider.ConfigProvider, provider),
-            Effect.provideService(HttpClient.HttpClient, client),
-            Effect.provide(NodeServices.layer),
-            Effect.exit,
-          );
+          const exit = yield* runReviewAction(client).pipe(Effect.exit);
 
           expect(Exit.isFailure(exit)).toBe(true);
           expect(yield* Ref.get(requests)).toEqual([
-            "/repos/reve-ai/example/pulls/12",
-            "/repos/reve-ai/example/pulls/12/reviews",
+            "GET /repos/reve-ai/example/pulls/12",
+            "GET /repos/reve-ai/example/pulls/12/reviews",
           ]);
         }
       }),
@@ -538,24 +508,17 @@ describe("Incremental review scope", () => {
   it.effect("publishes one incomplete attempt for tree and guidance preparation failures", () =>
     Effect.gen(function* () {
       for (const failureKind of ["truncated-tree", "missing-guidance"] as const) {
-        const publishedBodies = yield* Ref.make<ReadonlyArray<string>>([]);
-        const publishedWires = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const publishedWires = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
         const requests = yield* Ref.make<ReadonlyArray<string>>([]);
         let pullReads = 0;
         const client = HttpClient.make((request, url) => {
           let response: unknown;
           if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
-            response = {
-              number: 12,
-              title: "Record preparation failures",
-              body: null,
-              draft: false,
-              html_url: "https://github.test/reve-ai/example/pull/12",
-              base: { sha: "base" },
-              head: {
-                sha: failureKind === "truncated-tree" && pullReads > 0 ? "moved-head" : "head",
-              },
-            };
+            response = pullRequestWire(
+              "Record preparation failures",
+              "base",
+              failureKind === "truncated-tree" && pullReads > 0 ? "moved-head" : "head",
+            );
             pullReads += 1;
           } else if (
             request.method === "GET" &&
@@ -577,72 +540,26 @@ describe("Incremental review scope", () => {
               truncated: failureKind === "truncated-tree",
             };
           } else if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
-            const encoded =
-              request.body._tag === "Uint8Array"
-                ? new TextDecoder().decode(request.body.body)
-                : "{}";
-            const publishedWire: unknown = JSON.parse(encoded);
-            const published = Schema.decodeUnknownSync(Schema.Struct({ body: Schema.String }))(
-              publishedWire,
-            );
+            const publishedWire = decodePublishedReview(request);
             response = { html_url: "https://github.test/reve-ai/example/pull/12#review" };
-            return Ref.update(requests, (current) => [
-              ...current,
-              `${request.method} ${url.pathname}`,
-            ]).pipe(
-              Effect.andThen(
-                Ref.update(publishedBodies, (current) => [...current, published.body]),
-              ),
-              Effect.andThen(Ref.update(publishedWires, (current) => [...current, publishedWire])),
-              Effect.as(
-                HttpClientResponse.fromWeb(
-                  request,
-                  new globalThis.Response(JSON.stringify(response), {
-                    status: 200,
-                    headers: { "content-type": "application/json" },
-                  }),
-                ),
-              ),
+            return Ref.update(publishedWires, (current) => [...current, publishedWire]).pipe(
+              Effect.andThen(recordJsonResponse(requests, request, url, response)),
             );
           } else {
             return Effect.die(`unexpected request ${request.method} ${url.href}`);
           }
-          return Ref.update(requests, (current) => [
-            ...current,
-            `${request.method} ${url.pathname}`,
-          ]).pipe(
-            Effect.as(
-              HttpClientResponse.fromWeb(
-                request,
-                new globalThis.Response(JSON.stringify(response), {
-                  status: 200,
-                  headers: { "content-type": "application/json" },
-                }),
-              ),
-            ),
-          );
+          return recordJsonResponse(requests, request, url, response);
         });
-        const provider = ConfigProvider.fromEnv({
-          env: {
-            GITHUB_REPOSITORY: "reve-ai/example",
-            GITHUB_TOKEN: "github-token",
-            GITHUB_API_URL: "https://api.github.test",
-            PR_REVIEW_PULL_REQUEST: "12",
-            PR_REVIEW_AUTHOR: "effect-agent[bot]",
-            ...(failureKind === "missing-guidance"
-              ? { PR_REVIEW_GUIDANCE_FILE: "/missing/effect-agent-review-guidance.md" }
-              : {}),
-          },
-        });
-        const exit = yield* reviewActionProgram.pipe(
-          Effect.provideService(ConfigProvider.ConfigProvider, provider),
-          Effect.provideService(HttpClient.HttpClient, client),
-          Effect.provide(NodeServices.layer),
-          Effect.exit,
-        );
+        const exit = yield* runReviewAction(
+          client,
+          failureKind === "missing-guidance"
+            ? { PR_REVIEW_GUIDANCE_FILE: "/missing/effect-agent-review-guidance.md" }
+            : {},
+        ).pipe(Effect.exit);
 
         expect(Exit.isFailure(exit)).toBe(true);
-        expect(yield* Ref.get(publishedBodies)).toEqual([
+        const wires = yield* Ref.get(publishedWires);
+        expect(wires.map((wire) => wire.body)).toEqual([
           expect.stringContaining("<!-- effect-agent-review:v3 automatic=true completed=false -->"),
         ]);
         expect(
@@ -655,7 +572,6 @@ describe("Incremental review scope", () => {
             operation: "get recursive Git tree",
             reason: "GitHub truncated tree head-tree",
           });
-          const wires = yield* Ref.get(publishedWires);
           expect(wires[0]).toEqual({
             event: "COMMENT",
             body: expect.stringContaining(
@@ -678,89 +594,52 @@ describe("Incremental review scope", () => {
       const currentMergeBase = "current-merge-base";
       const requests = yield* Ref.make<ReadonlyArray<string>>([]);
       const publishedWires = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
-      const response = (request: Parameters<typeof HttpClientResponse.fromWeb>[0], body: unknown) =>
-        HttpClientResponse.fromWeb(
-          request,
-          new globalThis.Response(JSON.stringify(body), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-        );
       const client = HttpClient.make((request, url) => {
-        const record = Ref.update(requests, (current) => [
-          ...current,
-          `${request.method} ${url.pathname}`,
-        ]);
         if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
-          return record.pipe(
-            Effect.as(
-              response(request, {
-                number: 12,
-                title: "Rebase onto an updated target",
-                body: null,
-                draft: false,
-                html_url: "https://github.test/reve-ai/example/pull/12",
-                base: { sha: targetHead },
-                head: { sha: currentHead },
-              }),
-            ),
+          return recordJsonResponse(
+            requests,
+            request,
+            url,
+            pullRequestWire("Rebase onto an updated target", targetHead, currentHead),
           );
         }
         if (request.method === "GET" && url.pathname.endsWith("/pulls/12/reviews")) {
-          return record.pipe(
-            Effect.as(
-              response(request, [
-                {
-                  id: 1,
-                  body: reviewMarker(false),
-                  commit_id: reviewedHead,
-                  submitted_at: "2026-08-25T00:00:00Z",
-                  state: "COMMENTED",
-                  user: { login: "effect-agent[bot]", type: "Bot" },
-                },
-              ]),
-            ),
-          );
+          return recordJsonResponse(requests, request, url, [
+            reviewHistoryWire(1, reviewMarker(false), reviewedHead, "2026-08-25T00:00:00Z"),
+          ]);
         }
         if (request.method === "GET" && url.pathname.endsWith("/pulls/12/files")) {
-          return record.pipe(
-            Effect.as(
-              response(request, [
-                {
-                  filename: "src/shared.ts",
-                  status: "modified",
-                  additions: 1,
-                  deletions: 1,
-                  patch: "@@ -1 +1 @@\n-target\n+pull",
-                },
-              ]),
-            ),
-          );
+          return recordJsonResponse(requests, request, url, [
+            {
+              filename: "src/shared.ts",
+              status: "modified",
+              additions: 1,
+              deletions: 1,
+              patch: "@@ -1 +1 @@\n-target\n+pull",
+            },
+          ]);
         }
         if (
           request.method === "GET" &&
           url.pathname.endsWith(`/compare/${targetHead}...${currentHead}`)
         ) {
-          return record.pipe(
-            Effect.as(response(request, { merge_base_commit: { sha: currentMergeBase } })),
-          );
+          return recordJsonResponse(requests, request, url, {
+            merge_base_commit: { sha: currentMergeBase },
+          });
         }
         if (
           request.method === "GET" &&
           url.pathname.endsWith(`/compare/${targetHead}...${reviewedHead}`)
         ) {
-          return record.pipe(
-            Effect.as(response(request, { merge_base_commit: { sha: priorMergeBase } })),
-          );
+          return recordJsonResponse(requests, request, url, {
+            merge_base_commit: { sha: priorMergeBase },
+          });
         }
         if (request.method === "POST" && url.pathname.endsWith("/pulls/12/reviews")) {
-          const encoded =
-            request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}";
-          const wire = Schema.decodeUnknownSync(PublishedReviewBody)(JSON.parse(encoded));
-          return record.pipe(
-            Effect.andThen(Ref.update(publishedWires, (current) => [...current, wire])),
-            Effect.as(
-              response(request, {
+          const wire = decodePublishedReview(request);
+          return Ref.update(publishedWires, (current) => [...current, wire]).pipe(
+            Effect.andThen(
+              recordJsonResponse(requests, request, url, {
                 html_url: "https://github.test/reve-ai/example/pull/12#review",
               }),
             ),
@@ -768,21 +647,7 @@ describe("Incremental review scope", () => {
         }
         return Effect.die(`unexpected request ${request.method} ${url.href}`);
       });
-      const provider = ConfigProvider.fromEnv({
-        env: {
-          GITHUB_REPOSITORY: "reve-ai/example",
-          GITHUB_TOKEN: "github-token",
-          GITHUB_API_URL: "https://api.github.test",
-          PR_REVIEW_PULL_REQUEST: "12",
-          PR_REVIEW_AUTHOR: "effect-agent[bot]",
-        },
-      });
-      const exit = yield* reviewActionProgram.pipe(
-        Effect.provideService(ConfigProvider.ConfigProvider, provider),
-        Effect.provideService(HttpClient.HttpClient, client),
-        Effect.provide(NodeServices.layer),
-        Effect.exit,
-      );
+      const exit = yield* runReviewAction(client).pipe(Effect.exit);
 
       expect(Exit.isFailure(exit)).toBe(true);
       if (!Exit.isFailure(exit)) return;
@@ -802,46 +667,6 @@ describe("Incremental review scope", () => {
           comments: [],
         },
       ]);
-      const failedAttempt = {
-        id: 2,
-        authorLogin: "effect-agent[bot]",
-        authorType: "Bot",
-        body: String(published[0]?.body),
-        commitId: currentHead,
-        submittedAt: "2026-08-26T00:00:00Z",
-        state: "COMMENTED" as const,
-      };
-      const completedAttempt = {
-        id: 1,
-        authorLogin: "effect-agent[bot]",
-        authorType: "Bot",
-        body: reviewMarker(false),
-        commitId: reviewedHead,
-        submittedAt: "2026-08-25T00:00:00Z",
-        state: "COMMENTED" as const,
-      };
-      expect(
-        selectReview({
-          mode: "auto",
-          currentHead,
-          reviewAuthor: "effect-agent[bot]",
-          automaticReviewLimit: 2,
-          history: [completedAttempt, failedAttempt],
-        }),
-      ).toEqual({ _tag: "skip", reason: "head-review-incomplete" });
-      expect(
-        selectReview({
-          mode: "auto",
-          currentHead: "later-head",
-          reviewAuthor: "effect-agent[bot]",
-          automaticReviewLimit: 2,
-          history: [completedAttempt, failedAttempt],
-        }),
-      ).toMatchObject({
-        _tag: "review",
-        scope: "incremental",
-        baseRevision: reviewedHead,
-      });
     }),
   );
 
@@ -853,78 +678,43 @@ describe("Incremental review scope", () => {
       const currentMergeBase = "current-merge-base";
       const requests = yield* Ref.make<ReadonlyArray<string>>([]);
       const publishedWires = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
-      const response = (request: Parameters<typeof HttpClientResponse.fromWeb>[0], body: unknown) =>
-        HttpClientResponse.fromWeb(
-          request,
-          new globalThis.Response(JSON.stringify(body), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-        );
       const client = HttpClient.make((request, url) => {
-        const record = Ref.update(requests, (current) => [
-          ...current,
-          `${request.method} ${url.pathname}`,
-        ]);
         if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
-          return record.pipe(
-            Effect.as(
-              response(request, {
-                number: 12,
-                title: "Review the rebased pull request in full",
-                body: null,
-                draft: false,
-                html_url: "https://github.test/reve-ai/example/pull/12",
-                base: { sha: targetHead },
-                head: { sha: currentHead },
-              }),
-            ),
+          return recordJsonResponse(
+            requests,
+            request,
+            url,
+            pullRequestWire("Review the rebased pull request in full", targetHead, currentHead),
           );
         }
         if (request.method === "GET" && url.pathname.endsWith("/pulls/12/reviews")) {
-          return record.pipe(
-            Effect.as(
-              response(request, [
-                {
-                  id: 1,
-                  body: reviewMarker(false),
-                  commit_id: reviewedHead,
-                  submitted_at: "2026-08-25T00:00:00Z",
-                  state: "COMMENTED",
-                  user: { login: "effect-agent[bot]", type: "Bot" },
-                },
-                {
-                  id: 2,
-                  body: reviewMarker(true, false),
-                  commit_id: currentHead,
-                  submitted_at: "2026-08-26T00:00:00Z",
-                  state: "COMMENTED",
-                  user: { login: "effect-agent[bot]", type: "Bot" },
-                },
-              ]),
-            ),
-          );
+          return recordJsonResponse(requests, request, url, [
+            reviewHistoryWire(1, reviewMarker(false), reviewedHead, "2026-08-25T00:00:00Z"),
+            reviewHistoryWire(2, reviewMarker(true, false), currentHead, "2026-08-26T00:00:00Z"),
+          ]);
         }
         if (request.method === "GET" && url.pathname.endsWith("/pulls/12/files")) {
-          return record.pipe(Effect.as(response(request, [])));
+          return recordJsonResponse(requests, request, url, []);
         }
         if (
           request.method === "GET" &&
           url.pathname.endsWith(`/compare/${targetHead}...${currentHead}`)
         ) {
-          return record.pipe(
-            Effect.as(response(request, { merge_base_commit: { sha: currentMergeBase } })),
-          );
+          return recordJsonResponse(requests, request, url, {
+            merge_base_commit: { sha: currentMergeBase },
+          });
         }
         if (request.method === "GET" && url.pathname.endsWith(`/git/commits/${currentMergeBase}`)) {
-          return record.pipe(
-            Effect.as(response(request, { sha: currentMergeBase, tree: { sha: "base-tree" } })),
-          );
+          return recordJsonResponse(requests, request, url, {
+            sha: currentMergeBase,
+            tree: { sha: "base-tree" },
+          });
         }
         if (request.method === "GET" && url.pathname.endsWith(`/git/commits/${currentHead}`)) {
-          return record.pipe(
-            Effect.as(response(request, { sha: currentHead, tree: { sha: "head-tree" } })),
-          );
+          return recordJsonResponse(requests, request, url, {
+            sha: currentHead,
+            tree: { sha: "head-tree" },
+          });
         }
         if (
           request.method === "GET" &&
@@ -932,16 +722,13 @@ describe("Incremental review scope", () => {
             url.pathname.endsWith("/git/trees/head-tree"))
         ) {
           const sha = url.pathname.endsWith("base-tree") ? "base-tree" : "head-tree";
-          return record.pipe(Effect.as(response(request, { sha, tree: [], truncated: false })));
+          return recordJsonResponse(requests, request, url, { sha, tree: [], truncated: false });
         }
         if (request.method === "POST" && url.pathname.endsWith("/pulls/12/reviews")) {
-          const encoded =
-            request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}";
-          const wire = Schema.decodeUnknownSync(PublishedReviewBody)(JSON.parse(encoded));
-          return record.pipe(
-            Effect.andThen(Ref.update(publishedWires, (current) => [...current, wire])),
-            Effect.as(
-              response(request, {
+          const wire = decodePublishedReview(request);
+          return Ref.update(publishedWires, (current) => [...current, wire]).pipe(
+            Effect.andThen(
+              recordJsonResponse(requests, request, url, {
                 html_url: "https://github.test/reve-ai/example/pull/12#review",
               }),
             ),
@@ -949,23 +736,7 @@ describe("Incremental review scope", () => {
         }
         return Effect.die(`unexpected request ${request.method} ${url.href}`);
       });
-      const provider = ConfigProvider.fromEnv({
-        env: {
-          GITHUB_REPOSITORY: "reve-ai/example",
-          GITHUB_TOKEN: "github-token",
-          GITHUB_API_URL: "https://api.github.test",
-          PR_REVIEW_PULL_REQUEST: "12",
-          PR_REVIEW_AUTHOR: "effect-agent[bot]",
-          PR_REVIEW_MODE: "full",
-        },
-      });
-
-      const exit = yield* reviewActionProgram.pipe(
-        Effect.provideService(ConfigProvider.ConfigProvider, provider),
-        Effect.provideService(HttpClient.HttpClient, client),
-        Effect.provide(NodeServices.layer),
-        Effect.exit,
-      );
+      const exit = yield* runReviewAction(client, { PR_REVIEW_MODE: "full" }).pipe(Effect.exit);
 
       expect(Exit.isSuccess(exit)).toBe(true);
       const observed = yield* Ref.get(requests);
@@ -996,31 +767,20 @@ describe("Incremental review scope", () => {
       const targetBlob = "7".repeat(40);
       const requests = yield* Ref.make<ReadonlyArray<string>>([]);
       const publishedBodies = yield* Ref.make<ReadonlyArray<string>>([]);
+      const treeBlobs = new Map([
+        [targetTree, targetBlob],
+        [reviewedTree, unchangedBlob],
+        [currentTree, unchangedBlob],
+      ]);
       const client = HttpClient.make((request, url) => {
+        const requestedTree = [...treeBlobs].find(([tree]) => url.pathname.endsWith(tree));
         let body: unknown;
         if (request.method === "POST" && url.pathname.endsWith("/reactions")) {
           body = { id: 1, content: "eyes" };
         } else if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
-          body = {
-            number: 12,
-            title: "Rewrite the branch",
-            body: null,
-            draft: false,
-            html_url: "https://github.test/reve-ai/example/pull/12",
-            base: { sha: targetHead },
-            head: { sha: currentHead },
-          };
+          body = pullRequestWire("Rewrite the branch", targetHead, currentHead);
         } else if (request.method === "GET" && url.pathname.endsWith("/pulls/12/reviews")) {
-          body = [
-            {
-              id: 1,
-              body: reviewMarker(false),
-              commit_id: reviewedHead,
-              submitted_at: "2026-08-25T00:00:00Z",
-              state: "COMMENTED",
-              user: { login: "effect-agent[bot]", type: "Bot" },
-            },
-          ];
+          body = [reviewHistoryWire(1, reviewMarker(false), reviewedHead, "2026-08-25T00:00:00Z")];
         } else if (request.method === "GET" && url.pathname.endsWith("/pulls/12/files")) {
           body = [
             {
@@ -1039,105 +799,37 @@ describe("Incremental review scope", () => {
           body = { sha: reviewedHead, tree: { sha: reviewedTree } };
         } else if (request.method === "GET" && url.pathname.endsWith(currentHead)) {
           body = { sha: currentHead, tree: { sha: currentTree } };
-        } else if (request.method === "GET" && url.pathname.endsWith(targetTree)) {
+        } else if (request.method === "GET" && requestedTree !== undefined) {
+          const [tree, blob] = requestedTree;
           body = {
-            sha: targetTree,
+            sha: tree,
             truncated: false,
             tree: [
               {
                 path: "src/unchanged.ts",
                 mode: "100644",
                 type: "blob",
-                sha: targetBlob,
-                size: 1,
-              },
-            ],
-          };
-        } else if (request.method === "GET" && url.pathname.endsWith(reviewedTree)) {
-          body = {
-            sha: reviewedTree,
-            truncated: false,
-            tree: [
-              {
-                path: "src/unchanged.ts",
-                mode: "100644",
-                type: "blob",
-                sha: unchangedBlob,
-                size: 1,
-              },
-            ],
-          };
-        } else if (request.method === "GET" && url.pathname.endsWith(currentTree)) {
-          body = {
-            sha: currentTree,
-            truncated: false,
-            tree: [
-              {
-                path: "src/unchanged.ts",
-                mode: "100644",
-                type: "blob",
-                sha: unchangedBlob,
+                sha: blob,
                 size: 1,
               },
             ],
           };
         } else if (request.method === "POST" && url.pathname.endsWith("/pulls/12/reviews")) {
-          const encoded =
-            request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}";
-          const published = Schema.decodeUnknownSync(Schema.Struct({ body: Schema.String }))(
-            JSON.parse(encoded),
-          );
+          const published = decodePublishedReview(request);
           body = { html_url: "https://github.test/reve-ai/example/pull/12#review" };
-          return Ref.update(requests, (current) => [
-            ...current,
-            `${request.method} ${url.pathname}`,
-          ]).pipe(
-            Effect.andThen(Ref.update(publishedBodies, (current) => [...current, published.body])),
-            Effect.as(
-              HttpClientResponse.fromWeb(
-                request,
-                new globalThis.Response(JSON.stringify(body), {
-                  status: 200,
-                  headers: { "content-type": "application/json" },
-                }),
-              ),
-            ),
+          return Ref.update(publishedBodies, (current) => [...current, published.body]).pipe(
+            Effect.andThen(recordJsonResponse(requests, request, url, body)),
           );
         } else {
           return Effect.die(new Error(`unexpected request ${request.method} ${url.href}`));
         }
-        return Ref.update(requests, (current) => [
-          ...current,
-          `${request.method} ${url.pathname}`,
-        ]).pipe(
-          Effect.as(
-            HttpClientResponse.fromWeb(
-              request,
-              new globalThis.Response(JSON.stringify(body), {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              }),
-            ),
-          ),
-        );
-      });
-      const provider = ConfigProvider.fromEnv({
-        env: {
-          GITHUB_REPOSITORY: "reve-ai/example",
-          GITHUB_TOKEN: "github-token",
-          GITHUB_API_URL: "https://api.github.test",
-          PR_REVIEW_PULL_REQUEST: "12",
-          PR_REVIEW_AUTHOR: "effect-agent[bot]",
-          PR_REVIEW_COMMAND: "@effect-agent review",
-          PR_REVIEW_COMMENT_ID: "42",
-        },
+        return recordJsonResponse(requests, request, url, body);
       });
 
-      yield* reviewActionProgram.pipe(
-        Effect.provideService(ConfigProvider.ConfigProvider, provider),
-        Effect.provideService(HttpClient.HttpClient, client),
-        Effect.provide(NodeServices.layer),
-      );
+      yield* runReviewAction(client, {
+        PR_REVIEW_COMMAND: "@effect-agent review",
+        PR_REVIEW_COMMENT_ID: "42",
+      });
 
       const requested = yield* Ref.get(requests);
       const published = yield* Ref.get(publishedBodies);

@@ -6,7 +6,7 @@ import {
   ReviewChange,
   ReviewOutcome,
   ReviewReport,
-  ReviewRepository,
+  type ReviewRepository,
   ReviewRequest,
 } from "@effect-agent/pr-review";
 import { ScriptedModel } from "@effect-agent/testing";
@@ -19,12 +19,10 @@ import {
   Fiber,
   FileSystem,
   Layer,
-  Logger,
   Option,
   PlatformError,
   Redacted,
   Ref,
-  References,
   Schema,
   type Scope,
   Stream,
@@ -42,8 +40,6 @@ import {
   EvalExpectedDefect,
   EvalEvidence,
   EvalInputDigest,
-  EvalRepositoryFile,
-  EvalRepositorySnapshot,
   EvalReviewerFailure,
   EvalSuite,
   EvalVariantConfiguration,
@@ -209,124 +205,6 @@ describe("PR-review model eval", () => {
       expect(variant.configuration.guidanceDigest).toBe(
         yield* digestGuidance("Keep the public error channel typed."),
       );
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("logs bounded source metadata with isolated concurrent trial identity", () =>
-    Effect.gen(function* () {
-      const originalSuite = yield* makeSuite();
-      const original = originalSuite.cases[0];
-      if (original === undefined) return yield* Effect.die("Expected one eval case");
-
-      const privateSource = "private source body\nlast line";
-      const privatePath = "src/private-source.ts";
-      const privateMissingPath = "model-invented-private-path.ts";
-      const privateQuery = "model-authored-private-query";
-      const repository = EvalRepositorySnapshot.make({
-        version: 1,
-        digest: Schema.decodeSync(EvalInputDigest)("a".repeat(64)),
-        files: [
-          EvalRepositoryFile.make({
-            path: privatePath,
-            revision: "head",
-            content: privateSource,
-          }),
-        ],
-      });
-      const suite = EvalSuite.make({
-        version: 1,
-        cases: [EvalCase.make({ ...original, repository })],
-      });
-      const active = yield* Ref.make(0);
-      const concurrent = yield* Deferred.make<void>();
-      const variant: EvalVariant<ReviewRepository> = {
-        configuration: configuration("source-diagnostics"),
-        review: () =>
-          Effect.gen(function* () {
-            if ((yield* Ref.updateAndGet(active, (count) => count + 1)) === 2) {
-              yield* Deferred.succeed(concurrent, undefined);
-            }
-            yield* Deferred.await(concurrent);
-            const source = yield* ReviewRepository;
-            const read = yield* source.readFile({
-              path: privatePath,
-              revision: "head",
-              startLine: 1,
-              lineCount: 1,
-            });
-            expect(read.content).toBe("private source body");
-            const missing = yield* Effect.result(
-              source.readFile({
-                path: privateMissingPath,
-                revision: "base",
-                startLine: 2,
-                lineCount: 3,
-              }),
-            );
-            expect(missing._tag).toBe("Failure");
-            expect(yield* source.findFiles({ query: privateQuery, revision: "head" })).toEqual({
-              paths: [],
-              truncated: false,
-            });
-            return successfulOutcome;
-          }).pipe(
-            Effect.mapError((error) =>
-              EvalReviewerFailure.make({
-                errorTag: error._tag,
-                message: "Frozen source access failed",
-              }),
-            ),
-          ),
-      };
-      const logs: Array<{ message: unknown; annotations: Record<string, unknown> }> = [];
-      const logger = Logger.make<unknown, void>((options) => {
-        logs.push({
-          message: options.message,
-          annotations: { ...options.fiber.getRef(References.CurrentLogAnnotations) },
-        });
-      });
-
-      yield* runEvalSuite(suite, [variant], {
-        trials: 2,
-        concurrency: 2,
-        caseIds: [],
-      }).pipe(
-        Effect.provideService(References.MinimumLogLevel, "Debug"),
-        Effect.provide(Logger.layer([logger])),
-      );
-
-      const access = logs.filter(
-        (entry) => entry.annotations.evalRepositoryOperation !== undefined,
-      );
-      expect(access).toHaveLength(6);
-      expect(new Set(access.map((entry) => entry.annotations.evalTrial))).toEqual(new Set([1, 2]));
-      expect(
-        access.every(
-          (entry) =>
-            entry.annotations.evalCaseId === caseId &&
-            entry.annotations.evalVariantId === "source-diagnostics",
-        ),
-      ).toBe(true);
-      expect(
-        access.filter((entry) => entry.annotations.evalRepositoryOutcome === "failure"),
-      ).toEqual([
-        expect.objectContaining({
-          annotations: expect.objectContaining({
-            evalRepositoryFileIndex: -1,
-            evalRepositoryRevision: "base",
-            evalRepositoryStartLine: 2,
-            evalRepositoryLineCount: 3,
-          }),
-        }),
-        expect.objectContaining({
-          annotations: expect.objectContaining({ evalRepositoryFileIndex: -1 }),
-        }),
-      ]);
-      const encoded = JSON.stringify(access);
-      expect(encoded).not.toContain(privateSource);
-      expect(encoded).not.toContain(privatePath);
-      expect(encoded).not.toContain(privateMissingPath);
-      expect(encoded).not.toContain(privateQuery);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

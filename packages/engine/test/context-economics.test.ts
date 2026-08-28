@@ -1532,9 +1532,9 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
     }),
   );
 
-  it.effect(
-    "RUN-034: completion reserve enters delivery mode before a research call can consume it",
-    () =>
+  it.effect.each([false, true])(
+    "RUN-034: completion reserve preserves terminal Tool choice with required=%s",
+    (required) =>
       Effect.gen(function* () {
         const definition = Agent.define("completion-reserve-terminal-tool", {
           input: Schema.Struct({ question: Schema.String }),
@@ -1551,6 +1551,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
           }),
           completion: {
             tool: "post_message",
+            ...(required ? { required: true } : {}),
             project: ({ parameters, result }) => ({
               message: parameters.message,
               messageId: result.messageId,
@@ -1569,59 +1570,12 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         }).pipe(Effect.provide(toolLayer));
 
         expect(requests).toHaveLength(1);
-        expect(requests[0]?.toolChoice).toEqual({ mode: "auto", oneOf: ["post_message"] });
-        expect(result).toMatchObject({
-          output: { message: "reserved", messageId: "message-reserved" },
-          finishReason: "budget-exhausted",
-          exhausted: "tokens",
-        });
-      }),
-  );
-
-  it.effect(
-    "RUN-034: required completion reserve constrains delivery to a required singleton Tool",
-    () =>
-      Effect.gen(function* () {
-        const definition = Agent.define("required-completion-reserve-terminal-tool", {
-          input: Schema.Struct({ question: Schema.String }),
-          output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
-          instructions: `Deliver only through post_message. ${"context ".repeat(100)}`,
-          toolkit: postMessageToolkit,
-          policy: AgentPolicy.make({
-            maxTurns: 5,
-            maxToolCalls: 5,
-            maxDuration: "30 seconds",
-            toolConcurrency: 1,
-            tokenBudget: 10_000,
-            completionReserveTokens: 9_800,
-          }),
-          completion: {
-            tool: "post_message",
-            required: true,
-            project: ({ parameters, result }) => ({
-              message: parameters.message,
-              messageId: result.messageId,
-            }),
-          },
-        });
-        const { model, requests } = scriptedModel([
-          toolCallParts("required-delivery-1", "post_message", { message: "reserved" }),
-        ]);
-        const toolLayer = postMessageToolkit.toLayer({
-          post_message: () => Effect.succeed({ messageId: "required-message-reserved" }),
-        });
-
-        const result = yield* AgentRuntime.run(Agent.withModel(definition, model), {
-          question: "deliver",
-        }).pipe(Effect.provide(toolLayer));
-
-        expect(requests).toHaveLength(1);
         expect(requests[0]?.toolChoice).toEqual({
-          mode: "required",
+          mode: required ? "required" : "auto",
           oneOf: ["post_message"],
         });
         expect(result).toMatchObject({
-          output: { message: "reserved", messageId: "required-message-reserved" },
+          output: { message: "reserved", messageId: "message-reserved" },
           finishReason: "budget-exhausted",
           exhausted: "tokens",
         });
