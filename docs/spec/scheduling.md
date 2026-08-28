@@ -16,6 +16,9 @@ Webhook ingress, arbitrary callbacks or jobs, an event bus, catch-up replay, com
 
 `ScheduleId` is a non-empty string with at most 128 characters. `ScheduleOwner` is the tenant-qualified `{ tenantId, ownerId }` management and listing scope. `ScheduleScope` adds the caller principal. `deliveryPrincipal` is the stable principal authorized for a due occurrence and is distinct from the management caller.
 
+Schedule, tenant, and owner names must contain well-formed Unicode. Schemas reject unpaired UTF-16
+surrogates before UTF-8 storage can replace them and collapse distinct identities.
+
 `ScheduleInstant` is a UTC Unix millisecond safe integer between zero and 8,640,000,000,000,000. `DateTime` and `Cron` calculate time but are never stored.
 
 ```ts
@@ -96,6 +99,10 @@ lateness and pending age from the observation Clock, including after a backward 
 Transient `transport`, `capacity`, `storage`, `host-closed`, `timeout`, and `ambiguous` outcomes retain pending work. The persisted deterministic delay is `min(1_000 * 2^attempts, 300_000)` milliseconds, with the first failure at zero attempts. There is no jitter and no attempt cap.
 
 `ScheduledInputRefused` is conclusive only when the adapter proves the occurrence was not admitted and the unchanged request cannot succeed. It records refusal, clears only matching pending work, and pauses an active Schedule. Lost replies, ambiguity, corrupt values, and unsupported versions are never refusal.
+
+If local storage fails before a terminal outcome is recorded, recovery may replay the unchanged
+admission request. The adapter must return the existing Receipt or the same conclusive refusal.
+Temporary rejection belongs in `ScheduledInputRetryable`.
 
 Management authorizes each call. Preparation authorizes each occurrence. A successful preparation authorizes only completion of its frozen envelope. Later revocation blocks future preparation but cannot discard prepared delivery or silently abort accepted work. Existing runtime Tool authorization remains action-time.
 

@@ -132,6 +132,7 @@ describe("Scheduling public recovery contract", () => {
       expect(yield* scheduler.runDue()).toEqual([]);
       const resumed = yield* scheduler.resume(scope, request.scheduleId, 1);
       expect(resumed.nextAtMillis).toBe(360_000);
+      expect(resumed.lastSkippedRange).toEqual({ fromMillis: 240_000, toMillis: 360_000 });
       yield* TestClock.adjust(30_000);
       yield* scheduler.process(keyOf(request));
       yield* TestClock.setTime(300_000);

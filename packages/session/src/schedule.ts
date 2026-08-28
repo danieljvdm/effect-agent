@@ -5,7 +5,10 @@ import { Receipt } from "./durable-runtime.ts";
 import { IdempotencyKey, Principal } from "./ledger.ts";
 import { DefinitionDigests, Digest, PersistedJson } from "./records.ts";
 
-const Name = Schema.NonEmptyString.check(Schema.isMaxLength(128));
+const Name = Schema.NonEmptyString.check(
+  Schema.isMaxLength(128),
+  Schema.isPattern(/^[^\p{Surrogate}]*$/u),
+);
 /** Milliseconds since the Unix epoch, within DateTime's supported range. */
 export const ScheduleInstant = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
@@ -120,6 +123,7 @@ export const ScheduleRefusal = Schema.Struct({
   code: Name,
 });
 export type ScheduleRefusal = typeof ScheduleRefusal.Type;
+/** Half-open interval [fromMillis, toMillis); the upper bound is not skipped. */
 export const ScheduleSkippedRange = Schema.Struct({
   fromMillis: ScheduleInstant,
   toMillis: ScheduleInstant,
@@ -191,7 +195,7 @@ export class ScheduleStorageError extends Schema.TaggedError<ScheduleStorageErro
     reason: Schema.Literals(["unavailable", "corrupt"]),
   },
 ) {}
-/** An adapter may emit this only when it proves the request was not admitted. */
+/** Only when the unchanged envelope was not admitted and cannot succeed, including on replay. */
 export class ScheduledInputRefused extends Schema.TaggedError<ScheduledInputRefused>()(
   "ScheduledInputRefused",
   { code: Name },

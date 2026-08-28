@@ -16,6 +16,7 @@ import {
   ScheduleConflict,
   ScheduleDestination,
   ScheduleId,
+  ScheduleKey,
   SchedulingLimits,
   ScheduleNotFound,
   SchedulePage,
@@ -238,5 +239,17 @@ describe("Schedule persisted schemas", () => {
         maxInputBytes: 65_537,
       }),
     ).toThrow(/./);
+  });
+
+  it("rejects malformed Unicode names before they cross a UTF-8 storage boundary", () => {
+    const isKey = Schema.is(ScheduleKey);
+    for (const name of ["\ud800", "\udc00", "tenant\ud800name", "\udc00\ud800"]) {
+      expect(isKey({ ...key, scheduleId: name })).toBe(false);
+      expect(isKey({ ...key, owner: { ...owner, tenantId: name } })).toBe(false);
+      expect(isKey({ ...key, owner: { ...owner, ownerId: name } })).toBe(false);
+    }
+    for (const name of ["team-\u{1f642}", "\u6f22\u5b57", "\ufffd"]) {
+      expect(isKey({ owner: { tenantId: name, ownerId: name }, scheduleId: name })).toBe(true);
+    }
   });
 });
