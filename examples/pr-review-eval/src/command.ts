@@ -103,6 +103,7 @@ const runCommand = Command.make(
     const shared = yield* root;
     const suite = yield* loadEvalSuite(shared.casesFile);
     const caseIds = yield* decodeSelectedCases(options.selectedCases);
+    yield* selectEvalCases(suite, caseIds);
     const fs = yield* FileSystem.FileSystem;
     const guidanceText = yield* Option.match(options.guidance, {
       onNone: () => Effect.succeed(undefined),
