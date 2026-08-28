@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/capabilities",
-  "version": "0.1.0-beta.35",
+  "version": "0.1.0-beta.36",
   "description": "Operational capabilities for Effect Agent: approvals, budgets, context management, command queues, MCP, structural redaction, and subagents.",
   "license": "MIT",
   "repository": {

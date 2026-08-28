@@ -1,5 +1,15 @@
 # @effect-agent/platform-node
 
+## 0.1.0-beta.36
+
+### Patch Changes
+
+- Updated dependencies [[`082c258`](https://github.com/danieljvdm/effect-agent/commit/082c2584573c1ffbfa7d5b7166f4243e996816eb)]:
+  - @effect-agent/session@0.1.0-beta.36
+  - @effect-agent/storage-sqlite@0.1.0-beta.36
+  - @effect-agent/core@0.1.0-beta.36
+  - @effect-agent/engine@0.1.0-beta.36
+
 ## 0.1.0-beta.35
 
 ### Patch Changes
