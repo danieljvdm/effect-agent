@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.37
+
+### Patch Changes
+
+- [#199](https://github.com/danieljvdm/effect-agent/pull/199) [`bd48a7b`](https://github.com/danieljvdm/effect-agent/commit/bd48a7b200fb71335b19edd7941be331b6ede9ea) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Review independent pull-request defects against repository source in one bounded run while keeping incremental findings within the changed scope. BEHAVIOR CHANGE: invoke `reviewer.review` with an authorized, immutable `ReviewRepository` and use the `@effect-agent review` commands; direct definition/binding access, internal policy/sanitizer exports, the `style` category, and legacy slash commands are removed.
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.37
+
 ## 0.1.0-beta.36
 
 ### Patch Changes

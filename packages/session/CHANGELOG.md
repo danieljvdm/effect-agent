@@ -1,5 +1,23 @@
 # @effect-agent/session
 
+## 0.1.0-beta.37
+
+### Minor Changes
+
+- [#212](https://github.com/danieljvdm/effect-agent/pull/212) [`242b601`](https://github.com/danieljvdm/effect-agent/commit/242b601c6d14c3448c2a3acdc28b97b48e27cf92) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add durable schedules for typed Agent input with owner authorization, one-shot, interval and cron timing, and recovery through ordinary Submission admission on Node and Cloudflare.
+
+  BEHAVIOR CHANGE: Reset older private-development SQLite databases for storage version 5, and provide `effect-cf ^0.37.0` to Cloudflare hosts.
+
+- [#218](https://github.com/danieljvdm/effect-agent/pull/218) [`b43cf38`](https://github.com/danieljvdm/effect-agent/commit/b43cf38093f716cefc998241183ca2059ee83fe0) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Separate scheduling management from driver authority, expose explicit public status, and fix DST delivery, failed-record starvation, and repeated resume. Allow positive host interval minimums and release operational capacity when schedules finish while retaining creation replay guarantees.
+
+  BEHAVIOR CHANGE: Cloudflare consumers yield `Scheduling` from `CloudflareSchedulingClient.layer`; local drivers use `ScheduleDriver.layer`. Status omits persisted input and admission internals, and `dueBatchSize` bounds a query page within a sweep.
+
+### Patch Changes
+
+- Updated dependencies [[`bd48a7b`](https://github.com/danieljvdm/effect-agent/commit/bd48a7b200fb71335b19edd7941be331b6ede9ea), [`bd48a7b`](https://github.com/danieljvdm/effect-agent/commit/bd48a7b200fb71335b19edd7941be331b6ede9ea)]:
+  - @effect-agent/engine@0.1.0-beta.37
+  - @effect-agent/core@0.1.0-beta.37
+
 ## 0.1.0-beta.36
 
 ### Patch Changes

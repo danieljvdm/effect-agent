@@ -49,6 +49,7 @@
     "context-economics",
     "context-review-fixes",
     "delegation-containment",
+    "durable-agent-input-scheduling",
     "durable-progress-wait",
     "durable-run-duration",
     "effect-agent-umbrella",
@@ -60,6 +61,7 @@
     "harden-session-boundaries",
     "harden-storage-boundaries",
     "harden-testing-boundaries",
+    "host-browser-viewport",
     "initial-live-test-release",
     "interactive-browser-host-controls",
     "lean-pr-review",
@@ -68,8 +70,10 @@
     "model-visible-output-contract",
     "native-tool-observability",
     "normalize-overlapping-cache-writes",
+    "observed-browser-actions",
     "pin-internal-dependency-versions",
     "preserve-first-pass-findings",
+    "preserve-required-delivery",
     "pure-session-boundaries",
     "quiescent-conversation-maintenance",
     "react-controlled-browser-fill",
@@ -77,6 +81,8 @@
     "reliable-terminal-delivery",
     "remove-legacy-review-surfaces",
     "required-failed-settlement-diagnostic",
+    "required-native-completion",
+    "scheduling-management-recovery",
     "scoped-browser-crawl",
     "scoped-interactive-browser",
     "silent-web-capture-errors",
@@ -87,6 +93,7 @@
     "trusted-tool-failure-observer",
     "typed-budget-settlement",
     "typed-run-disposition",
-    "unknown-abort-recovery"
+    "unknown-abort-recovery",
+    "verified-pr-review"
   ]
 }
