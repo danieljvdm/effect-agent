@@ -1,11 +1,23 @@
 import { ReviewRequest } from "@effect-agent/pr-review";
 import { Crypto, Effect, Encoding, FileSystem, Schema, Stream } from "effect";
 
-import { EvalDataError, EvalInputDigest, EvalObservation, EvalSuite } from "./contracts.ts";
+import {
+  EvalDataError,
+  EvalInputDigest,
+  EvalObservation,
+  type EvalRepositorySnapshot,
+  EvalRepositoryFile,
+  EvalSuite,
+} from "./contracts.ts";
 
 const MAX_SUITE_BYTES = 64n * 1_024n * 1_024n;
 const decodeSuiteJson = Schema.decodeUnknownEffect(Schema.fromJsonString(EvalSuite));
 const encodeRequestJson = Schema.encodeEffect(Schema.fromJsonString(ReviewRequest));
+const encodeRepositoryJson = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ version: Schema.Literal(1), files: Schema.Array(EvalRepositoryFile) }),
+  ),
+);
 const encodeObservationJson = Schema.encodeEffect(Schema.fromJsonString(EvalObservation));
 
 const dataError = (
@@ -30,6 +42,22 @@ export const digestReviewRequest = Effect.fn("PrReviewEval.digestReviewRequest")
   );
   return yield* digestText(encoded);
 });
+
+export const digestRepositorySnapshot = Effect.fn("PrReviewEval.digestRepositorySnapshot")(
+  function* (snapshot: EvalRepositorySnapshot) {
+    const encoded = yield* encodeRepositoryJson({
+      version: snapshot.version,
+      files: snapshot.files,
+    }).pipe(
+      Effect.mapError((cause) =>
+        dataError("encode repository", "Frozen repository snapshot failed canonical encoding", {
+          cause,
+        }),
+      ),
+    );
+    return yield* digestText(encoded);
+  },
+);
 
 export const digestText = Effect.fn("PrReviewEval.digestText")(function* (text: string) {
   const bytes = yield* Effect.fromResult(Encoding.decodeHex(Encoding.encodeHex(text))).pipe(
@@ -58,6 +86,15 @@ export const validateEvalSuite = Effect.fn("PrReviewEval.validateEvalSuite")(fun
           "validate case digest",
           `Case ${evalCase.id} has input digest ${evalCase.inputDigest}, expected ${actual}`,
         );
+      }
+      if (evalCase.repository !== undefined) {
+        const repositoryDigest = yield* digestRepositorySnapshot(evalCase.repository);
+        if (repositoryDigest !== evalCase.repository.digest) {
+          return yield* dataError(
+            "validate repository digest",
+            `Case ${evalCase.id} has repository digest ${evalCase.repository.digest}, expected ${repositoryDigest}`,
+          );
+        }
       }
     }),
     { discard: true },

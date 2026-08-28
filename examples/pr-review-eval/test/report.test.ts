@@ -116,7 +116,7 @@ const judgment = (
     findingIndex,
     label,
     matchedDefectIds,
-    rationale: `Human judgment: ${label}.`,
+    rationale: `Source judgment: ${label}.`,
     adjudicator: "maintainer",
   });
 
@@ -184,7 +184,11 @@ describe("PR-review eval quality report", () => {
           clean,
           current,
           2,
-          EvalTrialFailed.make({ errorTag: "RateLimitError", message: "Try later" }),
+          EvalTrialFailed.make({
+            errorTag: "RateLimitError",
+            message: "Try later",
+            estimatedCostMicrousd: 11,
+          }),
         ),
         observation(
           known,
@@ -270,7 +274,8 @@ describe("PR-review eval quality report", () => {
         failedTrials: 1,
         costedSucceededTrials: 1,
         uncostedSucceededTrials: 2,
-        estimatedCostMicrousd: 5,
+        estimatedCostMicrousd: 16,
+        costedFailedTrials: 1,
         inputTokens: 30,
         outputTokens: 9,
         elapsedMillis: 600,
@@ -310,6 +315,7 @@ describe("PR-review eval quality report", () => {
         inputTokens: 30,
         outputTokens: 9,
         costedSucceededTrials: 3,
+        costedFailedTrials: 0,
         estimatedCostMicrousd: 16,
       });
       expect(report.unjudgedFindings).toHaveLength(1);

@@ -4,12 +4,14 @@ import { Prompt, Tool } from "effect/unstable/ai";
 /**
  * Model-visible final-output contract (RUN-028).
  *
- * The interpreter's only output-conformance point is `decodeFinalOutput`,
- * which validates the final text after the model has already finished; the
- * model itself is never told the Agent's output Schema (issue #41). This
- * module renders that Schema to JSON Schema with the same Effect AI
- * derivation the providers use for Tool parameters and states it as one
- * framework-owned system message on every model request.
+ * For ordinary text completion, the interpreter's only output-conformance
+ * point is `decodeFinalOutput`, which validates the final text after the
+ * model has already finished. This module renders that Schema to JSON Schema
+ * with the same Effect AI derivation the providers use for Tool parameters
+ * and states it as one framework-owned system message on every model request.
+ * A required completion Tool instead gets a native-tool directive: its Tool
+ * parameter Schema is already carried by the provider request, and ordinary
+ * final text is not an allowed completion path.
  *
  * The contract is a per-request projection of the immutable definition —
  * exactly like the Tool schemas the request already carries. It is inserted
@@ -44,6 +46,11 @@ const contractDirective = (definition: Agent.AnyDefinition): string =>
       "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " +
       `before or after the JSON. When calling the "${definition.completion.tool}" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool's parameter schema instead. The engine projects the successful completion Tool result into the Agent output.`;
 
+const requiredCompletionDirective = (tool: string): string =>
+  `Final output contract: complete only by calling the required completion Tool ${JSON.stringify(tool)} ` +
+  "as the sole Tool Call in its batch. Do not emit an ordinary final assistant text answer. " +
+  "The Tool's canonical parameters and successful result are projected and validated as the Agent output.";
+
 /**
  * Render the model-visible final-output contract for one definition. The
  * derivation is pure and cheap relative to a model call (providers derive
@@ -54,6 +61,12 @@ const contractDirective = (definition: Agent.AnyDefinition): string =>
  * a new failure mode.
  */
 export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputContract => {
+  if (definition.completion?.required === true) {
+    return {
+      _tag: "rendered",
+      message: requiredCompletionDirective(definition.completion.tool),
+    };
+  }
   try {
     const jsonSchema = Tool.getJsonSchemaFromSchema(definition.output);
     return {

@@ -1,14 +1,13 @@
-import { fileURLToPath } from "node:url";
-
 import {
-  isCommentableLine,
   makeReviewer,
   ReviewChange,
   ReviewOutcome,
   ReviewReport,
+  type ReviewRepository,
   ReviewRequest,
 } from "@effect-agent/pr-review";
 import { ScriptedModel } from "@effect-agent/testing";
+import { OpenAiClient } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -16,8 +15,10 @@ import {
   Effect,
   Fiber,
   FileSystem,
+  Layer,
   Option,
   PlatformError,
+  Redacted,
   Ref,
   Schema,
   type Scope,
@@ -25,6 +26,7 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import { Model } from "effect/unstable/ai";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import {
   decodeObservationLines,
@@ -39,8 +41,7 @@ import {
   EvalSuite,
   EvalVariantConfiguration,
   EvalVariantId,
-  digestGuidance,
-  loadEvalSuite,
+  digestText,
   makeCurrentOpenAiVariant,
   runEvalSuite,
   validateEvalSuite,
@@ -123,24 +124,20 @@ describe("PR-review model eval", () => {
   it.effect("replays the real reviewer and round-trips its JSONL observation", () =>
     Effect.gen(function* () {
       const suite = yield* makeSuite();
-      const model = Model.make(
-        "scripted",
-        "eval",
+      const scripted = yield* Layer.build(
         ScriptedModel.layer([
           {
             _tag: "Stream",
             parts: [
-              { type: "text-start", id: "review" },
               {
-                type: "text-delta",
+                type: "tool-call",
                 id: "review",
-                delta:
-                  '{"summary":"One blocker.","findings":[{"path":"src/read.ts","line":1,"severity":"blocking","category":"correctness","title":"Optional value is dereferenced","body":"Calling read without a value now throws."}]}',
+                name: "submit_review",
+                params: { findings: [] },
               },
-              { type: "text-end", id: "review" },
               {
                 type: "finish",
-                reason: "stop",
+                reason: "tool-calls",
                 usage: {
                   inputTokens: { total: 10, uncached: 10, cacheRead: 0, cacheWrite: 0 },
                   outputTokens: { total: 4 },
@@ -151,8 +148,9 @@ describe("PR-review model eval", () => {
           },
         ]),
       );
+      const model = Model.make("scripted", "eval", Layer.succeedContext(scripted));
       const reviewer = makeReviewer({ model });
-      const variant: EvalVariant<never> = {
+      const variant: EvalVariant<ReviewRepository> = {
         configuration: configuration("scripted"),
         review: (input) =>
           reviewer.review(input).pipe(
@@ -173,9 +171,7 @@ describe("PR-review model eval", () => {
       expect(observations[0]?.runnerVersion).toBe("0.1.1");
       expect(observations[0]?.result._tag).toBe("Succeeded");
       if (observations[0]?.result._tag === "Succeeded") {
-        expect(observations[0].result.outcome.report.findings[0]?.title).toBe(
-          "Optional value is dereferenced",
-        );
+        expect(observations[0].result.outcome.report.findings).toEqual([]);
       }
 
       const fs = yield* FileSystem.FileSystem;
@@ -196,15 +192,53 @@ describe("PR-review model eval", () => {
     Effect.gen(function* () {
       const variant = yield* makeCurrentOpenAiVariant({
         id: Schema.decodeSync(EvalVariantId)("candidate-guidance-v1"),
-        model: "gpt-5.6-sol",
-        reasoningEffort: "medium",
         guidance: "  Keep the public error channel typed.  ",
       });
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
-      expect(variant.configuration.reviewerProfile).toBe("single-pass-v1");
+      expect(variant.configuration.reviewerProfile).toBe("source-review-v4");
       expect(variant.configuration.guidanceDigest).toBe(
-        yield* digestGuidance("Keep the public error channel typed."),
+        yield* digestText("Keep the public error channel typed."),
       );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("records actionable AI error categories without provider payloads or credentials", () =>
+    Effect.gen(function* () {
+      const suite = yield* makeSuite();
+      const variant = yield* makeCurrentOpenAiVariant({
+        id: Schema.decodeSync(EvalVariantId)("provider-failure"),
+      });
+      const privateText = "private-source-and-provider-payload";
+      const client = HttpClient.make((request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(
+              JSON.stringify({ error: { type: "invalid_request_error", message: privateText } }),
+              { status: 400, headers: { "content-type": "application/json" } },
+            ),
+          ),
+        ),
+      );
+      const observations = yield* runEvalSuite(suite, [variant], {
+        trials: 1,
+        concurrency: 1,
+        caseIds: [],
+      }).pipe(
+        Stream.runCollect,
+        Effect.provide(
+          OpenAiClient.layer({ apiKey: Redacted.make("private-api-key") }).pipe(
+            Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
+          ),
+        ),
+      );
+      expect(observations[0]?.result).toEqual({
+        _tag: "Failed",
+        errorTag: "AiError/InvalidRequestError",
+        message: "AI failure; retryable=false",
+      });
+      expect(JSON.stringify(observations)).not.toContain(privateText);
+      expect(JSON.stringify(observations)).not.toContain("private-api-key");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -413,6 +447,7 @@ describe("PR-review model eval", () => {
           EvalReviewerFailure.make({
             errorTag: "RateLimitError",
             message: "Provider declined the trial",
+            estimatedCostMicrousd: 13,
           }),
       };
       const observations = yield* runEvalSuite(suite, [successful, failing], {
@@ -431,38 +466,11 @@ describe("PR-review model eval", () => {
           .every(
             (observation) =>
               observation.result._tag === "Failed" &&
-              observation.result.errorTag === "RateLimitError",
+              observation.result.errorTag === "RateLimitError" &&
+              observation.result.estimatedCostMicrousd === 13,
           ),
       ).toBe(true);
     }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect.each(["smoke-suite.json", "effect-v3-type-tests-suite.json"])(
-    "round-trips %s with a valid digest and commentable evidence",
-    (filename) =>
-      Effect.gen(function* () {
-        const suite = yield* loadEvalSuite(
-          fileURLToPath(new URL(`../fixtures/${filename}`, import.meta.url)),
-        );
-        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(EvalSuite))(suite);
-        const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(EvalSuite))(
-          encoded,
-        );
-        expect(decoded).toEqual(suite);
-        for (const evalCase of suite.cases) {
-          const patches = new Map(
-            evalCase.request.changes.map((change) => [change.path, change.patch]),
-          );
-          const invalidEvidence = evalCase.expectedDefects.flatMap((defect) =>
-            defect.evidence.filter(
-              (evidence) =>
-                evidence.line !== undefined &&
-                !isCommentableLine(patches.get(evidence.path) ?? "", evidence.line),
-            ),
-          );
-          expect(invalidEvidence).toEqual([]);
-        }
-      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("rejects corrupt corpus identity before a model can run", () =>

@@ -157,11 +157,12 @@ for the Object's coordinator. It adds no journal data or Code Mode durability cl
 
 ### `@effect-agent/pr-review`
 
-A provider-neutral, deployment-class-E review agent. The host supplies bounded patches; one
-tool-free model turn returns a Schema-decoded report; the package validates paths and RIGHT-side
-line anchors and exposes observed cached, uncached, cache-write, and output token usage plus an
-optional host-priced estimate. It contains no GitHub adapter, provider binding, entrypoint, retry,
-fan-out, continuity state, or publication behavior.
+A provider-neutral, deployment-class-E review agent. The host supplies bounded patches and
+immutable base/head repository source; one bounded, source-backed Run returns a Schema-decoded
+report. The package validates paths and RIGHT-side line anchors and exposes observed cached,
+uncached, cache-write, and output token usage plus an optional host-priced estimate. It contains no
+GitHub adapter, provider binding, entrypoint, retry of a completed review, fan-out, continuity
+state, or publication behavior.
 
 ### `@effect-agent/testing`
 
@@ -173,9 +174,9 @@ equivalence).
 ## GitHub Action
 
 The private `packages/pr-review-action` workspace owns the GitHub channel over
-`@effect-agent/pr-review`: webhook policy, REST decoding, bounded diff admission, deterministic
-four-shard fan-out, the OpenAI Layer, merging, and publication. The root `action` directory holds
-the consumer-facing metadata and committed node-runtime bundle. See the
+`@effect-agent/pr-review`: webhook policy, REST decoding, bounded exact-diff admission, immutable
+base/head source binding, the OpenAI Layer, one reviewer invocation, and publication. The root
+`action` directory holds the consumer-facing metadata and committed node-runtime bundle. See the
 [Action guide](https://github.com/danieljvdm/effect-agent/blob/main/action/README.md).
 
 ## Leaf examples

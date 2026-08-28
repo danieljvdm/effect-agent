@@ -1,5 +1,6 @@
+import { createTwoFilesPatch } from "diff";
 import type { Redacted } from "effect";
-import { Effect, Schema } from "effect";
+import { Effect, Encoding, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import type { ReviewHistoryItem } from "./selection.ts";
@@ -19,6 +20,7 @@ const PullRequestWire = Schema.Struct({
 
 const ChangedFileWire = Schema.Struct({
   filename: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
+  previous_filename: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(1_024))),
   status: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
   additions: Schema.Natural,
   deletions: Schema.Natural,
@@ -30,6 +32,7 @@ const ReviewWire = Schema.Struct({
   body: Schema.NullOr(Schema.String.check(Schema.isMaxLength(100_000))),
   commit_id: Schema.NullOr(Revision),
   submitted_at: Schema.NullOr(Schema.String.check(Schema.isMaxLength(128))),
+  state: Schema.Literals(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"]),
   user: Schema.Struct({
     login: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
     type: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
@@ -51,6 +54,7 @@ const GitTreeEntryWire = Schema.Union([
     ...GitTreeEntryFields,
     mode: Schema.Literals(["100644", "100755", "120000"]),
     type: Schema.Literal("blob"),
+    size: Schema.Natural,
   }),
   Schema.Struct({
     ...GitTreeEntryFields,
@@ -70,6 +74,17 @@ const GitTreeWire = Schema.Struct({
   truncated: Schema.Boolean,
 });
 
+const GitBlobWire = Schema.Struct({
+  sha: Revision,
+  size: Schema.Natural,
+  encoding: Schema.Literal("base64"),
+  content: Schema.String.check(Schema.isMaxLength(4_000_000)),
+});
+
+const CompareWire = Schema.Struct({
+  merge_base_commit: Schema.Struct({ sha: Revision }),
+});
+
 const PublishedReviewWire = Schema.Struct({ html_url: ShortString });
 const CreateReactionWire = Schema.Struct({ content: Schema.Literal("eyes") });
 const ReactionWire = Schema.Struct({
@@ -87,7 +102,12 @@ const PublishReviewWire = Schema.Struct({
       side: Schema.Literal("RIGHT"),
       body: Schema.NonEmptyString.check(Schema.isMaxLength(4_096)),
     }),
-  ).check(Schema.isMaxLength(12)),
+  ).check(Schema.isMaxLength(24)),
+});
+const PublishCurrentHeadCommentWire = Schema.Struct({
+  event: Schema.Literal("COMMENT"),
+  body: Schema.String.check(Schema.isMaxLength(100_000)),
+  comments: Schema.Tuple([]),
 });
 
 export interface PullRequestView {
@@ -102,6 +122,7 @@ export interface PullRequestView {
 
 export interface ChangedFile {
   readonly path: string;
+  readonly previousPath?: string | undefined;
   readonly status: string;
   readonly additions: number;
   readonly deletions: number;
@@ -110,6 +131,22 @@ export interface ChangedFile {
 
 export interface TreeComparisonView {
   readonly changedPaths: ReadonlyArray<string>;
+  readonly base: RepositorySnapshot;
+  readonly head: RepositorySnapshot;
+}
+
+export interface RepositorySnapshot {
+  readonly revision: string;
+  readonly paths: ReadonlyArray<string>;
+  readonly readTextFile: (path: string) => Effect.Effect<string, GitHubApiFailure>;
+  readonly entry: (path: string) =>
+    | {
+        readonly sha: string;
+        readonly mode: "100644" | "100755" | "120000" | "040000" | "160000";
+        readonly type: "blob" | "tree" | "commit";
+        readonly size?: number | undefined;
+      }
+    | undefined;
 }
 
 export class GitHubApiFailure extends Schema.TaggedError<GitHubApiFailure>()("GitHubApiFailure", {
@@ -117,8 +154,36 @@ export class GitHubApiFailure extends Schema.TaggedError<GitHubApiFailure>()("Gi
   reason: Schema.String,
 }) {}
 
+export class StaleReviewHead extends Schema.TaggedError<StaleReviewHead>()("StaleReviewHead", {
+  inspectedHead: Revision,
+  currentHead: Revision,
+}) {}
+
+const MAX_TEXT_BLOB_BYTES = 2_000_000;
+
+/** Build a unified patch from the exact two committed file contents. */
+export const makeExactPatch = (input: {
+  readonly path: string;
+  readonly basePath?: string | undefined;
+  readonly headPath?: string | undefined;
+  readonly baseRevision: string;
+  readonly headRevision: string;
+  readonly before: string;
+  readonly after: string;
+}): string | undefined =>
+  createTwoFilesPatch(
+    `a/${input.basePath ?? input.path}`,
+    `b/${input.headPath ?? input.path}`,
+    input.before,
+    input.after,
+    input.baseRevision,
+    input.headRevision,
+    { context: 3, timeout: 1_000, maxEditLength: 200_000 },
+  );
+
 const changedFileFromWire = (wire: typeof ChangedFileWire.Type): ChangedFile => ({
   path: wire.filename,
+  previousPath: wire.previous_filename,
   status: wire.status,
   additions: wire.additions,
   deletions: wire.deletions,
@@ -219,6 +284,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
           body: wire.body ?? "",
           commitId: wire.commit_id ?? undefined,
           submittedAt: wire.submitted_at ?? undefined,
+          state: wire.state,
         })),
       );
       if (wires.length < 100) return all;
@@ -229,7 +295,55 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     });
   });
 
-  const readTreeSnapshot = Effect.fn("GitHubClient.readTreeSnapshot")(function* (revision: string) {
+  const textBlobs = new Map<string, string>();
+
+  const readTextBlob = Effect.fn("GitHubClient.readTextBlob")(function* (sha: string) {
+    const cached = textBlobs.get(sha);
+    if (cached !== undefined) return cached;
+    const blob = yield* execute(
+      "get Git blob",
+      HttpClientRequest.get(
+        `${apiUrl}/repos/${options.repository}/git/blobs/${encodeURIComponent(sha)}`,
+      ),
+    ).pipe(Effect.flatMap(decode(GitBlobWire, "get Git blob")));
+    if (blob.sha !== sha) {
+      return yield* GitHubApiFailure.make({
+        operation: "get Git blob",
+        reason: `GitHub returned blob ${blob.sha} for requested blob ${sha}`,
+      });
+    }
+    if (blob.size > MAX_TEXT_BLOB_BYTES) {
+      return yield* GitHubApiFailure.make({
+        operation: "get Git blob",
+        reason: `blob ${sha} exceeds the ${String(MAX_TEXT_BLOB_BYTES)}-byte text bound`,
+      });
+    }
+    const bytes = yield* Effect.fromResult(
+      Encoding.decodeBase64(blob.content.replaceAll("\n", "")),
+    ).pipe(Effect.mapError((cause) => failure("decode Git blob", cause)));
+    if (bytes.length !== blob.size) {
+      return yield* GitHubApiFailure.make({
+        operation: "decode Git blob",
+        reason: `decoded blob ${sha} has ${String(bytes.length)} bytes, expected ${String(blob.size)}`,
+      });
+    }
+    if (bytes.includes(0)) {
+      return yield* GitHubApiFailure.make({
+        operation: "decode Git blob",
+        reason: `blob ${sha} is not textual`,
+      });
+    }
+    const content = yield* Effect.try({
+      try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      catch: (cause) => failure("decode Git blob", cause),
+    });
+    textBlobs.set(sha, content);
+    return content;
+  });
+
+  const readTreeSnapshot = Effect.fn("GitHubClient.readTreeSnapshot")(function* (
+    revision: string,
+  ): Effect.fn.Return<RepositorySnapshot, GitHubApiFailure> {
     const commit = yield* execute(
       "get Git commit",
       HttpClientRequest.get(
@@ -270,28 +384,58 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       }
       entries.set(entry.path, entry);
     }
-    return entries;
+    const paths = [...entries.values()]
+      .filter((entry) => entry.type !== "tree")
+      .map((entry) => entry.path)
+      .sort();
+    const entry = (path: string) => entries.get(path);
+    const readTextFile = Effect.fn("GitHubClient.RepositorySnapshot.readTextFile")(function* (
+      path: string,
+    ) {
+      const value = entry(path);
+      if (value?.type !== "blob") {
+        return yield* GitHubApiFailure.make({
+          operation: "read repository file",
+          reason: `path '${path}' is unavailable at revision ${revision}`,
+        });
+      }
+      return yield* readTextBlob(value.sha);
+    });
+    return { revision, paths, entry, readTextFile } satisfies RepositorySnapshot;
+  });
+
+  const getMergeBase = Effect.fn("GitHubClient.getMergeBase")(function* (
+    base: string,
+    head: string,
+  ) {
+    const comparison = yield* execute(
+      "get pull request merge base",
+      HttpClientRequest.get(
+        `${apiUrl}/repos/${options.repository}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
+      ),
+    ).pipe(Effect.flatMap(decode(CompareWire, "get pull request merge base")));
+    return comparison.merge_base_commit.sha;
   });
 
   const compareTrees = Effect.fn("GitHubClient.compareTrees")(function* (
-    base: string,
-    head: string,
-    paths: ReadonlyArray<string>,
+    baseRevision: string,
+    headRevision: string,
   ) {
-    const { baseEntries, headEntries } = yield* Effect.all(
+    const { base: baseSnapshot, head: headSnapshot } = yield* Effect.all(
       {
-        baseEntries: readTreeSnapshot(base),
-        headEntries: readTreeSnapshot(head),
+        base: readTreeSnapshot(baseRevision),
+        head: readTreeSnapshot(headRevision),
       },
       { concurrency: 2 },
     );
-    const changedPaths = [...new Set(paths)].sort().filter((path) => {
-      const before = baseEntries.get(path);
-      const after = headEntries.get(path);
+    const candidates = [...baseSnapshot.paths, ...headSnapshot.paths];
+    const changedPaths = [...new Set(candidates)].sort().filter((path) => {
+      const before = baseSnapshot.entry(path);
+      const after = headSnapshot.entry(path);
       if (before === undefined || after === undefined) return before !== after;
       return before.sha !== after.sha || before.mode !== after.mode || before.type !== after.type;
     });
-    return { changedPaths } satisfies TreeComparisonView;
+    return { changedPaths, base: baseSnapshot, head: headSnapshot } satisfies TreeComparisonView;
   });
 
   const acknowledgeComment = Effect.fn("GitHubClient.acknowledgeComment")(function* (
@@ -322,6 +466,13 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     }>;
   }) =>
     Effect.gen(function* () {
+      const current = yield* getPullRequest;
+      if (current.headRevision !== input.commitId) {
+        return yield* StaleReviewHead.make({
+          inspectedHead: input.commitId,
+          currentHead: current.headRevision,
+        });
+      }
       const body = yield* Schema.encodeEffect(PublishReviewWire)({
         commit_id: input.commitId,
         event: input.event,
@@ -343,12 +494,33 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       );
     });
 
+  /** Publish only a host-authored incomplete-attempt marker on GitHub's current head. */
+  const publishCurrentHeadAttemptMarker = Effect.fn("GitHubClient.publishCurrentHeadAttemptMarker")(
+    function* (bodyText: string) {
+      const body = yield* Schema.encodeEffect(PublishCurrentHeadCommentWire)({
+        event: "COMMENT",
+        body: bodyText,
+        comments: [],
+      }).pipe(Effect.mapError((cause) => failure("encode stale review marker", cause)));
+      const reviewRequest = yield* HttpClientRequest.post(`${pullUrl}/reviews`).pipe(
+        HttpClientRequest.bodyJson(body),
+        Effect.mapError((cause) => failure("encode stale review marker", cause)),
+      );
+      return yield* execute("publish stale review marker", reviewRequest).pipe(
+        Effect.flatMap(decode(PublishedReviewWire, "publish stale review marker")),
+        Effect.map((wire) => wire.html_url),
+      );
+    },
+  );
+
   return {
     getPullRequest,
     listFiles,
     listReviews,
+    getMergeBase,
     compareTrees,
     acknowledgeComment,
     publishReview,
+    publishCurrentHeadAttemptMarker,
   } as const;
 });

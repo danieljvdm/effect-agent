@@ -76,11 +76,10 @@ also applies once to the token budget.
 Synthetic rejections are exempt from `repeatedFailureLimit` folding: no handler ran, so a
 rejected four-call batch cannot trip a limit of three.
 
-**`"fail"`.** Exhaustion fails the Run typed before any declared application Handler starts,
-including a completion Tool. Choose fail mode for pipelines that must never accept a truncated
-answer or start a delivery side effect after a policy breach. The repository's PR reviewer uses
-this mode for every tool-free shard. Its GitHub channel runs at most four shards in one wave, so a
-wave either returns schema-valid reports for every shard or publishes no findings.
+**`"fail"`.** Fail mode rejects work beyond a bound before any declared application Handler
+starts. The final permitted Turn may settle through a singleton Definition-owned completion Tool,
+which needs no continuation. Choose fail mode for pipelines that must never accept a truncated
+answer or start a delivery side effect after a policy breach.
 
 Duration, cost, and repeated-failure limits always fail the Run. Token exhaustion allows only one
 constrained final answer, so it cannot loop or spend without a bound.

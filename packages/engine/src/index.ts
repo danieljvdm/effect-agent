@@ -3733,9 +3733,23 @@ const makeTurn = <
 > =>
   Stream.unwrap(
     Effect.gen(function* () {
+      const policy = agent.definition.policy;
+      const bounds = effectiveRunBounds(policy, options);
       const now = yield* Clock.currentTimeMillis;
       if (now >= context.durationDeadlineMillis) {
         return failRunEventStream(durationLimitError(agent.definition.policy));
+      }
+      // Fail-mode work never starts beyond the Turn ceiling. Most Tool paths
+      // reject at declaration admission; this preflight also covers a
+      // final-Turn completion Tool whose canonical returned result is a
+      // failure and therefore needs another model Turn.
+      if (policy.onExhaustion === "fail" && turn > bounds.maxTurns) {
+        return failRunEventStream(
+          AgentPolicyError.make({
+            limit: "turns",
+            message: `Agent exceeded its ${bounds.maxTurns} Turn limit`,
+          }),
+        );
       }
       const ids = yield* IdGenerator;
       const turnId = yield* ids.nextTurnId;
@@ -3820,8 +3834,6 @@ const makeTurn = <
       // resume re-seeds the counters, so the derivation survives ownership
       // changes). Strict `>` keeps an exact-cap Run on today's unconstrained
       // path byte-for-byte.
-      const policy = agent.definition.policy;
-      const bounds = effectiveRunBounds(policy, options);
       let finalAnswerOnly =
         policy.onExhaustion !== "fail" &&
         (turn > bounds.maxTurns ||
@@ -3954,8 +3966,13 @@ const makeTurn = <
       const attempt = (basis: Prompt.Prompt) =>
         Stream.unwrap(
           outgoingModelPrompt(policy, context, basis, turn, priorToolCalls).pipe(
-            Effect.map((outgoing) =>
-              guardBudgetStream(
+            Effect.map((outgoing) => {
+              const terminalToolChoiceOnly =
+                finalAnswerOnly ||
+                (agent.definition.completion?.required === true &&
+                  policy.onExhaustion === "fail" &&
+                  turn === bounds.maxTurns);
+              return guardBudgetStream(
                 LanguageModel.streamText({
                   // The contract joins the final outgoing prompt (after
                   // compaction and the run-status append), so every attempt —
@@ -3967,16 +3984,21 @@ const makeTurn = <
                       : insertOutputContract(outgoing, outputContractMessage),
                   toolkit: agent.definition.toolkit,
                   disableToolCallResolution: true,
-                  ...(finalAnswerOnly
+                  ...(terminalToolChoiceOnly
                     ? agent.definition.completion === undefined
                       ? { toolChoice: "none" as const }
                       : {
                           toolChoice: {
-                            mode: "auto" as const,
+                            mode:
+                              agent.definition.completion.required === true
+                                ? ("required" as const)
+                                : ("auto" as const),
                             oneOf: [agent.definition.completion.tool],
                           },
                         }
-                    : {}),
+                    : agent.definition.completion?.required === true
+                      ? { toolChoice: "required" as const }
+                      : {}),
                 }),
                 options.budget,
               ).pipe(
@@ -4001,8 +4023,8 @@ const makeTurn = <
                   ),
                 ),
                 Stream.flatMap(Stream.fromIterable),
-              ),
-            ),
+              );
+            }),
           ),
         );
       // RUN-027: one summarize-and-retry for a classified provider context
@@ -4175,6 +4197,13 @@ const makeTurn = <
               }),
             );
           }
+          if (agent.definition.completion?.required === true && trace.toolCalls.size === 0) {
+            return failRunEventStream(
+              ModelProtocolError.make({
+                message: `Model stopped without required completion Tool ${agent.definition.completion.tool}`,
+              }),
+            );
+          }
 
           const stagedResponse = Stream.fromIterable(trace.providerResultPayloads).pipe(
             Stream.mapEffect((payload) => stampProviderResultEvent(context, turnId, payload)),
@@ -4272,9 +4301,10 @@ const makeTurn = <
                         : Stream.fromIterable(pre).pipe(Stream.concat(nextStream));
                     if (consumed.breach !== undefined) {
                       // Provider-executed calls already ran provider-side: a
-                      // stop response with no APPLICATION calls is final and
-                      // settles the breach directly (RUN-025).
+                      // stop response with no APPLICATION calls can settle
+                      // the breach directly unless completion is required (RUN-025).
                       if (
+                        agent.definition.completion?.required !== true &&
                         trace.applicationToolCalls.length === 0 &&
                         trace.finishReason === "stop"
                       ) {
@@ -4415,7 +4445,23 @@ const makeTurn = <
             });
 
           if (providerOnly && trace.finishReason === "stop") {
-            return afterValidatedResponse(settleOrFollowUp(historyWithResponse()));
+            if (agent.definition.completion?.required === true) {
+              const turnsBlocked =
+                policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
+              if (turnsBlocked) {
+                return failRunEventStream(
+                  AgentPolicyError.make({
+                    limit: "turns",
+                    message: `Agent exceeded its ${bounds.maxTurns} Turn limit`,
+                  }),
+                );
+              }
+            }
+            return afterValidatedResponse(
+              agent.definition.completion?.required === true
+                ? continueTurn(historyWithResponse())
+                : settleOrFollowUp(historyWithResponse()),
+            );
           }
 
           if (trace.toolCalls.size > 0) {
@@ -4427,7 +4473,8 @@ const makeTurn = <
               );
             }
             const turnsBlocked =
-              policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
+              turn > bounds.maxTurns ||
+              (policy.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch);
             if (turnsBlocked) {
               return failRunEventStream(
                 AgentPolicyError.make({
@@ -4898,7 +4945,8 @@ const makeResumeTurn = <
         );
       }
       const turnsBlocked =
-        policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
+        turn > bounds.maxTurns ||
+        (policy.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch);
       if (turnsBlocked) {
         return failRunEventStream(
           AgentPolicyError.make({

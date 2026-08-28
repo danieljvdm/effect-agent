@@ -43,6 +43,8 @@ export interface CompletionToolDeclaration<
   Output = unknown,
 > {
   readonly tool: string;
+  /** Require native Tool use on every model Turn and this Tool for final completion. */
+  readonly required?: boolean | undefined;
   readonly project: (input: CompletionProjectionInput<Parameters, Result>) => Output;
 }
 

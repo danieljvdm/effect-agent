@@ -1,6 +1,12 @@
+This package includes adaptations of the review instructions and numbered diff
+hunk presentation from PR-Agent:
+
+https://github.com/The-PR-Agent/pr-agent
+Pinned source: 9e6d6a5b40f9ce90bcc085466ba7a42c0837c37a
+
 MIT License
 
-Copyright (c) 2023 Effectful Technologies Inc
+Copyright (c) 2026 The PR Agent
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -516,6 +516,35 @@ layer(identifiers)("RUN-028 model-visible output contract", (it) => {
     return Effect.void;
   });
 
+  it.effect("directs required native completion without a contradictory text JSON contract", () => {
+    const Complete = Tool.make("complete", {
+      parameters: Schema.Struct({ answer: Schema.String }),
+      success: Schema.Void,
+    });
+    const definition = Agent.define("required-completion-contract", {
+      input: Schema.Struct({ question: Schema.String }),
+      output: Schema.Struct({ answer: Schema.String }),
+      instructions: "Complete through the Tool.",
+      toolkit: Toolkit.make(Complete),
+      policy,
+      completion: {
+        tool: "complete",
+        required: true,
+        project: ({ parameters }) => parameters,
+      },
+    });
+
+    const contract = outputSchemaContract(definition);
+    expect(contract._tag).toBe("rendered");
+    if (contract._tag === "rendered") {
+      expect(contract.message).toContain('required completion Tool "complete"');
+      expect(contract.message).toContain("Do not emit an ordinary final assistant text answer");
+      expect(contract.message).not.toContain("final assistant message must be only JSON");
+      expect(contract.message).not.toContain('"answer"');
+    }
+    return Effect.void;
+  });
+
   it.effect("inserts after the last system message, extending the last contiguous block", () => {
     const contract = "contract-text";
     const system = (content: string) => Prompt.makeMessage("system", { content });

@@ -2,12 +2,14 @@ import {
   isCommentableLine,
   makeReviewer,
   ReviewChange,
+  ReviewContextError,
+  ReviewFileList,
   ReviewFinding,
   ReviewReport,
+  ReviewRepository,
   ReviewRequest,
+  ReviewSource,
   type RunCostEstimator,
-  type ReviewOutcome,
-  type ReviewSeverity,
 } from "@effect-agent/pr-review";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import {
@@ -19,26 +21,32 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Result,
   Schema,
 } from "effect";
 import type { Response } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { type ChangedFile, makeGitHubClient } from "./github.ts";
+import {
+  type ChangedFile,
+  type GitHubApiFailure,
+  makeExactPatch,
+  makeGitHubClient,
+  type RepositorySnapshot,
+  type StaleReviewHead,
+} from "./github.ts";
 import {
   type ReviewCostEstimate,
   ReviewPresentation,
   withReviewMarker,
   withReviewPauseMarker,
 } from "./presentation.ts";
-import { reviewModeFromCommand, selectReview } from "./selection.ts";
+import { reviewModeFromCommand, selectReview, unresolvedChangeRequestCount } from "./selection.ts";
 
-const MAX_REVIEW_PATCH_CHARS = 320_000;
+const MAX_REVIEW_PATCH_CHARS = 120_000;
 const MAX_PATCH_CHARS = 80_000;
 const MAX_REVIEW_FILES = 100;
-const TARGET_SHARD_PATCH_CHARS = 80_000;
-const MAX_MERGED_FINDINGS = 12;
-export const MAX_REVIEW_SHARDS = 4;
+const MAX_HYDRATED_SOURCE_BYTES = 4_000_000;
 
 interface Gpt56Pricing {
   readonly label: string;
@@ -150,6 +158,82 @@ export class BlockingFindings extends Schema.TaggedError<BlockingFindings>()("Bl
   count: Schema.Int,
 }) {}
 
+export class UnresolvedChangeRequests extends Schema.TaggedError<UnresolvedChangeRequests>()(
+  "UnresolvedChangeRequests",
+  { count: Schema.Int },
+) {}
+
+export class IncompleteReview extends Schema.TaggedError<IncompleteReview>()("IncompleteReview", {
+  unreviewedPaths: Schema.Int,
+}) {}
+
+export class ReviewAttemptIncomplete extends Schema.TaggedError<ReviewAttemptIncomplete>()(
+  "ReviewAttemptIncomplete",
+  {},
+) {}
+
+export class IncrementalScopeUnavailable extends Schema.TaggedError<IncrementalScopeUnavailable>()(
+  "IncrementalScopeUnavailable",
+  {
+    priorMergeBase: Schema.String,
+    currentMergeBase: Schema.String,
+  },
+) {}
+
+type ReviewPublication =
+  | { readonly _tag: "published"; readonly reviewUrl: string }
+  | {
+      readonly _tag: "stale";
+      readonly reviewUrl: string;
+      readonly failure: StaleReviewHead;
+    };
+
+const staleAttemptBody = (automatic: boolean): string =>
+  withReviewMarker(
+    [
+      "## Effect Agent review",
+      "",
+      "> [!CAUTION]",
+      "> **The review result was discarded because the pull request changed during publication.**",
+      "> This attempt is incomplete and does not clear the change.",
+    ].join("\n"),
+    automatic,
+    false,
+  );
+
+/** Recover only a known pre-POST head mismatch with a neutral marker on GitHub's current head. */
+export const publishHeadBoundReview = Effect.fn("publishHeadBoundReview")(function* (input: {
+  readonly publish: Effect.Effect<string, GitHubApiFailure | StaleReviewHead>;
+  readonly publishCurrentHeadAttemptMarker: (
+    body: string,
+  ) => Effect.Effect<string, GitHubApiFailure>;
+  readonly automatic: boolean;
+}): Effect.fn.Return<ReviewPublication, GitHubApiFailure> {
+  return yield* input.publish.pipe(
+    Effect.map((reviewUrl) => ({ _tag: "published", reviewUrl }) as const),
+    Effect.catchTag("StaleReviewHead", (failure) =>
+      input
+        .publishCurrentHeadAttemptMarker(staleAttemptBody(input.automatic))
+        .pipe(Effect.map((reviewUrl) => ({ _tag: "stale", reviewUrl, failure }) as const)),
+    ),
+  );
+});
+
+export const reviewPublicationFailure = (input: {
+  readonly blockingFindings: number;
+  readonly unreviewedPaths: number;
+  readonly unresolvedChangeRequests: number;
+}): BlockingFindings | IncompleteReview | UnresolvedChangeRequests | undefined => {
+  if (input.blockingFindings > 0) return BlockingFindings.make({ count: input.blockingFindings });
+  if (input.unreviewedPaths > 0) {
+    return IncompleteReview.make({ unreviewedPaths: input.unreviewedPaths });
+  }
+  if (input.unresolvedChangeRequests > 0) {
+    return UnresolvedChangeRequests.make({ count: input.unresolvedChangeRequests });
+  }
+  return undefined;
+};
+
 const writeOutputs = Effect.fn("writeReviewOutputs")(function* (
   entries: ReadonlyArray<readonly [string, string | number]>,
 ) {
@@ -163,7 +247,11 @@ const writeOutputs = Effect.fn("writeReviewOutputs")(function* (
   );
 });
 
-const skip = Effect.fn("skipReview")(function* (reason: string, reviewUrl?: string) {
+const skip = Effect.fn("skipReview")(function* (
+  reason: string,
+  reviewUrl?: string,
+  unresolvedChangeRequests = 0,
+) {
   yield* Console.log(
     reviewUrl === undefined ? `PR review skipped: ${reason}` : `Posted PR review: ${reviewUrl}`,
   );
@@ -177,6 +265,7 @@ const skip = Effect.fn("skipReview")(function* (reason: string, reviewUrl?: stri
     ["output-tokens", 0],
     ["estimated-cost-usd", "0.000000"],
     ["blocking-findings", 0],
+    ["unresolved-change-requests", unresolvedChangeRequests],
     ...(reviewUrl === undefined ? [] : [["review-url", reviewUrl] as const]),
   ]);
 });
@@ -198,138 +287,236 @@ const matchesIgnore = (path: string, rawPattern: string): boolean => {
   return false;
 };
 
-interface ReviewSurface {
-  readonly changes: ReadonlyArray<ReviewChange>;
-  readonly unreviewedPaths: ReadonlyArray<string>;
-  readonly ignoredPaths: ReadonlyArray<string>;
-}
+/** Admit sorted metadata before hydrating exact baseline-to-head patches. */
+export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (input: {
+  readonly files: ReadonlyArray<ChangedFile>;
+  readonly changedPaths: ReadonlyArray<string>;
+  readonly base: RepositorySnapshot;
+  readonly head: RepositorySnapshot;
+  readonly ignore: ReadonlyArray<string>;
+}) {
+  const metadata = new Map(input.files.map((file) => [file.path, file] as const));
+  const activeRenames = new Map<string, ChangedFile>();
+  for (const file of input.files) {
+    const previousPath = file.previousPath;
+    if (
+      file.status === "renamed" &&
+      previousPath !== undefined &&
+      input.base.entry(previousPath) !== undefined &&
+      input.base.entry(file.path) === undefined &&
+      input.head.entry(previousPath) === undefined &&
+      input.head.entry(file.path) !== undefined
+    ) {
+      activeRenames.set(previousPath, file);
+      activeRenames.set(file.path, file);
+    }
+  }
+  const candidates = new Map<string, { readonly file: ChangedFile; readonly basePath: string }>();
+  for (const changedPath of [...new Set(input.changedPaths)].sort()) {
+    const renamed = activeRenames.get(changedPath);
+    const path = renamed?.path ?? changedPath;
+    const file =
+      renamed ??
+      metadata.get(path) ??
+      ({
+        path,
+        status: "modified",
+        additions: 0,
+        deletions: 0,
+        patch: undefined,
+      } satisfies ChangedFile);
+    candidates.set(path, { file, basePath: renamed?.previousPath ?? path });
+  }
 
-export const prepareReviewSurface = (
-  files: ReadonlyArray<ChangedFile>,
-  ignore: ReadonlyArray<string>,
-): ReviewSurface => {
   const changes: Array<ReviewChange> = [];
   const unreviewedPaths: Array<string> = [];
   const ignoredPaths: Array<string> = [];
+  const unavailablePaths = new Set<string>();
+  const exclude = (paths: Array<string>, file: ChangedFile, basePath: string) => {
+    paths.push(file.path);
+    unavailablePaths.add(file.path).add(basePath);
+    if (file.previousPath !== undefined) unavailablePaths.add(file.previousPath);
+  };
+  let admittedPaths = 0;
   let patchChars = 0;
-  for (const file of files) {
-    if (ignore.some((pattern) => matchesIgnore(file.path, pattern))) {
-      ignoredPaths.push(file.path);
+  let patchBudgetExhausted = false;
+  let hydratedSourceBytes = 0;
+  let sourceBudgetExhausted = false;
+  for (const { file, basePath } of [...candidates.values()].sort((left, right) =>
+    left.file.path < right.file.path ? -1 : left.file.path > right.file.path ? 1 : 0,
+  )) {
+    const ignored = [file.path, ...(basePath === file.path ? [] : [basePath])].some((path) =>
+      input.ignore.some((pattern) => matchesIgnore(path, pattern)),
+    );
+    if (ignored) {
+      exclude(ignoredPaths, file, basePath);
       continue;
     }
-    const patch = file.patch;
     if (
-      patch === undefined ||
-      patch.length === 0 ||
-      patch.length > MAX_PATCH_CHARS ||
       file.path.length > 512 ||
-      changes.length >= MAX_REVIEW_FILES ||
-      patchChars + patch.length > MAX_REVIEW_PATCH_CHARS
+      admittedPaths >= MAX_REVIEW_FILES ||
+      patchBudgetExhausted ||
+      sourceBudgetExhausted
     ) {
-      unreviewedPaths.push(file.path);
+      exclude(unreviewedPaths, file, basePath);
       continue;
     }
-    changes.push(ReviewChange.make({ path: file.path, patch }));
-    patchChars += patch.length;
-  }
-  return { changes, unreviewedPaths, ignoredPaths };
-};
-
-/** Partition one admitted diff into a small, deterministic, size-balanced wave. */
-export const shardReviewChanges = (
-  changes: ReadonlyArray<ReviewChange>,
-): ReadonlyArray<ReadonlyArray<ReviewChange>> => {
-  if (changes.length === 0) return [];
-  const totalChars = changes.reduce((total, change) => total + change.patch.length, 0);
-  const shardCount = Math.min(
-    MAX_REVIEW_SHARDS,
-    changes.length,
-    Math.max(1, Math.ceil(totalChars / TARGET_SHARD_PATCH_CHARS)),
-  );
-  const shards: Array<{
-    chars: number;
-    changes: Array<{ readonly index: number; readonly change: ReviewChange }>;
-  }> = Array.from({ length: shardCount }, () => ({
-    chars: 0,
-    changes: [],
-  }));
-  const largestFirst = changes
-    .map((change, index) => ({ change, index }))
-    .sort((left, right) => right.change.patch.length - left.change.patch.length);
-
-  for (const item of largestFirst) {
-    let target = shards[0];
-    if (target === undefined) break;
-    for (const shard of shards) {
-      if (shard.chars < target.chars) target = shard;
+    admittedPaths += 1;
+    const beforeEntry = input.base.entry(basePath);
+    const afterEntry = input.head.entry(file.path);
+    if (
+      (beforeEntry !== undefined && beforeEntry.type !== "blob") ||
+      (afterEntry !== undefined && afterEntry.type !== "blob")
+    ) {
+      exclude(unreviewedPaths, file, basePath);
+      continue;
     }
-    target.changes.push(item);
-    target.chars += item.change.patch.length;
+    const sourceSizesKnown =
+      (beforeEntry === undefined || beforeEntry.size !== undefined) &&
+      (afterEntry === undefined || afterEntry.size !== undefined);
+    const estimatedSourceBytes = (beforeEntry?.size ?? 0) + (afterEntry?.size ?? 0);
+    if (
+      sourceSizesKnown &&
+      hydratedSourceBytes + estimatedSourceBytes > MAX_HYDRATED_SOURCE_BYTES
+    ) {
+      exclude(unreviewedPaths, file, basePath);
+      sourceBudgetExhausted = true;
+      continue;
+    }
+    const contents = yield* Effect.all(
+      {
+        before: beforeEntry === undefined ? Effect.succeed("") : input.base.readTextFile(basePath),
+        after: afterEntry === undefined ? Effect.succeed("") : input.head.readTextFile(file.path),
+      },
+      { concurrency: 2 },
+    ).pipe(Effect.result);
+    if (Result.isFailure(contents)) {
+      hydratedSourceBytes += estimatedSourceBytes;
+      exclude(unreviewedPaths, file, basePath);
+      continue;
+    }
+    hydratedSourceBytes += sourceSizesKnown
+      ? estimatedSourceBytes
+      : contents.success.before.length + contents.success.after.length;
+    if (hydratedSourceBytes > MAX_HYDRATED_SOURCE_BYTES) {
+      exclude(unreviewedPaths, file, basePath);
+      sourceBudgetExhausted = true;
+      continue;
+    }
+    const patch =
+      basePath === file.path &&
+      contents.success.before === contents.success.after &&
+      beforeEntry !== undefined &&
+      afterEntry !== undefined &&
+      beforeEntry.mode !== afterEntry.mode
+        ? [
+            `diff --git a/${file.path} b/${file.path}`,
+            `old mode ${beforeEntry.mode}`,
+            `new mode ${afterEntry.mode}`,
+          ].join("\n")
+        : makeExactPatch({
+            path: file.path,
+            basePath,
+            headPath: file.path,
+            baseRevision: input.base.revision,
+            headRevision: input.head.revision,
+            before: contents.success.before,
+            after: contents.success.after,
+          });
+    const exactPatch =
+      patch !== undefined && basePath !== file.path
+        ? [
+            `diff --git a/${basePath} b/${file.path}`,
+            `rename from ${basePath}`,
+            `rename to ${file.path}`,
+            patch,
+          ].join("\n")
+        : patch;
+    if (
+      exactPatch === undefined ||
+      exactPatch.length === 0 ||
+      exactPatch.length > MAX_PATCH_CHARS
+    ) {
+      exclude(unreviewedPaths, file, basePath);
+      continue;
+    }
+    if (patchChars + exactPatch.length > MAX_REVIEW_PATCH_CHARS) {
+      exclude(unreviewedPaths, file, basePath);
+      patchBudgetExhausted = true;
+      continue;
+    }
+    changes.push(ReviewChange.make({ path: file.path, patch: exactPatch }));
+    patchChars += exactPatch.length;
+    if (patchChars === MAX_REVIEW_PATCH_CHARS) patchBudgetExhausted = true;
   }
-
-  return shards.map((shard) =>
-    shard.changes.sort((left, right) => left.index - right.index).map(({ change }) => change),
-  );
-};
-
-/** Run one bounded parallel wave. Each Effect remains a one-turn reviewer invocation. */
-export const runReviewWave = Effect.fn("runReviewWave")(function* <A, E, R>(
-  reviews: ReadonlyArray<Effect.Effect<A, E, R>>,
-): Effect.fn.Return<ReadonlyArray<A>, E, R> {
-  return yield* Effect.all(reviews, { concurrency: MAX_REVIEW_SHARDS });
+  return { changes, unreviewedPaths, ignoredPaths, unavailablePaths };
 });
+
+const reviewContextFailure = (message: string): ReviewContextError =>
+  ReviewContextError.make({ message });
+
+type ReviewReadFileInput = Parameters<ReviewRepository["Service"]["readFile"]>[0];
+type ReviewFindFilesInput = Parameters<ReviewRepository["Service"]["findFiles"]>[0];
+
+/** Bind model context reads to the exact verified base and head trees. */
+export const makeReviewRepository = (input: {
+  readonly base: RepositorySnapshot;
+  readonly head: RepositorySnapshot;
+  readonly ignore: ReadonlyArray<string>;
+  readonly unavailablePaths: ReadonlySet<string>;
+}): ReviewRepository["Service"] => {
+  const snapshot = (revision: "base" | "head") => (revision === "base" ? input.base : input.head);
+  const outsideScope = (path: string) =>
+    input.unavailablePaths.has(path) ||
+    input.ignore.some((pattern) => matchesIgnore(path, pattern));
+  const isReadableEntry = (entry: ReturnType<RepositorySnapshot["entry"]>) =>
+    entry?.type === "blob" && entry.mode !== "120000";
+
+  const readFile = Effect.fn("ReviewRepository.readFile")(function* (request: ReviewReadFileInput) {
+    if (outsideScope(request.path)) {
+      return yield* reviewContextFailure(
+        "The requested path is outside this review's source scope.",
+      );
+    }
+    const selected = snapshot(request.revision);
+    if (!isReadableEntry(selected.entry(request.path))) {
+      return yield* reviewContextFailure(
+        "Text source is unavailable for the requested path and revision.",
+      );
+    }
+    const content = yield* selected
+      .readTextFile(request.path)
+      .pipe(
+        Effect.mapError(() =>
+          reviewContextFailure(
+            "Text source could not be read for the requested path and revision.",
+          ),
+        ),
+      );
+    return yield* ReviewSource.fromText(request, content);
+  });
+
+  const findFiles = (request: ReviewFindFilesInput) => {
+    const selected = snapshot(request.revision);
+    const matches = selected.paths
+      .filter(
+        (path) =>
+          path.length <= 512 &&
+          !outsideScope(path) &&
+          isReadableEntry(selected.entry(path)) &&
+          path.includes(request.query),
+      )
+      .sort();
+    return Effect.succeed(
+      ReviewFileList.make({ paths: matches.slice(0, 100), truncated: matches.length > 100 }),
+    );
+  };
+
+  return ReviewRepository.of({ readFile, findFiles });
+};
 
 export const reviewEventFor = (blockingFindings: number): "COMMENT" | "REQUEST_CHANGES" =>
   blockingFindings > 0 ? "REQUEST_CHANGES" : "COMMENT";
-
-export const mergeReviewOutcomes = (
-  outcomes: ReadonlyArray<ReviewOutcome>,
-): {
-  readonly report: ReviewReport;
-  readonly inputTokens: number;
-  readonly uncachedInputTokens: number;
-  readonly cachedInputTokens: number;
-  readonly cacheWriteInputTokens: number;
-  readonly outputTokens: number;
-  readonly estimatedCostMicrousd: number | undefined;
-} => {
-  const severityOrder: Record<ReviewSeverity, number> = { blocking: 0, important: 1, nit: 2 };
-  const findings = outcomes
-    .flatMap((outcome) => outcome.report.findings)
-    .sort((left, right) => severityOrder[left.severity] - severityOrder[right.severity])
-    .slice(0, MAX_MERGED_FINDINGS);
-  const summary =
-    outcomes.length === 1
-      ? (outcomes[0]?.report.summary ?? "Review completed without a summary.")
-      : outcomes
-          .map(
-            (outcome, index) =>
-              `Shard ${String(index + 1)}:\n${outcome.report.summary.slice(0, 1_400)}`,
-          )
-          .join("\n\n");
-  return {
-    report: ReviewReport.make({ summary, findings }),
-    inputTokens: outcomes.reduce((total, outcome) => total + outcome.usage.inputTokens, 0),
-    uncachedInputTokens: outcomes.reduce(
-      (total, outcome) => total + outcome.usage.uncachedInputTokens,
-      0,
-    ),
-    cachedInputTokens: outcomes.reduce(
-      (total, outcome) => total + outcome.usage.cachedInputTokens,
-      0,
-    ),
-    cacheWriteInputTokens: outcomes.reduce(
-      (total, outcome) => total + outcome.usage.cacheWriteInputTokens,
-      0,
-    ),
-    outputTokens: outcomes.reduce((total, outcome) => total + outcome.usage.outputTokens, 0),
-    estimatedCostMicrousd: outcomes.every(
-      (outcome) => outcome.usage.estimatedCostMicrousd !== undefined,
-    )
-      ? outcomes.reduce((total, outcome) => total + (outcome.usage.estimatedCostMicrousd ?? 0), 0)
-      : undefined,
-  };
-};
 
 const reanchorToFullPullRequest = (
   files: ReadonlyArray<ChangedFile>,
@@ -339,7 +526,6 @@ const reanchorToFullPullRequest = (
   return ReviewReport.make({
     summary: report.summary,
     findings: report.findings.flatMap((finding) => {
-      if (!patches.has(finding.path)) return [];
       const patch = patches.get(finding.path);
       const line =
         finding.line !== undefined && patch !== undefined && isCommentableLine(patch, finding.line)
@@ -407,7 +593,7 @@ export const reviewActionProgram = Effect.gen(function* () {
   const effort = yield* Config.literals(
     ["low", "medium", "high", "xhigh"],
     "PR_REVIEW_EFFORT",
-  ).pipe(Config.withDefault("medium"));
+  ).pipe(Config.withDefault("xhigh"));
   const guidanceFile = yield* Config.string("PR_REVIEW_GUIDANCE_FILE").pipe(Config.withDefault(""));
   const ignore = (yield* Config.string("PR_REVIEW_IGNORE").pipe(Config.withDefault("")))
     .split(",")
@@ -431,6 +617,7 @@ export const reviewActionProgram = Effect.gen(function* () {
   }
 
   const history = yield* github.listReviews;
+  const unresolvedChangeRequests = unresolvedChangeRequestCount({ reviewAuthor, history });
   const selection = selectReview({
     mode,
     currentHead: pull.headRevision,
@@ -438,7 +625,16 @@ export const reviewActionProgram = Effect.gen(function* () {
     automaticReviewLimit,
     history,
   });
-  if (selection._tag === "skip") return yield* skip(selection.reason);
+  if (selection._tag === "skip") {
+    yield* skip(selection.reason, undefined, unresolvedChangeRequests);
+    if (selection.reason === "head-review-incomplete") {
+      return yield* ReviewAttemptIncomplete.make({});
+    }
+    if (unresolvedChangeRequests > 0) {
+      return yield* UnresolvedChangeRequests.make({ count: unresolvedChangeRequests });
+    }
+    return;
+  }
   if (selection._tag === "pause") {
     const reviewUrl = yield* github.publishReview({
       commitId: pull.headRevision,
@@ -449,68 +645,97 @@ export const reviewActionProgram = Effect.gen(function* () {
           automaticAttempts: selection.automaticAttempts,
           lastCompletedRevision: selection.lastCompletedRevision,
           headRevision: pull.headRevision,
+          unresolvedChangeRequests,
         }),
         selection.automaticReviewLimit,
       ),
       comments: [],
     });
-    return yield* skip(selection.reason, reviewUrl);
+    yield* skip(selection.reason, reviewUrl, unresolvedChangeRequests);
+    if (unresolvedChangeRequests > 0) {
+      return yield* UnresolvedChangeRequests.make({ count: unresolvedChangeRequests });
+    }
+    return;
   }
 
-  const fullFiles = yield* github.listFiles;
-  let scopedFiles: ReadonlyArray<ChangedFile> = fullFiles;
-  if (selection.scope === "incremental" && selection.baseRevision !== undefined) {
-    const comparison = yield* github
-      .compareTrees(
-        selection.baseRevision,
-        pull.headRevision,
-        fullFiles.map((file) => file.path),
-      )
-      .pipe(
-        Effect.map((value) => ({ _tag: "success" as const, value })),
-        Effect.catch((error) =>
-          Console.warn(`Incremental tree comparison failed: ${error.reason}`).pipe(
-            Effect.as({ _tag: "failure" as const }),
-          ),
-        ),
-      );
-    if (comparison._tag === "failure") return yield* skip("incremental-scope-unavailable");
-    const changedPaths = new Set(comparison.value.changedPaths);
-    scopedFiles = fullFiles.filter((file) => changedPaths.has(file.path));
-  }
+  const reviewUrlOrFailStale = Effect.fn("reviewUrlOrFailStale")(function* (
+    publication: ReviewPublication,
+  ) {
+    if (publication._tag === "published") return publication.reviewUrl;
+    yield* writeOutputs([
+      ["skipped", "false"],
+      ["reason", "stale-review-head"],
+      ["blocking-findings", 0],
+      ["unresolved-change-requests", unresolvedChangeRequests],
+      ["review-url", publication.reviewUrl],
+    ]);
+    return yield* publication.failure;
+  });
 
-  const surface = prepareReviewSurface(scopedFiles, ignore);
-  const fs = yield* FileSystem.FileSystem;
-  const guidance =
-    guidanceFile.length === 0
-      ? undefined
-      : (yield* fs.readFileString(guidanceFile)).slice(0, 20_000);
-
-  let shardCount = 0;
-  let inputTokens = 0;
-  let uncachedInputTokens = 0;
-  let cachedInputTokens = 0;
-  let cacheWriteInputTokens = 0;
-  let outputTokens = 0;
-  let estimatedCostMicrousd: number | undefined;
-  let report: ReviewReport;
-  if (surface.changes.length === 0) {
-    report = ReviewReport.make({
-      summary:
-        selection.scope === "incremental" && scopedFiles.length === 0
-          ? "No pull-request files changed since the last completed review."
-          : surface.ignoredPaths.length === scopedFiles.length
-            ? "No changed files matched the configured review scope."
-            : "No textual patch fit within the review input bound.",
-      findings: [],
+  const attemptExit = yield* Effect.gen(function* () {
+    const fullFiles = yield* github.listFiles;
+    const currentMergeBase = yield* github.getMergeBase(pull.baseRevision, pull.headRevision);
+    const reviewBase =
+      selection.scope === "incremental" && selection.baseRevision !== undefined
+        ? selection.baseRevision
+        : currentMergeBase;
+    if (selection.scope === "incremental") {
+      const priorMergeBase = yield* github.getMergeBase(pull.baseRevision, reviewBase);
+      if (priorMergeBase !== currentMergeBase) {
+        return yield* IncrementalScopeUnavailable.make({
+          priorMergeBase,
+          currentMergeBase,
+        });
+      }
+    }
+    const comparison = yield* github.compareTrees(reviewBase, pull.headRevision);
+    const surface = yield* hydrateExactChanges({
+      files: fullFiles,
+      changedPaths: comparison.changedPaths,
+      base: comparison.base,
+      head: comparison.head,
+      ignore,
     });
-  } else {
-    const shards = shardReviewChanges(surface.changes);
-    shardCount = shards.length;
+    const reviewRepository = makeReviewRepository({
+      base: comparison.base,
+      head: comparison.head,
+      ignore,
+      unavailablePaths: surface.unavailablePaths,
+    });
+    const fs = yield* FileSystem.FileSystem;
+    const guidance =
+      guidanceFile.length === 0
+        ? undefined
+        : (yield* fs.readFileString(guidanceFile)).slice(0, 20_000);
+
+    if (surface.changes.length === 0) {
+      return {
+        surface,
+        modelTurns: 0,
+        inputTokens: 0,
+        uncachedInputTokens: 0,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 0,
+        estimatedCostMicrousd: undefined,
+        report: ReviewReport.make({
+          summary:
+            selection.scope === "incremental" &&
+            surface.ignoredPaths.length === 0 &&
+            surface.unreviewedPaths.length === 0
+              ? "No pull-request files changed since the last completed review."
+              : surface.ignoredPaths.length > 0 && surface.unreviewedPaths.length === 0
+                ? "No changed files matched the configured review scope."
+                : "No textual patch fit within the review input bound.",
+          findings: [],
+        }),
+      };
+    }
+
     const estimateCostMicrousd = gpt56CostEstimator(modelName);
     const reviewer = makeReviewer({
       model: OpenAiLanguageModel.model(modelName, {
-        max_output_tokens: 8_000,
+        max_output_tokens: 32_000,
         store: false,
         strictJsonSchema: true,
         reasoning: { effort },
@@ -518,26 +743,40 @@ export const reviewActionProgram = Effect.gen(function* () {
       ...(estimateCostMicrousd === undefined ? {} : { estimateCostMicrousd }),
       ...(guidance === undefined ? {} : { guidance }),
     });
-    const unreviewedPaths = surface.unreviewedPaths
-      .filter((path) => path.length <= 512)
-      .slice(0, 300);
-    const reviewExit = yield* runReviewWave(
-      shards.map((changes) =>
-        reviewer.review(
-          ReviewRequest.make({
-            title: pull.title.slice(0, 1_000),
-            description: pull.description.slice(0, 20_000),
-            baseRevision: pull.baseRevision,
-            headRevision: pull.headRevision,
-            changes,
-            unreviewedPaths,
-          }),
-        ),
-      ),
-    ).pipe(Effect.provide(openAiClientLayer), Effect.exit);
-    if (Exit.isFailure(reviewExit)) {
-      yield* Console.error(`PR review wave failed:\n${Cause.pretty(reviewExit.cause)}`);
-      const reviewUrl = yield* github.publishReview({
+    const result = yield* reviewer
+      .review(
+        ReviewRequest.make({
+          title: pull.title.slice(0, 1_000),
+          description: pull.description.slice(0, 20_000),
+          baseRevision: reviewBase,
+          headRevision: pull.headRevision,
+          scope: selection.scope,
+          changes: surface.changes,
+          unreviewedPaths: surface.unreviewedPaths
+            .filter((path) => path.length <= 512)
+            .slice(0, 300),
+        }),
+      )
+      .pipe(
+        Effect.provideService(ReviewRepository, reviewRepository),
+        Effect.provide(openAiClientLayer),
+      );
+    return {
+      surface,
+      modelTurns: result.turns,
+      inputTokens: result.usage.inputTokens,
+      uncachedInputTokens: result.usage.uncachedInputTokens,
+      cachedInputTokens: result.usage.cachedInputTokens,
+      cacheWriteInputTokens: result.usage.cacheWriteInputTokens,
+      outputTokens: result.usage.outputTokens,
+      estimatedCostMicrousd: result.usage.estimatedCostMicrousd,
+      report: reanchorToFullPullRequest(fullFiles, result.report),
+    };
+  }).pipe(Effect.exit);
+  if (Exit.isFailure(attemptExit)) {
+    yield* Console.error(`PR review attempt failed:\n${Cause.pretty(attemptExit.cause)}`);
+    const publication = yield* publishHeadBoundReview({
+      publish: github.publishReview({
         commitId: pull.headRevision,
         event: "COMMENT",
         body: withReviewMarker(
@@ -548,24 +787,34 @@ export const reviewActionProgram = Effect.gen(function* () {
           false,
         ),
         comments: [],
-      });
-      yield* writeOutputs([
-        ["skipped", "false"],
-        ["reason", "review-failed"],
-        ["blocking-findings", 0],
-        ["review-url", reviewUrl],
-      ]);
-      return yield* Effect.failCause(reviewExit.cause);
-    }
-    const merged = mergeReviewOutcomes(reviewExit.value);
-    inputTokens = merged.inputTokens;
-    uncachedInputTokens = merged.uncachedInputTokens;
-    cachedInputTokens = merged.cachedInputTokens;
-    cacheWriteInputTokens = merged.cacheWriteInputTokens;
-    outputTokens = merged.outputTokens;
-    estimatedCostMicrousd = merged.estimatedCostMicrousd;
-    report = reanchorToFullPullRequest(fullFiles, merged.report);
+      }),
+      publishCurrentHeadAttemptMarker: github.publishCurrentHeadAttemptMarker,
+      automatic: selection.automatic,
+    });
+    const reviewUrl = yield* reviewUrlOrFailStale(publication).pipe(
+      Effect.catchTag("StaleReviewHead", () => Effect.failCause(attemptExit.cause)),
+    );
+    yield* writeOutputs([
+      ["skipped", "false"],
+      ["reason", "review-failed"],
+      ["blocking-findings", 0],
+      ["unresolved-change-requests", unresolvedChangeRequests],
+      ["review-url", reviewUrl],
+    ]);
+    return yield* Effect.failCause(attemptExit.cause);
   }
+  const {
+    surface,
+    modelTurns,
+    inputTokens,
+    uncachedInputTokens,
+    cachedInputTokens,
+    cacheWriteInputTokens,
+    outputTokens,
+    estimatedCostMicrousd,
+    report,
+  } = attemptExit.value;
+  const complete = surface.unreviewedPaths.length === 0;
 
   const pricing = GPT_56_PRICING[modelName];
   const estimatedCost: ReviewCostEstimate | undefined =
@@ -581,13 +830,14 @@ export const reviewActionProgram = Effect.gen(function* () {
   const body = withReviewMarker(
     presentation.renderReview({
       report,
-      automatic: selection.automatic,
       automaticReviewsRemaining: selection.automaticReviewsRemaining,
       scope: selection.scope,
       reviewedFiles: surface.changes.length,
       unreviewedFiles: surface.unreviewedPaths.length,
       ignoredFiles: surface.ignoredPaths.length,
-      shards: shardCount,
+      modelTurns,
+      complete,
+      unresolvedChangeRequests,
       inputTokens,
       uncachedInputTokens,
       cachedInputTokens,
@@ -597,23 +847,29 @@ export const reviewActionProgram = Effect.gen(function* () {
       headRevision: pull.headRevision,
     }),
     selection.automatic,
+    complete,
   );
-  const reviewUrl = yield* github.publishReview({
-    commitId: pull.headRevision,
-    event: reviewEventFor(blocking),
-    body,
-    comments: report.findings.flatMap((finding) =>
-      finding.line === undefined
-        ? []
-        : [
-            {
-              path: finding.path,
-              line: finding.line,
-              body: presentation.renderFinding(finding, pull.headRevision),
-            },
-          ],
-    ),
+  const publication = yield* publishHeadBoundReview({
+    publish: github.publishReview({
+      commitId: pull.headRevision,
+      event: reviewEventFor(blocking),
+      body,
+      comments: report.findings.flatMap((finding) =>
+        finding.line === undefined
+          ? []
+          : [
+              {
+                path: finding.path,
+                line: finding.line,
+                body: presentation.renderFinding(finding, pull.headRevision),
+              },
+            ],
+      ),
+    }),
+    publishCurrentHeadAttemptMarker: github.publishCurrentHeadAttemptMarker,
+    automatic: selection.automatic,
   });
+  const reviewUrl = yield* reviewUrlOrFailStale(publication);
   yield* writeOutputs([
     ["skipped", "false"],
     ["reason", selection.reason],
@@ -627,8 +883,14 @@ export const reviewActionProgram = Effect.gen(function* () {
       estimatedCost === undefined ? "" : (estimatedCost.microusd / 1_000_000).toFixed(6),
     ],
     ["blocking-findings", blocking],
+    ["unresolved-change-requests", unresolvedChangeRequests],
     ["review-url", reviewUrl],
   ]);
   yield* Console.log(`Posted PR review: ${reviewUrl}`);
-  if (blocking > 0) return yield* BlockingFindings.make({ count: blocking });
+  const publicationFailure = reviewPublicationFailure({
+    blockingFindings: blocking,
+    unreviewedPaths: surface.unreviewedPaths.length,
+    unresolvedChangeRequests,
+  });
+  if (publicationFailure !== undefined) return yield* publicationFailure;
 });

@@ -12,6 +12,7 @@
     "@effect-agent/pr-review": "workspace:*",
     "@effect/ai-openai": "catalog:",
     "@effect/platform-node": "catalog:",
+    "diff": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {

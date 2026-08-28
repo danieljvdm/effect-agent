@@ -120,6 +120,7 @@ const ResourceSummaryFields = Schema.Struct({
   cacheWriteInputTokens: Schema.Natural,
   outputTokens: Schema.Natural,
   costedSucceededTrials: Schema.Natural,
+  costedFailedTrials: Schema.Natural,
   uncostedSucceededTrials: Schema.Natural,
   estimatedCostMicrousd: Schema.Natural,
   elapsedMillis: Schema.Natural,
@@ -137,7 +138,8 @@ const ResourceSummaryFields = Schema.Struct({
             resources.cachedInputTokens +
             resources.cacheWriteInputTokens &&
         resources.succeededTrials ===
-          resources.costedSucceededTrials + resources.uncostedSucceededTrials
+          resources.costedSucceededTrials + resources.uncostedSucceededTrials &&
+        resources.costedFailedTrials <= resources.failedTrials
       );
     },
     { title: "Resource summary counts and token classes are consistent" },
@@ -247,6 +249,7 @@ export class EvalCaseIdentity extends Schema.Class<EvalCaseIdentity>(
   id: EvalCaseId,
   version: Schema.Literal(1),
   inputDigest: EvalInputDigest,
+  repositoryDigest: Schema.optionalKey(EvalInputDigest),
 }) {}
 
 export class EvalQualityReport extends Schema.Class<EvalQualityReport>(
@@ -396,6 +399,7 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
   let cacheWriteInputTokens = 0;
   let outputTokens = 0;
   let costedSucceededTrials = 0;
+  let costedFailedTrials = 0;
   let estimatedCostMicrousd = 0;
   let elapsedMillis = 0;
   const failureCounts = new Map<string, number>();
@@ -408,6 +412,10 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
         observation.result.errorTag,
         (failureCounts.get(observation.result.errorTag) ?? 0) + 1,
       );
+      if (observation.result.estimatedCostMicrousd !== undefined) {
+        costedFailedTrials += 1;
+        estimatedCostMicrousd += observation.result.estimatedCostMicrousd;
+      }
       continue;
     }
     succeededTrials += 1;
@@ -438,6 +446,7 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
     cacheWriteInputTokens,
     outputTokens,
     costedSucceededTrials,
+    costedFailedTrials,
     uncostedSucceededTrials: succeededTrials - costedSucceededTrials,
     estimatedCostMicrousd,
     elapsedMillis,
@@ -485,7 +494,8 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
     if (
       evalCase === undefined ||
       observation.caseVersion !== evalCase.version ||
-      observation.inputDigest !== evalCase.inputDigest
+      observation.inputDigest !== evalCase.inputDigest ||
+      observation.repositoryDigest !== evalCase.repository?.digest
     ) {
       return yield* EvalReportError.make({
         message: `Observation case identity is incompatible for ${observation.caseId}`,
@@ -884,6 +894,9 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
         id: evalCase.id,
         version: evalCase.version,
         inputDigest: evalCase.inputDigest,
+        ...(evalCase.repository === undefined
+          ? {}
+          : { repositoryDigest: evalCase.repository.digest }),
       }),
     ),
     variants,
@@ -915,7 +928,9 @@ export const renderQualityReport = (report: EvalQualityReport): string =>
         `later-only ${variant.laterOnlyBlockingDefects.length}`,
         `failures ${variant.resources.failedTrials}/${variant.resources.attemptedTrials}`,
         `tokens ${variant.resources.inputTokens} in/${variant.resources.outputTokens} out`,
-        `cost ${variant.resources.estimatedCostMicrousd}µUSD (${variant.resources.costedSucceededTrials}/${variant.resources.succeededTrials} costed)`,
+        variant.resources.costedSucceededTrials + variant.resources.costedFailedTrials === 0
+          ? "cost unavailable"
+          : `cost ${variant.resources.estimatedCostMicrousd}µUSD (${variant.resources.costedSucceededTrials} succeeded + ${variant.resources.costedFailedTrials} failed costed)`,
         `elapsed ${variant.resources.elapsedMillis}ms`,
       ].join("; ");
     })

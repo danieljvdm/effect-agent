@@ -69,16 +69,7 @@ const trials = Flag.integer("trials").pipe(
 const concurrency = Flag.integer("concurrency").pipe(
   Flag.withDefault(1),
   Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4 }))),
-  Flag.withDescription("Maximum live model calls, between 1 and 4."),
-);
-const model = Flag.string("model").pipe(
-  Flag.withDefault("gpt-5.6-sol"),
-  Flag.withSchema(Schema.NonEmptyString.check(Schema.isMaxLength(200))),
-  Flag.withDescription("OpenAI model ID. Defaults to the current PR-review Action model."),
-);
-const effort = Flag.choice("effort", ["low", "medium", "high", "xhigh"]).pipe(
-  Flag.withDefault("medium"),
-  Flag.withDescription("Reasoning effort. Defaults to the current PR-review Action effort."),
+  Flag.withDescription("Maximum concurrent reviewer invocations, between 1 and 4."),
 );
 const guidance = Flag.file("guidance").pipe(
   Flag.withDescription("Optional repository guidance file, capped at 20,000 characters."),
@@ -92,7 +83,7 @@ const variantId = Flag.string("variant").pipe(
 
 const runCommand = Command.make(
   "run",
-  { concurrency, effort, guidance, model, output, selectedCases, trials, variantId },
+  { concurrency, guidance, output, selectedCases, trials, variantId },
   Effect.fn("PrReviewEval.runCommand")(function* (options) {
     const liveGate = yield* Config.string("EFFECT_AGENT_LIVE").pipe(Config.withDefault(""));
     if (liveGate !== "1") {
@@ -129,8 +120,6 @@ const runCommand = Command.make(
     });
     const variant = yield* makeCurrentOpenAiVariant({
       id: options.variantId,
-      model: options.model,
-      reasoningEffort: options.effort,
       ...(guidanceText === undefined ? {} : { guidance: guidanceText }),
     });
     const count = yield* writeObservations(

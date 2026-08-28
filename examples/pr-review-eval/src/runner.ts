@@ -14,6 +14,7 @@ import {
   EvalTrialSucceeded,
   type EvalVariantConfiguration,
 } from "./contracts.ts";
+import { repositoryLayer } from "./repository.ts";
 
 const RunnerOptions = Schema.Struct({
   trials: EvalTrialCount,
@@ -73,7 +74,11 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
   const clock = yield* Clock.Clock;
   const recordedAt = yield* DateTime.now;
   const startedAt = yield* clock.monotonicTimeNanos;
-  const result = yield* Effect.result(job.variant.review(job.evalCase.request));
+  const result = yield* Effect.result(
+    job.variant
+      .review(job.evalCase.request)
+      .pipe(Effect.provide(repositoryLayer(job.evalCase.repository))),
+  );
   const finishedAt = yield* clock.monotonicTimeNanos;
   return EvalObservation.make({
     version: 1,
@@ -81,6 +86,9 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
     caseId: job.evalCase.id,
     caseVersion: job.evalCase.version,
     inputDigest: job.evalCase.inputDigest,
+    ...(job.evalCase.repository === undefined
+      ? {}
+      : { repositoryDigest: job.evalCase.repository.digest }),
     variant: job.variant.configuration,
     trial: job.trial,
     recordedAt,
@@ -90,6 +98,9 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
       : EvalTrialFailed.make({
           errorTag: result.failure.errorTag,
           message: result.failure.message,
+          ...(result.failure.estimatedCostMicrousd === undefined
+            ? {}
+            : { estimatedCostMicrousd: result.failure.estimatedCostMicrousd }),
         }),
   });
 });

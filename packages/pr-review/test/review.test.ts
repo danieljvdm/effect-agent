@@ -1,15 +1,26 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Ref, Stream } from "effect";
-import { LanguageModel, Model, type Prompt } from "effect/unstable/ai";
+import { Deferred, Effect, Exit, Fiber, Layer, Ref, Result, Stream, Struct } from "effect";
+import {
+  type AiError,
+  LanguageModel,
+  Model,
+  type Prompt,
+  type Response,
+  Tool,
+} from "effect/unstable/ai";
+import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
 import {
-  commentableLines,
-  ReviewChange,
-  ReviewFinding,
-  ReviewReport,
-  ReviewRequest,
+  isCommentableLine,
   makeReviewer,
-  sanitizeReviewReport,
+  ReviewChange,
+  ReviewContextError,
+  ReviewFileList,
+  ReviewFinding,
+  ReviewRepository,
+  ReviewRequest,
+  ReviewSource,
+  type ReviewVerificationError,
 } from "../src/index.ts";
 
 const patch = `@@ -1,3 +1,4 @@
@@ -28,141 +39,489 @@ const request = ReviewRequest.make({
   unreviewedPaths: [],
 });
 
+const usage = {
+  inputTokens: { total: 10, uncached: 7, cacheRead: 2, cacheWrite: 1 },
+  outputTokens: { total: 4 },
+};
+
+const response = (
+  value: object,
+  responseUsage: typeof usage = usage,
+): Stream.Stream<Response.StreamPartEncoded> =>
+  Stream.fromIterable([
+    { type: "tool-call", id: "review", name: "submit_review", params: value },
+    { type: "finish", reason: "tool-calls", usage: responseUsage },
+  ]);
+
+const scriptedModel = (
+  respond: (
+    prompt: Prompt.Prompt,
+    tools: ReadonlyArray<Tool.Any>,
+    toolChoice: LanguageModel.ToolChoice<string>,
+  ) => Stream.Stream<Response.StreamPartEncoded, AiError.AiError>,
+) =>
+  Model.make(
+    "scripted",
+    "review",
+    Layer.effect(
+      LanguageModel.LanguageModel,
+      LanguageModel.make({
+        generateText: () => Effect.succeed([]),
+        streamText: ({ prompt, tools, toolChoice }) => respond(prompt, tools, toolChoice),
+      }),
+    ),
+  );
+
+const emptyRepository = ReviewRepository.of({
+  readFile: () => Effect.fail(ReviewContextError.make({ message: "Source unavailable" })),
+  findFiles: () => Effect.succeed(ReviewFileList.make({ paths: [], truncated: false })),
+});
+
+const blocker = ReviewFinding.make({
+  path: "src/index.ts",
+  line: 2,
+  severity: "blocking",
+  category: "reliability",
+  title: "Dropped acknowledgment",
+  body: "A committed operation loses its acknowledgment; preserve the result until acknowledgment completes.",
+});
+
+const otherBlocker = ReviewFinding.make({
+  ...blocker,
+  category: "security",
+  title: "Ownership check bypassed",
+  body: "The cached return bypasses the owner check; check ownership before returning the record.",
+});
+
+const importantFinding = ReviewFinding.make({
+  ...otherBlocker,
+  severity: "important",
+  title: "Nonblocking fallback error",
+  body: "The fallback reports the wrong optional status; return the status produced by the supported fallback.",
+});
+
+const nitFinding = ReviewFinding.make({
+  ...otherBlocker,
+  severity: "nit",
+  title: "Minor diagnostic mismatch",
+  body: "The diagnostic names the wrong optional phase; use the phase that produced the message.",
+});
+
+const submittedFinding = (
+  finding: ReviewFinding,
+  priority: 0 | 1 | 2 | 3,
+): Omit<ReviewFinding, "severity"> & { readonly priority: 0 | 1 | 2 | 3 } => ({
+  ...Struct.omit(finding, ["severity"]),
+  priority,
+});
+
+const sourceResults = (prompt: Prompt.Prompt) =>
+  prompt.content
+    .filter((message) => message.role === "tool")
+    .flatMap((message) => message.content)
+    .flatMap((part) => (part.type === "tool-result" && part.name === "read_file" ? [part] : []));
+
+const reviewInput = (prompt: Prompt.Prompt): string =>
+  prompt.content
+    .flatMap((message) =>
+      message.role === "user" && typeof message.content !== "string"
+        ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+        : [],
+    )
+    .at(-1) ?? "";
+
 describe("review output boundary", () => {
-  it.effect("PRR-002 reviews once without premature budget prompting", () =>
+  it.effect("PRR-002 completes one native review and keeps independent same-line blockers", () =>
     Effect.gen(function* () {
-      const requests = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([]);
-      const model = Model.make(
-        "scripted",
-        "single-pass",
-        Layer.effect(
-          LanguageModel.LanguageModel,
-          LanguageModel.make({
-            generateText: () => Effect.succeed([]),
-            streamText: ({ prompt }) =>
-              Stream.unwrap(
-                Ref.update(requests, (values) => [...values, prompt]).pipe(
-                  Effect.as(
-                    Stream.fromIterable([
-                      { type: "text-start" as const, id: "review" },
-                      {
-                        type: "text-delta" as const,
-                        id: "review",
-                        delta:
-                          '{"summary":"One defect found.","findings":[{"path":"src/index.ts","line":2,"severity":"important","category":"reliability","title":"Dropped acknowledgment","body":"The completed operation can lose its acknowledgment."},{"path":"src/index.ts","line":2,"severity":"blocking","category":"reliability","title":"Dropped acknowledgment","body":"The completed operation can lose its acknowledgment."}]}',
-                      },
-                      { type: "text-end" as const, id: "review" },
-                      {
-                        type: "finish" as const,
-                        reason: "stop" as const,
-                        usage: {
-                          inputTokens: {
-                            total: 10,
-                            uncached: 7,
-                            cacheRead: 2,
-                            cacheWrite: 1,
-                          },
-                          outputTokens: { total: 4 },
-                        },
-                      },
-                    ]),
-                  ),
-                ),
-              ),
-          }),
-        ),
-      );
+      const calls = yield* Ref.make(0);
+      const model = scriptedModel((prompt, tools, toolChoice) => {
+        expect(toolChoice).toBe("required");
+        expect(tools.map((tool) => tool.name)).toEqual([
+          "read_file",
+          "find_files",
+          "submit_review",
+        ]);
+        const text = reviewInput(prompt);
+        expect(text).toContain('"formattedDiff"');
+        expect(text).not.toContain('"patch"');
+        expect(text).toContain("__new hunk__");
+        expect(text).toContain("2 +new");
+        expect(text).toContain("__old hunk__");
+        expect(text).toContain("2 -old");
+
+        const completion = tools.find((tool) => tool.name === "submit_review");
+        expect(completion).toBeDefined();
+        if (completion !== undefined) {
+          const schema = JSON.stringify(
+            Tool.getJsonSchema(completion, { transformer: toCodecOpenAI }),
+          );
+          expect(schema).toContain('"findings"');
+          expect(schema).toContain('"maxItems":24');
+          expect(schema).toContain('"priority"');
+          expect(schema).not.toContain('"severity"');
+          expect(schema.indexOf('"body"')).toBeLessThan(schema.indexOf('"priority"'));
+        }
+        return Stream.unwrap(
+          Ref.update(calls, (count) => count + 1).pipe(
+            Effect.as(
+              response({
+                findings: [
+                  submittedFinding(blocker, 0),
+                  submittedFinding(otherBlocker, 1),
+                  submittedFinding(importantFinding, 2),
+                  submittedFinding(nitFinding, 3),
+                ],
+              }),
+            ),
+          ),
+        );
+      });
 
       const outcome = yield* makeReviewer({
         model,
+        guidance: "Preserve acknowledgments.",
         estimateCostMicrousd: () => Effect.succeed(123),
-      }).review(request);
-      const prompts = yield* Ref.get(requests);
-      expect(prompts).toHaveLength(1);
-      expect(JSON.stringify(prompts[0])).not.toContain("<run-status>");
-      expect(outcome.turns).toBe(1);
-      expect(outcome.usage).toMatchObject({
-        inputTokens: 10,
-        uncachedInputTokens: 7,
-        cachedInputTokens: 2,
-        cacheWriteInputTokens: 1,
-        outputTokens: 4,
-        estimatedCostMicrousd: 123,
-      });
-      expect(outcome.report.findings[0]?.category).toBe("reliability");
-      expect(outcome.report.findings.map((finding) => finding.severity)).toEqual([
-        "important",
-        "blocking",
+      })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
+      expect(yield* Ref.get(calls)).toBe(1);
+      expect(outcome.report.findings).toEqual([
+        blocker,
+        otherBlocker,
+        importantFinding,
+        nitFinding,
       ]);
+      expect(outcome).toMatchObject({
+        turns: 1,
+        usage: {
+          inputTokens: 10,
+          uncachedInputTokens: 7,
+          cachedInputTokens: 2,
+          cacheWriteInputTokens: 1,
+          outputTokens: 4,
+          estimatedCostMicrousd: 123,
+        },
+      });
+    }),
+  );
+
+  it.effect(
+    "PRR-002 reads immutable base and head source and recovers from a bounded failure",
+    () =>
+      Effect.gen(function* () {
+        const reads = yield* Ref.make<
+          ReadonlyArray<Parameters<typeof emptyRepository.readFile>[0]>
+        >([]);
+        const failedInputs = [
+          {
+            path: "src/missing.ts",
+            revision: "base",
+            startLine: 1,
+            lineCount: 4,
+          },
+          {
+            path: "src/index.ts",
+            revision: "base",
+            startLine: 99,
+            lineCount: 4,
+          },
+          {
+            path: "src/index.ts",
+            revision: "head",
+            startLine: 99,
+            lineCount: 4,
+          },
+        ] as const;
+        const base = {
+          path: "src/index.ts",
+          revision: "base",
+          startLine: 1,
+          lineCount: 4,
+        } as const;
+        const head = { ...base, revision: "head" } as const;
+        const recoveryUsage = {
+          inputTokens: { total: 40_000, uncached: 40_000, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 4 },
+        };
+        const model = scriptedModel((prompt) => {
+          const results = sourceResults(prompt);
+          if (results.length < failedInputs.length) {
+            if (results.length > 0) {
+              expect(results.at(-1)).toMatchObject({
+                isFailure: true,
+                result: { _tag: "ReviewContextError", message: "Source range unavailable" },
+              });
+            }
+            return Stream.fromIterable([
+              {
+                type: "tool-call",
+                id: `failed-${String(results.length)}`,
+                name: "read_file",
+                params: failedInputs[results.length] ?? base,
+              },
+              { type: "finish", reason: "tool-calls", usage: recoveryUsage },
+            ]);
+          }
+          if (results.length === failedInputs.length) {
+            expect(results.map((result) => result.isFailure)).toEqual([true, true, true]);
+            return Stream.fromIterable([
+              { type: "tool-call", id: "base", name: "read_file", params: base },
+              { type: "finish", reason: "tool-calls", usage: recoveryUsage },
+            ]);
+          }
+          if (results.length === failedInputs.length + 1) {
+            expect(results.at(-1)).toMatchObject({
+              isFailure: false,
+              result: { revision: "base", content: "old" },
+            });
+            return Stream.fromIterable([
+              { type: "tool-call", id: "head", name: "read_file", params: head },
+              { type: "finish", reason: "tool-calls", usage: recoveryUsage },
+            ]);
+          }
+          expect(results.at(-1)).toMatchObject({
+            isFailure: false,
+            result: { revision: "head", content: "new" },
+          });
+          return response({ findings: [] }, recoveryUsage);
+        });
+        const repository = ReviewRepository.of({
+          ...emptyRepository,
+          readFile: (input) =>
+            Effect.gen(function* () {
+              yield* Ref.update(reads, (current) => [...current, input]);
+              if (input.path !== "src/index.ts" || input.startLine !== 1) {
+                return yield* ReviewContextError.make({ message: "Source range unavailable" });
+              }
+              return ReviewSource.make({
+                path: input.path,
+                revision: input.revision,
+                startLine: input.startLine,
+                totalLines: 1,
+                content: input.revision === "base" ? "old" : "new",
+              });
+            }),
+        });
+
+        const outcome = yield* makeReviewer({ model })
+          .review(request)
+          .pipe(Effect.provideService(ReviewRepository, repository));
+
+        expect(yield* Ref.get(reads)).toEqual([...failedInputs, base, head]);
+        expect(outcome).toMatchObject({
+          turns: 6,
+          report: { findings: [] },
+          usage: {
+            inputTokens: 240_000,
+            uncachedInputTokens: 240_000,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            outputTokens: 24,
+          },
+        });
+      }),
+  );
+
+  it.effect("PRR-002 rejects a finding that does not name a causative changed path", () =>
+    Effect.gen(function* () {
+      const model = scriptedModel(() =>
+        response({
+          findings: [
+            submittedFinding(ReviewFinding.make({ ...blocker, path: "src/unchanged.ts" }), 0),
+          ],
+        }),
+      );
+      const result = yield* makeReviewer({ model })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
+      expect(Result.isFailure(result) && result.failure._tag).toBe("ReviewVerificationError");
+    }),
+  );
+
+  it.effect("PRR-002 demotes invalid anchors and removes only exact duplicates", () =>
+    Effect.gen(function* () {
+      const topLevel = ReviewFinding.make(Struct.omit(otherBlocker, ["line"]));
+      const invalid = ReviewFinding.make({ ...otherBlocker, line: 999 });
+      const model = scriptedModel(() =>
+        response({
+          findings: [
+            submittedFinding(blocker, 0),
+            submittedFinding(invalid, 1),
+            submittedFinding(topLevel, 1),
+            submittedFinding(invalid, 1),
+            submittedFinding(blocker, 0),
+          ],
+        }),
+      );
+      const outcome = yield* makeReviewer({ model })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+      expect(outcome.report.findings).toEqual([blocker, topLevel]);
+    }),
+  );
+
+  it.effect.each([24, 25])("PRR-002 enforces the native finding bound: %s", (count) =>
+    Effect.gen(function* () {
+      const findings = Array.from({ length: count }, (_, index) =>
+        ReviewFinding.make({
+          ...Struct.omit(blocker, ["line"]),
+          title: `Independent cause ${String(index)}`,
+        }),
+      );
+      const result = yield* makeReviewer({
+        model: scriptedModel(() =>
+          response({ findings: findings.map((finding) => submittedFinding(finding, 1)) }),
+        ),
+      })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
+      if (count === 24) {
+        expect(Result.isSuccess(result) && result.success.report.findings).toEqual(findings);
+      } else {
+        expect(Result.isFailure(result) && result.failure._tag).toBe("AiError");
+      }
+    }),
+  );
+
+  it.effect("PRR-002 rejects malformed native completion without retrying", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0);
+      const model = scriptedModel(() =>
+        Stream.unwrap(
+          Ref.update(calls, (count) => count + 1).pipe(Effect.as(response({ summary: "safe" }))),
+        ),
+      );
+      const result = yield* makeReviewer({ model })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
+      expect(Result.isFailure(result) && result.failure._tag).toBe("AiError");
+      expect(yield* Ref.get(calls)).toBe(1);
+    }),
+  );
+
+  it.effect("PRR-002 retains headers, mode metadata, and complete deletion hunks", () =>
+    Effect.gen(function* () {
+      const deletionPatch = `diff --git a/src/deleted.ts b/src/deleted.ts
+old mode 100644
+new mode 100755
+--- a/src/deleted.ts
++++ b/src/deleted.ts
+@@ -5,2 +5,1 @@
+ keep
+-removed`;
+      const modeOnlyPatch = `diff --git a/tool.sh b/tool.sh
+old mode 100644
+new mode 100755`;
+      const formattedRequest = ReviewRequest.make({
+        ...request,
+        changes: [
+          ReviewChange.make({ path: "src/deleted.ts", patch: deletionPatch }),
+          ReviewChange.make({ path: "tool.sh", patch: modeOnlyPatch }),
+        ],
+      });
+      const model = scriptedModel((prompt) => {
+        const text = reviewInput(prompt);
+        expect(text).toContain("old mode 100644");
+        expect(text).toContain("new mode 100755");
+        expect(text).toContain("__new hunk__");
+        expect(text).toContain("__old hunk__");
+        expect(text).toContain("6 -removed");
+        expect(text).toContain(modeOnlyPatch.replaceAll("\n", "\\n"));
+        return response({ findings: [] });
+      });
+      yield* makeReviewer({ model })
+        .review(formattedRequest)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+    }),
+  );
+
+  it.effect("PRR-002 falls back to the complete raw patch when numbering exceeds its bound", () =>
+    Effect.gen(function* () {
+      const manyContextLines = Array.from({ length: 7_000 }, () => " context").join("\n");
+      const rawPatch = `@@ -1,7001 +1,7001 @@\n${manyContextLines}\n-old\n+new`;
+      expect(rawPatch.length).toBeLessThan(80_000);
+      const largeRequest = ReviewRequest.make({
+        ...request,
+        changes: [ReviewChange.make({ path: "src/index.ts", patch: rawPatch })],
+      });
+      const model = scriptedModel((prompt) => {
+        const text = reviewInput(prompt);
+        expect(text).not.toContain("__new hunk__");
+        expect(text).toContain("7001 @@\\n");
+        expect(text).toContain("-old\\n+new");
+        return response({ findings: [] });
+      });
+      yield* makeReviewer({ model })
+        .review(largeRequest)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+    }),
+  );
+
+  it.effect("PRR-002 keeps incremental all-clear wording conservative", () =>
+    Effect.gen(function* () {
+      const outcome = yield* makeReviewer({
+        model: scriptedModel(() => response({ findings: [] })),
+      })
+        .review(ReviewRequest.make({ ...request, scope: "incremental" }))
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+      expect(outcome.report.summary).toContain("does not resolve earlier findings");
+      expect(outcome.report.summary).not.toContain("safe to merge");
+    }),
+  );
+
+  it.effect("PRR-002 closes the single run on interruption", () =>
+    Effect.gen(function* () {
+      const finalized = yield* Ref.make(false);
+      const started = yield* Deferred.make<void>();
+      const model = scriptedModel(() =>
+        Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+          Stream.flatMap(() => Stream.never),
+          Stream.ensuring(Ref.set(finalized, true)),
+        ),
+      );
+      const fiber = yield* makeReviewer({ model })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(fiber);
+      expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
+      expect(yield* Ref.get(finalized)).toBe(true);
+    }),
+  );
+
+  it.effect("PRR-003 shares exact source range bounds", () =>
+    Effect.gen(function* () {
+      const input = {
+        path: "src/index.ts",
+        revision: "head",
+        startLine: 1,
+        lineCount: 200,
+      } as const;
+      const source = yield* ReviewSource.fromText(input, "first\nlast\n");
+      expect(source).toMatchObject({ totalLines: 2, content: "first\nlast" });
+      const empty = yield* ReviewSource.fromText(input, "");
+      expect(empty).toMatchObject({ totalLines: 0, content: "" });
+      const finalBlank = yield* ReviewSource.fromText({ ...input, startLine: 2 }, "first\n\n");
+      expect(finalBlank).toMatchObject({ totalLines: 2, startLine: 2, content: "" });
+      for (const read of [
+        ReviewSource.fromText({ ...input, startLine: 3 }, "first\nlast\n"),
+        ReviewSource.fromText({ ...input, lineCount: 201 }, "first\nlast\n"),
+        ReviewSource.fromText(input, "x".repeat(20_001)),
+      ]) {
+        const result = yield* Effect.result(read);
+        expect(Result.isFailure(result) && result.failure._tag).toBe("ReviewContextError");
+      }
     }),
   );
 
   it("PRR-004 accepts only RIGHT-side patch lines", () => {
-    expect([...commentableLines(patch)]).toEqual([1, 2, 3, 4]);
-  });
-
-  it("PRR-004 removes only exact duplicates and preserves same-title blockers", () => {
-    const report = sanitizeReviewReport(
-      request,
-      ReviewReport.make({
-        summary: "Three findings.",
-        findings: [
-          ReviewFinding.make({
-            path: "src/index.ts",
-            line: 2,
-            severity: "important",
-            category: "correctness",
-            title: "Broken branch",
-            body: "This branch returns the wrong value.",
-          }),
-          ReviewFinding.make({
-            path: "src/index.ts",
-            line: 99,
-            severity: "nit",
-            category: "maintainability",
-            title: "Invalid anchor",
-            body: "Keep this finding, but not its line.",
-          }),
-          ReviewFinding.make({
-            path: "src/index.ts",
-            line: 2,
-            severity: "important",
-            category: "correctness",
-            title: "Broken branch",
-            body: "This branch returns the wrong value.",
-          }),
-          ReviewFinding.make({
-            path: "src/index.ts",
-            line: 2,
-            severity: "blocking",
-            category: "security",
-            title: "Broken branch",
-            body: "This branch also bypasses authorization.",
-          }),
-          ReviewFinding.make({
-            path: "not-in-the-diff.ts",
-            severity: "blocking",
-            category: "security",
-            title: "Invented path",
-            body: "Drop this.",
-          }),
-        ],
-      }),
-    );
-
-    expect(report.findings).toHaveLength(3);
-    expect(report.findings[0]?.line).toBe(2);
-    expect(report.findings[0]?.category).toBe("correctness");
-    expect(report.findings[1]?.line).toBeUndefined();
-    expect(report.findings[2]).toMatchObject({
-      severity: "blocking",
-      category: "security",
-      body: "This branch also bypasses authorization.",
-    });
+    expect([0, 1, 2, 3, 4, 5].filter((line) => isCommentableLine(patch, line))).toEqual([
+      1, 2, 3, 4,
+    ]);
   });
 });
 
-// Compile-time E/R proof: adding host pricing does not add an error or service requirement.
 type Equal<Left, Right> =
   (<T>() => T extends Left ? 1 : 2) extends <T>() => T extends Right ? 1 : 2 ? true : false;
 type Assert<T extends true> = T;
@@ -185,5 +544,12 @@ const pricingTypeProofs: readonly [
   Assert<
     Equal<EffectRequirements<TypedReviews["priced"]>, EffectRequirements<TypedReviews["unpriced"]>>
   >,
-] = [true, true];
+  Assert<Equal<EffectRequirements<TypedReviews["priced"]>, ReviewRepository>>,
+  Assert<
+    Equal<
+      Extract<EffectError<TypedReviews["priced"]>, ReviewVerificationError>,
+      ReviewVerificationError
+    >
+  >,
+] = [true, true, true, true];
 void pricingTypeProofs;

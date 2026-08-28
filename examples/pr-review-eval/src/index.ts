@@ -5,3 +5,4 @@ export * from "./openai-variant.ts";
 export * from "./report.ts";
 export * from "./report-files.ts";
 export * from "./runner.ts";
+export * from "./repository.ts";

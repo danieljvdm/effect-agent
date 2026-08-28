@@ -23,10 +23,9 @@ jobs:
         (github.event.comment.author_association == 'OWNER' ||
          github.event.comment.author_association == 'MEMBER' ||
          github.event.comment.author_association == 'COLLABORATOR') &&
-        (startsWith(github.event.comment.body, '@effect-agent review') ||
-         startsWith(github.event.comment.body, '/effect-agent review')))
+        startsWith(github.event.comment.body, '@effect-agent review'))
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check out the trusted review channel
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -55,6 +54,6 @@ jobs:
           comment-id: ${{ github.event.comment.id || 0 }}
           automatic-review-limit: 2
           expected-head: ${{ github.event.pull_request.head.sha || '' }}
-          effort: medium
+          effort: xhigh
           guidance-file: .github/review-guidance.md
           ignore: "bun.lock,action/dist/**,work-order-action/dist/**,**/CHANGELOG.md,.agents/skills/**,.claude/skills/**"

@@ -128,6 +128,7 @@ const terminalDefinition = Agent.define("terminal-type-proof", {
   }),
   completion: {
     tool: "post_message",
+    required: true,
     project: ({ parameters, result }) => ({
       message: parameters.message,
       messageId: result.messageId,

@@ -892,7 +892,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       });
       expect(reviewWorkflow.jobs.review?.if).toContain("!github.event.pull_request.draft");
       expect(reviewWorkflow.jobs.review?.if).toContain(
-        "startsWith(github.event.comment.body, '/effect-agent review')",
+        "startsWith(github.event.comment.body, '@effect-agent review')",
       );
       expect(reviewWorkflow.concurrency?.["cancel-in-progress"]).toBe(false);
       const reviewStep = workflowStep(reviewWorkflow, "review", "Review the pull request");
