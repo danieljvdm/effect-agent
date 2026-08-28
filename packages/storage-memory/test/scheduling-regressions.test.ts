@@ -83,6 +83,26 @@ const layer = (
   );
 
 describe("Scheduling public recovery contract", () => {
+  it.effect(
+    "rejects an unrepresentable recovery deadline through the typed initialization channel",
+    () =>
+      Effect.void.pipe(
+        Effect.provide(
+          layer(undefined, allow, {
+            ...defaultSchedulingLimits,
+            recoveryPollMillis: Number.MAX_SAFE_INTEGER,
+          }),
+        ),
+        Effect.flip,
+        Effect.map((error) =>
+          expect(error).toMatchObject({
+            _tag: "ScheduleValidationError",
+            message: "Scheduling recovery deadline exceeds the supported instant range",
+          }),
+        ),
+      ),
+  );
+
   it.effect("an authorization outage keeps the firing active for a later preparation", () => {
     let unavailable = true;
     const authorizer: ScheduleAuthorizer["Service"] = {

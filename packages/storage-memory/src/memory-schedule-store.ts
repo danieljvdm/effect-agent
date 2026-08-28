@@ -15,6 +15,7 @@ import {
   compareScheduleNames,
   scheduleDeadline,
   scheduleKeyString,
+  scheduleKeyOf,
   scheduleOwnerKey,
 } from "@effect-agent/session";
 import { Effect, Layer, Ref, Result, Schema } from "effect";
@@ -22,10 +23,6 @@ import { Effect, Layer, Ref, Result, Schema } from "effect";
 interface MemoryScheduleState {
   readonly records: ReadonlyMap<string, string>;
 }
-
-type Decision<A, E> =
-  | { readonly _tag: "Success"; readonly value: A }
-  | { readonly _tag: "Failure"; readonly error: E };
 
 const storageError = (operation: string, reason: "unavailable" | "corrupt") =>
   ScheduleStorageError.make({ operation, reason });
@@ -66,7 +63,7 @@ const makeScheduleStore = Effect.gen(function* () {
             (
               current,
             ): readonly [
-              Decision<
+              Result.Result<
                 ScheduleRecord,
                 ScheduleConflict | ScheduleCapacityError | ScheduleStorageError
               >,
@@ -80,16 +77,15 @@ const makeScheduleStore = Effect.gen(function* () {
                   catch: () => storageError("insert", "corrupt"),
                 });
                 if (Result.isFailure(decoded)) {
-                  return [{ _tag: "Failure", error: decoded.failure }, current];
+                  return [Result.fail(decoded.failure), current];
                 }
                 if (decoded.success.creationFingerprint === record.creationFingerprint) {
-                  return [{ _tag: "Success", value: decoded.success }, current];
+                  return [Result.succeed(decoded.success), current];
                 }
                 return [
-                  {
-                    _tag: "Failure",
-                    error: ScheduleConflict.make({ reason: "creation", key: scheduleKey(record) }),
-                  },
+                  Result.fail(
+                    ScheduleConflict.make({ reason: "creation", key: scheduleKeyOf(record) }),
+                  ),
                   current,
                 ];
               }
@@ -101,29 +97,23 @@ const makeScheduleStore = Effect.gen(function* () {
                   catch: () => storageError("insert", "corrupt"),
                 });
                 if (Result.isFailure(decoded)) {
-                  return [{ _tag: "Failure", error: decoded.failure }, current];
+                  return [Result.fail(decoded.failure), current];
                 }
                 if (sameOwner(decoded.success, record.owner)) ownerCount += 1;
               }
               if (ownerCount >= ownerLimit) {
-                return [
-                  {
-                    _tag: "Failure",
-                    error: ScheduleCapacityError.make({ limit: ownerLimit }),
-                  },
-                  current,
-                ];
+                return [Result.fail(ScheduleCapacityError.make({ limit: ownerLimit })), current];
               }
               const records = new Map(current.records);
               records.set(key, encoded);
               const next = { records };
-              return [{ _tag: "Success", value: record }, next];
+              return [Result.succeed(record), next];
             },
           ),
         );
-        if (decision._tag === "Failure") return yield* decision.error;
+        const inserted = yield* Effect.fromResult(decision);
         yield* failpoint.hit("schedule:insert:after");
-        return yield* decodeRecord("insert", yield* encodeRecord("insert", decision.value));
+        return yield* decodeRecord("insert", yield* encodeRecord("insert", inserted));
       }),
   );
 
@@ -171,33 +161,30 @@ const makeScheduleStore = Effect.gen(function* () {
             (
               current,
             ): readonly [
-              Decision<ScheduleRecord, ScheduleConflict | ScheduleStorageError | ScheduleNotFound>,
+              Result.Result<
+                ScheduleRecord,
+                ScheduleConflict | ScheduleStorageError | ScheduleNotFound
+              >,
               MemoryScheduleState,
             ] => {
               const storageKey = scheduleKeyString(decodedKey);
               const text = current.records.get(storageKey);
               if (text === undefined) {
-                return [
-                  {
-                    _tag: "Failure",
-                    error: ScheduleNotFound.make({ key: decodedKey }),
-                  },
-                  current,
-                ];
+                return [Result.fail(ScheduleNotFound.make({ key: decodedKey })), current];
               }
               const decoded = Result.try({
                 try: () => Schema.decodeSync(Schema.fromJsonString(ScheduleRecord))(text),
                 catch: () => storageError("change", "corrupt"),
               });
               if (Result.isFailure(decoded)) {
-                return [{ _tag: "Failure", error: decoded.failure }, current];
+                return [Result.fail(decoded.failure), current];
               }
               const applied = applyScheduleChange(decoded.success, decodedCommand);
               if (Result.isFailure(applied)) {
-                return [{ _tag: "Failure", error: applied.failure }, current];
+                return [Result.fail(applied.failure), current];
               }
               if (applied.success === decoded.success) {
-                return [{ _tag: "Success", value: decoded.success }, current];
+                return [Result.succeed(decoded.success), current];
               }
               const encoded = Result.try({
                 try: () =>
@@ -205,18 +192,18 @@ const makeScheduleStore = Effect.gen(function* () {
                 catch: () => storageError("change", "corrupt"),
               });
               if (Result.isFailure(encoded)) {
-                return [{ _tag: "Failure", error: encoded.failure }, current];
+                return [Result.fail(encoded.failure), current];
               }
               const records = new Map(current.records);
               records.set(storageKey, encoded.success);
               const next = { records };
-              return [{ _tag: "Success", value: applied.success }, next];
+              return [Result.succeed(applied.success), next];
             },
           ),
         );
-        if (decision._tag === "Failure") return yield* decision.error;
+        const changed = yield* Effect.fromResult(decision);
         yield* failpoint.hit(`schedule:${decodedCommand._tag.toLowerCase()}:after`);
-        return yield* decodeRecord("change", yield* encodeRecord("change", decision.value));
+        return yield* decodeRecord("change", yield* encodeRecord("change", changed));
       }),
   );
 
@@ -260,11 +247,6 @@ const makeScheduleStore = Effect.gen(function* () {
   });
 
   return ScheduleStore.of({ insert, get, list, change, due, nextDeadline });
-});
-
-const scheduleKey = (record: ScheduleRecord): ScheduleKey => ({
-  owner: record.owner,
-  scheduleId: record.scheduleId,
 });
 
 export const memoryScheduleStoreLayer = (): Layer.Layer<ScheduleStore> =>

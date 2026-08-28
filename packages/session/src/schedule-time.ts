@@ -1,20 +1,23 @@
-import { Cron, DateTime, Option, Result } from "effect";
+import { Cron, DateTime, Option, Result, Schema } from "effect";
 
 import {
   ScheduleValidationError,
+  ScheduleInstant,
   type ScheduleSkippedRange,
   type ScheduleTiming,
   type ScheduleTimingRequest,
 } from "./schedule.ts";
 
-const MAX_INSTANT = 8_640_000_000_000_000;
-
 const invalid = (message: string) => Result.fail(ScheduleValidationError.make({ message }));
 
 const checkedInstant = (millis: number, label: string) =>
-  Number.isSafeInteger(millis) && millis >= 0 && millis <= MAX_INSTANT
-    ? Result.succeed(millis)
-    : invalid(`${label} is outside the supported ScheduleInstant range`);
+  Schema.decodeUnknownResult(ScheduleInstant)(millis).pipe(
+    Result.mapError(() =>
+      ScheduleValidationError.make({
+        message: `${label} is outside the supported ScheduleInstant range`,
+      }),
+    ),
+  );
 
 const values = (set: ReadonlySet<number>, size: number): ReadonlyArray<number> =>
   set.size === 0 ? Array.from({ length: size }, (_, index) => index) : [...set];
@@ -124,7 +127,7 @@ export const scheduleNextAfter = (
       if (afterMillis < timing.anchorMillis) return Result.succeed(timing.anchorMillis);
       const steps = Math.floor((afterMillis - timing.anchorMillis) / timing.everyMillis) + 1;
       const next = timing.anchorMillis + steps * timing.everyMillis;
-      return Result.map(checkedInstant(next, "Next interval occurrence"), (value) => value);
+      return checkedInstant(next, "Next interval occurrence");
     }
     case "Cron": {
       const cron = parsedStoredCron(timing);
@@ -172,14 +175,13 @@ export const scheduleDueOccurrence = (
   } else {
     const cron = parsedStoredCron(timing);
     if (Result.isFailure(cron)) return Result.fail(cron.failure);
+    const exclusiveBoundary = checkedInstant(
+      Math.floor(nowMillis / 1_000) * 1_000 + 1_000,
+      "Cron due boundary",
+    );
+    if (Result.isFailure(exclusiveBoundary)) return Result.fail(exclusiveBoundary.failure);
     const latest = Result.try({
-      try: () => {
-        const exclusiveBoundary = Math.floor(nowMillis / 1_000) * 1_000 + 1_000;
-        if (exclusiveBoundary > MAX_INSTANT) {
-          throw new RangeError("Cron due boundary is outside the supported range");
-        }
-        return Cron.prev(cron.success, exclusiveBoundary).getTime();
-      },
+      try: () => Cron.prev(cron.success, exclusiveBoundary.success).getTime(),
       catch: () => ScheduleValidationError.make({ message: "Cron has no supported due firing" }),
     });
     if (Result.isFailure(latest)) return Result.fail(latest.failure);

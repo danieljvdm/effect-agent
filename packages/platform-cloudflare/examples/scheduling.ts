@@ -13,7 +13,10 @@ import {
   makeScheduleOwnerObjectClass,
 } from "../src/index.ts";
 
-/** Export the returned class; the application policy Layer owns its dependencies. */
+/**
+ * Export the returned class. The cached policy Layer must not acquire resources that need
+ * cleanup on eviction. Acquire temporary resources within Effect.scoped in manage / prepare.
+ */
 export const makeSchedulingOwner = <E>(
   authorizer: Layer.Layer<ScheduleAuthorizer, E, WorkerEnvironment>,
 ) =>

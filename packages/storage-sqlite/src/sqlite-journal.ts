@@ -13,9 +13,10 @@ import {
   SqliteStorageCorruptionError,
   SqliteStorageError,
   SqliteWriteContention,
-  type SqliteStorageFailpointLocation,
 } from "./errors.ts";
 import { CurrentSqliteStorageVersion, sqliteMigrations } from "./migrations.ts";
+import { SqliteStorageConfig } from "./sqlite-storage-config.ts";
+import { SqliteStorageFailpoint } from "./sqlite-storage-failpoint.ts";
 
 const BoundedStoredText = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
 const BoundedIdentifier = Schema.NonEmptyString.check(Schema.isMaxLength(1024));
@@ -138,12 +139,6 @@ type CheckpointError =
   | SqliteStorageCorruptionError
   | SqliteStorageError
   | SqliteWriteContention;
-type SqliteJournalFailpoint = (
-  location: SqliteStorageFailpointLocation,
-) => Effect.Effect<void, SqliteStorageFailpointError>;
-
-const noFailpoint: SqliteJournalFailpoint = () => Effect.void;
-
 const storageError =
   (operation: string) =>
   (error: SqlError): SqliteStorageError =>
@@ -195,16 +190,15 @@ export const decodeSingleRow = Effect.fn("SqliteJournal.decodeSingleRow")(
     ),
 );
 
-const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(function* (
-  sql: SqlClient.SqlClient,
-  failpoint: SqliteJournalFailpoint = noFailpoint,
-  busyTimeoutMillis = 5_000,
-) {
+export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const { hit: failpoint } = yield* SqliteStorageFailpoint;
+  const { busyTimeout } = yield* SqliteStorageConfig;
   yield* sql`PRAGMA foreign_keys = ON`.pipe(Effect.mapError(storageError("enable foreign keys")));
   // PRAGMA statements do not accept bound parameters; the value is a schema-validated
   // non-negative integer, never caller-controlled text.
   yield* sql
-    .unsafe(`PRAGMA busy_timeout = ${busyTimeoutMillis}`)
+    .unsafe(`PRAGMA busy_timeout = ${busyTimeout}`)
     .pipe(Effect.mapError(storageError("configure busy timeout")));
   const journalModeRows = yield* sql<Record<string, unknown>>`PRAGMA journal_mode`.pipe(
     Effect.mapError(storageError("read journal mode")),
@@ -272,9 +266,6 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
     }
 
     yield* SqliteMigrator.run({ loader: sqliteMigrations }).pipe(
-      // SqliteMigrator depends on the generic client supplied by this adapter.
-      // The concrete Node client is kept at the outer Layer boundary.
-      Effect.provideService(SqlClient.SqlClient, sql),
       Effect.mapError((error) =>
         SqliteStorageError.make({
           cause: error,
@@ -320,10 +311,6 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
     });
   }
 
-  return makeJournal(sql, failpoint);
-});
-
-const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint) => {
   const classifyWriteFailure =
     (operation: string) =>
     (error: SqlError): SqliteStorageError | SqliteWriteContention =>
@@ -1080,8 +1067,6 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
     scanStoredPayloads,
     withWriteTransaction,
   } as const;
-};
+});
 
-export type SqliteJournal = ReturnType<typeof makeJournal>;
-
-export const initializeSqliteJournal = ensureCurrentStorage;
+export type SqliteJournal = Effect.Success<ReturnType<typeof initializeSqliteJournal>>;

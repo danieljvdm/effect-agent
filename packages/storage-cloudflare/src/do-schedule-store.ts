@@ -7,8 +7,10 @@ import {
   ScheduleFailpoint,
   type ScheduleFailpointError,
   ScheduleKey,
+  ScheduleId,
+  ScheduleInstant,
   ScheduleNotFound,
-  type ScheduleOwner,
+  ScheduleOwner,
   type SchedulePage,
   SchedulePageRequest,
   ScheduleRecord,
@@ -22,19 +24,13 @@ const CURRENT_SCHEDULE_STORE_VERSION = 1;
 const MAX_STORED_SCHEDULE_BYTES = 1_900_000;
 
 const StoredScheduleJson = Schema.String.check(Schema.isMaxLength(MAX_STORED_SCHEDULE_BYTES));
-const StoredName = Schema.NonEmptyString.check(Schema.isMaxLength(128));
-const StoredDeadline = Schema.NullOr(
-  Schema.Int.check(
-    Schema.isGreaterThanOrEqualTo(0),
-    Schema.isLessThanOrEqualTo(8_640_000_000_000_000),
-  ),
-);
+const StoredDeadline = Schema.NullOr(ScheduleInstant);
 
 class ScheduleRow extends Schema.Class<ScheduleRow>("@effect-agent/storage-cloudflare/ScheduleRow")(
   {
-    tenant_id: StoredName,
-    owner_id: StoredName,
-    schedule_id: StoredName,
+    tenant_id: ScheduleOwner.fields.tenantId,
+    owner_id: ScheduleOwner.fields.ownerId,
+    schedule_id: ScheduleId,
     deadline_at_millis: StoredDeadline,
     record_json: StoredScheduleJson,
   },
@@ -96,10 +92,8 @@ export class DoScheduleAlarmControl extends Context.Service<
     readonly prearm: (
       deadlineAtMillis: number,
     ) => Effect.Effect<void, ScheduleStorageError | ScheduleFailpointError>;
-    /** Replace or cancel the wake from the authoritative indexed owner deadline. */
-    readonly reconcile: (
-      owner: ScheduleOwner,
-    ) => Effect.Effect<void, ScheduleStorageError | ScheduleFailpointError>;
+    /** Replace or cancel the wake from the object's authoritative indexed deadline. */
+    readonly reconcile: Effect.Effect<void, ScheduleStorageError | ScheduleFailpointError>;
   }
 >()("@effect-agent/storage-cloudflare/DoScheduleAlarmControl") {}
 
@@ -455,15 +449,14 @@ const makeServices = Effect.gen(function* () {
   const prearm = Effect.fn("DoScheduleStore.prearm")(function* (
     deadlineAtMillis: number,
   ): Effect.fn.Return<void, ScheduleStorageError | ScheduleFailpointError> {
+    yield* decodeBoundary(ScheduleInstant, deadlineAtMillis, "pre-arm schedule recovery");
     yield* transactions.run((replace) =>
       replaceAlarm(replace, deadlineAtMillis, "pre-arm schedule recovery"),
     );
     yield* scheduleFailpoint.hit("schedule:prearm:after");
   });
 
-  const reconcile = Effect.fn("DoScheduleStore.reconcile")(function* (
-    _owner: ScheduleOwner,
-  ): Effect.fn.Return<void, ScheduleStorageError | ScheduleFailpointError> {
+  const reconcile = Effect.gen(function* () {
     yield* transactions.run((replace) =>
       Effect.gen(function* () {
         const deadline = yield* readNextDeadline(undefined, "reconcile schedule alarm");

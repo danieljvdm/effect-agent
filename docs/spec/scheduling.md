@@ -63,6 +63,11 @@ both. Fixed offsets such as `+05:30` are also supported.
 
 The defaults are: 1,000 Schedules per owner, 60-second minimum recurrence, 64 KiB encoded input, 64 due records per driver pass, 8 concurrent admissions, 1-second retry base, 5-minute retry maximum, 30-second admission timeout, and 30-second recovery poll. Hosts configure finite limits through `SchedulingLimits`. The hard bounds are 100,000 Schedules per owner, a recurrence minimum of at least 60 seconds, at most 64 KiB input, at most 1,024 records per pass, and at most 64 concurrent admissions. A limit violation is typed and occurs before durable mutation. Paused, completed, and cancelled records still count toward the owner quota because they retain creation-idempotency evidence.
 
+Building `Scheduling.layer` rejects a recovery interval whose deadline, measured from the current
+Clock, exceeds `ScheduleInstant` with `ScheduleValidationError`. Cloudflare also validates each
+pre-arm deadline before entering its storage transaction. An unrepresentable alarm timestamp
+fails with a typed storage error instead of a defect; a failed transaction retains the prior wake.
+
 ## 3. Management and registration
 
 `Scheduling` provides `create`, `get`, `list`, `update`, `pause`, `resume`, and `cancel`. Every management call authorizes `ScheduleScope`. There is no global get or list.
@@ -135,6 +140,12 @@ The class factory accepts a host Layer providing `ScheduleAuthorizer` and
 application dependencies itself. Bindings come from the application's typed Worker environment;
 the scheduler does not look them up by string or assemble services through callbacks. Optional
 `ScheduleFailpoint` overrides use the same host Layer and reach both scheduling and storage.
+
+The host Layer is cached for one in-memory object incarnation. Cloudflare does not guarantee
+finalizers on eviction, so this Layer must not acquire resources that require cleanup. Policy
+implementations acquire temporary resources inside `Effect.scoped` in `manage` or `prepare`;
+those scopes close on success, failure, and interruption of the operation. The database, alarm
+service, and shared admission semaphore stay in the instance runtime.
 
 `effect-cf` 0.37.0 owns the logical alarm table and native alarm lifecycle. Schedule SQL and
 `tx.scheduleAlarm` or `tx.cancelAlarm` run in the same `DurableObjectAlarm.transaction` callback

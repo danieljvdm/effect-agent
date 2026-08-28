@@ -41,7 +41,7 @@ import {
   Schema,
   Stream,
 } from "effect";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import type * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import {
   type SqliteStorageCompatibilityError,
@@ -471,9 +471,8 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
 const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function* () {
   const config = yield* SqliteStorageConfig;
   const failpoint = yield* SqliteStorageFailpoint;
-  const sql = yield* SqlClientService.SqlClient;
   const crypto = yield* Crypto.Crypto;
-  const journal = yield* initializeSqliteJournal(sql, failpoint.hit, config.busyTimeout);
+  const journal = yield* initializeSqliteJournal();
   if (config.verifyOnOpen) {
     yield* decodeStartupPayloads(journal, crypto);
   }

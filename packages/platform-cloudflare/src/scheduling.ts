@@ -430,19 +430,31 @@ const transactionLayer: Layer.Layer<
                   ? transaction
                       .cancelAlarm({ id: SCHEDULE_ALARM_ID, tag: SCHEDULE_ALARM_TAG })
                       .pipe(Effect.mapError(alarmStorageError("cancel Schedule Owner alarm")))
-                  : transaction
-                      .scheduleAlarm({
-                        id: SCHEDULE_ALARM_ID,
-                        tag: SCHEDULE_ALARM_TAG,
-                        runAt: DateTime.makeUnsafe(
-                          Math.max(replacement.deadlineAtMillis, nowMillis + 1),
-                        ),
-                        payload: {
-                          schemaVersion: 1,
-                          generation: replacement.generation,
-                        },
-                      })
-                      .pipe(Effect.mapError(alarmStorageError("schedule Schedule Owner alarm"))),
+                  : Effect.fromOption(
+                      DateTime.make(Math.max(replacement.deadlineAtMillis, nowMillis + 1)),
+                    ).pipe(
+                      Effect.mapError(() =>
+                        ScheduleStorageError.make({
+                          operation: "validate Schedule Owner alarm deadline",
+                          reason: "corrupt",
+                        }),
+                      ),
+                      Effect.flatMap((runAt) =>
+                        transaction
+                          .scheduleAlarm({
+                            id: SCHEDULE_ALARM_ID,
+                            tag: SCHEDULE_ALARM_TAG,
+                            runAt,
+                            payload: {
+                              schemaVersion: 1,
+                              generation: replacement.generation,
+                            },
+                          })
+                          .pipe(
+                            Effect.mapError(alarmStorageError("schedule Schedule Owner alarm")),
+                          ),
+                      ),
+                    ),
               ),
             )
             .pipe(
@@ -624,7 +636,7 @@ const scheduleAlarmHandler = (limits: SchedulingLimits) =>
         const nowMillis = yield* Clock.currentTimeMillis;
         yield* alarmControl.prearm(nowMillis + limits.recoveryPollMillis);
         yield* scheduling.runDue(owner);
-        yield* alarmControl.reconcile(owner);
+        yield* alarmControl.reconcile;
       }),
     { mode: "ordered" },
   ).pipe(Effect.asVoid);
@@ -640,7 +652,12 @@ export interface ScheduleOwnerObjectClass {
   new (ctx: DurableObjectState, env: Cloudflare.Env): ScheduleOwnerObjectInstance;
 }
 
-/** The host Layer supplies authorization and routing; native services belong to effect-cf. */
+/**
+ * The host Layer supplies authorization and routing and is cached for the object incarnation.
+ * Cloudflare eviction does not guarantee its finalizers run. Do not acquire resources requiring
+ * cleanup in this Layer; acquire them inside scoped `manage` / `prepare` operations instead.
+ * Native services belong to effect-cf; the database and alarm runtime remain instance-owned.
+ */
 export const makeScheduleOwnerObjectClass = <E>(
   host: Layer.Layer<
     ScheduleAuthorizer | ConversationObjectNamespace,

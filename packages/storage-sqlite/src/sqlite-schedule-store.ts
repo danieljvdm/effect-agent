@@ -5,6 +5,8 @@ import {
   ScheduleFailpoint,
   applyScheduleChange,
   ScheduleKey,
+  ScheduleId,
+  ScheduleInstant,
   ScheduleNotFound,
   ScheduleOwner,
   type SchedulePage,
@@ -19,24 +21,18 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import type { SqliteStorageInitializationError } from "./sqlite-conversation-store.ts";
 import { initializeSqliteJournal } from "./sqlite-journal.ts";
-import { SqliteStorageConfig } from "./sqlite-storage-config.ts";
-import { SqliteStorageFailpoint } from "./sqlite-storage-failpoint.ts";
+import type { SqliteStorageConfig } from "./sqlite-storage-config.ts";
+import type { SqliteStorageFailpoint } from "./sqlite-storage-failpoint.ts";
 
 // Configuration and the immutable pending envelope may each carry the canonical input. Leave
 // room for JSON escaping and bounded status while rejecting an unreadable oversized row.
 const StoredScheduleJson = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
-const StoredName = Schema.NonEmptyString.check(Schema.isMaxLength(128));
-const StoredDeadline = Schema.NullOr(
-  Schema.Int.check(
-    Schema.isGreaterThanOrEqualTo(0),
-    Schema.isLessThanOrEqualTo(8_640_000_000_000_000),
-  ),
-);
+const StoredDeadline = Schema.NullOr(ScheduleInstant);
 
 class ScheduleRow extends Schema.Class<ScheduleRow>("@effect-agent/storage-sqlite/ScheduleRow")({
-  tenant_id: StoredName,
-  owner_id: StoredName,
-  schedule_id: StoredName,
+  tenant_id: ScheduleOwner.fields.tenantId,
+  owner_id: ScheduleOwner.fields.ownerId,
+  schedule_id: ScheduleId,
   deadline_at_millis: StoredDeadline,
   record_json: StoredScheduleJson,
 }) {}
@@ -106,11 +102,9 @@ const decodeInput = Effect.fn("SqliteScheduleStore.decodeInput")(function* <A, I
 
 const makeScheduleStore = Effect.gen(function* () {
   const sql = yield* SqlClientService.SqlClient;
-  const config = yield* SqliteStorageConfig;
-  const storageFailpoint = yield* SqliteStorageFailpoint;
   const scheduleFailpoint = yield* ScheduleFailpoint;
 
-  yield* initializeSqliteJournal(sql, storageFailpoint.hit, config.busyTimeout);
+  yield* initializeSqliteJournal();
 
   const readRows = Effect.fn("SqliteScheduleStore.readRows")(function* (
     key: ScheduleKey,

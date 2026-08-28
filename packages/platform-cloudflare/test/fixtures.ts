@@ -427,29 +427,69 @@ export const scheduleFailpoint = (ctx: DurableObjectState) => ({
     }),
 });
 
-export const scheduleAuthorizer = (owner: ScheduleOwner) => ({
-  manage: () => Effect.void,
-  prepare: () =>
-    Effect.suspend(() => {
-      const key = scheduleOwnerKey(owner);
-      const hold = scheduleAuthorizationFailureHolds.get(key);
-      if (hold?.held === true) {
-        hold.failureCount += 1;
-        const pending = hold.waiters.splice(0);
-        for (const waiter of pending) {
-          if (hold.failureCount >= waiter.minimum) waiter.resolve(hold.failureCount);
-          else hold.waiters.push(waiter);
-        }
-        return Effect.fail(
-          ScheduleStorageError.make({
-            operation: "test Schedule authorization",
-            reason: "unavailable",
+const schedulePolicyResources = new Map<
+  string,
+  {
+    acquired: number;
+    released: number;
+    fail: boolean;
+  }
+>();
+
+export const observeSchedulePolicyResources = (owner: ScheduleOwner) => {
+  const probe = { acquired: 0, released: 0, fail: false };
+  schedulePolicyResources.set(scheduleOwnerKey(owner), probe);
+  return probe;
+};
+
+export const scheduleAuthorizer = (owner: ScheduleOwner) => {
+  // This cached policy acquires no resources during construction. Each operation owns its scope.
+  const scoped = <A, E>(operation: Effect.Effect<A, E>) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const probe = schedulePolicyResources.get(scheduleOwnerKey(owner));
+        if (probe === undefined) return yield* operation;
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            probe.acquired += 1;
           }),
+          () =>
+            Effect.sync(() => {
+              probe.released += 1;
+            }),
         );
-      }
-      return Effect.succeed({ policyId: "cf-test-policy", decisionId: "cf-test-allow" });
-    }),
-});
+        if (probe.fail)
+          return yield* ScheduleStorageError.make({
+            operation: "test scoped Schedule policy",
+            reason: "unavailable",
+          });
+        return yield* operation;
+      }),
+    );
+  return {
+    manage: () => scoped(Effect.void),
+    prepare: () =>
+      Effect.suspend(() => {
+        const key = scheduleOwnerKey(owner);
+        const hold = scheduleAuthorizationFailureHolds.get(key);
+        if (hold?.held === true) {
+          hold.failureCount += 1;
+          const pending = hold.waiters.splice(0);
+          for (const waiter of pending) {
+            if (hold.failureCount >= waiter.minimum) waiter.resolve(hold.failureCount);
+            else hold.waiters.push(waiter);
+          }
+          return Effect.fail(
+            ScheduleStorageError.make({
+              operation: "test Schedule authorization",
+              reason: "unavailable",
+            }),
+          );
+        }
+        return Effect.succeed({ policyId: "cf-test-policy", decisionId: "cf-test-allow" });
+      }).pipe(scoped),
+  };
+};
 
 export const submitOptions = (
   conversation: string,

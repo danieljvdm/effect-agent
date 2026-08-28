@@ -32,6 +32,7 @@ import {
   type ScheduleDestination,
   ScheduleFailpoint,
   type ScheduleId,
+  ScheduleInstant,
   type ScheduleKey,
   SchedulingLimits,
   ScheduleNotFound,
@@ -161,6 +162,14 @@ const resolveInput = Effect.fn("Scheduling.resolveInput")(function* <
 
 const make = (limits: SchedulingLimits) =>
   Effect.gen(function* () {
+    const nowMillis = yield* currentMillis;
+    yield* Schema.decodeUnknownEffect(ScheduleInstant)(nowMillis + limits.recoveryPollMillis).pipe(
+      Effect.mapError(() =>
+        ScheduleValidationError.make({
+          message: "Scheduling recovery deadline exceeds the supported instant range",
+        }),
+      ),
+    );
     const store = yield* ScheduleStore;
     const authorizer = yield* ScheduleAuthorizer;
     const admission = yield* ScheduledInputAdmission;

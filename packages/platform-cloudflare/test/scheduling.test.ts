@@ -1,7 +1,8 @@
 import { ScheduleId, type ScheduleAuthorizer, type ScheduleOwner } from "@effect-agent/session";
+import { DoScheduleAlarmControl } from "@effect-agent/storage-cloudflare";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, type Layer, Schema } from "effect";
-import type { DurableObjectState, WorkerEnvironment } from "effect-cf";
+import { DurableObject, type DurableObjectState, type WorkerEnvironment } from "effect-cf";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -20,6 +21,7 @@ import {
   decodeConversationId,
   holdScheduleAuthorizationFailures,
   observedCommittedPrepareBeforeEviction,
+  observeSchedulePolicyResources,
   plannerDefinition,
 } from "./fixtures.ts";
 import { laneRows, runScheduleClient, scheduleStubFor } from "./harness.ts";
@@ -205,6 +207,49 @@ describe("Cloudflare Schedule Owner", () => {
 
     const retried = await manage(data, Date.now() + 60_000, "must roll back");
     expect(retried.configurationRevision).toBe(1);
+  });
+
+  it("rejects an invalid recovery deadline before changing the persisted wake", async () => {
+    const data = fixture("invalid-recovery-deadline");
+    await manage(data, Date.now() + 60_000, "retain the valid wake");
+    const before = await alarmRows(data.owner);
+    const beforeState = await storeProbe(data.owner);
+    const error = await runInDurableObject(scheduleStubFor(data.owner), (instance) =>
+      instance[DurableObject.RunSymbol](
+        Effect.gen(function* () {
+          const alarms = yield* DoScheduleAlarmControl;
+          return yield* alarms.prearm(Number.MAX_SAFE_INTEGER).pipe(Effect.flip);
+        }),
+      ),
+    );
+
+    expect(error).toMatchObject({ _tag: "ScheduleStorageError", reason: "corrupt" });
+    expect(await alarmRows(data.owner)).toEqual(before);
+    expect(await storeProbe(data.owner)).toEqual(beforeState);
+  });
+
+  it("releases policy resources within RPC and alarm operations while the owner stays alive", async () => {
+    const data = fixture("policy-resource-scope");
+    const resources = observeSchedulePolicyResources(data.owner);
+    const created = await manage(data, Date.now() + 60_000, "scoped policy");
+    expect(resources.acquired).toBeGreaterThan(0);
+    expect(resources.released).toBe(resources.acquired);
+
+    resources.fail = true;
+    await expect(snapshotFor(data)).rejects.toMatchObject({
+      _tag: "ScheduleStorageError",
+      reason: "unavailable",
+    });
+    expect(resources.released).toBe(resources.acquired);
+
+    resources.fail = false;
+    await manage(data, Date.now(), "scoped policy", created.configurationRevision);
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await runDurableObjectAlarm(scheduleStubFor(data.owner));
+      if ((await snapshotFor(data)).lastReceipt !== null) break;
+    }
+    expect((await snapshotFor(data)).lastReceipt).not.toBeNull();
+    expect(resources.released).toBe(resources.acquired);
   });
 
   it("replays a create whose reply was lost after its atomic commit without replacing the alarm", async () => {
