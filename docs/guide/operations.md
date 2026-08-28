@@ -73,11 +73,17 @@ An unknown or approval-waiting head with ready followers quiesces until an autho
 restores its maintenance alarm. Keep host decisions about whether and when to abort; there is no
 automatic inactivity deadline.
 
+A parent suspended in `WaitingForChild` does not acquire abort authority because its child is
+unknown. The host must explicitly decide to abort the parent, or apply a separately configured
+authorized policy. The fix owns child abort propagation, joining, and reservation cleanup only
+after that parent abort is durably accepted. It does not choose the parent's outcome beforehand.
+
 ## Observe a Submission outcome
 
 Persist the admission `Receipt`: its `submissionId`, `receiptId`, `conversationId`, and
-`queueSequence` identify the same obligation across retries and replacement Attempts. Existing
-public ports supply the evidence; a separate inspection RPC or recovery classifier is unnecessary.
+`queueSequence` identify the same obligation across retries and replacement Attempts. The APIs
+below supply the evidence inside a host with the real `SubmissionLedger` and `DurableAgentRuntime`
+services. They are not all remotely available through `CloudflareConversationClient`.
 
 | Need                         | Public API and evidence                                                                                                                                                                                                 |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -123,7 +129,26 @@ bound for `ConversationStore.read` (use `sequence - 1` to include the input); a 
 no Run history yet. Keep subsequent reads incremental and retain only the application's projection.
 Cloudflare already exposes `explainEncoded` for occasional remote diagnosis.
 
-For a queued follower, the ordered public `SubmissionLedger.scanNonterminal` identifies the
+An independent Worker outside the Conversation Object cannot obtain the complete operational
+snapshot through that client. The public `portCall` protocol supports ledger lookup, which returns
+the admitted input and Submission state, but has no recovery-snapshot or nonterminal-scan request.
+The routed ledger keeps `loadRecoverySnapshot` local-only and `scanNonterminal` local to its owning
+Object. Canonical paging and progress waits do not expose the authoritative suspension,
+`inputApplied` marker, or FIFO blocker. There is no public composition that obtains all of these
+remotely without an additional host boundary; repeated `explainEncoded` calls are not a bounded
+snapshot substitute.
+
+For an external Worker that needs those fields, retain an authorized, Schema-backed, read-only
+snapshot RPC inside the owning Conversation Object and its external client adapter. That RPC
+validates the Receipt against local lookup, uses the real ledger's `loadRecoverySnapshot` for
+input application, suspension, abort intent, and joined host linkage, and scans the local ordered
+nonterminal rows for an earlier FIFO blocker. It can expose the relevant child references for
+host policy. It need not copy the recovery classifier or construct dummy local services outside
+the Object. Any application-specific activity or Tool-result projection can use bounded canonical
+reads from the input marker and an incremental cursor. This remains a host adapter, not an API
+added by the abort fix.
+
+Inside the owning Object, the ordered public `SubmissionLedger.scanNonterminal` identifies the
 earlier unsettled head in its Conversation; `explain` diagnoses that head without reimplementing
 recovery. Do not infer the follower's state from the Conversation's latest Run.
 
@@ -134,8 +159,9 @@ delivery. No exactly-once external delivery is promised. Hosts must authorize pu
 and observation, and handle typed storage, protocol, and authorization errors without interpreting
 them as a terminal outcome.
 
-Delete custom inspection/classification and outcome-polling code that duplicates these contracts.
-Keep application policy for visible responses, whether an acknowledgement is sufficient,
+Replace only inspection/classification and outcome-polling logic that the APIs available at the
+caller's boundary actually cover. Keep the host snapshot RPC when an external Worker needs the
+operational evidence above. Keep application policy for visible responses, whether an acknowledgement is sufficient,
 destinations and authorization, inactivity thresholds, and delivery retries. Tool success or an
 application result tag is not a library-defined answer obligation; project that policy from
 canonical records without adding it to the runtime.
