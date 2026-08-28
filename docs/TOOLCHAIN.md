@@ -200,10 +200,12 @@ by Changesets, validates its repository, branch, base, and commit identities,
 runs `changeset version` and lockfile generation in a temporary worktree, and
 requires the resulting complete Git tree to match the proposed head
 byte-for-byte. It posts the required `ready` check directly to that immutable
-head only after successful verification. GitHub suppresses `pull_request`
-workflow runs caused by `GITHUB_TOKEN`, so an unexpected path in an automated
-Changesets update is rejected by that exact-tree verification and receives a
-failing `ready`; path routing is not its security boundary. A later human
+head only after successful verification. GitHub requires approval for matching
+`pull_request` workflows triggered by `GITHUB_TOKEN` on opened, synchronize, or
+reopened events. The path filters prevent those runs and their approval prompt
+for generated-only changes. Explicit `@effect-agent review` comments still work.
+An unexpected path in an automated Changesets update is rejected by exact-tree
+verification and receives a failing `ready`; path routing is not its security boundary. A later human
 mutation with an unexpected path invokes the ordinary PR workflows, while a
 generated-only mutation has a new head without a verified check and remains
 unmergeable. The exact-tree verifier runs in a fresh read-only job checked out from the triggering
@@ -355,8 +357,8 @@ separate runners. Its remaining-workspace job includes every other package, incl
 packages. Each runner executes one package test task at a time, because every task already
 starts its own Vitest worker pool. File isolation, test counts, and timeouts remain unchanged.
 The exact internal Changesets release PR is the only exception: CI and PR Review path-filter the exact set of files
-Changesets may generate. GitHub suppresses `pull_request` workflows caused by `GITHUB_TOKEN`, so
-the trusted Release run validates the PR lineage, regenerates the complete tree from its checked-out
+Changesets may generate, avoiding approval-required workflow runs on `GITHUB_TOKEN` updates.
+The trusted Release run validates the PR lineage, regenerates the complete tree from its checked-out
 `main` commit, and creates the required `ready` check on the verified head through the Checks API.
 The check is success only after an exact-tree comparison in a fresh read-only job; unexpected files,
 setup failures, or any other incomplete verification post failure to the current PR head. An invalid
