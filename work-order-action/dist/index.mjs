@@ -36320,7 +36320,14 @@ var boundedValueFootprint = (root, maxBytes, knownSafePrototypes = new Set, maxD
 
 // packages/engine/src/output-contract-internal.ts
 var contractDirective = (definition) => definition.completion === undefined ? "Final output contract: when the task is complete, the final assistant message must be only " + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + "before or after the JSON." : `Final output contract: when the task is complete without calling the "${definition.completion.tool}" completion Tool, the final assistant message must be only ` + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + `before or after the JSON. When calling the "${definition.completion.tool}" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool's parameter schema instead. The engine projects the successful completion Tool result into the Agent output.`;
+var requiredCompletionDirective = (tool) => `Final output contract: complete only by calling the required completion Tool ${JSON.stringify(tool)} ` + "as the sole Tool Call in its batch. Do not emit an ordinary final assistant text answer. " + "The Tool's canonical parameters and successful result are projected and validated as the Agent output.";
 var outputSchemaContract = (definition) => {
+  if (definition.completion?.required === true) {
+    return {
+      _tag: "rendered",
+      message: requiredCompletionDirective(definition.completion.tool)
+    };
+  }
   try {
     const jsonSchema2 = exports_Tool.getJsonSchemaFromSchema(definition.output);
     return {
@@ -38938,9 +38945,17 @@ function decodeRunDisposition(agent2, encoded) {
   })) : decodeRunDispositionCandidate(declaration, encoded);
 }
 var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exports_Stream.unwrap(exports_Effect.gen(function* () {
+  const policy2 = agent2.definition.policy;
+  const bounds = effectiveRunBounds(policy2, options3);
   const now3 = yield* exports_Clock.currentTimeMillis;
   if (now3 >= context3.durationDeadlineMillis) {
     return failRunEventStream(durationLimitError(agent2.definition.policy));
+  }
+  if (policy2.onExhaustion === "fail" && turn > bounds.maxTurns) {
+    return failRunEventStream(AgentPolicyError.make({
+      limit: "turns",
+      message: `Agent exceeded its ${bounds.maxTurns} Turn limit`
+    }));
   }
   const ids = yield* IdGenerator2;
   const turnId = yield* ids.nextTurnId;
@@ -38994,8 +39009,6 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
       })
     ];
   }).pipe(exports_Effect.withLogSpan("AgentRuntime.model"))).pipe(exports_Stream.flatMap(exports_Stream.fromIterable));
-  const policy2 = agent2.definition.policy;
-  const bounds = effectiveRunBounds(policy2, options3);
   let finalAnswerOnly = policy2.onExhaustion !== "fail" && (turn > bounds.maxTurns || priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls || context3.tokenExhausted);
   if (finalAnswerOnly && context3.exhaustedDimension === undefined) {
     context3.exhaustedDimension = turn > bounds.maxTurns ? "turns" : priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls ? "tool-calls" : "tokens";
@@ -39060,17 +39073,20 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
     context3.compaction.lastViewLength = view.length;
     return exports_Prompt.fromMessages([...view]);
   };
-  const attempt = (basis) => exports_Stream.unwrap(outgoingModelPrompt(policy2, context3, basis, turn, priorToolCalls).pipe(exports_Effect.map((outgoing) => guardBudgetStream(exports_LanguageModel.streamText({
-    prompt: outputContractMessage === undefined ? outgoing : insertOutputContract(outgoing, outputContractMessage),
-    toolkit: agent2.definition.toolkit,
-    disableToolCallResolution: true,
-    ...finalAnswerOnly ? agent2.definition.completion === undefined ? { toolChoice: "none" } : {
-      toolChoice: {
-        mode: "auto",
-        oneOf: [agent2.definition.completion.tool]
-      }
-    } : {}
-  }), options3.budget).pipe(exports_Stream.mapEffect((part) => ownModelResponsePart(part, agent2.definition.toolkit, trace3, context3.bufferLimits).pipe(exports_Effect.flatMap((owned) => eventsForPart(context3, turnId, turn, agent2.definition.toolkit.tools, trace3, owned.ownedPart, owned.retainedBytes)))), exports_Stream.flatMap(exports_Stream.fromIterable)))));
+  const attempt = (basis) => exports_Stream.unwrap(outgoingModelPrompt(policy2, context3, basis, turn, priorToolCalls).pipe(exports_Effect.map((outgoing) => {
+    const terminalToolChoiceOnly = finalAnswerOnly || agent2.definition.completion?.required === true && policy2.onExhaustion === "fail" && turn === bounds.maxTurns;
+    return guardBudgetStream(exports_LanguageModel.streamText({
+      prompt: outputContractMessage === undefined ? outgoing : insertOutputContract(outgoing, outputContractMessage),
+      toolkit: agent2.definition.toolkit,
+      disableToolCallResolution: true,
+      ...terminalToolChoiceOnly ? agent2.definition.completion === undefined ? { toolChoice: "none" } : {
+        toolChoice: {
+          mode: agent2.definition.completion.required === true ? "required" : "auto",
+          oneOf: [agent2.definition.completion.tool]
+        }
+      } : agent2.definition.completion?.required === true ? { toolChoice: "required" } : {}
+    }), options3.budget).pipe(exports_Stream.mapEffect((part) => ownModelResponsePart(part, agent2.definition.toolkit, trace3, context3.bufferLimits).pipe(exports_Effect.flatMap((owned) => eventsForPart(context3, turnId, turn, agent2.definition.toolkit.tools, trace3, owned.ownedPart, owned.retainedBytes)))), exports_Stream.flatMap(exports_Stream.fromIterable));
+  })));
   const response = attempt(compactedOutgoing()).pipe(exports_Stream.catch((error2) => {
     if (!(error2 instanceof exports_AiError.AiError) || !isContextOverflowMessage(overflowText(error2))) {
       return exports_Stream.fail(error2);
@@ -39153,6 +39169,11 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
         message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
       }));
     }
+    if (agent2.definition.completion?.required === true && trace3.toolCalls.size === 0) {
+      return failRunEventStream(ModelProtocolError.make({
+        message: `Model stopped without required completion Tool ${agent2.definition.completion.tool}`
+      }));
+    }
     const stagedResponse = exports_Stream.fromIterable(trace3.providerResultPayloads).pipe(exports_Stream.mapEffect((payload) => stampProviderResultEvent(context3, turnId, payload)), exports_Stream.concat(turnCompletion === undefined ? exports_Stream.empty : exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => TurnCompleted.make({
       ...base2,
       turnId,
@@ -39187,7 +39208,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
       }
       const emitThen = (nextStream) => pre.length === 0 ? nextStream : exports_Stream.fromIterable(pre).pipe(exports_Stream.concat(nextStream));
       if (consumed.breach !== undefined) {
-        if (trace3.applicationToolCalls.length === 0 && trace3.finishReason === "stop") {
+        if (agent2.definition.completion?.required !== true && trace3.applicationToolCalls.length === 0 && trace3.finishReason === "stop") {
           const output = yield* decodeFinalOutput(agent2, trace3.text.join("")).pipe(exports_Effect.map(exports_Option.some), exports_Effect.catch(() => exports_Effect.succeed(exports_Option.none())));
           if (exports_Option.isSome(output)) {
             yield* advanceHistory(context3, historyWithResponse(), options3);
@@ -39245,7 +39266,16 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
       })));
     });
     if (providerOnly && trace3.finishReason === "stop") {
-      return afterValidatedResponse(settleOrFollowUp(historyWithResponse()));
+      if (agent2.definition.completion?.required === true) {
+        const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
+        if (turnsBlocked) {
+          return failRunEventStream(AgentPolicyError.make({
+            limit: "turns",
+            message: `Agent exceeded its ${bounds.maxTurns} Turn limit`
+          }));
+        }
+      }
+      return afterValidatedResponse(agent2.definition.completion?.required === true ? continueTurn(historyWithResponse()) : settleOrFollowUp(historyWithResponse()));
     }
     if (trace3.toolCalls.size > 0) {
       if (trace3.finishReason !== "tool-calls") {
@@ -39253,7 +39283,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
           message: `Model declared Tool Calls with incompatible finish reason ${trace3.finishReason}`
         }));
       }
-      const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
+      const turnsBlocked = turn > bounds.maxTurns || policy2.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch;
       if (turnsBlocked) {
         return failRunEventStream(AgentPolicyError.make({
           limit: "turns",
@@ -39474,7 +39504,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
       message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
     }));
   }
-  const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
+  const turnsBlocked = turn > bounds.maxTurns || policy2.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch;
   if (turnsBlocked) {
     return failRunEventStream(AgentPolicyError.make({
       limit: "turns",

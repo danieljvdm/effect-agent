@@ -225,6 +225,7 @@ describe("PR-review model eval", () => {
         concurrency: 1,
         caseIds: [],
       }).pipe(
+        Stream.runCollect,
         Effect.provide(
           OpenAiClient.layer({ apiKey: Redacted.make("private-api-key") }).pipe(
             Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),

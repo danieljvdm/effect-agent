@@ -57,6 +57,7 @@ const scriptedModel = (
   respond: (
     prompt: Prompt.Prompt,
     tools: ReadonlyArray<Tool.Any>,
+    toolChoice: LanguageModel.ToolChoice<string>,
   ) => Stream.Stream<Response.StreamPartEncoded, AiError.AiError>,
 ) =>
   Model.make(
@@ -66,7 +67,7 @@ const scriptedModel = (
       LanguageModel.LanguageModel,
       LanguageModel.make({
         generateText: () => Effect.succeed([]),
-        streamText: ({ prompt, tools }) => respond(prompt, tools),
+        streamText: ({ prompt, tools, toolChoice }) => respond(prompt, tools, toolChoice),
       }),
     ),
   );
