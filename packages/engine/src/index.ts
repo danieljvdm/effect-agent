@@ -3968,7 +3968,10 @@ const makeTurn = <
           outgoingModelPrompt(policy, context, basis, turn, priorToolCalls).pipe(
             Effect.map((outgoing) => {
               const terminalToolChoiceOnly =
-                finalAnswerOnly || (policy.onExhaustion === "fail" && turn === bounds.maxTurns);
+                finalAnswerOnly ||
+                (agent.definition.completion?.required === true &&
+                  policy.onExhaustion === "fail" &&
+                  turn === bounds.maxTurns);
               return guardBudgetStream(
                 LanguageModel.streamText({
                   // The contract joins the final outgoing prompt (after
@@ -4298,9 +4301,10 @@ const makeTurn = <
                         : Stream.fromIterable(pre).pipe(Stream.concat(nextStream));
                     if (consumed.breach !== undefined) {
                       // Provider-executed calls already ran provider-side: a
-                      // stop response with no APPLICATION calls is final and
-                      // settles the breach directly (RUN-025).
+                      // stop response with no APPLICATION calls can settle
+                      // the breach directly unless completion is required (RUN-025).
                       if (
+                        agent.definition.completion?.required !== true &&
                         trace.applicationToolCalls.length === 0 &&
                         trace.finishReason === "stop"
                       ) {

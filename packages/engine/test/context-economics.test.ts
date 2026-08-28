@@ -1222,10 +1222,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
       ).pipe(Effect.provide(toolLayer));
 
       expect(optionalRequests).toHaveLength(1);
-      expect(optionalRequests[0]?.toolChoice).toEqual({
-        mode: "auto",
-        oneOf: ["post_message"],
-      });
+      expect(optionalRequests[0]?.toolChoice).toBe("auto");
       expect(optionalResult).toMatchObject({
         output: { message: "text is still valid", messageId: "text-result" },
         turns: 1,
@@ -2305,10 +2302,13 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
       }),
   );
 
-  it.effect(
-    "RUN-025: a token-breaching stop response with only provider-executed calls completes budget-exhausted",
-    () =>
+  it.effect.each(["single-turn", "token-breach", "required-token-breach"] as const)(
+    "provider-only final text honors completion and budget policy: %s",
+    (scenario) =>
       Effect.gen(function* () {
+        const required = scenario === "required-token-breach";
+        const singleTurn = scenario === "single-turn";
+        const deliveries: Array<string> = [];
         const HostedSearch = Tool.providerDefined({
           id: "test.web_search",
           customName: "HostedSearch",
@@ -2316,21 +2316,33 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
           parameters: Schema.Struct({ query: Schema.String }),
           success: Schema.Struct({ status: Schema.String }),
         })(undefined);
-        const hostedToolkit = Toolkit.make(HostedSearch);
+        const hostedToolkit = Toolkit.make(HostedSearch, PostMessageTool);
         const definition = Agent.define("provider-only-breach", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Answer.",
           toolkit: hostedToolkit,
           policy: AgentPolicy.make({
-            maxTurns: 3,
+            maxTurns: singleTurn ? 1 : 3,
             maxToolCalls: 2,
             maxDuration: "30 seconds",
             toolConcurrency: 1,
             tokenBudget: 10_000,
+            onExhaustion: singleTurn ? "fail" : "final-answer",
           }),
+          ...(required
+            ? {
+                completion: {
+                  tool: "post_message" as const,
+                  required: true,
+                  project: ({ parameters }: { parameters: { message: string } }) => ({
+                    answer: parameters.message,
+                  }),
+                },
+              }
+            : {}),
         });
-        const { model } = scriptedModel([
+        const { model, requests } = scriptedModel([
           [
             {
               type: "tool-call",
@@ -2350,14 +2362,34 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             { type: "text-start", id: "answer" },
             { type: "text-delta", id: "answer", delta: '{"answer":"hosted"}' },
             { type: "text-end", id: "answer" },
-            { type: "finish", reason: "stop", usage: usageOf(15_000, 1_000) },
+            {
+              type: "finish",
+              reason: "stop",
+              usage: singleTurn ? usageOf(100, 10) : usageOf(15_000, 1_000),
+            },
           ],
+          toolCallParts("delivery", "post_message", { message: "delivered" }),
         ]);
         const result = yield* AgentRuntime.run(Agent.withModel(definition, model), {
           question: "q",
-        });
-        expect(result.finishReason).toBe("budget-exhausted");
-        expect(result.exhausted).toBe("tokens");
+        }).pipe(
+          Effect.provide(
+            hostedToolkit.toLayer({
+              post_message: ({ message }) =>
+                Effect.sync(() => {
+                  deliveries.push(message);
+                  return { messageId: "message-1" };
+                }),
+            }),
+          ),
+        );
+        expect(result.output).toEqual({ answer: required ? "delivered" : "hosted" });
+        expect(result.finishReason).toBe(singleTurn ? "model-stop" : "budget-exhausted");
+        expect(result.exhausted).toBe(singleTurn ? undefined : "tokens");
+        expect(requests.map((request) => request.toolChoice)).toEqual(
+          required ? ["required", { mode: "required", oneOf: ["post_message"] }] : ["auto"],
+        );
+        expect(deliveries).toEqual(required ? ["delivered"] : []);
       }),
   );
 });

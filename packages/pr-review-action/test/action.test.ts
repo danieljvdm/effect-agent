@@ -913,6 +913,57 @@ describe("exact review delta", () => {
     }),
   );
 
+  it.effect("keeps expected blob read failures as coverage gaps and admits other files", () =>
+    Effect.gen(function* () {
+      const paths = ["src/a.ts", "src/b.ts"];
+      const head = treeSnapshot("head", { "src/a.ts": "a", "src/b.ts": "b" });
+      const surface = yield* hydrateExactChanges({
+        files: paths.map((path) => file(path, undefined)),
+        changedPaths: paths,
+        base: treeSnapshot("base", {}),
+        head: {
+          ...head,
+          readTextFile: (path) =>
+            path === "src/a.ts"
+              ? Effect.fail(
+                  GitHubApiFailure.make({ operation: "readTextFile", reason: "blob unavailable" }),
+                )
+              : head.readTextFile(path),
+        },
+        ignore: [],
+      });
+
+      expect(surface.unreviewedPaths).toEqual(["src/a.ts"]);
+      expect([...surface.unavailablePaths]).toEqual(["src/a.ts"]);
+      expect(surface.changes.map((change) => change.path)).toEqual(["src/b.ts"]);
+    }),
+  );
+
+  it.effect.each([
+    { cause: Cause.die("adapter defect"), expected: { _tag: "Die", defect: "adapter defect" } },
+    { cause: Cause.interrupt(7335), expected: { _tag: "Interrupt", fiberId: 7335 } },
+  ])("preserves a blob read cause and stops hydration: $expected._tag", ({ cause, expected }) =>
+    Effect.gen(function* () {
+      const paths = ["src/a.ts", "src/b.ts"];
+      const reads: Array<string> = [];
+      const exit = yield* hydrateExactChanges({
+        files: paths.map((path) => file(path, undefined)),
+        changedPaths: paths,
+        base: treeSnapshot("base", {}),
+        head: {
+          ...treeSnapshot("head", { "src/a.ts": "a", "src/b.ts": "b" }),
+          readTextFile: (path) =>
+            Effect.sync(() => reads.push(path)).pipe(Effect.andThen(Effect.failCause(cause))),
+        },
+        ignore: [],
+      }).pipe(Effect.exit);
+
+      if (Exit.isSuccess(exit)) throw new Error("Expected hydration to fail");
+      expect(exit.cause.reasons).toMatchObject([expected]);
+      expect(reads).toEqual(["src/a.ts"]);
+    }),
+  );
+
   it.effect(
     "treats either ignored rename alias as one ignored change and denies both sources",
     () =>

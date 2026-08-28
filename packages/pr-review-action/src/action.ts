@@ -21,6 +21,7 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Result,
   Schema,
 } from "effect";
 import type { Response } from "effect/unstable/ai";
@@ -388,15 +389,15 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
         after: afterEntry === undefined ? Effect.succeed("") : input.head.readTextFile(file.path),
       },
       { concurrency: 2 },
-    ).pipe(Effect.exit);
-    if (Exit.isFailure(contents)) {
+    ).pipe(Effect.result);
+    if (Result.isFailure(contents)) {
       hydratedSourceBytes += estimatedSourceBytes;
       exclude(unreviewedPaths, file, basePath);
       continue;
     }
     hydratedSourceBytes += sourceSizesKnown
       ? estimatedSourceBytes
-      : contents.value.before.length + contents.value.after.length;
+      : contents.success.before.length + contents.success.after.length;
     if (hydratedSourceBytes > MAX_HYDRATED_SOURCE_BYTES) {
       exclude(unreviewedPaths, file, basePath);
       sourceBudgetExhausted = true;
@@ -404,7 +405,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
     }
     const patch =
       basePath === file.path &&
-      contents.value.before === contents.value.after &&
+      contents.success.before === contents.success.after &&
       beforeEntry !== undefined &&
       afterEntry !== undefined &&
       beforeEntry.mode !== afterEntry.mode
@@ -419,8 +420,8 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
             headPath: file.path,
             baseRevision: input.base.revision,
             headRevision: input.head.revision,
-            before: contents.value.before,
-            after: contents.value.after,
+            before: contents.success.before,
+            after: contents.success.after,
           });
     const exactPatch =
       patch !== undefined && basePath !== file.path
