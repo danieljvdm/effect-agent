@@ -11,6 +11,7 @@ import {
   ScheduledInputRetryable,
   ScheduleWake,
   Scheduling,
+  ScheduleDriver,
   defaultSchedulingLimits,
   PersistedJson,
 } from "@effect-agent/session";
@@ -98,18 +99,19 @@ const reportPassFailure = (cause: Cause.Cause<ScheduleProcessFailure>): Effect.E
 
 const nodeSchedulingDriverLayer = (
   limits: SchedulingLimits,
-): Layer.Layer<never, never, Scheduling | ScheduleStore | ScheduleWake> =>
+): Layer.Layer<never, never, ScheduleDriver | ScheduleStore | ScheduleWake> =>
   Layer.effectDiscard(
     Effect.gen(function* () {
-      const scheduling = yield* Scheduling;
+      const scheduling = yield* ScheduleDriver;
       const store = yield* ScheduleStore;
       const wake = yield* ScheduleWake;
 
       const run = Effect.gen(function* () {
         while (true) {
-          const passSucceeded = yield* scheduling
-            .runDue()
-            .pipe(Effect.as(true), Effect.catchCause(reportPassFailure));
+          const passSucceeded = yield* scheduling.runDue().pipe(
+            Effect.map((pass) => pass.failed === 0),
+            Effect.catchCause(reportPassFailure),
+          );
           const deadlineResult = passSucceeded
             ? yield* store.nextDeadline().pipe(Effect.result)
             : Result.fail(
@@ -150,7 +152,8 @@ export class NodeScheduling {
   > {
     const limits = options.limits ?? defaultSchedulingLimits;
     const schedulingWithDriver = nodeSchedulingDriverLayer(limits).pipe(
-      Layer.provideMerge(Scheduling.layer(limits)),
+      Layer.provide(ScheduleDriver.layer(limits)),
+      Layer.merge(Scheduling.layer(limits)),
     );
     return schedulingWithDriver.pipe(
       Layer.provide(

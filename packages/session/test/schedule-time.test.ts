@@ -124,6 +124,13 @@ describe("Schedule timing", () => {
     expect(success(scheduleNextAfter(timing, Date.parse("2026-03-07T07:31:00.000Z")))).toBe(
       Date.parse("2026-03-08T07:30:00.000Z"),
     );
+    for (const cursor of ["2026-03-07T07:30:00Z", "2026-03-08T07:30:00Z"]) {
+      for (const now of ["2026-03-08T07:30:00Z", "2026-03-08T08:00:00Z"]) {
+        const due = success(scheduleDueOccurrence(timing, Date.parse(cursor), Date.parse(now)));
+        expect(due?.intendedAtMillis).toBe(Date.parse("2026-03-08T07:30:00Z"));
+        expect(due?.nextAtMillis).toBe(Date.parse("2026-03-09T06:30:00Z"));
+      }
+    }
 
     const repeated = {
       _tag: "Cron" as const,
@@ -136,6 +143,18 @@ describe("Schedule timing", () => {
     expect(success(scheduleNextAfter(repeated, first))).toBe(
       Date.parse("2026-11-02T06:30:00.000Z"),
     );
+    expect(success(scheduleNextAfter(repeated, Date.parse("2026-11-01T06:15:00Z")))).toBe(
+      Date.parse("2026-11-02T06:30:00Z"),
+    );
+    const folded = success(
+      scheduleDueOccurrence(
+        repeated,
+        Date.parse("2026-10-31T05:30:00Z"),
+        Date.parse("2026-11-01T06:15:00Z"),
+      ),
+    );
+    expect(folded?.intendedAtMillis).toBe(Date.parse("2026-11-01T05:30:00Z"));
+    expect(folded?.nextAtMillis).toBe(Date.parse("2026-11-02T06:30:00Z"));
     expect(
       success(
         scheduleDueOccurrence(
@@ -149,5 +168,52 @@ describe("Schedule timing", () => {
       nextAtMillis: Date.parse("2026-11-02T06:30:00.000Z"),
       skippedRange: null,
     });
+  });
+
+  it("coalesces long named-zone downtime across sparse dates and whole-day gaps", () => {
+    for (const [expression, timeZone, cursor, now, intended, next] of [
+      [
+        "* * * * *",
+        "America/New_York",
+        "2000-01-01T05:00Z",
+        "2026-03-08T07:15Z",
+        "2026-03-08T07:15Z",
+        "2026-03-08T07:16Z",
+      ],
+      [
+        "30 2 * * *",
+        "America/New_York",
+        "2000-01-01T07:30Z",
+        "2026-03-08T07:45Z",
+        "2026-03-08T07:30Z",
+        "2026-03-09T06:30Z",
+      ],
+      [
+        "0 0 29 2 *",
+        "America/New_York",
+        "2000-02-29T05:00Z",
+        "2026-03-08T07:45Z",
+        "2024-02-29T05:00Z",
+        "2028-02-29T05:00Z",
+      ],
+      [
+        "0 12 * * *",
+        "Pacific/Apia",
+        "2011-12-28T22:00Z",
+        "2011-12-31T00:00Z",
+        "2011-12-30T22:00Z",
+        "2011-12-31T22:00Z",
+      ],
+    ] as const) {
+      const due = success(
+        scheduleDueOccurrence(
+          { _tag: "Cron", expression, timeZone },
+          Date.parse(cursor),
+          Date.parse(now),
+        ),
+      );
+      expect(due?.intendedAtMillis).toBe(Date.parse(intended));
+      expect(due?.nextAtMillis).toBe(Date.parse(next));
+    }
   });
 });

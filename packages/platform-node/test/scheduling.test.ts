@@ -149,7 +149,10 @@ it.effect("recovers one pending admission after a lost reply and host reopen", (
         );
         expect(pending.lastReceipt).toBeNull();
         expect(pending.pending?.retry.lastFailure).toBe("ambiguous");
-        const envelope = pending.pending?.envelope;
+        const envelope = (yield* Context.get(firstContext, ScheduleStore).get({
+          owner: scheduleScope.owner,
+          scheduleId,
+        }))?.pending?.envelope;
         expect(envelope).toBeDefined();
 
         yield* Scope.close(firstScope, Exit.void);

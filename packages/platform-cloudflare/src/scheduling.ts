@@ -6,7 +6,6 @@ import {
   ScheduleAuthorizationError,
   type ScheduleAuthorizer,
   ScheduleCapacityError,
-  type ScheduleCreateOptions,
   ScheduleConflict,
   ScheduleDestination,
   ScheduleFailpointError,
@@ -17,16 +16,16 @@ import {
   type ScheduleScope,
   ScheduleScope as ScheduleScopeSchema,
   ScheduleSnapshot,
-  type ScheduleSnapshotPage,
   ScheduleSnapshotPage as ScheduleSnapshotPageSchema,
   ScheduleStorageError,
   ScheduleTimingRequest,
-  type ScheduleUpdateOptions,
   ScheduleValidationError,
   ScheduledInputAdmission,
   ScheduledInputRetryable,
   type ScheduledEnvelope,
   Scheduling,
+  ScheduleDriver,
+  type ScheduleManagementFailure,
   defaultSchedulingLimits,
   scheduleOwnerKey,
   ScheduleWakeNoop,
@@ -165,214 +164,166 @@ const passthroughAgent = (agentId: AgentId): DurableSubmitAgent<typeof Persisted
 
 const requestOwner = (request: ScheduleOwnerRequest): ScheduleOwner => request.scope.owner;
 
-export interface CloudflareSchedulingClientService {
-  readonly create: <InputSchema extends Schema.Top>(
-    agent: DurableSubmitAgent<InputSchema>,
-    input: InputSchema["Type"],
-    options: ScheduleCreateOptions,
-  ) => Effect.Effect<
-    typeof ScheduleSnapshot.Type,
-    ScheduleOwnerFailure | ScheduleOwnerProtocolError,
-    InputSchema["EncodingServices"]
-  >;
-  readonly update: <InputSchema extends Schema.Top>(
-    agent: DurableSubmitAgent<InputSchema>,
-    input: InputSchema["Type"],
-    options: ScheduleUpdateOptions,
-  ) => Effect.Effect<
-    typeof ScheduleSnapshot.Type,
-    ScheduleOwnerFailure | ScheduleOwnerProtocolError,
-    InputSchema["EncodingServices"]
-  >;
-  readonly get: (
-    scope: ScheduleScope,
-    scheduleId: ScheduleId,
-  ) => Effect.Effect<
-    typeof ScheduleSnapshot.Type,
-    ScheduleOwnerFailure | ScheduleOwnerProtocolError
-  >;
-  readonly list: (
-    scope: ScheduleScope,
-    options?: { readonly after?: ScheduleId; readonly limit?: number },
-  ) => Effect.Effect<ScheduleSnapshotPage, ScheduleOwnerFailure | ScheduleOwnerProtocolError>;
-  readonly pause: CloudflareScheduleControl;
-  readonly resume: CloudflareScheduleControl;
-  readonly cancel: CloudflareScheduleControl;
-}
+/** Provides the same authorized management service as NodeScheduling.layer. */
+export class CloudflareSchedulingClient {
+  static readonly layer: Layer.Layer<Scheduling, never, ScheduleOwnerNamespace> = Layer.effect(
+    Scheduling,
+    Effect.gen(function* () {
+      const { namespace } = yield* ScheduleOwnerNamespace;
 
-type CloudflareScheduleControl = (
-  scope: ScheduleScope,
-  scheduleId: ScheduleId,
-  expectedRevision: number,
-) => Effect.Effect<typeof ScheduleSnapshot.Type, ScheduleOwnerFailure | ScheduleOwnerProtocolError>;
+      const call = Effect.fn("CloudflareSchedulingClient.call")(function* (
+        owner: ScheduleOwner,
+        request: ScheduleOwnerRequest,
+      ): Effect.fn.Return<ScheduleOwnerResponse, ScheduleManagementFailure> {
+        const encoded = yield* encodeScheduleOwnerRequest(request).pipe(
+          Effect.mapError(() =>
+            ScheduleStorageError.make({ operation: "Schedule Owner protocol", reason: "corrupt" }),
+          ),
+        );
+        const raw = yield* Effect.tryPromise({
+          try: () => namespace.get(namespace.idFromName(scheduleOwnerKey(owner))).schedule(encoded),
+          catch: () =>
+            ScheduleStorageError.make({
+              operation: "call Schedule Owner",
+              reason: "unavailable",
+            }),
+        });
+        const response = yield* decodeScheduleOwnerResponse(raw).pipe(
+          Effect.mapError(() =>
+            ScheduleStorageError.make({ operation: "Schedule Owner protocol", reason: "corrupt" }),
+          ),
+        );
+        if (response._tag !== "Failed") return response;
+        return yield* response.failure._tag === "ScheduleOwnerProtocolError"
+          ? ScheduleStorageError.make({ operation: "Schedule Owner protocol", reason: "corrupt" })
+          : response.failure;
+      });
 
-export class CloudflareSchedulingClient extends Context.Service<
-  CloudflareSchedulingClient,
-  CloudflareSchedulingClientService
->()("@effect-agent/platform-cloudflare/CloudflareSchedulingClient") {
-  static readonly layer: Layer.Layer<CloudflareSchedulingClient, never, ScheduleOwnerNamespace> =
-    Layer.effect(
-      CloudflareSchedulingClient,
-      Effect.gen(function* () {
-        const { namespace } = yield* ScheduleOwnerNamespace;
+      const encodeInput = Effect.fn("CloudflareSchedulingClient.encodeInput")(function* <
+        InputSchema extends Schema.Top,
+      >(
+        agent: DurableSubmitAgent<InputSchema>,
+        input: InputSchema["Type"],
+      ): Effect.fn.Return<PersistedJson, ScheduleValidationError, InputSchema["EncodingServices"]> {
+        const encoded = yield* Schema.encodeEffect(agent.definition.input)(input).pipe(
+          Effect.mapError(() =>
+            ScheduleValidationError.make({
+              message: "Unable to encode Agent input",
+            }),
+          ),
+        );
+        return yield* Schema.decodeUnknownEffect(PersistedJson)(encoded).pipe(
+          Effect.mapError(() =>
+            ScheduleValidationError.make({
+              message: "Agent input does not satisfy the canonical persistence bounds",
+            }),
+          ),
+        );
+      });
 
-        const call = Effect.fn("CloudflareSchedulingClient.call")(function* (
-          owner: ScheduleOwner,
-          request: ScheduleOwnerRequest,
-        ): Effect.fn.Return<
-          ScheduleOwnerResponse,
-          ScheduleOwnerFailure | ScheduleOwnerProtocolError
-        > {
-          const encoded = yield* encodeScheduleOwnerRequest(request).pipe(
-            Effect.mapError(() =>
-              ScheduleOwnerProtocolError.make({
-                message: "The Schedule request could not be encoded",
-              }),
-            ),
-          );
-          const raw = yield* Effect.tryPromise({
-            try: () =>
-              namespace.get(namespace.idFromName(scheduleOwnerKey(owner))).schedule(encoded),
-            catch: () =>
-              ScheduleStorageError.make({
-                operation: "call Schedule Owner",
-                reason: "unavailable",
-              }),
+      const create: Scheduling["Service"]["create"] = (agent, input, options) =>
+        Effect.gen(function* () {
+          const payload = yield* encodeInput(agent, input);
+          const response = yield* call(options.scope.owner, {
+            _tag: "Create",
+            schemaVersion: 1,
+            agentId: agent.definition.id,
+            input: payload,
+            ...options,
           });
-          const response = yield* decodeScheduleOwnerResponse(raw).pipe(
-            Effect.mapError(() =>
-              ScheduleOwnerProtocolError.make({
-                message: "The Schedule response could not be decoded",
-              }),
-            ),
-          );
-          return response._tag === "Failed" ? yield* response.failure : response;
+          return response._tag === "Snapshot"
+            ? response.value
+            : yield* ScheduleStorageError.make({
+                operation: "Schedule Owner protocol",
+                reason: "corrupt",
+              });
         });
 
-        const encodeInput = Effect.fn("CloudflareSchedulingClient.encodeInput")(function* <
-          InputSchema extends Schema.Top,
-        >(
-          agent: DurableSubmitAgent<InputSchema>,
-          input: InputSchema["Type"],
-        ): Effect.fn.Return<
-          PersistedJson,
-          ScheduleValidationError,
-          InputSchema["EncodingServices"]
-        > {
-          const encoded = yield* Schema.encodeEffect(agent.definition.input)(input).pipe(
-            Effect.mapError(() =>
-              ScheduleValidationError.make({
-                message: "Unable to encode Agent input",
-              }),
-            ),
-          );
-          return yield* Schema.decodeUnknownEffect(PersistedJson)(encoded).pipe(
-            Effect.mapError(() =>
-              ScheduleValidationError.make({
-                message: "Agent input does not satisfy the canonical persistence bounds",
-              }),
-            ),
-          );
+      const update: Scheduling["Service"]["update"] = (agent, input, options) =>
+        Effect.gen(function* () {
+          const payload = yield* encodeInput(agent, input);
+          const response = yield* call(options.scope.owner, {
+            _tag: "Update",
+            schemaVersion: 1,
+            agentId: agent.definition.id,
+            input: payload,
+            ...options,
+          });
+          return response._tag === "Snapshot"
+            ? response.value
+            : yield* ScheduleStorageError.make({
+                operation: "Schedule Owner protocol",
+                reason: "corrupt",
+              });
         });
 
-        const create: CloudflareSchedulingClientService["create"] = (agent, input, options) =>
-          Effect.gen(function* () {
-            const payload = yield* encodeInput(agent, input);
-            const response = yield* call(options.scope.owner, {
-              _tag: "Create",
-              schemaVersion: 1,
-              agentId: agent.definition.id,
-              input: payload,
-              ...options,
-            });
-            return response._tag === "Snapshot"
-              ? response.value
-              : yield* ScheduleOwnerProtocolError.make({
-                  message: "Schedule create returned a page response",
-                });
+      const get: Scheduling["Service"]["get"] = (scope, scheduleId) =>
+        Effect.gen(function* () {
+          const response = yield* call(scope.owner, {
+            _tag: "Get",
+            schemaVersion: 1,
+            scope,
+            scheduleId,
           });
-
-        const update: CloudflareSchedulingClientService["update"] = (agent, input, options) =>
-          Effect.gen(function* () {
-            const payload = yield* encodeInput(agent, input);
-            const response = yield* call(options.scope.owner, {
-              _tag: "Update",
-              schemaVersion: 1,
-              agentId: agent.definition.id,
-              input: payload,
-              ...options,
-            });
-            return response._tag === "Snapshot"
-              ? response.value
-              : yield* ScheduleOwnerProtocolError.make({
-                  message: "Schedule update returned a page response",
-                });
-          });
-
-        const get: CloudflareSchedulingClientService["get"] = (scope, scheduleId) =>
-          Effect.gen(function* () {
-            const response = yield* call(scope.owner, {
-              _tag: "Get",
-              schemaVersion: 1,
-              scope,
-              scheduleId,
-            });
-            return response._tag === "Snapshot"
-              ? response.value
-              : yield* ScheduleOwnerProtocolError.make({
-                  message: "Schedule get returned a page response",
-                });
-          });
-
-        const list: CloudflareSchedulingClientService["list"] = (scope, options = {}) =>
-          Effect.gen(function* () {
-            const response = yield* call(scope.owner, {
-              _tag: "List",
-              schemaVersion: 1,
-              scope,
-              ...(options.after === undefined ? {} : { after: options.after }),
-              ...(options.limit === undefined ? {} : { limit: options.limit }),
-            });
-            return response._tag === "Page"
-              ? response.value
-              : yield* ScheduleOwnerProtocolError.make({
-                  message: "Schedule list returned a snapshot response",
-                });
-          });
-
-        const control = (
-          operation: "pause" | "resume" | "cancel",
-          scope: ScheduleScope,
-          scheduleId: ScheduleId,
-          expectedRevision: number,
-        ) =>
-          Effect.gen(function* () {
-            const response = yield* call(scope.owner, {
-              _tag: "Control",
-              schemaVersion: 1,
-              operation,
-              scope,
-              scheduleId,
-              expectedRevision,
-            });
-            return response._tag === "Snapshot"
-              ? response.value
-              : yield* ScheduleOwnerProtocolError.make({
-                  message: `Schedule ${operation} returned a page response`,
-                });
-          });
-
-        return CloudflareSchedulingClient.of({
-          create,
-          update,
-          get,
-          list,
-          pause: (scope, id, revision) => control("pause", scope, id, revision),
-          resume: (scope, id, revision) => control("resume", scope, id, revision),
-          cancel: (scope, id, revision) => control("cancel", scope, id, revision),
+          return response._tag === "Snapshot"
+            ? response.value
+            : yield* ScheduleStorageError.make({
+                operation: "Schedule Owner protocol",
+                reason: "corrupt",
+              });
         });
-      }),
-    );
+
+      const list: Scheduling["Service"]["list"] = (scope, options = {}) =>
+        Effect.gen(function* () {
+          const response = yield* call(scope.owner, {
+            _tag: "List",
+            schemaVersion: 1,
+            scope,
+            ...(options.after === undefined ? {} : { after: options.after }),
+            ...(options.limit === undefined ? {} : { limit: options.limit }),
+          });
+          return response._tag === "Page"
+            ? response.value
+            : yield* ScheduleStorageError.make({
+                operation: "Schedule Owner protocol",
+                reason: "corrupt",
+              });
+        });
+
+      const control = (
+        operation: "pause" | "resume" | "cancel",
+        scope: ScheduleScope,
+        scheduleId: ScheduleId,
+        expectedRevision: number,
+      ) =>
+        Effect.gen(function* () {
+          const response = yield* call(scope.owner, {
+            _tag: "Control",
+            schemaVersion: 1,
+            operation,
+            scope,
+            scheduleId,
+            expectedRevision,
+          });
+          return response._tag === "Snapshot"
+            ? response.value
+            : yield* ScheduleStorageError.make({
+                operation: "Schedule Owner protocol",
+                reason: "corrupt",
+              });
+        });
+
+      return Scheduling.of({
+        create,
+        update,
+        get,
+        list,
+        pause: (scope, id, revision) => control("pause", scope, id, revision),
+        resume: (scope, id, revision) => control("resume", scope, id, revision),
+        cancel: (scope, id, revision) => control("cancel", scope, id, revision),
+      });
+    }),
+  );
 }
 
 export class ScheduleOwnerIdentity extends Context.Service<
@@ -514,6 +465,7 @@ const admissionLayer: Layer.Layer<ScheduledInputAdmission, never, CloudflareConv
 
 type ScheduleRuntimeServices =
   | Scheduling
+  | ScheduleDriver
   | DoScheduleAlarmControl
   | ScheduleOwnerIdentity
   | DurableObjectAlarm.DurableObjectAlarm;
@@ -630,13 +582,17 @@ const scheduleAlarmHandler = (limits: SchedulingLimits) =>
             }),
           ),
         );
-        const scheduling = yield* Scheduling;
+        const scheduling = yield* ScheduleDriver;
         const alarmControl = yield* DoScheduleAlarmControl;
         const { owner } = yield* ScheduleOwnerIdentity;
         const nowMillis = yield* Clock.currentTimeMillis;
         yield* alarmControl.prearm(nowMillis + limits.recoveryPollMillis);
-        yield* scheduling.runDue(owner);
-        yield* alarmControl.reconcile;
+        const pass = yield* scheduling.runDue(owner);
+        if (pass.failed > 0) {
+          yield* alarmControl.prearm((yield* Clock.currentTimeMillis) + limits.recoveryPollMillis);
+        } else {
+          yield* alarmControl.reconcile;
+        }
       }),
     { mode: "ordered" },
   ).pipe(Effect.asVoid);
@@ -678,7 +634,7 @@ export const makeScheduleOwnerObjectClass = <E>(
       SqliteClient.layer({ storage: state.raw.storage }),
     ),
   );
-  const application = Scheduling.layer(limits).pipe(
+  const application = Layer.merge(Scheduling.layer(limits), ScheduleDriver.layer(limits)).pipe(
     Layer.provideMerge(
       scheduleStoreLayer.pipe(Layer.provide(transactionLayer), Layer.provide(sqlLayer)),
     ),

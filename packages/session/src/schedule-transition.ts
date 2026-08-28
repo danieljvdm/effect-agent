@@ -46,6 +46,10 @@ export const scheduleDeadline = (record: ScheduleRecord): number | null => {
   return record.state === "active" ? record.nextAtMillis : null;
 };
 
+/** Paused work reserves capacity; terminal replay evidence does not. */
+export const scheduleUsesCapacity = (record: ScheduleRecord): boolean =>
+  record.pending !== null || (record.state !== "cancelled" && record.nextAtMillis !== null);
+
 const conflict = (record: ScheduleRecord, reason: "revision" | "cancelled") =>
   Result.fail(ScheduleConflict.make({ reason, key: scheduleKeyOf(record) }));
 
@@ -85,6 +89,7 @@ export const applyScheduleChange = (
         return conflict(record, "revision");
       }
       if (record.version !== change.expectedVersion) return conflict(record, "revision");
+      if (change.action === "resume" && record.state === "active") return Result.succeed(record);
       if (change.action === "pause") {
         return changed(record, {
           state: "paused",

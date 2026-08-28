@@ -1,5 +1,8 @@
 import {
   ScheduleCapacityError,
+  ScheduleDueCursor,
+  defaultSchedulingLimits,
+  scheduleUsesCapacity,
   ScheduleChange,
   ScheduleConflict,
   ScheduleFailpoint,
@@ -99,7 +102,11 @@ const makeScheduleStore = Effect.gen(function* () {
                 if (Result.isFailure(decoded)) {
                   return [Result.fail(decoded.failure), current];
                 }
-                if (sameOwner(decoded.success, record.owner)) ownerCount += 1;
+                if (
+                  sameOwner(decoded.success, record.owner) &&
+                  scheduleUsesCapacity(decoded.success)
+                )
+                  ownerCount += 1;
               }
               if (ownerCount >= ownerLimit) {
                 return [Result.fail(ScheduleCapacityError.make({ limit: ownerLimit })), current];
@@ -150,7 +157,7 @@ const makeScheduleStore = Effect.gen(function* () {
   );
 
   const change: ScheduleStore["Service"]["change"] = Effect.fn("MemoryScheduleStore.change")(
-    (key, command) =>
+    (key, command, ownerLimit = defaultSchedulingLimits.maxSchedulesPerOwner) =>
       Effect.gen(function* () {
         const decodedKey = yield* decodeInput("change", ScheduleKey, key);
         const decodedCommand = yield* decodeInput("change", ScheduleChange, command);
@@ -163,7 +170,7 @@ const makeScheduleStore = Effect.gen(function* () {
             ): readonly [
               Result.Result<
                 ScheduleRecord,
-                ScheduleConflict | ScheduleStorageError | ScheduleNotFound
+                ScheduleConflict | ScheduleStorageError | ScheduleNotFound | ScheduleCapacityError
               >,
               MemoryScheduleState,
             ] => {
@@ -185,6 +192,23 @@ const makeScheduleStore = Effect.gen(function* () {
               }
               if (applied.success === decoded.success) {
                 return [Result.succeed(decoded.success), current];
+              }
+              if (!scheduleUsesCapacity(decoded.success) && scheduleUsesCapacity(applied.success)) {
+                let count = 0;
+                for (const text of current.records.values()) {
+                  const candidate = Schema.decodeUnknownResult(
+                    Schema.fromJsonString(ScheduleRecord),
+                  )(text);
+                  if (Result.isFailure(candidate))
+                    return [Result.fail(storageError("change", "corrupt")), current];
+                  if (
+                    sameOwner(candidate.success, decodedKey.owner) &&
+                    scheduleUsesCapacity(candidate.success)
+                  )
+                    count += 1;
+                }
+                if (count >= ownerLimit)
+                  return [Result.fail(ScheduleCapacityError.make({ limit: ownerLimit })), current];
               }
               const encoded = Result.try({
                 try: () =>
@@ -208,23 +232,28 @@ const makeScheduleStore = Effect.gen(function* () {
   );
 
   const due: ScheduleStore["Service"]["due"] = Effect.fn("MemoryScheduleStore.due")(
-    function* (nowMillis, limit, owner) {
+    function* (nowMillis, limit, owner, after) {
       const decodedOwner =
         owner === undefined ? undefined : yield* decodeInput("due", ScheduleOwner, owner);
-      const records: Array<ScheduleRecord> = [];
+      const cursor =
+        after === undefined ? undefined : yield* decodeInput("due", ScheduleDueCursor, after);
+      const records: Array<ScheduleDueCursor> = [];
       for (const text of (yield* Ref.get(state)).records.values()) {
         const record = yield* decodeRecord("due", text);
         const deadline = scheduleDeadline(record);
         if (
           deadline !== null &&
           deadline <= nowMillis &&
-          (decodedOwner === undefined || sameOwner(record, decodedOwner))
+          (decodedOwner === undefined || sameOwner(record, decodedOwner)) &&
+          (cursor === undefined ||
+            deadline > cursor.deadlineAtMillis ||
+            (deadline === cursor.deadlineAtMillis && compareScheduleKeys(record, cursor) > 0))
         ) {
-          records.push(record);
+          records.push({ ...scheduleKeyOf(record), deadlineAtMillis: deadline });
         }
       }
       records.sort((left, right) => {
-        const byDeadline = (scheduleDeadline(left) ?? 0) - (scheduleDeadline(right) ?? 0);
+        const byDeadline = left.deadlineAtMillis - right.deadlineAtMillis;
         return byDeadline !== 0 ? byDeadline : compareScheduleKeys(left, right);
       });
       return records.slice(0, limit);

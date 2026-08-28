@@ -157,7 +157,37 @@ export const ScheduleRecord = Schema.Struct({
 export type ScheduleRecord = typeof ScheduleRecord.Type;
 
 export const ScheduleSnapshot = Schema.Struct({
-  ...ScheduleRecord.fields,
+  owner: ScheduleOwner,
+  scheduleId: ScheduleId,
+  createdAtMillis: ScheduleInstant,
+  updatedAtMillis: ScheduleInstant,
+  configurationRevision: Positive,
+  configuration: Schema.Struct({
+    timing: ScheduleTiming,
+    destination: ScheduleDestination,
+    deliveryPrincipal: Principal,
+    agentId: AgentId,
+  }),
+  state: Schema.Literals(["active", "paused", "cancelled"]),
+  nextAtMillis: Schema.NullOr(ScheduleInstant),
+  pending: Schema.NullOr(
+    Schema.Struct({
+      intendedAtMillis: ScheduleInstant,
+      preparedAtMillis: ScheduleInstant,
+      occurrenceId: Digest,
+      retry: ScheduleRetry,
+    }),
+  ),
+  lastReceipt: Schema.NullOr(
+    Schema.Struct({
+      atMillis: ScheduleInstant,
+      intendedAtMillis: ScheduleInstant,
+      occurrenceId: Digest,
+      receipt: Receipt,
+    }),
+  ),
+  lastRefusal: Schema.NullOr(ScheduleRefusal),
+  lastSkippedRange: Schema.NullOr(ScheduleSkippedRange),
   observedAtMillis: ScheduleInstant,
   pendingAgeMillis: Schema.NullOr(Schema.Natural),
   latenessMillis: Schema.Natural,
@@ -255,7 +285,7 @@ export class ScheduleAuthorizer extends Context.Service<
 
 export const SchedulingLimits = Schema.Struct({
   maxSchedulesPerOwner: Positive.check(Schema.isLessThanOrEqualTo(100_000)),
-  minIntervalMillis: Positive.check(Schema.isGreaterThanOrEqualTo(60_000)),
+  minIntervalMillis: Positive,
   maxInputBytes: Positive.check(Schema.isLessThanOrEqualTo(65_536)),
   dueBatchSize: Positive.check(Schema.isLessThanOrEqualTo(1_024)),
   admissionConcurrency: Positive.check(Schema.isLessThanOrEqualTo(64)),
@@ -288,6 +318,14 @@ export const SchedulePage = Schema.Struct({
   next: Schema.NullOr(ScheduleId),
 });
 export type SchedulePage = typeof SchedulePage.Type;
+
+/** Driver pagination uses the index only; a corrupt record cannot poison an entire page. */
+export const ScheduleDueCursor = Schema.Struct({
+  owner: ScheduleOwner,
+  scheduleId: ScheduleId,
+  deadlineAtMillis: ScheduleInstant,
+});
+export type ScheduleDueCursor = typeof ScheduleDueCursor.Type;
 
 /** Local transaction commands. Admission is deliberately absent from this union. */
 export const ScheduleChange = Schema.Union([
@@ -365,13 +403,15 @@ export class ScheduleStore extends Context.Service<
     readonly change: (
       key: ScheduleKey,
       change: ScheduleChange,
+      ownerLimit?: number,
     ) => Effect.Effect<ScheduleRecord, ScheduleStoreFailure>;
     /** Internal driver query, not a public management listing. Pending deadlines take precedence. */
     readonly due: (
       nowMillis: number,
       limit: number,
       owner?: ScheduleOwner,
-    ) => Effect.Effect<ReadonlyArray<ScheduleRecord>, ScheduleStorageError>;
+      after?: ScheduleDueCursor,
+    ) => Effect.Effect<ReadonlyArray<ScheduleDueCursor>, ScheduleStorageError>;
     readonly nextDeadline: (
       owner?: ScheduleOwner,
     ) => Effect.Effect<number | null, ScheduleStorageError>;

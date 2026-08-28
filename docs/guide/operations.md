@@ -236,6 +236,9 @@ permissions and host-owned tenant scope, not source-text inspection.
 `Scheduling` delivers encoded Agent input through ordinary durable admission. It owns a due
 occurrence until it records a Receipt or a proven permanent refusal; it does not promise one Run
 per firing. Hosts provide an explicit `ScheduleAuthorizer` and owner-scoped management.
+`Scheduling` exposes only management and bounded status projections, excluding input, digests,
+storage versions, and pending admission envelopes. Keep `ScheduleDriver` and `ScheduleStore` in
+the privileged host; never provide them to management callers or model Tools.
 
 Preparation atomically freezes the authorized envelope and advances the cursor. Recover pending
 delivery before preparing another occurrence. A lost reply retries the exact envelope and
@@ -244,14 +247,25 @@ occurrence may clear pending state. Transient or ambiguous failure remains pendi
 refusal requires proof that admission did not occur and the unchanged request cannot succeed.
 
 Recurring downtime coalesces to the latest due firing instead of replaying missed firings.
+Named-zone cron selection follows the forward sequence from the stored cursor, including spring
+gaps and the first fall-fold occurrence. Reverse traversal is not its inverse across offset changes.
 Pause stops new preparation; cancel is irreversible and stops future preparation. Neither drops
 pending delivery nor aborts accepted work. Revocation blocks future preparation, but recovery must
-finish already-authorized envelopes. Resume skips missed recurring times and cannot resurrect a
+finish already-authorized envelopes. Resume from paused skips missed recurring times; resuming an
+active Schedule is a no-op after authorization and revision checks. Resume cannot resurrect a
 consumed one-shot; update is required. Creation replay uses its original fingerprint even after edits.
+
+Owner quotas count operational work, including pending delivery and active or paused cursors.
+Completed or cancelled records without pending work retain replay evidence without consuming
+capacity. Reactivation checks capacity atomically; Schedule IDs and their creation evidence are
+not recycled. Due queries page by indexed key, and one failed or corrupt record cannot block later
+records. A query-wide storage failure still fails the sweep. Retry failed sweeps after the recovery
+poll, with no in-memory exclusion list or busy loop; interruption preserves pending work.
 
 Node runs one Scope-owned driver with indexed polling to repair lost wake hints. Cloudflare stores
 Schedule changes and alarm updates in one transaction, pre-arms recovery before remote admission,
-and fences acknowledgements by alarm generation. A cancelled or paused Schedule still needs a wake
+and fences acknowledgements by alarm generation. A sweep with failures re-arms recovery after its
+transitions, because they may have replaced the earlier wake. A cancelled or paused Schedule still needs a wake
 while delivery is pending. Storage failure that prevents a recovery alarm requires restored storage
 and another wake or operator intervention; pending work is never silently marked complete.
 
