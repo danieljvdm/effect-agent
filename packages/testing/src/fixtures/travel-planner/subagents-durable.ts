@@ -43,7 +43,7 @@ import {
 } from "./subagents.ts";
 
 // ---------------------------------------------------------------------------
-// S2 durability profile (spec/subagents.md §17): the S1 coordinator →
+// S2 durability profile: the S1 coordinator →
 // destination-researcher delegation re-run as ACCEPTED WORK on the Node/SQLite
 // runtime. The claim is `DN` durable attached Subagents only: establishment
 // and join are replay-safe by construction (SUB-016/SUB-019), a completed

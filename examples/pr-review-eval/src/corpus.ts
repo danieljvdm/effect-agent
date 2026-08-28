@@ -1,5 +1,5 @@
 import { ReviewRequest } from "@effect-agent/pr-review";
-import { Crypto, Effect, Encoding, FileSystem, Path, Schema } from "effect";
+import { Crypto, Effect, Encoding, FileSystem, Schema, Stream } from "effect";
 
 import { EvalDataError, EvalInputDigest, EvalObservation, EvalSuite } from "./contracts.ts";
 
@@ -99,62 +99,47 @@ export const loadEvalSuite = Effect.fn("PrReviewEval.loadEvalSuite")(function* (
   return yield* validateEvalSuite(suite);
 });
 
-export const preflightObservationOutput = Effect.fn("PrReviewEval.preflightObservationOutput")(
-  function* (output: string) {
-    const fs = yield* FileSystem.FileSystem;
-    const paths = yield* Path.Path;
-    if (yield* fs.exists(output)) {
-      return yield* dataError("write observations", "Output path already exists", {
-        path: output,
-      });
-    }
-    const parent = paths.dirname(output);
-    const parentInfo = yield* fs.stat(parent).pipe(
-      Effect.mapError((cause) =>
-        dataError("write observations", "Output directory does not exist", {
-          path: parent,
-          cause,
-        }),
-      ),
-    );
-    if (parentInfo.type !== "Directory") {
-      return yield* dataError("write observations", "Output parent is not a directory", {
-        path: parent,
-      });
-    }
-    yield* fs.access(parent, { writable: true }).pipe(
-      Effect.mapError((cause) =>
-        dataError("write observations", "Output directory is not writable", {
-          path: parent,
-          cause,
-        }),
-      ),
-    );
-  },
-);
-
-export const writeObservations = Effect.fn("PrReviewEval.writeObservations")(function* (
+export const writeObservations = Effect.fn("PrReviewEval.writeObservations")(function* <E, R>(
   output: string,
-  observations: ReadonlyArray<EvalObservation>,
+  observations: Stream.Stream<EvalObservation, E, R>,
 ) {
-  const lines = yield* Effect.forEach(observations, (observation) =>
-    encodeObservationJson(observation).pipe(
-      Effect.mapError((cause) =>
-        dataError("encode observations", "Eval observation failed to encode", { cause }),
-      ),
-    ),
-  );
-  const contents = `${lines.join("\n")}\n`;
   const fs = yield* FileSystem.FileSystem;
-  yield* fs.writeFileString(output, contents, { flag: "wx" }).pipe(
+  const file = yield* fs.open(output, { flag: "wx", mode: 0o600 }).pipe(
     Effect.mapError((cause) =>
-      dataError("write observations", `Could not write eval observations to ${output}`, {
+      dataError("open observations", `Could not create new eval observations at ${output}`, {
         path: output,
         cause,
       }),
     ),
   );
-});
+  const encoder = new TextEncoder();
+  return yield* observations.pipe(
+    Stream.runFoldEffect(
+      () => 0,
+      Effect.fn("PrReviewEval.writeObservation")(function* (
+        count: number,
+        observation: EvalObservation,
+      ) {
+        const line = yield* encodeObservationJson(observation).pipe(
+          Effect.mapError((cause) =>
+            dataError("encode observations", "Eval observation failed to encode", { cause }),
+          ),
+        );
+        yield* file.writeAll(encoder.encode(`${line}\n`)).pipe(
+          Effect.andThen(file.sync),
+          Effect.uninterruptible,
+          Effect.mapError((cause) =>
+            dataError("write observations", `Could not persist eval observation to ${output}`, {
+              path: output,
+              cause,
+            }),
+          ),
+        );
+        return count + 1;
+      }),
+    ),
+  );
+}, Effect.scoped);
 
 export const decodeObservationLines = Effect.fn("PrReviewEval.decodeObservationLines")(function* (
   contents: string,

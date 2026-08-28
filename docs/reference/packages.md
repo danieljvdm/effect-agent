@@ -34,7 +34,7 @@ Exports include `AgentRuntime`, `DetachedRun`, `RunOptions`, and the operational
 `CurrentToolFailureObserver`, `toolFailureObserverLayer`, `RunToolFailureObserver`, and
 `ToolFailureObservation` provide the opt-in trusted local interface for non-propagating Tool
 failures. The default is absent, installation is service-only, and observations are never
-persisted or automatically exported. See [Tool failure observation](../spec/runtime#tool-failure-observation).
+persisted or automatically exported. See [Tool failure observation](../guide/run-agents#observe-recovered-tool-failures).
 
 ### `@effect-agent/capabilities`
 
@@ -161,8 +161,7 @@ A provider-neutral, deployment-class-E review agent. The host supplies bounded p
 tool-free model turn returns a Schema-decoded report; the package validates paths and RIGHT-side
 line anchors and exposes observed cached, uncached, cache-write, and output token usage plus an
 optional host-priced estimate. It contains no GitHub adapter, provider binding, entrypoint, retry,
-fan-out, continuity state, or publication behavior. See the
-[PR-review specification](/spec/pr-review).
+fan-out, continuity state, or publication behavior.
 
 ### `@effect-agent/testing`
 
@@ -177,7 +176,7 @@ The private `packages/pr-review-action` workspace owns the GitHub channel over
 `@effect-agent/pr-review`: webhook policy, REST decoding, bounded diff admission, deterministic
 four-shard fan-out, the OpenAI Layer, merging, and publication. The root `action` directory holds
 the consumer-facing metadata and committed node-runtime bundle. See the
-[PR-review specification](/spec/pr-review).
+[Action guide](https://github.com/danieljvdm/effect-agent/blob/main/action/README.md).
 
 ## Leaf examples
 

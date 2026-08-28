@@ -2,8 +2,7 @@
 
 Effect Agent is a TypeScript agent framework built on Effect and Effect AI. It keeps the parts an
 Effect application relies on: typed failures, visible dependencies, Schema boundaries, and scoped
-resources. Flue and Pi informed parts of the agent loop, interaction model, and durability
-specification.
+resources. Flue and Pi informed parts of the agent loop, interaction model, and durability design.
 
 The working product thesis is:
 
@@ -13,14 +12,13 @@ The working product thesis is:
 
 ## Status
 
-| Item          | Current state                                                             |
-| ------------- | ------------------------------------------------------------------------- |
-| Specification | Draft                                                                     |
-| Distribution  | Private internal project                                                  |
-| Effect        | Effect v4, pinned exactly during pre-1.0 development                      |
-| Packages      | `@effect-agent/*`                                                         |
-| Workspace     | Vite+ monorepo with packages in `packages/*` and examples in `examples/*` |
-| Platforms     | Node.js with SQLite and Cloudflare Workers with Durable Objects           |
+| Item         | Current state                                                             |
+| ------------ | ------------------------------------------------------------------------- |
+| Distribution | Private internal project                                                  |
+| Effect       | Effect v4, pinned exactly during pre-1.0 development                      |
+| Packages     | `@effect-agent/*`                                                         |
+| Workspace    | Vite+ monorepo with packages in `packages/*` and examples in `examples/*` |
+| Platforms    | Node.js with SQLite and Cloudflare Workers with Durable Objects           |
 
 The planned build through Phase 7 is implemented. Tests cover the ephemeral interpreter, durable
 Node runtime (`DN`), Cloudflare runtime (`DC`), Tool uncertainty, joined input, attached Subagents,
@@ -45,35 +43,15 @@ Normative words such as **MUST**, **SHOULD**, and **MAY** are used in their usua
 ## Read this first
 
 The documentation site lives in [`docs/`](docs/index.md); run it locally with
-`bun run docs:dev`. The specifications below remain the normative design source.
+`vp run docs:dev`.
 
 1. [Domain glossary](GLOSSARY.md)
 2. [Repository toolchain](docs/TOOLCHAIN.md)
 3. [Instructions for implementation agents](AGENTS.md)
 
-## Detailed specifications
-
-| Area                                                    | Document                                                    |
-| ------------------------------------------------------- | ----------------------------------------------------------- |
-| Authoring, schemas, tools, Layers                       | [Authoring model](docs/spec/authoring.md)                   |
-| Turn loop, events, errors, concurrency                  | [Runtime engine](docs/spec/runtime.md)                      |
-| Effect AI and model provider integration                | [Model providers](docs/spec/providers.md)                   |
-| Sessions, tools, skills, MCP, sandboxes, subagents      | [Capabilities](docs/spec/capabilities.md)                   |
-| Declared delegation, child lifecycle, budgets, recovery | [Subagents](docs/spec/subagents.md)                         |
-| Accepted work and crash recovery                        | [Durability](docs/spec/durability.md)                       |
-| Conversation history, work ledger, and storage adapters | [Persistence](docs/spec/persistence.md)                     |
-| Node and Cloudflare hosts                               | [Deployment](docs/spec/deployment.md)                       |
-| Security, approvals, tenancy, redaction                 | [Security and operations](docs/spec/security-operations.md) |
-| Tests, fault injection, model checking                  | [Verification](docs/spec/testing.md)                        |
-| Versioning and compatibility                            | [Compatibility](docs/spec/compatibility.md)                 |
-| Pull-request work orders                                | [Work orders](docs/spec/pr-work-orders.md)                  |
-| GitHub work-order dispatch and publication              | [Work-order ingress](docs/spec/pr-work-order-ingress.md)    |
-| Durable typed-input delivery at a specified time        | [Scheduling](docs/spec/scheduling.md)                       |
-| Single-pass pull-request review and GitHub channel      | [PR review](docs/spec/pr-review.md)                         |
-
 ## Architecture decisions
 
-The specifications and concept pages record the rationale and invariants for these choices:
+The [concept guides](docs/concepts/effect-native.md) explain these choices:
 
 - build an Effect-native core;
 - use Effect AI Tool, Toolkit, LanguageModel, Prompt, Response, and Model directly;
@@ -148,5 +126,4 @@ claim durable execution after it can demonstrate:
 - [Vite+ Effect/Cloudflare template](https://github.com/danieljvdm/vp-effect-cf-template)
 - [Contributor agent skills](https://github.com/danieljvdm/agent-skills)
 
-Flue and Pi are source material. All normative behavior is restated in the Effect-native
-specifications. Effect and Effect AI are the runtime foundation.
+Flue and Pi are source material. Effect and Effect AI are the runtime foundation.

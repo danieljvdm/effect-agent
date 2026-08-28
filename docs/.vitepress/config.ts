@@ -41,7 +41,7 @@ export default defineConfig({
     nav: [
       { text: "Guide", link: "/guide/getting-started", activeMatch: "/guide/" },
       { text: "Architecture", link: "/concepts/effect-native", activeMatch: "/concepts/" },
-      { text: "Reference", link: "/reference/packages", activeMatch: "/(reference|spec)/" },
+      { text: "Reference", link: "/reference/packages", activeMatch: "/reference/" },
     ],
     sidebar: [
       {
@@ -81,27 +81,6 @@ export default defineConfig({
       {
         text: "Reference",
         items: [{ text: "Package map", link: "/reference/packages" }],
-      },
-      {
-        text: "Specifications",
-        collapsed: true,
-        items: [
-          { text: "Authoring", link: "/spec/authoring" },
-          { text: "Runtime", link: "/spec/runtime" },
-          { text: "Providers", link: "/spec/providers" },
-          { text: "Capabilities", link: "/spec/capabilities" },
-          { text: "Subagents", link: "/spec/subagents" },
-          { text: "Durability", link: "/spec/durability" },
-          { text: "Scheduling", link: "/spec/scheduling" },
-          { text: "Persistence", link: "/spec/persistence" },
-          { text: "Deployment", link: "/spec/deployment" },
-          { text: "Security & operations", link: "/spec/security-operations" },
-          { text: "PR review", link: "/spec/pr-review" },
-          { text: "PR work orders", link: "/spec/pr-work-orders" },
-          { text: "PR work-order ingress", link: "/spec/pr-work-order-ingress" },
-          { text: "Testing", link: "/spec/testing" },
-          { text: "Compatibility", link: "/spec/compatibility" },
-        ],
       },
     ],
     search: {

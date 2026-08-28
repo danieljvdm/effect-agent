@@ -219,8 +219,8 @@ const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 
 /**
- * Deterministic canonical record identity of one parent Tool Call's `SubagentRequested` record
- * (spec/subagents.md §12 step 3). The one-record batch reuses the same string, so batch
+ * Deterministic canonical record identity of one parent Tool Call's `SubagentRequested` record.
+ * The one-record batch reuses the same string, so batch
  * idempotency plus the parent epoch fence make the request append exactly-once-canonical.
  */
 export const subagentRequestedRecordId = (runId: RunId, toolCallId: ToolCallId): RecordId =>
@@ -231,8 +231,8 @@ export const subagentRequestedBatchId = (runId: RunId, toolCallId: ToolCallId): 
   decodeBatchId(`subagent-requested:${runId}:${toolCallId}`);
 
 /**
- * Deterministic canonical record identity of one parent Tool Call's `SubagentStarted` record
- * (spec/subagents.md §12 step 9). Recovery's start-link repair appends the EXACT same record
+ * Deterministic canonical record identity of one parent Tool Call's `SubagentStarted` record.
+ * Recovery's start-link repair appends the EXACT same record
  * under this identity, so a raced repair replays instead of duplicating (SUB-016/SUB-017).
  */
 export const subagentStartedRecordId = (runId: RunId, toolCallId: ToolCallId): RecordId =>
@@ -255,8 +255,8 @@ export const subagentJoinedRecordId = (runId: RunId, toolCallId: ToolCallId): Re
   decodeRecordId(`subagent-joined:${runId}:${toolCallId}`);
 
 /**
- * Deterministic identity of one child Conversation's `SubagentLineageRecorded` record
- * (spec/subagents.md §11). Its own single-record batch reuses the same string so the generic
+ * Deterministic identity of one child Conversation's `SubagentLineageRecorded` record.
+ * Its own single-record batch reuses the same string so the generic
  * `conversation-created:{cid}` batch identity is never contradicted.
  */
 export const subagentLineageRecordId = (conversationId: ConversationId): RecordId =>
@@ -267,7 +267,7 @@ export const subagentLineageBatchId = (conversationId: ConversationId): BatchId 
   decodeBatchId(`subagent-lineage:${conversationId}`);
 
 /**
- * Deterministic intended child Conversation identity (spec/subagents.md §12 step 4, D4): the
+ * Deterministic intended child Conversation identity: the
  * parent Submission and Tool Call pair addresses exactly one child Conversation, so a replayed
  * establishment converges on the one existing child (SUB-016).
  */
@@ -277,7 +277,7 @@ export const childConversationIdFor = (
 ): ConversationId => decodeConversationId(`subagent:${parentSubmissionId}:${toolCallId}`);
 
 /**
- * Deterministic child admission idempotency key (spec/subagents.md §12 step 4, D4): scoped to
+ * Deterministic child admission idempotency key: scoped to
  * the parent Run and Tool Call identity, so duplicate admission attempts resolve through the
  * ledger's idempotency contract to one child Receipt (SUB-016, SUB-031). The ledger key is
  * bounded (256); coordinator-minted Run and Tool Call identities stay far below that bound.

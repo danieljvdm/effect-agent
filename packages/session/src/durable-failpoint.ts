@@ -9,7 +9,7 @@ import { Context, Effect, Layer, Ref, Schema } from "effect";
  * BEFORE boundary here to distinguish a fresh clock from a committed clock in crash tests.
  *
  * The `subagent:*` family covers every durable mutation of the S2 establishment/join protocol
- * (spec/subagents.md §12/§14): reservation, request append, child admission, child readiness,
+ * including reservation, request append, child admission, child readiness,
  * start-link append, sibling per-call settles at the suspension seam, the `waitingForChild`
  * suspension, child abort propagation, the atomic join batch, and both reservation-release
  * transitions.

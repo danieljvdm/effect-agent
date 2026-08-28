@@ -51,7 +51,15 @@ export const loadObservationFile = Effect.fn("PrReviewEval.loadObservationFile")
   path: string,
 ): Effect.fn.Return<ReadonlyArray<EvalObservation>, EvalDataError, FileSystem.FileSystem> {
   const contents = yield* readBoundedFile(path, MAX_OBSERVATION_BYTES, "read observations");
-  return yield* decodeObservationLines(contents);
+  const observations = yield* decodeObservationLines(contents);
+  if (observations.length === 0) {
+    return yield* dataError(
+      "read observations",
+      "Observation file contains no completed trials",
+      path,
+    );
+  }
+  return observations;
 });
 
 export const loadObservationFiles = Effect.fn("PrReviewEval.loadObservationFiles")(function* (

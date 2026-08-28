@@ -69,5 +69,55 @@ start:
 - stores implement fenced, idempotent canonical append;
 - provider SDK objects never become recovery truth.
 
-The [durability specification](../spec/durability) defines the admission, recovery, and Settlement
-contracts.
+## Admission and recovery
+
+Return a Receipt only after ledger admission, Conversation materialization, and readiness are
+durable. Reusing an admission key with the same input returns the same Receipt; a different input
+conflicts. Queue order comes from admission sequence, not wall-clock arrival. Every producer write
+checks its ownership token and epoch atomically, rejecting stale Attempts.
+
+Recovery validates a strongly consistent canonical prefix before repairing ledger state. It
+classifies the last committed boundary instead of replaying the Run:
+
+| Last committed boundary                          | Recovery                                                                             |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| Admission without readiness                      | Finish materialization and readiness.                                                |
+| Input appended without its ledger marker         | Repair the marker without applying input twice.                                      |
+| `RunStarted`                                     | Preserve its original deadline; reject a replacement duration allowance.             |
+| Incomplete model response                        | Retry inference if permitted; duplicate provider charges are possible.               |
+| Complete Tool declaration without preparation    | Reauthorize and resume that batch without another model call.                        |
+| Ordinary Tool prepared without a result          | Reconcile or expose `UnknownToolOutcome`; never infer that invocation did not start. |
+| Canonical Tool result or Durable Step result     | Reuse the recorded result.                                                           |
+| Reserved Settlement                              | Append that exact outcome, then finalize the ledger idempotently.                    |
+| Canonical Settlement without ledger finalization | Finalize from history; do not choose another outcome.                                |
+
+Joined input follows the same rule: a claimed input without a canonical append returns to ready;
+an appended input reattaches to its host Run and settles with it. Approval decisions must be
+canonical before execution resumes. Unknown work releases execution permits but remains an
+accepted obligation requiring an authorized resolution path. Abort does not roll back external
+effects or rewrite a winning Settlement. See [Operations](../guide/operations).
+
+## Attached subagents
+
+A durable child owns a distinct Conversation and Attempt. Under the parent's fence, reserve its
+budget, append `SubagentRequested` with the intended identity and exact binding/input digests,
+then admit using a stable parent-Run/Tool-Call idempotency key. Commit child lineage before
+readiness. Only after its Receipt exists may the parent append `SubagentStarted` and enter
+`waitingForChild`, releasing its worker permit.
+
+Resolve lost admission replies against the authoritative admission owner. `indeterminate` means
+wait, never create a replacement child. Missing exact binding or projection digests fail closed;
+current code cannot silently substitute for the recorded binding.
+
+Join by verifying the child's canonical Settlement, lineage, and digests, then Schema-decode and
+bound its projected result. Append `SubagentJoined` and the parent Tool result atomically before
+idempotently releasing the reservation. A crash can leave budget unavailable until repair, never
+available twice. Child transcripts stay private unless explicitly projected.
+
+Parent abort uses `request-abort-and-join`: persist abort intent for each child and join its actual
+terminal outcome before settling the parent. Unknown child effects remain resolution obligations.
+After the parent's deadline expires, recovery may finish existing child abort/join/accounting
+work, but cannot start a new child, invoke application projectors, run Tools, or continue the model.
+
+The [recovery classifier](https://github.com/danieljvdm/effect-agent/blob/main/packages/session/src/recovery.ts),
+coordinator failpoints, and [adapter certification](../guide/certify-adapters) exercise these boundaries.

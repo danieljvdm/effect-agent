@@ -921,7 +921,7 @@ export const fixtureReconcilerLayer: Layer.Layer<ToolReconciler> = Layer.succeed
 // ---------------------------------------------------------------------------
 
 /**
- * Every fixture Binding, captured with its tool layers (spec/subagents.md §11): the
+ * Every fixture Binding, captured with its tool layers: the
  * Conversation Object resolves each claimed head's stored `(agentId, digests)` to exactly
  * one of these before any code runs (SUB-023).
  */

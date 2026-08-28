@@ -36,7 +36,7 @@ export type ApprovalRecord = typeof ApprovalRecord.Type;
 /**
  * Parent-side view of one Subagent Invocation, keyed by the parent Tool Call: the canonical
  * `SubagentRequested`/`SubagentStarted`/`SubagentJoined` payloads as they become canonical
- * (spec/subagents.md §11). A disposable derived view — the canonical records and the child's
+ * in history. A disposable derived view — the canonical records and the child's
  * own Settlement remain the recovery truth (DUR-015).
  */
 export class SubagentInvocationState extends Schema.Class<SubagentInvocationState>(

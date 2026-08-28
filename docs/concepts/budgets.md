@@ -33,26 +33,26 @@ AgentPolicy.make({
 });
 ```
 
-| Bound                     | What it limits                                       | On exhaustion                     |
-| ------------------------- | ---------------------------------------------------- | --------------------------------- |
-| `maxTurns`                | model requests per Run                               | `onExhaustion` resolves           |
-| `maxToolCalls`            | declared Tool Calls per Run (programmatic included)  | `onExhaustion` resolves           |
-| `maxDuration`             | logical-Run wall clock, including durable suspension | always fails typed                |
-| `tokenBudget`             | input + output tokens per Run                        | `onExhaustion` resolves (RUN-025) |
-| `completionReserveTokens` | capacity withheld from research for delivery         | enters finalization before spend  |
-| `costBudgetMicrousd`      | estimated cost per Run (needs a cost estimator)      | always fails typed                |
-| `repeatedFailureLimit`    | consecutive terminal Tool failures                   | always fails typed                |
-| `toolConcurrency`         | parallel Tool Handlers per batch                     | concurrency gate                  |
+| Bound                     | What it limits                                       | On exhaustion                    |
+| ------------------------- | ---------------------------------------------------- | -------------------------------- |
+| `maxTurns`                | model requests per Run                               | `onExhaustion` resolves          |
+| `maxToolCalls`            | declared Tool Calls per Run (programmatic included)  | `onExhaustion` resolves          |
+| `maxDuration`             | logical-Run wall clock, including durable suspension | always fails typed               |
+| `tokenBudget`             | input + output tokens per Run                        | `onExhaustion` resolves          |
+| `completionReserveTokens` | capacity withheld from research for delivery         | enters finalization before spend |
+| `costBudgetMicrousd`      | estimated cost per Run (needs a cost estimator)      | always fails typed               |
+| `repeatedFailureLimit`    | consecutive terminal Tool failures                   | always fails typed               |
+| `toolConcurrency`         | parallel Tool Handlers per batch                     | concurrency gate                 |
 
 A typed exhaustion failure is `AgentPolicyError` with a `limit` literal naming the exhausted limit.
 In the DN and DC assemblies a Run failed this way settles with that literal preserved as the
-canonical settlement's `policyLimit` under RUN-011. Consumers read the typed dimension instead
+canonical settlement's `policyLimit`. Consumers read the typed dimension instead
 of parsing the failure message.
 
 ## Exhaustion: final answer or failure
 
-`onExhaustion` selects the resolution for Turn and Tool Call limits under RUN-018 and RUN-019. It
-also applies once to the token budget under RUN-025.
+`onExhaustion` selects the resolution for Turn and Tool Call limits. It
+also applies once to the token budget.
 
 **`"final-answer"` (the default).** The Run gets one constrained opportunity to deliver:
 
@@ -64,14 +64,14 @@ also applies once to the token budget under RUN-025.
 3. Turn exhaustion admits exactly **one grace Turn** past `maxTurns`, under the same constraint.
    A second grace is structurally impossible.
 4. The Run settles _completed_ with `finishReason: "budget-exhausted"`, never a plain
-   `"model-stop"`. RUN-011 does not allow budget exhaustion to look like ordinary success. In the
+   `"model-stop"`. Budget exhaustion must remain distinguishable from ordinary success. In the
    DN and DC assemblies, the canonical `SubmissionSettled` record carries the same marker plus the
    typed `exhausted` dimension (`tokens`, `tool-calls`, or `turns`), so a rebuilt projection
    distinguishes a truncated answer from an ordinary one and names the exhausted limit without
    the live event stream or message parsing.
 5. A model that declares a Tool Call under the constraint fails the Run typed
-   with `ModelProtocolError` under RUN-020, except for the singleton Definition-owned completion
-   Tool in RUN-032. That Tool delivers and settles immediately without another summary turn.
+   with `ModelProtocolError`, except for the singleton Definition-owned completion
+   Tool. That Tool delivers and settles immediately without another summary turn.
 
 Synthetic rejections are exempt from `repeatedFailureLimit` folding: no handler ran, so a
 rejected four-call batch cannot trip a limit of three.
@@ -83,11 +83,11 @@ this mode for every tool-free shard. Its GitHub channel runs at most four shards
 wave either returns schema-valid reports for every shard or publishes no findings.
 
 Duration, cost, and repeated-failure limits always fail the Run. Token exhaustion allows only one
-constrained final answer under RUN-025, so it cannot loop or spend without a bound.
+constrained final answer, so it cannot loop or spend without a bound.
 
 ## Per-Run allowances
 
-A caller can tighten the countable bounds per Run under RUN-021. It cannot widen them.
+A caller can tighten the countable bounds per Run. It cannot widen them.
 
 ```ts
 AgentRuntime.run(agent, input, { toolCallAllowance: 8, turnAllowance: 4 });
@@ -129,7 +129,7 @@ _after the fact_; it is deliberately not a reservation service.
 
 ## Delegation budgets
 
-A delegated child answers to three ceilings at once (spec/subagents.md §7):
+A delegated child answers to three ceilings at once:
 
 ```text
 model-granted allowance ≤ delegation reservation slice ≤ child Definition policy
@@ -149,12 +149,12 @@ model-granted allowance ≤ delegation reservation slice ≤ child Definition po
 
 Two delegation options control this behavior:
 
-**`failureMode: "return"`.** SUB-033 converts each expected child failure, including the declared
+**`failureMode: "return"`.** This converts each expected child failure, including the declared
 failure and the framework failure family, into model-visible result data. One failed scout does
 not fail the parent. The engine-owned suspension signal and durability error always stay in the
 error channel, so durable children still suspend correctly.
 
-**`toolCallAllowance: { default, fromParameters }`.** Under SUB-034, each child runs with a
+**`toolCallAllowance: { default, fromParameters }`.** Each child runs with a
 per-invocation allowance below its Definition ceiling. The orchestrator may grant more in a new
 invocation.
 
@@ -172,7 +172,7 @@ marker still travels durably via the child Settlement).
 
 ## Programmatic calls and Code Mode
 
-Code Mode's generated programs consume the same Run budgets mid-pass (RUN-017): every inner Tool
+Code Mode's generated programs consume the same Run budgets mid-pass: every inner Tool
 call checks and reserves against `maxToolCalls` before its handler runs, exhaustion becomes that
 _call's_ outcome rather than a Run failure, and the Turn boundary re-enforces the combined
 declared-plus-programmatic count.
@@ -183,7 +183,7 @@ declared-plus-programmatic count.
   one Tool Call and each batch one Turn, so `maxTurns` usually binds before `maxToolCalls`; raise
   them together, and let the soft landing convert the residual tail into a partial cited answer
   instead of provisioning for the worst case.
-- **Treat the token budget as the spend ceiling.** RUN-025 permits one constrained final answer.
+- **Treat the token budget as the spend ceiling.** The runtime permits one constrained final answer.
   Set `tokenBudget` high enough to cover that call, but keep it finite.
 - **Delegate instead of raising.** If independent work needs 100 Tool Calls, five scouts with 20
   calls each may fit better. Give each invocation its own allowance and grant extensions only
@@ -193,6 +193,4 @@ declared-plus-programmatic count.
 
 - [Agent definitions guide](/guide/agents) explains policy declarations.
 - [Run and stream guide](/guide/run-agents) covers finish reasons and Run options.
-- [Runtime specification](/spec/runtime) defines RUN-011 and RUN-016 through RUN-021.
-- [Subagent specification](/spec/subagents) defines hierarchical budgets in section 7 and
-  SUB-033/034.
+- [Persistence and durability](/concepts/durability#attached-subagents) covers child recovery and joins.

@@ -82,6 +82,24 @@ Good Agent tests cover more than final text:
 - interruption and every resource finalizer;
 - exact inferred `Effect<A, E, R>` types.
 
+## Review quality evaluation
+
+The private `examples/pr-review-eval` bench replays saved requests and scores findings against
+source-adjudicated defects. Public fixtures are examples, not an unbiased quality estimate. Live
+runs require `EFFECT_AGENT_LIVE=1` and credentials; ordinary tests make no provider calls.
+
+Judge trial one separately. Detection counts an expected blocker found at any severity; blocking
+recall requires `blocking` severity. Blocking precision penalizes invalid or overstated findings.
+Later trials expose instability and cannot repair a first-trial miss. Named judgments bind to the
+exact observation digest; unjudged or unclear findings leave the relevant precision unresolved.
+New valid findings require corpus repair, not invented matches to existing defects.
+
+Run `vp run pr-review-eval -- --help` from the repository root. Validate case selection before
+creating output. Each completed trial is appended and synchronized to a new, exclusive file;
+interruption keeps completed rows and never retries provider calls. Reports require the intended
+`--trials` and `--case` selection and reject empty files, incomplete grids, and malformed trailing
+lines. Keep private cases and raw results in the example's ignored `data/` and `results/` folders.
+
 ## Test storage contracts, not implementations
 
 Memory and SQLite stores run shared contract cases for materialization, idempotent append, tail

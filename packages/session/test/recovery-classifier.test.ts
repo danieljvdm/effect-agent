@@ -686,7 +686,7 @@ describe("recovery classifier P5 joined-input rows (plan §4.3, DUR-016)", () =>
 });
 
 /**
- * The S2 durable-Subagent rows: one deterministic classification per spec/subagents.md §13 row
+ * Durable child recovery: one deterministic classification per persisted boundary
  * (plan §4.2), against the establishment failpoints of plan §4.4.
  */
 describe("recovery classifier S2 subagent establishment rows (spec §13)", () => {

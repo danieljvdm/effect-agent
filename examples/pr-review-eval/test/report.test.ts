@@ -8,11 +8,15 @@ import {
 } from "@effect-agent/pr-review";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { DateTime, Effect, FileSystem, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Schema, Stream } from "effect";
 
 import {
   CURRENT_RUNNER_VERSION,
   digestObservationSet,
+  EvalCase,
+  EvalDefectId,
+  EvalEvidence,
+  EvalExpectedDefect,
   EvalFindingJudgment,
   EvalInputDigest,
   EvalJudgmentSet,
@@ -22,14 +26,13 @@ import {
   EvalTrialFailed,
   EvalTrialSucceeded,
   EvalVariantConfiguration,
+  EvalSuite,
   loadJudgmentSet,
   loadObservationFiles,
   loadEvalSuite,
   makeQualityReport,
-  preflightObservationOutput,
   writeObservations,
   writeQualityReport,
-  type EvalCase,
 } from "../src/index.ts";
 
 const fixturePath = fileURLToPath(new URL("../fixtures/smoke-suite.json", import.meta.url));
@@ -130,12 +133,35 @@ const judgmentSet = (
 describe("PR-review eval quality report", () => {
   it.effect("pins first-pass quality while keeping later trials diagnostic", () =>
     Effect.gen(function* () {
-      const suite = yield* loadEvalSuite(fixturePath);
-      const known = suite.cases.find((evalCase) => evalCase.kind === "known-defects");
-      const clean = suite.cases.find((evalCase) => evalCase.kind === "clean-control");
-      expect(known).toBeDefined();
+      const loadedSuite = yield* loadEvalSuite(fixturePath);
+      const loadedKnown = loadedSuite.cases.find((evalCase) => evalCase.kind === "known-defects");
+      const clean = loadedSuite.cases.find((evalCase) => evalCase.kind === "clean-control");
+      expect(loadedKnown).toBeDefined();
       expect(clean).toBeDefined();
-      if (known === undefined || clean === undefined) return;
+      if (loadedKnown === undefined || clean === undefined) return;
+      const importantDefectId = Schema.decodeSync(EvalDefectId)("important-follow-up");
+      const known = EvalCase.make({
+        ...loadedKnown,
+        expectedDefects: [
+          ...loadedKnown.expectedDefects,
+          EvalExpectedDefect.make({
+            id: importantDefectId,
+            severity: "important",
+            invariant: "A secondary issue is actionable but does not block merge.",
+            evidence: [
+              EvalEvidence.make({
+                path: "src/read.ts",
+                line: 1,
+                description: "Synthetic evidence for severity calibration.",
+              }),
+            ],
+          }),
+        ],
+      });
+      const suite = EvalSuite.make({
+        ...loadedSuite,
+        cases: loadedSuite.cases.map((evalCase) => (evalCase.id === known.id ? known : evalCase)),
+      });
       const defectId = known.expectedDefects[0]?.id;
       expect(defectId).toBeDefined();
       if (defectId === undefined) return;
@@ -143,11 +169,12 @@ describe("PR-review eval quality report", () => {
       const current = configuration("current");
       const candidate = configuration("candidate");
       const currentFirstUnjudged = finding("Unjudged non-blocker", "important");
-      const currentFirstInvalid = finding("Speculative cleanup", "nit");
+      const currentFirstInvalid = finding("Speculative cleanup");
       const repeatedBlocker = finding("Optional value is dereferenced");
       const candidateBlocker = finding("Missing undefined guard");
+      const candidateOverstated = finding("Important issue promoted to blocker");
       const candidateNovel = finding("Another valid regression", "important");
-      const candidateUnclear = finding("Ambiguous edge case", "nit");
+      const candidateUnclear = finding("Ambiguous edge case");
 
       const observations = [
         observation(known, current, 1, succeeded([currentFirstUnjudged, currentFirstInvalid], 5)),
@@ -163,7 +190,7 @@ describe("PR-review eval quality report", () => {
           known,
           candidate,
           1,
-          succeeded([candidateBlocker, candidateNovel, candidateUnclear], 7),
+          succeeded([candidateBlocker, candidateOverstated, candidateNovel, candidateUnclear], 7),
         ),
         observation(known, candidate, 2, succeeded([candidateBlocker], 7)),
         observation(
@@ -180,12 +207,13 @@ describe("PR-review eval quality report", () => {
         judgment(known, current, 2, 0, "matches-expected", [defectId]),
         judgment(known, current, 2, 1, "matches-expected", [defectId]),
         judgment(known, candidate, 1, 0, "matches-expected", [defectId]),
-        judgment(known, candidate, 1, 1, "new-valid"),
-        judgment(known, candidate, 1, 2, "unclear"),
+        judgment(known, candidate, 1, 1, "matches-expected", [importantDefectId]),
+        judgment(known, candidate, 1, 2, "new-valid"),
+        judgment(known, candidate, 1, 3, "unclear"),
         judgment(known, candidate, 2, 0, "matches-expected", [defectId]),
       ]);
 
-      const report = yield* makeQualityReport(suite, observations, judgments);
+      const report = yield* makeQualityReport(suite, observations, 2, judgments);
       expect(report.variants).toHaveLength(2);
       const currentReport = report.variants.find(
         (variant) => variant.configuration.id === "current",
@@ -201,6 +229,11 @@ describe("PR-review eval quality report", () => {
         numerator: 0,
         denominator: 1,
         status: "measured",
+      });
+      expect(currentReport.blockerDetection).toMatchObject({
+        numerator: 0,
+        denominator: 1,
+        status: "unresolved",
       });
       expect(currentReport.blockerCases).toMatchObject({
         complete: 0,
@@ -224,6 +257,12 @@ describe("PR-review eval quality report", () => {
         invalid: 1,
         unjudged: 1,
       });
+      expect(currentReport.firstTrialBlockingFindings).toMatchObject({
+        aligned: 0,
+        overstated: 1,
+        unresolved: 0,
+        precision: { numerator: 0, denominator: 1, status: "measured" },
+      });
       expect(currentReport.cleanControls).toMatchObject({ passed: 1, total: 1 });
       expect(currentReport.resources).toMatchObject({
         attemptedTrials: 4,
@@ -245,14 +284,25 @@ describe("PR-review eval quality report", () => {
         denominator: 1,
         status: "measured",
       });
+      expect(candidateReport.blockerDetection).toMatchObject({
+        numerator: 1,
+        denominator: 1,
+        status: "measured",
+      });
       expect(candidateReport.blockerCases.complete).toBe(1);
       expect(candidateReport.cleanControls).toMatchObject({ passed: 0, total: 1 });
       expect(candidateReport.firstTrialFindings.precision.status).toBe("unresolved");
       expect(candidateReport.firstTrialFindings).toMatchObject({
-        valid: 2,
+        valid: 3,
         invalid: 0,
         unclear: 1,
         unjudged: 0,
+      });
+      expect(candidateReport.firstTrialBlockingFindings).toMatchObject({
+        aligned: 1,
+        overstated: 1,
+        unresolved: 1,
+        precision: { numerator: 1, denominator: 2, status: "unresolved" },
       });
       expect(candidateReport.firstTrialFailures).toBe(1);
       expect(candidateReport.resources).toMatchObject({
@@ -283,6 +333,50 @@ describe("PR-review eval quality report", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("separates blocker detection from merge-gating severity", () =>
+    Effect.gen(function* () {
+      const suite = yield* loadEvalSuite(fixturePath);
+      const known = suite.cases.find((evalCase) => evalCase.kind === "known-defects");
+      expect(known).toBeDefined();
+      if (known === undefined) return;
+      const defectId = known.expectedDefects[0]?.id;
+      expect(defectId).toBeDefined();
+      if (defectId === undefined) return;
+
+      const variant = configuration("underclassified");
+      const observations = [
+        observation(
+          known,
+          variant,
+          1,
+          succeeded([finding("Detected blocker labeled important", "important")]),
+        ),
+      ];
+      const digest = yield* digestObservationSet(observations);
+      const judgments = judgmentSet(digest, [
+        judgment(known, variant, 1, 0, "matches-expected", [defectId]),
+      ]);
+      const report = yield* makeQualityReport(
+        EvalSuite.make({ ...suite, cases: [known] }),
+        observations,
+        1,
+        judgments,
+      );
+      const variantReport = report.variants[0];
+      expect(variantReport?.blockerDetection).toMatchObject({
+        numerator: 1,
+        denominator: 1,
+        status: "measured",
+      });
+      expect(variantReport?.blockerRecall).toMatchObject({
+        numerator: 0,
+        denominator: 1,
+        status: "measured",
+      });
+      expect(variantReport?.firstTrialBlockingFindings.precision.status).toBe("not-applicable");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("rejects incompatible observation and judgment identities", () =>
     Effect.gen(function* () {
       const suite = yield* loadEvalSuite(fixturePath);
@@ -308,7 +402,7 @@ describe("PR-review eval quality report", () => {
         EvalObservation.make({ ...knownObservation, inputDigest: wrongDigest }),
         cleanObservation,
       ];
-      expect((yield* Effect.result(makeQualityReport(suite, incompatibleCase)))._tag).toBe(
+      expect((yield* Effect.result(makeQualityReport(suite, incompatibleCase, 1)))._tag).toBe(
         "Failure",
       );
 
@@ -319,7 +413,7 @@ describe("PR-review eval quality report", () => {
           variant: configuration("current", "different-model"),
         }),
       ];
-      expect((yield* Effect.result(makeQualityReport(suite, incompatibleConfig)))._tag).toBe(
+      expect((yield* Effect.result(makeQualityReport(suite, incompatibleConfig, 1)))._tag).toBe(
         "Failure",
       );
 
@@ -328,14 +422,24 @@ describe("PR-review eval quality report", () => {
         [],
       );
       expect(
-        (yield* Effect.result(makeQualityReport(suite, observations, staleJudgments)))._tag,
+        (yield* Effect.result(makeQualityReport(suite, observations, 1, staleJudgments)))._tag,
       ).toBe("Failure");
 
-      const report = yield* makeQualityReport(suite, observations, judgmentSet(digest, []));
+      const report = yield* makeQualityReport(suite, observations, 1, judgmentSet(digest, []));
       expect(report.caseSet).toHaveLength(2);
       expect(report.variants).toHaveLength(1);
 
-      const subsetReport = yield* makeQualityReport(suite, [knownObservation]);
+      expect((yield* Effect.result(makeQualityReport(suite, observations, 5)))._tag).toBe(
+        "Failure",
+      );
+      expect((yield* Effect.result(makeQualityReport(suite, [knownObservation], 1)))._tag).toBe(
+        "Failure",
+      );
+      const subsetReport = yield* makeQualityReport(
+        EvalSuite.make({ ...suite, cases: [known] }),
+        [knownObservation],
+        1,
+      );
       expect(subsetReport.caseSet.map((identity) => identity.id)).toEqual([known.id]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -360,11 +464,14 @@ describe("PR-review eval quality report", () => {
       const judgmentsPath = `${directory}/judgments.json`;
       const reportPath = `${directory}/report.json`;
 
-      yield* writeObservations(observationsPath, observations);
+      yield* writeObservations(observationsPath, Stream.fromIterable(observations));
       const candidateObservations = observations.map((entry) =>
         EvalObservation.make({ ...entry, variant: configuration("candidate") }),
       );
-      yield* writeObservations(candidateObservationsPath, candidateObservations);
+      yield* writeObservations(
+        candidateObservationsPath,
+        Stream.fromIterable(candidateObservations),
+      );
       const loadedObservations = yield* loadObservationFiles([
         observationsPath,
         candidateObservationsPath,
@@ -376,9 +483,8 @@ describe("PR-review eval quality report", () => {
         Schema.encodeSync(Schema.fromJsonString(EvalJudgmentSet))(judgments),
       );
       const loadedJudgments = yield* loadJudgmentSet(judgmentsPath);
-      const report = yield* makeQualityReport(suite, loadedObservations, loadedJudgments);
+      const report = yield* makeQualityReport(suite, loadedObservations, 1, loadedJudgments);
       expect(report.variants).toHaveLength(2);
-      yield* preflightObservationOutput(reportPath);
       yield* writeQualityReport(reportPath, report);
 
       expect(
@@ -386,6 +492,15 @@ describe("PR-review eval quality report", () => {
           yield* fs.readFileString(reportPath),
         ),
       ).toEqual(report);
+
+      const emptyPath = `${directory}/interrupted-candidate.jsonl`;
+      yield* fs.writeFileString(emptyPath, "");
+      expect(
+        yield* loadObservationFiles([observationsPath, emptyPath]).pipe(Effect.result),
+      ).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "EvalDataError", operation: "read observations" },
+      });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

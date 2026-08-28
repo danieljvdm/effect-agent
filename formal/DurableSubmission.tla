@@ -1,7 +1,7 @@
 --------------------------- MODULE DurableSubmission ---------------------------
 (***************************************************************************)
 (* Bounded model of the durable Submission protocol of                    *)
-(* `@effect-agent/session` (docs/spec/durability.md): one Conversation    *)
+(* `@effect-agent/session`: one Conversation                            *)
 (* lane, FIFO Submissions, worker Attempts with ownership + producer-     *)
 (* epoch fencing, canonical-history-first recovery classification, tool   *)
 (* uncertainty (DUR-009/DUR-017), approval suspension, joined input       *)

@@ -81,7 +81,7 @@ crash matrices.
   `non-durable` state; there is no real loss to exercise.
 - `@effect-agent/storage-sqlite` reports `recorded-evidence` for the process-kill crash matrix in
   `packages/platform-node/test/crash/crash.test.ts` and `crash-subagents.test.ts`. The tests kill
-  real workers over these Layers under TEST-005.
+  real workers over these Layers.
 - `@effect-agent/storage-cloudflare` reports `recorded-evidence` for the `ctx.abort()` eviction matrix,
   the cross-DO subagent matrix, and the Miniflare restart lane
   (`packages/platform-cloudflare/test/eviction.test.ts`, `subagents-cross-do.test.ts`,

@@ -2092,7 +2092,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                   return Effect.void;
                 }
                 // Every non-waiting sibling has settled; the Run now suspends
-                // `waitingForChild` (spec/subagents.md §12 step 10, SUB-030)
+                // `waitingForChild`
                 // via the AgentApprovalPending-mirroring typed error below.
                 const child = (signal: ToolCallWaiting) => ({
                   toolCallId: signal.toolCallId,
@@ -6271,8 +6271,8 @@ export class ToolCallWaiting extends Schema.TaggedError<ToolCallWaiting>()("Tool
 
 /**
  * The Run suspended `waitingForChild`: at least one durable delegation call
- * of the last Tool batch is waiting on its attached child (spec/subagents.md
- * §12 step 10, SUB-030). Mirrors `AgentApprovalPending`: the engine emits
+ * of the last Tool batch is waiting on its attached child.
+ * Mirrors `AgentApprovalPending`: the engine emits
  * `RunSuspended` and then fails the Run stream with this error; the durable
  * coordinator catches it and ends the Attempt's ownership period without
  * settling. `children` is listed in declaration order, deterministically.
@@ -6327,7 +6327,7 @@ export interface SubagentDurabilityEphemeral {
  */
 export interface SubagentDurabilityDurable {
   readonly mode: "durable";
-  /** Idempotent durable child establishment (spec/subagents.md §12 steps 2-9, SUB-016). */
+  /** Idempotent durable child establishment under the parent ownership fence. */
   readonly establish: (
     request: RunSubagentEstablishRequest,
   ) => Effect.Effect<ChildEstablishStatus, SubagentDurabilityError>;
@@ -6605,7 +6605,7 @@ const DEFECT_MESSAGE_LIMIT = 2_048;
  * `RunFailed { errorTag: "Defect" }` event before the original cause is rethrown, so a viewer
  * always observes a terminal event even when the Run dies.
  *
- * Contract (documented in docs/spec/runtime.md §10):
+ * Event contract:
  *
  * - typed failures and interruptions pass through untouched — the engine already emitted
  *   their terminal event, so nothing is duplicated;

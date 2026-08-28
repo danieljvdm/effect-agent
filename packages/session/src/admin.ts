@@ -88,7 +88,7 @@ export class ExplainedEvidence extends Schema.Class<ExplainedEvidence>(
   recordedSettlementOutcome: Schema.optionalKey(SettlementOutcome),
   /** Prepared ordinary Tool Calls without a canonical outcome (DUR-009). */
   openToolCalls: Schema.Array(OpenToolCallEvidence),
-  /** Delegation Tool Calls with an open parent-side obligation (spec/subagents.md §13). */
+  /** Delegation Tool Calls with an open parent-side obligation. */
   openDelegationCalls: Schema.Array(OpenDelegationCallEvidence),
   /** Canonically requested approvals without a canonical decision. */
   approvalsPending: Schema.Array(PendingApprovalEvidence),
@@ -98,7 +98,7 @@ export class ExplainedEvidence extends Schema.Class<ExplainedEvidence>(
   approvalDecisions: Schema.Array(ApprovalDecisionIntent),
   /** Durable unknown-outcome resolutions recorded against this Submission. */
   unknownResolutions: Schema.Array(UnknownResolutionIntent),
-  /** Parent-side child attachments (spec/subagents.md §12). */
+  /** Parent-side child attachments. */
   childAttachments: Schema.Array(ChildAttachmentSnapshot),
   /** Host-side joined/joining members of this Submission's Run (DUR-016). */
   joins: Schema.Array(JoinSnapshot),
@@ -176,7 +176,7 @@ export const RECOVERY_DECISION_MEANINGS: Readonly<Record<RecoveryDecision["_tag"
   AwaitHostSettlement:
     "The Submission is joined and its host Run is still live: nothing to repair — the input reattaches through the host's resume and the Submission settles with the host.",
   CompleteChildAdmission:
-    "A canonical SubagentRequested exists and the authoritative lookup proved not-admitted: recovery idempotently admits the intended child from the canonical request payload alone (spec/subagents.md §13, SUB-016/SUB-031).",
+    "A canonical SubagentRequested exists and the authoritative lookup proved not-admitted: recovery idempotently admits the intended child from the canonical request payload alone.",
   AwaitChildAdmissionResolution:
     "The authoritative child-admission lookup answered indeterminate (or was not performed): recovery waits and retries the authoritative owner; a second admission never occurs (SUB-031).",
   RepairSubagentStartLink:
@@ -186,13 +186,13 @@ export const RECOVERY_DECISION_MEANINGS: Readonly<Record<RecoveryDecision["_tag"
   AwaitChildSettlement:
     "The parent is durably suspended waitingForChild and a listed child is not yet provably settled: the lane stays dormant, consumes no worker permit, and the child's Settlement wakes it durably (SUB-021/SUB-030).",
   ResumeWaitingParent:
-    "Every relevant child is provably settled but the parent has not joined: recovery replays the idempotent wake so a claiming worker resumes the declared batch and joins each child's canonical Settlement (spec/subagents.md §13).",
+    "Every relevant child is provably settled but the parent has not joined: recovery replays the idempotent wake so a claiming worker resumes the declared batch and joins each child's canonical Settlement.",
   ApplyJoinAccounting:
     "The canonical SubagentJoined record exists but the reservation release is incomplete: recovery replays the accounting decision FROM the canonical record — budget stays unavailable until repair, never available twice (DUR-015).",
   PropagateChildAbort:
-    "Parent abort is canonical while attached children are nonterminal: recovery idempotently issues each child's durable abort command and keeps the parent waiting for the joins — request-abort-and-join is the only close behavior (spec/subagents.md §13.1, SUB-022, DUR-012).",
+    "Parent abort is canonical while attached children are nonterminal: recovery idempotently issues each child's durable abort command and keeps the parent waiting for the joins — request-abort-and-join is the only close behavior.",
   ReleaseOrphanChildReservation:
-    "A child budget reservation can no longer bind a child: recovery freezes the deterministic zero-consumed accounting decision and releases the unused allocation exactly once (spec/subagents.md §13/§14).",
+    "A child budget reservation can no longer bind a child: recovery freezes the deterministic zero-consumed accounting decision and releases the unused allocation exactly once.",
   AwaitParentEstablishment:
     "The Submission is a parent-linked child whose Conversation lacks the canonical lineage record: the child lane defers its own readiness repair — the parent's idempotent establishment completes it, so a child never runs a Turn before its lineage is canonical (P7 §7(a), SUB-016).",
   NoAction: "The Submission is settled; nothing is owed.",

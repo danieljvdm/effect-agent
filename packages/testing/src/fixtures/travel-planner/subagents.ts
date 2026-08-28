@@ -9,9 +9,8 @@ import { AirportCode } from "./definition.ts";
 import { CatalogLifecycle } from "./deterministic-layers.ts";
 
 // ---------------------------------------------------------------------------
-// Destination Researcher: the S1 specialist child Agent
-// (spec/subagents.md §17 "deterministic scripted Travel Planner specialist
-// delegation"). The researcher is a normal Agent with one deterministic
+// Destination Researcher: the S1 specialist child Agent.
+// The researcher is a normal Agent with one deterministic
 // travel-service Tool; it never becomes a second child loop (SUB-001/003).
 // ---------------------------------------------------------------------------
 
@@ -159,7 +158,7 @@ export const DestinationResearchSupportLayer = Layer.mergeAll(
 );
 
 // ---------------------------------------------------------------------------
-// Delegation Definition (spec/subagents.md §4): the coordinator sees exactly
+// Delegation Definition: the coordinator sees exactly
 // one Effect AI Tool with explicit input/result projections and finite bounds.
 // ---------------------------------------------------------------------------
 
@@ -189,7 +188,7 @@ export class DestinationResearchFailed extends Schema.TaggedError<DestinationRes
  * this gate before the handler reserves budget or spawns, so tests can order
  * concurrent delegation preflights without sleeps. It also keeps the
  * projection's construction requirements honestly visible in the handler
- * Layer's `R` (spec/subagents.md §4.1). The open Layer never waits.
+ * Layer's `R`. The open Layer never waits.
  */
 export class ResearchDispatchGate extends Context.Service<
   ResearchDispatchGate,

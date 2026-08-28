@@ -80,7 +80,7 @@ observation interface, not callback middleware: its closed `Effect<void>` return
 has no typed failure channel, and cannot change a Tool result. Observer and reporter defects are
 isolated. Delivery runs inline under the existing Tool permit, so it consumes time and remains
 externally interruptible. The observer must not reenter the engine. Its live Causes never enter
-events, canonical records, or automatic telemetry; see [Tool failure observation](../spec/runtime#tool-failure-observation).
+events, canonical records, or automatic telemetry; see [Tool failure observation](../guide/run-agents#observe-recovered-tool-failures).
 
 ## Bounded concurrency
 

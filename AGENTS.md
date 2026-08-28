@@ -47,17 +47,16 @@ Before editing code:
 1. Read `README.md`.
 2. Read `GLOSSARY.md` when changing domain concepts or public terminology.
 3. Read `docs/TOOLCHAIN.md`.
-4. Read the specification documents for the modules in scope (`docs/spec/`).
+4. Read the relevant guide, API comments, and neighboring tests for the modules in scope.
 5. Read `node_modules/effect/AGENTS.md` before writing Effect code (the canonical Effect
    guidance; `.agents/skills` carries the focused task skills).
 6. Read `.agents/skills/build-effect-clis/SKILL.md` before creating or changing repository
    scripts.
 7. Inspect neighboring package tests before introducing a new pattern.
 
-Architecture is encoded in the docs site (`docs/spec/` and `docs/concepts/`)
-and enforced by tests; there is no separate decision register or ADR log. Do not create planning
-documents, decision registers, ADRs, roadmaps, or evidence logs — record semantics in the
-specification pages and rationale in the pull request.
+Keep user-facing behavior in existing guides, implementation contracts beside the code, and
+regression evidence in tests. Explain change rationale in the pull request. Do not create separate
+specifications, planning documents, decision registers, ADRs, roadmaps, or evidence logs.
 
 ## Non-negotiable architecture rules
 
@@ -114,7 +113,7 @@ packages.
   `bunx @danieljvdm/dev-kit@latest skills add <name>`.
 - Contributor agent skills are repository tooling. They are not runtime Skill definitions and
   must not be imported by `@effect-agent/*`.
-- Before handoff, run `bun run ready`.
+- Before handoff, run `vp run ready`.
 
 ## Change discipline
 
@@ -122,9 +121,9 @@ packages.
 - Add type tests for inferred `E` and `R` whenever Agent or Effect AI composition changes.
 - Add deterministic tests for every new state transition.
 - Add failpoints before and after every new durable mutation.
-- Update the requirement's specification (`docs/spec/`) when semantics change.
-- Record rejected alternatives in the relevant specification section or the pull request when a
-  future agent could reasonably re-propose them.
+- Update existing guides or API comments when a change affects their documented behavior.
+- Explain rejected alternatives in the pull request when a future agent could reasonably
+  re-propose them.
 - Do not silently widen errors to `unknown`, `Error`, or `any`.
 - Do not use type assertions to cross a schema boundary.
 - Do not build persistence migration tooling during private development. Incompatible development
@@ -139,7 +138,7 @@ Parallel agents must own disjoint packages or documents. Shared domain schemas, 
 journal records, and public exports require one designated integrator. Before merging parallel
 branches, run:
 
-1. `bun run ready`;
+1. `vp run ready`;
 2. adapter contract suites;
 3. generated schema fixture checks;
 4. relevant crash/fault tests.

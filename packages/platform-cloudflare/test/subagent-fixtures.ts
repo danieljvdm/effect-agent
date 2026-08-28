@@ -335,7 +335,7 @@ const mapChildFailure = (failure: { readonly _tag: string }) =>
 /**
  * The three resolvable worker Bindings of the WP4 fixture, registered under EXACTLY the
  * digest strings the tests submit with (`TEST_DIGESTS`) and the delegation declares
- * (`SUBAGENT_CHILD_DIGEST_STRINGS`) — the spec/subagents.md §11 host obligation. Runs once
+ * (`SUBAGENT_CHILD_DIGEST_STRINGS`). Runs once
  * per Object incarnation during Layer construction; every observable counter lives in the
  * module-level supplier log, never in the Binding values.
  */

@@ -56,7 +56,7 @@ import {
 } from "./harness.ts";
 
 /**
- * S2 durable attached Subagents — process-kill crash matrix (spec/subagents.md §14, plan §4.4).
+ * S2 durable attached Subagents — process-kill crash matrix.
  * Every row spawns `worker-entry.ts` as a REAL child process over a temp SQLite file, kills it
  * at an armed coordinator/storage failpoint (or SIGKILLs it while blocked mid-Attempt), restarts
  * a host against the same file, and asserts the required durable outcome. The scripted child

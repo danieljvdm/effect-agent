@@ -211,11 +211,71 @@ is a manual runbook, not an executed claim:
    recovery ladder).
 5. Run `verifyEncoded` and `obligationsEncoded` before reopening admission.
 
+## Authorization and isolation
+
+Hosts authenticate external callers before admission and preserve tenant scope in storage,
+authorization, and telemetry. A Layer supplies a capability; it does not authorize its use.
+Recheck policy at action time, including after durable suspension, and audit administrative
+mutations with their author and reason. Approval is bound to the exact action and expires; parent
+approval never authorizes a child's later actions.
+
+Delegation grants are immutable ceilings. Each child action must satisfy current policy, its
+grant, target requirements, and normalized resource scope. The model supplies decoded task
+parameters, not bindings, identities, secrets, or policy. Missing authorization dependencies deny
+the action. Child output and artifacts remain untrusted, bounded, Schema-validated input.
+
+Keep secrets as handles and redact diagnostic data before persistence or export. Raw Tool Causes
+belong only to an explicitly installed trusted local observer. Generated programs need an isolated
+executor with no ambient authority; host Tools remain behind the validated broker. Local sandbox
+processes are unisolated. Browser exact-host URL checks are not connection-time network isolation;
+use a supported containment policy for hostile content. Enforce read-only SQL with database
+permissions and host-owned tenant scope, not source-text inspection.
+
+## Scheduled input
+
+`Scheduling` delivers encoded Agent input through ordinary durable admission. It owns a due
+occurrence until it records a Receipt or a proven permanent refusal; it does not promise one Run
+per firing. Hosts provide an explicit `ScheduleAuthorizer` and owner-scoped management.
+`Scheduling` exposes only management and bounded status projections, excluding input, digests,
+storage versions, and pending admission envelopes. Keep `ScheduleDriver` and `ScheduleStore` in
+the privileged host; never provide them to management callers or model Tools.
+
+Preparation atomically freezes the authorized envelope and advances the cursor. Recover pending
+delivery before preparing another occurrence. A lost reply retries the exact envelope and
+idempotency key, never current configuration or a newly calculated time. Only a matching
+occurrence may clear pending state. Transient or ambiguous failure remains pending; a conclusive
+refusal requires proof that admission did not occur and the unchanged request cannot succeed.
+
+Recurring downtime coalesces to the latest due firing instead of replaying missed firings.
+Named-zone cron selection follows the forward sequence from the stored cursor, including spring
+gaps and the first fall-fold occurrence. Reverse traversal is not its inverse across offset changes.
+Pause stops new preparation; cancel is irreversible and stops future preparation. Neither drops
+pending delivery nor aborts accepted work. Revocation blocks future preparation, but recovery must
+finish already-authorized envelopes. Resume from paused skips missed recurring times; resuming an
+active Schedule is a no-op after authorization and revision checks. Resume cannot resurrect a
+consumed one-shot; update is required. Creation replay uses its original fingerprint even after edits.
+
+Owner quotas count operational work, including pending delivery and active or paused cursors.
+Completed or cancelled records without pending work retain replay evidence without consuming
+capacity. Reactivation checks capacity atomically; Schedule IDs and their creation evidence are
+not recycled. Due queries page by indexed key, and one failed or corrupt record cannot block later
+records. A query-wide storage failure still fails the sweep. Retry failed sweeps after the recovery
+poll, with no in-memory exclusion list or busy loop; interruption preserves pending work.
+
+Node runs one Scope-owned driver with indexed polling to repair lost wake hints. Cloudflare stores
+Schedule changes and alarm updates in one transaction, pre-arms recovery before remote admission,
+and fences acknowledgements by alarm generation. A sweep with failures re-arms recovery after its
+transitions, because they may have replaced the earlier wake. A cancelled or paused Schedule still needs a wake
+while delivery is pending. Storage failure that prevents a recovery alarm requires restored storage
+and another wake or operator intervention; pending work is never silently marked complete.
+
+See the compiling [Node](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-node/test/fixtures/scheduling-example.ts)
+and [Cloudflare](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/examples/scheduling.ts)
+examples for host setup and typed registration.
+
 ## Next steps
 
 - [Persistence and durability](../concepts/durability) defines the contract these operations
   administer.
 - [Certify storage adapters](./certify-adapters) explains how a third-party adapter proves the same
   invariants.
-- [Security and operations specification](../spec/security-operations) contains the normative
-  authorization and audit requirements.

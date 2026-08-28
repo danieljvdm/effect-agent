@@ -439,7 +439,7 @@ export interface RunSubagentDigests {
 
 /**
  * Establishment request assembled by a delegation Tool handler for the
- * durable coordinator (spec/subagents.md §12 steps 2-9), expressed strictly
+ * durable coordinator, expressed strictly
  * in core/engine vocabulary. The coordinator derives everything else
  * deterministically: reservation identity from `(parentRunId, toolCallId)`,
  * child Conversation/Submission identity and the admission idempotency key
@@ -536,8 +536,8 @@ export interface RunSubagentJoinRequest {
  * coordinator (S2 plan §2 option c) and consumed by the delegation Tool
  * handler through the engine-provided per-batch `SubagentDurability` service.
  *
- * `establish` performs (or replays) the recoverable establishment protocol of
- * spec/subagents.md §12 under the parent's ownership fence and reports where
+ * `establish` performs (or replays) child establishment
+ * under the parent's ownership fence and reports where
  * the one child stands; `join` atomically commits the verified settlement
  * join. When the hook is absent the engine provides the explicit
  * ephemeral-mode service and the S1 in-process spawn semantics apply honestly

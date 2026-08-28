@@ -1,5 +1,5 @@
 import { type ReviewOutcome, type ReviewRequest } from "@effect-agent/pr-review";
-import { Clock, DateTime, Effect, Result, Schema } from "effect";
+import { Clock, DateTime, Effect, Result, Schema, Stream } from "effect";
 
 import {
   CURRENT_RUNNER_VERSION,
@@ -9,13 +9,14 @@ import {
   EvalObservation,
   type EvalReviewerFailure,
   type EvalSuite,
+  EvalTrialCount,
   EvalTrialFailed,
   EvalTrialSucceeded,
   type EvalVariantConfiguration,
 } from "./contracts.ts";
 
 const RunnerOptions = Schema.Struct({
-  trials: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 20 })),
+  trials: EvalTrialCount,
   concurrency: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4 })),
   caseIds: Schema.Array(EvalCaseId).check(Schema.isMaxLength(50)),
 });
@@ -41,7 +42,7 @@ interface EvalJob<Requirements> {
 
 const decodeRunnerOptions = Schema.decodeUnknownEffect(RunnerOptions);
 
-const selectCases = (
+export const selectEvalCases = (
   suite: EvalSuite,
   caseIds: ReadonlyArray<EvalCaseId>,
 ): Effect.Effect<ReadonlyArray<EvalCase>, EvalConfigurationError> => {
@@ -114,7 +115,7 @@ export const runEvalSuite = Effect.fn("PrReviewEval.runEvalSuite")(function* <Re
   if (new Set(variantIds).size !== variantIds.length) {
     return yield* EvalConfigurationError.make({ message: "Eval variant IDs must be unique" });
   }
-  const selectedCases = yield* selectCases(suite, decodedOptions.caseIds);
+  const selectedCases = yield* selectEvalCases(suite, decodedOptions.caseIds);
   const jobs: Array<EvalJob<Requirements>> = [];
   for (const evalCase of selectedCases) {
     for (const variant of variants) {
@@ -123,5 +124,7 @@ export const runEvalSuite = Effect.fn("PrReviewEval.runEvalSuite")(function* <Re
       }
     }
   }
-  return yield* Effect.forEach(jobs, runJob, { concurrency: decodedOptions.concurrency });
-});
+  return Stream.fromIterable(jobs).pipe(
+    Stream.mapEffect(runJob, { concurrency: decodedOptions.concurrency, unordered: true }),
+  );
+}, Stream.unwrap);

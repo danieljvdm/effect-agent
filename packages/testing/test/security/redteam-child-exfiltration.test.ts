@@ -35,9 +35,8 @@ import {
 } from "../../src/index.ts";
 
 // ---------------------------------------------------------------------------
-// Red-team suite: CHILD EXFILTRATION THROUGH THE DURABLE JOIN (P7 WP5, plan §4;
-// spec/subagents.md §11/§15, S2 D5; testing.md §10 "child failure, progress,
-// and provenance payloads containing secret-bearing values"; SEC-008/SUB-015).
+// Red-team suite: child exfiltration through the durable join.
+// Failure, progress, and provenance payloads may contain secret-bearing values.
 //
 // The threat: a Subagent child holds secrets in its OWN Conversation (fetched
 // document bodies, internal working notes) and, if compromised or
