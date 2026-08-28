@@ -127,7 +127,7 @@ export interface CloudflareDurableRuntimeOptions {
    */
   readonly toolReconciler?: Layer.Layer<ToolReconciler> | undefined;
   /**
-   * Registered worker Bindings resolved at durable claim time (S2, spec/subagents.md §11):
+   * Registered worker Bindings resolved at durable claim time:
    * build each with `DurableWorkerBinding.make(binding, digests)`. The callback receives the live
    * Object context and derived identities and is evaluated once per incarnation during Layer
    * construction. Defaults to the empty registration (every resolved claim fails closed).

@@ -1,6 +1,6 @@
 # Glossary
 
-Use these terms consistently in code, specifications, telemetry, and user documentation.
+Use these terms consistently in code, telemetry, and user documentation.
 
 ## Product concepts
 
@@ -156,10 +156,9 @@ Tool Call settles. Detachment is a separate future capability.
 
 **Work Order**
 A head-bound, path-scoped instruction on a pull request, admitted only by explicit human
-dispatch. An implementer proposes a patch; the host validates and publishes. See
-`docs/spec/pr-work-orders.md`. GitHub dispatch, persistent admission, isolated
-publication, and thread presentation are implemented by the separately named
-`work-order-action/` workflow specified in `docs/spec/pr-work-order-ingress.md`.
+dispatch. An implementer proposes a patch; the host validates and publishes. The separate
+[work-order Action](work-order-action/README.md) owns GitHub dispatch, persistent admission,
+isolated publication, and thread presentation.
 
 **Sandbox**  
 A scoped capability set for filesystem, process, and optional network operations. It is not a

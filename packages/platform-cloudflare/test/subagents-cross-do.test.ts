@@ -62,8 +62,7 @@ import {
 } from "./subagent-harness.ts";
 
 /**
- * WP4 — the cross-Object subagent matrix (plan §4 WP4; spec/subagents.md §14; S2-EVIDENCE's
- * deferred `DC` rows). Every `subagent:*` coordinator failpoint re-runs with the parent and
+ * Cross-Object subagent crash matrix. Every `subagent:*` coordinator failpoint re-runs with the parent and
  * child Conversations in DIFFERENT Durable Objects (the identity rule maps each Conversation
  * to its own Object), the kill lever is the platform's real failure mode (`ctx.abort()`), and
  * convergence is proven by alarm delivery alone — `drainDelegationUntil` fires only the two

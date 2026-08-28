@@ -136,7 +136,7 @@ export interface NodeDurableRuntimeOptions {
    */
   readonly toolReconciler?: Layer.Layer<ToolReconciler> | undefined;
   /**
-   * Registered worker Bindings resolved at durable claim time (S2, spec/subagents.md §11):
+   * Registered worker Bindings resolved at durable claim time:
    * build each with `DurableWorkerBinding.make(binding, digests)` so
    * `NodeDurableHost.runResolvedWorkers` / `DurableAgentRuntime.runResolvedWorker` can serve
    * parent and child lanes from one pool with exact-digest resolution (SUB-023). Defaults to

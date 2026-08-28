@@ -580,8 +580,8 @@ export const phase6ResearcherModel = promptAwareModel("destination-researcher-p6
 // ---------------------------------------------------------------------------
 
 /**
- * Every phase-6 Travel Planner worker Binding, captured with its requirement Contexts
- * (spec/subagents.md §11): the P4 planner and its gated twin, the P5 booking agent over the
+ * Every phase-6 Travel Planner worker Binding, captured with its requirement Contexts:
+ * the P4 planner and its gated twin, the P5 booking agent over the
  * shared supplier desk, and the S2 coordinator/researcher pair wired through the durable
  * delegation Layer. A Conversation Object registers these via its `bindings` option; the
  * capture runs once per incarnation, and everything stateful the assertions rely on (desk,

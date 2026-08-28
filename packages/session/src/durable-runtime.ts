@@ -373,7 +373,7 @@ const CHILD_DELEGATION_DEPTH: DelegationDepth = Schema.decodeSync(DelegationDept
 
 /** Canonical `AbortRequested.author` of every propagated parent-abort command (spec §13.1). */
 const SUBAGENT_ABORT_AUTHOR = "subagent-parent-abort";
-/** Deterministic propagated-abort reason: replaying the identical command is the repair (DUR-012). */
+/** Keep this exact reason, including its historical citation: abort repair replays the same command. */
 const SUBAGENT_ABORT_REASON =
   "The parent Submission was aborted; request-abort-and-join propagates the durable abort intent to every attached child (spec/subagents.md 13.1)";
 
@@ -683,7 +683,7 @@ type AttemptOutcome =
  * What one `runModel` pass produced: a terminal `AttemptOutcome` for terminalization, a
  * durable approval suspension (plan §2.6) — the unresolved call's canonical request is already
  * appended, NO settlement is owed by this pass, and `runAttempt` transitions the ledger — or a
- * durable `waitingForChild` suspension (spec/subagents.md §12 step 10): every non-waiting
+ * durable `waitingForChild` suspension: every non-waiting
  * sibling result is already committed as a per-call late-settle batch and `runAttempt` executes
  * `ledger.suspend(WaitingForChild)`.
  */
@@ -4413,8 +4413,8 @@ const make = Effect.gen(function* () {
       };
 
       /**
-       * Durable-Subagent seam (spec/subagents.md §12, plan §1.2/§1.6): `establish` performs —
-       * or replays — the ten-step idempotent get-or-create establishment protocol under the
+       * Durable child establishment: `establish` performs or replays
+       * the idempotent get-or-create establishment protocol under the
        * parent's ownership fence and reports where the one child stands; `join` appends the
        * atomic `[SubagentJoined, ToolCallSettled]` settlement batch (SUB-019) and applies the
        * reservation release. Both use the halt side channel exactly like the durability/step

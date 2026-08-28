@@ -320,7 +320,7 @@ overwriting it. Add a new skill from the approved catalog with `skills add <name
 `dev-kit` skill before changing these outputs.
 
 These are contributor instructions. They are not the runtime Skill abstraction described in the
-product specification and must not be imported by a framework package.
+capabilities API and must not be imported by a framework package.
 
 ## Adding a package
 
@@ -338,7 +338,7 @@ the pull request that introduces it:
 5. add it to root `tsconfig.json` references;
 6. declare only inward workspace dependencies;
 7. provide `check`, `test`, and `build` scripts when the package has those behaviors;
-8. update the relevant package reference and specification pages;
+8. update existing guides and API comments affected by the change;
 9. run `bun run ready`.
 
 Package export maps point to source during private development. Distribution builds are produced

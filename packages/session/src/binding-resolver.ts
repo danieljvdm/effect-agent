@@ -10,7 +10,7 @@ import { DefinitionDigests } from "./records.ts";
 /**
  * No Agent Binding is registered for the requested stable identity. Recovery
  * fails closed: it never substitutes the latest Binding or runs different
- * code (spec/subagents.md §11, SUB-023/SUB-032).
+ * code.
  */
 export class BindingUnavailable extends Schema.TaggedError<BindingUnavailable>()(
   "BindingUnavailable",
@@ -196,9 +196,9 @@ const capture = <
   );
 
 /**
- * Build resolvable worker bindings (spec/subagents.md §11: the definition
+ * Build resolvable worker bindings. The definition
  * resolver is an explicit host-supplied Effect service; it resolves an Agent
- * Binding by stable identity and exact stored digest).
+ * Binding by stable identity and exact stored digest.
  *
  * - `make(agent, digests)` captures the binding plus its worker-requirement
  *   Context at Layer/effect construction time and registers the EXACT digest
@@ -279,8 +279,8 @@ export const DurableWorkerBinding = {
 
 /**
  * Host-supplied definition/binding resolver used at durable claim time
- * (spec/subagents.md §11, D7): stable identity plus exact stored digests
- * resolve to one executable `ResolvedBinding`. Missing or different code is a
+ * using stable identity plus exact stored digests to
+ * resolve one executable `ResolvedBinding`. Missing or different code is a
  * typed, fail-closed refusal — recovery never substitutes the latest Binding
  * (SUB-023); the coordinator turns a refusal into the framework
  * `ChildCompatibilityFailure` Settlement for a parent-linked child and a

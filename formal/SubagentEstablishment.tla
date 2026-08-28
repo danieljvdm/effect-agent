@@ -1,7 +1,7 @@
 ------------------------ MODULE SubagentEstablishment ------------------------
 (***************************************************************************)
-(* Bounded model of the S2 durable attached-Subagent protocol              *)
-(* (docs/spec/subagents.md SS12-SS14): one parent Submission with one      *)
+(* Bounded model of the durable attached-Subagent protocol:               *)
+(* one parent Submission with one                                        *)
 (* delegation Tool Call, one child Conversation lane, the recoverable      *)
 (* establishment ladder (reserve -> request -> admit -> materialize ->     *)
 (* lineage -> ready -> start), waitingForChild suspension, at-least-once   *)

@@ -7,4 +7,4 @@ Replay saved PRs through the reviewer and score findings against adjudicated def
 - Run `vp run pr-review-eval -- --help` for commands and options.
 - Public cases live in `fixtures/`; private cases and results belong in ignored `data/` and `results/`.
 
-See the [evaluation spec](../../docs/spec/pr-review.md#6-model-quality-evaluation) for scoring and output rules.
+See the [evaluation guide](../../docs/guide/testing.md#review-quality-evaluation) for scoring and output rules.

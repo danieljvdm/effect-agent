@@ -27,7 +27,7 @@ export const makeBudgetReservationId = (
     `${encodeURIComponent(parentRunId)}:${encodeURIComponent(parentToolCallId)}`,
   );
 
-/** One enforced hierarchical delegation budget dimension (spec/subagents.md §7). */
+/** One enforced hierarchical delegation budget dimension. */
 export const SubagentBudgetDimension = Schema.Literals([
   "total-child-invocations",
   "concurrent-children",
@@ -190,8 +190,7 @@ export class SubagentParentBudgetActive extends Schema.TaggedError<SubagentParen
 ) {}
 
 /**
- * Parent-owned hierarchical Subagent budget reservation authority
- * (spec/subagents.md §7 and §8).
+ * Parent-owned hierarchical Subagent budget reservation authority.
  *
  * Every transition is a single atomic `Ref` update, so parallel children can
  * never observe and spend the same remainder. The post-response usage hook in
@@ -508,7 +507,7 @@ const reserveTransition = (
       continue;
     }
     // Overrun already charged to the parent aggregate reduces delegable
-    // headroom without mutating `available` (spec/subagents.md §7 equation).
+    // headroom without mutating `available`.
     const headroom = (parent.available[spec.key] ?? 0) - parent.cumulativeOverrun[spec.key];
     const requested = request.allocation[spec.key];
     if (requested > headroom) {
@@ -605,7 +604,7 @@ const observeTransition = (
 
 /**
  * Freeze the settlement decision. A dimension that was never observed
- * conservatively consumes its full reserved amount (spec/subagents.md §7).
+ * conservatively consumes its full reserved amount.
  */
 const freezeSettlement = (reservation: ReservationState): ReservationState => {
   const observed: { [K in ReservableDimensionKey]?: number } = { ...reservation.observed };

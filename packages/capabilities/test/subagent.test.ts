@@ -1286,7 +1286,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
 });
 
 // ---------------------------------------------------------------------------
-// S2 durable delegation branch (spec/subagents.md §12, plan §5 WP5)
+// S2 durable delegation branch
 // ---------------------------------------------------------------------------
 
 const decodeSubmissionId = Schema.decodeSync(SubmissionId);
@@ -1928,7 +1928,7 @@ describe("Subagent.define", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Compile-time proofs (spec/subagents.md §4, §16.1)
+// Compile-time proofs
 // ---------------------------------------------------------------------------
 
 class ChildModelConfig extends Context.Service<ChildModelConfig, { readonly modelName: string }>()(

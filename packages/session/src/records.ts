@@ -595,7 +595,7 @@ export const SubmissionSettledRecord = SubmissionSettled.pipe(
 );
 
 /**
- * PARENT-log record of one durable child establishment request (spec/subagents.md §12 step 3):
+ * PARENT-log record of one durable child establishment request:
  * the exact parent Tool Call, delegation and target identity, the digests that pin the child's
  * Binding/input/grant, the fenced budget reservation, and the INTENDED child identity derived
  * deterministically from the parent Run and Tool Call pair (D4). `childInput` carries the
@@ -625,8 +625,8 @@ export class SubagentRequested extends Schema.TaggedClass<SubagentRequested>(
 }) {}
 
 /**
- * PARENT-log record that the intended child exists as accepted work (spec/subagents.md §12
- * step 9): the full established child identity. It is appended only after the child Receipt
+ * PARENT-log record that the intended child exists as accepted work:
+ * the full established child identity. It is appended only after the child Receipt
  * exists — SUB-017 holds by construction because `childReceiptId` is a required field.
  */
 export class SubagentStarted extends Schema.TaggedClass<SubagentStarted>(
@@ -641,7 +641,7 @@ export class SubagentStarted extends Schema.TaggedClass<SubagentStarted>(
 }) {}
 
 /**
- * PARENT-log record of one verified child settlement join (spec/subagents.md §12 join step 5):
+ * PARENT-log record of one verified child settlement join:
  * the child's canonical Settlement identity and outcome, the digests pinning the verified child
  * result and the bounded projected parent result, the child usage summary, and the FINAL
  * consumed/released accounting decision for the reservation. It commits in ONE atomic batch with
@@ -664,7 +664,7 @@ export class SubagentJoined extends Schema.TaggedClass<SubagentJoined>(
 }) {}
 
 /**
- * CHILD-log immutable lineage (spec/subagents.md §11): the Parent Link plus the digests that pin
+ * CHILD-log immutable lineage: the Parent Link plus the digests that pin
  * the child's definition, input, and authority grant. It is the first record after the child's
  * `ConversationCreated` (its own single-record batch, so the generic `conversation-created:{cid}`
  * batch identity is never contradicted) and the join path verifies it fail-closed — a fabricated

@@ -80,8 +80,8 @@ export type SubagentPolicyInput = Readonly<
 >;
 
 /**
- * Finite delegation bounds declared by one Delegation Definition
- * (spec/subagents.md §7, SUB-009). Structural limits are hard limits; token
+ * Finite delegation bounds declared by one Delegation Definition.
+ * Structural limits are hard limits; token
  * and cost caps are optional and enforced only as honestly as provider
  * reporting allows.
  */
@@ -98,7 +98,7 @@ export class SubagentPolicy extends Schema.Class<SubagentPolicy>(
 }
 
 /**
- * S1 fail-closed authority ceiling skeleton (spec/subagents.md §6). The full
+ * S1 fail-closed authority ceiling skeleton. The full
  * grant model (MCP methods, sandbox rights, secret handles, model classes,
  * per-action reauthorization inputs) is deferred to a later slice; S1 checks
  * allowed child Tool names and the delegation-depth ceiling at preflight.
@@ -114,8 +114,8 @@ export class SubagentGrant extends Schema.Class<SubagentGrant>(
 const BoundedFailureText = Schema.String.check(Schema.isMaxLength(4 * 1024));
 
 /**
- * Delegation preflight denied before any child started
- * (spec/subagents.md §15). No reservation, identity, or event exists for the
+ * Delegation preflight denied before any child started.
+ * No reservation, identity, or event exists for the
  * denied invocation; retry requires a new authorized parent Tool Call.
  */
 export class SubagentPrestartDenied extends Schema.TaggedError<SubagentPrestartDenied>()(
@@ -129,8 +129,8 @@ export class SubagentPrestartDenied extends Schema.TaggedError<SubagentPrestartD
 ) {}
 
 /**
- * Input or result projection failed its Schema or bounds
- * (spec/subagents.md §15). Fail closed: the message is a fixed description and
+ * Input or result projection failed its Schema or bounds.
+ * Fail closed: the message is a fixed description and
  * never carries the raw child value.
  */
 export class SubagentProjectionFailure extends Schema.TaggedError<SubagentProjectionFailure>()(
@@ -143,8 +143,8 @@ export class SubagentProjectionFailure extends Schema.TaggedError<SubagentProjec
 ) {}
 
 /**
- * Classification of one bounded durable delegation failure (S2 D5,
- * spec/subagents.md §15). `"child-failed"` and `"child-aborted"` project the
+ * Classification of one bounded durable delegation failure.
+ * `"child-failed"` and `"child-aborted"` project the
  * child's canonical failed/aborted Settlement; `"child-compatibility"`
  * projects the framework's `ChildCompatibilityFailure` child Settlement (the
  * stored child Binding digest was unavailable — recovery never substituted
@@ -167,8 +167,8 @@ const maxErrorTagLength = 256;
 const BoundedErrorTag = Schema.NonEmptyString.check(Schema.isMaxLength(maxErrorTagLength));
 
 /**
- * Bounded framework projection of a durable attached-child failure
- * (spec/subagents.md §11, §15; S2 plan D5). A failed or aborted durable child
+ * Bounded framework projection of a durable attached-child failure.
+ * A failed or aborted durable child
  * joins its parent Tool Call as exactly this typed failure: a classification,
  * the child references, and the coordinator's bounded `{errorTag, message}`
  * projection — never a raw Cause, stack, provider response, secret, or child
@@ -211,7 +211,7 @@ const decodeDelegationToolName = Schema.decodeSync(DelegationToolName);
 const decodeDelegationId = Schema.decodeSync(DelegationId);
 
 /**
- * Bounded parent metadata visible to `prepareInput` (spec/subagents.md §4.1).
+ * Bounded parent metadata visible to `prepareInput`.
  * It never contains the parent transcript, prompt, or a root runtime Context.
  */
 export interface SubagentPrepareContext {
@@ -234,8 +234,8 @@ export interface SubagentResultContext {
 
 /**
  * The delegation Tool failure Schema: the author's declared failure plus the
- * framework's preflight/budget/projection/durable-execution failure family
- * (spec/subagents.md §15). With the default `failureMode: "error"`, exactly
+ * framework's preflight/budget/projection/durable-execution failure family.
+ * With the default `failureMode: "error"`, exactly
  * this union (plus Effect AI's own error) can enter the parent handler `E`.
  *
  * The engine-owned `ToolCallWaiting` suspension signal and the typed
@@ -387,7 +387,7 @@ export interface SubagentDefineOptions<
   readonly failure: Failure;
   /**
    * Effectful, typed projection from decoded parameters and bounded parent
-   * metadata to the child Agent input (spec/subagents.md §4.1). It never
+   * metadata to the child Agent input. It never
    * receives the parent transcript or a root Context; its expected failures
    * are already the declared Tool failure.
    */
@@ -398,7 +398,7 @@ export interface SubagentDefineOptions<
   /**
    * Bounded result projection from the Schema-decoded child output, result
    * context, and original Schema-decoded Tool parameters to the declared Tool
-   * success value (spec/subagents.md §4.2). This is the explicit
+   * success value. This is the explicit
    * declassification boundary for child output: the parameters let it bind
    * echoed identity and scope to the exact request without prompt parsing.
    * The context carries the
@@ -435,7 +435,7 @@ export interface SubagentDefineOptions<
   /** Finite delegation bounds reserved for every invocation (SUB-009). */
   readonly policy: SubagentPolicy;
   /**
-   * Authority ceiling for the child (spec/subagents.md §6). Defaults to
+   * Authority ceiling for the child. Defaults to
    * exactly the target's declared Tool names at depth ceiling one; a narrower
    * grant fails preflight closed because S1 cannot shrink the child Toolkit.
    */
@@ -450,7 +450,7 @@ export interface SubagentDefineOptions<
 /**
  * An immutable Delegation Definition: one target Agent Definition exposed to
  * a parent as one Effect AI Tool with explicit projections, policy, and
- * authority ceiling (spec/subagents.md §3). It owns no acquired resources and
+ * authority ceiling. It owns no acquired resources and
  * is not executable until `SubagentRuntime.layer` pairs it with an explicit
  * child Binding.
  */
@@ -497,7 +497,7 @@ export interface SubagentDelegation<
 }
 
 /**
- * Declare one attached delegation as a pure value (spec/subagents.md §4).
+ * Declare one attached delegation as a pure value.
  *
  * The returned `.tool` is a native Effect AI Tool whose handler dependencies
  * are exactly the engine-owned `AgentSpawner` and `RunEventSink` plus
@@ -708,7 +708,7 @@ const define: SubagentDefine = <
   });
 };
 
-/** Pure Subagent authoring surface (spec/subagents.md §4, S1). */
+/** Pure Subagent authoring surface. */
 export const Subagent = { define } as const;
 
 const millisOfMaxDuration = (policy: SubagentPolicy): number =>
@@ -777,8 +777,8 @@ type InstructionRequirementsOf<Instructions, Input> =
     : never;
 
 /**
- * Every expected child Run failure the delegation's total mapping must cover
- * (spec/subagents.md §4.2, SUB-028): the child's inferred Agent failures plus
+ * Every expected child Run failure the delegation's total mapping must cover:
+ * the child's inferred Agent failures plus
  * the interpreter's policy, protocol, and approval failures. Interruption and
  * defects are not members; they retain their distinct semantics.
  */
@@ -850,8 +850,8 @@ export type SubagentLayerRequirements<
   | SubagentReservations;
 
 /**
- * Construction-fixed durable delegation declaration (S2, spec/subagents.md
- * §11-§12). Supplying it makes the delegation Layer establishable under a
+ * Construction-fixed durable delegation declaration.
+ * Supplying it makes the delegation Layer establishable under a
  * durable coordinator; a durable-mode invocation of a Layer constructed
  * without it fails closed with `SubagentExecutionFailure`
  * (`"declaration-unavailable"`) instead of inventing digests or degrading to
@@ -874,8 +874,7 @@ export interface SubagentDurableOptions {
 
 /**
  * The conservative final accounting summary the durable delegation handler
- * attaches to every settlement join (spec/subagents.md §7, §12 join step 6;
- * S2 plan D11). The handler has no live child usage stream at durable join
+ * attaches to every settlement join. The handler has no live child usage stream at durable join
  * time, so every dimension conservatively consumes its full reservation and
  * releases nothing — unreported usage never creates budget. The coordinator
  * owns the canonical accounting decision on `SubagentJoined` and may replace
@@ -1087,7 +1086,7 @@ type SubagentHandler<
 
 /**
  * Build the Toolkit handler Layer for one delegation Tool from an explicit
- * child Agent Binding (spec/subagents.md §4, §8, §9, §12, §15).
+ * child Agent Binding.
  *
  * Construction requirements carry the child Binding's full runtime needs and
  * both projections; they are captured once via `Effect.context` so the
@@ -1302,7 +1301,7 @@ const layer = <
         handlerContext.toolCallId,
       ).pipe(Effect.orDie);
 
-      // Preflight (spec/subagents.md §8 step 2, SUB-029): depth ceiling,
+      // Preflight: depth ceiling,
       // nested delegation in the child Toolkit, and the grant ceiling all
       // fail closed before any reservation or child identity exists.
       if (spawner.depth + 1 > delegation.grant.maxDepth) {
@@ -1547,7 +1546,7 @@ const layer = <
         return projected;
       });
 
-      // Interruption stays interruption (spec/subagents.md §15): record the
+      // Interruption stays interruption: record the
       // bounded lifecycle event best-effort, then let the closing handler
       // scope interrupt and join the child and settle the reservation.
       return yield* joined.pipe(
@@ -1564,7 +1563,7 @@ const layer = <
     });
 
     /**
-     * Durable branch (S2, spec/subagents.md §12): establishment through the
+     * Durable branch: establishment through the
      * coordinator's idempotent protocol instead of an in-process spawn. No
      * child fiber ever starts here, and the S1 in-memory reservation service
      * is deliberately not consulted — its Scope-finalizer settlement
@@ -1589,8 +1588,8 @@ const layer = <
 
       // A durable coordinator driving a Layer constructed without its durable
       // declaration can never establish: fail closed with the framework
-      // failure (spec/subagents.md §11 — never invent digests, never load the
-      // latest declaration, never degrade to an in-process spawn).
+      // failure. Never invent digests, load the latest declaration, or
+      // degrade to an in-process spawn.
       if (durableDeclaration === undefined) {
         return yield* executionFailure(
           "declaration-unavailable",
@@ -1903,8 +1902,8 @@ const layer = <
 };
 
 /**
- * Runtime wiring for declared attached delegation (spec/subagents.md §17,
- * S1): `layer` pairs one immutable Delegation Definition with one explicit
+ * Runtime wiring for declared attached delegation:
+ * `layer` pairs one immutable Delegation Definition with one explicit
  * child Agent Binding and produces the Toolkit handler Layer for the
  * delegation Tool.
  */
