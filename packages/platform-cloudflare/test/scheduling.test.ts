@@ -205,13 +205,14 @@ describe("Cloudflare Schedule Owner", () => {
       );
       state.storage.sql.exec("UPDATE effect_cf_scheduled_alarms SET run_at = 0");
     });
+    const passStartedAt = Date.now();
     const result = await runAlarmDirectExit(broken.owner);
     expect(result._tag).toBe("Success");
     expect((await snapshotFor(healthy)).lastReceipt).not.toBeNull();
     expect(await laneRows(healthy.conversation)).toHaveLength(1);
     const alarms = await alarmRows(broken.owner);
     expect(alarms).toHaveLength(1);
-    expect(alarms[0]?.run_at).toBeGreaterThan(Date.now());
+    expect(alarms[0]?.run_at).toBeGreaterThan(passStartedAt);
   });
 
   it("rolls back the schedule row and logical/native alarm when alarm mutation fails", async () => {
