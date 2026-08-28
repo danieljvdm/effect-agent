@@ -296,7 +296,6 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
   });
 
   const textBlobs = new Map<string, string>();
-  const treeSnapshots = new Map<string, RepositorySnapshot>();
 
   const readTextBlob = Effect.fn("GitHubClient.readTextBlob")(function* (sha: string) {
     const cached = textBlobs.get(sha);
@@ -345,8 +344,6 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
   const readTreeSnapshot = Effect.fn("GitHubClient.readTreeSnapshot")(function* (
     revision: string,
   ): Effect.fn.Return<RepositorySnapshot, GitHubApiFailure> {
-    const cached = treeSnapshots.get(revision);
-    if (cached !== undefined) return cached;
     const commit = yield* execute(
       "get Git commit",
       HttpClientRequest.get(
@@ -404,9 +401,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       }
       return yield* readTextBlob(value.sha);
     });
-    const snapshot = { revision, paths, entry, readTextFile } satisfies RepositorySnapshot;
-    treeSnapshots.set(revision, snapshot);
-    return snapshot;
+    return { revision, paths, entry, readTextFile } satisfies RepositorySnapshot;
   });
 
   const getMergeBase = Effect.fn("GitHubClient.getMergeBase")(function* (
@@ -425,7 +420,6 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
   const compareTrees = Effect.fn("GitHubClient.compareTrees")(function* (
     baseRevision: string,
     headRevision: string,
-    paths?: ReadonlyArray<string>,
   ) {
     const { base: baseSnapshot, head: headSnapshot } = yield* Effect.all(
       {
@@ -434,7 +428,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       },
       { concurrency: 2 },
     );
-    const candidates = paths === undefined ? [...baseSnapshot.paths, ...headSnapshot.paths] : paths;
+    const candidates = [...baseSnapshot.paths, ...headSnapshot.paths];
     const changedPaths = [...new Set(candidates)].sort().filter((path) => {
       const before = baseSnapshot.entry(path);
       const after = headSnapshot.entry(path);

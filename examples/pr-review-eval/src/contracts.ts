@@ -15,7 +15,6 @@ export const EvalRunnerVersion = Schema.String.check(
 export type EvalRunnerVersion = typeof EvalRunnerVersion.Type;
 
 export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.1.1");
-export const CURRENT_REVIEWER_PROFILE = "source-review-v4";
 
 export const EvalCaseId = BoundedIdentifier.pipe(
   Schema.brand("@effect-agent/example-pr-review-eval/EvalCaseId"),
@@ -136,7 +135,7 @@ export class EvalSuite extends Schema.Class<EvalSuite>(
   "@effect-agent/example-pr-review-eval/EvalSuite",
 )(EvalSuiteFields) {}
 
-export const EvalReasoningEffort = Schema.Literals(["low", "medium", "high", "xhigh", "max"]);
+export const EvalReasoningEffort = Schema.Literals(["low", "medium", "high", "xhigh"]);
 export type EvalReasoningEffort = typeof EvalReasoningEffort.Type;
 
 export class EvalVariantConfiguration extends Schema.Class<EvalVariantConfiguration>(

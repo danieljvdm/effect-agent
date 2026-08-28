@@ -11,8 +11,6 @@ import {
   IncrementalScopeUnavailable,
   makeReviewRepository,
   publishHeadBoundReview,
-  reviewCandidatePaths,
-  reviewUnavailablePaths,
   reviewPublicationFailure,
   reviewActionProgram,
   reviewEventFor,
@@ -806,6 +804,12 @@ describe("Incremental review scope", () => {
             truncated: false,
             tree: [
               {
+                path: "src",
+                mode: "040000",
+                type: "tree",
+                sha: `${tree}-src`,
+              },
+              {
                 path: "src/unchanged.ts",
                 mode: "100644",
                 type: "blob",
@@ -834,7 +838,7 @@ describe("Incremental review scope", () => {
       const requested = yield* Ref.get(requests);
       const published = yield* Ref.get(publishedBodies);
       expect(requested.some((request) => request.includes("/compare/"))).toBe(true);
-      expect(requested.filter((request) => request.includes("/git/trees/"))).toHaveLength(3);
+      expect(requested.filter((request) => request.includes("/git/trees/"))).toHaveLength(2);
       expect(published).toHaveLength(1);
       expect(published[0]).toContain("| **Incremental** | 0 reviewed | ✅ None |");
       expect(published[0]).toContain(
@@ -891,16 +895,14 @@ describe("exact review delta", () => {
         previousPath,
         status: "renamed",
       };
-      const candidates = reviewCandidatePaths([renamed]);
       const surface = yield* hydrateExactChanges({
         files: [renamed],
-        changedPaths: candidates,
+        changedPaths: [previousPath, path],
         base: treeSnapshot("merge-base", { [previousPath]: unchanged }),
         head: treeSnapshot("head", { [path]: unchanged }),
         ignore: [],
       });
 
-      expect(candidates).toEqual([path, previousPath].sort());
       expect(surface.changes).toHaveLength(1);
       expect(surface.unreviewedPaths).toEqual([]);
       expect(surface.changes[0]?.path).toBe(path);
@@ -937,7 +939,7 @@ describe("exact review delta", () => {
             base,
             head,
             ignore: [ignoredAlias],
-            unavailablePaths: reviewUnavailablePaths([renamed], surface),
+            unavailablePaths: surface.unavailablePaths,
           });
 
           expect(surface.ignoredPaths).toEqual([path]);

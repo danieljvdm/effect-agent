@@ -286,37 +286,6 @@ const matchesIgnore = (path: string, rawPattern: string): boolean => {
   return false;
 };
 
-interface ReviewSurface {
-  readonly changes: ReadonlyArray<ReviewChange>;
-  readonly unreviewedPaths: ReadonlyArray<string>;
-  readonly ignoredPaths: ReadonlyArray<string>;
-}
-
-export const reviewUnavailablePaths = (
-  files: ReadonlyArray<ChangedFile>,
-  surface: ReviewSurface,
-): ReadonlySet<string> => {
-  const paths = new Set([...surface.unreviewedPaths, ...surface.ignoredPaths]);
-  for (const file of files) {
-    if (file.previousPath !== undefined && paths.has(file.path)) paths.add(file.previousPath);
-  }
-  return paths;
-};
-
-/** Include both sides of provider-declared renames in exact tree comparison. */
-export const reviewCandidatePaths = (
-  files: ReadonlyArray<ChangedFile>,
-  additionalPaths: ReadonlyArray<string> = [],
-): ReadonlyArray<string> =>
-  [
-    ...new Set([
-      ...files.flatMap((file) =>
-        file.previousPath === undefined ? [file.path] : [file.previousPath, file.path],
-      ),
-      ...additionalPaths,
-    ]),
-  ].sort();
-
 /** Admit sorted metadata before hydrating exact baseline-to-head patches. */
 export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (input: {
   readonly files: ReadonlyArray<ChangedFile>;
@@ -326,25 +295,24 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
   readonly ignore: ReadonlyArray<string>;
 }) {
   const metadata = new Map(input.files.map((file) => [file.path, file] as const));
-  const activeRenames = new Map(
-    input.files.flatMap((file) => {
-      const previousPath = file.previousPath;
-      return file.status === "renamed" &&
-        previousPath !== undefined &&
-        input.base.entry(previousPath) !== undefined &&
-        input.base.entry(file.path) === undefined &&
-        input.head.entry(previousPath) === undefined &&
-        input.head.entry(file.path) !== undefined
-        ? [[previousPath, file] as const]
-        : [];
-    }),
-  );
-  const activeRenamesByCurrentPath = new Map(
-    [...activeRenames.values()].map((file) => [file.path, file] as const),
-  );
+  const activeRenames = new Map<string, ChangedFile>();
+  for (const file of input.files) {
+    const previousPath = file.previousPath;
+    if (
+      file.status === "renamed" &&
+      previousPath !== undefined &&
+      input.base.entry(previousPath) !== undefined &&
+      input.base.entry(file.path) === undefined &&
+      input.head.entry(previousPath) === undefined &&
+      input.head.entry(file.path) !== undefined
+    ) {
+      activeRenames.set(previousPath, file);
+      activeRenames.set(file.path, file);
+    }
+  }
   const candidates = new Map<string, { readonly file: ChangedFile; readonly basePath: string }>();
   for (const changedPath of [...new Set(input.changedPaths)].sort()) {
-    const renamed = activeRenames.get(changedPath) ?? activeRenamesByCurrentPath.get(changedPath);
+    const renamed = activeRenames.get(changedPath);
     const path = renamed?.path ?? changedPath;
     const file =
       renamed ??
@@ -362,6 +330,12 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
   const changes: Array<ReviewChange> = [];
   const unreviewedPaths: Array<string> = [];
   const ignoredPaths: Array<string> = [];
+  const unavailablePaths = new Set<string>();
+  const exclude = (paths: Array<string>, file: ChangedFile, basePath: string) => {
+    paths.push(file.path);
+    unavailablePaths.add(file.path).add(basePath);
+    if (file.previousPath !== undefined) unavailablePaths.add(file.previousPath);
+  };
   let admittedPaths = 0;
   let patchChars = 0;
   let patchBudgetExhausted = false;
@@ -374,7 +348,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       input.ignore.some((pattern) => matchesIgnore(path, pattern)),
     );
     if (ignored) {
-      ignoredPaths.push(file.path);
+      exclude(ignoredPaths, file, basePath);
       continue;
     }
     if (
@@ -383,7 +357,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       patchBudgetExhausted ||
       sourceBudgetExhausted
     ) {
-      unreviewedPaths.push(file.path);
+      exclude(unreviewedPaths, file, basePath);
       continue;
     }
     admittedPaths += 1;
@@ -393,7 +367,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       (beforeEntry !== undefined && beforeEntry.type !== "blob") ||
       (afterEntry !== undefined && afterEntry.type !== "blob")
     ) {
-      unreviewedPaths.push(file.path);
+      exclude(unreviewedPaths, file, basePath);
       continue;
     }
     const sourceSizesKnown =
@@ -404,7 +378,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       sourceSizesKnown &&
       hydratedSourceBytes + estimatedSourceBytes > MAX_HYDRATED_SOURCE_BYTES
     ) {
-      unreviewedPaths.push(file.path);
+      exclude(unreviewedPaths, file, basePath);
       sourceBudgetExhausted = true;
       continue;
     }
@@ -417,14 +391,14 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
     ).pipe(Effect.exit);
     if (Exit.isFailure(contents)) {
       hydratedSourceBytes += estimatedSourceBytes;
-      unreviewedPaths.push(file.path);
+      exclude(unreviewedPaths, file, basePath);
       continue;
     }
     hydratedSourceBytes += sourceSizesKnown
       ? estimatedSourceBytes
       : contents.value.before.length + contents.value.after.length;
     if (hydratedSourceBytes > MAX_HYDRATED_SOURCE_BYTES) {
-      unreviewedPaths.push(file.path);
+      exclude(unreviewedPaths, file, basePath);
       sourceBudgetExhausted = true;
       continue;
     }
@@ -462,11 +436,11 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       exactPatch.length === 0 ||
       exactPatch.length > MAX_PATCH_CHARS
     ) {
-      unreviewedPaths.push(file.path);
+      exclude(unreviewedPaths, file, basePath);
       continue;
     }
     if (patchChars + exactPatch.length > MAX_REVIEW_PATCH_CHARS) {
-      unreviewedPaths.push(file.path);
+      exclude(unreviewedPaths, file, basePath);
       patchBudgetExhausted = true;
       continue;
     }
@@ -474,7 +448,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
     patchChars += exactPatch.length;
     if (patchChars === MAX_REVIEW_PATCH_CHARS) patchBudgetExhausted = true;
   }
-  return { changes, unreviewedPaths, ignoredPaths } satisfies ReviewSurface;
+  return { changes, unreviewedPaths, ignoredPaths, unavailablePaths };
 });
 
 const reviewContextFailure = (message: string): ReviewContextError =>
@@ -704,7 +678,6 @@ export const reviewActionProgram = Effect.gen(function* () {
       selection.scope === "incremental" && selection.baseRevision !== undefined
         ? selection.baseRevision
         : currentMergeBase;
-    let candidatePaths = reviewCandidatePaths(fullFiles);
     if (selection.scope === "incremental") {
       const priorMergeBase = yield* github.getMergeBase(pull.baseRevision, reviewBase);
       if (priorMergeBase !== currentMergeBase) {
@@ -713,10 +686,8 @@ export const reviewActionProgram = Effect.gen(function* () {
           currentMergeBase,
         });
       }
-      const priorPullDelta = yield* github.compareTrees(priorMergeBase, reviewBase);
-      candidatePaths = reviewCandidatePaths(fullFiles, priorPullDelta.changedPaths);
     }
-    const comparison = yield* github.compareTrees(reviewBase, pull.headRevision, candidatePaths);
+    const comparison = yield* github.compareTrees(reviewBase, pull.headRevision);
     const surface = yield* hydrateExactChanges({
       files: fullFiles,
       changedPaths: comparison.changedPaths,
@@ -724,12 +695,11 @@ export const reviewActionProgram = Effect.gen(function* () {
       head: comparison.head,
       ignore,
     });
-    const unavailablePaths = reviewUnavailablePaths(fullFiles, surface);
     const reviewRepository = makeReviewRepository({
       base: comparison.base,
       head: comparison.head,
       ignore,
-      unavailablePaths,
+      unavailablePaths: surface.unavailablePaths,
     });
     const fs = yield* FileSystem.FileSystem;
     const guidance =

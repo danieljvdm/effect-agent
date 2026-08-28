@@ -250,11 +250,6 @@ describe("PR-review eval quality report", () => {
         defectId,
         firstFoundTrial: 2,
       });
-      expect(currentReport.blockingDispositionAgreement).toMatchObject({
-        numerator: 0,
-        denominator: 2,
-        status: "unresolved",
-      });
       expect(currentReport.firstTrialFindings).toMatchObject({
         valid: 0,
         invalid: 1,
@@ -280,14 +275,10 @@ describe("PR-review eval quality report", () => {
         costedSucceededTrials: 1,
         uncostedSucceededTrials: 2,
         estimatedCostMicrousd: 16,
-        estimatedCostP50Microusd: 5,
-        estimatedCostP95Microusd: 11,
         costedFailedTrials: 1,
         inputTokens: 30,
         outputTokens: 9,
         elapsedMillis: 600,
-        elapsedP50Millis: 100,
-        elapsedP95Millis: 200,
       });
       expect(currentReport.resources.failuresByTag).toEqual([
         { errorTag: "RateLimitError", count: 1 },
@@ -304,11 +295,6 @@ describe("PR-review eval quality report", () => {
         status: "measured",
       });
       expect(candidateReport.blockerCases.complete).toBe(1);
-      expect(candidateReport.blockingDispositionAgreement).toMatchObject({
-        numerator: 1,
-        denominator: 2,
-        status: "unresolved",
-      });
       expect(candidateReport.cleanControls).toMatchObject({ passed: 0, total: 1 });
       expect(candidateReport.firstTrialFindings.precision.status).toBe("unresolved");
       expect(candidateReport.firstTrialFindings).toMatchObject({
@@ -331,8 +317,6 @@ describe("PR-review eval quality report", () => {
         costedSucceededTrials: 3,
         costedFailedTrials: 0,
         estimatedCostMicrousd: 16,
-        estimatedCostP50Microusd: 7,
-        estimatedCostP95Microusd: 7,
       });
       expect(report.unjudgedFindings).toHaveLength(1);
       expect(report.unmappedValidFindings).toHaveLength(1);
@@ -346,65 +330,9 @@ describe("PR-review eval quality report", () => {
         outputTokens: 6,
       });
       expect(currentKnown?.blockerStatus).toBe("incomplete");
-      expect(currentKnown?.blockerHitCounts).toEqual([
-        { defectId, hitTrials: 1, succeededTrials: 2 },
-      ]);
-      expect(currentKnown?.blockingDispositionAgreement).toMatchObject({
-        numerator: 0,
-        denominator: 1,
-        status: "measured",
-      });
-      expect(currentClean?.blockingDispositionAgreement).toMatchObject({
-        numerator: 0,
-        denominator: 1,
-        status: "unresolved",
-      });
       expect(currentClean?.cleanControlPassed).toBe(true);
       expect(currentClean?.resources.failedTrials).toBe(1);
       expect(candidateClean?.firstTrialFailureTag).toBe("TimeoutError");
-
-      const pairwiseObservations = [
-        observation(known, current, 1, succeeded([])),
-        observation(known, current, 2, succeeded([repeatedBlocker])),
-        observation(known, current, 3, succeeded([])),
-        observation(clean, current, 1, succeeded([])),
-        observation(
-          clean,
-          current,
-          2,
-          EvalTrialFailed.make({ errorTag: "RateLimitError", message: "Try later" }),
-        ),
-        observation(clean, current, 3, succeeded([])),
-      ];
-      const pairwiseReport = yield* makeQualityReport(suite, pairwiseObservations);
-      const pairwiseVariant = pairwiseReport.variants[0];
-      const pairwiseKnown = pairwiseVariant?.cases.find((entry) => entry.caseId === known.id);
-      const pairwiseClean = pairwiseVariant?.cases.find((entry) => entry.caseId === clean.id);
-      expect(pairwiseKnown?.blockingDispositionAgreement).toMatchObject({
-        numerator: 1,
-        denominator: 3,
-        status: "measured",
-      });
-      expect(pairwiseClean?.blockingDispositionAgreement).toMatchObject({
-        numerator: 1,
-        denominator: 3,
-        status: "unresolved",
-      });
-      expect(pairwiseVariant?.blockingDispositionAgreement).toMatchObject({
-        numerator: 2,
-        denominator: 6,
-        status: "unresolved",
-      });
-
-      const singleTrialReport = yield* makeQualityReport(
-        suite,
-        pairwiseObservations.filter((entry) => entry.trial === 1),
-      );
-      expect(singleTrialReport.variants[0]?.blockingDispositionAgreement).toMatchObject({
-        numerator: 0,
-        denominator: 0,
-        status: "not-applicable",
-      });
       expect(
         Schema.decodeSync(EvalQualityReport)(Schema.encodeSync(EvalQualityReport)(report)),
       ).toEqual(report);

@@ -140,23 +140,13 @@ class ReviewSubmission extends Schema.Class<ReviewSubmission>(
   findings: Schema.Array(SubmittedFinding).check(Schema.isMaxLength(24)),
 }) {}
 
-class FormattedReviewChange extends Schema.Class<FormattedReviewChange>(
-  "@effect-agent/pr-review/FormattedReviewChange",
-)({
-  path: ReviewPath,
-  formattedDiff: Schema.NonEmptyString.check(Schema.isMaxLength(80_000)),
-}) {}
-
 class FormattedReviewRequest extends Schema.Class<FormattedReviewRequest>(
   "@effect-agent/pr-review/FormattedReviewRequest",
 )({
-  title: Schema.String.check(Schema.isMaxLength(1_000)),
-  description: Schema.String.check(Schema.isMaxLength(20_000)),
-  baseRevision: Revision,
-  headRevision: Revision,
-  scope: Schema.optionalKey(Schema.Literals(["full", "incremental"])),
-  changes: Schema.Array(FormattedReviewChange).check(Schema.isMaxLength(100)),
-  unreviewedPaths: Schema.Array(ReviewPath).check(Schema.isMaxLength(300)),
+  ...ReviewRequest.fields,
+  changes: Schema.Array(
+    Schema.Struct({ path: ReviewChange.fields.path, formattedDiff: ReviewChange.fields.patch }),
+  ).check(Schema.isMaxLength(100)),
 }) {}
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
@@ -240,18 +230,11 @@ const formatPatch = (path: string, patch: string): string => {
 
 const formatRequest = (request: ReviewRequest): FormattedReviewRequest =>
   FormattedReviewRequest.make({
-    title: request.title,
-    description: request.description,
-    baseRevision: request.baseRevision,
-    headRevision: request.headRevision,
-    ...(request.scope === undefined ? {} : { scope: request.scope }),
-    changes: request.changes.map((change) =>
-      FormattedReviewChange.make({
-        path: change.path,
-        formattedDiff: formatPatch(change.path, change.patch),
-      }),
-    ),
-    unreviewedPaths: request.unreviewedPaths,
+    ...request,
+    changes: request.changes.map(({ path, patch }) => ({
+      path,
+      formattedDiff: formatPatch(path, patch),
+    })),
   });
 
 export class ReviewVerificationError extends Schema.TaggedError<ReviewVerificationError>()(
@@ -273,19 +256,16 @@ const reviewPolicy = AgentPolicy.make({
 const instructions = (guidance?: string) =>
   `${REVIEW_INSTRUCTIONS}${guidance === undefined || guidance.trim().length === 0 ? "" : `\n\nRepository guidance:\n${guidance.trim()}`}`;
 
-const completionToolkit = <Output extends Schema.Top>(output: Output) =>
-  Toolkit.make(
-    Tool.make("submit_review", {
-      description:
-        "Finish this investigation with its complete structured result. Call alone, after checking all changed behaviors. This records no external side effect.",
-      parameters: output,
-      success: Schema.Null,
-    })
-      .annotate(Tool.Strict, true)
-      .annotate(Tool.Readonly, true),
-  );
-
-const reviewCompletion = completionToolkit(ReviewSubmission);
+const reviewCompletion = Toolkit.make(
+  Tool.make("submit_review", {
+    description:
+      "Finish this investigation with its complete structured result. Call alone, after checking all changed behaviors. This records no external side effect.",
+    parameters: ReviewSubmission,
+    success: Schema.Null,
+  })
+    .annotate(Tool.Strict, true)
+    .annotate(Tool.Readonly, true),
+);
 
 const reviewBudgetLimits = UsageBudgetLimits.make({
   maxInputTokens: 384_000,
@@ -315,40 +295,6 @@ const commentableLines = (patch: string): ReadonlySet<number> => {
 export const isCommentableLine = (patch: string, line: number): boolean =>
   commentableLines(patch).has(line);
 
-/**
- * Treat model output as untrusted: demote invalid line anchors to top-level
- * findings and collapse exact duplicates.
- */
-const sanitizeFindings = (
-  request: Pick<ReviewRequest, "changes">,
-  untrusted: ReadonlyArray<ReviewFinding>,
-): ReadonlyArray<ReviewFinding> => {
-  const patches = new Map(request.changes.map((change) => [change.path, change.patch] as const));
-  const seen = new Set<string>();
-  const findings: Array<ReviewFinding> = [];
-  for (const finding of untrusted) {
-    const patch = patches.get(finding.path);
-    if (patch === undefined) continue;
-    const line =
-      finding.line !== undefined && isCommentableLine(patch, finding.line)
-        ? finding.line
-        : undefined;
-    const sanitized = ReviewFinding.make({
-      path: finding.path,
-      ...(line === undefined ? {} : { line }),
-      severity: finding.severity,
-      category: finding.category,
-      title: finding.title,
-      body: finding.body,
-    });
-    const key = JSON.stringify(sanitized);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    findings.push(sanitized);
-  }
-  return findings;
-};
-
 export interface ReviewerOptions<Provider, ModelProvides, ModelRequires> {
   readonly model: Model.Model<Provider, LanguageModel.LanguageModel | ModelProvides, ModelRequires>;
   readonly guidance?: string | undefined;
@@ -364,31 +310,41 @@ const reviewSummary = (request: ReviewRequest, findings: ReadonlyArray<ReviewFin
   return `${summary}${request.scope === "incremental" ? " This incremental review does not resolve earlier findings or establish that merging is safe." : ""}${request.unreviewedPaths.length > 0 ? " Coverage is incomplete because some changed paths were unavailable." : ""}`;
 };
 
-const toReviewFinding = (finding: typeof SubmittedFinding.Type): ReviewFinding =>
-  ReviewFinding.make({
-    path: finding.path,
-    ...(finding.line === undefined ? {} : { line: finding.line }),
-    severity: finding.priority <= 1 ? "blocking" : finding.priority === 2 ? "important" : "nit",
-    category: finding.category,
-    title: finding.title,
-    body: finding.body,
-  });
-
+/** Fail on unknown paths, demote invalid anchors, and remove only exact duplicates. */
 const validatedFindings = Effect.fn("validatedFindings")(function* (
   request: ReviewRequest,
-  findings: ReadonlyArray<ReviewFinding>,
+  submitted: ReadonlyArray<typeof SubmittedFinding.Type>,
 ) {
-  for (const finding of findings) {
-    if (!request.changes.some((change) => change.path === finding.path)) {
+  const patches = new Map(request.changes.map((change) => [change.path, change.patch] as const));
+  const seen = new Set<string>();
+  const findings: Array<ReviewFinding> = [];
+  for (const finding of submitted) {
+    const patch = patches.get(finding.path);
+    if (patch === undefined) {
       return yield* ReviewVerificationError.make({
         message: "A finding must identify its causative changed path",
       });
     }
+    const line =
+      finding.line !== undefined && isCommentableLine(patch, finding.line)
+        ? finding.line
+        : undefined;
+    const sanitized = ReviewFinding.make({
+      path: finding.path,
+      ...(line === undefined ? {} : { line }),
+      severity: finding.priority <= 1 ? "blocking" : finding.priority === 2 ? "important" : "nit",
+      category: finding.category,
+      title: finding.title,
+      body: finding.body,
+    });
+    const key = JSON.stringify(sanitized);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    findings.push(sanitized);
   }
-  const sanitized = sanitizeFindings(request, findings);
   return ReviewReport.make({
-    summary: reviewSummary(request, sanitized),
-    findings: sanitized,
+    summary: reviewSummary(request, findings),
+    findings,
   });
 });
 
@@ -425,7 +381,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       const result = yield* AgentRuntime.run(reviewer, formatRequest(request), runOptions);
       // Diagnostics deliberately contain counts only, never source or model-authored prose.
       yield* Effect.logDebug("Review completed", { findingCount: result.output.findings.length });
-      const report = yield* validatedFindings(request, result.output.findings.map(toReviewFinding));
+      const report = yield* validatedFindings(request, result.output.findings);
       const usage = yield* budget.snapshot;
       return ReviewOutcome.make({
         report,

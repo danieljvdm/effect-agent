@@ -4,13 +4,7 @@ import { Config, Effect, Layer, Option, Ref, Schema } from "effect";
 import { AiError, type Response } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import {
-  CURRENT_REVIEWER_PROFILE,
-  type EvalReasoningEffort,
-  EvalReviewerFailure,
-  EvalVariantConfiguration,
-  type EvalVariantId,
-} from "./contracts.ts";
+import { EvalReviewerFailure, EvalVariantConfiguration, type EvalVariantId } from "./contracts.ts";
 import { digestText } from "./corpus.ts";
 import { type EvalVariant } from "./runner.ts";
 
@@ -20,27 +14,22 @@ const ReviewerErrorView = Schema.Struct({
 });
 
 const reviewerFailure = (error: unknown, estimatedCostMicrousd?: number): EvalReviewerFailure => {
-  if (AiError.isAiError(error)) {
-    // Provider messages and Tool parameters may contain source or credentials.
-    return EvalReviewerFailure.make({
-      errorTag: `AiError/${error.reason._tag}`,
-      message: `AI failure; retryable=${String(error.reason.isRetryable)}`,
-      ...(estimatedCostMicrousd === undefined ? {} : { estimatedCostMicrousd }),
-    });
-  }
-  return Option.match(Schema.decodeUnknownOption(ReviewerErrorView)(error), {
-    onNone: () =>
-      EvalReviewerFailure.make({
-        errorTag: "ReviewInvocationFailure",
-        message: "Reviewer invocation failed without a bounded typed diagnostic",
-        ...(estimatedCostMicrousd === undefined ? {} : { estimatedCostMicrousd }),
-      }),
-    onSome: (view) =>
-      EvalReviewerFailure.make({
-        errorTag: view._tag,
-        message: view.message?.trim() || view._tag,
-        ...(estimatedCostMicrousd === undefined ? {} : { estimatedCostMicrousd }),
-      }),
+  // Provider messages and Tool parameters may contain source or credentials.
+  const diagnostic = AiError.isAiError(error)
+    ? {
+        errorTag: `AiError/${error.reason._tag}`,
+        message: `AI failure; retryable=${String(error.reason.isRetryable)}`,
+      }
+    : Option.match(Schema.decodeUnknownOption(ReviewerErrorView)(error), {
+        onNone: () => ({
+          errorTag: "ReviewInvocationFailure",
+          message: "Reviewer invocation failed without a bounded typed diagnostic",
+        }),
+        onSome: (view) => ({ errorTag: view._tag, message: view.message?.trim() || view._tag }),
+      });
+  return EvalReviewerFailure.make({
+    ...diagnostic,
+    ...(estimatedCostMicrousd === undefined ? {} : { estimatedCostMicrousd }),
   });
 };
 
@@ -67,8 +56,6 @@ export const openAiClientLayer = OpenAiClient.layerConfig({
 
 export interface CurrentOpenAiVariantOptions {
   readonly id: EvalVariantId;
-  readonly model: string;
-  readonly reasoningEffort: EvalReasoningEffort;
   readonly guidance?: string | undefined;
 }
 
@@ -77,13 +64,13 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
     const trimmedGuidance = options.guidance?.trim();
     const effectiveGuidance = trimmedGuidance === "" ? undefined : trimmedGuidance;
     const guidanceDigest =
-      effectiveGuidance === undefined ? undefined : yield* digestGuidance(effectiveGuidance);
+      effectiveGuidance === undefined ? undefined : yield* digestText(effectiveGuidance);
     const configuration = EvalVariantConfiguration.make({
       id: options.id,
-      reviewerProfile: CURRENT_REVIEWER_PROFILE,
+      reviewerProfile: "source-review-v4",
       provider: "openai",
-      model: options.model,
-      reasoningEffort: options.reasoningEffort,
+      model: "gpt-5.6-sol",
+      reasoningEffort: "xhigh",
       maxOutputTokens: 32_000,
       strictJsonSchema: true,
       store: false,
@@ -94,25 +81,19 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
       review: Effect.fn("PrReviewEval.review")(function* (request: ReviewRequest) {
         // This Ref belongs to one review invocation, so concurrent eval jobs cannot share cost.
         const accountedCost = yield* Ref.make<number | undefined>(undefined);
-        const estimateCostMicrousd =
-          options.model === "gpt-5.6-sol"
-            ? (usage: Response.Usage) =>
-                gpt56SolCost(usage).pipe(
-                  Effect.tap((estimate) =>
-                    Ref.update(accountedCost, (total) =>
-                      total === undefined ? estimate.costMicrousd : total + estimate.costMicrousd,
-                    ),
-                  ),
-                )
-            : undefined;
         const reviewer = makeReviewer({
-          model: OpenAiLanguageModel.model(options.model, {
+          model: OpenAiLanguageModel.model(configuration.model, {
             max_output_tokens: configuration.maxOutputTokens,
-            reasoning: { effort: options.reasoningEffort },
+            reasoning: { effort: configuration.reasoningEffort },
             store: configuration.store,
             strictJsonSchema: configuration.strictJsonSchema,
           }),
-          ...(estimateCostMicrousd === undefined ? {} : { estimateCostMicrousd }),
+          estimateCostMicrousd: (usage) =>
+            gpt56SolCost(usage).pipe(
+              Effect.tap((estimate) =>
+                Ref.update(accountedCost, (total) => (total ?? 0) + estimate.costMicrousd),
+              ),
+            ),
           ...(effectiveGuidance === undefined ? {} : { guidance: effectiveGuidance }),
         });
         return yield* reviewer
@@ -128,9 +109,3 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
     } satisfies EvalVariant<OpenAiClient.OpenAiClient | ReviewRepository>;
   },
 );
-
-export const digestGuidance = Effect.fn("PrReviewEval.digestGuidance")(function* (
-  guidance: string,
-) {
-  return yield* digestText(guidance);
-});

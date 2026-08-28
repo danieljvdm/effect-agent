@@ -241,24 +241,28 @@ describe("GitHub tree comparison", () => {
                   sha: baseTree,
                   truncated: false,
                   tree: [
+                    entry("src", "a".repeat(40), "040000", "tree"),
                     entry("src/unchanged.ts", "a".repeat(40)),
                     entry("src/changed.ts", "b".repeat(40)),
                     entry("src/mode.ts", "c".repeat(40)),
                     entry("src/removed.ts", "d".repeat(40)),
                     entry("src/type.ts", "e".repeat(40)),
-                    entry("src/not-in-pr.ts", "f".repeat(40)),
+                    entry("src/was-file", "f".repeat(40)),
+                    entry("src/was-directory", "f".repeat(40), "040000", "tree"),
                   ],
                 }
               : {
                   sha: headTree,
                   truncated: false,
                   tree: [
+                    entry("src", "b".repeat(40), "040000", "tree"),
                     entry("src/unchanged.ts", "a".repeat(40)),
                     entry("src/changed.ts", "8".repeat(40)),
                     entry("src/mode.ts", "c".repeat(40), "100755"),
                     entry("src/added.ts", "9".repeat(40)),
                     entry("src/type.ts", "e".repeat(40), "160000", "commit"),
-                    entry("src/not-in-pr.ts", "0".repeat(40)),
+                    entry("src/was-file", "0".repeat(40), "040000", "tree"),
+                    entry("src/was-directory", "0".repeat(40)),
                   ],
                 };
         return Ref.update(requests, (current) => [...current, url.href]).pipe(
@@ -280,16 +284,7 @@ describe("GitHub tree comparison", () => {
         apiUrl: "https://api.github.test",
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
-      const comparison = yield* github.compareTrees(baseRevision, headRevision, [
-        "src/unchanged.ts",
-        "src/changed.ts",
-        "src/mode.ts",
-        "src/added.ts",
-        "src/removed.ts",
-        "src/type.ts",
-        "src/changed.ts",
-      ]);
-      const completeComparison = yield* github.compareTrees(baseRevision, headRevision);
+      const comparison = yield* github.compareTrees(baseRevision, headRevision);
 
       expect(comparison.changedPaths).toEqual([
         "src/added.ts",
@@ -297,9 +292,9 @@ describe("GitHub tree comparison", () => {
         "src/mode.ts",
         "src/removed.ts",
         "src/type.ts",
+        "src/was-directory",
+        "src/was-file",
       ]);
-      expect(completeComparison.changedPaths).toContain("src/not-in-pr.ts");
-      expect(completeComparison.changedPaths).toContain("src/type.ts");
       expect(yield* Ref.get(requests)).toHaveLength(4);
       expect((yield* Ref.get(requests)).filter((url) => url.endsWith("?recursive=1"))).toHaveLength(
         2,
@@ -336,9 +331,7 @@ describe("GitHub tree comparison", () => {
         apiUrl: "https://api.github.test",
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
-      const failure = yield* github
-        .compareTrees(baseRevision, headRevision, ["src/changed.ts"])
-        .pipe(Effect.flip);
+      const failure = yield* github.compareTrees(baseRevision, headRevision).pipe(Effect.flip);
 
       expect(failure._tag).toBe("GitHubApiFailure");
       expect(failure.reason).toContain("truncated tree");
@@ -381,7 +374,7 @@ describe("GitHub tree comparison", () => {
         token: Redacted.make("github-token"),
         apiUrl: "https://api.github.test",
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
-      const comparison = yield* github.compareTrees(baseRevision, headRevision, [path]);
+      const comparison = yield* github.compareTrees(baseRevision, headRevision);
 
       const failure = yield* comparison.head.readTextFile(path).pipe(Effect.flip);
 

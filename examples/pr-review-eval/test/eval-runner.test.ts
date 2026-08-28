@@ -1,7 +1,4 @@
-import { fileURLToPath } from "node:url";
-
 import {
-  isCommentableLine,
   makeReviewer,
   ReviewChange,
   ReviewOutcome,
@@ -44,8 +41,7 @@ import {
   EvalSuite,
   EvalVariantConfiguration,
   EvalVariantId,
-  digestGuidance,
-  loadEvalSuite,
+  digestText,
   makeCurrentOpenAiVariant,
   runEvalSuite,
   validateEvalSuite,
@@ -196,14 +192,12 @@ describe("PR-review model eval", () => {
     Effect.gen(function* () {
       const variant = yield* makeCurrentOpenAiVariant({
         id: Schema.decodeSync(EvalVariantId)("candidate-guidance-v1"),
-        model: "gpt-5.6-sol",
-        reasoningEffort: "max",
         guidance: "  Keep the public error channel typed.  ",
       });
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
       expect(variant.configuration.reviewerProfile).toBe("source-review-v4");
       expect(variant.configuration.guidanceDigest).toBe(
-        yield* digestGuidance("Keep the public error channel typed."),
+        yield* digestText("Keep the public error channel typed."),
       );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -213,8 +207,6 @@ describe("PR-review model eval", () => {
       const suite = yield* makeSuite();
       const variant = yield* makeCurrentOpenAiVariant({
         id: Schema.decodeSync(EvalVariantId)("provider-failure"),
-        model: "gpt-5.6-sol",
-        reasoningEffort: "medium",
       });
       const privateText = "private-source-and-provider-payload";
       const client = HttpClient.make((request) =>
@@ -478,34 +470,6 @@ describe("PR-review model eval", () => {
           ),
       ).toBe(true);
     }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect.each(["smoke-suite.json", "effect-v3-type-tests-suite.json"])(
-    "round-trips %s with a valid digest and commentable evidence",
-    (filename) =>
-      Effect.gen(function* () {
-        const suite = yield* loadEvalSuite(
-          fileURLToPath(new URL(`../fixtures/${filename}`, import.meta.url)),
-        );
-        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(EvalSuite))(suite);
-        const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(EvalSuite))(
-          encoded,
-        );
-        expect(decoded).toEqual(suite);
-        for (const evalCase of suite.cases) {
-          const patches = new Map(
-            evalCase.request.changes.map((change) => [change.path, change.patch]),
-          );
-          const invalidEvidence = evalCase.expectedDefects.flatMap((defect) =>
-            defect.evidence.filter(
-              (evidence) =>
-                evidence.line !== undefined &&
-                !isCommentableLine(patches.get(evidence.path) ?? "", evidence.line),
-            ),
-          );
-          expect(invalidEvidence).toEqual([]);
-        }
-      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("rejects corrupt corpus identity before a model can run", () =>
