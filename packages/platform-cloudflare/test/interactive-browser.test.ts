@@ -20,6 +20,7 @@ import {
   BrowserRunInteractiveHost,
   BrowserRunLiveViewRequest,
   BrowserRunHandoffRequest,
+  BrowserRunViewport,
   browserRunInteractiveHostLayer,
   browserRunInteractiveLayer,
   type BrowserRunCloudflareCommand,
@@ -29,6 +30,7 @@ import {
   type BrowserRunInteractivePage,
   type BrowserRunInteractiveRequest,
   type BrowserRunInteractiveRequestListener,
+  type BrowserRunInteractiveSession,
 } from "../src/interactive-browser.ts";
 
 type Equal<Left, Right> =
@@ -40,6 +42,10 @@ type LayerRequirements<Value> =
 type InteractiveLayerRequiresBinding = Equal<
   LayerRequirements<ReturnType<typeof browserRunInteractiveLayer>>,
   BrowserRunInteractiveBinding
+>;
+type ResizeEffect = Equal<
+  ReturnType<BrowserRunInteractiveSession["resizeViewport"]>,
+  Effect.Effect<void, InteractiveBrowserError>
 >;
 type ScopedOpenRequirement = Equal<
   ReturnType<InteractiveBrowser["Service"]["open"]> extends Effect.Effect<
@@ -102,6 +108,7 @@ interface FixtureOptions {
   readonly click?: (selector: string) => Promise<void>;
   readonly screenshot?: (fullPage: boolean) => Promise<unknown>;
   readonly scroll?: (deltaX: number, deltaY: number) => Promise<void>;
+  readonly setViewport?: (viewport: BrowserRunViewport) => Promise<void>;
   readonly cdpSend?: (
     command: BrowserRunCloudflareCommand,
     parameters: unknown,
@@ -297,6 +304,10 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
       };
       return options.createCdp === undefined ? session : options.createCdp(session);
     },
+    setViewport: async (viewport) => {
+      calls.push("page.setViewport");
+      await options.setViewport?.(viewport);
+    },
   };
 
   const context: BrowserRunInteractiveContext = {
@@ -429,10 +440,236 @@ const expectResourcesClosedOnce = (fixture: Fixture): void => {
 const awaitPromise = <A>(promise: Promise<A>): Effect.Effect<A> => Effect.promise(() => promise);
 
 describe("Browser Run interactive browser adapter", () => {
+  it.effect(
+    "resizes before and after action exhaustion without spending or restoring actions",
+    () =>
+      Effect.gen(function* () {
+        const viewports: Array<BrowserRunViewport> = [];
+        const fixture = makeFixture({
+          setViewport: async (viewport) => {
+            viewports.push(viewport);
+          },
+        });
+        yield* withHost(fixture, (host) =>
+          Effect.gen(function* () {
+            const session = yield* host.open(policy({ maxActions: 1 }));
+            yield* session.resizeViewport({ width: 1_440, height: 900 });
+            yield* session.handle.navigate(navigate());
+            yield* session.resizeViewport({ width: 1_024, height: 768, deviceScaleFactor: 2 });
+            expect(yield* session.handle.readText(readText()).pipe(Effect.flip)).toMatchObject({
+              _tag: "InteractiveBrowserLimitError",
+              limit: "actions",
+              observed: 2,
+            });
+          }),
+        );
+        expect(viewports).toEqual([
+          { width: 1_440, height: 900, deviceScaleFactor: 1 },
+          { width: 1_024, height: 768, deviceScaleFactor: 2 },
+        ]);
+        expectResourcesClosedOnce(fixture);
+      }),
+  );
+
+  it.effect("validates mutated viewport values before provider dispatch or budget admission", () =>
+    Effect.gen(function* () {
+      const fixture = makeFixture();
+      yield* withHost(fixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy({ maxActions: 1 }));
+          const viewport = BrowserRunViewport.make({ width: 1_440, height: 900 });
+          Reflect.set(viewport, "deviceScaleFactor", 2);
+          expect(yield* session.resizeViewport(viewport).pipe(Effect.flip)).toMatchObject({
+            _tag: "InteractiveBrowserPolicyDeniedError",
+          });
+          yield* session.handle.navigate(navigate());
+        }),
+      );
+      expect(fixture.calls).not.toContain("page.setViewport");
+      expectResourcesClosedOnce(fixture);
+    }),
+  );
+
+  it.effect.each([
+    "off-policy",
+    "malformed-url",
+    "closed",
+    "disconnected",
+    "elapsed",
+    "scope-closed",
+  ])("rejects resize on an unavailable page (%s)", (reason) =>
+    Effect.gen(function* () {
+      const fixture = makeFixture();
+      yield* withHost(fixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* reason === "scope-closed"
+            ? Effect.scoped(host.open(policy()))
+            : host.open(policy());
+          if (reason === "closed") yield* session.close;
+          if (reason === "disconnected") fixture.controls.disconnect();
+          if (reason === "off-policy") fixture.controls.setUrl("https://elsewhere.example/");
+          if (reason === "malformed-url") fixture.controls.setUrl(123);
+          if (reason === "elapsed") yield* TestClock.adjust(Duration.millis(5_000));
+          expect(
+            yield* session.resizeViewport({ width: 800, height: 600 }).pipe(Effect.flip),
+          ).toMatchObject({
+            _tag:
+              reason === "off-policy"
+                ? "InteractiveBrowserPolicyDeniedError"
+                : reason === "malformed-url"
+                  ? "InteractiveBrowserProtocolError"
+                  : reason === "elapsed"
+                    ? "InteractiveBrowserLimitError"
+                    : "InteractiveBrowserExpiredError",
+          });
+        }),
+      );
+      expect(fixture.calls).not.toContain("page.setViewport");
+      expectResourcesClosedOnce(fixture);
+    }),
+  );
+
+  it.effect.each(["resize", "navigate", "handoff"])(
+    "shares the fail-fast lock with %s and releases it on success",
+    (operation) =>
+      Effect.gen(function* () {
+        const gate = makeGate<void>();
+        const wait = () => {
+          gate.markStarted();
+          return gate.promise;
+        };
+        const fixture = makeFixture({
+          setViewport: operation === "resize" ? wait : undefined,
+          goto: operation === "navigate" ? wait : undefined,
+          cdpSend:
+            operation === "handoff"
+              ? async () => {
+                  await wait();
+                  return { active: false };
+                }
+              : undefined,
+        });
+        yield* withHost(fixture, (host) =>
+          Effect.gen(function* () {
+            const session = yield* host.open(policy());
+            const resize = session.resizeViewport({ width: 800, height: 600 });
+            const pending = yield* (
+              operation === "resize"
+                ? resize
+                : operation === "navigate"
+                  ? session.handle.navigate(navigate()).pipe(Effect.asVoid)
+                  : session.getHandoffState.pipe(Effect.asVoid)
+            ).pipe(Effect.forkChild);
+            yield* awaitPromise(gate.started);
+            expect(yield* resize.pipe(Effect.flip)).toMatchObject({
+              _tag: "InteractiveBrowserBusyError",
+            });
+            expect(yield* session.handle.readText(readText()).pipe(Effect.flip)).toMatchObject({
+              _tag: "InteractiveBrowserBusyError",
+            });
+            gate.resolve(undefined);
+            yield* Fiber.join(pending);
+            yield* resize;
+            yield* session.handle.readText(readText());
+          }),
+        );
+        expectResourcesClosedOnce(fixture);
+      }),
+  );
+
+  it.effect.each(["reject", "throw", "remote-closure"])(
+    "returns typed provider failures for resize (%s)",
+    (failure) =>
+      Effect.gen(function* () {
+        const cause = new Error(
+          failure === "remote-closure" ? "Target closed" : "private-provider-error",
+        );
+        const fixture = makeFixture({
+          setViewport: () => {
+            if (failure === "throw") throw cause;
+            return Promise.reject(cause);
+          },
+        });
+        yield* withHost(fixture, (host) =>
+          Effect.gen(function* () {
+            const session = yield* host.open(policy({ maxActions: 1 }));
+            const error = yield* session
+              .resizeViewport({ width: 800, height: 600 })
+              .pipe(Effect.flip);
+            expect(error).toMatchObject({
+              _tag:
+                failure === "remote-closure"
+                  ? "InteractiveBrowserExpiredError"
+                  : "InteractiveBrowserProtocolError",
+            });
+            if (failure === "remote-closure") {
+              expect(yield* session.handle.navigate(navigate()).pipe(Effect.flip)).toMatchObject({
+                _tag: "InteractiveBrowserExpiredError",
+              });
+            } else {
+              expect(error).toHaveProperty("cause", cause);
+              expect(error.message).not.toContain("private-provider-error");
+              yield* session.handle.navigate(navigate());
+            }
+          }),
+        );
+        expectResourcesClosedOnce(fixture);
+      }),
+  );
+
+  it.effect.each(["timeout", "interruption", "close"])(
+    "expires an in-flight resize after %s without replay",
+    (ending) =>
+      Effect.gen(function* () {
+        const gate = makeGate<void>();
+        const fixture = makeFixture({
+          setViewport: () => {
+            gate.markStarted();
+            return gate.promise;
+          },
+        });
+        yield* withHost(fixture, (host) =>
+          Effect.gen(function* () {
+            const session = yield* host.open(policy({ maxElapsedMillis: 100 }));
+            const resize = session.resizeViewport({ width: 800, height: 600 });
+            const pending = yield* resize.pipe(Effect.forkChild);
+            yield* awaitPromise(gate.started);
+            if (ending === "timeout") {
+              yield* TestClock.adjust(Duration.millis(100));
+              expect(yield* Fiber.join(pending).pipe(Effect.flip)).toMatchObject({
+                _tag: "InteractiveBrowserLimitError",
+                limit: "elapsed",
+              });
+            } else if (ending === "interruption") {
+              yield* Fiber.interrupt(pending);
+              expect(Exit.hasInterrupts(yield* Fiber.await(pending))).toBe(true);
+            } else {
+              yield* session.close;
+            }
+            gate.resolve(undefined);
+            if (ending === "close") {
+              expect(yield* Fiber.join(pending).pipe(Effect.flip)).toMatchObject({
+                _tag: "InteractiveBrowserExpiredError",
+              });
+            }
+            expect(yield* resize.pipe(Effect.flip)).toMatchObject({
+              _tag: "InteractiveBrowserExpiredError",
+            });
+            expect(yield* session.handle.readText(readText()).pipe(Effect.flip)).toMatchObject({
+              _tag: "InteractiveBrowserExpiredError",
+            });
+          }),
+        );
+        expect(fixture.calls.filter((call) => call === "page.setViewport")).toHaveLength(1);
+        expectResourcesClosedOnce(fixture);
+      }),
+  );
+
   it("keeps native binding authority visible in the Layer requirement", () => {
     const proof: InteractiveLayerRequiresBinding = true;
     const scoped: ScopedOpenRequirement = true;
-    expect(proof && scoped).toBe(true);
+    const resize: ResizeEffect = true;
+    expect(proof && scoped && resize).toBe(true);
   });
 
   it.effect("runs the bounded exact-host flow and closes page, context, then browser", () =>

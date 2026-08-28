@@ -185,6 +185,38 @@ const HandoffStateObservation = Schema.Union([
   }),
 ]);
 
+/**
+ * Host presentation state in CSS pixels. Dimensions are integers in 1..2048,
+ * density is finite in 1..2 (default 1), and neither scaled dimension may exceed
+ * 2048 pixels. Mobile, touch, and orientation emulation are not supported.
+ */
+export class BrowserRunViewport extends Schema.Class<BrowserRunViewport>("BrowserRunViewport")(
+  Schema.Struct({
+    width: PositiveInt.check(Schema.isLessThanOrEqualTo(2_048)),
+    height: PositiveInt.check(Schema.isLessThanOrEqualTo(2_048)),
+    deviceScaleFactor: Schema.optionalKey(
+      Schema.Finite.check(Schema.isBetween({ minimum: 1, maximum: 2 })),
+    ),
+  }).check(
+    Schema.makeFilter(
+      (viewport) =>
+        Math.max(viewport.width, viewport.height) * (viewport.deviceScaleFactor ?? 1) <= 2_048,
+      { title: "a viewport with scaled dimensions no larger than 2048 pixels" },
+    ),
+  ),
+) {}
+
+const decodeViewport = (input: BrowserRunViewport) =>
+  Schema.decodeUnknownEffect(BrowserRunViewport)(input, { onExcessProperty: "error" }).pipe(
+    Effect.mapError(() => policyError("The browser viewport is malformed")),
+    // Copy only presentation fields, including for Schema class instances.
+    Effect.map((viewport) => ({
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: viewport.deviceScaleFactor ?? 1,
+    })),
+  );
+
 /** Host-only request for a redacted Cloudflare Live View URL. */
 export class BrowserRunLiveViewRequest extends Schema.Class<BrowserRunLiveViewRequest>(
   "BrowserRunLiveViewRequest",
@@ -275,6 +307,7 @@ export interface BrowserRunInteractivePage {
   ) => Promise<unknown>;
   readonly screenshot: (fullPage: boolean) => Promise<unknown>;
   readonly scroll: (deltaX: number, deltaY: number) => Promise<void>;
+  readonly setViewport: (viewport: BrowserRunViewport) => Promise<void>;
   readonly createCdpSession: () => Promise<BrowserRunInteractiveCdpSession>;
 }
 
@@ -302,23 +335,40 @@ export class BrowserRunInteractiveBinding extends Context.Service<
 >()("@effect-agent/platform-cloudflare/BrowserRunInteractiveBinding") {
   static layer(options: {
     readonly browser: BrowserRun;
-  }): Layer.Layer<BrowserRunInteractiveBinding> {
-    return Layer.succeed(BrowserRunInteractiveBinding)({
-      launch: async (keepAliveMillis) =>
-        makeProductionBrowser(
-          await puppeteer.launch(options.browser, {
-            keep_alive: keepAliveMillis,
-          }),
-        ),
-      connect: async (sessionId) =>
-        makeProductionBrowser(await puppeteer.connect(options.browser, sessionId)),
-    });
+    readonly viewport?: BrowserRunViewport;
+  }): Layer.Layer<BrowserRunInteractiveBinding, InteractiveBrowserPolicyDeniedError> {
+    return Layer.effect(BrowserRunInteractiveBinding)(
+      Effect.gen(function* () {
+        const viewport =
+          options.viewport === undefined ? undefined : yield* decodeViewport(options.viewport);
+        return {
+          launch: async (keepAliveMillis: number) =>
+            makeProductionBrowser(
+              await puppeteer.launch(options.browser, {
+                keep_alive: keepAliveMillis,
+                ...(viewport === undefined ? {} : { defaultViewport: { ...viewport } }),
+              }),
+            ),
+          connect: async (sessionId: string) =>
+            makeProductionBrowser(await puppeteer.connect(options.browser, sessionId)),
+        };
+      }),
+    );
   }
 }
 
 export interface BrowserRunInteractiveSession {
   readonly handle: BrowserHandle;
   readonly sessionId: Redacted.Redacted<string>;
+  /**
+   * Resize without charging an agent action or changing emulation modes. Shares
+   * the handle's fail-fast lock, page-policy preflight, and elapsed deadline.
+   * A timeout or interruption leaves the session unusable; no resize is retried.
+   * The host must authorize callers. No viewer ownership or durable state is added.
+   */
+  readonly resizeViewport: (
+    viewport: BrowserRunViewport,
+  ) => Effect.Effect<void, InteractiveBrowserError>;
   readonly getLiveView: (
     request: BrowserRunLiveViewRequest,
   ) => Effect.Effect<BrowserRunLiveViewResult, InteractiveBrowserError>;
@@ -924,6 +974,7 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
         deltaY,
       ),
     createCdpSession: async () => makeProductionCdpSession(await page.createCDPSession()),
+    setViewport: (viewport) => page.setViewport(viewport),
   };
 };
 
@@ -1143,6 +1194,7 @@ interface HandleRuntime {
   readonly run: <A>(
     effect: Effect.Effect<A, BrowserFailure>,
     preflight?: Effect.Effect<void, BrowserFailure>,
+    consumeAction?: boolean,
   ) => Effect.Effect<A, BrowserFailure>;
 }
 
@@ -1380,6 +1432,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
   const run = <A>(
     effect: Effect.Effect<A, BrowserFailure>,
     preflight: Effect.Effect<void, BrowserFailure> = Effect.void,
+    consumeAction = true,
   ) =>
     permits
       .withPermitsIfAvailable(1)(
@@ -1388,19 +1441,21 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
           if (unavailable !== undefined) return yield* unavailable;
           yield* preflight;
 
-          const admitted = yield* Ref.modify(actions, (count) =>
-            count >= policy.maxActions
-              ? [{ allowed: false, observed: count + 1 }, count]
-              : [{ allowed: true, observed: count + 1 }, count + 1],
-          );
-          if (!admitted.allowed) {
-            return yield* InteractiveBrowserLimitError.make({
-              implementation: browserRunInteractiveImplementation,
-              limit: "actions",
-              maximum: policy.maxActions,
-              observed: admitted.observed,
-              message: "The browser action limit was reached",
-            });
+          if (consumeAction) {
+            const admitted = yield* Ref.modify(actions, (count) =>
+              count >= policy.maxActions
+                ? [{ allowed: false, observed: count + 1 }, count]
+                : [{ allowed: true, observed: count + 1 }, count + 1],
+            );
+            if (!admitted.allowed) {
+              return yield* InteractiveBrowserLimitError.make({
+                implementation: browserRunInteractiveImplementation,
+                limit: "actions",
+                maximum: policy.maxActions,
+                observed: admitted.observed,
+                message: "The browser action limit was reached",
+              });
+            }
           }
 
           const completed = effect.pipe(
@@ -1898,6 +1953,25 @@ const makeHostService = (
     return {
       handle: runtime.handle,
       sessionId: Redacted.make(sessionIdValue),
+      resizeViewport: (viewport) =>
+        decodeViewport(viewport).pipe(
+          Effect.flatMap((decoded) =>
+            runtime.run(
+              Effect.tryPromise({
+                try: () => page.setViewport(decoded),
+                catch: (cause) => {
+                  if (state.disconnected.value || isRemoteClosure(cause)) {
+                    state.disconnected.value = true;
+                    return expiredError();
+                  }
+                  return protocolError("Resizing the browser viewport failed", cause);
+                },
+              }),
+              currentPagePreflight,
+              false,
+            ),
+          ),
+        ),
       getLiveView: (request) =>
         Schema.decodeUnknownEffect(BrowserRunLiveViewRequest)(request).pipe(
           Effect.mapError(() => policyError("The Live View request is malformed")),
