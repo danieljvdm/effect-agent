@@ -175,13 +175,13 @@ interface StoredSubmission {
 
 /**
  * States in which `claim` never grants the head: the lane is host-owned (`joining`/`joined`)
- * or durably blocked (`suspended`/`unknown`) rather than worker-claimable.
+ * or durably suspended rather than worker-claimable. Unknown heads are checked against abort
+ * intent separately: abort authorizes cleanup and settlement, never ordinary Tool replay.
  */
 const BLOCKED_HEAD_STATES: ReadonlySet<SubmissionState> = new Set([
   "joining",
   "joined",
   "suspended",
-  "unknown",
 ]);
 
 interface LaneState {
@@ -597,9 +597,11 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             (current): readonly [Decision<Option.Option<Claim>, LedgerError>, LedgerState] => {
               const head = findHead(current, request.conversationId);
               if (head === undefined) return [success(Option.none()), current];
-              // A joining/joined head is host-owned and a suspended/unknown head is durably
-              // blocked; the lane produces no claim and later ready work is never skipped.
-              if (BLOCKED_HEAD_STATES.has(head.row.state)) return [success(Option.none()), current];
+              if (
+                BLOCKED_HEAD_STATES.has(head.row.state) ||
+                (head.row.state === "unknown" && head.abortIntent === undefined)
+              )
+                return [success(Option.none()), current];
               if (
                 head.ownership !== undefined &&
                 head.ownership.leaseExpiresAtMillis > nowMillis &&

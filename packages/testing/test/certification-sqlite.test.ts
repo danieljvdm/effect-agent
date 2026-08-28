@@ -83,15 +83,13 @@ const certified = Effect.gen(function* () {
 
 describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () => {
   it.effect(
-    "TIER1: all 32 SubmissionLedger and 8 ConversationStore contract cases pass",
+    "TIER1: all SubmissionLedger and ConversationStore contract cases pass",
     () =>
       Effect.gen(function* () {
         const report = yield* certified;
         const ledgerCases = report.tier1.filter((result) => result.suite === "submission-ledger");
         const storeCases = report.tier1.filter((result) => result.suite === "conversation-store");
-        expect(ledgerCases).toHaveLength(32);
         expect(ledgerCases).toHaveLength(submissionLedgerConformanceCases.length);
-        expect(storeCases).toHaveLength(8);
         expect(storeCases).toHaveLength(conversationStoreConformanceCases.length);
         expect(report.tier1.filter((result) => result.status !== "passed")).toEqual([]);
       }),

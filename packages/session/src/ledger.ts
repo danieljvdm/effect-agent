@@ -70,10 +70,11 @@ export type QueueSequence = typeof QueueSequence.Type;
  * - `suspended` — durably waiting for explicit approval decisions; the ownership period has
  *   ended and the lane consumes no worker permit while the obligation stays owed.
  * - `unknown` — at least one ordinary Tool Call has a durable Unknown Outcome; the lane is
- *   blocked until an authorized resolution covers every open call (DUR-017).
+ *   blocked until an authorized resolution covers every open call or a durable abort intent
+ *   authorizes cleanup and aborted settlement without Tool replay (DUR-012/DUR-017).
  *
- * `claim` never grants a `joining`, `joined`, `suspended`, or `unknown` head: the lane is
- * host-owned or blocked, never worker-claimable.
+ * `claim` never grants a `joining`, `joined`, or `suspended` head. An `unknown` head is
+ * claimable only with a durable abort intent, under the ordinary lease and fencing rules.
  */
 export const SubmissionState = Schema.Literals([
   "admitted",

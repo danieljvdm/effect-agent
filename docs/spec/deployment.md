@@ -327,6 +327,10 @@ stores a versioned `dirty`/`processed` generation beside its single alarm slot:
   outcome, joined child, or child awaiting parent establishment), the observed generation is
   acknowledged and the alarm clears. Its resolving mutation re-establishes both generation and
   alarm before changing the wait;
+- ready FIFO followers behind a stable external wait do not make the lane actionable. Admission
+  repair, an accepted abort, and pending terminalization still require maintenance, including an
+  abort whose ownership claim was deferred. Neither elapsed time nor queued followers authorize
+  resolving or aborting an unknown outcome;
 - autonomous retry, indeterminate admission/establishment, lease recovery, and other locally
   actionable states leave the generation unprocessed and rearm with bounded backoff;
 - a forced alarm with `processed >= dirty` reads only the maintenance record, clears the alarm,

@@ -396,6 +396,20 @@ Abort is a durable command with identity, author, reason, and target.
 - Repeating the same abort command is idempotent.
 - A completed or failed submission cannot later become aborted.
 
+An `unknown` FIFO head with a durably accepted abort intent MUST be claimable under the normal
+ownership lease and producer fence. The claim authorizes the existing abort recovery path,
+including request-abort-and-join for attached children; it does not authorize ordinary Tool replay.
+The ledger retains the unknown mark and canonical `ToolCallUnknown` evidence. Neither callers nor
+recovery need to manufacture a `ResolutionAbortSubmission` for each open call. Without an abort
+intent or covering authorized resolutions, the head remains blocked.
+
+Claimability reads the intent in the existing atomic claim operation, rather than changing unknown
+state in `requestAbort`. This also covers an abort accepted before a racing unknown mark and an
+acknowledgement lost after either write. Existing claim, abort-intent, reservation, canonical-append,
+and finalization failpoints bound the protocol; no additional durable mutation is introduced.
+The original abort author, reason, and timestamp survive retries. A previously reserved or
+canonical terminal outcome still wins over a later abort.
+
 ## 14. Recovery algorithm
 
 A recovery worker:

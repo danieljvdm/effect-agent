@@ -240,11 +240,15 @@ const stableExternalWait = (
   snapshot: SubmissionSnapshot,
   reports: ReadonlyMap<string, RecoveryReport>,
 ): boolean => {
+  const decision = reports.get(snapshot.submissionId)?.decision._tag;
+  // An accepted abort still owes cleanup/settlement even if its claim was deferred this pass.
+  if (decision === "SettleAborted") return false;
   switch (snapshot.state) {
     case "suspended":
-    case "unknown":
     case "joined":
       return true;
+    case "unknown":
+      return decision === "AwaitUnknownResolution" || decision === "MarkUnknown";
     case "admitted":
       return reports.get(snapshot.submissionId)?.decision._tag === "AwaitParentEstablishment";
     case "input-applied":
@@ -478,7 +482,20 @@ export class ConversationMaintenance extends Context.Service<
         // Observe residual state before acknowledging this exact pass-start generation.
         const remaining = yield* Stream.runCollect(ledger.scanNonterminal);
         const reports = new Map(recovered.map((report) => [report.submissionId, report]));
-        const autonomous = remaining.some((snapshot) => !stableExternalWait(snapshot, reports));
+        const head = remaining[0];
+        const headWaiting = head !== undefined && stableExternalWait(head, reports);
+        const autonomous = remaining.some((snapshot, index) => {
+          // FIFO followers cannot execute through a stable external wait. Only plain queued
+          // input is dormant here; admission repairs and accepted aborts still need a pass.
+          if (
+            index > 0 &&
+            headWaiting &&
+            snapshot.state === "ready" &&
+            reports.get(snapshot.submissionId)?.decision._tag === "ApplyInput"
+          )
+            return false;
+          return !stableExternalWait(snapshot, reports);
+        });
         const progressed =
           settlements.length > 0 || recovered.some((report) => report.disposition === "repaired");
         const delay = autonomous ? yield* rearmDelay(progressed) : 0;

@@ -545,12 +545,15 @@ const BookTool = Tool.make("book", {
   parameters: Schema.Struct({ ref: Schema.String }),
   success: Schema.Struct({ confirmation: Schema.String }),
 });
-const bookTools = Toolkit.make(BookTool);
+export const bookTools = Toolkit.make(BookTool);
+/** Lose the RPC reply after the external action, without claiming a safe-to-retry failure. */
+export const lostBookReplies = new Set<string>();
 export const bookToolLayer = bookTools.toLayer({
   book: ({ ref }) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       const confirmation = `confirmed-${ref}`;
       recordSupplierCall("book", ref, confirmation);
+      if (lostBookReplies.delete(ref)) return yield* Effect.die("external reply lost");
       return { confirmation };
     }),
 });
