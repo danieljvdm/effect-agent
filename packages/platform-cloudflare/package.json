@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/platform-cloudflare",
-  "version": "0.1.0-beta.36",
+  "version": "0.1.0-beta.37",
   "description": "Cloudflare Layer assembly for Effect Agent: Durable Objects and Browser Run adapters.",
   "license": "MIT",
   "repository": {

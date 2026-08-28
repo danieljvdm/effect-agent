@@ -1,5 +1,14 @@
 # @effect-agent/capabilities
 
+## 0.1.0-beta.37
+
+### Patch Changes
+
+- Updated dependencies [[`bd48a7b`](https://github.com/danieljvdm/effect-agent/commit/bd48a7b200fb71335b19edd7941be331b6ede9ea), [`bd48a7b`](https://github.com/danieljvdm/effect-agent/commit/bd48a7b200fb71335b19edd7941be331b6ede9ea)]:
+  - @effect-agent/engine@0.1.0-beta.37
+  - @effect-agent/core@0.1.0-beta.37
+  - @effect-agent/sandbox@0.1.0-beta.37
+
 ## 0.1.0-beta.36
 
 ### Patch Changes

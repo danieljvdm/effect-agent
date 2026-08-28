@@ -1,5 +1,11 @@
 # @effect-agent/core
 
+## 0.1.0-beta.37
+
+### Patch Changes
+
+- [#199](https://github.com/danieljvdm/effect-agent/pull/199) [`bd48a7b`](https://github.com/danieljvdm/effect-agent/commit/bd48a7b200fb71335b19edd7941be331b6ede9ea) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow agents to require a native completion Tool, rejecting ordinary final text instead of parsing it as structured output. Permit a sole completion Tool on the final allowed turn when no further model call is needed.
+
 ## 0.1.0-beta.36
 
 ## 0.1.0-beta.35

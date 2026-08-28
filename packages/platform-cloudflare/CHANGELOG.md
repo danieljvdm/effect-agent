@@ -1,5 +1,32 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.37
+
+### Minor Changes
+
+- [#212](https://github.com/danieljvdm/effect-agent/pull/212) [`242b601`](https://github.com/danieljvdm/effect-agent/commit/242b601c6d14c3448c2a3acdc28b97b48e27cf92) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add durable schedules for typed Agent input with owner authorization, one-shot, interval and cron timing, and recovery through ordinary Submission admission on Node and Cloudflare.
+
+  BEHAVIOR CHANGE: Reset older private-development SQLite databases for storage version 5, and provide `effect-cf ^0.37.0` to Cloudflare hosts.
+
+- [#219](https://github.com/danieljvdm/effect-agent/pull/219) [`d713c28`](https://github.com/danieljvdm/effect-agent/commit/d713c28f5b7537e133e063e5df0207ecd4046856) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose a validated launch viewport and host-only session resizing without spending the agent action budget.
+
+  BEHAVIOR CHANGE: Handle `InteractiveBrowserPolicyDeniedError` when building `BrowserRunInteractiveBinding.layer` with invalid viewport configuration.
+
+- [#218](https://github.com/danieljvdm/effect-agent/pull/218) [`b43cf38`](https://github.com/danieljvdm/effect-agent/commit/b43cf38093f716cefc998241183ca2059ee83fe0) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Separate scheduling management from driver authority, expose explicit public status, and fix DST delivery, failed-record starvation, and repeated resume. Allow positive host interval minimums and release operational capacity when schedules finish while retaining creation replay guarantees.
+
+  BEHAVIOR CHANGE: Cloudflare consumers yield `Scheduling` from `CloudflareSchedulingClient.layer`; local drivers use `ScheduleDriver.layer`. Status omits persisted input and admission internals, and `dueBatchSize` bounds a query page within a sweep.
+
+### Patch Changes
+
+- [#220](https://github.com/danieljvdm/effect-agent/pull/220) [`5f83df4`](https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose bounded JSON page text and form-control observations, including native option selection, and wait for DOM-ready navigation with a 30-second timeout. Require unique click/fill targets, export `isBrowserRunUndispatchedActionError`, and observe bounded fetch/XHR settlement while preserving uncertainty and cleanup on interruption.
+
+- Updated dependencies [[`242b601`](https://github.com/danieljvdm/effect-agent/commit/242b601c6d14c3448c2a3acdc28b97b48e27cf92), [`bd48a7b`](https://github.com/danieljvdm/effect-agent/commit/bd48a7b200fb71335b19edd7941be331b6ede9ea), [`bd48a7b`](https://github.com/danieljvdm/effect-agent/commit/bd48a7b200fb71335b19edd7941be331b6ede9ea), [`b43cf38`](https://github.com/danieljvdm/effect-agent/commit/b43cf38093f716cefc998241183ca2059ee83fe0)]:
+  - @effect-agent/session@0.1.0-beta.37
+  - @effect-agent/storage-cloudflare@0.1.0-beta.37
+  - @effect-agent/engine@0.1.0-beta.37
+  - @effect-agent/core@0.1.0-beta.37
+  - @effect-agent/sandbox@0.1.0-beta.37
+
 ## 0.1.0-beta.36
 
 ### Patch Changes
