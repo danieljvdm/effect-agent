@@ -22,6 +22,7 @@ export * from "./transport.ts";
 export * from "./layers.ts";
 export * from "./conversation-object.ts";
 export * from "./client.ts";
+export * from "./scheduling.ts";
 export * from "./code-mode-executor.ts";
 export * from "./browser-quick-action.ts";
 export * from "./browser-rest-capture.ts";

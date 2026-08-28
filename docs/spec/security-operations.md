@@ -69,6 +69,13 @@ contract. Authorization performed when instructions were first received is insuf
 later Tool Call.
 Programmatic `ToolBroker` calls are outside this authorization hook.
 
+Durable input [schedules](./scheduling.md) require an explicit `ScheduleAuthorizer` for every
+management call and occurrence preparation. Reads and listing are scoped to a tenant-qualified
+owner. Preparation authorizes completion of that one frozen delivery even if authority is later
+revoked; revocation prevents future preparation, not recovery of input that may already have been
+admitted. This grant does not bypass the Tool action-time checks above. Persist only bounded policy
+and decision identifiers, never credentials or input-bearing diagnostics, as scheduling metadata.
+
 ## 4. Least authority
 
 An Agent Runtime is assembled with only the Layers required for that agent. Tools

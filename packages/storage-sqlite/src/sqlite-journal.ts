@@ -4,6 +4,7 @@ import { Effect, Exit, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
+import type { SqliteStorageFailpointError } from "./errors.ts";
 import {
   SqliteAppendConflict,
   SqliteCheckpointConflict,
@@ -11,7 +12,6 @@ import {
   SqliteStorageCompatibilityError,
   SqliteStorageCorruptionError,
   SqliteStorageError,
-  SqliteStorageFailpointError,
   SqliteWriteContention,
   type SqliteStorageFailpointLocation,
 } from "./errors.ts";
@@ -300,7 +300,8 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
         'effect_agent_settlement_reservations',
         'effect_agent_abort_intents',
         'effect_agent_approval_decisions',
-        'effect_agent_unknown_resolutions'
+        'effect_agent_unknown_resolutions',
+        'effect_agent_schedules'
       )
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
@@ -310,7 +311,7 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
     "required_tables",
     requiredRows,
   );
-  if (required.length !== 11) {
+  if (required.length !== 12) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: CurrentSqliteStorageVersion,
       supportedVersion: CurrentSqliteStorageVersion,

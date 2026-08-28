@@ -124,6 +124,11 @@ conversation application independently recoverable.
 The default scheduler permits at most one active submission per conversation.
 Different conversations may run concurrently.
 
+Scheduled input uses this same admission and ordering boundary. A Schedule owns a due occurrence
+until ordinary admission returns a Receipt; after that commit, the Submission Ledger owns the
+accepted work. [The scheduling specification](./scheduling.md) defines preparation, recovery, and
+coalescing before admission.
+
 FIFO is defined by the sequence allocated during admission, not wall-clock arrival
 time. Steering addressed to an active run has a separate ordered stream but must be
 committed to the canonical log before it affects the run.

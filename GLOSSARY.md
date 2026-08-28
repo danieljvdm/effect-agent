@@ -53,6 +53,23 @@ The durable identity returned after ledger admission, Conversation materializati
 attachment storage, and readiness are committed. It is an identifier, not an authorization
 capability.
 
+**Schedule**
+A durable, owner-scoped registration that delivers one Schema-encoded Agent input through ordinary
+Submission admission at a specified time. It owns a firing until it records a Receipt or a
+conclusive refusal; it does not run the Agent itself.
+
+**Schedule Owner**
+The tenant-qualified scope that owns a Schedule and authorizes its management and listing. There is
+no global Schedule listing operation.
+
+**Delivery Principal**
+The stable principal recorded in a Schedule and used to authorize and admit each due occurrence.
+It is distinct from the caller who manages the Schedule.
+
+**Prepared Delivery**
+The single immutable pending admission envelope for one Schedule occurrence. Recovery retries that
+exact envelope until Receipt or conclusive refusal and never rebuilds it from later configuration.
+
 **Settlement**  
 The single durable terminal outcome owed to an accepted Submission: `completed`, `failed`, or
 `aborted`. A failed Settlement always carries the framework's bounded generic diagnostic;

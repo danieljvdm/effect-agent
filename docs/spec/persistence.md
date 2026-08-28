@@ -55,6 +55,14 @@ transactional stores contain references.
 
 Stores rebuildable views for UI, search, metrics, and administration.
 
+### 2.8 Schedule Store
+
+Stores one authoritative, versioned Schedule record per owner and Schedule ID. Its atomic
+transitions compare configuration revision and cursor, and conditionally create, retry, clear, or
+refuse one immutable pending delivery. The [scheduling specification](./scheduling.md) defines the
+record and transition rules. Schedule records are operational state, not canonical Conversation
+records or a replacement Submission Ledger.
+
 ## 3. Port shape
 
 The actual TypeScript API may split these services further, but it must preserve the

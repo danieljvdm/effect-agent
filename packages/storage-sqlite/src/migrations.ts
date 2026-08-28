@@ -2,7 +2,7 @@ import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-export const CurrentSqliteStorageVersion = 4;
+export const CurrentSqliteStorageVersion = 5;
 
 export const sqliteMigrations = SqliteMigrator.fromRecord({
   "1_current_persistent_conversation_foundation": Effect.gen(function* () {
@@ -271,5 +271,35 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
     `.withoutTransform;
 
     yield* sql`PRAGMA user_version = 4`.withoutTransform;
+  }),
+  "5_durable_schedules": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+
+    // record_json is authoritative. The remaining columns support owner keyset paging and
+    // deadline queries without decoding unrelated future schedules.
+    yield* sql`
+      CREATE TABLE effect_agent_schedules (
+        tenant_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        schedule_id TEXT NOT NULL,
+        deadline_at_millis INTEGER,
+        record_json TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, owner_id, schedule_id)
+      )
+    `.withoutTransform;
+
+    yield* sql`
+      CREATE INDEX effect_agent_schedules_deadline
+        ON effect_agent_schedules (deadline_at_millis, tenant_id, owner_id, schedule_id)
+        WHERE deadline_at_millis IS NOT NULL
+    `.withoutTransform;
+
+    yield* sql`
+      CREATE INDEX effect_agent_schedules_owner_deadline
+        ON effect_agent_schedules (tenant_id, owner_id, deadline_at_millis, schedule_id)
+        WHERE deadline_at_millis IS NOT NULL
+    `.withoutTransform;
+
+    yield* sql`PRAGMA user_version = 5`.withoutTransform;
   }),
 });

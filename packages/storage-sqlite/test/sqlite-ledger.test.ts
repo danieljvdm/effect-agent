@@ -86,6 +86,7 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import {
   type SqliteStorageConfig,
   conversationStoreLayer,
+  CurrentSqliteStorageVersion,
   ledgerLayer,
   storageConfigLayer,
   SqliteStorageCompatibilityError,
@@ -632,9 +633,9 @@ describe("SqliteSubmissionLedger", () => {
   );
 
   it.effect(
-    "rejects v1-v3 files exactly with reset guidance and still rejects newer versions",
+    "rejects older files exactly with reset guidance and still rejects newer versions",
     () =>
-      Effect.forEach([1, 2, 3, 5, 99], (storedVersion) =>
+      Effect.forEach([1, 2, 3, 4, CurrentSqliteStorageVersion + 1, 99], (storedVersion) =>
         withTemporaryDatabase((filename) =>
           Effect.gen(function* () {
             yield* withSql(
@@ -652,7 +653,7 @@ describe("SqliteSubmissionLedger", () => {
               expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
               if (isSqliteStorageCompatibilityError(error)) {
                 expect(error.actualVersion).toBe(storedVersion);
-                expect(error.supportedVersion).toBe(4);
+                expect(error.supportedVersion).toBe(CurrentSqliteStorageVersion);
                 expect(error.message).toContain("Reset the database file explicitly");
               }
             }

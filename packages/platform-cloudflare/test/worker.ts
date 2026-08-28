@@ -5,6 +5,7 @@ import { OtlpExporter } from "effect/unstable/observability";
 
 import {
   makeConversationObjectClass,
+  makeScheduleOwnerObjectClass,
   type ConversationObjectOptions,
   type ConversationObjectRpc,
 } from "../src/index.ts";
@@ -17,6 +18,8 @@ import {
   makeContextCompactorRunContextLayer,
   makeTestBindings,
   runtimeEvictionFailpoint,
+  scheduleAuthorizer,
+  scheduleFailpoint,
   storageEvictionFailpoint,
 } from "./fixtures.ts";
 import {
@@ -54,6 +57,24 @@ const baseOptions: ConversationObjectOptions = {
   runtimeFailpoint: runtimeEvictionFailpoint,
   maintenanceFailpoint: maintenanceRaceFailpoint,
 };
+
+/** Real Schedule Owner object routed to the test Conversation namespace. */
+export class TestScheduleOwnerObject extends makeScheduleOwnerObjectClass({
+  conversationNamespaceBinding: CONVERSATIONS_BINDING,
+  authorizer: ({ owner }) => scheduleAuthorizer(owner),
+  failpoint: ({ ctx }) => scheduleFailpoint(ctx),
+  limits: {
+    maxSchedulesPerOwner: 100,
+    minIntervalMillis: 60_000,
+    maxInputBytes: 65_536,
+    dueBatchSize: 16,
+    admissionConcurrency: 4,
+    retryBaseMillis: 10,
+    retryMaxMillis: 100,
+    admissionTimeoutMillis: 5_000,
+    recoveryPollMillis: 100,
+  },
+}) {}
 
 interface BindingSourceProbe {
   readonly evaluationCount: number;

@@ -1,5 +1,6 @@
 import { SubmissionId } from "@effect-agent/core";
 import {
+  scheduleOwnerKey,
   submissionInputRecordId,
   submissionSettlementRecordId,
   type CanonicalRecordEnvelope,
@@ -12,7 +13,10 @@ import { expect } from "vite-plus/test";
 
 import {
   CloudflareConversationClient,
+  CloudflareSchedulingClient,
   ConversationObjectNamespace,
+  ScheduleOwnerNamespace,
+  type ScheduleOwnerObjectRpc,
   type ConversationObjectRpc,
 } from "../src/index.ts";
 import { decodeConversationId, supplierCountsFor, supplierValuesFor } from "./fixtures.ts";
@@ -24,6 +28,7 @@ import type {
   SubagentConversationObject,
   TelemetryConversationObject,
   TestConversationObject,
+  TestScheduleOwnerObject,
   TinyDatabaseConversationObject,
 } from "./worker.ts";
 
@@ -38,6 +43,7 @@ declare global {
       DYNAMIC_BINDINGS: DurableObjectNamespace<DynamicBindingsConversationObject>;
       TELEMETRY: DurableObjectNamespace<TelemetryConversationObject>;
       CONTEXT_COMPACTOR: DurableObjectNamespace<ContextCompactorConversationObject>;
+      SCHEDULES: DurableObjectNamespace<TestScheduleOwnerObject>;
     }
   }
 }
@@ -99,6 +105,22 @@ export const runClient = <A, E>(
   effect: Effect.Effect<A, E, CloudflareConversationClient>,
   namespace: TestNamespace = "CONVERSATIONS",
 ): Promise<A> => Effect.runPromise(effect.pipe(Effect.provide(clientLayer(namespace))));
+
+const scheduleClientLayer = CloudflareSchedulingClient.layer.pipe(
+  Layer.provide(
+    ScheduleOwnerNamespace.layer(
+      env.SCHEDULES as unknown as DurableObjectNamespace<ScheduleOwnerObjectRpc>,
+    ),
+  ),
+);
+
+export const scheduleStubFor = (owner: { readonly tenantId: string; readonly ownerId: string }) =>
+  env.SCHEDULES.get(env.SCHEDULES.idFromName(scheduleOwnerKey(owner)));
+
+/** Run one management operation through the real Worker-to-Schedule-Owner RPC client. */
+export const runScheduleClient = <A, E>(
+  effect: Effect.Effect<A, E, CloudflareSchedulingClient>,
+): Promise<A> => Effect.runPromise(effect.pipe(Effect.provide(scheduleClientLayer)));
 
 /** Fork one client Effect so tests can interrupt the real Worker-side caller deterministically. */
 export const runClientFiber = <A, E>(

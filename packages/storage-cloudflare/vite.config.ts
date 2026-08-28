@@ -48,6 +48,7 @@ export default defineConfig({
         durableObjects: {
           PROBE: { className: "ProbeDurableObject", useSQLite: true },
           CONVERSATIONS: { className: "ConversationStorageObject", useSQLite: true },
+          SCHEDULES: { className: "ScheduleStorageObject", useSQLite: true },
         },
       },
     }),
