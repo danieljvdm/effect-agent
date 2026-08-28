@@ -7,6 +7,7 @@ const run: NonNullable<UserConfig["run"]> = {
   tasks: {
     test: {
       command: "vitest run",
+      env: ["BROWSER_TEST_EXECUTABLE"],
       input: [
         { auto: true },
         { pattern: "bun.lock", base: "workspace" },
@@ -85,7 +86,22 @@ export default defineConfig({
         test: {
           name: "workerd",
           include: ["test/**/*.test.ts"],
-          exclude: ["test/restart/**", "test/code-mode/**", "test/travel-planner-dc.test.ts"],
+          exclude: [
+            "test/restart/**",
+            "test/code-mode/**",
+            "test/interactive-browser-actions.test.ts",
+            "test/interactive-browser-native.test.ts",
+            "test/travel-planner-dc.test.ts",
+          ],
+        },
+      },
+      {
+        test: {
+          name: "browser-actions",
+          include: [
+            "test/interactive-browser-actions.test.ts",
+            "test/interactive-browser-native.test.ts",
+          ],
         },
       },
       {
