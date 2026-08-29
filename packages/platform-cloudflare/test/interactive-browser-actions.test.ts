@@ -8,6 +8,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Logger } from "effect";
 import { afterEach, beforeEach, vi } from "vite-plus/test";
 
+import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
 import {
   BrowserRunInteractiveBinding,
   browserRunInteractiveLayer,
@@ -103,7 +104,9 @@ const fixture = (
   };
   const layer = browserRunInteractiveLayer().pipe(
     Layer.provide(
-      BrowserRunInteractiveBinding.layer({ browser: { fetch: unused, quickAction: unused } }),
+      BrowserRunInteractiveBinding.layer({ browser: { fetch: unused, quickAction: unused } }).pipe(
+        Layer.provide(Layer.succeed(BrowserRunSessionLifecycle)({ close: () => Effect.void })),
+      ),
     ),
   );
   return {

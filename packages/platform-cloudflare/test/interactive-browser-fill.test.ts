@@ -7,6 +7,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { vi } from "vite-plus/test";
 
+import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
 import {
   BrowserRunInteractiveBinding,
   browserRunInteractiveLayer,
@@ -58,7 +59,9 @@ const nativeLayer = (element: object) => {
     Layer.provide(
       BrowserRunInteractiveBinding.layer({
         browser: { fetch: unusedRpc, quickAction: unusedRpc },
-      }),
+      }).pipe(
+        Layer.provide(Layer.succeed(BrowserRunSessionLifecycle)({ close: () => Effect.void })),
+      ),
     ),
   );
 };

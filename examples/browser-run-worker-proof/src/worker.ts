@@ -8,6 +8,7 @@ import {
   BrowserRunHandoffRequest,
   BrowserRunInteractiveBinding,
   BrowserRunInteractiveHost,
+  BrowserRunSessionLifecycle,
   BrowserRunLiveViewRequest,
   browserRunInteractiveHostLayer,
 } from "@effect-agent/platform-cloudflare/interactive-browser";
@@ -22,9 +23,20 @@ import {
   PageScreenshotRequest,
   PageUrlTarget,
 } from "@effect-agent/sandbox";
-import { Duration, Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
+import {
+  Config,
+  ConfigProvider,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Redacted,
+  Schema,
+  Stream,
+} from "effect";
 import { Worker, WorkerEnvironment } from "effect-cf";
 import { Toolkit } from "effect/unstable/ai";
+import { FetchHttpClient } from "effect/unstable/http";
 
 import {
   BrowserRunInteractiveProof,
@@ -82,13 +94,23 @@ class WorkerCaptureProofError extends Schema.TaggedError<WorkerCaptureProofError
 ) {}
 
 const proofLayer = Layer.unwrap(
-  Effect.map(WorkerEnvironment, (env) => {
+  Effect.gen(function* () {
+    const env = yield* WorkerEnvironment;
+    const lifecycleConfig = yield* Config.all({
+      accountId: Config.string("CLOUDFLARE_ACCOUNT_ID"),
+      apiToken: Config.redacted("BROWSER_RENDERING_API_TOKEN"),
+    }).pipe(Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(env)));
     const quickActionLayer = Layer.mergeAll(
       browserQuickActionCaptureLayer(),
       browserQuickActionScreenshotLayer(),
     ).pipe(Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: env.BROWSER })));
     const interactiveLayer = browserRunInteractiveHostLayer().pipe(
       Layer.provide(BrowserRunInteractiveBinding.layer({ browser: env.BROWSER })),
+      Layer.provide(
+        BrowserRunSessionLifecycle.layer(lifecycleConfig).pipe(
+          Layer.provide(FetchHttpClient.layer),
+        ),
+      ),
     );
     const browserRunLayer = Layer.merge(quickActionLayer, interactiveLayer);
     return Layer.merge(proofCapture.handlers, proofScrape.handlers).pipe(

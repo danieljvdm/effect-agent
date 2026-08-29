@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { vi } from "vite-plus/test";
 
+import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
 import {
   BrowserRunInteractiveBinding,
   BrowserRunInteractiveHost,
@@ -73,7 +74,11 @@ describe("Browser Run viewport boundary", () => {
     Effect.gen(function* () {
       sdk.launch.mockClear();
       const error = yield* BrowserRunInteractiveBinding.pipe(
-        Effect.provide(BrowserRunInteractiveBinding.layer({ browser, viewport })),
+        Effect.provide(
+          BrowserRunInteractiveBinding.layer({ browser, viewport }).pipe(
+            Layer.provide(Layer.succeed(BrowserRunSessionLifecycle)({ close: () => Effect.void })),
+          ),
+        ),
         Effect.flip,
       );
       expect(error).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
@@ -90,7 +95,13 @@ describe("Browser Run viewport boundary", () => {
         Effect.scoped,
         Effect.provide(
           browserRunInteractiveHostLayer().pipe(
-            Layer.provide(BrowserRunInteractiveBinding.layer({ browser })),
+            Layer.provide(
+              BrowserRunInteractiveBinding.layer({ browser }).pipe(
+                Layer.provide(
+                  Layer.succeed(BrowserRunSessionLifecycle)({ close: () => Effect.void }),
+                ),
+              ),
+            ),
           ),
         ),
       );
@@ -121,7 +132,11 @@ describe("Browser Run viewport boundary", () => {
                 BrowserRunInteractiveBinding.layer({
                   browser,
                   ...(viewport === undefined ? {} : { viewport }),
-                }),
+                }).pipe(
+                  Layer.provide(
+                    Layer.succeed(BrowserRunSessionLifecycle)({ close: () => Effect.void }),
+                  ),
+                ),
               ),
             ),
           ),

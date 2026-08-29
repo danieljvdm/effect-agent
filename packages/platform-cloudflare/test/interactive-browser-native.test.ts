@@ -13,6 +13,7 @@ import { expect, it } from "@effect/vitest";
 import { Config, Effect, Layer, Logger, Option, Schema } from "effect";
 import { vi } from "vite-plus/test";
 
+import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
 import {
   BrowserRunInteractiveBinding,
   browserRunInteractiveLayer,
@@ -125,7 +126,11 @@ it.live(
       const logs: Array<ReturnType<typeof Logger.formatStructured.log>> = [];
       const layer = browserRunInteractiveLayer().pipe(
         Layer.provide(
-          BrowserRunInteractiveBinding.layer({ browser: { fetch: unused, quickAction: unused } }),
+          BrowserRunInteractiveBinding.layer({
+            browser: { fetch: unused, quickAction: unused },
+          }).pipe(
+            Layer.provide(Layer.succeed(BrowserRunSessionLifecycle)({ close: () => Effect.void })),
+          ),
         ),
       );
       yield* Effect.gen(function* () {

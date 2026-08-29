@@ -183,6 +183,13 @@ uncertainty and recovery contract.
 
 `BrowserRunInteractiveBinding.layer({ browser, viewport: { width: 1440, height: 900 } })`
 sets Puppeteer's launch `defaultViewport`. Omitting `viewport` preserves Puppeteer's default.
+The binding requires `BrowserRunSessionLifecycle.layer({ accountId, apiToken })`, backed by an
+`HttpClient` and an account-scoped Browser Rendering Write token. Both `session.close` and
+`host.closeSession` confirm whole-browser termination or exact-session absence. Cleanup sends at
+most one DELETE and two metadata reads within ten seconds. A `closing` response remains pending;
+authentication, malformed responses, and transport failures never count as absence. Local
+teardown errors cannot veto confirmed termination. `BrowserRunCleanupError` carries a sanitized
+reason in the close error's cause; park authorization/configuration failures until corrected.
 The exported `BrowserRunViewport` Schema accepts integer CSS dimensions in `1..2048`, optional
 finite `deviceScaleFactor` in `1..2`, defaulting to `1`, and requires
 `max(width, height) * deviceScaleFactor <= 2048`. Hosts can impose narrower UI limits.
