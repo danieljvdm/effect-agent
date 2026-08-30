@@ -2934,6 +2934,10 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
       responsePartBytes: 0,
     };
     let summaryUsage: Response.Usage | undefined;
+    let summaryFinished = false;
+    let summaryFailure: ModelProtocolError | undefined;
+    const textParts = new Map<string, PartLifecycle>();
+    const reasoningParts = new Map<string, PartLifecycle>();
     yield* guardBudgetStream(
       LanguageModel.streamText({ prompt: summarizerPrompt }),
       options.budget,
@@ -2948,14 +2952,77 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
           );
           yield* consumeModelResponsePart(responseUsage, owned.retainedBytes, context.bufferLimits);
           const ownedPart = owned.ownedPart;
+          // Keep consuming a malformed response to retain its reported usage.
+          // Validation must succeed before either summary or coverage changes.
           if (ownedPart.type === "text-delta") {
             pieces.push(ownedPart.delta);
           } else if (ownedPart.type === "finish") {
             summaryUsage = ownedPart.usage;
           }
+          yield* Effect.gen(function* () {
+            if (summaryFinished) {
+              return yield* ModelProtocolError.make({
+                message: "Compaction response emitted content after its finish part",
+              });
+            }
+            switch (ownedPart.type) {
+              case "text-start":
+                return yield* startPart(textParts, ownedPart.id, "compaction text");
+              case "text-delta":
+                return yield* continuePart(textParts, ownedPart.id, "compaction text delta");
+              case "text-end":
+                return yield* endPart(textParts, ownedPart.id, "compaction text");
+              case "reasoning-start":
+                return yield* startPart(reasoningParts, ownedPart.id, "compaction reasoning");
+              case "reasoning-delta":
+                return yield* continuePart(
+                  reasoningParts,
+                  ownedPart.id,
+                  "compaction reasoning delta",
+                );
+              case "reasoning-end":
+                return yield* endPart(reasoningParts, ownedPart.id, "compaction reasoning");
+              case "finish": {
+                summaryFinished = true;
+                if (
+                  ownedPart.reason !== "stop" ||
+                  [...textParts.values(), ...reasoningParts.values()].includes("open")
+                ) {
+                  return yield* ModelProtocolError.make({
+                    message:
+                      "Compaction response did not finish with complete text and a stop reason",
+                  });
+                }
+                return;
+              }
+              case "tool-params-start":
+              case "tool-params-delta":
+              case "tool-params-end":
+              case "tool-approval-request":
+              case "error":
+                return yield* ModelProtocolError.make({
+                  message: `Compaction response contained an unusable ${ownedPart.type} part`,
+                });
+              case "file":
+              case "response-metadata":
+              case "source":
+                return;
+            }
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.sync(() => {
+                summaryFailure ??= error;
+              }),
+            ),
+          );
         }),
       ),
     );
+    if (!summaryFinished) {
+      return yield* ModelProtocolError.make({
+        message: "Compaction response ended without a finish part",
+      });
+    }
     const wasFinalizing = context.finalizing;
     context.finalizing = true;
     const consumed = yield* consumeUsage(agent, context, summaryUsage, 0, turn, options).pipe(
@@ -2966,8 +3033,13 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
       ),
     );
     events.push(...consumed.warnings);
-    const summaryText = pieces.join("").trim();
-    const summary = summaryText.length === 0 ? "(no summary produced)" : summaryText;
+    const summary = pieces.join("").trim();
+    if (summaryFailure !== undefined) return yield* summaryFailure;
+    if (summary.length === 0) {
+      return yield* ModelProtocolError.make({
+        message: "Compaction response requires non-whitespace text and a valid finish part",
+      });
+    }
     state.summary = summary;
     state.summarizedThrough = cut;
     state.lastViewLength = -1;
