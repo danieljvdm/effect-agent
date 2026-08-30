@@ -9,3 +9,4 @@ export * from "./certification.ts";
 export * from "./conformance.ts";
 export * from "./ledger-conformance.ts";
 export * from "./schedule-conformance.ts";
+export * from "./subscription-conformance.ts";

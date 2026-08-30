@@ -1,74 +1,20 @@
-import type { AgentId } from "@effect-agent/core";
 import {
-  type DurableSubmitAgent,
   type ScheduleProcessFailure,
   type ScheduleAuthorizer,
   type SchedulingLimits,
   ScheduleStorageError,
   ScheduleStore,
   type ScheduleValidationError,
-  ScheduledInputAdmission,
-  ScheduledInputRetryable,
   ScheduleWake,
   Scheduling,
   ScheduleDriver,
   defaultSchedulingLimits,
-  PersistedJson,
 } from "@effect-agent/session";
 import { NodeCrypto } from "@effect/platform-node";
 import { Cause, Duration, Effect, Layer, Option, PubSub, Result } from "effect";
 
-import { NodeDurableHost } from "./host.ts";
-
-const passthroughSubmitAgent = (agentId: AgentId): DurableSubmitAgent<typeof PersistedJson> => ({
-  definition: { id: agentId, input: PersistedJson },
-});
-
-const ambiguous = (): ScheduledInputRetryable =>
-  ScheduledInputRetryable.make({ reason: "ambiguous" });
-
-const corrupt = (operation: string): ScheduleStorageError =>
-  ScheduleStorageError.make({ operation, reason: "corrupt" });
-
-/**
- * Scheduled admission through the existing host gate. Once the gate admits the call, every
- * runtime failure stays ambiguous because the Submission may already have committed.
- */
-export const nodeScheduledInputAdmissionLayer: Layer.Layer<
-  ScheduledInputAdmission,
-  never,
-  NodeDurableHost
-> = Layer.effect(
-  ScheduledInputAdmission,
-  Effect.gen(function* () {
-    const host = yield* NodeDurableHost;
-    return ScheduledInputAdmission.of({
-      submit: (envelope) =>
-        host
-          .submit(passthroughSubmitAgent(envelope.agentId), envelope.input, {
-            conversationId: envelope.conversationId,
-            principal: envelope.deliveryPrincipal,
-            idempotencyKey: envelope.admissionKey,
-            definitions: envelope.definitions,
-          })
-          .pipe(
-            Effect.catchTags({
-              AdmissionClosed: () =>
-                Effect.fail(ScheduledInputRetryable.make({ reason: "host-closed" })),
-              AgentInputError: () => Effect.fail(corrupt("scheduled admission input")),
-              AdmissionConflict: () => Effect.fail(corrupt("scheduled admission conflict")),
-              DigestError: () => Effect.fail(ambiguous()),
-              LedgerError: () => Effect.fail(ambiguous()),
-              ConversationStoreError: () => Effect.fail(ambiguous()),
-              ConversationNotMaterialized: () => Effect.fail(ambiguous()),
-              AppendConflict: () => Effect.fail(ambiguous()),
-              FenceRejected: () => Effect.fail(ambiguous()),
-              DurableRuntimeFailpointError: () => Effect.fail(ambiguous()),
-            }),
-          ),
-    });
-  }),
-);
+import type { NodeDurableHost } from "./host.ts";
+import { nodeScheduledInputAdmissionLayer } from "./subscriptions.ts";
 
 /** One bounded hint slot for the single supported Node scheduler. Indexed polling repairs loss. */
 export const nodeScheduleWakeLayer: Layer.Layer<ScheduleWake> = Layer.effect(

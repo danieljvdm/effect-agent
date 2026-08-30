@@ -273,6 +273,118 @@ See the compiling [Node](https://github.com/danieljvdm/effect-agent/blob/main/pa
 and [Cloudflare](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/examples/scheduling.ts)
 examples for host setup and typed registration.
 
+## Event subscriptions
+
+`Subscriptions` is the event-driven sibling of `Scheduling`. A subscription can outlive its Run.
+`SubscriptionIntake` first retains a normalized event and its unfinished routing work, then returns
+an `EventAcknowledgement`. That acknowledgement is not a Submission Receipt. Delivery uses ordinary
+Conversation admission, ordering, and joining; each event does not necessarily start its own Run.
+No waiter or Run stays open to watch a source.
+
+The host assigns each source a stable `SourcePartition`, consisting of a tenant ID and source
+address, such as a repository identity. Every event and registration belongs to exactly one
+partition. Keep that address unchanged across deployments, source versions, and payload changes.
+Node uses partition-qualified SQLite tables under one process owner per database. Cloudflare uses
+one addressed Subscription Partition Object. There is no cross-partition transaction or global
+subscription directory. Hosts must bound the partitions accessible to each owner.
+
+Install exact, versioned behavior with `makeEventSource` and `EventSources`. The source supplies
+event, parameter, continuation, and Agent input Schemas; canonical event identity and matching keys;
+deterministic bounded matching; and Effect input preparation. Supply the destination Agent's input
+Schema and bind that Agent in host policy. Persisted data never includes callbacks, Schemas, Effects,
+credentials, or captured services. Keep old source versions installed while retained work needs
+them. Unsupported versions fail explicitly rather than borrowing newer behavior.
+
+Provide an explicit `SubscriptionAuthorizer`. It authorizes every management operation, intake,
+and preparation. `Subscriptions` exposes `subscribe`, `listSubscriptions`, `cancelSubscription`,
+and redacted delivery status. Management is scoped to one partition and tenant-qualified owner;
+possession of a handle is not authority. Keep `SubscriptionStore`, `SubscriptionIntake`, and
+`SubscriptionDriver` out of model Tool environments. Restricted subscription Tools bind the owner,
+Agent, principal, permitted source catalog, and current Conversation in the host. A host may also
+permit a deterministic fresh Conversation per selected event.
+
+Registrations cannot be edited, paused, or resumed. Cancel and register a new creation identity to
+change configuration. Reusing a creation identity with the same fingerprint returns the retained
+registration, including after cancellation; conflicting reuse fails. Durable Tools retain their
+creation identity and result through `DurableStep`. An uncertain ordinary Tool is not automatically
+replayed after ownership loss.
+
+Intake deduplicates by tenant, stable source address, and logical source event ID. A conflicting
+payload or source version fails. Registration and intake share a local storage sequence. An event
+can select only registrations created by its recorded cutoff; duplicate intake never moves that
+cutoff or reopens routing. Sources index registrations by exact source version and canonical
+matching key. Additional filters inspect only that bounded candidate set.
+
+Selection atomically advances the event cursor, inserts delivery obligations, and consumes once
+registrations. The first atomic selection wins, regardless of provider timestamp. Failure or
+refusal does not reactivate a consumed registration. Continuous subscriptions keep distinct events
+in a backlog without coalescing. Delivery and retries may reorder admissions; Conversation admission
+order governs execution. There is no global or provider-event ordering promise.
+
+Preparation rechecks authority, constructs and validates input, and freezes an envelope with the
+destination, principal, definition and input digests, authorization metadata, and stable admission
+key. Storage rechecks cancellation and expiry when committing it. Cancellation, expiry, and policy
+revocation stop new preparation, including a selected once delivery, which records an explicit
+refusal. Already-prepared envelopes finish recovery unchanged. Aborting admitted work is separate.
+Expiry itself never sends input to an Agent.
+
+Lost admission replies retry the exact prepared envelope and key. Only the matching delivery can
+record its Receipt. Permanent refusal requires proof that this unchanged request was not admitted
+and cannot succeed. Execution remains at least once; there is no exactly-once external-effect claim.
+Expected transient failures, defects, timeouts, and interruption preserve committed or recoverable
+work. Public status omits payloads, parameters, continuation context, and credentials.
+
+Each recovery pass processes one bounded page of source recovery, event routing, and delivery work.
+Durable scan cursors advance independently of individual failures, so restart or eviction cannot
+repeatedly send every pass back to a corrupt first record. A corrupt candidate or missing source
+version leaves that event's fanout pending with its cursor intact; unrelated events and deliveries
+continue. `SubscriptionIntake.status` exposes routing progress and failures without returning the
+event payload. Source reconciliation status retains bounded failure codes; conclusive source
+failures stop polling, while unavailable state and rate limits remain pending recovery.
+
+Node's Scope-owned driver uses indexed recovery polling. Cloudflare commits work and required
+alarms together, pre-arms recovery before external calls, and re-arms after failed passes. Wake hints
+never own work. A storage outage that prevents both durable mutation and alarm repair requires
+restored storage and a new wake or operator intervention; it never authorizes dropping work.
+
+See the compiling [Node](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-node/test/fixtures/subscriptions-example.ts)
+and [Cloudflare](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/examples/subscriptions.ts)
+examples for source registration, policy, storage, and driver assembly.
+
+`SubscriptionLimits` bounds payload, context, lifetime, candidate pages, concurrency, retries, and
+retained records per partition and owner. This implementation retains event deduplication, creation
+replay, registration configuration, and completed delivery evidence for the partition's lifetime.
+There is no automatic pruning or identity recycling. Quotas count retained records, including
+terminal ones, and reject new work before acknowledgment when full. A delivery quota reached after
+intake pauses routing with the event and cursor intact. Size capacity for that retention policy;
+do not delete evidence still needed for routing, delivery, source recovery, or durable Tool replay.
+
+### GitHub workflow run completion
+
+`makeGitHubWorkflowRunSource` watches one repository, workflow run ID, attempt number, and expected
+head SHA. Both successful and unsuccessful completions reach the Agent. It does not aggregate all
+CI checks for a commit. The host owns repository authorization, credentials, webhook setup, and the
+binding from repository identity to source partition.
+
+`acceptVerifiedGitHubWorkflowRunWebhook` verifies raw bytes before parsing a `workflow_run` delivery
+with action `completed`. Webhook and exact-attempt API observations normalize to one logical
+completion identity and canonical payload. A webhook delivery ID alone is insufficient for this
+deduplication. See GitHub's [workflow_run payload](https://docs.github.com/en/webhooks/webhook-events-and-payloads#workflow_run)
+and [exact workflow run attempt endpoint](https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run-attempt).
+
+Registration durably arms source reconciliation before any provider read. An already-completed
+attempt can therefore notify a newly registered watch without a check-then-subscribe race. A
+register-then-check catch-up may atomically select that one later watch against a retained matching
+completion, even after the ordinary cutoff. It never reroutes the event to other subscriptions.
+Cancellation, expiry, and once selection stop provider polling; preparation and admission then
+recover without further GitHub reads.
+
+GitHub [does not automatically redeliver failed webhooks](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries).
+Reconciliation covers a missed completion while the exact attempt remains retained, readable, and
+authorized. It is a state check for registered watches, not historical event replay. Provider failures
+never invent completion. Generic source durability starts at accepted intake; trusted callers should
+register before triggering work unless the source supplies register-then-check or a durable cursor.
+
 ## Next steps
 
 - [Persistence and durability](../concepts/durability) defines the contract these operations

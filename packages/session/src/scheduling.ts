@@ -16,6 +16,7 @@ import {
 import { digestJson } from "./digest.ts";
 import type { DurableSubmitAgent } from "./durable-runtime.ts";
 import { IdempotencyKey, type Principal } from "./ledger.ts";
+import { admitPreparedInput } from "./prepared-admission.ts";
 import { DefinitionDigests, type Digest, PersistedJson } from "./records.ts";
 import {
   normalizeScheduleTiming,
@@ -614,23 +615,9 @@ const makeDriver = (limits: SchedulingLimits) =>
       yield* verifyPending(key, record);
       const envelope = record.pending.envelope;
       const outcome = yield* admissionSemaphore.withPermit(
-        admission.submit(envelope).pipe(
-          Effect.timeout(limits.admissionTimeoutMillis),
-          Effect.tap(() => failpoint.hit("schedule:admission:after")),
-          Effect.map((receipt) => ({ _tag: "Receipt" as const, receipt })),
-          Effect.catchTag("ScheduledInputRefused", (error) =>
-            Effect.succeed({ _tag: "Refused" as const, error }),
-          ),
-          Effect.catchTag("ScheduledInputRetryable", (error) =>
-            Effect.succeed({ _tag: "Retry" as const, reason: error.reason }),
-          ),
-          Effect.catchTag("TimeoutError", () =>
-            Effect.succeed({ _tag: "Retry" as const, reason: "timeout" as const }),
-          ),
-          Effect.catchTag("ScheduleStorageError", (error) =>
-            error.reason === "unavailable"
-              ? Effect.succeed({ _tag: "Retry" as const, reason: "storage" as const })
-              : Effect.fail(error),
+        admitPreparedInput(admission.submit(envelope), limits.admissionTimeoutMillis).pipe(
+          Effect.tap((outcome) =>
+            outcome._tag === "Receipt" ? failpoint.hit("schedule:admission:after") : Effect.void,
           ),
         ),
       );
