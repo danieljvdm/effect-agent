@@ -5,6 +5,7 @@ import {
   estimatePromptTokens,
   DurableStep,
   DurableStepError,
+  RunToolAuthorization,
   ToolExecutionClass,
 } from "@effect-agent/engine";
 import {
@@ -602,6 +603,28 @@ const contextCompactorLayer = (conversationId: string) =>
 /** A closed generic run-context Layer; BrowserCrypto remains owned by the platform assembly. */
 export const makeContextCompactorRunContextLayer = (conversationId: string) =>
   contextCompactorRunContextLayer.pipe(Layer.provide(contextCompactorLayer(conversationId)));
+
+const contextAuthorizationProbes = new Map<string, { acquisitions: number; calls: number }>();
+export const contextAuthorizationProbe = (conversationId: string) =>
+  contextAuthorizationProbes.get(conversationId);
+
+/** Independent policy: the compactor fixture may prepare prompts but cannot authorize Tools. */
+export const makeContextAuthorizationLayer = (conversationId: string) =>
+  Layer.effect(
+    RunToolAuthorization,
+    Effect.sync(() => {
+      const probe = contextAuthorizationProbes.get(conversationId) ?? { acquisitions: 0, calls: 0 };
+      probe.acquisitions += 1;
+      contextAuthorizationProbes.set(conversationId, probe);
+      return RunToolAuthorization.of({
+        authorize: () =>
+          Effect.sync(() => {
+            probe.calls += 1;
+            return { _tag: "denied" as const, reason: "host denied Tool execution" };
+          }),
+      });
+    }),
+  );
 
 // ---------------------------------------------------------------------------
 // Scripted prompt-aware models

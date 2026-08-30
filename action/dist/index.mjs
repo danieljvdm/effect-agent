@@ -37032,6 +37032,10 @@ class RunContextPreparationError extends exports_Schema.TaggedError()("RunContex
 class RunContextPreparation extends exports_Context.Service()("@effect-agent/engine/RunContextPreparation") {
 }
 var RunContextPreparationPassthrough = exports_Layer.succeed(RunContextPreparation)({});
+
+class RunToolAuthorization extends exports_Context.Service()("@effect-agent/engine/RunToolAuthorization") {
+  static allowAll = exports_Layer.succeed(RunToolAuthorization, { authorize: () => exports_Effect.succeed({ _tag: "allowed" }) });
+}
 var RunTurnResumeSettledCallSchema = exports_Schema.Struct({
   id: exports_Schema.NonEmptyString,
   result: exports_Schema.Json,

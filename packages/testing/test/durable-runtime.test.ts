@@ -12,6 +12,7 @@ import {
   COMPACTION_SUMMARY_PREFIX,
   ContextCompactor,
   RunContextPreparation,
+  RunToolAuthorization,
   estimatePromptTokens,
   ToolExecutionClass,
   ToolBroker,
@@ -264,6 +265,7 @@ const configLayer = DurableRuntimeConfig.layer({
 });
 
 const baseLayer = Layer.mergeAll(
+  RunToolAuthorization.allowAll,
   MemorySubmissionLedgerLive,
   MemoryConversationStoreLive,
   WakeScheduler.layerNoop,

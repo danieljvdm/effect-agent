@@ -3,6 +3,8 @@ import {
   DurableStep,
   DurableStepError,
   RunContextPreparation,
+  RunContextPreparationPassthrough,
+  RunToolAuthorization,
   ToolExecutionClass,
   toolFailureObserverLayer,
   type ToolFailureObservation,
@@ -70,14 +72,7 @@ import {
   SchemaGetter,
   Stream,
 } from "effect";
-import {
-  type Prompt,
-  LanguageModel,
-  Model,
-  Tool,
-  Toolkit,
-  type Response,
-} from "effect/unstable/ai";
+import { Prompt, LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-tools");
@@ -314,7 +309,7 @@ const reconcilerTestLayer = Layer.effectContext(
   }),
 );
 
-/** Host action-authorization control (default: allow) captured by the existing run-context hook. */
+/** Independent host action-authorization control, captured at runtime construction. */
 class ToolAuthorizationTestControl extends Context.Service<
   ToolAuthorizationTestControl,
   {
@@ -336,15 +331,13 @@ const toolAuthorizationTestLayer = Layer.effectContext(
       );
     const requests = yield* Ref.make<ReadonlyArray<RunToolAuthorizationRequest>>([]);
     return Context.make(
-      RunContextPreparation,
-      RunContextPreparation.of({
-        toolAuthorization: {
-          authorize: (request) =>
-            Ref.update(requests, (all) => [...all, request]).pipe(
-              Effect.andThen(Ref.get(policy)),
-              Effect.map((decide) => decide(request)),
-            ),
-        },
+      RunToolAuthorization,
+      RunToolAuthorization.of({
+        authorize: (request) =>
+          Ref.update(requests, (all) => [...all, request]).pipe(
+            Effect.andThen(Ref.get(policy)),
+            Effect.map((decide) => decide(request)),
+          ),
       }),
     ).pipe(
       Context.add(
@@ -374,6 +367,7 @@ const baseLayer = Layer.mergeAll(
   DurableRuntimeFailpoint.layerTest,
   reconcilerTestLayer,
   toolAuthorizationTestLayer,
+  RunContextPreparationPassthrough,
   configLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
@@ -956,7 +950,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
   );
 
   it.effect(
-    "RUN-031 preserves canonical authority for a later-Turn restart and durable resume",
+    "composes context and authorization Layers across later-Turn restart and durable resume",
     () =>
       Effect.gen(function* () {
         yield* resetReconciler;
@@ -1046,7 +1040,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
 
         const settlements = yield* runtime
           .processConversation(agent, decodeConversationId(conversation))
-          .pipe(Effect.provide(toolLayer));
+          .pipe(Effect.provide(Layer.merge(toolLayer, RunToolAuthorization.allowAll)));
         expect(settlements).toHaveLength(1);
         expect(settlements[0]).toMatchObject({
           outcome: "failed",
@@ -1078,6 +1072,11 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(freshTurnTwo?.runId).toBeDefined();
         expect(freshTurnTwo?.turnId).toBeDefined();
         expect(scripted.prompts).toHaveLength(2);
+        expect(
+          scripted.prompts.every((prompt) =>
+            JSON.stringify(prompt).includes("host-prepared-context"),
+          ),
+        ).toBe(true);
 
         const records = yield* readLog(conversation);
         expect(
@@ -1094,7 +1093,27 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(yield* Ref.get(handlerWrites)).toEqual(["r-turn-1"]);
         expect(yield* authorization.requests).toHaveLength(3);
         yield* authorization.reset;
-      }),
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(DurableAgentRuntime.layerWithContext).pipe(
+            Layer.provide(
+              Layer.succeed(RunContextPreparation, {
+                hook: {
+                  prepare: ({ source }) =>
+                    Effect.succeed({
+                      prompt: Prompt.fromMessages([
+                        ...source.content,
+                        Prompt.systemMessage({ content: "host-prepared-context" }),
+                      ]),
+                    }),
+                },
+              }),
+            ),
+            Layer.provideMerge(baseLayer),
+          ),
+          { local: true },
+        ),
+      ),
   );
 
   it.effect("settles a denied action failed without preparation, handler writes, or retry", () =>
@@ -1817,6 +1836,16 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       >
         ? false
         : true = true;
+      const customLayerNeedsAuthorization: RunToolAuthorization extends LayerIn<
+        typeof DurableAgentRuntime.layerWithContext
+      >
+        ? true
+        : false = true;
+      const defaultLayerClosesAuthorization: RunToolAuthorization extends LayerIn<
+        typeof DurableAgentRuntime.layer
+      >
+        ? false
+        : true = true;
 
       expect(resolveHasConflict).toBe(true);
       expect(resolveHasSettlement).toBe(true);
@@ -1824,6 +1853,8 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(layerNeedsReconciler).toBe(true);
       expect(customLayerNeedsContext).toBe(true);
       expect(defaultLayerClosesContext).toBe(true);
+      expect(customLayerNeedsAuthorization).toBe(true);
+      expect(defaultLayerClosesAuthorization).toBe(true);
     }),
   );
 });

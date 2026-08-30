@@ -19,6 +19,7 @@ import {
   fixtureReconcilerLayer,
   maintenanceRaceFailpoint,
   makeContextCompactorRunContextLayer,
+  makeContextAuthorizationLayer,
   makeTestBindings,
   runtimeEvictionFailpoint,
   scheduleAuthorizer,
@@ -288,6 +289,7 @@ export class ContextCompactorConversationObject extends makeConversationObjectCl
   ...baseOptions,
   namespaceBinding: "CONTEXT_COMPACTOR",
   runContext: ({ conversationId }) => makeContextCompactorRunContextLayer(conversationId),
+  toolAuthorization: ({ conversationId }) => makeContextAuthorizationLayer(conversationId),
 }) {}
 
 /** Minimal integration proof that effect-cf owns native RPC event scopes and OTLP flushing. */

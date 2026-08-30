@@ -13,7 +13,7 @@ import type {
   TurnId,
 } from "@effect-agent/core";
 import { RunPolicyUsage } from "@effect-agent/core";
-import { type Cause, type Effect, Context, type DateTime, Layer, Schema } from "effect";
+import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
 import type { ContextCompactor } from "./context-compactor.ts";
@@ -327,11 +327,11 @@ export interface RunToolAuthorizationHook<Error = never, Requirements = never> {
 }
 
 /**
- * Generic host-owned extensions for one Run's model context and action-time Tool authority.
+ * Host-owned model-context preparation, independent of action-time Tool authorization.
  *
  * The service is intentionally narrower than a Conversation store. Durable coordinators capture
- * it once while their runtime Layer is acquired. When absent, compatible assemblies preserve the
- * existing pass-through behavior.
+ * it once while their runtime Layer is acquired. Compatible assemblies explicitly provide
+ * `RunContextPreparationPassthrough`. Installing a compactor cannot replace `RunToolAuthorization`.
  */
 export class RunContextPreparation extends Context.Service<
   RunContextPreparation,
@@ -340,15 +340,31 @@ export class RunContextPreparation extends Context.Service<
     readonly hook?: RunContextHook<RunContextPreparationError, never> | undefined;
     /** Replaces native compaction after prompt reconstruction; acquired with the host Layer. */
     readonly compactor?: ContextCompactor["Service"] | undefined;
-    /** Optional action-time Tool authorization, closed over all host dependencies. */
-    readonly toolAuthorization?: RunToolAuthorizationHook<never, never> | undefined;
   }
 >()("@effect-agent/engine/RunContextPreparation") {}
 
-/** Explicit no-preparer/no-authorizer Layer used by compatible runtime assemblies. */
+/** Explicit no-preparer Layer used by compatible runtime assemblies. */
 export const RunContextPreparationPassthrough: Layer.Layer<RunContextPreparation> = Layer.succeed(
   RunContextPreparation,
 )({});
+
+/**
+ * Host action-time authority for model-declared application Tools. Implementations close over
+ * their dependencies at Layer construction and return a denial when execution is not authorized.
+ * Durable coordinators capture this service once and retain it across replacement Attempts.
+ * Ephemeral callers may pass the service as `RunOptions.toolAuthorization`; typed per-run hooks
+ * remain available when the caller needs its own error or requirement channel.
+ */
+export class RunToolAuthorization extends Context.Service<
+  RunToolAuthorization,
+  RunToolAuthorizationHook
+>()("@effect-agent/engine/RunToolAuthorization") {
+  /** Explicit compatibility policy: Tool execution requires no additional host authorization. */
+  static readonly allowAll: Layer.Layer<RunToolAuthorization> = Layer.succeed(
+    RunToolAuthorization,
+    { authorize: () => Effect.succeed({ _tag: "allowed" }) },
+  );
+}
 
 /**
  * Payload of one durable response commit: the completed Turn's identity, its

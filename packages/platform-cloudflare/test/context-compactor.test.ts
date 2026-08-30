@@ -4,7 +4,13 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import { CloudflareConversationClient } from "../src/index.ts";
-import { contextCompactorDefinition, contextCompactorProbe, submitOptions } from "./fixtures.ts";
+import {
+  contextCompactorDefinition,
+  contextCompactorProbe,
+  contextAuthorizationProbe,
+  searchDefinition,
+  submitOptions,
+} from "./fixtures.ts";
 import {
   allSettled,
   drainAlarmsUntil,
@@ -61,6 +67,57 @@ const abortIncarnation = (conversation: string): Promise<void> =>
   );
 
 describe("Cloudflare replaceable compaction", () => {
+  it("retains independent Tool authorization alongside a compactor after eviction", async () => {
+    const conversation = lane("authorization");
+    for (const incarnation of [1, 2]) {
+      await submitAndSettle(
+        conversation,
+        "seed",
+        `${conversation}-seed-${incarnation}`,
+        "CONTEXT_COMPACTOR",
+      );
+      const compacted = await submitAndSettle(
+        conversation,
+        "compact",
+        `${conversation}-compact-${incarnation}`,
+        "CONTEXT_COMPACTOR",
+      );
+      expect(compacted.terminal.result).toEqual({ answer: "compacted" });
+      const receipt = await runClient(
+        CloudflareConversationClient.use((client) =>
+          client.submit(
+            { definition: searchDefinition },
+            { question: "search", ref: conversation },
+            submitOptions(conversation, `${conversation}-denied-${incarnation}`),
+          ),
+        ),
+        "CONTEXT_COMPACTOR",
+      );
+      await drainAlarmsUntil(conversation, allSettled(conversation, "CONTEXT_COMPACTOR"), {
+        namespace: "CONTEXT_COMPACTOR",
+      });
+      const settlement = await runClient(
+        CloudflareConversationClient.use((client) => client.awaitSettlement(receipt)),
+        "CONTEXT_COMPACTOR",
+      );
+      expect(settlement).toMatchObject({
+        outcome: "failed",
+        failure: {
+          errorTag: "AgentToolAuthorizationDenied",
+          message: "host denied Tool execution",
+        },
+      });
+      expect(contextAuthorizationProbe(conversation)).toEqual({
+        acquisitions: incarnation,
+        calls: incarnation,
+      });
+      expect(contextCompactorProbe(conversation).acquisitions).toBe(incarnation);
+      const records = await readCanonical(conversation, "CONTEXT_COMPACTOR");
+      expect(records.some(({ record }) => record.payload._tag === "ToolCallSettled")).toBe(false);
+      if (incarnation === 1) await abortIncarnation(conversation);
+    }
+  });
+
   it("keeps the existing no-compactor construction behavior", async () => {
     const conversation = lane("default");
     const result = await submitAndSettle(

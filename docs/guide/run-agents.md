@@ -113,6 +113,25 @@ const options: RunOptions<AppError, AppRequirements> = {
 Hook failures join the Run's error channel. Hook requirements join `R`. Capability packages adapt
 richer domain contracts to this narrow engine boundary rather than creating a second runtime.
 
+Ephemeral callers can reuse independent host preparation and authorization services through these
+hooks. Yielding them keeps both requirements visible in the caller's `R`:
+
+```ts
+const run = Effect.gen(function* () {
+  const preparation = yield* RunContextPreparation;
+  const authorization = yield* RunToolAuthorization;
+  return yield* AgentRuntime.run(agent, input, {
+    context: preparation.hook,
+    toolAuthorization: authorization,
+  });
+}).pipe(Effect.provide(Layer.mergeAll(preparationLayer, authorizationLayer)), Effect.scoped);
+```
+
+Ephemeral compactor selection still uses `ContextCompactor` directly. Per-run hooks can retain
+their own typed errors and requirements. Supplying neither hook preserves the default prompt and
+requires no additional Tool authorization. Durable hosts capture the two services at runtime
+construction, as described in [Context management](/guide/context-management#composing-preparation-and-tool-authorization).
+
 ## Observe recovered Tool failures
 
 A Tool may fail while the model recovers and the Run completes. Install

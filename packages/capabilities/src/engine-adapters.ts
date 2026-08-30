@@ -253,6 +253,7 @@ export const toRunContextHook = <Error, Requirements>(
 /**
  * Install the inward-owned compactor in durable assemblies. It runs at the native compaction
  * seam, after canonical reconstruction, with the same metering and commits as ephemeral Runs.
+ * It provides only `RunContextPreparation`; compose `RunToolAuthorization` independently.
  */
 export const contextCompactorRunContextLayer: Layer.Layer<
   RunContextPreparation,

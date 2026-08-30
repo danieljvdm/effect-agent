@@ -1,12 +1,15 @@
 import type { SubmissionId } from "@effect-agent/core";
 import {
   CurrentToolFailureObserver,
+  RunContextPreparationPassthrough,
+  RunToolAuthorization,
   toolFailureObserverLayer,
+  type RunContextPreparation,
   type RunCostEstimator,
   type RunToolFailureObserver,
 } from "@effect-agent/engine";
-import type { ScheduleStore } from "@effect-agent/session";
 import {
+  type ScheduleStore,
   type ConversationStore,
   type WakeScheduler,
   AgentBindingResolver,
@@ -35,7 +38,7 @@ import {
 } from "@effect-agent/storage-sqlite";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
-import { Context, Duration, Effect, Layer, Ref, Schema } from "effect";
+import { Context, type Crypto, Duration, Effect, Layer, Ref, Schema } from "effect";
 
 import { NodeWakeSchedulerConfig, nodeWakeSchedulerLayer } from "./wake-scheduler.ts";
 
@@ -135,6 +138,13 @@ export interface NodeDurableRuntimeOptions {
    * DUR-017 resolution path.
    */
   readonly toolReconciler?: Layer.Layer<ToolReconciler> | undefined;
+  /** Host prompt preparation/compaction, acquired once with the runtime; default pass-through. */
+  readonly runContext?: Layer.Layer<RunContextPreparation, never, Crypto.Crypto> | undefined;
+  /**
+   * Independent action-time Tool authority, acquired once with the runtime; default allow-all.
+   * Both extension Layers must close application dependencies; the platform supplies Crypto.
+   */
+  readonly toolAuthorization?: Layer.Layer<RunToolAuthorization, never, Crypto.Crypto> | undefined;
   /**
    * Registered worker Bindings resolved at durable claim time:
    * build each with `DurableWorkerBinding.make(binding, digests)` so
@@ -393,7 +403,7 @@ export class NodeDurableRuntime {
             Layer.provideMerge(ownershipDrainLayer.pipe(Layer.provide(submissionLedgerLayer))),
           ),
         );
-        return DurableAgentRuntime.layer.pipe(
+        return DurableAgentRuntime.layerWithContext.pipe(
           Layer.provideMerge(
             Layer.mergeAll(
               ports,
@@ -407,6 +417,8 @@ export class NodeDurableRuntime {
               runtimeFailpointLayer,
               reconcilerLayer,
               observerLayer,
+              options.runContext ?? RunContextPreparationPassthrough,
+              options.toolAuthorization ?? RunToolAuthorization.allowAll,
             ),
           ),
           Layer.provideMerge(infrastructure),
