@@ -17,6 +17,7 @@ import {
   ReviewContextError,
   ReviewFileList,
   ReviewFinding,
+  type ReviewOutcome,
   ReviewRepository,
   ReviewRequest,
   ReviewSource,
@@ -128,7 +129,7 @@ const reviewInput = (prompt: Prompt.Prompt): string =>
         ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
         : [],
     )
-    .at(-1) ?? "";
+    .at(0) ?? "";
 
 describe("review output boundary", () => {
   it.effect("PRR-002 completes one native review and keeps independent same-line blockers", () =>
@@ -203,6 +204,7 @@ describe("review output boundary", () => {
           estimatedCostMicrousd: 123,
         },
       });
+      expect(outcome.exhausted).toBeUndefined();
     }),
   );
 
@@ -320,6 +322,104 @@ describe("review output boundary", () => {
             outputTokens: 24,
           },
         });
+      }),
+  );
+
+  it.effect(
+    "reserves a completion turn and preserves findings and usage when research runs out",
+    () =>
+      Effect.gen(function* () {
+        const reads = yield* Ref.make(0);
+        const calls = yield* Ref.make(0);
+        const model = scriptedModel((prompt, _tools, toolChoice) =>
+          Stream.unwrap(
+            Ref.updateAndGet(calls, (count) => count + 1).pipe(
+              Effect.map((call) => {
+                expect(JSON.stringify(prompt.content)).toContain("<run-status>");
+                if (call <= 2) {
+                  expect(toolChoice).toBe("required");
+                  return Stream.fromIterable([
+                    {
+                      type: "tool-call",
+                      id: `read-${String(call)}`,
+                      name: "read_file",
+                      params: {
+                        path: "src/index.ts",
+                        revision: "head",
+                        startLine: 1,
+                        lineCount: 1,
+                      },
+                    },
+                    {
+                      type: "finish",
+                      reason: "tool-calls",
+                      usage: {
+                        inputTokens: {
+                          total: 90_000,
+                          uncached: 90_000,
+                          cacheRead: 0,
+                          cacheWrite: 0,
+                        },
+                        outputTokens: { total: 20_000 },
+                      },
+                    },
+                  ]);
+                }
+                expect(call).toBe(3);
+                expect(toolChoice).toEqual({ mode: "required", oneOf: ["submit_review"] });
+                return response(
+                  { findings: [submittedFinding(blocker, 1)] },
+                  {
+                    inputTokens: {
+                      total: 90_000,
+                      uncached: 10_000,
+                      cacheRead: 80_000,
+                      cacheWrite: 0,
+                    },
+                    outputTokens: { total: 1_000 },
+                  },
+                );
+              }),
+            ),
+          ),
+        );
+        const outcome = yield* makeReviewer({
+          model,
+          estimateCostMicrousd: () => Effect.succeed(123),
+        })
+          .review(request)
+          .pipe(
+            Effect.provideService(ReviewRepository, {
+              ...emptyRepository,
+              readFile: () =>
+                Ref.update(reads, (count) => count + 1).pipe(
+                  Effect.as(
+                    ReviewSource.make({
+                      path: "src/index.ts",
+                      revision: "head",
+                      startLine: 1,
+                      totalLines: 1,
+                      content: "new",
+                    }),
+                  ),
+                ),
+            }),
+          );
+        expect(yield* Ref.get(reads)).toBe(2);
+        expect(yield* Ref.get(calls)).toBe(3);
+        expect(outcome).toMatchObject({
+          turns: 3,
+          exhausted: "tokens",
+          report: { findings: [blocker] },
+          usage: {
+            inputTokens: 270_000,
+            uncachedInputTokens: 190_000,
+            cachedInputTokens: 80_000,
+            outputTokens: 41_000,
+            estimatedCostMicrousd: 369,
+          },
+        });
+        expect(outcome.report.summary).toContain("remaining change has not been verified");
       }),
   );
 
@@ -545,11 +645,12 @@ const pricingTypeProofs: readonly [
     Equal<EffectRequirements<TypedReviews["priced"]>, EffectRequirements<TypedReviews["unpriced"]>>
   >,
   Assert<Equal<EffectRequirements<TypedReviews["priced"]>, ReviewRepository>>,
+  Assert<Equal<Effect.Success<TypedReviews["priced"]>, ReviewOutcome>>,
   Assert<
     Equal<
       Extract<EffectError<TypedReviews["priced"]>, ReviewVerificationError>,
       ReviewVerificationError
     >
   >,
-] = [true, true, true, true];
+] = [true, true, true, true, true];
 void pricingTypeProofs;

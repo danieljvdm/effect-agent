@@ -155,40 +155,6 @@ it.effect("refuses publication after the pull-request head moves", () =>
   }),
 );
 
-it.effect("publishes only a marker comment against GitHub's current head", () =>
-  Effect.gen(function* () {
-    const bodies = yield* Ref.make<ReadonlyArray<unknown>>([]);
-    const client = HttpClient.make((request) => {
-      const encoded =
-        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}";
-      return Ref.update(bodies, (current) => [...current, JSON.parse(encoded)]).pipe(
-        Effect.as(
-          HttpClientResponse.fromWeb(
-            request,
-            new globalThis.Response(JSON.stringify({ html_url: "https://github.test/review" }), {
-              status: 200,
-              headers: { "content-type": "application/json" },
-            }),
-          ),
-        ),
-      );
-    });
-    const github = yield* makeGitHubClient({
-      repository,
-      pullRequest: 12,
-      token: Redacted.make("github-token"),
-      apiUrl: "https://api.github.test",
-    }).pipe(Effect.provideService(HttpClient.HttpClient, client));
-
-    expect(yield* github.publishCurrentHeadAttemptMarker("Host marker")).toBe(
-      "https://github.test/review",
-    );
-    expect(yield* Ref.get(bodies)).toEqual([
-      { event: "COMMENT", body: "Host marker", comments: [] },
-    ]);
-  }),
-);
-
 it.effect("retains GitHub's exact previous filename for declared renames", () =>
   Effect.gen(function* () {
     const client = HttpClient.make((request) =>

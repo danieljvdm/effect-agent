@@ -22,6 +22,15 @@ The reviewer does not resolve previous findings or declare a partial review safe
 to merge. GitHub history, credentials, diff collection, and publication belong to
 the host channel.
 
+The engine owns a cumulative 416,000-token stop policy and reserves 160,000 tokens for a final
+context and completion response. The model sees its current turn, tool, and token usage. Token,
+turn, or tool exhaustion permits one constrained completion through `submit_review`; it returns
+validated findings and accounted usage with `ReviewOutcome.exhausted` naming the limit. Hosts must
+treat that outcome as incomplete, even when it contains no findings. Measured usage can exceed a
+policy threshold before the engine observes it; this is not a provider-side spending cap.
+The usage ledger records research, compaction, and finalization without a second token limit that
+could abort delivery. Duration and protocol failures still fail through the typed error channel.
+
 ```ts
 const reviewer = makeReviewer({ model, guidance, estimateCostMicrousd });
 const program = reviewer.review(request).pipe(Effect.provideService(ReviewRepository, repository));
