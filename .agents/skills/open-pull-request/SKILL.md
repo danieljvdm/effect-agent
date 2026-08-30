@@ -1,122 +1,74 @@
 ---
 name: open-pull-request
-description: Open pull requests with conventional commits, reviewer-complete descriptions, links to vital code, and concrete evidence. Use whenever preparing or opening a pull request, including checking commit history, explaining a bug or architectural change, drafting the title or body, and attaching screenshots or other evidence.
+description: Prepare, open, or revise pull requests with conventional titles and descriptions proportional to the change. Use when drafting a PR title or body, preparing a branch for review, or opening a PR.
 ---
 
-# Open a Pull Request
+# Open a pull request
 
-Produce a PR that a reviewer can understand and trust without access to the
-task conversation.
+Help the reviewer understand what changes and why. Default to a short
+description; add detail where it helps them assess the change.
 
 ## Prepare the branch
 
-1. Read the repository's contribution instructions and PR template. Identify
-   the intended base branch, then inspect the full commit range, diff, and
-   working tree. Finish when the PR scope contains no accidental changes and
-   the description will cover the branch as it exists, not merely the latest
-   task.
-2. Use Conventional Commits for every commit you create and for the PR title:
-   `type(scope): imperative summary`. Follow repository-specific types and
-   scopes, and omit the scope when it adds no useful context. Otherwise use a
-   precise standard type such as `feat`, `fix`, `refactor`, `docs`, `test`,
-   `build`, `ci`, or `chore`. Keep each commit to one logical concern. Rewrite
-   only commits you created and know are unshared; get approval before
-   rewriting user-authored or published history.
-3. Run the repository's required validation on the final branch state, then
-   collect the strongest available evidence of the changed behavior. Identify
-   the few files, symbols, or modules a reviewer must understand and prepare
-   links that resolve in the rendered PR. Finish when every claim can be traced
-   to the diff, CI, or a verified artifact.
+Read repository contribution instructions and any required PR template. Inspect
+the intended base, full commit range, diff, and working tree so the description
+covers the branch as it exists. Resolve accidental changes before opening.
 
-## Write for the reviewer
+Use Conventional Commits for commits you create and the PR title:
+`type(scope): imperative summary`. Follow repository conventions and omit the
+scope when it adds nothing. Keep commits focused. Rewrite only your own unshared
+commits; get approval before rewriting user-authored or published history.
 
-Write clear, compact English for someone with little context. Give the reviewer
-enough explanation to agree with both the problem and the solution; do not
-sacrifice causal or architectural context for brevity. Lead with the observable
-outcome, then explain why the change was needed and how the important pieces
-fit together. Prefer concrete nouns and expand uncommon acronyms. Describe
-behavior and impact rather than narrating the task conversation.
+Complete required validation on the final branch state before opening the PR,
+including any changes made by commit hooks. Ground claims in the diff, CI, or
+verified artifacts.
 
-Link the vital implementation points from the summary or architecture section.
-Use descriptive link text that names each piece by its role, such as the request
-router or cache invalidation boundary, and verify every link after opening the
-PR. Link the core pieces a reviewer should inspect, not every touched file.
+## Write the description
 
-For every bug fix, include a **What went wrong** section in plain English. State
-the incorrect behavior, its actual root cause and causal chain, and why the
-change fixes it. Make uncertainty or incomplete coverage explicit. A result
-such as "fixed stale state" is not a diagnosis; explain how the stale state was
-created or allowed to survive.
+Choose the shape from the change. Follow a required repository template;
+otherwise there are no mandatory headings or sections.
 
-When the change alters architecture, identify the affected components and
-boundaries, what each one owns after the change, and any important change to
-control flow, data flow, public contracts, or persistence. Link to the core
-implementation of each affected piece. Use a dedicated **Architecture** section
-when this would make the change easier to review; otherwise include the context
-in the summary.
+- Small fixes and maintenance usually need one short paragraph. State the
+  observable problem and how the change fixes it. A bug's cause can fit in the
+  same sentence; expand only when the reasoning is subtle.
+- For architecture or API changes, lead with the practical difference and show
+  a compact before/after code example. Use actual base and head code, trimming
+  to the relevant call site, contract, or implementation. Explain the ownership
+  or flow change that the snippets cannot show. Include migration steps when
+  callers must act.
+- For subtle correctness changes, add the causal explanation, tradeoff, or
+  limitation a reviewer needs to judge the fix. Use headings only when they
+  make that explanation easier to scan.
 
-Use the repository's required template when present. Otherwise use this small
-shape and omit empty sections:
+A small fix can be this short:
 
-```md
-## Summary
+> Clearing the search box left the previous filter active because the update
+> skipped empty strings. Always apply the new value so clearing shows all rows.
 
-- <What changes for a user, operator, or developer>
-- <Why it matters and the shape of the solution, with links to vital code>
+Code examples should show the change with enough context to understand it.
+Mark omissions or schematic examples clearly. One representative example is
+usually enough; link to a guide for full setup or additional variants. For
+changes that code cannot explain well, use the smallest useful before/after
+output or diagram instead.
 
-## What went wrong
+Link to implementation points when they save the reviewer a search. Keep the
+body focused on behavior, rationale, and necessary migration. Leave the file
+inventory to the diff and routine validation results to CI.
 
-<For a bug fix: explain the symptom, root cause, causal chain, and why this fix
-addresses it.>
+## Include evidence when it helps
 
-## Architecture
+Add a screenshot for a visible UI change, or concise output, a request/response,
+or a focused regression result when it makes the behavior easier to assess.
+Use only artifacts actually produced and verified, and check them for secrets
+or personal data. If needed proof is unavailable, state the limitation briefly.
 
-- <When applicable: explain the changed components, ownership, and flow, with
-  links to their core implementations.>
-
-## Evidence
-
-- <Screenshot, before/after output, request/response, trace, or other verified
-  artifact>
-```
-
-Keep the body proportional to the change: a small change may need two useful
-bullets, while a subtle bug or architectural change may need several paragraphs.
-Omit conditional sections that do not apply. Make the title specific enough to
-stand alone in release notes and conventional enough to become the squash
-commit without editing.
-
-## Show useful evidence
-
-Evidence is something the reviewer can inspect, not an assertion that the
-change works.
-
-- For a runnable UI or visual feature, capture and attach a screenshot or short
-  recording of the actual final state. Use a representative viewport, add a
-  short caption, and check the artifact for secrets or personal data.
-- For CLI, API, or automation behavior, include concise terminal output, a
-  request/response example, generated artifact, or execution log when it proves
-  the behavior more clearly than the CI result alone.
-- For a bug fix or behavior change, prefer before/after evidence when it is
-  practical and materially clarifies the result.
-- For internal-only changes, include focused regression output, a trace, a
-  generated artifact, or another result that demonstrates the changed behavior
-  when available.
-
-Routine validation commands that CI always runs, such as `vp check` or standard
-format, lint, typecheck, and test commands, add no useful context to the PR body.
-Let CI report them. Mention a command or CI result only when it is unusual,
-cannot run in CI, or its output itself helps the reviewer understand the change.
-
-Include only evidence that was actually produced and verified. When expected
-visual proof cannot be produced, state the concrete reason briefly instead of
-silently substituting a claim. Choose the smallest set of evidence that makes
-the changed behavior easy to inspect. Omit the section when no evidence adds
-information beyond routine CI.
+Evidence can sit beside the explanation. Omit it when it adds nothing beyond
+the diff and CI. Mention validation commands only for unusual checks, checks CI
+cannot run, or results that explain the behavior.
 
 ## Open and verify
 
-Open the PR against the intended base with the conventional title and prepared
-body. Then read back the rendered PR and verify the base/head branches, title,
-description, links, screenshots, and check results. Finish only when the PR is
-reviewable as rendered and return its URL.
+Open against the intended base with the prepared conventional title and body.
+Read back the rendered PR and check its branches, description, links, attached
+artifacts, and check status. Return the URL once it is reviewable, reporting any
+pending or failed checks accurately.
