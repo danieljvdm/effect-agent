@@ -15,12 +15,14 @@ import {
   makeReviewer,
   ReviewChange,
   ReviewContextError,
+  ReviewCostSnapshot,
   ReviewFileList,
   ReviewFinding,
   type ReviewOutcome,
   ReviewRepository,
   ReviewRequest,
   ReviewSource,
+  ReviewUsage,
   type ReviewVerificationError,
 } from "../src/index.ts";
 
@@ -140,6 +142,7 @@ describe("review output boundary", () => {
         expect(tools.map((tool) => tool.name)).toEqual([
           "read_file",
           "find_files",
+          "record_finding",
           "submit_review",
         ]);
         const text = reviewInput(prompt);
@@ -500,6 +503,41 @@ describe("review output boundary", () => {
     }),
   );
 
+  it.effect("preserves recorded findings when a later completion fails validation", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const model = scriptedModel(() => {
+        calls += 1;
+        return calls === 1
+          ? Stream.fromIterable([
+              {
+                type: "tool-call",
+                id: "saved",
+                name: "record_finding",
+                params: submittedFinding(blocker, 1),
+              },
+              { type: "finish", reason: "tool-calls", usage },
+            ])
+          : response({
+              findings: [
+                submittedFinding(
+                  ReviewFinding.make({ ...otherBlocker, path: "src/unchanged.ts" }),
+                  1,
+                ),
+              ],
+            });
+      });
+      const outcome = yield* makeReviewer({ model })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+      expect(calls).toBe(2);
+      expect(outcome.incomplete).toBe(true);
+      expect(outcome.exhausted).toBeUndefined();
+      expect(outcome.report.findings).toEqual([blocker]);
+      expect(outcome.report.summary).toContain("remaining change has not been verified");
+    }),
+  );
+
   it.effect("PRR-002 retains headers, mode metadata, and complete deletion hunks", () =>
     Effect.gen(function* () {
       const deletionPatch = `diff --git a/src/deleted.ts b/src/deleted.ts
@@ -637,9 +675,29 @@ const typedReviews = (model: typeof typedModel) => ({
     model,
     estimateCostMicrousd: () => Effect.succeed(1),
   }).review(request),
+  controlled: makeReviewer({
+    model,
+    costControl: {
+      snapshot: Effect.succeed(
+        ReviewCostSnapshot.make({
+          stopped: false,
+          modelCalls: 0,
+          usage: ReviewUsage.make({
+            inputTokens: 0,
+            uncachedInputTokens: 0,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            outputTokens: 0,
+          }),
+        }),
+      ),
+    },
+  }).review(request),
 });
 type TypedReviews = ReturnType<typeof typedReviews>;
 const pricingTypeProofs: readonly [
+  Assert<Equal<EffectError<TypedReviews["controlled"]>, EffectError<TypedReviews["unpriced"]>>>,
+  Assert<Equal<EffectRequirements<TypedReviews["controlled"]>, ReviewRepository>>,
   Assert<Equal<EffectError<TypedReviews["priced"]>, EffectError<TypedReviews["unpriced"]>>>,
   Assert<
     Equal<EffectRequirements<TypedReviews["priced"]>, EffectRequirements<TypedReviews["unpriced"]>>
@@ -652,5 +710,5 @@ const pricingTypeProofs: readonly [
       ReviewVerificationError
     >
   >,
-] = [true, true, true, true, true];
+] = [true, true, true, true, true, true, true];
 void pricingTypeProofs;

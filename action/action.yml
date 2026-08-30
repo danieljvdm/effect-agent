@@ -37,7 +37,7 @@ inputs:
     description: "Webhook head SHA; a stale event exits before model execution."
     required: false
   model:
-    description: "OpenAI model id."
+    description: "Priced OpenAI model id: gpt-5.6-sol, gpt-5.6, gpt-5.6-terra, or gpt-5.6-luna. Every review has a fixed spending ceiling below $1."
     required: false
     default: "gpt-5.6-sol"
   effort:
@@ -66,7 +66,11 @@ outputs:
   output-tokens:
     description: "Observed model output tokens."
   estimated-cost-usd:
-    description: "Estimated model cost in US dollars when the configured model has known pricing."
+    description: "Estimated model cost in US dollars from reported usage at the pinned standard-tier rates. Excludes unsettled reservations."
+  reserved-cost-usd:
+    description: "Maximum additional charge in US dollars for dispatched requests whose usage is still unknown."
+  cost-limit-usd:
+    description: "Fixed per-review spending admission ceiling in US dollars, strictly below $1."
   blocking-findings:
     description: "Number of published blocking findings."
   unresolved-change-requests:

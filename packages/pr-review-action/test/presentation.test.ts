@@ -72,7 +72,7 @@ describe("review presentation", () => {
     expect(body).toContain("### Findings without an inline anchor (1)");
     expect(body).toContain("```text\n[⚠️ important · security] Authorization is not enforced");
     expect(body).toContain(
-      '<sub>5 model turns · 12,345 input (10,000 uncached · 2,000 cached · 345 cache write) / 678 output tokens · ≈ $0.0629 at <a href="https://developers.openai.com/api/docs/models/gpt-5.6-sol">GPT-5.6 Sol rates</a> · reviewed at <code>abcdef0</code> · 2 automatic reviews remain</sub>',
+      '<sub>5 model calls · 12,345 input (10,000 uncached · 2,000 cached · 345 cache write; 16.2% cache reads) / 678 output tokens · ≈ $0.0629 at <a href="https://developers.openai.com/api/docs/models/gpt-5.6-sol">GPT-5.6 Sol rates</a> · inspected at <code>abcdef0</code> · 2 automatic reviews remain</sub>',
     );
   });
 
@@ -124,7 +124,7 @@ describe("review presentation", () => {
 
       No actionable defects found in the supplied diff.
 
-      <sub>3 model turns · 2,267 input (2,000 uncached · 200 cached · 67 cache write) / 456 output tokens · ≈ $0.0182 at <a href="https://developers.openai.com/api/docs/models/gpt-5.6-sol">GPT-5.6 Sol rates</a> · reviewed at <code>abcdef0</code></sub>
+      <sub>3 model calls · 2,267 input (2,000 uncached · 200 cached · 67 cache write; 8.8% cache reads) / 456 output tokens · ≈ $0.0182 at <a href="https://developers.openai.com/api/docs/models/gpt-5.6-sol">GPT-5.6 Sol rates</a> · inspected at <code>abcdef0</code></sub>
 
       <!-- effect-agent-review:v3 automatic=true completed=true -->"
     `);
@@ -184,7 +184,7 @@ describe("review presentation", () => {
     const render = (
       complete: boolean,
       unresolvedChangeRequests: number,
-      exhausted?: "tokens" | "turns" | "tool-calls",
+      exhausted?: "tokens" | "turns" | "tool-calls" | "cost",
     ) =>
       renderReviewBody({
         report: ReviewReport.make({ summary: "No new findings.", findings: [] }),
@@ -208,7 +208,7 @@ describe("review presentation", () => {
     expect(render(false, 0)).toContain("Review coverage is incomplete");
     expect(render(true, 2)).toContain("2 earlier change requests");
     expect(render(true, 2)).not.toContain("No actionable findings");
-    for (const exhausted of ["tokens", "turns", "tool-calls"] as const) {
+    for (const exhausted of ["tokens", "turns", "tool-calls", "cost"] as const) {
       const body = render(false, 0, exhausted);
       expect(body).toContain(`Review stopped at the ${exhausted} budget`);
       expect(body).not.toContain("No actionable findings");

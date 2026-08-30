@@ -57,7 +57,7 @@ const renderVerdict = (
     return `> [!CAUTION]\n> **Review stopped at the ${exhausted} budget.** Findings are preserved, but coverage is incomplete and this result does not clear the change.`;
   }
   if (!complete) {
-    return "> [!CAUTION]\n> **Review coverage is incomplete.** Unavailable paths were not inspected, so this result does not clear the change.";
+    return "> [!CAUTION]\n> **Review coverage is incomplete.** Not all supplied changes were verified, so this result does not clear the change.";
   }
   if (unresolvedChangeRequests > 0) {
     return `> [!CAUTION]\n> **No new blocking finding clears ${countNoun(unresolvedChangeRequests, "earlier change request")}.** A maintainer must dismiss it explicitly after verifying the fix.`;
@@ -111,6 +111,8 @@ export interface ReviewPresentationInput {
   readonly cacheWriteInputTokens: number;
   readonly outputTokens: number;
   readonly estimatedCost?: ReviewCostEstimate | undefined;
+  readonly reservedCostMicrousd?: number;
+  readonly costLimitMicrousd?: number;
   readonly headRevision: string;
 }
 
@@ -122,19 +124,24 @@ export interface ReviewCostEstimate {
 
 const renderCoverage = (input: ReviewPresentationInput): string =>
   [
-    `${String(input.reviewedFiles)} ${input.exhausted === undefined ? "reviewed" : "supplied"}`,
+    `${String(input.reviewedFiles)} ${input.complete ? "reviewed" : "supplied"}`,
     ...(input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} unavailable`] : []),
     ...(input.ignoredFiles > 0 ? [`${String(input.ignoredFiles)} ignored`] : []),
   ].join(" · ");
 
 const formatEstimatedUsd = (microusd: number): string => {
   const dollars = microusd / 1_000_000;
-  const digits = dollars > 0 && dollars < 0.0001 ? 6 : dollars < 1 ? 4 : 2;
+  const digits =
+    (dollars > 0 && dollars < 0.0001) || (dollars >= 0.9999 && dollars < 1)
+      ? 6
+      : dollars < 1
+        ? 4
+        : 2;
   return `$${dollars.toFixed(digits)}`;
 };
 
 const renderInputUsage = (input: ReviewPresentationInput): string =>
-  `${formatNumber(input.inputTokens)} input (${formatNumber(input.uncachedInputTokens)} uncached · ${formatNumber(input.cachedInputTokens)} cached · ${formatNumber(input.cacheWriteInputTokens)} cache write)`;
+  `${formatNumber(input.inputTokens)} input (${formatNumber(input.uncachedInputTokens)} uncached · ${formatNumber(input.cachedInputTokens)} cached · ${formatNumber(input.cacheWriteInputTokens)} cache write; ${(input.inputTokens === 0 ? 0 : (100 * input.cachedInputTokens) / input.inputTokens).toFixed(1)}% cache reads)`;
 
 const renderAutomaticPause = (automaticReviewsRemaining: number): string | undefined =>
   automaticReviewsRemaining > 0
@@ -172,7 +179,7 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
   }
 
   const modelLabel =
-    input.modelTurns === 0 ? "No model call" : countNoun(input.modelTurns, "model turn");
+    input.modelTurns === 0 ? "No model call" : countNoun(input.modelTurns, "model call");
   const usage =
     input.modelTurns === 0
       ? ""
@@ -181,13 +188,21 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
     input.estimatedCost === undefined
       ? ""
       : ` · ≈ ${formatEstimatedUsd(input.estimatedCost.microusd)} at <a href="${input.estimatedCost.url}">${input.estimatedCost.label} rates</a>`;
+  const pendingCost =
+    (input.reservedCostMicrousd ?? 0) === 0
+      ? ""
+      : ` · up to ${formatEstimatedUsd(input.reservedCostMicrousd ?? 0)} awaiting usage`;
+  const costLimit =
+    input.costLimitMicrousd === undefined
+      ? ""
+      : ` · $${(input.costLimitMicrousd / 1_000_000).toFixed(6)} spending ceiling`;
   const automaticReviewStatus =
     input.automaticReviewsRemaining === 0
       ? ""
       : input.automaticReviewsRemaining === 1
         ? " · 1 automatic review remains"
         : ` · ${String(input.automaticReviewsRemaining)} automatic reviews remain`;
-  const footer = `<sub>${modelLabel}${usage}${estimatedCost} · reviewed at <code>${input.headRevision.slice(0, 7)}</code>${automaticReviewStatus}</sub>`;
+  const footer = `<sub>${modelLabel}${usage}${estimatedCost}${pendingCost}${costLimit} · inspected at <code>${input.headRevision.slice(0, 7)}</code>${automaticReviewStatus}</sub>`;
 
   parts.push(footer);
   return parts.join("\n\n");

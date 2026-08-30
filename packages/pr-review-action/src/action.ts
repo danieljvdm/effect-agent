@@ -10,7 +10,6 @@ import {
   ReviewRepository,
   ReviewRequest,
   ReviewSource,
-  type RunCostEstimator,
 } from "@effect-agent/pr-review";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import {
@@ -21,12 +20,9 @@ import {
   Effect,
   Exit,
   FileSystem,
-  Layer,
   Result,
   Schema,
 } from "effect";
-import type { Response } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
 
 import {
   type ChangedFile,
@@ -42,84 +38,20 @@ import {
   withReviewMarker,
   withReviewPauseMarker,
 } from "./presentation.ts";
+import {
+  makeReviewOpenAi,
+  REVIEW_COST_LIMIT_MICROUSD,
+  reviewCostEstimator,
+  reviewModelPricing,
+} from "./review-openai.ts";
 import { reviewModeFromCommand, selectReview, unresolvedChangeRequestCount } from "./selection.ts";
 
-const MAX_REVIEW_PATCH_CHARS = 120_000;
+export { estimateGpt56CostMicrousd } from "./review-openai.ts";
+
+const MAX_REVIEW_PATCH_CHARS = 256_000;
 const MAX_PATCH_CHARS = 80_000;
 const MAX_REVIEW_FILES = 100;
-const MAX_HYDRATED_SOURCE_BYTES = 4_000_000;
-
-interface Gpt56Pricing {
-  readonly label: string;
-  readonly url: string;
-  readonly inputRateHundredths: number;
-  readonly cachedInputRateHundredths: number;
-  readonly cacheWriteRateHundredths: number;
-  readonly outputRateHundredths: number;
-}
-
-const GPT_56_SOL_PRICING: Gpt56Pricing = {
-  label: "GPT-5.6 Sol",
-  url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
-  inputRateHundredths: 400,
-  cachedInputRateHundredths: 40,
-  cacheWriteRateHundredths: 500,
-  outputRateHundredths: 2_000,
-};
-
-const GPT_56_PRICING: Readonly<Record<string, Gpt56Pricing>> = {
-  "gpt-5.6": GPT_56_SOL_PRICING,
-  "gpt-5.6-sol": GPT_56_SOL_PRICING,
-  "gpt-5.6-terra": {
-    label: "GPT-5.6 Terra",
-    url: "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
-    inputRateHundredths: 200,
-    cachedInputRateHundredths: 20,
-    cacheWriteRateHundredths: 250,
-    outputRateHundredths: 1_200,
-  },
-  "gpt-5.6-luna": {
-    label: "GPT-5.6 Luna",
-    url: "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
-    inputRateHundredths: 20,
-    cachedInputRateHundredths: 2,
-    cacheWriteRateHundredths: 25,
-    outputRateHundredths: 120,
-  },
-};
-
-const GPT_56_PRICING_VERSION = "openai-api-2026-08-25";
-
-/** Estimate standard-tier GPT-5.6 text cost, rounded up to the nearest microdollar. */
-export const estimateGpt56CostMicrousd = (
-  model: string,
-  usage: Response.Usage,
-): number | undefined => {
-  const pricing = GPT_56_PRICING[model];
-  if (pricing === undefined) return undefined;
-  const cacheRead = usage.inputTokens.cacheRead ?? 0;
-  const inputTotal = usage.inputTokens.total ?? (usage.inputTokens.uncached ?? 0) + cacheRead;
-  const uncached = Math.max(0, inputTotal - cacheRead);
-  const cacheWrite = Math.min(uncached, usage.inputTokens.cacheWrite ?? 0);
-  const standardInput = uncached - cacheWrite;
-  const output = usage.outputTokens.total ?? 0;
-  const costHundredths =
-    standardInput * pricing.inputRateHundredths +
-    cacheRead * pricing.cachedInputRateHundredths +
-    cacheWrite * pricing.cacheWriteRateHundredths +
-    output * pricing.outputRateHundredths;
-  return Math.ceil(costHundredths / 100);
-};
-
-const gpt56CostEstimator = (model: string): RunCostEstimator | undefined => {
-  const pricing = GPT_56_PRICING[model];
-  if (pricing === undefined) return undefined;
-  return (usage) =>
-    Effect.succeed({
-      costMicrousd: estimateGpt56CostMicrousd(model, usage) ?? 0,
-      pricingVersion: GPT_56_PRICING_VERSION,
-    });
-};
+const MAX_HYDRATED_SOURCE_BYTES = 8_000_000;
 
 const ACTION_INPUT_BY_CONFIG: Readonly<Record<string, string>> = {
   OPENAI_API_KEY: "INPUT_OPENAI-API-KEY",
@@ -186,6 +118,7 @@ export const reviewPublicationFailure = (input: {
   readonly unreviewedPaths: number;
   readonly unresolvedChangeRequests: number;
   readonly exhausted?: ReviewOutcome["exhausted"];
+  readonly incomplete?: boolean;
 }):
   | BlockingFindings
   | IncompleteReview
@@ -196,7 +129,8 @@ export const reviewPublicationFailure = (input: {
   if (input.unreviewedPaths > 0) {
     return IncompleteReview.make({ unreviewedPaths: input.unreviewedPaths });
   }
-  if (input.exhausted !== undefined) return ReviewAttemptIncomplete.make({});
+  if (input.exhausted !== undefined || input.incomplete === true)
+    return ReviewAttemptIncomplete.make({});
   if (input.unresolvedChangeRequests > 0) {
     return UnresolvedChangeRequests.make({ count: input.unresolvedChangeRequests });
   }
@@ -275,6 +209,8 @@ const skip = Effect.fn("skipReview")(function* (
     ["cache-write-input-tokens", 0],
     ["output-tokens", 0],
     ["estimated-cost-usd", "0.000000"],
+    ["reserved-cost-usd", "0.000000"],
+    ["cost-limit-usd", (REVIEW_COST_LIMIT_MICROUSD / 1_000_000).toFixed(6)],
     ["blocking-findings", 0],
     ["unresolved-change-requests", unresolvedChangeRequests],
     ...(reviewUrl === undefined ? [] : [["review-url", reviewUrl] as const]),
@@ -556,10 +492,6 @@ const reanchorToFullPullRequest = (
   });
 };
 
-const openAiClientLayer = OpenAiClient.layerConfig({
-  apiKey: Config.redacted("OPENAI_API_KEY"),
-}).pipe(Layer.provide(FetchHttpClient.layer));
-
 export const reviewActionProgram = Effect.gen(function* () {
   const presentation = yield* ReviewPresentation;
   const repository = yield* Config.nonEmptyString("GITHUB_REPOSITORY");
@@ -710,12 +642,14 @@ export const reviewActionProgram = Effect.gen(function* () {
         surface,
         modelTurns: 0,
         exhausted: undefined,
+        incomplete: false,
         inputTokens: 0,
         uncachedInputTokens: 0,
         cachedInputTokens: 0,
         cacheWriteInputTokens: 0,
         outputTokens: 0,
         estimatedCostMicrousd: undefined,
+        reservedCostMicrousd: 0,
         report: ReviewReport.make({
           summary:
             selection.scope === "incremental" &&
@@ -730,15 +664,21 @@ export const reviewActionProgram = Effect.gen(function* () {
       };
     }
 
-    const estimateCostMicrousd = gpt56CostEstimator(modelName);
+    const provider = yield* makeReviewOpenAi({
+      client: yield* OpenAiClient.make({ apiKey: yield* Config.redacted("OPENAI_API_KEY") }),
+      model: modelName,
+      cacheKey: `pr-review-v2:${pull.headRevision}`,
+    });
     const reviewer = makeReviewer({
       model: OpenAiLanguageModel.model(modelName, {
         max_output_tokens: 32_000,
         store: false,
+        service_tier: "default",
         strictJsonSchema: true,
         reasoning: { effort },
       }),
-      ...(estimateCostMicrousd === undefined ? {} : { estimateCostMicrousd }),
+      estimateCostMicrousd: reviewCostEstimator(modelName),
+      costControl: provider.costControl,
       ...(guidance === undefined ? {} : { guidance }),
     });
     const result = yield* reviewer
@@ -757,18 +697,32 @@ export const reviewActionProgram = Effect.gen(function* () {
       )
       .pipe(
         Effect.provideService(ReviewRepository, reviewRepository),
-        Effect.provide(openAiClientLayer),
+        Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+        Effect.onExit(() =>
+          provider.costControl.snapshot.pipe(
+            Effect.flatMap((snapshot) =>
+              Effect.logInfo("Review accounting totals", {
+                modelCalls: snapshot.modelCalls,
+                costLimited: snapshot.stopped,
+                ...snapshot.usage,
+                costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
+              }),
+            ),
+          ),
+        ),
       );
     return {
       surface,
       modelTurns: result.turns,
       exhausted: result.exhausted,
+      incomplete: result.incomplete === true,
       inputTokens: result.usage.inputTokens,
       uncachedInputTokens: result.usage.uncachedInputTokens,
       cachedInputTokens: result.usage.cachedInputTokens,
       cacheWriteInputTokens: result.usage.cacheWriteInputTokens,
       outputTokens: result.usage.outputTokens,
       estimatedCostMicrousd: result.usage.estimatedCostMicrousd,
+      reservedCostMicrousd: result.usage.reservedCostMicrousd ?? 0,
       report: reanchorToFullPullRequest(fullFiles, result.report),
     };
   }).pipe(Effect.exit);
@@ -794,8 +748,13 @@ export const reviewActionProgram = Effect.gen(function* () {
       })
       .at(0);
     yield* Console.error(
-      `PR review attempt failed${failureSummary === undefined ? "" : `: ${failureSummary}`}\n${Cause.pretty(attemptExit.cause)}`,
+      `PR review attempt failed${failureSummary === undefined ? "" : `: ${failureSummary}`}`,
     );
+    yield* Effect.logError("Review failure", {
+      failureTypes: attemptExit.cause.reasons.flatMap((reason) =>
+        Cause.isFailReason(reason) ? [reason.error._tag] : [reason._tag],
+      ),
+    });
     const reviewUrl = yield* publishHeadBoundReview(
       github.publishReview({
         commitId: pull.headRevision,
@@ -830,12 +789,14 @@ export const reviewActionProgram = Effect.gen(function* () {
     cacheWriteInputTokens,
     outputTokens,
     estimatedCostMicrousd,
+    reservedCostMicrousd,
     report,
     exhausted,
+    incomplete,
   } = attemptExit.value;
-  const complete = surface.unreviewedPaths.length === 0 && exhausted === undefined;
+  const complete = surface.unreviewedPaths.length === 0 && exhausted === undefined && !incomplete;
 
-  const pricing = GPT_56_PRICING[modelName];
+  const pricing = reviewModelPricing(modelName);
   const estimatedCost: ReviewCostEstimate | undefined =
     estimatedCostMicrousd === undefined || pricing === undefined
       ? undefined
@@ -864,6 +825,8 @@ export const reviewActionProgram = Effect.gen(function* () {
       cacheWriteInputTokens,
       outputTokens,
       estimatedCost,
+      reservedCostMicrousd,
+      costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
       headRevision: pull.headRevision,
     }),
     selection.automatic,
@@ -896,6 +859,8 @@ export const reviewActionProgram = Effect.gen(function* () {
     ["cached-input-tokens", cachedInputTokens],
     ["cache-write-input-tokens", cacheWriteInputTokens],
     ["output-tokens", outputTokens],
+    ["reserved-cost-usd", (reservedCostMicrousd / 1_000_000).toFixed(6)],
+    ["cost-limit-usd", (REVIEW_COST_LIMIT_MICROUSD / 1_000_000).toFixed(6)],
     [
       "estimated-cost-usd",
       estimatedCost === undefined ? "" : (estimatedCost.microusd / 1_000_000).toFixed(6),
@@ -910,6 +875,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     unreviewedPaths: surface.unreviewedPaths.length,
     unresolvedChangeRequests,
     exhausted,
+    incomplete,
   });
   if (publicationFailure !== undefined) return yield* publicationFailure;
 });

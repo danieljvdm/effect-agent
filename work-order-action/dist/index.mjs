@@ -38210,8 +38210,11 @@ var boundEncodedToolResult = (encodedResult, bounds) => {
 var RUN_STATUS_WARNING = " · WARNING: approaching limits — converge and deliver your final result now.";
 var nearingLimit = (consumed, limit) => consumed * 5 >= limit * 4;
 var formatRunStatus = (view) => {
-  const warn2 = nearingLimit(view.turn, view.maxTurns) || nearingLimit(view.toolCallsUsed, view.maxToolCalls) || view.tokenBudget !== undefined && nearingLimit(view.tokensConsumed, view.tokenBudget) || nearingLimit(view.elapsedSeconds, view.maxDurationSeconds);
-  return `<run-status>turn ${view.turn}/${view.maxTurns} · tool-calls ${view.toolCallsUsed}/${view.maxToolCalls} · tokens ${view.tokensConsumed}/${view.tokenBudget ?? "unbounded"} · last-context ${view.lastInputTokens} · elapsed ${view.elapsedSeconds}s/${view.maxDurationSeconds}s${warn2 ? RUN_STATUS_WARNING : ""}</run-status>`;
+  const researchBudget = view.tokenBudget === undefined ? undefined : Math.max(0, view.tokenBudget - (view.completionReserveTokens ?? 0));
+  const remainingResearch = researchBudget === undefined ? undefined : Math.max(0, researchBudget - view.tokensConsumed);
+  const warn2 = nearingLimit(view.turn, view.maxTurns) || nearingLimit(view.toolCallsUsed, view.maxToolCalls) || researchBudget !== undefined && (nearingLimit(view.tokensConsumed, researchBudget) || view.lastInputTokens > 0 && (remainingResearch ?? 0) <= view.lastInputTokens) || nearingLimit(view.elapsedSeconds, view.maxDurationSeconds);
+  const reserveStatus = view.tokenBudget === undefined ? "" : ` · research-remaining ${remainingResearch} · completion-reserve ${view.completionReserveTokens ?? 0}`;
+  return `<run-status>turn ${view.turn}/${view.maxTurns} · tool-calls ${view.toolCallsUsed}/${view.maxToolCalls} · tokens ${view.tokensConsumed}/${view.tokenBudget ?? "unbounded"}${reserveStatus} · last-context ${view.lastInputTokens} · elapsed ${view.elapsedSeconds}s/${view.maxDurationSeconds}s${warn2 ? RUN_STATUS_WARNING : ""}</run-status>`;
 };
 var outgoingModelPrompt = (policy2, context3, prepared, turn, declaredToolCalls) => exports_Effect.gen(function* () {
   if (policy2.runStatus !== "appended") {
@@ -38225,6 +38228,7 @@ var outgoingModelPrompt = (policy2, context3, prepared, turn, declaredToolCalls)
     maxToolCalls: policy2.maxToolCalls,
     tokensConsumed: context3.inputTokens + context3.outputTokens,
     tokenBudget: policy2.tokenBudget,
+    completionReserveTokens: policy2.completionReserveTokens,
     lastInputTokens: context3.lastInputTokens,
     elapsedSeconds: Math.max(0, Math.floor((now3 - context3.startedAtMillis) / 1000)),
     maxDurationSeconds: Math.floor(exports_Duration.toMillis(policy2.maxDuration) / 1000)
@@ -39481,7 +39485,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
           message: `Model declared Tool Calls with incompatible finish reason ${trace3.finishReason}`
         }));
       }
-      const turnsBlocked = turn > bounds.maxTurns || policy2.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch;
+      const turnsBlocked = turn > bounds.maxTurns && !(turn === bounds.maxTurns + 1 && finalAnswerOnly && completionBatch) || policy2.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch;
       if (turnsBlocked) {
         return failRunEventStream(AgentPolicyError.make({
           limit: "turns",
@@ -39733,7 +39737,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, countedToolCalls, option
       message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
     }));
   }
-  const turnsBlocked = turn > bounds.maxTurns && !(completionBatch && context3.finalizationUsed) || policy2.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch;
+  const turnsBlocked = turn > bounds.maxTurns && !(policy2.onExhaustion === "final-answer" && turn === bounds.maxTurns + 1 && context3.finalizationUsed && completionBatch) || policy2.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch;
   if (turnsBlocked) {
     return failRunEventStream(AgentPolicyError.make({
       limit: "turns",
