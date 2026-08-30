@@ -38,6 +38,7 @@ import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import {
+  Cause,
   Context,
   Effect,
   Exit,
@@ -158,7 +159,11 @@ const storeLayer = (filename: string, probe?: DeadlineDefectProbe) => {
         nextDeadline: Ref.update(probe.attempts, (count) => count + 1).pipe(
           Effect.andThen(Ref.getAndSet(probe.pending, false)),
           Effect.flatMap((shouldDefect) =>
-            shouldDefect ? Effect.die("transient nextDeadline defect") : store.nextDeadline,
+            shouldDefect
+              ? Effect.failCause(
+                  Cause.combine(Cause.die("transient nextDeadline defect"), Cause.interrupt(0)),
+                )
+              : store.nextDeadline,
           ),
         ),
       }),
@@ -271,7 +276,7 @@ const makeInitialAgent = Effect.sync(() => {
 });
 
 it.effect(
-  "continues polling after a transient nextDeadline defect and stops when its Scope closes",
+  "continues polling after a mixed defect and interruption and stops when its Scope closes",
   () =>
     withTemporaryDatabase((filename) =>
       Effect.scoped(

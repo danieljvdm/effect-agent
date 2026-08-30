@@ -741,14 +741,14 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
               processed += 1;
             }),
           onFailure: (cause) =>
-            Cause.hasInterrupts(cause)
+            Cause.hasInterruptsOnly(cause)
               ? Effect.interrupt
               : Effect.gen(function* () {
                   failed += 1;
                   const code = failureCode(cause);
                   yield* recover(code).pipe(
                     Effect.catchCause((c) =>
-                      Cause.hasInterrupts(c) ? Effect.interrupt : Effect.void,
+                      Cause.hasInterruptsOnly(c) ? Effect.interrupt : Effect.void,
                     ),
                   );
                   yield* Effect.logWarning("Subscription work remains pending").pipe(

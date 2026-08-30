@@ -33,7 +33,7 @@ import {
 } from "@effect-agent/session";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
 import { memorySubscriptionStoreLayer } from "../src/index.ts";
@@ -838,6 +838,30 @@ describe("Durable subscription delivery", () => {
       ),
     );
   }
+
+  it.effect("retries selected work after a mixed preparation defect and interruption", () => {
+    let failPreparation = true;
+    return Effect.gen(function* () {
+      yield* registerAndAccept;
+      const driver = yield* SubscriptionDriver;
+      expect(yield* driver.runDue).toMatchObject({ failed: 1 });
+      const store = yield* SubscriptionStore;
+      expect((yield* store.delivery(key()))?.state).toBe("selected");
+      failPreparation = false;
+      yield* TestClock.adjust(limits.retryMillis);
+      yield* drain();
+      expect((yield* store.delivery(key()))?.state).toBe("delivered");
+    }).pipe(
+      Effect.provide(
+        layer({
+          prepare: (event) =>
+            failPreparation
+              ? Effect.failCause(Cause.combine(Cause.die("preparation defect"), Cause.interrupt(0)))
+              : Effect.succeed({ text: event.text }),
+        }),
+      ),
+    );
+  });
 
   it.effect("retains permanent source failure visibly and does not poll it again", () => {
     let polls = 0;

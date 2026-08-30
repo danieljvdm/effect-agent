@@ -107,7 +107,7 @@ export const nodeScheduledInputAdmissionLayer: Layer.Layer<
 );
 
 const reportPassFailure = (cause: Cause.Cause<SubscriptionStoreFailure>): Effect.Effect<boolean> =>
-  Cause.hasInterrupts(cause)
+  Cause.hasInterruptsOnly(cause)
     ? Effect.interrupt
     : Effect.logWarning("Node subscription pass failed").pipe(
         Effect.annotateLogs({
