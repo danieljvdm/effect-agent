@@ -6,7 +6,6 @@ import {
   Digest,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
   IdempotencyKey,
   ObligationThresholds,
   OperationAuthorizer,
@@ -23,6 +22,7 @@ import {
   type OperationAuthorizationRequest,
   type OperationAuthorizerService,
 } from "@effect-agent/session";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
 import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
@@ -189,7 +189,7 @@ const baseLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
   MemoryConversationStoreLive,
   WakeScheduler.layerNoop,
-  DurableRuntimeFailpoint.layerTest,
+  DurableRuntimeFailpointTestControl.layer,
   ToolReconciler.uncertain,
   configLayer,
   tenantScopedAuthorizerLayer,

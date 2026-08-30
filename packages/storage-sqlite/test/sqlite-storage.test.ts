@@ -21,6 +21,7 @@ import {
   type CanonicalRecordPayload,
 } from "@effect-agent/session";
 import { conversationStoreConformanceCases } from "@effect-agent/session/testing";
+import { SqliteStorageFailpointTestControl } from "@effect-agent/storage-sqlite/testing";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, describe, it } from "@effect/vitest";
@@ -42,15 +43,14 @@ import {
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
+import type { SqliteStorageFailpoint } from "../src/index.ts";
 import {
   conversationStoreLayer,
   layer,
   observationOffsetAt,
   SqliteStorageConfig,
   SqliteStorageConfigValue,
-  SqliteStorageFailpoint,
   SqliteStorageFailpointError,
-  SqliteStorageFailpointTestControl,
   type SqliteStorageFailpointLocation,
   SqliteStorageCompatibilityError,
   SqliteStorageCorruptionError,
@@ -179,7 +179,7 @@ const explicitTestStorageLayer = (filename: string) =>
             verifyOnOpen: false,
           }),
         ),
-        SqliteStorageFailpoint.layerTest,
+        SqliteStorageFailpointTestControl.layer,
         SqliteClient.layer({ filename }),
         NodeCrypto.layer,
       ),

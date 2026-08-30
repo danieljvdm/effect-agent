@@ -1,5 +1,5 @@
 import { Agent } from "@effect-agent/core";
-import { TravelPlanner } from "@effect-agent/testing";
+import { TravelPlanner } from "@effect-agent/testing/fixtures/travel-planner";
 import { AnthropicLanguageModel } from "@effect/ai-anthropic";
 import { OpenAiLanguageModel } from "@effect/ai-openai";
 

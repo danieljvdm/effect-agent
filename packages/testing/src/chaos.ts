@@ -27,7 +27,6 @@ import {
   DurableRuntimeConfig,
   DurableRuntimeFailpointError,
   DurableRuntimeFailpointLocation,
-  DurableRuntimeFailpointTestControl,
   DurableWorkerBinding,
   IdempotencyKey,
   ObligationThresholds,
@@ -52,6 +51,7 @@ import {
   type SubmissionSnapshot,
   type UnknownResolution,
 } from "@effect-agent/session";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
 import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { FastCheck } from "effect/testing";
 import {

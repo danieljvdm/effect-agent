@@ -14,7 +14,12 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./certification": "./src/certification.ts",
+    "./chaos": "./src/chaos.ts",
+    "./code-executor": "./src/code-executor.ts",
+    "./fixtures/docs-researcher": "./src/docs-researcher.ts",
+    "./fixtures/travel-planner": "./src/travel-planner.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -28,14 +33,14 @@
     "@effect-agent/capabilities": "workspace:*",
     "@effect-agent/core": "workspace:*",
     "@effect-agent/engine": "workspace:*",
-    "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/sandbox": "workspace:*",
     "@effect-agent/session": "workspace:*",
-    "@effect-agent/storage-memory": "workspace:*",
-    "@effect-agent/storage-sqlite": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@effect-agent/platform-node": "workspace:*",
+    "@effect-agent/storage-memory": "workspace:*",
+    "@effect-agent/storage-sqlite": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",

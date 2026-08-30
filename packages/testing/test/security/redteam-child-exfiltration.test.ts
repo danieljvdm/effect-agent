@@ -14,10 +14,6 @@ import {
   runIdForSubmission,
   type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
-
 import {
   docsCoordinatorConfidentialMarker,
   docsDocumentBodySecret,
@@ -32,7 +28,10 @@ import {
   researchCorpusDocumentIds,
   researchMissionRequest,
   summarizeCallId,
-} from "../../src/index.ts";
+} from "@effect-agent/testing/fixtures/docs-researcher";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
 
 // ---------------------------------------------------------------------------
 // Red-team suite: child exfiltration through the durable join.

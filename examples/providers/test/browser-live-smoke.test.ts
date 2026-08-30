@@ -7,7 +7,10 @@ import {
   browserQuickActionCaptureLayer,
   type BrowserQuickActionClient,
 } from "@effect-agent/platform-cloudflare/browser-quick-action";
-import { PHASE7_LIVE_CREDENTIAL_ENV, phase7LiveProfileEnabled } from "@effect-agent/testing";
+import {
+  PHASE7_LIVE_CREDENTIAL_ENV,
+  phase7LiveProfileEnabled,
+} from "@effect-agent/testing/fixtures/travel-planner";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Console, Effect, Layer, Ref, Schema, Stream } from "effect";
 import { Toolkit } from "effect/unstable/ai";

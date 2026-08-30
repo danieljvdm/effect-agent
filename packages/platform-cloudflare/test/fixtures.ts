@@ -29,10 +29,10 @@ import {
   type ResolvedBinding,
 } from "@effect-agent/session";
 import {
-  evictionFailpointHandler,
   type DoStorageFailpointHandler,
   type DoStorageFailpointLocation,
 } from "@effect-agent/storage-cloudflare";
+import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing";
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 

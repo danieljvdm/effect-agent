@@ -16,21 +16,12 @@ import {
   type CanonicalRecordEnvelope,
   type Receipt,
 } from "@effect-agent/session";
-import { phase7LiveProfileEnabled } from "@effect-agent/testing";
+import { phase7LiveProfileEnabled } from "@effect-agent/testing/fixtures/travel-planner";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  Config,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Option,
-  PlatformError,
-  Schema,
-  Stream,
-} from "effect";
+import type { PlatformError } from "effect";
+import { Config, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import {

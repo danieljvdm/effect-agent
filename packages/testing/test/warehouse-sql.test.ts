@@ -6,7 +6,7 @@ import {
   WarehouseLimits,
   warehouseDbLayer,
   warehouseDemoSeed,
-} from "../src/fixtures/warehouse/index.ts";
+} from "./fixtures/warehouse.ts";
 
 const acmeLayer = (limits?: WarehouseLimits) =>
   warehouseDbLayer({ tenant: "acme", seed: warehouseDemoSeed, limits });

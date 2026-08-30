@@ -13,22 +13,17 @@ import {
   DurableAgentRuntime,
   DurableApprovalResolver,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
   IdempotencyKey,
   runIdForSubmission,
   SubmissionLedger,
   SubmissionLookupById,
   WakeScheduler,
 } from "@effect-agent/session";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
 import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
 } from "@effect-agent/storage-memory";
-import { NodeCrypto } from "@effect/platform-node";
-import { expect, layer } from "@effect/vitest";
-import { Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, type Prompt, type Response } from "effect/unstable/ai";
-
 import {
   ActivityCatalogLayer,
   bookFlightIdempotencyKey,
@@ -45,7 +40,11 @@ import {
   TravelPlannerPhase5,
   TravelPlannerPhase5ToolkitLayer,
   TravelSupplierReconcilerLayer,
-} from "../../src/index.ts";
+} from "@effect-agent/testing/fixtures/travel-planner";
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, layer } from "@effect/vitest";
+import { Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import { LanguageModel, Model, type Prompt, type Response } from "effect/unstable/ai";
 
 // ---------------------------------------------------------------------------
 // Red-team suite: PROMPT-INJECTED SUPPLIER CONTENT (P7 WP5, plan §4;
@@ -209,7 +208,7 @@ const infraLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
   MemoryConversationStoreLive,
   WakeScheduler.layerNoop,
-  DurableRuntimeFailpoint.layerTest,
+  DurableRuntimeFailpointTestControl.layer,
   configLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 

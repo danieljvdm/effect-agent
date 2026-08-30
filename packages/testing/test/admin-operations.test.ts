@@ -12,9 +12,7 @@ import {
   Digest,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
-  DurableRuntimeFailpointTestControl,
   IdempotencyKey,
   ObligationThresholds,
   OperationAuthorizer,
@@ -52,6 +50,7 @@ import {
   type RecoveryExplanation,
   type RecoveryReport,
 } from "@effect-agent/session";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
 import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
@@ -233,7 +232,7 @@ const baseLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
   MemoryConversationStoreLive,
   WakeScheduler.layerNoop,
-  DurableRuntimeFailpoint.layerTest,
+  DurableRuntimeFailpointTestControl.layer,
   ToolReconciler.uncertain,
   configLayer,
   authorizerLayer,

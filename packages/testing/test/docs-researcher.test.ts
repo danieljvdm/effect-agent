@@ -14,11 +14,6 @@ import {
   runIdForSubmission,
   type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import type { PlatformError } from "effect";
-import { Effect, FileSystem, Option, Schema, Stream } from "effect";
-
 import {
   assertDiscoveryMatchesAuthoredToolkit,
   docsCoordinatorConfidentialMarker,
@@ -42,7 +37,11 @@ import {
   researchCorpusDocumentIds,
   researchMissionRequest,
   summarizeCallId,
-} from "../src/index.ts";
+} from "@effect-agent/testing/fixtures/docs-researcher";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import type { PlatformError } from "effect";
+import { Effect, FileSystem, Option, Schema, Stream } from "effect";
 
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);

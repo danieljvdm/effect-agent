@@ -14,6 +14,7 @@ import {
   UnknownResolutionCommand,
 } from "@effect-agent/session";
 import { submissionLedgerConformanceCases } from "@effect-agent/session/testing";
+import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runInDurableObject } from "cloudflare:test";
@@ -27,7 +28,6 @@ import {
   DoStorageError,
   DoStorageFailpoint,
   DoValueBoundExceeded,
-  evictionFailpointHandler,
   ledgerLayer,
   storageConfigLayer,
   submissionLedgerLayer,

@@ -31,12 +31,6 @@ import {
   type DurableRuntimeFailpointLocation,
   type Receipt,
 } from "@effect-agent/session";
-import { NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import type { PlatformError } from "effect";
-import { Cause, Duration, Effect, Exit, FileSystem, Option, Schema, Stream } from "effect";
-import { TestClock } from "effect/testing";
-
 import {
   DestinationShortlist,
   TravelPlannerSubagentDurabilityProfile,
@@ -56,7 +50,12 @@ import {
   s2TravelPlannerProducerId,
   s2TravelPlannerProfile,
   s2TravelPlannerSubmitOptions,
-} from "../src/index.ts";
+} from "@effect-agent/testing/fixtures/travel-planner";
+import { NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import type { PlatformError } from "effect";
+import { Cause, Duration, Effect, Exit, FileSystem, Option, Schema, Stream } from "effect";
+import { TestClock } from "effect/testing";
 
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);

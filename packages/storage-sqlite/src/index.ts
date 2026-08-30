@@ -1,5 +1,5 @@
 export * from "./errors.ts";
-export * from "./migrations.ts";
+export { CurrentSqliteStorageVersion } from "./migrations.ts";
 export * from "./sqlite-conversation-store.ts";
 export * from "./sqlite-ledger.ts";
 export * from "./sqlite-schedule-store.ts";

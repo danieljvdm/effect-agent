@@ -5,14 +5,13 @@ import {
   CodeExecutor,
   NetworkDisabled,
 } from "@effect-agent/sandbox";
-import { expect, layer } from "@effect/vitest";
-import { Duration, Effect } from "effect";
-
 import {
   codeExecutorConformanceCases,
   inProcessCodeExecutorImplementation,
   inProcessCodeExecutorLayer,
-} from "../src/index.ts";
+} from "@effect-agent/testing/code-executor";
+import { expect, layer } from "@effect/vitest";
+import { Duration, Effect } from "effect";
 
 const limits = CodeExecutionLimits.make({
   maxSourceBytes: 64 * 1024,

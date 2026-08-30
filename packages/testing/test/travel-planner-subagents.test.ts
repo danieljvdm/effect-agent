@@ -15,10 +15,7 @@ import {
   ToolCallId,
 } from "@effect-agent/core";
 import { AgentRuntime, AgentSpawner } from "@effect-agent/engine";
-import { describe, expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
-import { Model, Tool, Toolkit } from "effect/unstable/ai";
-
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
 import {
   AirportCode,
   CatalogLifecycle,
@@ -45,10 +42,11 @@ import {
   ResearchDispatchGate,
   researcherHappyPathTurns,
   researchMission,
-  ScriptedModel,
-  type ScriptedTurnInput,
   TravelCoordinator,
-} from "../src/index.ts";
+} from "@effect-agent/testing/fixtures/travel-planner";
+import { describe, expect, it } from "@effect/vitest";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
+import { Model, Tool, Toolkit } from "effect/unstable/ai";
 
 const decodeRunId = Schema.decodeSync(RunId);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);

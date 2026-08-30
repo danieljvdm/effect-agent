@@ -19,7 +19,7 @@ point that runs three tiers against a candidate
 
 ```ts
 import { Effect } from "effect";
-import { certifyDurableAdapters } from "@effect-agent/testing";
+import { certifyDurableAdapters } from "@effect-agent/testing/certification";
 
 const certificate = Effect.gen(function* () {
   return yield* certifyDurableAdapters({

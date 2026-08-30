@@ -2,18 +2,17 @@ import type {
   ConversationStore,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpointTestControl,
   SubmissionLedger,
 } from "@effect-agent/session";
-import type { Crypto, Effect } from "effect";
-import { describe, expect, it } from "vite-plus/test";
-
+import type { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
 import {
   ChaosPlan,
   ChaosSubmissionSpec,
   runChaosPlan,
   type ChaosConvergenceFailure,
-} from "../src/index.ts";
+} from "@effect-agent/testing/chaos";
+import type { Crypto, Effect } from "effect";
+import { describe, expect, it } from "vite-plus/test";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

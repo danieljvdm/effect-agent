@@ -6,7 +6,7 @@ import {
   PageCaptureRequest,
   PageUrlTarget,
 } from "@effect-agent/sandbox";
-import { phase7LiveProfileEnabled } from "@effect-agent/testing";
+import { phase7LiveProfileEnabled } from "@effect-agent/testing/fixtures/travel-planner";
 import { Config, Effect } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "vite-plus/test";

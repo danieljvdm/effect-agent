@@ -12,6 +12,7 @@ import {
   type CodeHostCall,
   type CodeHostCallResult,
 } from "@effect-agent/sandbox";
+import { codeExecutorConformanceCases } from "@effect-agent/testing/code-executor";
 import { DurableObject } from "cloudflare:workers";
 import {
   Cause,
@@ -25,9 +26,6 @@ import {
   type Layer,
 } from "effect";
 
-// Workspace-relative source import: esbuild bundles it, and the package
-// barrel would pull in Node-only storage fixtures the worker cannot load.
-import { codeExecutorConformanceCases } from "../../../testing/src/code-executor-conformance.ts";
 import {
   disposeRpcHandle,
   dynamicWorkerCodeExecutorLayer,

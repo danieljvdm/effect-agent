@@ -18,10 +18,6 @@ import {
 } from "@effect-agent/session";
 import { MemoryStorageLive } from "@effect-agent/storage-memory";
 import { layer as sqliteStorageLayer } from "@effect-agent/storage-sqlite";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
-
 import {
   expectedTravelPlan,
   makePhase3TravelPlannerCheckpoint,
@@ -30,7 +26,10 @@ import {
   phase3TravelPlannerEncodedFixture,
   phase3TravelPlannerProfile,
   travelPlanFromProjection,
-} from "../src/index.ts";
+} from "@effect-agent/testing/fixtures/travel-planner";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
 
 const producerEpoch = Schema.decodeSync(ProducerEpoch)(1);
 const initialSequence = Schema.decodeSync(CanonicalSequence)(0);

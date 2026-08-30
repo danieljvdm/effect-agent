@@ -3,7 +3,7 @@ import {
   phase6SupplierReconcilerLayer,
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
-} from "@effect-agent/testing";
+} from "@effect-agent/testing/fixtures/travel-planner";
 
 import { makeConversationObjectClass, type ConversationObjectOptions } from "../src/index.ts";
 import { runtimeEvictionFailpoint, storageEvictionFailpoint } from "./fixtures.ts";

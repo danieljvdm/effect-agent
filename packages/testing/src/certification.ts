@@ -26,10 +26,8 @@ import {
   Digest,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
   DurableRuntimeFailpointLocation,
-  DurableRuntimeFailpointTestControl,
   DurableWorkerBinding,
   IdempotencyKey,
   LoadCheckpointRequest,
@@ -52,6 +50,7 @@ import {
   type SubmissionSnapshot,
 } from "@effect-agent/session";
 import {
+  DurableRuntimeFailpointTestControl,
   type CertificationCaseResult,
   CertificationReport,
   CertificationSweepResult,
@@ -937,7 +936,7 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
     options.submissionLedger,
     capturingStore,
     options.wakeScheduler ?? WakeScheduler.layerNoop,
-    DurableRuntimeFailpoint.layerTest,
+    DurableRuntimeFailpointTestControl.layer,
     ToolReconciler.uncertain,
     DurableRuntimeConfig.layer({
       deploymentId: Schema.decodeSync(DeploymentId)("deployment-certification"),

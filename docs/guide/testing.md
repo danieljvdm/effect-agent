@@ -26,6 +26,32 @@ The script can emit text, reasoning, Tool Calls, usage, malformed sequences, typ
 or a stream that waits for interruption. Hooks can assert the normalized Prompt and detect stream
 finalization.
 
+## Choose a testing entry point
+
+The package root exports only `ScriptedModel` and its request, Turn, and hook types and Schemas.
+Specialized utilities and shared application fixtures use these supported imports:
+
+| Import                                           | Contents                                                |
+| ------------------------------------------------ | ------------------------------------------------------- |
+| `@effect-agent/testing/certification`            | Durable adapter certification runner                    |
+| `@effect-agent/testing/chaos`                    | Seeded plans and convergence checks                     |
+| `@effect-agent/testing/code-executor`            | CodeExecutor conformance and the in-process substitute  |
+| `@effect-agent/testing/fixtures/travel-planner`  | Travel Planner definitions, services, and scenarios     |
+| `@effect-agent/testing/fixtures/docs-researcher` | Docs Researcher definitions and MCP delegation fixtures |
+
+These paths ship JavaScript and declarations. The SQLite warehouse fixture stays private to the
+repository's tests. Testing's Node runtime and storage adapter dependencies are development-only;
+install whichever adapters your own tests use directly.
+
+Mutable failpoint controls also use testing paths. Import `DurableRuntimeFailpointTestControl`
+from `@effect-agent/session/testing`, `SqliteStorageFailpointTestControl` from
+`@effect-agent/storage-sqlite/testing`, or `DoStorageFailpointTestControl` from
+`@effect-agent/storage-cloudflare/testing`. Each control's `.layer` provides both the production
+failpoint service and its mutable test control over the same Ref. This replaces
+`DurableRuntimeFailpoint.layerTest`, `SqliteStorageFailpoint.layerTest`, and
+`DoStorageFailpoint.layerTest`. The Cloudflare testing path also exports `evictionFailpointHandler`.
+Production roots retain the failpoint services, handler types, errors, locations, and no-op `.layer`.
+
 ## Exercise the public runtime
 
 Tests provide the same Layers a real application would provide, swapping the default

@@ -31,6 +31,7 @@ export default defineConfig({
   // defaults, so the published artifact's declarations and sourcemap are
   // pinned explicitly here.
   pack: {
+    entry: ["src/index.ts", "src/testing.ts"],
     dts: true,
     sourcemap: true,
   },

@@ -2,26 +2,25 @@ import {
   DeploymentId,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
   ProducerId,
   ToolReconciler,
   WakeScheduler,
 } from "@effect-agent/session";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
 import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
 } from "@effect-agent/storage-memory";
-import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Cause, Duration, Effect, Exit, Layer, Schema } from "effect";
-
 import {
   ChaosPlan,
   DEFAULT_CHAOS_SEED,
   chaosSeedFromEnv,
   generateChaosPlans,
   runChaosPlan,
-} from "../src/index.ts";
+} from "@effect-agent/testing/chaos";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Cause, Duration, Effect, Exit, Layer, Schema } from "effect";
 
 /**
  * P7 WP4 memory chaos lane (plan §5): ~200 seeded plans over the in-memory adapter pair,
@@ -50,7 +49,7 @@ const freshLayer = () =>
         MemorySubmissionLedgerLive,
         MemoryConversationStoreLive,
         WakeScheduler.layerNoop,
-        DurableRuntimeFailpoint.layerTest,
+        DurableRuntimeFailpointTestControl.layer,
         ToolReconciler.uncertain,
         configLayer,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
