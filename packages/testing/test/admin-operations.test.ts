@@ -1,5 +1,6 @@
 import { Agent, AgentPolicy, ConversationId, ToolCallId } from "@effect-agent/core";
 import {
+  AbortCommand,
   ApprovalDecisionCommand,
   CanonicalRecordEnvelope,
   ConversationExport,
@@ -732,6 +733,123 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       expect(laterById.get(unknown.submissionId)?.ageSeconds).toBe(720);
       expect(laterById.get(unknown.submissionId)?.severity).toBe("overdue");
       expect(laterById.get(ready.submissionId)?.severity).toBe("overdue");
+    }),
+  );
+
+  it.effect("denies settlement waits and aborts before protected access or notifications", () =>
+    Effect.gen(function* () {
+      yield* resetAuthorizer;
+      const receipt = yield* makeSettledLane("conversation-denied-settlement", "denied");
+      const ledger = yield* SubmissionLedger;
+      const wake = yield* WakeScheduler;
+      const control = yield* AuthorizerTestControl;
+      yield* control.reset;
+      yield* control.deny(["awaitSettlement", "abort"]);
+      const accesses: Array<string> = [];
+      const protectedAccess = (name: string) =>
+        Effect.sync(() => {
+          accesses.push(name);
+        });
+      const guardedLedger = SubmissionLedger.of({
+        ...ledger,
+        lookup: (request) => protectedAccess("lookup").pipe(Effect.andThen(ledger.lookup(request))),
+        finalizeSettlement: (request) =>
+          protectedAccess("finalize").pipe(Effect.andThen(ledger.finalizeSettlement(request))),
+        loadRecoverySnapshot: (request) =>
+          protectedAccess("recovery").pipe(Effect.andThen(ledger.loadRecoverySnapshot(request))),
+        requestAbort: (request) =>
+          protectedAccess("abort").pipe(Effect.andThen(ledger.requestAbort(request))),
+      });
+      const failpoints = yield* DurableRuntimeFailpointTestControl;
+      yield* failpoints.setHandler(() => protectedAccess("failpoint"));
+      yield* Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        expect(failureTag(yield* Effect.exit(runtime.awaitSettlement(receipt)))).toBe(
+          "OperationDenied",
+        );
+        expect(
+          failureTag(
+            yield* Effect.exit(
+              runtime.abort(
+                AbortCommand.make({
+                  submissionId: receipt.submissionId,
+                  author: "operator",
+                  reason: "stop",
+                }),
+              ),
+            ),
+          ),
+        ).toBe("OperationDenied");
+      }).pipe(
+        Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+        Effect.provideService(SubmissionLedger, guardedLedger),
+        Effect.provideService(WakeScheduler, { ...wake, notify: () => protectedAccess("notify") }),
+      );
+      expect(accesses).toEqual([]);
+      expect(yield* control.requests).toMatchObject([
+        {
+          operation: "awaitSettlement",
+          conversationId: receipt.conversationId,
+          submissionId: receipt.submissionId,
+        },
+        { operation: "abort", submissionId: receipt.submissionId },
+      ]);
+      yield* clearFailpoint;
+      yield* resetAuthorizer;
+    }),
+  );
+
+  it.effect("rejects a receipt mixing an authorized Conversation with another Submission", () =>
+    Effect.gen(function* () {
+      yield* resetAuthorizer;
+      const allowed = yield* makeSettledLane("conversation-receipt-allowed", "allowed");
+      const forbidden = yield* makeSettledLane("conversation-receipt-forbidden", "forbidden");
+      const ledger = yield* SubmissionLedger;
+      const accesses: Array<string> = [];
+      const note = (name: string) =>
+        Effect.sync(() => {
+          accesses.push(name);
+        });
+      const guardedLedger = SubmissionLedger.of({
+        ...ledger,
+        lookup: (request) => note("lookup").pipe(Effect.andThen(ledger.lookup(request))),
+        finalizeSettlement: (request) =>
+          note("finalize").pipe(Effect.andThen(ledger.finalizeSettlement(request))),
+        loadRecoverySnapshot: (request) =>
+          note("recovery").pipe(Effect.andThen(ledger.loadRecoverySnapshot(request))),
+      });
+      const authorizer: OperationAuthorizerService = {
+        authorize: (request) =>
+          request.conversationId === allowed.conversationId
+            ? Effect.void
+            : Effect.fail(
+                OperationDenied.make({
+                  operation: request.operation,
+                  reason: "Conversation denied",
+                }),
+              ),
+      };
+      yield* Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        expect(failureTag(yield* Effect.exit(runtime.awaitSettlement(forbidden)))).toBe(
+          "OperationDenied",
+        );
+        expect(accesses).toEqual([]);
+
+        const mixed = { ...forbidden, conversationId: allowed.conversationId };
+        expect(failureTag(yield* Effect.exit(runtime.awaitSettlement(mixed)))).toBe(
+          "OperationDenied",
+        );
+        expect(accesses).toEqual(["lookup"]);
+
+        const settlement = yield* runtime.awaitSettlement(allowed);
+        expect(settlement.submissionId).toBe(allowed.submissionId);
+        expect(settlement.outcome).toBe("completed");
+      }).pipe(
+        Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+        Effect.provideService(SubmissionLedger, guardedLedger),
+        Effect.provideService(OperationAuthorizer, authorizer),
+      );
     }),
   );
 

@@ -7,7 +7,7 @@ import {
   IdGenerator,
   InputTokenUsage,
   ModelUsageGroup,
-  isDelegationToolName,
+  DelegationTool,
   PolicyLimit,
   ReceiptId,
   RunUsageSummary,
@@ -166,7 +166,7 @@ import {
 import {
   OperationAuthorizationRequest,
   OperationAuthorizer,
-  type OperationDenied,
+  OperationDenied,
 } from "./operation-authorizer.ts";
 import { PreparedToolCallEvidence, ToolReconciler } from "./reconciler.ts";
 import {
@@ -199,6 +199,7 @@ import {
   ToolApprovalDecided,
   ToolApprovalRequested,
   ToolCallPrepared,
+  RunPolicyUsageReserved,
   ToolCallResolved,
   ToolCallSettled,
   ToolCallUnknown,
@@ -353,6 +354,8 @@ const boundedText = (value: string): string =>
 const decodePrincipalSync = Schema.decodeSync(Principal);
 const decodeIdempotencyKeySync = Schema.decodeSync(IdempotencyKey);
 const decodeChildReservationIdSync = Schema.decodeSync(ChildReservationId);
+const decodeRecordIdSync = Schema.decodeSync(RecordId);
+const decodeBatchIdSync = Schema.decodeSync(BatchId);
 const decodeDefinitionDigests = Schema.decodeUnknownEffect(DefinitionDigests);
 
 /**
@@ -521,7 +524,7 @@ export type DurableWorkerFailure =
   | RunJournalError
   | DurableRuntimeFailpointError;
 
-export type DurableAwaitFailure = LedgerError | SettlementConflict;
+export type DurableAwaitFailure = LedgerError | SettlementConflict | OperationDenied;
 
 /** Typed failures from the public canonical progress boundary. */
 export type DurableProgressFailure =
@@ -530,6 +533,7 @@ export type DurableProgressFailure =
   | OperationDenied;
 
 export type DurableAbortFailure =
+  | OperationDenied
   | LedgerError
   | SettlementConflict
   | JoinedToHost
@@ -782,11 +786,14 @@ interface DeclaredApplicationCall {
   readonly name: string;
   /** Encoded JSON parameters exactly as canonical history carries them. */
   readonly params: unknown;
+  readonly providerExecuted?: boolean;
 }
 
 interface DeclaredToolCalls {
   readonly total: number;
   readonly application: Array<DeclaredApplicationCall>;
+  readonly all: Array<DeclaredApplicationCall>;
+  readonly providerResults: Array<Prompt.ToolResultPart>;
 }
 
 /**
@@ -806,17 +813,26 @@ const declaredToolCalls = Effect.fn("DurableAgentRuntime.declaredToolCalls")(
       Effect.map((prompt) => {
         let total = 0;
         const application: Array<DeclaredApplicationCall> = [];
+        const all: Array<DeclaredApplicationCall> = [];
+        const providerResults: Array<Prompt.ToolResultPart> = [];
         for (const message of prompt.content) {
           if (message.role !== "assistant") continue;
           for (const part of message.content) {
+            if (part.type === "tool-result" && part.providerExecuted) providerResults.push(part);
             if (part.type !== "tool-call") continue;
             total += 1;
+            all.push({
+              id: part.id,
+              name: part.name,
+              params: part.params,
+              providerExecuted: part.providerExecuted,
+            });
             if (!part.providerExecuted) {
               application.push({ id: part.id, name: part.name, params: part.params });
             }
           }
         }
-        return { total, application };
+        return { total, application, all, providerResults };
       }),
     ),
 );
@@ -864,6 +880,7 @@ interface PendingToolBatch {
     readonly id: string;
     readonly result: PersistedJson;
     readonly isFailure: boolean;
+    readonly budgetRejected?: true;
   }>;
   readonly declaredIds: ReadonlySet<string>;
   readonly responseRecordId: RecordId;
@@ -1193,6 +1210,7 @@ const make = Effect.gen(function* () {
     let hostSettlementOutcome: SettlementOutcome | undefined;
     let hostRespondedAfterInput = false;
     const prepared: Array<OpenToolCallEvidence> = [];
+    const preparedKinds = new Map<RecordId, ToolCallPrepared["executionKind"]>();
     const preparedTurns = new Set<number>();
     const settledIds = new Set<string>();
     const resolvedIds = new Set<string>();
@@ -1227,6 +1245,13 @@ const make = Effect.gen(function* () {
       switch (payload._tag) {
         case "ToolCallPrepared": {
           if (payload.runId !== runId) break;
+          const identity = toolCallPreparedRecordId(runId, payload.turn, payload.toolCallId);
+          if (preparedKinds.has(identity)) {
+            return yield* RunJournalError.make({
+              message: "Duplicate canonical Tool preparation evidence",
+            });
+          }
+          preparedKinds.set(identity, payload.executionKind);
           prepared.push(
             OpenToolCallEvidence.make({
               toolCallId: payload.toolCallId,
@@ -1290,12 +1315,15 @@ const make = Effect.gen(function* () {
       (call) => !settledIds.has(call.toolCallId) && !resolvedIds.has(call.toolCallId),
     );
 
-    // S2 delegation evidence (plan §4.1, WP2 contract): every Tool Call with any canonical
-    // subagent lifecycle record — plus every open call matching the core-owned delegation
-    // naming rule — is separated from `openToolCalls`, because its establishment protocol is
-    // idempotent by construction and must never be marked Unknown (spec §13 vs. DUR-009).
+    // Only canonical classification authorizes the idempotent establishment protocol.
+    // A lifecycle record cannot silently upgrade an ordinary or unclassified preparation.
     const subagent = subagentRecordsOf(records, runId);
-    const openByCallId = new Map(allOpenCalls.map((call) => [call.toolCallId, call]));
+    const isPreparedDelegation = (call: OpenToolCallEvidence): boolean =>
+      preparedKinds.get(toolCallPreparedRecordId(runId, call.turn, call.toolCallId)) ===
+      "delegation";
+    const openByCallId = new Map(
+      allOpenCalls.filter(isPreparedDelegation).map((call) => [call.toolCallId, call]),
+    );
     const delegationCallIds: Array<ToolCallId> = [];
     const seenDelegationIds = new Set<ToolCallId>();
     const noteDelegation = (toolCallId: ToolCallId): void => {
@@ -1306,8 +1334,20 @@ const make = Effect.gen(function* () {
     for (const toolCallId of subagent.requested.keys()) noteDelegation(toolCallId);
     for (const toolCallId of subagent.started.keys()) noteDelegation(toolCallId);
     for (const toolCallId of subagent.joined.keys()) noteDelegation(toolCallId);
+    for (const toolCallId of delegationCallIds) {
+      const request = subagent.requested.get(toolCallId);
+      if (
+        request === undefined ||
+        preparedKinds.get(toolCallPreparedRecordId(runId, request.turn, toolCallId)) !==
+          "delegation"
+      ) {
+        return yield* RunJournalError.make({
+          message: "Subagent evidence conflicts with Tool preparation classification",
+        });
+      }
+    }
     for (const call of allOpenCalls) {
-      if (isDelegationToolName(call.toolName)) noteDelegation(call.toolCallId);
+      if (isPreparedDelegation(call)) noteDelegation(call.toolCallId);
     }
     const openDelegationCalls: Array<OpenDelegationCallEvidence> = [];
     for (const toolCallId of delegationCallIds) {
@@ -1363,7 +1403,7 @@ const make = Effect.gen(function* () {
         }),
       );
     }
-    const openToolCalls = allOpenCalls.filter((call) => !seenDelegationIds.has(call.toolCallId));
+    const openToolCalls = allOpenCalls.filter((call) => !isPreparedDelegation(call));
 
     let declaredPendingBatch: DeclaredPendingBatchEvidence | undefined;
     if (lastResponse !== undefined && !preparedTurns.has(lastResponse.turn)) {
@@ -1405,7 +1445,11 @@ const make = Effect.gen(function* () {
     let lastResponse: { readonly turn: number; readonly messages: PersistedJson } | undefined;
     const settledByCallId = new Map<
       string,
-      { readonly result: PersistedJson; readonly isFailure: boolean }
+      {
+        readonly result: PersistedJson;
+        readonly isFailure: boolean;
+        readonly budgetRejected?: true;
+      }
     >();
     for (const envelope of records) {
       const payload = envelope.record.payload;
@@ -1419,17 +1463,37 @@ const make = Effect.gen(function* () {
         settledByCallId.set(payload.toolCallId, {
           result: payload.result,
           isFailure: payload.isFailure,
+          ...(payload.budgetRejected === true ? { budgetRejected: true } : {}),
         });
       }
     }
     if (lastResponse === undefined) return undefined;
-    const calls = yield* declaredApplicationCalls(lastResponse.messages);
-    if (calls.length === 0) return undefined;
-    const settled: Array<{ id: string; result: PersistedJson; isFailure: boolean }> = [];
+    const declared = yield* declaredToolCalls(lastResponse.messages);
+    if (declared.application.length === 0) return undefined;
+    const calls = declared.all;
+    for (const part of declared.providerResults) {
+      const result = yield* decodePersisted(part.result).pipe(
+        Effect.mapError((cause) =>
+          RunJournalError.make({ message: `Invalid canonical provider result ${part.id}`, cause }),
+        ),
+      );
+      settledByCallId.set(part.id, { result, isFailure: part.isFailure });
+    }
+    const settled: Array<{
+      id: string;
+      result: PersistedJson;
+      isFailure: boolean;
+      budgetRejected?: true;
+    }> = [];
     for (const call of calls) {
       const recorded = settledByCallId.get(call.id);
+      if (call.providerExecuted === true && recorded === undefined) {
+        return yield* RunJournalError.make({
+          message: `Pending Turn lacks canonical provider result for ${call.id}`,
+        });
+      }
       if (recorded !== undefined) {
-        settled.push({ id: call.id, result: recorded.result, isFailure: recorded.isFailure });
+        settled.push({ id: call.id, ...recorded });
       }
     }
     if (settled.length >= calls.length) return undefined;
@@ -2043,7 +2107,10 @@ const make = Effect.gen(function* () {
           message: `Run ${runId} has execution records but no canonical start; reset incompatible private-development data`,
         });
       }
-      start = yield* makeEnvelope(recordId, RunStartedRecord.make({ runId, maxDurationMillis }));
+      start = yield* makeEnvelope(
+        recordId,
+        RunStartedRecord.make({ runId, maxDurationMillis, policyAccountingVersion: 1 }),
+      );
       yield* hit("run:before-start-append");
       yield* appendBatch(
         ctx,
@@ -3299,9 +3366,21 @@ const make = Effect.gen(function* () {
         pending === undefined
           ? journal
           : yield* projectRunJournal(withoutPendingBatch(records, pending, runId), runId);
-      // Batch-resume Turn numbers are already canonical (resume.turn is the pending canonical
-      // Turn); ordinary Attempts restart engine Turns at 1 and offset by the committed count.
-      const turnOffset = pending === undefined ? journal.committedTurns : 0;
+      const tools: Record<string, Tool.Any> = agent.definition.toolkit.tools;
+      for (const envelope of records) {
+        const payload = envelope.record.payload;
+        if (payload._tag !== "ToolCallPrepared" || payload.runId !== runId) continue;
+        const tool = tools[payload.toolName];
+        const kind =
+          tool !== undefined && Context.get(tool.annotations, DelegationTool)
+            ? "delegation"
+            : "ordinary";
+        if (tool === undefined || (payload.executionKind ?? "ordinary") !== kind) {
+          return yield* RunJournalError.make({
+            message: `Prepared Tool ${payload.toolCallId} classification conflicts with the resolved binding`,
+          });
+        }
+      }
 
       const knownIds = knownRecordIdsOf(records);
       const stepOutputs = new Map<string, PersistedJson>();
@@ -3760,6 +3839,7 @@ const make = Effect.gen(function* () {
         string,
         { readonly toolCallId: ToolCallId; readonly result: unknown; readonly isFailure: boolean }
       >();
+      const budgetRejectedCalls = new Set<string>();
       // Step-hook coordinator failures are re-wrapped by the engine as `DurableStepError` in the
       // handler channel; this side channel preserves the original failure so the Attempt aborts
       // (obligation still owed) instead of settling the Run `failed` on an infrastructure fault.
@@ -3857,10 +3937,34 @@ const make = Effect.gen(function* () {
             };
 
       const durability: RunDurabilityHook<CoordinatorHalt, never> = {
+        reservePolicyUsage: (usage) =>
+          recordHalt(
+            Effect.gen(function* () {
+              const recordId = decodeRecordIdSync(
+                `policy:${runId}:${usage.programmaticToolCalls}:${usage.finalizationUsed}`,
+              );
+              if (knownIds.has(recordId)) return;
+              const record = yield* makeEnvelope(
+                recordId,
+                RunPolicyUsageReserved.make({ runId, ...usage }),
+              );
+              yield* hit("policy:before-reservation-append");
+              yield* appendBatch(
+                ctx,
+                CanonicalBatch.make({
+                  batchId: decodeBatchIdSync(recordId),
+                  producerId: config.producerId,
+                  records: [record],
+                }),
+              );
+              knownIds.add(recordId);
+              yield* hit("policy:after-reservation-append");
+            }),
+          ),
         commitResponse: (commit) =>
           recordHalt(
             Effect.gen(function* () {
-              const canonicalTurn = turnOffset + commit.turn;
+              const canonicalTurn = commit.turn;
               currentToolTurn = { turn: canonicalTurn, turnId: commit.turnId };
               for (const call of commit.calls) {
                 encodedParamsByCallId.set(call.toolCallId, call.parameters);
@@ -3896,7 +4000,7 @@ const make = Effect.gen(function* () {
                 }),
               );
               yield* appendBatch(ctx, batch);
-              knownIds.add(responseId);
+              for (const record of batch.records) knownIds.add(record.recordId);
               yield* hit("turn:after-response-append");
             }),
           ),
@@ -3938,12 +4042,14 @@ const make = Effect.gen(function* () {
                       toolName: call.toolName,
                       parameters,
                       parametersDigest,
+                      executionKind: call.executionKind,
                     }),
                   ),
                 );
               }
               const head = preparedRecords[0];
               if (head === undefined) return;
+              yield* hit("tools:before-prepared-append");
               yield* appendBatch(
                 ctx,
                 CanonicalBatch.make({
@@ -4006,7 +4112,7 @@ const make = Effect.gen(function* () {
           Effect.sync(() => {
             // Accumulate, never replace: a compaction summarizer and the
             // Turn's own response stage into the same canonical Turn.
-            const key = turnOffset + usage.turn;
+            const key = usage.turn;
             const prior = stagedUsage.get(key);
             stagedUsage.set(key, {
               inputTokens: (prior?.inputTokens ?? 0) + usage.usage.inputTokens.total,
@@ -4018,7 +4124,7 @@ const make = Effect.gen(function* () {
         commitCompaction: (commit) =>
           recordHalt(
             Effect.gen(function* () {
-              const canonicalTurn = turnOffset + commit.turn;
+              const canonicalTurn = commit.turn;
               const recordId = compactionRecordId(runId, canonicalTurn, commit.kind);
               if (knownIds.has(recordId)) return;
               // Coverage selection walks the attempt-start snapshot: records
@@ -4776,10 +4882,6 @@ const make = Effect.gen(function* () {
               authorize: (request: RunToolAuthorizationRequest) =>
                 externalToolAuthorization.authorize({
                   ...request,
-                  // Ordinary replacement Attempts restart the engine's Turn counter at 1.
-                  // Present the host with the same canonical journal Turn used by commits;
-                  // pending-batch resumes already carry their canonical Turn and use offset 0.
-                  turn: turnOffset + request.turn,
                   // Preserve the admitted wire value even when an Agent Schema's decode/encode
                   // pair normalizes differently on a second pass.
                   input: submission.inputPayload,
@@ -4815,7 +4917,7 @@ const make = Effect.gen(function* () {
         ...(config.estimateCostMicrousd === undefined
           ? {}
           : { estimateCostMicrousd: config.estimateCostMicrousd }),
-        ...(journal.committedTurns === 0 ? {} : { resumeUsage: journal.usage }),
+        resumeUsage: { ...journal.usage, ...journal.policyUsage },
       };
 
       const commitPendingTurn: Effect.Effect<void, DurableWorkerFailure> = Effect.gen(function* () {
@@ -4824,7 +4926,7 @@ const make = Effect.gen(function* () {
         if (state.pendingTurn === undefined || history === undefined) return;
         let appended = history.content.slice(state.lastCommitLen);
         if (appended.length === 0) return;
-        const canonicalTurn = turnOffset + state.pendingTurn.turn;
+        const canonicalTurn = state.pendingTurn.turn;
         const createdAt = yield* nowUtc;
         let committedLen = history.content.length;
         const completedRun =
@@ -4887,6 +4989,7 @@ const make = Effect.gen(function* () {
                 ? completedRun
                 : undefined;
             const batch = yield* turnResultsBatch({
+              budgetRejectedCalls,
               runId,
               turn: canonicalTurn,
               turnId: state.pendingTurn.turnId,
@@ -4908,6 +5011,7 @@ const make = Effect.gen(function* () {
               : -1;
           const batch = yield* withCrypto(
             turnCanonicalBatch({
+              budgetRejectedCalls,
               runId,
               turn: canonicalTurn,
               turnId: state.pendingTurn.turnId,
@@ -4984,7 +5088,7 @@ const make = Effect.gen(function* () {
             return commitPendingTurn;
           }
           case "TurnCompleted": {
-            const turnId = event.turnId ?? turnIdForRun(runId, turnOffset + event.turn);
+            const turnId = event.turnId ?? turnIdForRun(runId, event.turn);
             return Ref.update(stateRef, (state) => ({
               ...state,
               pendingTurn: { turn: event.turn, turnId },
@@ -5021,6 +5125,7 @@ const make = Effect.gen(function* () {
             return Effect.void;
           }
           case "ToolCallFailed": {
+            if (event.budgetRejected === true) budgetRejectedCalls.add(event.toolCallId);
             // Only the bounded diagnostics survive the event stream for a failed sibling; the
             // per-call late-settle carries this same bounded `{errorTag, message}` projection.
             if (!event.providerExecuted) {
@@ -5122,7 +5227,16 @@ const make = Effect.gen(function* () {
         AgentRuntime.stream(agent, submission.inputPayload, options).pipe(
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
         ),
-        (event) => halt(handleEvent(event)),
+        (event) =>
+          halt(
+            Effect.gen(function* () {
+              // A broker reports hook failures as Tool preflight data. The coordinator's recorded
+              // infrastructure halt must win before any subsequent event commits that Tool outcome.
+              const failure = yield* Ref.get(haltRef);
+              if (failure !== undefined) return yield* Effect.fail(failure);
+              yield* handleEvent(event);
+            }),
+          ),
       ).pipe(Effect.as({ _tag: "run" as const }));
 
       // Durable §13: the abort command becomes canonical (serialized on the append gate) BEFORE
@@ -6773,6 +6887,14 @@ const make = Effect.gen(function* () {
   const awaitSettlement = Effect.fn("DurableAgentRuntime.awaitSettlement")(function* (
     receipt: Receipt,
   ): Effect.fn.Return<Settlement, DurableAwaitFailure> {
+    // Authorization lasts for this wait, as it does for one observe subscription.
+    yield* operationAuthorizer.authorize(
+      OperationAuthorizationRequest.make({
+        operation: "awaitSettlement",
+        conversationId: receipt.conversationId,
+        submissionId: receipt.submissionId,
+      }),
+    );
     while (true) {
       const snapshot = yield* ledger.lookup(
         SubmissionLookupById.make({ submissionId: receipt.submissionId }),
@@ -6781,6 +6903,14 @@ const make = Effect.gen(function* () {
         return yield* LedgerError.make({
           operation: "awaitSettlement",
           message: `Unknown Submission ${receipt.submissionId}`,
+        });
+      }
+      if (snapshot.value.conversationId !== receipt.conversationId) {
+        return yield* OperationDenied.make({
+          operation: "awaitSettlement",
+          reason: "Receipt Submission does not belong to the authorized Conversation",
+          conversationId: receipt.conversationId,
+          submissionId: receipt.submissionId,
         });
       }
       if (snapshot.value.state === "settled") {
@@ -6866,6 +6996,12 @@ const make = Effect.gen(function* () {
   const abort = Effect.fn("DurableAgentRuntime.abort")(function* (
     command: AbortCommand,
   ): Effect.fn.Return<AbortIntent, DurableAbortFailure> {
+    yield* operationAuthorizer.authorize(
+      OperationAuthorizationRequest.make({
+        operation: "abort",
+        submissionId: command.submissionId,
+      }),
+    );
     const intent = yield* ledger.requestAbort(command);
     yield* hit("abort:after-intent");
     const snapshot = yield* ledger.lookup(
@@ -7414,10 +7550,10 @@ const make = Effect.gen(function* () {
  * - `submit(agent, input, options)` — durable admission → Conversation materialization →
  *   `ConversationCreated` → readiness → Receipt, with failpoints between the steps; a retry with
  *   the same (conversation, principal, idempotencyKey) resumes and returns the same Receipt.
- * - `awaitSettlement(receipt)` — wake-hinted, poll-guaranteed wait; interrupting it detaches the
- *   caller only and never cancels accepted work.
+ * - `awaitSettlement(receipt)` — authorized once before the first ledger read, for the lifetime
+ *   of this wait; interrupting it detaches the caller only and never cancels accepted work.
  * - `observe(receipt, {after})` — canonical record observation from a stored offset.
- * - `abort(command)` — durable idempotent abort intent; inactive work settles aborted through
+ * - `abort(command)` — authorized before ledger access; durable idempotent abort intent; inactive work settles aborted through
  *   recovery, an active worker makes the command canonical before interrupting its Run (§13),
  *   settled work fails with `SettlementConflict` (DUR-012). A `joined` Submission fails with a
  *   typed `JoinedToHost` conflict carrying the host identity — it settles with its host, so the

@@ -4,6 +4,7 @@ import {
   AgentPolicy,
   AgentPolicyError,
   ConversationId,
+  DelegationTool,
   IdGenerator,
   ModelProtocolError,
   RunId,
@@ -64,6 +65,20 @@ class TypedHookService extends Context.Service<TypedHookService, { readonly enab
 const usage = {
   inputTokens: {},
   outputTokens: {},
+};
+
+const oneCallResumeUsage = {
+  committedTurns: 1,
+  toolCalls: 1,
+  programmaticToolCalls: 0,
+  consecutiveToolFailures: 0,
+  finalizationUsed: false,
+  modelCalls: 1,
+  inputTokens: 0,
+  outputTokens: 0,
+  lastInputTokens: 0,
+  lastOutputTokens: 0,
+  costMicrousd: 0,
 };
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -156,6 +171,79 @@ const policy = (overrides?: Partial<Parameters<typeof AgentPolicy.make>[0]>) =>
   });
 
 layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
+  it.effect(
+    "classifies fresh and resumed calls from definition annotations, never name prefixes",
+    () =>
+      Effect.gen(function* () {
+        const Ordinary = Tool.make("delegate_fake", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        });
+        const Delegated = Tool.make("research", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        })
+          .annotate(DelegationTool, true)
+          .annotate(ToolExecutionClass, "readonly");
+        const toolkit = Toolkit.make(Ordinary, Delegated);
+        const definition = Agent.define("classification", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Answer.",
+          toolkit,
+          policy: policy({ maxTurns: 3 }),
+        });
+        const calls = [
+          { id: "ordinary", name: "delegate_fake", params: {} },
+          { id: "delegated", name: "research", params: {} },
+        ];
+        for (const resumed of [false, true]) {
+          const classifications: Array<string> = [];
+          const model = scriptedModel(
+            resumed
+              ? finalParts('"done"')
+              : [
+                  ...calls.map((call) => ({
+                    type: "tool-call" as const,
+                    ...call,
+                    providerExecuted: false,
+                  })),
+                  { type: "finish", reason: "tool-calls", usage },
+                ],
+            '"done"',
+          );
+          yield* AgentRuntime.run(Agent.withModel(definition, model), "q", {
+            ...(resumed
+              ? {
+                  resume: { turn: 1, turnId: resumeTurnId, calls, settled: [] },
+                  resumeUsage: { ...oneCallResumeUsage, toolCalls: 2 },
+                }
+              : {}),
+            durability: {
+              commitResponse: () => Effect.void,
+              prepareToolCalls: (descriptors) =>
+                Effect.sync(() => {
+                  classifications.push(
+                    ...descriptors.map((call) => `${call.toolName}:${call.executionKind}`),
+                  );
+                }),
+              commitCompaction: () => Effect.void,
+              noteTurnUsage: () => Effect.void,
+              step: inertStepHook,
+            },
+          }).pipe(
+            Effect.provide(
+              toolkit.toLayer({
+                delegate_fake: () => Effect.succeed("ok"),
+                research: () => Effect.succeed("ok"),
+              }),
+            ),
+          );
+          expect(classifications).toEqual(["delegate_fake:ordinary", "research:delegation"]);
+        }
+      }),
+  );
+
   it.effect("commitResponse fires after the finish part and before approval preflight", () =>
     Effect.gen(function* () {
       const marks = yield* Ref.make<ReadonlyArray<string>>([]);
@@ -220,6 +308,7 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
             toolName: "book",
             parameters: { ref: "r-1" },
             executionClass: "uncertain",
+            executionKind: "ordinary",
           },
         ],
       });
@@ -482,6 +571,7 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
             toolName: "book",
             parameters: { ref: "r-1" },
             executionClass: "uncertain",
+            executionKind: "ordinary",
           },
         },
         {
@@ -495,6 +585,7 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
             toolName: "book",
             parameters: { ref: "r-2" },
             executionClass: "uncertain",
+            executionKind: "ordinary",
           },
         },
       ]);
@@ -705,7 +796,11 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
         const result = yield* AgentRuntime.stream(
           Agent.withModel(definition, model),
           { question: "resume" },
-          { resume, durability: markingDurability(marks) },
+          {
+            resume,
+            resumeUsage: { ...oneCallResumeUsage, toolCalls: 2 },
+            durability: markingDurability(marks),
+          },
         ).pipe(
           Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
           Stream.runCollect,
@@ -816,7 +911,11 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
         const exit = yield* AgentRuntime.run(
           Agent.withModel(definition, model),
           { question: "resume" },
-          { resume, durability: markingDurability(marks) },
+          {
+            resume,
+            resumeUsage: { ...oneCallResumeUsage, toolCalls: 2 },
+            durability: markingDurability(marks),
+          },
         ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
         const failure = failureFrom(exit);
         expect(failure).toBeInstanceOf(ModelProtocolError);
@@ -848,7 +947,11 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       const accessorExit = yield* AgentRuntime.run(
         Agent.withModel(definition, model),
         { question: "resume" },
-        { resume: accessorResume, durability: markingDurability(marks) },
+        {
+          resume: accessorResume,
+          resumeUsage: { ...oneCallResumeUsage, toolCalls: 2 },
+          durability: markingDurability(marks),
+        },
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
       const accessorFailure = failureFrom(accessorExit);
       expect(accessorFailure).toBeInstanceOf(ModelProtocolError);
@@ -873,7 +976,11 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       const collectionAccessorExit = yield* AgentRuntime.run(
         Agent.withModel(definition, model),
         { question: "resume" },
-        { resume: collectionAccessorResume, durability: markingDurability(marks) },
+        {
+          resume: collectionAccessorResume,
+          resumeUsage: { ...oneCallResumeUsage, toolCalls: 2 },
+          durability: markingDurability(marks),
+        },
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
       const collectionAccessorFailure = failureFrom(collectionAccessorExit);
       expect(collectionAccessorFailure).toBeInstanceOf(ModelProtocolError);
@@ -957,7 +1064,11 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
         const exit = yield* AgentRuntime.stream(
           Agent.withModel(definition, model),
           { question: "resume" },
-          { durationDeadline, resume },
+          {
+            durationDeadline,
+            resume,
+            resumeUsage: { ...oneCallResumeUsage, toolCalls: resume.calls.length },
+          },
         ).pipe(
           Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
           Stream.runDrain,
@@ -1035,7 +1146,7 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       const fiber = yield* AgentRuntime.stream(
         Agent.withModel(definition, model),
         { question: "resume" },
-        { durationDeadline, resume },
+        { durationDeadline, resume, resumeUsage: oneCallResumeUsage },
       ).pipe(
         Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
         Stream.runDrain,
@@ -1106,7 +1217,7 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       const exit = yield* AgentRuntime.run(
         Agent.withModel(definition, model),
         { question: "resume" },
-        { resume, durability: markingDurability(marks) },
+        { resume, resumeUsage: oneCallResumeUsage, durability: markingDurability(marks) },
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
       const failure = failureFrom(exit);
 
@@ -1542,6 +1653,24 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
         },
       },
     );
+    const reservationProgram = AgentRuntime.run(
+      Agent.withModel(definition, scriptedModel([], '{"answer":"typed"}')),
+      { question: "typed" },
+      {
+        durability: {
+          commitResponse: () => Effect.void,
+          prepareToolCalls: () => Effect.void,
+          commitCompaction: () => Effect.void,
+          noteTurnUsage: () => Effect.void,
+          step: inertStepHook,
+          reservePolicyUsage: () =>
+            Effect.gen(function* () {
+              yield* TypedHookService;
+              return yield* HookFailure.make({ message: "reservation failed" });
+            }),
+        },
+      },
+    );
     type ErrorProof = HookFailure extends Effect.Error<typeof program> ? true : false;
     type RequirementsProof =
       TypedHookService extends Effect.Services<typeof program> ? true : false;
@@ -1551,11 +1680,21 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       TypedHookService extends Effect.Services<typeof authorizationProgram> ? true : false;
     const errorProof: ErrorProof = true;
     const requirementsProof: RequirementsProof = true;
+    const reservationErrorProof: HookFailure extends Effect.Error<typeof reservationProgram>
+      ? true
+      : false = true;
+    const reservationRequirementsProof: TypedHookService extends Effect.Services<
+      typeof reservationProgram
+    >
+      ? true
+      : false = true;
     const authorizationErrorProof: AuthorizationErrorProof = true;
     const authorizationRequirementsProof: AuthorizationRequirementsProof = true;
 
     expect(errorProof).toBe(true);
     expect(requirementsProof).toBe(true);
+    expect(reservationErrorProof).toBe(true);
+    expect(reservationRequirementsProof).toBe(true);
     expect(authorizationErrorProof).toBe(true);
     expect(authorizationRequirementsProof).toBe(true);
     return Effect.void;

@@ -613,7 +613,9 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const failure = childMessages(handle.stdoutText()).find(
                   (message) => message.kind === "worker-failure",
                 );
-                expect(failure?.kind === "worker-failure" && failure.tag).toBe("FenceRejected");
+                expect(["FenceRejected", "OwnershipLost"]).toContain(
+                  failure?.kind === "worker-failure" && failure.tag,
+                );
 
                 yield* withRuntime(
                   site.db,

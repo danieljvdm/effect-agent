@@ -1,10 +1,4 @@
-import {
-  ConversationId,
-  isDelegationToolName,
-  SettlementId,
-  SubmissionId,
-  ToolCallId,
-} from "@effect-agent/core";
+import { ConversationId, SettlementId, SubmissionId, ToolCallId } from "@effect-agent/core";
 import { Effect, Schema } from "effect";
 
 import {
@@ -98,9 +92,8 @@ export class OpenDelegationCallEvidence extends Schema.Class<OpenDelegationCallE
  * `openToolCalls` is the DUR-009 seam: every `ToolCallPrepared` without a matching
  * `ToolCallSettled` or `ToolCallResolved`. S2 separates `openDelegationCalls` from it (plan
  * §4.1): a delegation's prepared-without-outcome state is provably replay-safe, so those calls
- * route through the Subagent recovery rows and never through `MarkUnknown` — the classifier
- * additionally applies the core-owned naming rule and the snapshot's reservation rows to any
- * delegation call an assembler left in `openToolCalls` (fail-closed). `joinedInputCovered`
+ * route through the Subagent recovery rows and never through `MarkUnknown`. Names and
+ * operational reservation rows cannot upgrade ordinary classification. `joinedInputCovered`
  * implements the plan §2.5 prompt-coverage rule for the joined side: a joined input is covered
  * iff a later `ModelResponseRecorded` of the host Run exists after the `input:{sid}` record.
  * `hostSettlementOutcome` is the joined-side view of the host's canonical `SubmissionSettled`
@@ -466,9 +459,8 @@ const isTerminalAttachment = (attachment: ChildAttachmentSnapshot): boolean =>
 
 /**
  * Merge every durable delegation-detection source into per-call views (plan §4.1): the
- * separated `openDelegationCalls` evidence, the core-owned naming rule over any delegation call
- * an assembler left in `openToolCalls` (fail-closed), and the snapshot's reservation rows and
- * child attachments — a reservation row is durable proof of a delegation even without evidence.
+ * explicitly classified `openDelegationCalls`, reservation rows and child attachments.
+ * Reservations may need cleanup, but never upgrade an ordinary call into a replayable delegation.
  */
 const delegationViewsOf = (
   snapshot: RecoverySnapshot,
@@ -504,22 +496,10 @@ const delegationViewsOf = (
     view.admission = call.admission;
     view.childSubmissionId = call.childSubmissionId;
   }
-  const openByCallId = new Map(evidence.openToolCalls.map((call) => [call.toolCallId, call]));
-  for (const [toolCallId, call] of openByCallId) {
-    if (views.has(toolCallId) || !isDelegationToolName(call.toolName)) continue;
-    const view = ensure(toolCallId);
-    view.turn = call.turn;
-    view.open = true;
-  }
   for (const reservation of snapshot.childReservations) {
     let view = views.get(reservation.parentToolCallId);
     if (view === undefined) {
       view = ensure(reservation.parentToolCallId);
-      const open = openByCallId.get(reservation.parentToolCallId);
-      if (open !== undefined) {
-        view.turn = open.turn;
-        view.open = true;
-      }
     }
     view.reservation = reservation;
     if (view.childSubmissionId === undefined && reservation.childSubmissionId !== undefined) {
@@ -901,7 +881,9 @@ export const classifyRecovery = (
       classifyDelegationAbort(submissionId, delegationViews) ?? SettleAborted.make({ submissionId })
     );
   }
-  const delegationCallIds = new Set<string>(delegationViews.map((view) => view.toolCallId));
+  const delegationCallIds = new Set<string>(
+    evidence.openDelegationCalls.map((call) => call.toolCallId),
+  );
   const ordinaryOpenCalls = evidence.openToolCalls.filter(
     (call) => !delegationCallIds.has(call.toolCallId),
   );

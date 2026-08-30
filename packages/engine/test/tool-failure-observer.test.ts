@@ -445,6 +445,19 @@ layer(identifiers)("RUN-036 trusted Tool failure observation", (it) => {
               calls: [{ id: rawId, name: "host", params: { value: 1 } }],
               settled: [],
             },
+            resumeUsage: {
+              committedTurns: 1,
+              toolCalls: 1,
+              programmaticToolCalls: 0,
+              consecutiveToolFailures: 0,
+              finalizationUsed: false,
+              modelCalls: 1,
+              inputTokens: 0,
+              outputTokens: 0,
+              lastInputTokens: 0,
+              lastOutputTokens: 0,
+              costMicrousd: 0,
+            },
           },
         ).pipe(Effect.provide(toolFailureObserverLayer(collect(observations))));
         expect(events.at(-1)?._tag).toBe("RunCompleted");
@@ -928,6 +941,19 @@ layer(identifiers)("RUN-036 trusted Tool failure observation", (it) => {
               turnId: TurnId.make("turn-observer"),
               calls: [{ id: outerId, name: "returned", params: { value: 1 } }],
               settled: [{ id: outerId, result: { _tag: "QueryFailure" }, isFailure: true }],
+            },
+            resumeUsage: {
+              committedTurns: 1,
+              toolCalls: 1,
+              programmaticToolCalls: 0,
+              consecutiveToolFailures: 0,
+              finalizationUsed: false,
+              modelCalls: 1,
+              inputTokens: 0,
+              outputTokens: 0,
+              lastInputTokens: 0,
+              lastOutputTokens: 0,
+              costMicrousd: 0,
             },
           }).pipe(
             Stream.provide(

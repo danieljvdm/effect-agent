@@ -5792,7 +5792,22 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
             const result = yield* AgentRuntime.run(
               Agent.withModel(definition, model),
               { question: "resume" },
-              { resume },
+              {
+                resume,
+                resumeUsage: {
+                  committedTurns: 1,
+                  toolCalls: 1,
+                  programmaticToolCalls: 0,
+                  consecutiveToolFailures: 0,
+                  finalizationUsed: false,
+                  modelCalls: 1,
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  lastInputTokens: 0,
+                  lastOutputTokens: 0,
+                  costMicrousd: 0,
+                },
+              },
             ).pipe(Effect.provide(toolLayer), Effect.scoped);
             expect(result.output).toEqual({ answer: "resumed" });
             expect(captured).toBeDefined();
@@ -6125,7 +6140,22 @@ layer(identifiers)("RUN-018 budget soft landing", (it) => {
         const exit = yield* AgentRuntime.stream(
           Agent.withModel(definition, model),
           { question: "resume" },
-          { resume },
+          {
+            resume,
+            resumeUsage: {
+              committedTurns: 1,
+              toolCalls: 2,
+              programmaticToolCalls: 0,
+              consecutiveToolFailures: 0,
+              finalizationUsed: false,
+              modelCalls: 1,
+              inputTokens: 0,
+              outputTokens: 0,
+              lastInputTokens: 0,
+              lastOutputTokens: 0,
+              costMicrousd: 0,
+            },
+          },
         ).pipe(
           Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
           Stream.runDrain,

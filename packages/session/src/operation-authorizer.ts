@@ -6,11 +6,13 @@ import { Principal } from "./ledger.ts";
 /**
  * Administrative/observation operations submitted to authorization (P7 WP1; SEC-003/SEC-011,
  * DUR-017 "authenticated per-read authorization"). The union covers every operation the durable
- * runtime consults the authorizer for: canonical observation, the administrative surface, and
- * the two durable resolution paths.
+ * runtime consults the authorizer for: canonical observation, settlement waits, aborts,
+ * administration, and the two durable resolution paths.
  */
 export const AuthorizedOperation = Schema.Literals([
   "observe",
+  "awaitSettlement",
+  "abort",
   "explain",
   "verify",
   "retry",
@@ -44,7 +46,7 @@ export class OperationDenied extends Schema.TaggedError<OperationDenied>()("Oper
 }) {}
 
 /**
- * The minimal authorization port consulted by `observe`, the administrative operations, and the
+ * The minimal authorization port consulted by `observe`, `awaitSettlement`, `abort`, administration, and the
  * `resolveUnknown`/`resolveApproval` resolution paths. `authorize` either succeeds (allow) or
  * fails with the typed `OperationDenied` (deny) — the runtime propagates the denial fail-closed
  * and performs no reads or writes for the denied operation.

@@ -9,10 +9,12 @@ import {
   ModelCallUsage,
   RunUsageSummary,
   RunId,
+  RunPolicyUsage,
   SettlementId,
   SubagentParentLink,
   SubmissionId,
   ToolCallId,
+  ToolExecutionKind,
   TurnId,
 } from "@effect-agent/core";
 import { Encoding, Schema } from "effect";
@@ -201,6 +203,8 @@ export class RunStartedRecord extends Schema.TaggedClass<RunStartedRecord>(
   "@effect-agent/session/RunStartedRecord",
 )("RunStarted", {
   runId: RunId,
+  /** Older private histories cannot prove programmatic accounting and must be reset. */
+  policyAccountingVersion: Schema.Literal(1),
   maxDurationMillis: Schema.Finite.check(Schema.isGreaterThan(0)),
 }) {}
 
@@ -219,6 +223,8 @@ export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
   toolName: BoundedName,
   result: PersistedJson,
   isFailure: Schema.Boolean,
+  /** Explicit engine evidence, never inferred from Tool result data. */
+  budgetRejected: Schema.optionalKey(Schema.Literal(true)),
 }) {}
 
 /**
@@ -278,7 +284,8 @@ export class ModelResponseRecorded extends Schema.TaggedClass<ModelResponseRecor
  * (durability §10). `parameters` is the Schema-encoded wire form of the declared call and
  * `parametersDigest` pins it; recovery that sees this record without a matching `ToolCallSettled`
  * (or `ToolCallUnknown` → `ToolCallResolved`) must reconcile or mark unknown, never silently
- * replay (DUR-009). `readonly`-class Tools never produce this record (P4 parity).
+ * replay (DUR-009). Ordinary `readonly`-class Tools never produce this record. Delegation
+ * classification is always prepared, including for a Tool annotated `readonly`.
  */
 export class ToolCallPrepared extends Schema.TaggedClass<ToolCallPrepared>(
   "@effect-agent/session/ToolCallPrepared",
@@ -290,7 +297,19 @@ export class ToolCallPrepared extends Schema.TaggedClass<ToolCallPrepared>(
   toolName: BoundedName,
   parameters: PersistedJson,
   parametersDigest: Digest,
+  /** Absent legacy evidence grants no delegation replay authority. */
+  executionKind: Schema.optionalKey(ToolExecutionKind),
 }) {}
+
+/** Monotonic reservations charged before programmatic execution or grace finalization. */
+export class RunPolicyUsageReserved extends Schema.TaggedClass<RunPolicyUsageReserved>()(
+  "RunPolicyUsageReserved",
+  {
+    runId: RunId,
+    programmaticToolCalls: RunPolicyUsage.fields.programmaticToolCalls,
+    finalizationUsed: RunPolicyUsage.fields.finalizationUsed,
+  },
+) {}
 
 /**
  * A durable Unknown Outcome: the external effect of one prepared ordinary Tool Call may have
@@ -690,6 +709,7 @@ export const CanonicalRecordPayload = Schema.Union([
   ConversationCreated,
   UserInputRecorded,
   RunStartedRecord,
+  RunPolicyUsageReserved,
   ModelCompleted,
   ModelResponseRecorded,
   ToolCallPrepared,

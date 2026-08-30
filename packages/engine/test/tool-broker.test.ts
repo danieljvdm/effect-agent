@@ -26,6 +26,7 @@ import {
   type ProgrammaticCallOutcome,
   type ToolBrokerPass,
   type ToolBrokerPassOptions,
+  type RunOptions,
 } from "../src/index.ts";
 
 class QueryFailure extends Schema.TaggedError<QueryFailure>()("QueryFailure", {
@@ -125,6 +126,7 @@ const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
   readonly program: (pass: ToolBrokerPass) => Effect.Effect<unknown>;
   readonly passOptions?: ToolBrokerPassOptions;
   readonly agentPolicy?: AgentPolicy;
+  readonly runOptions?: RunOptions;
 }) =>
   Effect.gen(function* () {
     const Orchestrate = Tool.make("orchestrate", {
@@ -163,12 +165,191 @@ const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
     const result = yield* AgentRuntime.run(
       Agent.withModel(definition, model),
       { question: "go" },
-      {},
+      options.runOptions ?? {},
     ).pipe(Effect.provide(toolLayer), Effect.scoped);
     return result;
   });
 
 layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
+  it.effect("serializes cumulative reservations across concurrent outer handlers", () =>
+    Effect.gen(function* () {
+      const Orchestrate = Tool.make("orchestrate", {
+        parameters: Schema.Struct({ plan: Schema.String }),
+        success: Schema.Unknown,
+      }).addDependency(ToolBroker);
+      const outer = Toolkit.make(Orchestrate);
+      const inner = Toolkit.make(Query);
+      const bothEntered = yield* Deferred.make<void>();
+      let entered = 0;
+      let activeReservations = 0;
+      let maxActiveReservations = 0;
+      const reservations: Array<number> = [];
+      let handlerStarts = 0;
+      const definition = Agent.define("parallel-reservations", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Answer.",
+        toolkit: outer,
+        policy: policy({ maxToolCalls: 4 }),
+      });
+      const model = scriptedModel(
+        [...orchestrateCall("outer-1").slice(0, -1), ...orchestrateCall("outer-2")],
+        '"done"',
+      );
+      const handlers = outer
+        .toLayer(
+          Effect.gen(function* () {
+            const toolkit = yield* inner;
+            return {
+              orchestrate: () =>
+                Effect.gen(function* () {
+                  entered += 1;
+                  if (entered === 2) yield* Deferred.succeed(bothEntered, undefined);
+                  const broker = yield* ToolBroker;
+                  const pass = yield* broker
+                    .openPass(toolkit, { maxResultBytes: 1024 })
+                    .pipe(Effect.orDie);
+                  return yield* pass.invoke({
+                    toolName: "query",
+                    encodedArguments: { sql: "select" },
+                  });
+                }),
+            };
+          }),
+        )
+        .pipe(
+          Layer.provide(
+            inner.toLayer({
+              query: () =>
+                Effect.sync(() => {
+                  handlerStarts += 1;
+                  return { rows: [1] };
+                }),
+            }),
+          ),
+        );
+      yield* AgentRuntime.run(Agent.withModel(definition, model), "q", {
+        durability: {
+          commitResponse: () => Effect.void,
+          prepareToolCalls: () => Effect.void,
+          commitCompaction: () => Effect.void,
+          noteTurnUsage: () => Effect.void,
+          step: { lookup: () => Effect.succeed(Option.none()), commit: () => Effect.void },
+          reservePolicyUsage: (usage) =>
+            Effect.gen(function* () {
+              activeReservations += 1;
+              maxActiveReservations = Math.max(maxActiveReservations, activeReservations);
+              yield* Deferred.await(bothEntered);
+              yield* Effect.yieldNow;
+              reservations.push(usage.programmaticToolCalls);
+              activeReservations -= 1;
+            }),
+        },
+      }).pipe(Effect.provide(handlers));
+      expect(reservations).toEqual([1, 2]);
+      expect(maxActiveReservations).toBe(1);
+      expect(handlerStarts).toBe(2);
+    }),
+  );
+
+  it.effect(
+    "restores programmatic allowance and reserves the remaining slot before its handler",
+    () =>
+      Effect.gen(function* () {
+        const innerToolkit = Toolkit.make(Query);
+        const marks: Array<string> = [];
+        const outcomes: Array<ProgrammaticCallOutcome> = [];
+        yield* runOrchestrated({
+          innerToolkit,
+          innerHandlers: innerToolkit.toLayer({
+            query: () =>
+              Effect.sync(() => {
+                marks.push("handler");
+                return { rows: [1] };
+              }),
+          }),
+          agentPolicy: policy({ maxToolCalls: 5, onExhaustion: "fail" }),
+          runOptions: {
+            resumeUsage: {
+              committedTurns: 1,
+              toolCalls: 1,
+              programmaticToolCalls: 2,
+              consecutiveToolFailures: 0,
+              finalizationUsed: false,
+              modelCalls: 1,
+              inputTokens: 0,
+              outputTokens: 0,
+              lastInputTokens: 0,
+              lastOutputTokens: 0,
+              costMicrousd: 0,
+            },
+            durability: {
+              commitResponse: () => Effect.void,
+              prepareToolCalls: () => Effect.void,
+              commitCompaction: () => Effect.void,
+              noteTurnUsage: () => Effect.void,
+              step: { lookup: () => Effect.succeed(Option.none()), commit: () => Effect.void },
+              reservePolicyUsage: (usage) =>
+                Effect.sync(() => {
+                  marks.push(`reserve:${usage.programmaticToolCalls}:${usage.finalizationUsed}`);
+                }),
+            },
+          },
+          program: (pass) =>
+            Effect.gen(function* () {
+              outcomes.push(
+                yield* pass.invoke({ toolName: "query", encodedArguments: { sql: "first" } }),
+              );
+              outcomes.push(
+                yield* pass.invoke({ toolName: "query", encodedArguments: { sql: "second" } }),
+              );
+              return null;
+            }),
+        });
+        expect(marks).toEqual(["reserve:3:false", "handler"]);
+        expect(outcomes[0]).toMatchObject({ _tag: "ProgrammaticCallSuccess" });
+        expect(outcomes[1]).toMatchObject({
+          _tag: "ProgrammaticCallError",
+          errorTag: "AgentPolicyError",
+        });
+      }),
+  );
+
+  it.effect("a reservation interrupted after commit starts no programmatic handler", () =>
+    Effect.gen(function* () {
+      const innerToolkit = Toolkit.make(Query);
+      let starts = 0;
+      let reserved = 0;
+      const exit = yield* runOrchestrated({
+        innerToolkit,
+        innerHandlers: innerToolkit.toLayer({
+          query: () =>
+            Effect.sync(() => {
+              starts += 1;
+              return { rows: [1] };
+            }),
+        }),
+        runOptions: {
+          durability: {
+            commitResponse: () => Effect.void,
+            prepareToolCalls: () => Effect.void,
+            commitCompaction: () => Effect.void,
+            noteTurnUsage: () => Effect.void,
+            step: { lookup: () => Effect.succeed(Option.none()), commit: () => Effect.void },
+            reservePolicyUsage: (usage) =>
+              Effect.sync(() => {
+                reserved = usage.programmaticToolCalls;
+              }).pipe(Effect.andThen(Effect.interrupt)),
+          },
+        },
+        program: (pass) => pass.invoke({ toolName: "query", encodedArguments: { sql: "never" } }),
+      }).pipe(Effect.exit);
+      expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true);
+      expect(reserved).toBe(1);
+      expect(starts).toBe(0);
+    }),
+  );
+
   it.effect("rejects omitted pass options through the typed configuration channel", () =>
     Effect.gen(function* () {
       const captured = yield* Ref.make<unknown>(undefined);
