@@ -1,4 +1,4 @@
 interface:
   display_name: "Open Pull Request"
-  short_description: "Open clear, evidence-backed pull requests"
-  default_prompt: "Use $open-pull-request to prepare and open a clear pull request with conventional commits and proof of work."
+  short_description: "Open PRs with concise, useful descriptions"
+  default_prompt: "Use $open-pull-request to prepare and open a pull request with a description proportional to the change."
