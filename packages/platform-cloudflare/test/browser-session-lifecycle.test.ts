@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { Effect, Redacted } from "effect";
+import { Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
@@ -12,9 +12,11 @@ it.effect("uses a credential-preserving redirect policy supported by the Worker 
     yield* (yield* BrowserRunSessionLifecycle).close(Redacted.make(sessionId));
   }).pipe(
     Effect.provide(
-      BrowserRunSessionLifecycle.layer({ accountId, apiToken: Redacted.make("fixture-token") }),
+      BrowserRunSessionLifecycle.layer({
+        accountId,
+        apiToken: Redacted.make("fixture-token"),
+      }).pipe(Layer.provide(FetchHttpClient.layer)),
     ),
-    Effect.provide(FetchHttpClient.layer),
     Effect.provideService(FetchHttpClient.Fetch, async (input, init) => {
       // The real workerd Request constructor rejects unsupported fetch options.
       const request = new Request(input, init);
