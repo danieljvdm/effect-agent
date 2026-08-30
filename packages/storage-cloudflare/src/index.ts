@@ -27,6 +27,7 @@ export * from "./migrations.ts";
 export * from "./do-conversation-store.ts";
 export * from "./do-ledger.ts";
 export * from "./do-schedule-store.ts";
+export * from "./do-subscription-store.ts";
 export * from "./do-storage-config.ts";
 export * from "./do-storage-failpoint.ts";
 export * from "./port-protocol.ts";

@@ -20,9 +20,6 @@ import {
   ScheduleStorageError,
   ScheduleTimingRequest,
   ScheduleValidationError,
-  ScheduledInputAdmission,
-  ScheduledInputRetryable,
-  type ScheduledEnvelope,
   Scheduling,
   ScheduleDriver,
   type ScheduleManagementFailure,
@@ -46,7 +43,11 @@ import {
 } from "effect-cf";
 
 import type { ConversationObjectNamespace } from "./bindings.ts";
-import { CloudflareConversationClient, type ConversationClientError } from "./client.ts";
+import { CloudflareConversationClient } from "./client.ts";
+import {
+  cloudflarePreparedInputAdmissionLayer,
+  cloudflareScheduledInputAdmissionLayer,
+} from "./prepared-admission.ts";
 
 const SCHEDULE_ALARM_TAG = "effect-agent/ScheduleOwnerWake";
 const SCHEDULE_ALARM_ID = "driver";
@@ -421,48 +422,6 @@ const transactionLayer: Layer.Layer<
   }),
 );
 
-const admissionLayer: Layer.Layer<ScheduledInputAdmission, never, CloudflareConversationClient> =
-  Layer.effect(
-    ScheduledInputAdmission,
-    Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
-      const submit = (envelope: ScheduledEnvelope) =>
-        client
-          .submit(passthroughAgent(envelope.agentId), envelope.input, {
-            conversationId: envelope.conversationId,
-            principal: envelope.deliveryPrincipal,
-            idempotencyKey: envelope.admissionKey,
-            definitions: envelope.definitions,
-          })
-          .pipe(
-            Effect.catchTags({
-              AdmissionConflict: () =>
-                ScheduleStorageError.make({ operation: "scheduled admission", reason: "corrupt" }),
-              AdmissionLimitExceeded: () => ScheduledInputRetryable.make({ reason: "capacity" }),
-              ConversationClientError: (error: ConversationClientError) =>
-                ScheduledInputRetryable.make({
-                  reason: error.overloaded === true ? "capacity" : "transport",
-                }),
-              HostProtocolError: () => ScheduledInputRetryable.make({ reason: "ambiguous" }),
-              LedgerError: () => ScheduledInputRetryable.make({ reason: "storage" }),
-              ConversationStoreError: () => ScheduledInputRetryable.make({ reason: "storage" }),
-              DurableAlarmError: () => ScheduledInputRetryable.make({ reason: "storage" }),
-              AgentInputError: () =>
-                ScheduleStorageError.make({ operation: "scheduled admission", reason: "corrupt" }),
-              DigestError: () =>
-                ScheduleStorageError.make({ operation: "scheduled admission", reason: "corrupt" }),
-              ConversationNotMaterialized: () =>
-                ScheduledInputRetryable.make({ reason: "storage" }),
-              AppendConflict: () => ScheduledInputRetryable.make({ reason: "ambiguous" }),
-              FenceRejected: () => ScheduledInputRetryable.make({ reason: "ambiguous" }),
-              DurableRuntimeFailpointError: () =>
-                ScheduledInputRetryable.make({ reason: "ambiguous" }),
-            }),
-          );
-      return ScheduledInputAdmission.of({ submit });
-    }),
-  );
-
 type ScheduleRuntimeServices =
   | Scheduling
   | ScheduleDriver
@@ -638,7 +597,12 @@ export const makeScheduleOwnerObjectClass = <E>(
     Layer.provideMerge(
       scheduleStoreLayer.pipe(Layer.provide(transactionLayer), Layer.provide(sqlLayer)),
     ),
-    Layer.provide(admissionLayer.pipe(Layer.provide(CloudflareConversationClient.layer))),
+    Layer.provide(
+      cloudflareScheduledInputAdmissionLayer.pipe(
+        Layer.provide(cloudflarePreparedInputAdmissionLayer),
+        Layer.provide(CloudflareConversationClient.layer),
+      ),
+    ),
     Layer.provide(ScheduleWakeNoop),
     Layer.provide(BrowserCrypto.layer),
     Layer.provideMerge(DurableObjectAlarm.DurableObjectAlarm.layer),

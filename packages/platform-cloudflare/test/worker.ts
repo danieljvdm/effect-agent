@@ -6,6 +6,7 @@ import { OtlpExporter } from "effect/unstable/observability";
 import {
   makeConversationObjectClass,
   makeScheduleOwnerObjectClass,
+  makeSubscriptionPartitionObjectClass,
   ConversationObjectNamespace,
   ScheduleOwnerIdentity,
   type ConversationObjectOptions,
@@ -31,6 +32,11 @@ import {
   telemetryProbe,
 } from "./observability-fixture.ts";
 import { makeSubagentTestBindings, transportFaultReason } from "./subagent-fixtures.ts";
+import {
+  subscriptionAuthorizerLayer,
+  subscriptionFailpointLayer,
+  subscriptionSourcesLayer,
+} from "./subscription-fixtures.ts";
 
 /**
  * The WP3 test Worker entry: the REAL `makeConversationObjectClass` output under three
@@ -87,6 +93,35 @@ export class TestScheduleOwnerObject extends makeScheduleOwnerObjectClass(schedu
   admissionTimeoutMillis: 5_000,
   recoveryPollMillis: 100,
 }) {}
+
+const subscriptionHostLayer = Layer.mergeAll(
+  subscriptionAuthorizerLayer,
+  subscriptionSourcesLayer,
+  subscriptionFailpointLayer,
+  Layer.effect(
+    ConversationObjectNamespace,
+    Effect.map(WorkerEnvironment, (env) => ({ namespace: env.CONVERSATIONS })),
+  ),
+);
+
+/** Real source-addressed Subscription Partition object routed to Conversation Objects. */
+export class TestSubscriptionPartitionObject extends makeSubscriptionPartitionObjectClass(
+  subscriptionHostLayer,
+  {
+    maxRegistrations: 100,
+    maxRegistrationsPerOwner: 100,
+    maxEvents: 100,
+    maxDeliveries: 100,
+    maxDeliveriesPerOwner: 100,
+    maxPayloadBytes: 65_536,
+    maxContextBytes: 16_384,
+    maxLifetimeMillis: 86_400_000,
+    batchSize: 1,
+    concurrency: 1,
+    retryMillis: 10,
+    operationTimeoutMillis: 5_000,
+  },
+) {}
 
 interface BindingSourceProbe {
   readonly evaluationCount: number;

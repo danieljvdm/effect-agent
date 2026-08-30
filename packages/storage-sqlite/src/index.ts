@@ -3,5 +3,6 @@ export * from "./migrations.ts";
 export * from "./sqlite-conversation-store.ts";
 export * from "./sqlite-ledger.ts";
 export * from "./sqlite-schedule-store.ts";
+export * from "./sqlite-subscription-store.ts";
 export * from "./sqlite-storage-config.ts";
 export * from "./sqlite-storage-failpoint.ts";
