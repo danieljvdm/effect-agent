@@ -10,7 +10,7 @@ import {
   TravelPlan,
   TravelPlannerPhase7Profile,
   TravelPlannerRuntimeLayer,
-} from "@effect-agent/testing";
+} from "@effect-agent/testing/fixtures/travel-planner";
 import { OpenAiClient } from "@effect/ai-openai";
 import { Config, Effect, Layer, Schema, Stream } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";

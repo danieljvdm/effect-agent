@@ -12,7 +12,7 @@ import {
   phase6SupplierReconcilerLayer,
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
-} from "@effect-agent/testing";
+} from "@effect-agent/testing/fixtures/travel-planner";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { Effect, Layer, Schema } from "effect";
 

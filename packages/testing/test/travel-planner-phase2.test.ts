@@ -15,10 +15,7 @@ import {
   RunId,
 } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
-import { describe, expect, it } from "@effect/vitest";
-import { Cause, DateTime, Effect, Fiber, Layer, Option, Ref, Schema, type Exit } from "effect";
-import { Model, Prompt } from "effect/unstable/ai";
-
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
 import {
   ActivityCatalogLayer,
   CatalogLifecycle,
@@ -32,14 +29,15 @@ import {
   phase1Trip,
   QuoteId,
   ReverseCompletionToolkitLayer,
-  ScriptedModel,
-  type ScriptedTurnInput,
   TravelGuidanceLayer,
   TravelPlanner,
   TravelPlannerPhase2,
   TravelPlannerPhase2ToolkitLayer,
   TravelPlannerRuntimeLayer,
-} from "../src/index.ts";
+} from "@effect-agent/testing/fixtures/travel-planner";
+import { describe, expect, it } from "@effect/vitest";
+import { Cause, DateTime, Effect, Fiber, Layer, Option, Ref, Schema, type Exit } from "effect";
+import { Model, Prompt } from "effect/unstable/ai";
 
 const makeTravelAgent = (turns: ReadonlyArray<ScriptedTurnInput>) =>
   Agent.withModel(

@@ -8,17 +8,17 @@ import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
 } from "@effect-agent/storage-memory";
-import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
-
 import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,
   certifyDurableAdapters,
   resolveTierThree,
   tier2NeverFiredLocations,
-} from "../src/index.ts";
+} from "@effect-agent/testing/certification";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Schema } from "effect";
+
 import { maybeWriteReport } from "./certification-report-io.ts";
 
 // ---------------------------------------------------------------------------

@@ -42,7 +42,7 @@ import {
   s2TravelPlannerSubmitOptions,
   travelPlanFromDurableSettlement,
   TripRequest,
-} from "@effect-agent/testing";
+} from "@effect-agent/testing/fixtures/travel-planner";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, Schema } from "effect";

@@ -6,11 +6,6 @@ import {
   DurableAgentRuntime,
   IdempotencyKey,
 } from "@effect-agent/session";
-import { NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import type { PlatformError } from "effect";
-import { Effect, FileSystem, Layer, Schema, Stream } from "effect";
-
 import {
   TravelPlannerCloudflareProfile,
   expectedTravelPlan,
@@ -24,7 +19,11 @@ import {
   phase6TravelPlannerGoldenEvidence,
   phase6TravelPlannerProfile,
   travelPlanFromDurableSettlement,
-} from "../src/index.ts";
+} from "@effect-agent/testing/fixtures/travel-planner";
+import { NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import type { PlatformError } from "effect";
+import { Effect, FileSystem, Layer, Schema, Stream } from "effect";
 
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);

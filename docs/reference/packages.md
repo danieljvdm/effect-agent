@@ -84,7 +84,8 @@ Schemas, the child budget reservation and `waitingForChild` ledger operations, a
 host-supplied `AgentBindingResolver` port for exact-digest Binding resolution.
 Adapter certification reports, port runners, and the TestClock-dependent conformance case arrays
 are available only from `@effect-agent/session/testing`; the package root has no transitive
-test-runtime dependency.
+test-runtime dependency. Mutable coordinator failpoint controls and their test Layer also live
+in `@effect-agent/session/testing`; scheduling APIs remain on the production root.
 
 ### `@effect-agent/storage-memory`
 
@@ -97,6 +98,9 @@ Provides the Node SQLite adapters behind the `DN` assembly: the Conversation Sto
 durable Submission Ledger in one database file, current-version (v4, exact-match) initialization,
 observation, typed compatibility/corruption/conflict/contention errors, and before/after
 failpoints on every durable mutation.
+
+`@effect-agent/storage-sqlite/testing` exposes `SqliteStorageFailpointTestControl.layer` for tests.
+The production root exports `CurrentSqliteStorageVersion`; the migration loader is internal.
 
 ### `@effect-agent/platform-node`
 
@@ -122,7 +126,16 @@ a closed route-capable subset with adapter-minted routable Submission identities
 imports the `cloudflare:workers` runtime module; Durable Object handles are injected as Layer
 construction values.
 
+`@effect-agent/storage-cloudflare/testing` exposes `DoStorageFailpointTestControl.layer` and
+`evictionFailpointHandler` for adapter tests. The production root retains
+`CurrentDoStorageVersion`; the migration loader is internal.
+
 ### `@effect-agent/platform-cloudflare`
+
+The root exports the durable host and Code Mode integration. Browser Run adapters are available
+only from the four browser subpaths below. Install `@cloudflare/puppeteer@^1.1.0` directly when
+using `@effect-agent/platform-cloudflare/interactive-browser`; it is an optional peer dependency.
+Durable hosts, Quick Actions, and REST capture/crawl do not need Puppeteer.
 
 Assembles the class `DC` Cloudflare runtime and is the only package that imports
 `cloudflare:workers`: binding Layers (namespace, Object context, identity), schema-validated
@@ -223,10 +236,10 @@ state, or publication behavior.
 
 ### `@effect-agent/testing`
 
-Provides the scripted Effect AI Model, deterministic services, cumulative Travel Planner fixtures,
-and reusable conformance evidence. Production packages never depend on it (the one dev-only
-exception: `platform-cloudflare`'s test suite consumes the shared fixtures to prove DN/DC
-equivalence).
+The root exports the scripted Effect AI Model and its supporting types and Schemas. Certification,
+chaos, CodeExecutor helpers, Docs Researcher, and Travel Planner have dedicated
+[testing subpaths](../guide/testing#choose-a-testing-entry-point). Production packages never depend
+on this package. Shared fixtures remain available to example and adapter tests through those paths.
 
 ## GitHub Action
 

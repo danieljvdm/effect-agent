@@ -20,10 +20,7 @@ import {
   type AgentRuntimeRequirements,
 } from "@effect-agent/engine";
 import type { DurableWorkerRequirements } from "@effect-agent/session";
-import { Context, Effect, Schema, SchemaGetter, type Scope } from "effect";
-import { type AiError, Model, Tool, Toolkit } from "effect/unstable/ai";
-import { describe, expect, it } from "vite-plus/test";
-
+import { ScriptedModel } from "@effect-agent/testing";
 import type {
   ActivityCatalog,
   ActivityUnavailable,
@@ -34,8 +31,11 @@ import type {
   LodgingUnavailable,
   TravelGuidance,
   TravelPlannerToolkit,
-} from "../src/index.ts";
-import { phase1Trip, ScriptedModel, TravelPlanner } from "../src/index.ts";
+} from "@effect-agent/testing/fixtures/travel-planner";
+import { phase1Trip, TravelPlanner } from "@effect-agent/testing/fixtures/travel-planner";
+import { Context, Effect, Schema, SchemaGetter, type Scope } from "effect";
+import { type AiError, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { describe, expect, it } from "vite-plus/test";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

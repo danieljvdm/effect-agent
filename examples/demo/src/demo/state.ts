@@ -1,4 +1,7 @@
-import { TravelPlan, type TravelPlan as TravelPlanValue } from "@effect-agent/testing";
+import {
+  TravelPlan,
+  type TravelPlan as TravelPlanValue,
+} from "@effect-agent/testing/fixtures/travel-planner";
 import { Effect, Schema, Stream } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
 

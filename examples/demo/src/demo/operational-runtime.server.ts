@@ -1,8 +1,7 @@
 import "@tanstack/react-start/server-only";
+import type { ApprovalAdapterError, ApprovalAudit, Redactor } from "@effect-agent/capabilities";
 import {
   ApprovalApproved,
-  ApprovalAdapterError,
-  ApprovalAudit,
   type ApprovalAuditLimitExceeded,
   type ApprovalDecision,
   type ApprovalDecisionMismatch,
@@ -23,7 +22,6 @@ import {
   McpConnector,
   McpServerIdentity,
   RunCommandQueueConfig,
-  Redactor,
   type RedactionError,
   SteeringCommand,
   StructuralRedactorLive,
@@ -50,6 +48,7 @@ import {
   SandboxRuntime,
 } from "@effect-agent/sandbox";
 import { layer as LocalSandboxLayer } from "@effect-agent/sandbox-local";
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
 import {
   ActivityCatalog,
   ActivitySearchResult,
@@ -61,8 +60,6 @@ import {
   LodgingCatalog,
   LodgingOption,
   QuoteId,
-  ScriptedModel,
-  type ScriptedTurnInput,
   TravelGuidanceLayer,
   TravelPlan,
   TravelPlannerPhase2,
@@ -70,7 +67,7 @@ import {
   TripRequest,
   phase1HappyPathTurns,
   phase1Trip,
-} from "@effect-agent/testing";
+} from "@effect-agent/testing/fixtures/travel-planner";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeCrypto } from "@effect/platform-node";
 import {

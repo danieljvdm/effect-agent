@@ -66,7 +66,7 @@ fully materializes.
 
 This text scan is a demo-grade boundary. A production warehouse should back
 this with a read-only database identity or curated read-only views. The Node
-reference fixture in `@effect-agent/testing` (`warehouseDbLayer`) proves the
+private fixture in `packages/testing/test/fixtures/warehouse.ts` (`warehouseDbLayer`) proves the
 stronger _database-authority_ path (`PRAGMA query_only = ON` →
 `SQLITE_READONLY`) that Node SQLite allows.
 

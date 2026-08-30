@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 
 /**
  * Coordinator-owned failpoint locations (plan §Failpoints). Locations normally sit immediately
@@ -66,15 +66,6 @@ export type DurableRuntimeFailpointHandler = (
 
 const noFailpoint: DurableRuntimeFailpointHandler = () => Effect.void;
 
-/** Test-only control for replacing the active coordinator failpoint handler. */
-export class DurableRuntimeFailpointTestControl extends Context.Service<
-  DurableRuntimeFailpointTestControl,
-  {
-    readonly clear: Effect.Effect<void>;
-    readonly setHandler: (handler: DurableRuntimeFailpointHandler) => Effect.Effect<void>;
-  }
->()("@effect-agent/session/DurableRuntimeFailpointTestControl") {}
-
 /**
  * Explicit fault-injection authority used at durable coordinator step boundaries. The process
  * crash harness (WP5) maps a hit to `process.exit`; in-process tests fail the step with the
@@ -88,25 +79,4 @@ export class DurableRuntimeFailpoint extends Context.Service<
 >()("@effect-agent/session/DurableRuntimeFailpoint") {
   /** Production default: no fault injection. */
   static readonly layer = Layer.succeed(this)({ hit: noFailpoint });
-
-  /** Reusable test Layer with a control service backed by the same handler Ref. */
-  static readonly layerTest = Layer.effectContext(
-    Effect.gen(function* () {
-      const handler = yield* Ref.make<DurableRuntimeFailpointHandler>(noFailpoint);
-      return Context.make(
-        DurableRuntimeFailpoint,
-        DurableRuntimeFailpoint.of({
-          hit: (location) => Ref.get(handler).pipe(Effect.flatMap((current) => current(location))),
-        }),
-      ).pipe(
-        Context.add(
-          DurableRuntimeFailpointTestControl,
-          DurableRuntimeFailpointTestControl.of({
-            clear: Ref.set(handler, noFailpoint),
-            setHandler: (next) => Ref.set(handler, next),
-          }),
-        ),
-      );
-    }),
-  );
 }

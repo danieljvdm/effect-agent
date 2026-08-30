@@ -8,7 +8,7 @@ import {
   TIER2_UNREACHED_LOCATIONS,
   certifyDurableAdapters,
   tier2NeverFiredLocations,
-} from "@effect-agent/testing";
+} from "@effect-agent/testing/certification";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer, Schema } from "effect";

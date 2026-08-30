@@ -25,6 +25,7 @@ import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
 } from "@effect-agent/storage-memory";
+import { inProcessCodeExecutorLayer } from "@effect-agent/testing/code-executor";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Layer, Logger, Ref, References, Schema, Stream } from "effect";
@@ -35,8 +36,7 @@ import {
   warehouseDemoSeed,
   warehouseHandlersLayer,
   warehouseQueryTool,
-} from "../src/fixtures/warehouse/index.ts";
-import { inProcessCodeExecutorLayer } from "../src/index.ts";
+} from "./fixtures/warehouse.ts";
 
 const usage = { inputTokens: {}, outputTokens: {} };
 

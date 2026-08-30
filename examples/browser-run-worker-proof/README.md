@@ -1,5 +1,9 @@
 # Browser Run deployed Worker proof
 
+This example declares `@cloudflare/puppeteer` directly because it imports
+`@effect-agent/platform-cloudflare/interactive-browser`. Durable-host and REST-only consumers
+do not need that optional peer dependency.
+
 This private class E example proves the shipped Cloudflare Browser Run binding path against one
 temporary deployed Worker. The Worker resolves `env.BROWSER` through
 `BrowserQuickActionBrowserBinding.layer`, provides `browserQuickActionCaptureLayer`, and invokes a

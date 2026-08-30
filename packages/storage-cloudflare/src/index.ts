@@ -23,7 +23,7 @@
  * stays a types-only devDependency.
  */
 export * from "./errors.ts";
-export * from "./migrations.ts";
+export { CurrentDoStorageVersion } from "./migrations.ts";
 export * from "./do-conversation-store.ts";
 export * from "./do-ledger.ts";
 export * from "./do-schedule-store.ts";

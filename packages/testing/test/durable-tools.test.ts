@@ -21,9 +21,7 @@ import {
   Digest,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
-  DurableRuntimeFailpointTestControl,
   IdempotencyKey,
   Principal,
   ProducerId,
@@ -51,6 +49,7 @@ import {
   type UnknownResolutionConflict,
   WakeScheduler,
 } from "@effect-agent/session";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
 import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
@@ -364,7 +363,7 @@ const baseLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
   MemoryConversationStoreLive,
   WakeScheduler.layerNoop,
-  DurableRuntimeFailpoint.layerTest,
+  DurableRuntimeFailpointTestControl.layer,
   reconcilerTestLayer,
   toolAuthorizationTestLayer,
   RunContextPreparationPassthrough,

@@ -2,29 +2,28 @@ import {
   DeploymentId,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
   ProducerId,
   ToolReconciler,
   WakeScheduler,
 } from "@effect-agent/session";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
 import {
   SqliteStorageFailpointError,
   SqliteStorageFailpointLocation,
   layer as sqliteConversationStoreLayer,
   ledgerLayer as sqliteLedgerLayer,
 } from "@effect-agent/storage-sqlite";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Cause, Duration, Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
-import { TestClock } from "effect/testing";
-
 import {
   chaosSeedFromEnv,
   generateChaosPlans,
   runChaosPlan,
   type ChaosAdapterFailpoints,
   type ChaosPlan,
-} from "../src/index.ts";
+} from "@effect-agent/testing/chaos";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Cause, Duration, Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
+import { TestClock } from "effect/testing";
 
 /**
  * P7 WP4 SQLite chaos lane (plan §5): a reduced seeded-plan sweep over the REAL SQLite adapter
@@ -109,7 +108,7 @@ const freshLayer = (
           failpoint: handler,
         }),
         WakeScheduler.layerNoop,
-        DurableRuntimeFailpoint.layerTest,
+        DurableRuntimeFailpointTestControl.layer,
         ToolReconciler.uncertain,
         configLayer,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),

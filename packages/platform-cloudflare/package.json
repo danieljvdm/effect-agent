@@ -28,7 +28,6 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@cloudflare/puppeteer": "catalog:",
     "@effect-agent/core": "workspace:*",
     "@effect-agent/engine": "workspace:*",
     "@effect-agent/sandbox": "workspace:*",
@@ -39,6 +38,7 @@
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@cloudflare/puppeteer": "catalog:",
     "@cloudflare/vitest-pool-workers": "catalog:",
     "@cloudflare/workers-types": "catalog:",
     "@effect-agent/capabilities": "workspace:*",
@@ -54,6 +54,12 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
+    "@cloudflare/puppeteer": "^1.1.0",
     "effect-cf": "^0.37.0"
+  },
+  "peerDependenciesMeta": {
+    "@cloudflare/puppeteer": {
+      "optional": true
+    }
   }
 }

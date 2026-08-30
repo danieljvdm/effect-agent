@@ -6,6 +6,7 @@
  * ordinary session runtime import never reaches Effect's testing modules.
  */
 export * from "./certification.ts";
+export * from "./durable-failpoint-testing.ts";
 export * from "./conformance.ts";
 export * from "./ledger-conformance.ts";
 export * from "./schedule-conformance.ts";

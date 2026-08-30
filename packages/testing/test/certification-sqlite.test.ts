@@ -9,17 +9,17 @@ import {
   storageConfigLayer,
   submissionLedgerLayer,
 } from "@effect-agent/storage-sqlite";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Schema } from "effect";
-
 import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,
   certifyDurableAdapters,
   tier2NeverFiredLocations,
-} from "../src/index.ts";
+} from "@effect-agent/testing/certification";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { SqliteClient } from "@effect/sql-sqlite-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, FileSystem, Layer, Schema } from "effect";
+
 import { maybeWriteReport } from "./certification-report-io.ts";
 
 // ---------------------------------------------------------------------------

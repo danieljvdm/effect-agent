@@ -30,9 +30,7 @@ import {
   Digest,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
-  DurableRuntimeFailpointTestControl,
   IdempotencyKey,
   ModelResponseRecorded,
   ObservationOffset,
@@ -70,6 +68,7 @@ import {
   type FenceRejected,
   type SettlementConflict,
 } from "@effect-agent/session";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
 import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
@@ -269,7 +268,7 @@ const baseLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
   MemoryConversationStoreLive,
   WakeScheduler.layerNoop,
-  DurableRuntimeFailpoint.layerTest,
+  DurableRuntimeFailpointTestControl.layer,
   ToolReconciler.uncertain,
   configLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
@@ -325,7 +324,7 @@ const corruptedCompletionBaseLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
   corruptedCompletionStoreLayer,
   WakeScheduler.layerNoop,
-  DurableRuntimeFailpoint.layerTest,
+  DurableRuntimeFailpointTestControl.layer,
   ToolReconciler.uncertain,
   configLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
@@ -397,7 +396,7 @@ const injectedProviderCallTestLayer = DurableAgentRuntime.layer.pipe(
       MemorySubmissionLedgerLive,
       injectedProviderCallStoreLayer,
       WakeScheduler.layerNoop,
-      DurableRuntimeFailpoint.layerTest,
+      DurableRuntimeFailpointTestControl.layer,
       ToolReconciler.uncertain,
       configLayer,
     ).pipe(Layer.provideMerge(NodeCrypto.layer)),
@@ -441,7 +440,7 @@ const corruptedRunDispositionTestLayer = DurableAgentRuntime.layer.pipe(
       MemorySubmissionLedgerLive,
       corruptedRunDispositionStoreLayer,
       WakeScheduler.layerNoop,
-      DurableRuntimeFailpoint.layerTest,
+      DurableRuntimeFailpointTestControl.layer,
       ToolReconciler.uncertain,
       configLayer,
     ).pipe(Layer.provideMerge(NodeCrypto.layer)),
@@ -468,7 +467,7 @@ const pricedTestLayer = DurableAgentRuntime.layer.pipe(
       MemorySubmissionLedgerLive,
       MemoryConversationStoreLive,
       WakeScheduler.layerNoop,
-      DurableRuntimeFailpoint.layerTest,
+      DurableRuntimeFailpointTestControl.layer,
       ToolReconciler.uncertain,
       pricedConfigLayer,
     ).pipe(Layer.provideMerge(NodeCrypto.layer)),
@@ -503,7 +502,7 @@ const untrustedSettlementBaseLayer = Layer.mergeAll(
   untrustedSettlementLedgerLayer,
   MemoryConversationStoreLive,
   WakeScheduler.layerNoop,
-  DurableRuntimeFailpoint.layerTest,
+  DurableRuntimeFailpointTestControl.layer,
   ToolReconciler.uncertain,
   configLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
@@ -599,7 +598,7 @@ const progressWaitAdapters = Layer.merge(progressWaitSchedulerLayer, progressWai
 const progressWaitBaseLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
   progressWaitAdapters,
-  DurableRuntimeFailpoint.layerTest,
+  DurableRuntimeFailpointTestControl.layer,
   ToolReconciler.uncertain,
   configLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));

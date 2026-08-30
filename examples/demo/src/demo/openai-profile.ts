@@ -5,7 +5,7 @@ import {
   TravelPlan,
   TravelPlannerPhase2Toolkit,
   TripRequest,
-} from "@effect-agent/testing";
+} from "@effect-agent/testing/fixtures/travel-planner";
 import { OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
 import { Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";

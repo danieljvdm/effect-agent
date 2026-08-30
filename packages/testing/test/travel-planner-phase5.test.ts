@@ -12,9 +12,7 @@ import {
   DurableAgentRuntime,
   DurableApprovalResolver,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
-  DurableRuntimeFailpointTestControl,
   IdempotencyKey,
   PersistedJson,
   ResolutionCompletedWithResult,
@@ -30,29 +28,11 @@ import {
   type DurableRuntimeFailpointLocation,
   type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
 import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
 } from "@effect-agent/storage-memory";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it, layer } from "@effect/vitest";
-import type { PlatformError } from "effect";
-import {
-  Cause,
-  Context,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  FileSystem,
-  Layer,
-  Option,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
-import { LanguageModel, Model, type Prompt, type Response } from "effect/unstable/ai";
-
 import {
   assertSettledBookingsExistAtSupplier,
   bookFlightIdempotencyKey,
@@ -71,7 +51,25 @@ import {
   TravelPlannerPhase5,
   TravelSupplierReconcilerLayer,
   TripRequest,
-} from "../src/index.ts";
+} from "@effect-agent/testing/fixtures/travel-planner";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it, layer } from "@effect/vitest";
+import type { PlatformError } from "effect";
+import {
+  Cause,
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
+import { LanguageModel, Model, type Prompt, type Response } from "effect/unstable/ai";
 
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
@@ -178,7 +176,7 @@ const infraLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
   MemoryConversationStoreLive,
   WakeScheduler.layerNoop,
-  DurableRuntimeFailpoint.layerTest,
+  DurableRuntimeFailpointTestControl.layer,
   configLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 

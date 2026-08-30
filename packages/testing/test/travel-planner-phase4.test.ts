@@ -23,11 +23,6 @@ import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
 } from "@effect-agent/storage-memory";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import type { PlatformError } from "effect";
-import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
-
 import {
   expectedTravelPlan,
   makePhase4TravelPlannerAgent,
@@ -40,7 +35,11 @@ import {
   phase4TravelPlannerWorkerLayer,
   travelPlanFromDurableSettlement,
   TravelPlannerDurabilityProfile,
-} from "../src/index.ts";
+} from "@effect-agent/testing/fixtures/travel-planner";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import type { PlatformError } from "effect";
+import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);

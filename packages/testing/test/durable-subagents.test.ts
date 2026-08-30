@@ -26,9 +26,7 @@ import {
   Digest,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
-  DurableRuntimeFailpointTestControl,
   DurableWorkerBinding,
   IdempotencyKey,
   Principal,
@@ -51,6 +49,7 @@ import {
   type ResolvedBinding,
   type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
 import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
@@ -272,7 +271,7 @@ const baseLayer = (ledger: Layer.Layer<SubmissionLedger>) =>
         ledger,
         MemoryConversationStoreLive,
         WakeScheduler.layerNoop,
-        DurableRuntimeFailpoint.layerTest,
+        DurableRuntimeFailpointTestControl.layer,
         ToolReconciler.uncertain,
         configLayer,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
