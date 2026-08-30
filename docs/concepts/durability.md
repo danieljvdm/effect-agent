@@ -99,6 +99,22 @@ effects or rewrite a winning Settlement. See [Operations](../guide/operations).
 
 ## Attached subagents
 
+`Subagent.define` annotates its Tool with the core-owned `DelegationTool` marker. Preparation
+persists `executionKind`, and recovery checks it against the resolved Tool before re-entry.
+The `delegate_` name prefix is only an authoring convention. An ordinary `delegate_export`
+without a recorded outcome follows ordinary reconciliation and Unknown Outcome handling.
+A prepared delegation interrupted before `SubagentRequested` can resume idempotent establishment.
+Missing classification grants no delegation replay authority; conflicting evidence fails closed.
+
+Run limits survive replacement Attempts. Canonical responses account for Turns and declared
+Tool Calls, including a pending batch; fully settled batches account for the trailing failure
+streak in declaration order. Replaying a pending batch folds its outcomes once. Synthetic budget
+rejections neither advance nor reset that streak. Programmatic Tool Calls and the single grace
+finalization reserve their allowance canonically before execution. A crash after reservation
+can consume allowance without execution; it cannot restore allowance. Token, cost, and duration
+accounting retain their existing contracts. `RunStarted.policyAccountingVersion` identifies this
+accounting contract; incompatible private-development histories must be reset, not migrated.
+
 A durable child owns a distinct Conversation and Attempt. Under the parent's fence, reserve its
 budget, append `SubagentRequested` with the intended identity and exact binding/input digests,
 then admit using a stable parent-Run/Tool-Call idempotency key. Commit child lineage before

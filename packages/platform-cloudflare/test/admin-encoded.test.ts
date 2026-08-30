@@ -1,3 +1,4 @@
+import { AbortCommand } from "@effect-agent/session";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -42,6 +43,38 @@ const callAdmin = async (invoke: () => unknown): Promise<AdminResponse> => {
 };
 
 describe("P7 admin encoded entry points (DC)", () => {
+  it("preserves settlement and abort authorization denials through the RPC client", async () => {
+    const receipt = await submitPlanner(lane(), "deny-target");
+    const operations = await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        const awaited = yield* client.awaitSettlement(receipt).pipe(
+          Effect.match({
+            onSuccess: () => "unexpected success",
+            onFailure: (error) => error._tag,
+          }),
+        );
+        const aborted = yield* client
+          .abort(
+            receipt.conversationId,
+            AbortCommand.make({
+              submissionId: receipt.submissionId,
+              author: "operator",
+              reason: "stop",
+            }),
+          )
+          .pipe(
+            Effect.match({
+              onSuccess: () => "unexpected success",
+              onFailure: (error) => error._tag,
+            }),
+          );
+        return [awaited, aborted];
+      }),
+      "DENIED",
+    );
+    expect(operations).toEqual(["OperationDenied", "OperationDenied"]);
+  });
   it("explainEncoded answers typed explanations for one Submission and for the lane", async () => {
     const conversation = lane();
     const receipt = await submitPlanner(conversation, "admin-explain");

@@ -1109,7 +1109,9 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             Effect.provideService(ConversationStore, faulty),
           ),
         );
-        expect(failureTag(rejected)).toBe("LedgerError");
+        expect(failureTag(rejected)).toBe(
+          corrupt === "missing" ? "RunJournalError" : "LedgerError",
+        );
         expect(payloadsOf(yield* readLog(parent.conversationId), "SubagentJoined")).toHaveLength(0);
         expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
           "reserved",
@@ -1146,9 +1148,114 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       }),
   );
 
+  it.effect(
+    "missing or conflicting preparation classification never grants delegation replay",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* ConversationStore;
+        for (const classification of ["missing", "conflicting"] as const) {
+          yield* clearFailpoint;
+          const harness = yield* makeHarness();
+          const parent = yield* harness.submitParent(`classification-${classification}`, "parent");
+          yield* armFailpoint(
+            classification === "missing"
+              ? "tools:after-prepared-append"
+              : "subagent:after-request-append",
+          );
+          expect(failureTag(yield* Effect.exit(drive(harness)(parent.conversationId)))).toBe(
+            "DurableRuntimeFailpointError",
+          );
+          yield* clearFailpoint;
+          const corruptStore = ConversationStore.of({
+            ...store,
+            read: (request) =>
+              store.read(request).pipe(
+                Stream.map((envelope) => {
+                  if (
+                    request.conversationId !== parent.conversationId ||
+                    envelope.record.payload._tag !== "ToolCallPrepared"
+                  )
+                    return envelope;
+                  const { executionKind: _kind, ...prepared } = envelope.record.payload;
+                  return {
+                    ...envelope,
+                    record: RecordEnvelope.make({
+                      ...envelope.record,
+                      payload: ToolCallPrepared.make({
+                        ...prepared,
+                        ...(classification === "missing" ? {} : { executionKind: "ordinary" }),
+                      }),
+                    }),
+                  };
+                }),
+              ),
+          });
+          const result = yield* Effect.exit(
+            drive(harness)(parent.conversationId).pipe(
+              Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+              Effect.provideService(ConversationStore, corruptStore),
+            ),
+          );
+          if (classification === "conflicting") expect(failureTag(result)).toBe("RunJournalError");
+          else {
+            expect(result).toMatchObject({ _tag: "Success", value: [] });
+            expect((yield* parentState(parent.submissionId)).state).toBe("unknown");
+          }
+          expect(yield* harness.childInvocations).toBe(0);
+        }
+      }),
+  );
+
+  it.effect("a replacement binding cannot reclassify an admitted delegation", () =>
+    Effect.gen(function* () {
+      yield* clearFailpoint;
+      const runtime = yield* DurableAgentRuntime;
+      const harness = yield* makeHarness();
+      const parent = yield* harness.submitParent("changed-delegation-binding", "parent");
+      yield* armFailpoint("tools:after-prepared-append");
+      expect(failureTag(yield* Effect.exit(drive(harness)(parent.conversationId)))).toBe(
+        "DurableRuntimeFailpointError",
+      );
+      yield* clearFailpoint;
+      const replacement = Tool.make("delegate_research", {
+        parameters: Schema.Struct({ topic: Schema.String }),
+        success: Schema.Struct({ summary: Schema.String }),
+      });
+      const toolkit = Toolkit.make(replacement);
+      const definition = Agent.define(coordinatorDefinition.id, {
+        input: coordinatorDefinition.input,
+        output: coordinatorDefinition.output,
+        instructions: "Research.",
+        toolkit,
+        policy: coordinatorDefinition.policy,
+      });
+      const scripted = yield* makeScriptedModel(() => finalParts('{"report":"unexpected"}'));
+      const calls = yield* Ref.make(0);
+      const exit = yield* Effect.exit(
+        runtime
+          .processConversation(Agent.withModel(definition, scripted.model), parent.conversationId)
+          .pipe(
+            Effect.provide(
+              toolkit.toLayer({
+                delegate_research: () =>
+                  Ref.update(calls, (n) => n + 1).pipe(Effect.as({ summary: "unexpected" })),
+              }),
+            ),
+          ),
+      );
+      expect(failureTag(exit)).toBe("RunJournalError");
+      expect(yield* Ref.get(calls)).toBe(0);
+      expect(payloadsOf(yield* readLog(parent.conversationId), "SubagentRequested")).toHaveLength(
+        0,
+      );
+    }),
+  );
+
   it.effect("every establishment failpoint converges on one child Receipt and Conversation", () =>
     Effect.gen(function* () {
       const locations: ReadonlyArray<DurableRuntimeFailpointLocation> = [
+        "tools:before-prepared-append",
+        "tools:after-prepared-append",
         "subagent:after-reserve",
         "subagent:after-request-append",
         "subagent:after-admit",
@@ -1170,6 +1277,13 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         yield* clearFailpoint;
 
         // Idempotent re-entry converges: one child, one Receipt, one start link.
+        if (location === "tools:after-prepared-append") {
+          const prepared = payloadsOf(yield* readLog(parent.conversationId), "ToolCallPrepared");
+          expect(prepared[0]?.record.payload).toMatchObject({ executionKind: "delegation" });
+          expect(
+            payloadsOf(yield* readLog(parent.conversationId), "SubagentRequested"),
+          ).toHaveLength(0);
+        }
         yield* run(parent.conversationId);
         const childSettlements = yield* run(childConversationId);
         expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);

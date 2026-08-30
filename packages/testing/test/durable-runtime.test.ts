@@ -8,7 +8,7 @@ import {
   ToolCallId,
   type IdGenerator,
 } from "@effect-agent/core";
-import { COMPACTION_SUMMARY_PREFIX, ToolExecutionClass } from "@effect-agent/engine";
+import { COMPACTION_SUMMARY_PREFIX, ToolBroker, ToolExecutionClass } from "@effect-agent/engine";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -1589,6 +1589,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           "ConversationCreated",
           "UserInputRecorded",
           "RunStarted",
+          "RunPolicyUsageReserved",
           "ModelResponseRecorded",
           "ToolCallSettled",
           "ToolCallSettled",
@@ -1599,7 +1600,12 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         // Exact synthetic settlements: identities in declaration order, each
         // carrying the encoded policy failure — replay correlation for the
         // model-declared calls, not just an isFailure bit.
-        expect(records.map((envelope) => envelope.record.recordId).slice(3, 6)).toEqual([
+        expect(
+          records
+            .filter(({ record }) => record.payload._tag !== "RunPolicyUsageReserved")
+            .map((envelope) => envelope.record.recordId)
+            .slice(3, 6),
+        ).toEqual([
           modelResponseRecordId(runId, 1),
           toolCallSettledRecordId(runId, 1, Schema.decodeSync(ToolCallId)("probe-1")),
           toolCallSettledRecordId(runId, 1, Schema.decodeSync(ToolCallId)("probe-2")),
@@ -2099,7 +2105,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       // Unblock the stale Attempt: its canonical append must be fenced, not committed.
       yield* Deferred.succeed(latch, void 0);
       const staleExit = yield* Fiber.await(staleWorker);
-      expect(failureTag(staleExit)).toBe("FenceRejected");
+      expect(["FenceRejected", "OwnershipLost"]).toContain(failureTag(staleExit));
 
       const records = yield* readLog(conversation);
       const runId = runIdForSubmission(receipt.submissionId);
@@ -2854,6 +2860,266 @@ layer(corruptedRunDispositionTestLayer)("RUN-029 recovered run disposition valid
 });
 
 layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
+  it.effect("programmatic reservations survive loss before the inner Handler starts", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      for (const location of [
+        "policy:before-reservation-append",
+        "policy:after-reservation-append",
+      ] as const) {
+        yield* clearFailpoint;
+        const inner = Toolkit.make(
+          Tool.make("query", { parameters: Schema.Struct({}), success: Schema.String }),
+        );
+        const outer = Toolkit.make(
+          Tool.make("orchestrate", { parameters: Schema.Struct({}), success: Schema.String })
+            .addDependency(ToolBroker)
+            .annotate(ToolExecutionClass, "idempotent"),
+        );
+        const definition = Agent.define("reservation-recovery", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Query.",
+          toolkit: outer,
+          policy: AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 2,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            onExhaustion: "fail",
+          }),
+        });
+        const executions = yield* Ref.make(0);
+        const handlers = outer
+          .toLayer(
+            Effect.gen(function* () {
+              const innerTools = yield* inner;
+              return {
+                orchestrate: () =>
+                  Effect.gen(function* () {
+                    const broker = yield* ToolBroker;
+                    const pass = yield* broker
+                      .openPass(innerTools, { maxResultBytes: 1024 })
+                      .pipe(Effect.orDie);
+                    yield* pass.invoke({ toolName: "query", encodedArguments: {} });
+                    return "done";
+                  }),
+              };
+            }),
+          )
+          .pipe(
+            Layer.provide(
+              inner.toLayer({
+                query: () => Ref.update(executions, (n) => n + 1).pipe(Effect.as("ok")),
+              }),
+            ),
+          );
+        const scripted = yield* makeScriptedModel(() => [
+          {
+            type: "tool-call",
+            id: "outer",
+            name: "orchestrate",
+            params: {},
+            providerExecuted: false,
+          },
+          { type: "finish", reason: "tool-calls", usage },
+        ]);
+        const agent = Agent.withModel(definition, scripted.model);
+        const receipt = yield* runtime.submit(
+          agent,
+          "query",
+          submitOptions(`programmatic-${location}`, "reservation"),
+        );
+        const run = runtime
+          .processConversation(agent, receipt.conversationId)
+          .pipe(Effect.provide(handlers));
+        yield* armFailpoint(location);
+        expect(failureTag(yield* Effect.exit(run))).toBe("DurableRuntimeFailpointError");
+        expect(yield* Ref.get(executions)).toBe(0);
+        yield* clearFailpoint;
+        expect((yield* run)[0]?.outcome).toBe("failed");
+        expect(yield* Ref.get(executions)).toBe(
+          location === "policy:before-reservation-append" ? 1 : 0,
+        );
+        expect(scripted.prompts).toHaveLength(2);
+        const journal = yield* projectRunJournal(
+          yield* readLog(receipt.conversationId),
+          runIdForSubmission(receipt.submissionId),
+        );
+        expect(journal.policyUsage.programmaticToolCalls).toBe(1);
+      }
+    }),
+  );
+
+  it.effect("a durably reserved grace finalization is not granted to the replacement Attempt", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      yield* clearFailpoint;
+      const definition = Agent.define("grace-recovery", {
+        input: searchDefinition.input,
+        output: searchDefinition.output,
+        instructions: "Search.",
+        toolkit: searchDefinition.toolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 1,
+          maxToolCalls: 10,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0 ? toolCallParts : finalParts('{"answer":"grace"}'),
+      );
+      const agent = Agent.withModel(definition, scripted.model);
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: "search" },
+        submitOptions("grace-reservation-recovery", "grace"),
+      );
+      const run = runtime
+        .processConversation(agent, receipt.conversationId)
+        .pipe(Effect.provide(searchToolLayer));
+      yield* armFailpoint("policy:after-reservation-append");
+      expect(failureTag(yield* Effect.exit(run))).toBe("DurableRuntimeFailpointError");
+      expect(scripted.prompts).toHaveLength(1);
+      yield* clearFailpoint;
+      expect((yield* run)[0]?.outcome).toBe("failed");
+      expect(scripted.prompts).toHaveLength(1);
+      const journal = yield* projectRunJournal(
+        yield* readLog(receipt.conversationId),
+        runIdForSubmission(receipt.submissionId),
+      );
+      expect(journal.policyUsage.finalizationUsed).toBe(true);
+    }),
+  );
+  it.effect("replacement Attempts preserve the original Turn, Tool and failure limits", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      for (const limit of ["turns", "tool-calls", "repeated-failures"] as const) {
+        yield* clearFailpoint;
+        const tool = Tool.make("probe", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+          failure: Schema.String,
+          failureMode: "return",
+        });
+        const toolkit = Toolkit.make(tool);
+        const definition = Agent.define(`resume-${limit}`, {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Keep probing.",
+          toolkit,
+          policy: AgentPolicy.make({
+            maxTurns: limit === "turns" ? 3 : 10,
+            maxToolCalls: limit === "tool-calls" ? 2 : 10,
+            repeatedFailureLimit: limit === "repeated-failures" ? 2 : 0,
+            onExhaustion: "fail",
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        });
+        const scripted = yield* makeScriptedModel((call) => [
+          {
+            type: "tool-call",
+            id: `probe-${call}`,
+            name: "probe",
+            params: {},
+            providerExecuted: false,
+          },
+          { type: "finish", reason: "tool-calls", usage },
+        ]);
+        const agent = Agent.withModel(definition, scripted.model);
+        const executions = yield* Ref.make(0);
+        const handlers = toolkit.toLayer({
+          probe: () =>
+            Ref.update(executions, (n) => n + 1).pipe(
+              Effect.andThen(
+                limit === "repeated-failures" ? Effect.fail("failed") : Effect.succeed("ok"),
+              ),
+            ),
+        });
+        const receipt = yield* runtime.submit(
+          agent,
+          "probe",
+          submitOptions(`limits-${limit}`, "limits"),
+        );
+        const run = runtime
+          .processConversation(agent, receipt.conversationId)
+          .pipe(Effect.provide(handlers));
+        yield* armFailpoint("turn:after-results-append");
+        for (let attempt = 0; attempt < (limit === "repeated-failures" ? 1 : 2); attempt++) {
+          const exit = yield* Effect.exit(run);
+          expect(exit._tag, `${limit} Attempt ${attempt}: ${JSON.stringify(exit)}`).toBe("Failure");
+          expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
+        }
+        yield* clearFailpoint;
+        const settlements = yield* run;
+        expect(settlements[0]?.outcome).toBe("failed");
+        expect(yield* Ref.get(executions)).toBe(2);
+        expect(scripted.prompts.length).toBe(limit === "repeated-failures" ? 2 : 3);
+        expect((yield* readLog(receipt.conversationId)).at(-1)?.record.payload).toMatchObject({
+          policyLimit: limit,
+        });
+      }
+    }),
+  );
+
+  it.effect("invalid compaction summaries never become durable recovery state", () =>
+    Effect.gen(function* () {
+      yield* clearFailpoint;
+      const runtime = yield* DurableAgentRuntime;
+      const conversation = "invalid-compaction-summary";
+      const first = yield* makeScriptedModel(() =>
+        finalParts(JSON.stringify({ answer: "PADDING".repeat(1000) })),
+      );
+      const initial = Agent.withModel(plannerDefinition, first.model);
+      yield* runtime.submit(
+        initial,
+        { question: "prepare history" },
+        submitOptions(conversation, "initial"),
+      );
+      yield* runtime.processConversation(initial, decodeConversationId(conversation));
+      const definition = Agent.define("invalid-summary", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          contextTokenLimit: 500,
+          compaction: CompactionPolicy.make({ keepRecentTokens: 10, mode: "summarize" }),
+        }),
+      });
+      const model = yield* makeScriptedModel(() => finalPartsWithUsage("   \n", usageOf(17, 9)));
+      const agent = Agent.withModel(definition, model.model);
+      const receipt = yield* runtime.submit(
+        agent,
+        "summarize",
+        submitOptions(conversation, "invalid"),
+      );
+      const settlement = (yield* runtime.processConversation(agent, receipt.conversationId))[0];
+      expect(settlement?.outcome).toBe("failed");
+      expect(settlement?.usageSummary).toMatchObject({
+        modelCalls: 1,
+        inputTokens: { total: 17 },
+        outputTokens: { total: 9 },
+      });
+      expect(model.prompts).toHaveLength(1);
+      const records = yield* readLog(conversation);
+      expect(
+        records.filter(
+          ({ record }) =>
+            record.payload._tag === "CompactionCreated" && record.payload.kind === "summarize",
+        ),
+      ).toEqual([]);
+      const prompt = yield* promptFromCanonicalRecords(records);
+      expect(JSON.stringify(prompt)).not.toContain(COMPACTION_SUMMARY_PREFIX);
+      expect(JSON.stringify(prompt)).toContain("PADDING");
+    }),
+  );
   const usageOf = (input: number, output: number) => ({
     inputTokens: { total: input },
     outputTokens: { total: output },

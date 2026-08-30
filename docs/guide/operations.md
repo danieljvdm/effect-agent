@@ -30,7 +30,8 @@ On `DN`, `NodeDurableHost` re-exposes all five, and
 `bun run admin:durable -- <explain|verify|retry|wake|obligations> --database <file>` is the CLI.
 On `DC`, the Conversation Object exposes Schema-encoded entry points (`explainEncoded`,
 `verifyEncoded`, `retryEncoded`, `obligationsEncoded`, `wake`); deployments reach them through
-their own Worker. Every operation, including `observe`, `resolveUnknown`, and `resolveApproval`,
+their own Worker. Every operation, including `observe`, `awaitSettlement`, `abort`,
+`resolveUnknown`, and `resolveApproval`,
 consults the `OperationAuthorizer` fail-closed: the default Layer preserves service-possession
 behavior, and a host-supplied authorizer turns denials into the typed `OperationDenied` before
 any read or write.
@@ -55,9 +56,9 @@ export the rows as logs or metrics, and alert on:
 
 Call `DurableAgentRuntime.abort(AbortCommand.make({ submissionId, author, reason }))` after the
 host authorizes stopping that Submission. On Cloudflare, use
-`CloudflareConversationClient.abort(receipt.conversationId, command)`. Abort authority remains
-service possession plus the host's authenticated boundary; it does not grant callers broader
-Tool-resolution authority.
+`CloudflareConversationClient.abort(receipt.conversationId, command)`. The runtime asks
+`OperationAuthorizer` about the target Submission before reading the ledger, recording intent,
+or notifying workers. The possession default preserves trusted-host behavior.
 
 Normal recovery/maintenance now claims an unknown head with that durable intent, cleans up and
 joins attached children, and records the aborted settlement. It releases queued followers without
@@ -79,6 +80,13 @@ authorized policy. The fix owns child abort propagation, joining, and reservatio
 after that parent abort is durably accepted. It does not choose the parent's outcome beforehand.
 
 ## Observe a Submission outcome
+
+`awaitSettlement` authorizes the Receipt's Conversation and Submission before its first lookup.
+Authorization lasts for that wait, just as one `observe` subscription authorizes once at
+subscription time. Hosts enforcing revocation during a long wait must interrupt it and start a
+new authorized wait. Neither operation accepts an authenticated caller identity from the wire;
+hosts can capture their authenticated context in the installed authorizer. A Receipt identifies
+work and does not grant access.
 
 Persist the admission `Receipt`: its `submissionId`, `receiptId`, `conversationId`, and
 `queueSequence` identify the same obligation across retries and replacement Attempts. The APIs

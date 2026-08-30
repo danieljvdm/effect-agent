@@ -32063,6 +32063,11 @@ var AgentError = exports_Schema.Union([
 // packages/core/src/subagent.ts
 var DelegationDepth = exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(1));
 var delegationToolPrefix = "delegate_";
+var DelegationTool = exports_Context.Reference("@effect-agent/core/DelegationTool", {
+  defaultValue: () => false
+});
+var ToolExecutionKind = exports_Schema.Literals(["ordinary", "delegation"]);
+
 class SubagentParentLink extends exports_Schema.Class("SubagentParentLink")({
   delegationId: DelegationId,
   parentAgentId: AgentId,
@@ -32152,7 +32157,8 @@ class ToolCallFailed extends exports_Schema.TaggedClass()("ToolCallFailed", {
   toolName: exports_Schema.NonEmptyString,
   errorTag: exports_Schema.NonEmptyString,
   message: exports_Schema.String,
-  providerExecuted: exports_Schema.Boolean
+  providerExecuted: exports_Schema.Boolean,
+  budgetRejected: exports_Schema.optionalKey(exports_Schema.Literal(true))
 }) {
 }
 
@@ -32479,6 +32485,14 @@ class AgentPolicy extends exports_Schema.Class("AgentPolicy")(AgentPolicyFields)
     });
   }
 }
+// packages/core/src/run-policy-usage.ts
+var RunPolicyUsage = exports_Schema.Struct({
+  committedTurns: exports_Schema.Natural,
+  toolCalls: exports_Schema.Natural,
+  programmaticToolCalls: exports_Schema.Natural,
+  consecutiveToolFailures: exports_Schema.Natural,
+  finalizationUsed: exports_Schema.Boolean
+});
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/AiError.js
 var exports_AiError = {};
 __export(exports_AiError, {
@@ -37156,9 +37170,11 @@ var RunContextPreparationPassthrough = exports_Layer.succeed(RunContextPreparati
 var RunTurnResumeSettledCallSchema = exports_Schema.Struct({
   id: exports_Schema.NonEmptyString,
   result: exports_Schema.Json,
-  isFailure: exports_Schema.Boolean
+  isFailure: exports_Schema.Boolean,
+  budgetRejected: exports_Schema.optionalKey(exports_Schema.Literal(true))
 });
 var RunResumeUsageSchema = exports_Schema.Struct({
+  ...RunPolicyUsage.fields,
   modelCalls: exports_Schema.Natural,
   inputTokens: exports_Schema.Natural,
   outputTokens: exports_Schema.Natural,
@@ -37401,10 +37417,15 @@ var decodeResumedSettledCall = exports_Effect.fn("AgentRuntime.decodeResumedSett
         }
         return descriptor.value;
       };
+      const rejected = Object.getOwnPropertyDescriptor(input, "budgetRejected");
+      if (rejected !== undefined && !("value" in rejected)) {
+        throw new TypeError("settled Tool Call budgetRejected must be an own data property");
+      }
       return {
         id: readOwnDataProperty("id"),
         result: readOwnDataProperty("result"),
-        isFailure: readOwnDataProperty("isFailure")
+        isFailure: readOwnDataProperty("isFailure"),
+        ...rejected === undefined ? {} : { budgetRejected: rejected.value }
       };
     },
     catch: () => ModelProtocolError.make({
@@ -37474,7 +37495,12 @@ var decodeResumeUsage = exports_Effect.fn("AgentRuntime.decodeResumeUsage")((inp
         outputTokens: read2("outputTokens"),
         lastInputTokens: read2("lastInputTokens"),
         lastOutputTokens: read2("lastOutputTokens"),
-        costMicrousd: read2("costMicrousd")
+        costMicrousd: read2("costMicrousd"),
+        committedTurns: read2("committedTurns"),
+        toolCalls: read2("toolCalls"),
+        programmaticToolCalls: read2("programmaticToolCalls"),
+        consecutiveToolFailures: read2("consecutiveToolFailures"),
+        finalizationUsed: read2("finalizationUsed")
       };
     },
     catch: () => ModelProtocolError.make({
@@ -37485,7 +37511,7 @@ var decodeResumeUsage = exports_Effect.fn("AgentRuntime.decodeResumeUsage")((inp
     message: "Run resume usage requires own data properties with non-negative safe-integer totals and last-call tokens no greater than their cumulative totals"
   })));
 }));
-var makeToolFailedEvent = exports_Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (context3, turnId, call, error2) {
+var makeToolFailedEvent = exports_Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (context3, turnId, call, error2, budgetRejected) {
   const toolCallId = yield* decodeToolCallId(call.id);
   return ToolCallFailed.make({
     ...yield* eventBase(context3),
@@ -37494,7 +37520,8 @@ var makeToolFailedEvent = exports_Effect.fn("AgentRuntime.makeToolFailedEvent")(
     toolName: call.name,
     errorTag: errorTag(error2),
     message: errorMessage(error2),
-    providerExecuted: false
+    providerExecuted: false,
+    ...budgetRejected === undefined ? {} : { budgetRejected }
   });
 });
 var settleRejectedBatch = exports_Effect.fn("AgentRuntime.settleRejectedBatch")(function* (context3, turnId, trace3, policyError, alreadySettled) {
@@ -37516,7 +37543,7 @@ var settleRejectedBatch = exports_Effect.fn("AgentRuntime.settleRejectedBatch")(
       isFailure: true,
       budgetRejected: true
     };
-    events2.push(yield* makeToolFailedEvent(context3, turnId, call, policyError));
+    events2.push(yield* makeToolFailedEvent(context3, turnId, call, policyError, true));
   }
   return events2;
 });
@@ -37911,7 +37938,7 @@ var executeToolBatch = (context3, turnId, turn, toolkit, calls, trace3, concurre
   const executableDescriptors = settledCallIds === undefined ? descriptors : descriptors.filter((call) => !settledCallIds.has(call.toolCallId));
   const authorizationPreflight = executableDescriptors.reduce((stream3, call) => stream3.pipe(exports_Stream.concat(preflightToolAuthorization(context3, turnId, turn, call, options3))), exports_Stream.empty);
   const preparation = durability === undefined ? exports_Stream.empty : exports_Stream.fromEffect(exports_Effect.suspend(() => {
-    const preparedDescriptors = descriptors.filter((call) => call.executionClass !== "readonly");
+    const preparedDescriptors = descriptors.filter((call) => call.executionClass !== "readonly" || call.executionKind === "delegation");
     return preparedDescriptors.length === 0 ? exports_Effect.void : durability.prepareToolCalls(preparedDescriptors);
   })).pipe(exports_Stream.drain);
   const stepServiceFor = (call) => durability === undefined ? passthroughDurableStep() : makeDurableStepService(call.toolCallId, durability.step, hookServices);
@@ -37924,6 +37951,7 @@ var executeToolBatch = (context3, turnId, turn, toolkit, calls, trace3, concurre
       maxToolCalls: brokerAccounting.maxToolCalls,
       declaredToolCalls: brokerAccounting.declaredToolCalls,
       budget: options3.budget,
+      reservePolicyUsage: options3.durability?.reservePolicyUsage,
       hookServices
     });
     liveBrokers.set(call.call.id, broker);
@@ -38451,6 +38479,10 @@ ${transcript}
     responsePartBytes: 0
   };
   let summaryUsage;
+  let summaryFinished = false;
+  let summaryFailure;
+  const textParts = new Map;
+  const reasoningParts = new Map;
   yield* guardBudgetStream(exports_LanguageModel.streamText({ prompt: summarizerPrompt }), options3.budget).pipe(exports_Stream.runForEach((part) => exports_Effect.gen(function* () {
     const owned = yield* ownModelResponsePart(part, exports_Toolkit.empty, responseUsage, context3.bufferLimits);
     yield* consumeModelResponsePart(responseUsage, owned.retainedBytes, context3.bufferLimits);
@@ -38460,15 +38492,70 @@ ${transcript}
     } else if (ownedPart.type === "finish") {
       summaryUsage = ownedPart.usage;
     }
+    yield* exports_Effect.gen(function* () {
+      if (summaryFinished) {
+        return yield* ModelProtocolError.make({
+          message: "Compaction response emitted content after its finish part"
+        });
+      }
+      switch (ownedPart.type) {
+        case "text-start":
+          return yield* startPart(textParts, ownedPart.id, "compaction text");
+        case "text-delta":
+          return yield* continuePart(textParts, ownedPart.id, "compaction text delta");
+        case "text-end":
+          return yield* endPart(textParts, ownedPart.id, "compaction text");
+        case "reasoning-start":
+          return yield* startPart(reasoningParts, ownedPart.id, "compaction reasoning");
+        case "reasoning-delta":
+          return yield* continuePart(reasoningParts, ownedPart.id, "compaction reasoning delta");
+        case "reasoning-end":
+          return yield* endPart(reasoningParts, ownedPart.id, "compaction reasoning");
+        case "finish": {
+          summaryFinished = true;
+          if (ownedPart.reason !== "stop" || [...textParts.values(), ...reasoningParts.values()].includes("open")) {
+            return yield* ModelProtocolError.make({
+              message: "Compaction response did not finish with complete text and a stop reason"
+            });
+          }
+          return;
+        }
+        case "tool-params-start":
+        case "tool-params-delta":
+        case "tool-params-end":
+        case "tool-approval-request":
+        case "error":
+          return yield* ModelProtocolError.make({
+            message: `Compaction response contained an unusable ${ownedPart.type} part`
+          });
+        case "file":
+        case "response-metadata":
+        case "source":
+          return;
+      }
+    }).pipe(exports_Effect.catch((error2) => exports_Effect.sync(() => {
+      summaryFailure ??= error2;
+    })));
   })));
+  if (!summaryFinished) {
+    return yield* ModelProtocolError.make({
+      message: "Compaction response ended without a finish part"
+    });
+  }
   const wasFinalizing = context3.finalizing;
   context3.finalizing = true;
   const consumed = yield* consumeUsage(agent2, context3, summaryUsage, 0, turn, options3).pipe(exports_Effect.ensuring(exports_Effect.sync(() => {
     context3.finalizing = wasFinalizing;
   })));
   events2.push(...consumed.warnings);
-  const summaryText = pieces.join("").trim();
-  const summary2 = summaryText.length === 0 ? "(no summary produced)" : summaryText;
+  const summary2 = pieces.join("").trim();
+  if (summaryFailure !== undefined)
+    return yield* summaryFailure;
+  if (summary2.length === 0) {
+    return yield* ModelProtocolError.make({
+      message: "Compaction response requires non-whitespace text and a valid finish part"
+    });
+  }
   state.summary = summary2;
   state.summarizedThrough = cut;
   state.lastViewLength = -1;
@@ -38728,7 +38815,8 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
           toolCallId,
           toolName: part.name,
           parameters,
-          executionClass: getToolExecutionClass(tool)
+          executionClass: getToolExecutionClass(tool),
+          executionKind: exports_Context.get(tool.annotations, DelegationTool) ? "delegation" : "ordinary"
         });
       }
       const declared = ToolCallDeclared.make({
@@ -38957,6 +39045,12 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
       message: `Agent exceeded its ${bounds.maxTurns} Turn limit`
     }));
   }
+  if (context3.finalizationUsed) {
+    return failRunEventStream(AgentPolicyError.make({
+      limit: turn > bounds.maxTurns ? "turns" : priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls ? "tool-calls" : "tokens",
+      message: "Agent already used its one grace finalization"
+    }));
+  }
   const ids = yield* IdGenerator2;
   const turnId = yield* ids.nextTurnId;
   const outputContract = outputSchemaContract(agent2.definition);
@@ -39067,6 +39161,17 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
       context3.exhaustedDimension ??= "tokens";
       finalAnswerOnly = true;
     }
+  }
+  if (finalAnswerOnly) {
+    yield* context3.policyReservations.withPermit(exports_Effect.gen(function* () {
+      context3.finalizationUsed = true;
+      if (options3.durability?.reservePolicyUsage !== undefined) {
+        yield* options3.durability.reservePolicyUsage({
+          programmaticToolCalls: context3.programmaticToolCalls,
+          finalizationUsed: true
+        });
+      }
+    }));
   }
   const compactedOutgoing = () => {
     const view = buildCompactedView(modelContext.prompt.content, context3.compaction);
@@ -39393,7 +39498,7 @@ var toolBatchContinuation = (agent2, context3, trace3, prompt, turn, toolCalls, 
   const nextPrompt = yield* appendInputs(context3, history, steering, options3);
   return makeTurn(agent2, context3, nextPrompt, turn + 1, toolCalls, options3);
 }));
-var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Stream.unwrap(exports_Effect.gen(function* () {
+var makeResumeTurn = (agent2, context3, prompt, resume, countedToolCalls, options3) => exports_Stream.unwrap(exports_Effect.gen(function* () {
   const tools = agent2.definition.toolkit.tools;
   const turn = resume.turn;
   const turnId = resume.turnId;
@@ -39460,7 +39565,8 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
       toolCallId,
       toolName: call.name,
       parameters,
-      executionClass: getToolExecutionClass(tool)
+      executionClass: getToolExecutionClass(tool),
+      executionKind: exports_Context.get(tool.annotations, DelegationTool) ? "delegation" : "ordinary"
     });
   }
   const completionTool = agent2.definition.completion?.tool;
@@ -39470,6 +39576,11 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
     }));
   }
   const completionBatch = completionTool !== undefined && trace3.toolCalls.size === 1 && trace3.applicationToolCalls[0]?.name === completionTool;
+  if (context3.finalizationUsed && !completionBatch) {
+    return failRunEventStream(ModelProtocolError.make({
+      message: "A resumed grace finalization may only execute the completion Tool"
+    }));
+  }
   const settledIds = new Set;
   const settledInputs = yield* snapshotResumedSettledCalls(resume, declarationByCallId.size);
   for (const settledInput of settledInputs) {
@@ -39491,12 +39602,13 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
       id: settledCall.id,
       name: declared.name,
       encodedResult: settledCall.result,
-      isFailure: settledCall.isFailure
+      isFailure: settledCall.isFailure,
+      ...settledCall.budgetRejected === undefined ? {} : { budgetRejected: settledCall.budgetRejected }
     };
   }
   const policy2 = agent2.definition.policy;
   const bounds = effectiveRunBounds(policy2, options3);
-  const toolCalls = trace3.toolCalls.size;
+  const toolCalls = countedToolCalls;
   const overToolBudget = toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls;
   if (overToolBudget && policy2.onExhaustion === "fail") {
     return failRunEventStream(AgentPolicyError.make({
@@ -39504,7 +39616,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options3) => exports_Str
       message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
     }));
   }
-  const turnsBlocked = turn > bounds.maxTurns || policy2.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch;
+  const turnsBlocked = turn > bounds.maxTurns && !(completionBatch && context3.finalizationUsed) || policy2.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch;
   if (turnsBlocked) {
     return failRunEventStream(AgentPolicyError.make({
       limit: "turns",
@@ -39588,7 +39700,7 @@ var stream3 = (agent2, input, options3 = {}) => {
       durationDeadlineMillis,
       history: options3.history ?? exports_Prompt.empty,
       modelCalls: resumeUsage?.modelCalls ?? 0,
-      consecutiveToolFailures: 0,
+      consecutiveToolFailures: resumeUsage?.consecutiveToolFailures ?? 0,
       inputTokens: resumeUsage?.inputTokens ?? 0,
       outputTokens: resumeUsage?.outputTokens ?? 0,
       lastInputTokens: resumeUsage?.lastInputTokens ?? 0,
@@ -39602,9 +39714,28 @@ var stream3 = (agent2, input, options3 = {}) => {
       compaction: initialCompactionState(),
       bufferLimits: effectiveRunBufferLimits(options3.bufferLimits),
       sequence: 0,
-      programmaticToolCalls: 0
+      programmaticToolCalls: resumeUsage?.programmaticToolCalls ?? 0,
+      finalizationUsed: resumeUsage?.finalizationUsed ?? false,
+      policyReservations: yield* exports_Semaphore.make(1)
     };
     if (resumeUsage !== undefined) {
+      const bounds = effectiveRunBounds(agent2.definition.policy, options3);
+      if (context3.finalizationUsed) {
+        context3.exhaustedDimension = resumeUsage.committedTurns > bounds.maxTurns ? "turns" : resumeUsage.toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls ? "tool-calls" : "tokens";
+      }
+      if (agent2.definition.policy.onExhaustion === "fail" && resumeUsage.toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls) {
+        return failRunEventStream(AgentPolicyError.make({
+          limit: "tool-calls",
+          message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
+        }));
+      }
+      const failureLimit = agent2.definition.policy.repeatedFailureLimit;
+      if (failureLimit > 0 && context3.consecutiveToolFailures >= failureLimit) {
+        return failRunEventStream(AgentPolicyError.make({
+          limit: "repeated-failures",
+          message: `Agent reached its ${failureLimit} consecutive Tool Call failure limit`
+        }));
+      }
       const seededCostBudget = agent2.definition.policy.costBudgetMicrousd;
       if (seededCostBudget !== undefined && context3.costMicrousd > seededCostBudget) {
         return failRunEventStream(AgentPolicyError.make({
@@ -39648,11 +39779,11 @@ var stream3 = (agent2, input, options3 = {}) => {
       }
       yield* advanceHistory(context3, prompt, options3);
       if (options3.resume !== undefined) {
-        return makeResumeTurn(agent2, context3, prompt, options3.resume, options3);
+        return makeResumeTurn(agent2, context3, prompt, options3.resume, resumeUsage?.toolCalls ?? options3.resume.calls.length, options3);
       }
       const steering = yield* drainInputs(context3, options3);
       const initialPrompt = yield* appendInputs(context3, prompt, steering, options3);
-      return makeTurn(agent2, context3, initialPrompt, 1, 0, options3);
+      return makeTurn(agent2, context3, initialPrompt, (resumeUsage?.committedTurns ?? 0) + 1, resumeUsage?.toolCalls ?? 0, options3);
     }));
     const durationLimit = durationLimitError(agent2.definition.policy);
     const deadline = enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
@@ -39896,28 +40027,38 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
         if (invalidParameters !== undefined) {
           return invalidParameters;
         }
-        const used = binding.declaredToolCalls + binding.context.programmaticToolCalls;
-        if (used + 1 > binding.maxToolCalls) {
-          return yield* preflightFailure(input, "infrastructure", "AgentPolicyError", `Agent exceeded its ${binding.maxToolCalls} Tool Call limit`);
-        }
-        binding.context.programmaticToolCalls += 1;
-        if (binding.budget !== undefined) {
-          const exhausted = yield* provideHookServices(binding.budget.consume({
-            modelCalls: 0,
-            inputTokens: 0,
-            outputTokens: 0,
-            totalTokens: 0,
-            toolCalls: 1,
-            costMicrousd: 0,
-            usage: emptyProgrammaticUsage
-          }), binding.hookServices).pipe(exports_Effect.map(() => {
-            return;
-          }), exports_Effect.catchCauseFilter(exports_Cause.findError, (error2, cause) => exports_Effect.succeed({ error: error2, cause })));
-          if (exhausted !== undefined) {
-            binding.context.programmaticToolCalls -= 1;
-            return yield* preflightFailure(input, "infrastructure", errorTag(exhausted.error), errorMessage(exhausted.error), exhausted.cause);
+        const rejected = yield* binding.context.policyReservations.withPermit(exports_Effect.gen(function* () {
+          const used = binding.declaredToolCalls + binding.context.programmaticToolCalls;
+          if (used + 1 > binding.maxToolCalls) {
+            return yield* preflightFailure(input, "infrastructure", "AgentPolicyError", `Agent exceeded its ${binding.maxToolCalls} Tool Call limit`);
           }
-        }
+          if (binding.budget !== undefined) {
+            const exhausted = yield* provideHookServices(binding.budget.consume({
+              modelCalls: 0,
+              inputTokens: 0,
+              outputTokens: 0,
+              totalTokens: 0,
+              toolCalls: 1,
+              costMicrousd: 0,
+              usage: emptyProgrammaticUsage
+            }), binding.hookServices).pipe(exports_Effect.map(() => {
+              return;
+            }), exports_Effect.catchCauseFilter(exports_Cause.findError, (error2, cause) => exports_Effect.succeed({ error: error2, cause })));
+            if (exhausted !== undefined) {
+              return yield* preflightFailure(input, "infrastructure", errorTag(exhausted.error), errorMessage(exhausted.error), exhausted.cause);
+            }
+          }
+          binding.context.programmaticToolCalls += 1;
+          if (binding.reservePolicyUsage !== undefined) {
+            return yield* provideHookServices(binding.reservePolicyUsage({
+              programmaticToolCalls: binding.context.programmaticToolCalls,
+              finalizationUsed: binding.context.finalizationUsed
+            }), binding.hookServices).pipe(exports_Effect.as(undefined), exports_Effect.catchCauseFilter(exports_Cause.findError, (error2, cause) => preflightFailure(input, "infrastructure", errorTag(error2), errorMessage(error2), cause)));
+          }
+          return;
+        }));
+        if (rejected !== undefined)
+          return rejected;
         const index2 = state.nextIndex++;
         const handleId = `${binding.outerToolCallId}#${index2}`;
         const executionClass = getToolExecutionClass(tool);

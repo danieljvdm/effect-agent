@@ -58,9 +58,11 @@ import { expect, layer } from "@effect/vitest";
 import {
   Cause,
   Context,
+  Deferred,
   Duration,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Option,
   Ref,
@@ -435,6 +437,64 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 };
 
 layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknown)", (it) => {
+  it.effect("an ordinary delegate_export is never replayed after its external effect", () =>
+    Effect.gen(function* () {
+      yield* resetReconciler;
+      yield* clearFailpoint;
+      const runtime = yield* DurableAgentRuntime;
+      const tool = Tool.make("delegate_export", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+      const toolkit = Toolkit.make(tool);
+      const definition = Agent.define("ordinary-export", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Export.",
+        toolkit,
+        policy,
+      });
+      const scripted = yield* makeScriptedModel(() =>
+        toolTurn(toolCall("export-1", "delegate_export", {})),
+      );
+      const agent = Agent.withModel(definition, scripted.model);
+      const starts = yield* Ref.make(0);
+      const acted = yield* Deferred.make<void>();
+      const handlers = toolkit.toLayer({
+        delegate_export: () =>
+          Ref.update(starts, (n) => n + 1).pipe(
+            Effect.andThen(Deferred.succeed(acted, undefined)),
+            Effect.andThen(Effect.never),
+          ),
+      });
+      // Lose ownership after the external action, before the result batch can become canonical.
+      const receipt = yield* runtime.submit(
+        agent,
+        "export",
+        submitOptions("ordinary-delegate-export", "export"),
+      );
+      const attempt = yield* Effect.forkChild(
+        runtime.processConversation(agent, receipt.conversationId).pipe(Effect.provide(handlers)),
+      );
+      yield* Deferred.await(acted);
+      yield* Fiber.interrupt(attempt);
+      expect(yield* Ref.get(starts)).toBe(1);
+      yield* runtime.runRecovery;
+      expect(
+        yield* runtime
+          .processConversation(agent, receipt.conversationId)
+          .pipe(Effect.provide(handlers)),
+      ).toEqual([]);
+      expect(yield* Ref.get(starts)).toBe(1);
+      expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
+      const records = yield* readLog(receipt.conversationId);
+      expect(
+        records.find(({ record }) => record.payload._tag === "ToolCallPrepared")?.record.payload,
+      ).toMatchObject({ executionKind: "ordinary" });
+      expect(logTags(records)).toContain("ToolCallUnknown");
+      expect(logTags(records)).not.toContain("SubagentRequested");
+    }),
+  );
   it.effect(
     "RUN-036 captures the host observer for fresh and replacement Attempts and skips settled replay",
     () => {
@@ -1081,6 +1141,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         toolName: "book",
         parameters: { ref: "r-denied" },
         executionClass: "uncertain",
+        executionKind: "ordinary",
       });
       const records = yield* readLog(conversation);
       expect(logTags(records)).toEqual([

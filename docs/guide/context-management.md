@@ -118,7 +118,11 @@ Crossing the limit triggers compaction, synchronously, per `CompactionPolicy`:
 Compaction is a view, never a rewrite. Official history and the canonical Conversation Log are
 untouched; a `CompactionPerformed` event reports each reduction. In the durable assemblies (DN
 and DC) each compaction also appends a canonical `CompactionCreated` record, and the journal
-projection folds it. Covered records render as the summary or with cleared Tool results on every
+projection folds it. A summary must contain usable text and finish successfully. Empty,
+whitespace-only, truncated, or otherwise unusable summaries fail with `ModelProtocolError` after
+charging provider usage. Rejection preserves the previous summary and coverage, and persists no
+new summary; independently accepted Tool-result pruning remains effective.
+Covered records render as the summary or with cleared Tool results on every
 later Attempt and every later Run of the same Conversation. This matters for long-lived
 Conversations: without it, every prior Run's raw Tool output replays into every new Run's
 opening prompt forever.

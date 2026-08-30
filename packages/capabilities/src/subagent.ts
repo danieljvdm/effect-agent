@@ -3,6 +3,7 @@ import {
   ConversationId,
   type Definition,
   DelegationId,
+  DelegationTool,
   delegationToolPrefix,
   IdGenerator,
   isDelegationToolName,
@@ -29,7 +30,8 @@ import {
   type SubagentEventPayload,
   ToolCallWaiting,
 } from "@effect-agent/engine";
-import { Clock, Duration, Effect, Layer, Option, Ref, Schema } from "effect";
+import type { Layer } from "effect";
+import { Clock, Duration, Effect, Option, Ref, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import {
@@ -193,10 +195,8 @@ export class SubagentExecutionFailure extends Schema.TaggedError<SubagentExecuti
 ) {}
 
 /**
- * The delegation naming rule (`delegationToolPrefix`/`isDelegationToolName`)
- * is core-owned (plan §4.1) so session recovery can classify delegation calls
- * without importing capabilities; re-exported here unchanged for existing
- * consumers.
+ * Core-owned authoring conventions, re-exported for existing consumers.
+ * Replay authority comes from DelegationTool and canonical preparation, never the name.
  */
 export { delegationToolPrefix, isDelegationToolName } from "@effect-agent/core";
 
@@ -687,6 +687,7 @@ const define: SubagentDefine = <
   // this assertion bridges only that limitation and crosses no schema
   // boundary (the schemas above are constructed per mode, never reinterpreted).
   const tool = (failureMode === "return" ? returnModeTool : errorModeTool)
+    .annotate(DelegationTool, true)
     .addDependency(AgentSpawner)
     .addDependency(RunEventSink)
     .addDependency(SubagentDurability)

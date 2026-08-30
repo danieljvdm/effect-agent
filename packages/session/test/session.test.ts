@@ -114,7 +114,12 @@ const decodeEnvelope = (sequence: number, record: RecordEnvelope): CanonicalReco
 
 describe("session canonical contracts", () => {
   it("round-trips the immutable Run duration and rejects invalid allowances", () => {
-    const encoded = { _tag: "RunStarted", runId: "duration-run", maxDurationMillis: 30_000 };
+    const encoded = {
+      _tag: "RunStarted",
+      runId: "duration-run",
+      maxDurationMillis: 30_000,
+      policyAccountingVersion: 1,
+    };
     const start = Schema.decodeUnknownSync(RunStartedRecord)(encoded);
     expect(Schema.encodeSync(RunStartedRecord)(start)).toEqual(encoded);
     for (const maxDurationMillis of [0, -1, NaN, Infinity, -Infinity, "30000", undefined]) {
