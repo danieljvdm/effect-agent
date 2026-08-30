@@ -12,6 +12,7 @@ import type {
 } from "@effect-agent/core";
 import {
   AgentRuntime,
+  type CompactionError,
   type AgentChildPending,
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
@@ -54,6 +55,7 @@ type ExpectedFailure =
   | AgentPolicyError
   | ContextBudgetError
   | ContextOverflowError
+  | CompactionError
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentToolAuthorizationDenied

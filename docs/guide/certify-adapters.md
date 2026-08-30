@@ -100,3 +100,18 @@ Schema-encoded report locally. The Cloudflare runner can print its report from w
 Import `CertificationReport`, `certifyPorts`, and the shared conformance case arrays from
 `@effect-agent/session/testing`. The `@effect-agent/session` root contains only production
 schemas, ports, invariant verification, replay, and runtime APIs.
+
+## Subscription stores
+
+Adapters implementing `SubscriptionStore` must also run `subscriptionStoreConformanceCases` from
+`@effect-agent/session/testing` against a fresh partition for each case. These cases cover intake
+cutoffs and deduplication, atomic once selection and capacity, cancellation and prepared recovery,
+targeted catch-up, persistent scan cursors, and replay after limits tighten. They are separate from
+the Conversation and Submission certificate above.
+
+The shipped adapters run this same contract. Additional recovery evidence lives in
+`packages/storage-memory/test/subscriptions.test.ts`,
+`packages/platform-node/test/subscriptions.test.ts`, and
+`packages/platform-cloudflare/test/subscriptions.test.ts`. The Node suite closes and reopens SQLite
+after a settled Run and an ambiguous admission. The Cloudflare suite evicts the source partition
+after intake, partial fanout, selection, preparation, and admission before Receipt persistence.

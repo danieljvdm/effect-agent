@@ -104,7 +104,7 @@ wall-clock limit or increase the bill.
 
 When `contextTokenLimit` is set, the engine estimates the next call's context at every pre-Turn
 seam (the last provider-reported input plus a conservative estimate of newly appended parts).
-Crossing the limit triggers compaction, synchronously, per `CompactionPolicy`:
+Crossing the limit invokes the installed `ContextCompactor`. The default follows `CompactionPolicy`:
 
 1. **Prune** replaces application Tool results older than the protected `keepRecentTokens` tail
    with `"[tool result cleared by compaction]"`. Message structure and call/result pairing are
@@ -118,11 +118,10 @@ Crossing the limit triggers compaction, synchronously, per `CompactionPolicy`:
 Compaction is a view, never a rewrite. Official history and the canonical Conversation Log are
 untouched; a `CompactionPerformed` event reports each reduction. In the durable assemblies (DN
 and DC) each compaction also appends a canonical `CompactionCreated` record, and the journal
-projection folds it. A summary must contain usable text and finish successfully. Empty,
-whitespace-only, truncated, or otherwise unusable summaries fail with `ModelProtocolError` after
-charging provider usage. Rejection preserves the previous summary and coverage, and persists no
-new summary; independently accepted Tool-result pruning remains effective.
-Covered records render as the summary or with cleared Tool results on every
+projection folds it. A summary must contain non-whitespace text and finish successfully. Empty,
+truncated, or incomplete model responses fail with `ModelProtocolError` after charging reported
+usage. Rejection preserves the previous summary and coverage; independently committed Tool-result
+pruning remains effective. Covered records render as the summary or with cleared Tool results on every
 later Attempt and every later Run of the same Conversation. This matters for long-lived
 Conversations: without it, every prior Run's raw Tool output replays into every new Run's
 opening prompt forever.
@@ -131,6 +130,97 @@ If a provider still rejects a prompt as too long, the engine classifies the reje
 and issues at most one framework-level retry. Transport ambiguity can still duplicate the
 external call. A second rejection, or overflow with no `contextTokenLimit` configured, fails
 typed with `ContextOverflowError` instead of an opaque provider error.
+
+### Replacing compaction
+
+`ContextCompactor` is owned by `@effect-agent/engine` and re-exported by capabilities and the
+umbrella package. Install it with a Layer to replace the strategy and token estimator without
+changing the Run loop. `ContextCompactor.layer` supplies the bounded default. Existing Runs that
+do not install a compactor select that same default at the Run boundary.
+
+To keep the default strategy but use another upstream Effect AI Model:
+
+```ts
+const compactorLayer = ContextCompactor.layerWithModel(summaryModel);
+
+const result = AgentRuntime.run(agent, input).pipe(Effect.provide(compactorLayer), Effect.scoped);
+```
+
+The Layer retains the summary Model's construction requirements. The interpreter charges its
+reported usage and prices it under that Model's provider/name, then checks the remaining Run
+budget before the next research call.
+
+For a custom summary prompt, make a decorator Layer that requires the compactor it wraps.
+Choose that underlying implementation with `Layer.provide` at the application boundary:
+
+```ts
+const summaryDecorator = Layer.effect(
+  ContextCompactor,
+  Effect.gen(function* () {
+    const compactor = yield* ContextCompactor;
+    return ContextCompactor.of({
+      estimate: compactor.estimate,
+      compact: (request) =>
+        compactor.compact({
+          ...request,
+          summarize: (prompt, model) =>
+            request.summarize(
+              Prompt.fromMessages([
+                Prompt.systemMessage({
+                  content: "Retain unresolved decisions and exact customer identifiers.",
+                }),
+                ...prompt.content,
+              ]),
+              model,
+            ),
+        }),
+    });
+  }),
+);
+
+const compactorLayer = summaryDecorator.pipe(
+  Layer.provide(ContextCompactor.layerWithModel(summaryModel)),
+);
+```
+
+The decorator requires `ContextCompactor` and forwards the Model selected by that service. The
+application supplies the default strategy with its summary Model; the resulting Layer retains
+the Model's construction requirements. Providing another compactor Layer changes the strategy
+and estimator being decorated. `request.summarize` is a per-Run capability
+carrying the interpreter's metering and hook requirements, so the decorator forwards it for the
+current invocation instead of capturing it during Layer construction.
+
+A replacement `compact` may instead emit its own `CompactionDecision` stream. Each decision
+selects an exclusive source-message prefix with `through`, and either clears old Tool results
+or supplies a summary. The interpreter validates decisions, preserves protected instructions
+and input, rejects cuts that split Tool pairs, and retains the recent tail. It allows one prune
+followed by one summary per Turn, with at most one metered `request.summarize` call. Pressure
+compaction and overflow recovery share that allowance: an overflow after pruning can add the
+first summary, but cannot repeat a prune or replace a summary already accepted in that Turn. All summary
+model calls must use that callback. It preserves callback errors and requirements; application
+strategy failures use `CompactionError`, while defects and interruption keep their Effect meaning.
+Response-buffer limits and the Run deadline also apply during compaction. Custom summary decisions
+containing only whitespace fail with `CompactionError`.
+
+`estimate` must return a non-negative finite integer. It sizes the source, appended output
+contract, and Run status. The interpreter still uses provider-reported usage as the base when
+the view has only grown since the previous call. A non-progressing strategy fails the context
+check before provider I/O.
+
+Custom harnesses can yield `ContextCompactor` with `ContextCompactor.layer`, call `compact`
+directly with an upstream `Prompt`, `initialCompactionState()`, policy, and their own metered
+`summarize` callback, and consume the decision stream. The harness owns applying each decision
+to its view state and rebuilding the prompt with `buildCompactedView`. No Agent or Run is needed.
+
+The interpreter commits each accepted decision before applying its view or pulling the next
+decision. Durable coordinators map only the actually covered source prefix to complete prior-Run
+records. If no eligible prior-Run records exist, or any changed messages cannot map to complete
+canonical coverage, the decision fails with `CompactionError` before the view changes or the next
+model call starts. This includes prompt transformations that break that mapping and decisions that
+reach into the current Run's history. Durable summaries must also fit the canonical limit of 65,536
+characters. Larger summaries fail instead of being truncated; accepted summaries retain identical
+text in the live view and recovery. These decision failures settle the Run as failed, while storage
+failures retain the coordinator's retry behavior. Canonical history remains append-only.
 
 ### Supplying a Cloudflare compactor
 
@@ -151,12 +241,19 @@ export class Conversations extends makeConversationObjectClass({
 });
 ```
 
-The returned Layer may still require `Crypto.Crypto`; the Cloudflare assembly supplies
-`BrowserCrypto`. Everything specific to your compactor must already be provided. The Layer is
-acquired once per Durable Object incarnation and rebuilt after eviction. Each call receives the
-canonical reconstructed prompt, and its digest-bound artifact changes only the next model request;
-the original messages remain in canonical history. Expected compactor failures settle as
-`RunContextPreparationError`; defects remain defects for the host to supervise.
+Everything specific to your compactor must already be provided. The adapter itself no longer
+requires `Crypto.Crypto`. The Layer is acquired once per Durable Object incarnation and rebuilt
+after eviction. It installs the same compaction service used by ephemeral Runs, invoked under
+context pressure after canonical prompt reconstruction. Usage, events, and `CompactionCreated`
+commits follow the native path. Expected strategy failures settle as `CompactionError`; defects
+remain defects for the host to supervise.
+
+BEHAVIOR CHANGE: the former capabilities `ContextCompactor.compact(snapshot)` artifact API has
+been replaced by the engine request/decision contract. Migrate implementations to the contract
+above. `contextCompactorRunContextLayer` installs `RunContextPreparation.compactor`, rather than
+a per-Turn prompt hook. Digest-bound `CompactionArtifact`, `digestCompactionSource`, and
+`applyCompaction` remain explicit data utilities; the interpreter does not invoke a second
+artifact compaction path. General prompt transformations still use `RunContextPreparation.hook`.
 
 ## Observing usage
 

@@ -16,6 +16,7 @@ import { RunPolicyUsage } from "@effect-agent/core";
 import { type Cause, type Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
+import type { ContextCompactor } from "./context-compactor.ts";
 import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
 
 /** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
@@ -337,6 +338,8 @@ export class RunContextPreparation extends Context.Service<
   {
     /** Optional transformation of the model-visible prompt. */
     readonly hook?: RunContextHook<RunContextPreparationError, never> | undefined;
+    /** Replaces native compaction after prompt reconstruction; acquired with the host Layer. */
+    readonly compactor?: ContextCompactor["Service"] | undefined;
     /** Optional action-time Tool authorization, closed over all host dependencies. */
     readonly toolAuthorization?: RunToolAuthorizationHook<never, never> | undefined;
   }
@@ -363,13 +366,14 @@ export interface RunTurnResponseCommit {
 
 /**
  * One compaction decision the engine applied to its model-visible view
- * (RUN-026). The durable coordinator owns the canonical
- * `coversThrough` selection — the engine reports only what it decided and the
- * summary it produced, because in-memory message indices do not map to
- * canonical record sequences at this seam.
+ * (RUN-026). The durable coordinator maps the covered source prefix to complete prior-Run
+ * records. It must never infer a wider cutoff from policy or token estimates.
  */
 export interface RunCompactionCommit {
   readonly turn: number;
+  /** Exact pre-compaction source and exclusive message bound; live values, never persisted. */
+  readonly source: Prompt.Prompt;
+  readonly through: number;
   readonly kind: "clear-tool-results" | "summarize";
   /** Present exactly when `kind` is `"summarize"`. */
   readonly summary?: string | undefined;
@@ -418,12 +422,13 @@ export interface RunDurabilityHook<Error = never, Requirements = never> {
   ) => Effect.Effect<void, Error, Requirements>;
   readonly step: RunStepHook<Error, Requirements>;
   /**
-   * RUN-026: called at the pre-Turn seam right after the engine applied a
-   * compaction to its model-visible view and BEFORE the model call whose
+   * RUN-026: called at the pre-Turn seam BEFORE the engine applies a
+   * compaction to its model-visible view or starts the model call whose
    * prompt reflects it, so a crash between the two resumes onto the compacted
    * projection. Required by the durability protocol: a coordinator that
    * silently dropped the record would let the engine use a compacted prompt
-   * that recovery cannot reproduce.
+   * that recovery cannot reproduce. Reject unpersistable decisions in the typed
+   * error channel; success means the same summary and coverage are durable.
    */
   readonly commitCompaction: (
     commit: RunCompactionCommit,

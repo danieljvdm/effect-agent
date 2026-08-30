@@ -39,6 +39,7 @@ export default defineConfig({
     entry: [
       "src/index.ts",
       "src/scheduling.ts",
+      "src/subscriptions.ts",
       "src/browser-quick-action.ts",
       "src/interactive-browser.ts",
       "src/browser-rest-capture.ts",
@@ -63,6 +64,7 @@ export default defineConfig({
               durableObjects: {
                 CONVERSATIONS: { className: "TestConversationObject", useSQLite: true },
                 SCHEDULES: { className: "TestScheduleOwnerObject", useSQLite: true },
+                SUBSCRIPTIONS: { className: "TestSubscriptionPartitionObject", useSQLite: true },
                 LIMITED: { className: "LimitedConversationObject", useSQLite: true },
                 TINYDB: { className: "TinyDatabaseConversationObject", useSQLite: true },
                 DENIED: { className: "DeniedConversationObject", useSQLite: true },

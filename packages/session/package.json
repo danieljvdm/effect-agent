@@ -15,7 +15,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./github": "./src/github-workflow-source.ts"
   },
   "publishConfig": {
     "access": "public"

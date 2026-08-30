@@ -2,7 +2,7 @@ import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-export const CurrentSqliteStorageVersion = 5;
+export const CurrentSqliteStorageVersion = 6;
 
 export const sqliteMigrations = SqliteMigrator.fromRecord({
   "1_current_persistent_conversation_foundation": Effect.gen(function* () {
@@ -301,5 +301,82 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
     `.withoutTransform;
 
     yield* sql`PRAGMA user_version = 5`.withoutTransform;
+  }),
+  "6_durable_subscriptions": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE effect_agent_subscription_sequences (
+        tenant_id TEXT NOT NULL,
+        source_address TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        event_scan_cursor TEXT NOT NULL,
+        delivery_scan_cursor TEXT NOT NULL,
+        recovery_scan_cursor INTEGER NOT NULL,
+        PRIMARY KEY (tenant_id, source_address)
+      )
+    `.withoutTransform;
+    yield* sql`
+      CREATE TABLE effect_agent_subscriptions (
+        tenant_id TEXT NOT NULL,
+        source_address TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        subscription_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        source_name TEXT NOT NULL,
+        source_version TEXT NOT NULL,
+        matching_key TEXT NOT NULL,
+        state TEXT NOT NULL,
+        expires_at_millis INTEGER NOT NULL,
+        recovery_at_millis INTEGER,
+        record_json TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, source_address, owner_id, subscription_id),
+        UNIQUE (tenant_id, source_address, ordinal)
+      )
+    `.withoutTransform;
+    yield* sql`CREATE INDEX effect_agent_subscriptions_owner ON effect_agent_subscriptions (tenant_id, source_address, owner_id, ordinal)`
+      .withoutTransform;
+    yield* sql`CREATE INDEX effect_agent_subscriptions_candidates ON effect_agent_subscriptions (tenant_id, source_address, source_name, source_version, matching_key, ordinal)`
+      .withoutTransform;
+    yield* sql`CREATE INDEX effect_agent_subscriptions_recovery ON effect_agent_subscriptions (tenant_id, source_address, recovery_at_millis, ordinal) WHERE recovery_at_millis IS NOT NULL`
+      .withoutTransform;
+    yield* sql`
+      CREATE TABLE effect_agent_subscription_events (
+        tenant_id TEXT NOT NULL,
+        source_address TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        source_name TEXT NOT NULL,
+        source_version TEXT NOT NULL,
+        matching_key TEXT NOT NULL,
+        payload_digest TEXT NOT NULL,
+        cutoff INTEGER NOT NULL,
+        cursor INTEGER NOT NULL,
+        routing_complete INTEGER NOT NULL,
+        next_attempt_at_millis INTEGER NOT NULL,
+        record_json TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, source_address, event_id)
+      )
+    `.withoutTransform;
+    yield* sql`CREATE INDEX effect_agent_subscription_events_pending ON effect_agent_subscription_events (tenant_id, source_address, routing_complete, next_attempt_at_millis, event_id)`
+      .withoutTransform;
+    yield* sql`
+      CREATE TABLE effect_agent_subscription_deliveries (
+        tenant_id TEXT NOT NULL,
+        source_address TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        subscription_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        delivery_key TEXT NOT NULL,
+        state TEXT NOT NULL,
+        next_attempt_at_millis INTEGER NOT NULL,
+        record_json TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, source_address, owner_id, subscription_id, event_id),
+        UNIQUE (tenant_id, source_address, delivery_key)
+      )
+    `.withoutTransform;
+    yield* sql`CREATE INDEX effect_agent_subscription_deliveries_pending ON effect_agent_subscription_deliveries (tenant_id, source_address, state, next_attempt_at_millis, delivery_key)`
+      .withoutTransform;
+    yield* sql`CREATE INDEX effect_agent_subscription_deliveries_registration ON effect_agent_subscription_deliveries (tenant_id, source_address, owner_id, subscription_id, delivery_key)`
+      .withoutTransform;
+    yield* sql`PRAGMA user_version = 6`.withoutTransform;
   }),
 });

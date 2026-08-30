@@ -67,8 +67,27 @@ The stable principal recorded in a Schedule and used to authorize and admit each
 It is distinct from the caller who manages the Schedule.
 
 **Prepared Delivery**
-The single immutable pending admission envelope for one Schedule occurrence. Recovery retries that
-exact envelope until Receipt or conclusive refusal and never rebuilds it from later configuration.
+An immutable pending admission envelope for one Schedule occurrence or selected event delivery.
+Recovery retries that exact envelope until Receipt or conclusive refusal and never rebuilds it
+from later configuration.
+
+**Subscription**
+An immutable, owner-scoped registration for Schema-defined events at one stable source partition.
+A once registration is consumed when an event is atomically selected, before input preparation.
+A continuous registration creates a separate delivery obligation for each selected event.
+
+**Source Partition**
+A tenant-qualified, host-defined source address with one storage owner. It contains registrations,
+accepted events, routing cursors, and delivery obligations. Its identity is independent of payload,
+source version, and deployment. Admission to a destination Conversation is a separate operation.
+
+**Accepted Event**
+A normalized event whose identity, payload digest, registration eligibility cutoff, and remaining
+routing work are durably retained. Its acknowledgement is not a Submission Receipt.
+
+**Selected Delivery**
+A durable obligation for one Subscription and Accepted Event. Selection pins the registration,
+event, source version, destination, and admission identity before fallible input preparation.
 
 **Settlement**  
 The single durable terminal outcome owed to an accepted Submission: `completed`, `failed`, or
@@ -222,10 +241,11 @@ Limit or would consume the Completion Reserve. It prunes old Tool results, summa
 metered model call, and records
 each compaction in the DN and DC assemblies as a canonical `CompactionCreated` record that
 projections fold
-(RUN-026). Host-supplied, digest-bound compaction artifacts remain a separate capability.
-Cloudflare Conversation Objects may install that capability through a scoped, generic
-`RunContextPreparation` Layer; it runs after canonical resume reconstruction and changes only the
-model-visible prompt, so eviction rebuilds it without making its artifact authoritative.
+(RUN-026). The engine-owned `ContextCompactor` service selects the strategy, token estimator,
+summary prompt, and Model. `ContextCompactor.layer` supplies the bounded default. Cloudflare
+Conversation Objects install the same service through a scoped `RunContextPreparation` Layer,
+rebuilt after eviction. The interpreter owns metering, protected messages, events, and commits;
+the durable coordinator maps actual covered messages to complete prior-Run records.
 
 **Context Token Limit**  
 The optional `AgentPolicy.contextTokenLimit` bound on one model call's live context, supplied by
