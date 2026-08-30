@@ -121,15 +121,14 @@ const defaultCompactor = (model?: CompactionModelLayer): ContextCompaction => ({
 });
 
 /**
- * The sole interpreter compaction port. Runs without an installed service use default at their
- * composition boundary. Direct harnesses yield this service and provide layer explicitly.
- * Install application implementations with Layer.effect/succeed; close dependencies there.
+ * The sole interpreter compaction port. Runs without an installed service provide layer at their
+ * composition boundary. Decorators yield this service during construction and receive their
+ * underlying implementation through Layer.provide. Direct harnesses use the same Layer contract.
  */
 export class ContextCompactor extends Context.Service<ContextCompactor, ContextCompaction>()(
   "@effect-agent/engine/ContextCompactor",
 ) {
-  static readonly default: ContextCompaction = defaultCompactor();
-  static readonly layer = Layer.succeed(ContextCompactor, ContextCompactor.default);
+  static readonly layer = Layer.succeed(ContextCompactor, defaultCompactor());
 
   /** Use the bounded default algorithm with a separate upstream Effect AI Model. */
   static readonly layerWithModel = <Provider, Requirements>(

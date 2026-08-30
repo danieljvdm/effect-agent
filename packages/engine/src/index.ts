@@ -5185,6 +5185,14 @@ const stream = <
           ? yield* ids.nextConversationId
           : options.conversationId;
       const runId = options.runId === undefined ? yield* ids.nextRunId : options.runId;
+      const compactor = yield* Effect.serviceOption(ContextCompactor).pipe(
+        Effect.flatMap(
+          Option.match({
+            onSome: Effect.succeed,
+            onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
+          }),
+        ),
+      );
       const context: RunContext = {
         agentId: agent.definition.id,
         conversationId,
@@ -5211,10 +5219,7 @@ const stream = <
         tokenExhausted: false,
         exhaustedDimension: undefined,
         compaction: initialCompactionState(),
-        compactor: Option.getOrElse(
-          yield* Effect.serviceOption(ContextCompactor),
-          () => ContextCompactor.default,
-        ),
+        compactor,
         bufferLimits: effectiveRunBufferLimits(options.bufferLimits),
         sequence: 0,
         programmaticToolCalls: 0,

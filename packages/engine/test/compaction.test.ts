@@ -266,7 +266,7 @@ layer(compactionTestLayer)("engine compaction and overflow recovery", (it) => {
   };
 
   it.effect(
-    "replaces strategy, prompt, estimator and summary Model through a Layer while retaining metering and history",
+    "decorates the injected strategy and estimator while retaining summary Model metering and history",
     () =>
       Effect.gen(function* () {
         const summaryModel = scriptedModel(
@@ -276,32 +276,59 @@ layer(compactionTestLayer)("engine compaction and overflow recovery", (it) => {
         const commits: Array<RunCompactionCommit> = [];
         const usage: Array<RunUsageDelta> = [];
         const estimates: Array<number> = [];
-        const compactor = Layer.effect(
+        const baseCompactor = Layer.effect(
           ContextCompactor,
-          Effect.gen(function* () {
-            const captured = yield* summaryModel.model.captureRequirements;
-            return ContextCompactor.of({
+          Effect.map(summaryModel.model.captureRequirements, (model) =>
+            ContextCompactor.of({
               estimate: (messages) => {
                 estimates.push(messages.length);
                 return estimatePromptTokens(messages);
               },
               compact: (request) =>
                 Stream.fromEffect(
-                  Effect.gen(function* () {
-                    const summary = yield* request.summarize(
-                      Prompt.make("Keep the application decisions."),
-                      captured,
-                    );
-                    return {
-                      kind: "summarize",
-                      through: 4,
-                      summary,
-                    } satisfies CompactionDecision;
-                  }),
+                  request
+                    .summarize(Prompt.make("Transcript from the injected strategy."), model)
+                    .pipe(
+                      Effect.map(
+                        (summary) =>
+                          ({ kind: "summarize", through: 4, summary }) satisfies CompactionDecision,
+                      ),
+                    ),
                 ),
+            }),
+          ),
+        );
+        const summaryDecorator = Layer.effect(
+          ContextCompactor,
+          Effect.gen(function* () {
+            const underlying = yield* ContextCompactor;
+            return ContextCompactor.of({
+              estimate: underlying.estimate,
+              compact: (request) =>
+                underlying.compact({
+                  ...request,
+                  summarize: (prompt, model) =>
+                    request.summarize(
+                      Prompt.fromMessages([
+                        Prompt.systemMessage({ content: "Keep the application decisions." }),
+                        ...prompt.content,
+                      ]),
+                      model,
+                    ),
+                }),
             });
           }),
         );
+        const compactor = summaryDecorator.pipe(Layer.provide(baseCompactor));
+        const decoratorRequiresBase: ContextCompactor extends Layer.Services<
+          typeof summaryDecorator
+        >
+          ? true
+          : false = true;
+        const compositionClosesBase: ContextCompactor extends Layer.Services<typeof compactor>
+          ? false
+          : true = true;
+        expect([decoratorRequiresBase, compositionClosesBase]).toEqual([true, true]);
         const result = yield* driveRun({
           ...replacementSetup,
           commitCompaction: (commit) =>
@@ -317,7 +344,7 @@ layer(compactionTestLayer)("engine compaction and overflow recovery", (it) => {
         expect(result.requests).toHaveLength(3);
         expect(summaryModel.requests).toHaveLength(1);
         expect(promptText(summaryModel.requests[0]?.prompt ?? Prompt.empty)).toBe(
-          "Keep the application decisions.",
+          "Keep the application decisions.\nTranscript from the injected strategy.",
         );
         const outgoing = result.requests[2]?.prompt ?? Prompt.empty;
         expect(promptText(outgoing)).toContain("Application summary");

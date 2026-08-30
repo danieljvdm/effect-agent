@@ -147,19 +147,20 @@ The Layer retains the summary Model's construction requirements. The interpreter
 reported usage and prices it under that Model's provider/name, then checks the remaining Run
 budget before the next research call.
 
-For a custom summary prompt, capture dependencies while constructing the Layer:
+For a custom summary prompt, make a decorator Layer that requires the compactor it wraps.
+Choose that underlying implementation with `Layer.provide` at the application boundary:
 
 ```ts
-const compactorLayer = Layer.effect(
+const summaryDecorator = Layer.effect(
   ContextCompactor,
   Effect.gen(function* () {
-    const model = yield* summaryModel.captureRequirements;
+    const compactor = yield* ContextCompactor;
     return ContextCompactor.of({
-      estimate: estimatePromptTokens,
+      estimate: compactor.estimate,
       compact: (request) =>
-        ContextCompactor.default.compact({
+        compactor.compact({
           ...request,
-          summarize: (prompt) =>
+          summarize: (prompt, model) =>
             request.summarize(
               Prompt.fromMessages([
                 Prompt.systemMessage({
@@ -173,7 +174,18 @@ const compactorLayer = Layer.effect(
     });
   }),
 );
+
+const compactorLayer = summaryDecorator.pipe(
+  Layer.provide(ContextCompactor.layerWithModel(summaryModel)),
+);
 ```
+
+The decorator requires `ContextCompactor` and forwards the Model selected by that service. The
+application supplies the default strategy with its summary Model; the resulting Layer retains
+the Model's construction requirements. Providing another compactor Layer changes the strategy
+and estimator being decorated. `request.summarize` is a per-Run capability
+carrying the interpreter's metering and hook requirements, so the decorator forwards it for the
+current invocation instead of capturing it during Layer construction.
 
 A replacement `compact` may instead emit its own `CompactionDecision` stream. Each decision
 selects an exclusive source-message prefix with `through`, and either clears old Tool results

@@ -36954,8 +36954,7 @@ ${transcript}
 });
 
 class ContextCompactor extends exports_Context.Service()("@effect-agent/engine/ContextCompactor") {
-  static default = defaultCompactor();
-  static layer = exports_Layer.succeed(ContextCompactor, ContextCompactor.default);
+  static layer = exports_Layer.succeed(ContextCompactor, defaultCompactor());
   static layerWithModel = (model) => exports_Layer.effect(ContextCompactor, exports_Effect.map(model.captureRequirements, (captured) => defaultCompactor(captured)));
 }
 
@@ -39449,6 +39448,10 @@ var stream3 = (agent2, input, options3 = {}) => {
     const ids = yield* IdGenerator2;
     const conversationId = options3.conversationId === undefined ? yield* ids.nextConversationId : options3.conversationId;
     const runId = options3.runId === undefined ? yield* ids.nextRunId : options3.runId;
+    const compactor = yield* exports_Effect.serviceOption(ContextCompactor).pipe(exports_Effect.flatMap(exports_Option.match({
+      onSome: exports_Effect.succeed,
+      onNone: () => exports_Effect.provide(ContextCompactor, ContextCompactor.layer)
+    })));
     const context3 = {
       agentId: agent2.definition.id,
       conversationId,
@@ -39472,7 +39475,7 @@ var stream3 = (agent2, input, options3 = {}) => {
       tokenExhausted: false,
       exhaustedDimension: undefined,
       compaction: initialCompactionState(),
-      compactor: exports_Option.getOrElse(yield* exports_Effect.serviceOption(ContextCompactor), () => ContextCompactor.default),
+      compactor,
       bufferLimits: effectiveRunBufferLimits(options3.bufferLimits),
       sequence: 0,
       programmaticToolCalls: 0

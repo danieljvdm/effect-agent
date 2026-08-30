@@ -170,8 +170,8 @@ import {
   type OperationDenied,
 } from "./operation-authorizer.ts";
 import { PreparedToolCallEvidence, ToolReconciler } from "./reconciler.ts";
-import type { CanonicalRecordPayload } from "./records.ts";
 import {
+  type CanonicalRecordPayload,
   type CanonicalRecordEnvelope,
   type DeploymentId,
   type Digest,
@@ -915,7 +915,14 @@ const make = Effect.gen(function* () {
   const runContextPreparation = yield* RunContextPreparation;
   const compactor =
     runContextPreparation.compactor ??
-    Option.getOrElse(yield* Effect.serviceOption(ContextCompactor), () => ContextCompactor.default);
+    (yield* Effect.serviceOption(ContextCompactor).pipe(
+      Effect.flatMap(
+        Option.match({
+          onSome: Effect.succeed,
+          onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
+        }),
+      ),
+    ));
   // Possession-default authorization reference (P7 WP1): the default allows everything —
   // exactly the pre-P7 service-possession boundary — and a host-supplied non-default Layer is
   // consulted fail-closed by observe, the admin operations, and the two resolution paths.
