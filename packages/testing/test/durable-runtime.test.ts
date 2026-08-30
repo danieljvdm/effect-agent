@@ -3089,6 +3089,222 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       ),
   );
 
+  for (const scenario of [
+    "no prior records",
+    "transformed prefix",
+    "partially mapped prefix",
+    "oversized summary",
+    "summary at canonical capacity",
+    "replacement after recovery",
+  ] as const) {
+    it.effect(`durable compaction validates persistence before continuing: ${scenario}`, () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const conversation = `compaction-persistence-${scenario.replaceAll(" ", "-")}`;
+        const summary =
+          scenario === "oversized summary"
+            ? "s".repeat(65_537)
+            : scenario === "summary at canonical capacity"
+              ? "s".repeat(65_536)
+              : "custom summary";
+        if (scenario !== "no prior records") {
+          const prior = yield* makeScriptedModel(() => finalParts('{"answer":"ORIGINAL HISTORY"}'));
+          const initial = Agent.withModel(plannerDefinition, prior.model);
+          yield* runtime.submit(initial, { question: "seed" }, submitOptions(conversation, "seed"));
+          const settled = yield* runtime.processConversation(
+            initial,
+            decodeConversationId(conversation),
+          );
+          expect(settled[0]?.outcome).toBe("completed");
+        }
+        const definition = Agent.define("persistence-compactor", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Answer from retained history.",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({
+            maxTurns: 2,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            contextTokenLimit: 500,
+            runStatus: "off",
+          }),
+        });
+        const model = yield* makeScriptedModel(() => finalParts('"done"'));
+        const agent = Agent.withModel(definition, model.model);
+        const settled = yield* Effect.gen(function* () {
+          const custom = yield* DurableAgentRuntime;
+          const receipt = yield* custom.submit(
+            agent,
+            "continue",
+            submitOptions(conversation, "compact"),
+          );
+          if (scenario === "replacement after recovery") {
+            yield* armFailpoint("compaction:after-canonical-append");
+            const crashed = yield* custom
+              .processConversation(agent, receipt.conversationId)
+              .pipe(Effect.ensuring(clearFailpoint), Effect.exit);
+            expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+            expect(model.prompts).toHaveLength(0);
+          }
+          return yield* custom.processConversation(agent, receipt.conversationId);
+        }).pipe(
+          Effect.provide(
+            Layer.fresh(DurableAgentRuntime.layerWithContext).pipe(
+              Layer.provide(
+                Layer.succeed(RunContextPreparation, {
+                  compactor: ContextCompactor.of({
+                    estimate: (messages) =>
+                      (scenario === "replacement after recovery" &&
+                        promptTexts(Prompt.fromMessages(messages)).includes(
+                          COMPACTION_SUMMARY_PREFIX,
+                        )) ||
+                      messages.some((message) => message.role === "assistant")
+                        ? 1_000
+                        : 10,
+                    compact: ({ source }) =>
+                      Stream.succeed({
+                        kind: "summarize",
+                        through: scenario === "partially mapped prefix" ? 2 : 1,
+                        summary:
+                          scenario === "replacement after recovery" &&
+                          promptTexts(source).includes(COMPACTION_SUMMARY_PREFIX)
+                            ? "uncommitted replacement"
+                            : summary,
+                      }),
+                  }),
+                  ...(scenario === "no prior records" ||
+                  scenario === "transformed prefix" ||
+                  scenario === "partially mapped prefix"
+                    ? {
+                        hook: {
+                          prepare: ({ source }) =>
+                            Effect.succeed({
+                              prompt: Prompt.fromMessages(
+                                scenario === "partially mapped prefix"
+                                  ? [
+                                      ...source.content.slice(0, 1),
+                                      Prompt.assistantMessage({
+                                        content: [Prompt.textPart({ text: "UNPERSISTED" })],
+                                      }),
+                                      ...source.content.slice(1),
+                                    ]
+                                  : [
+                                      Prompt.assistantMessage({
+                                        content: [Prompt.textPart({ text: "UNPERSISTED" })],
+                                      }),
+                                      ...source.content,
+                                    ],
+                              ),
+                            }),
+                        },
+                      }
+                    : {}),
+                }),
+              ),
+              Layer.provideMerge(baseLayer),
+            ),
+          ),
+        );
+        const records = yield* readLog(conversation);
+        const compactions = records.flatMap(({ record }) =>
+          record.payload._tag === "CompactionCreated" ? [record.payload] : [],
+        );
+        const replay = yield* promptFromCanonicalRecords(records);
+        if (scenario === "summary at canonical capacity") {
+          expect(settled[0]?.outcome).toBe("completed");
+          expect(model.prompts).toHaveLength(1);
+          expect(compactions).toHaveLength(1);
+          expect(compactions[0]?.summary).toBe(summary);
+          expect(promptTexts(model.prompts[0] ?? Prompt.empty)).toContain(
+            COMPACTION_SUMMARY_PREFIX + summary,
+          );
+          expect(promptTexts(replay)).toContain(COMPACTION_SUMMARY_PREFIX + summary);
+        } else {
+          expect(settled[0]?.outcome).toBe("failed");
+          expect(records.at(-1)?.record.payload).toMatchObject({
+            _tag: "SubmissionSettled",
+            outcome: "failed",
+            result: { errorTag: "CompactionError" },
+          });
+          expect(model.prompts).toHaveLength(0);
+          if (scenario === "replacement after recovery") {
+            expect(compactions).toHaveLength(1);
+            expect(compactions[0]?.summary).toBe(summary);
+            expect(promptTexts(replay)).toContain(COMPACTION_SUMMARY_PREFIX + summary);
+            expect(promptTexts(replay)).not.toContain("uncommitted replacement");
+          } else {
+            expect(compactions).toEqual([]);
+            expect(promptTexts(replay)).not.toContain(COMPACTION_SUMMARY_PREFIX);
+            if (scenario !== "no prior records")
+              expect(promptTexts(replay)).toContain("ORIGINAL HISTORY");
+          }
+        }
+      }),
+    );
+  }
+
+  it.effect(
+    "invalid compaction summaries retain charged usage without becoming recovery state",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const conversation = "invalid-compaction-summary";
+        const first = yield* makeScriptedModel(() =>
+          finalParts(JSON.stringify({ answer: "PADDING".repeat(1_000) })),
+        );
+        const initial = Agent.withModel(plannerDefinition, first.model);
+        yield* runtime.submit(
+          initial,
+          { question: "prepare history" },
+          submitOptions(conversation, "initial"),
+        );
+        yield* runtime.processConversation(initial, decodeConversationId(conversation));
+        const definition = Agent.define("invalid-summary", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Answer.",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({
+            maxTurns: 3,
+            maxToolCalls: 2,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            contextTokenLimit: 500,
+            compaction: CompactionPolicy.make({ keepRecentTokens: 10, mode: "summarize" }),
+          }),
+        });
+        const model = yield* makeScriptedModel(() => finalPartsWithUsage("   \n", usageOf(17, 9)));
+        const agent = Agent.withModel(definition, model.model);
+        const receipt = yield* runtime.submit(
+          agent,
+          "summarize",
+          submitOptions(conversation, "invalid"),
+        );
+        const settlement = (yield* runtime.processConversation(agent, receipt.conversationId))[0];
+        expect(settlement?.outcome).toBe("failed");
+        expect(settlement?.usageSummary).toMatchObject({
+          modelCalls: 1,
+          inputTokens: { total: 17 },
+          outputTokens: { total: 9 },
+        });
+        expect(model.prompts).toHaveLength(1);
+        const records = yield* readLog(conversation);
+        expect(records.at(-1)?.record.payload).toMatchObject({
+          _tag: "SubmissionSettled",
+          outcome: "failed",
+          result: { errorTag: "ModelProtocolError" },
+        });
+        expect(records.filter(({ record }) => record.payload._tag === "CompactionCreated")).toEqual(
+          [],
+        );
+        const prompt = yield* promptFromCanonicalRecords(records);
+        expect(promptTexts(prompt)).not.toContain(COMPACTION_SUMMARY_PREFIX);
+        expect(promptTexts(prompt)).toContain("PADDING");
+      }),
+  );
+
   it.effect(
     "RUN-026: the durable cut never covers the threshold-crossing Turn (whole-Turn retention)",
     () =>

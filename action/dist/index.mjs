@@ -36895,7 +36895,7 @@ var CompactionDecision = exports_Schema.Union([
   exports_Schema.Struct({
     kind: exports_Schema.Literal("summarize"),
     through: exports_Schema.Natural,
-    summary: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024 * 1024))
+    summary: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024 * 1024), exports_Schema.isPattern(/\S/))
   })
 ]);
 
@@ -36947,7 +36947,7 @@ ${transcript}
       return exports_Stream.succeed({
         kind: "summarize",
         through,
-        summary: text2.trim() || "(no summary produced)"
+        summary: text2.trim()
       });
     }))));
   })
@@ -38277,6 +38277,10 @@ var compactContext = (agent2, context3, source, turn, options3, targetTokens, fo
         responsePartBytes: 0
       };
       let summaryUsage;
+      let summaryFinished = false;
+      let summaryFailure;
+      const textParts = new Map;
+      const reasoningParts = new Map;
       yield* guardBudgetStream(exports_LanguageModel.streamText({ prompt: summarizerPrompt }), options3.budget).pipe(exports_Stream.runForEach((part) => exports_Effect.gen(function* () {
         const owned = yield* ownModelResponsePart(part, exports_Toolkit.empty, responseUsage, context3.bufferLimits);
         yield* consumeModelResponsePart(responseUsage, owned.retainedBytes, context3.bufferLimits);
@@ -38286,14 +38290,71 @@ var compactContext = (agent2, context3, source, turn, options3, targetTokens, fo
         } else if (ownedPart.type === "finish") {
           summaryUsage = ownedPart.usage;
         }
+        yield* exports_Effect.gen(function* () {
+          if (summaryFinished) {
+            return yield* ModelProtocolError.make({
+              message: "Compaction response emitted content after its finish part"
+            });
+          }
+          switch (ownedPart.type) {
+            case "text-start":
+              return yield* startPart(textParts, ownedPart.id, "compaction text");
+            case "text-delta":
+              return yield* continuePart(textParts, ownedPart.id, "compaction text delta");
+            case "text-end":
+              return yield* endPart(textParts, ownedPart.id, "compaction text");
+            case "reasoning-start":
+              return yield* startPart(reasoningParts, ownedPart.id, "compaction reasoning");
+            case "reasoning-delta":
+              return yield* continuePart(reasoningParts, ownedPart.id, "compaction reasoning delta");
+            case "reasoning-end":
+              return yield* endPart(reasoningParts, ownedPart.id, "compaction reasoning");
+            case "finish": {
+              summaryFinished = true;
+              if (ownedPart.reason !== "stop" || [...textParts.values(), ...reasoningParts.values()].includes("open")) {
+                return yield* ModelProtocolError.make({
+                  message: "Compaction response did not finish with complete text and a stop reason"
+                });
+              }
+              return;
+            }
+            case "tool-params-start":
+            case "tool-params-delta":
+            case "tool-params-end":
+            case "tool-approval-request":
+            case "error":
+              return yield* ModelProtocolError.make({
+                message: `Compaction response contained an unusable ${ownedPart.type} part`
+              });
+            case "file":
+            case "response-metadata":
+            case "source":
+              return;
+          }
+        }).pipe(exports_Effect.catch((error2) => exports_Effect.sync(() => {
+          summaryFailure ??= error2;
+        })));
       })));
+      if (!summaryFinished) {
+        return yield* ModelProtocolError.make({
+          message: "Compaction response ended without a finish part"
+        });
+      }
       const wasFinalizing = context3.finalizing;
       context3.finalizing = true;
       const consumed = yield* consumeUsage(agent2, context3, summaryUsage, 0, turn, options3).pipe(exports_Effect.ensuring(exports_Effect.sync(() => {
         context3.finalizing = wasFinalizing;
       })));
       events2.push(...consumed.warnings);
-      return pieces.join("");
+      const summary2 = pieces.join("").trim();
+      if (summaryFailure !== undefined)
+        return yield* summaryFailure;
+      if (summary2.length === 0) {
+        return yield* ModelProtocolError.make({
+          message: "Compaction response requires non-whitespace text and a valid finish part"
+        });
+      }
+      return summary2;
     });
     return model === undefined ? generate : exports_Effect.provide(generate, model);
   };

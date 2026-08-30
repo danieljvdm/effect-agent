@@ -407,12 +407,13 @@ export interface RunDurabilityHook<Error = never, Requirements = never> {
   ) => Effect.Effect<void, Error, Requirements>;
   readonly step: RunStepHook<Error, Requirements>;
   /**
-   * RUN-026: called at the pre-Turn seam right after the engine applied a
-   * compaction to its model-visible view and BEFORE the model call whose
+   * RUN-026: called at the pre-Turn seam BEFORE the engine applies a
+   * compaction to its model-visible view or starts the model call whose
    * prompt reflects it, so a crash between the two resumes onto the compacted
    * projection. Required by the durability protocol: a coordinator that
    * silently dropped the record would let the engine use a compacted prompt
-   * that recovery cannot reproduce.
+   * that recovery cannot reproduce. Reject unpersistable decisions in the typed
+   * error channel; success means the same summary and coverage are durable.
    */
   readonly commitCompaction: (
     commit: RunCompactionCommit,

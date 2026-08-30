@@ -6,6 +6,7 @@ import {
   ContextOverflowError,
   ConversationId,
   IdGenerator,
+  ModelProtocolError,
   RunId,
   TurnId,
   type RunEvent,
@@ -55,6 +56,7 @@ import {
   type RunUsageDelta,
   type RunCompactionCommit,
   type RunDurabilityHook,
+  type RunTurnUsage,
 } from "../src/index.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -183,6 +185,7 @@ interface RunSetup {
   readonly script: ReadonlyArray<ScriptEntry>;
   readonly results: ReadonlyArray<string>;
   readonly commitCompaction?: (commit: RunCompactionCommit) => Effect.Effect<void>;
+  readonly noteTurnUsage?: (usage: RunTurnUsage) => Effect.Effect<void>;
   readonly consume?: (delta: RunUsageDelta) => Effect.Effect<void>;
 }
 
@@ -224,8 +227,7 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
               commit: () => Effect.void,
             },
             commitCompaction,
-            // Required by the durability protocol; usage staging is not under test here.
-            noteTurnUsage: () => Effect.void,
+            noteTurnUsage: setup.noteTurnUsage ?? (() => Effect.void),
           };
     const exit = yield* AgentRuntime.stream(
       Agent.withModel(definition, model),
@@ -442,6 +444,10 @@ layer(compactionTestLayer)("engine compaction and overflow recovery", (it) => {
             compact: () => Stream.succeed({ kind: "summarize", through: 3, summary: "split pair" }),
           }),
           ContextCompactor.of({ estimate: () => Number.NaN, compact: () => Stream.empty }),
+          ContextCompactor.of({
+            estimate: estimatePromptTokens,
+            compact: () => Stream.succeed({ kind: "summarize", through: 4, summary: " \n\t " }),
+          }),
         ]) {
           const commits: Array<RunCompactionCommit> = [];
           const result = yield* driveRun({
@@ -743,6 +749,82 @@ layer(compactionTestLayer)("engine compaction and overflow recovery", (it) => {
   );
 
   // -------------------------------------------------------- RUN-026 summarize
+
+  const invalidSummaries: ReadonlyArray<{
+    readonly name: string;
+    readonly parts: ReadonlyArray<Response.StreamPartEncoded>;
+  }> = [
+    { name: "finish-only", parts: [{ type: "finish", reason: "stop", usage: usageOf(50, 20) }] },
+    { name: "whitespace-only", parts: finalParts(" \n\t ", usageOf(50, 20)) },
+    {
+      name: "truncated",
+      parts: [
+        ...finalParts("partial summary").slice(0, -1),
+        { type: "finish", reason: "length", usage: usageOf(50, 20) },
+      ],
+    },
+    { name: "missing finish", parts: finalParts("unfinished summary").slice(0, -1) },
+    {
+      name: "unfinished text",
+      parts: [
+        { type: "text-start", id: "summary" },
+        { type: "text-delta", id: "summary", delta: "partial summary" },
+        { type: "finish", reason: "stop", usage: usageOf(50, 20) },
+      ],
+    },
+    {
+      name: "content after finish",
+      parts: [
+        ...finalParts("summary", usageOf(50, 20)),
+        { type: "text-delta", id: "answer", delta: "late text" },
+      ],
+    },
+  ];
+
+  for (const invalid of invalidSummaries) {
+    it.effect(
+      `rejects ${invalid.name} compaction without replacing prior coverage, and charges usage`,
+      () =>
+        Effect.gen(function* () {
+          const commits: Array<RunCompactionCommit> = [];
+          const usage: Array<RunTurnUsage> = [];
+          const { exit, requests, events } = yield* driveRun({
+            policy: replacementSetup.policy,
+            script: [
+              toolCallParts("s1", "search", {}, usageOf(100, 5)),
+              toolCallParts("s2", "search", {}, usageOf(1_300, 5)),
+              finalParts("Goal: preserved summary", usageOf(50, 20)),
+              toolCallParts("s3", "search", {}, usageOf(1_300, 5)),
+              invalid.parts,
+              finalParts('{"answer":"must not run"}'),
+            ],
+            results: ["alpha".repeat(800), "bravo".repeat(800), "charl".repeat(800)],
+            commitCompaction: (commit) =>
+              Effect.sync(() => {
+                commits.push(commit);
+              }),
+            noteTurnUsage: (call) =>
+              Effect.sync(() => {
+                usage.push(call);
+              }),
+          });
+          expect(failureFrom(exit)).toBeInstanceOf(ModelProtocolError);
+          expect(requests).toHaveLength(5);
+          expect(compactionEvents(events).map((event) => event.kind)).toEqual(["summarize"]);
+          expect(commits.map((commit) => commit.summary)).toEqual(["Goal: preserved summary"]);
+          expect(usage).toHaveLength(invalid.name === "missing finish" ? 4 : 5);
+          if (invalid.name !== "missing finish") {
+            expect(usage[4]?.usage.inputTokens.total).toBe(50);
+            expect(usage[4]?.usage.outputTokens.total).toBe(20);
+          }
+          const lastRequest = requests[4];
+          if (lastRequest === undefined) throw new Error("expected rejected summarizer request");
+          expect(promptText(lastRequest.prompt)).toContain(
+            "[Previous summary]\nGoal: preserved summary",
+          );
+        }),
+    );
+  }
 
   it.effect("RUN-026: summarizes when configured, rebuilding instructions + summary + tail", () =>
     Effect.gen(function* () {

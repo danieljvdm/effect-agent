@@ -32,6 +32,7 @@ import {
   getToolExecutionClass,
   RunContextPreparation,
   ContextCompactor,
+  CompactionError,
   RunContextPreparationPassthrough,
   type RunContextPreparationError,
   type AgentRuntimeRequirements,
@@ -3856,7 +3857,7 @@ const make = Effect.gen(function* () {
                 ),
             };
 
-      const durability: RunDurabilityHook<CoordinatorHalt, never> = {
+      const durability: RunDurabilityHook<CoordinatorHalt | CompactionError, never> = {
         commitResponse: (commit) =>
           recordHalt(
             Effect.gen(function* () {
@@ -4016,101 +4017,131 @@ const make = Effect.gen(function* () {
             });
           }),
         commitCompaction: (commit) =>
-          recordHalt(
-            Effect.gen(function* () {
-              const canonicalTurn = turnOffset + commit.turn;
-              const recordId = compactionRecordId(runId, canonicalTurn, commit.kind);
-              if (knownIds.has(recordId)) return;
-              // Coverage selection walks the attempt-start snapshot: records
-              // appended by THIS Attempt are all owner-Run and excluded by the
-              // prior-Runs-only rule regardless.
-              const coverable: Array<CanonicalRecordEnvelope> = [];
-              for (const envelope of records) {
-                if (ownerFirstSequence !== undefined && envelope.sequence >= ownerFirstSequence) {
-                  break;
-                }
-                const tag = envelope.record.payload._tag;
-                if (tag === "ModelResponseRecorded" || tag === "ToolCallSettled") {
-                  coverable.push(envelope);
-                }
+          Effect.gen(function* () {
+            const canonicalTurn = turnOffset + commit.turn;
+            const recordId = compactionRecordId(runId, canonicalTurn, commit.kind);
+            if (knownIds.has(recordId)) {
+              return yield* CompactionError.make({
+                message: "Compaction is already committed for this Turn and kind",
+              });
+            }
+            // Coverage selection walks the attempt-start snapshot: records
+            // appended by THIS Attempt are all owner-Run and excluded by the
+            // prior-Runs-only rule regardless.
+            const coverable: Array<CanonicalRecordEnvelope> = [];
+            for (const envelope of records) {
+              if (ownerFirstSequence !== undefined && envelope.sequence >= ownerFirstSequence) {
+                break;
               }
-              if (coverable.length === 0) return;
-              // Map only a prefix the strategy actually covered. Reprojection retains prior
-              // compaction records, so indices remain correct after earlier summaries. A host
-              // prompt transform that breaks this correspondence cannot authorize deletion.
-              const encodedSource = yield* Schema.encodeEffect(Prompt.Prompt)(commit.source).pipe(
-                Effect.mapError((cause) =>
-                  RunJournalError.make({
-                    message: "Could not encode the compaction source",
-                    cause,
-                  }),
-                ),
-              );
-              let lastCovered: CanonicalRecordEnvelope | undefined;
-              for (let index = 0; index < coverable.length; index += 1) {
-                const candidate = coverable[index];
-                if (candidate === undefined) continue;
-                const following = coverable[index + 1];
-                if (
-                  following !== undefined &&
-                  following.record.payload._tag !== "ModelResponseRecorded"
-                )
-                  continue;
-                const prefix = yield* projectRunJournal(
+              const tag = envelope.record.payload._tag;
+              if (tag === "ModelResponseRecorded" || tag === "ToolCallSettled") {
+                coverable.push(envelope);
+              }
+            }
+            if (coverable.length === 0) {
+              return yield* CompactionError.make({
+                message: "Durable compaction requires eligible prior-Run records",
+              });
+            }
+            // Map only a prefix the strategy actually covered. Reprojection retains prior
+            // compaction records, so indices remain correct after earlier summaries. A host
+            // prompt transform that breaks this correspondence cannot authorize deletion.
+            const encodedSource = yield* Schema.encodeEffect(Prompt.Prompt)(commit.source).pipe(
+              Effect.mapError((cause) =>
+                CompactionError.make({
+                  message: "Could not encode the compaction source",
+                  cause,
+                }),
+              ),
+            );
+            let lastCovered: CanonicalRecordEnvelope | undefined;
+            for (let index = 0; index < coverable.length; index += 1) {
+              const candidate = coverable[index];
+              if (candidate === undefined) continue;
+              const following = coverable[index + 1];
+              if (
+                following !== undefined &&
+                following.record.payload._tag !== "ModelResponseRecorded"
+              )
+                continue;
+              const prefix = yield* recordHalt(
+                projectRunJournal(
                   records.filter(
                     (entry) =>
                       entry.sequence <= candidate.sequence ||
                       entry.record.payload._tag === "CompactionCreated",
                   ),
                   runId,
-                );
-                const length = prefix.prompt.content.length;
-                if (length === 0 || length > commit.through) continue;
-                const encodedPrefix = yield* Schema.encodeEffect(Prompt.Prompt)(prefix.prompt).pipe(
-                  Effect.mapError((cause) =>
-                    RunJournalError.make({
-                      message: "Could not encode the canonical compaction prefix",
-                      cause,
-                    }),
-                  ),
-                );
-                if (
-                  JSON.stringify(encodedPrefix.content) !==
-                  JSON.stringify(encodedSource.content.slice(0, length))
-                )
-                  continue;
-                lastCovered = candidate;
-              }
-              if (lastCovered === undefined) return;
-              if (commit.kind === "summarize" && (commit.summary ?? "").length === 0) {
-                return yield* RunJournalError.make({
-                  message: "A summarize compaction commit carried no summary",
-                });
-              }
-              const envelope = yield* makeEnvelope(
-                recordId,
-                CompactionCreated.make({
-                  runId,
-                  turn: canonicalTurn,
-                  kind: commit.kind,
-                  coversThrough: lastCovered.sequence,
-                  ...(commit.kind === "summarize"
-                    ? { summary: (commit.summary ?? "").slice(0, 64 * 1024) }
-                    : {}),
-                }),
+                ),
               );
-              yield* appendBatch(
+              const length = prefix.prompt.content.length;
+              if (length === 0 || length > commit.through) continue;
+              // A shorter canonical prefix is sufficient only if the remaining source
+              // messages would not change. Never acknowledge partial persistence.
+              if (
+                commit.source.content
+                  .slice(length, commit.through)
+                  .some((message) =>
+                    commit.kind === "summarize"
+                      ? message.role !== "system"
+                      : message.role === "tool",
+                  )
+              )
+                continue;
+              const encodedPrefix = yield* Schema.encodeEffect(Prompt.Prompt)(prefix.prompt).pipe(
+                Effect.mapError((cause) =>
+                  CompactionError.make({
+                    message: "Could not encode the canonical compaction prefix",
+                    cause,
+                  }),
+                ),
+              );
+              if (
+                JSON.stringify(encodedPrefix.content) !==
+                JSON.stringify(encodedSource.content.slice(0, length))
+              )
+                continue;
+              lastCovered = candidate;
+            }
+            if (lastCovered === undefined) {
+              return yield* CompactionError.make({
+                message: "Compaction coverage cannot be mapped to complete prior-Run records",
+              });
+            }
+            if (commit.kind === "summarize" && (commit.summary ?? "").trim().length === 0) {
+              return yield* CompactionError.make({
+                message: "A summarize compaction commit carried no summary",
+              });
+            }
+            const payload = yield* Schema.decodeUnknownEffect(CompactionCreated)({
+              _tag: "CompactionCreated",
+              runId,
+              turn: canonicalTurn,
+              kind: commit.kind,
+              coversThrough: lastCovered.sequence,
+              ...(commit.kind === "summarize" ? { summary: commit.summary } : {}),
+            }).pipe(
+              Effect.mapError((cause) =>
+                CompactionError.make({
+                  message: "Compaction decision exceeds canonical persistence bounds",
+                  cause,
+                }),
+              ),
+            );
+            const envelope = yield* recordHalt(makeEnvelope(recordId, payload));
+            yield* recordHalt(
+              appendBatch(
                 ctx,
                 CanonicalBatch.make({
                   batchId: compactionBatchId(runId, canonicalTurn, commit.kind),
                   producerId: config.producerId,
                   records: [envelope],
                 }),
-              );
-              knownIds.add(recordId);
-              yield* hit("compaction:after-canonical-append");
-            }),
-          ),
+              ),
+            );
+            knownIds.add(recordId);
+            yield* recordHalt(hit("compaction:after-canonical-append"));
+          }),
       };
 
       /** Digest of one declared call's canonical encoded parameters (same family as prepared). */
@@ -4803,7 +4834,10 @@ const make = Effect.gen(function* () {
                 }),
             } satisfies RunToolAuthorizationHook<never, never>);
 
-      const options: RunOptions<CoordinatorHalt | RunContextPreparationError, never> = {
+      const options: RunOptions<
+        CoordinatorHalt | CompactionError | RunContextPreparationError,
+        never
+      > = {
         conversationId: submission.conversationId,
         runId,
         history: pending === undefined ? journal.historyBefore : resumeProjection.historyBefore,

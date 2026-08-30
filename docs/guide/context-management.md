@@ -118,7 +118,10 @@ Crossing the limit invokes the installed `ContextCompactor`. The default follows
 Compaction is a view, never a rewrite. Official history and the canonical Conversation Log are
 untouched; a `CompactionPerformed` event reports each reduction. In the durable assemblies (DN
 and DC) each compaction also appends a canonical `CompactionCreated` record, and the journal
-projection folds it. Covered records render as the summary or with cleared Tool results on every
+projection folds it. A summary must contain non-whitespace text and finish successfully. Empty,
+truncated, or incomplete model responses fail with `ModelProtocolError` after charging reported
+usage. Rejection preserves the previous summary and coverage; independently committed Tool-result
+pruning remains effective. Covered records render as the summary or with cleared Tool results on every
 later Attempt and every later Run of the same Conversation. This matters for long-lived
 Conversations: without it, every prior Run's raw Tool output replays into every new Run's
 opening prompt forever.
@@ -194,7 +197,8 @@ and input, rejects cuts that split Tool pairs, and retains the recent tail. It a
 followed by one summary per pass, with at most one metered `request.summarize` call. All summary
 model calls must use that callback. It preserves callback errors and requirements; application
 strategy failures use `CompactionError`, while defects and interruption keep their Effect meaning.
-Response-buffer limits and the Run deadline also apply during compaction.
+Response-buffer limits and the Run deadline also apply during compaction. Custom summary decisions
+containing only whitespace fail with `CompactionError`.
 
 `estimate` must return a non-negative finite integer. It sizes the source, appended output
 contract, and Run status. The interpreter still uses provider-reported usage as the base when
@@ -208,8 +212,13 @@ to its view state and rebuilding the prompt with `buildCompactedView`. No Agent 
 
 The interpreter commits each accepted decision before applying its view or pulling the next
 decision. Durable coordinators map only the actually covered source prefix to complete prior-Run
-records. A prompt transformation that prevents that mapping cannot authorize canonical coverage.
-Canonical history remains append-only, and replay uses the committed summary after interruption.
+records. If no eligible prior-Run records exist, or any changed messages cannot map to complete
+canonical coverage, the decision fails with `CompactionError` before the view changes or the next
+model call starts. This includes prompt transformations that break that mapping and decisions that
+reach into the current Run's history. Durable summaries must also fit the canonical limit of 65,536
+characters. Larger summaries fail instead of being truncated; accepted summaries retain identical
+text in the live view and recovery. These decision failures settle the Run as failed, while storage
+failures retain the coordinator's retry behavior. Canonical history remains append-only.
 
 ### Supplying a Cloudflare compactor
 

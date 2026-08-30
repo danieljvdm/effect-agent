@@ -19,7 +19,10 @@ export const CompactionDecision = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("summarize"),
     through: Schema.Natural,
-    summary: Schema.NonEmptyString.check(Schema.isMaxLength(8 * 1024 * 1024)),
+    summary: Schema.NonEmptyString.check(
+      Schema.isMaxLength(8 * 1024 * 1024),
+      Schema.isPattern(/\S/),
+    ),
   }),
 ]);
 export type CompactionDecision = typeof CompactionDecision.Type;
@@ -111,7 +114,7 @@ const defaultCompactor = (model?: CompactionModelLayer): ContextCompaction => ({
               return Stream.succeed({
                 kind: "summarize",
                 through,
-                summary: text.trim() || "(no summary produced)",
+                summary: text.trim(),
               } satisfies CompactionDecision);
             }),
           ),
