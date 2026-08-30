@@ -36889,6 +36889,76 @@ ${previousSummary}`;
   return lines.join(joiner);
 };
 
+// packages/engine/src/context-compactor.ts
+var CompactionDecision = exports_Schema.Union([
+  exports_Schema.Struct({ kind: exports_Schema.Literal("clear-tool-results"), through: exports_Schema.Natural }),
+  exports_Schema.Struct({
+    kind: exports_Schema.Literal("summarize"),
+    through: exports_Schema.Natural,
+    summary: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8 * 1024 * 1024))
+  })
+]);
+
+class CompactionError extends exports_Schema.TaggedError()("CompactionError", {
+  message: exports_Schema.String.check(exports_Schema.isMaxLength(4096)),
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+var defaultCompactor = (model) => ({
+  estimate: estimatePromptTokens,
+  compact: (request3) => exports_Stream.suspend(() => {
+    const { source, policy: policy2, targetTokens, forceSummarize, allowSummarize } = request3;
+    const state = { ...request3.state };
+    const keepRecentTokens = targetTokens === undefined ? policy2.keepRecentTokens : Math.max(1, Math.min(policy2.keepRecentTokens, targetTokens));
+    const decisions = [];
+    if (!forceSummarize && policy2.mode !== "summarize") {
+      const through = choosePruneBound(source.content, state, keepRecentTokens);
+      if (through > state.clearedThrough) {
+        state.clearedThrough = through;
+        decisions.push({ kind: "clear-tool-results", through });
+        if (targetTokens !== undefined && estimatePromptTokens(buildCompactedView(source.content, state)) <= targetTokens) {
+          return exports_Stream.fromIterable(decisions);
+        }
+      }
+    }
+    const prune = exports_Stream.fromIterable(decisions);
+    if ((!allowSummarize || policy2.mode === "prune") && !forceSummarize)
+      return prune;
+    return prune.pipe(exports_Stream.concat(exports_Stream.unwrap(exports_Effect.gen(function* () {
+      const through = chooseSummarizeCut(source.content, state, keepRecentTokens);
+      const covered = collectCoveredMessages(source.content, state, through);
+      if (covered.length === 0)
+        return exports_Stream.empty;
+      const transcript = renderForSummary(covered, state.summary);
+      const prompt = exports_Prompt.fromMessages([
+        exports_Prompt.userMessage({
+          content: [
+            exports_Prompt.textPart({
+              text: `${COMPACTION_INSTRUCTION}
+
+<transcript>
+${transcript}
+</transcript>`
+            })
+          ]
+        })
+      ]);
+      const text2 = yield* request3.summarize(prompt, model);
+      return exports_Stream.succeed({
+        kind: "summarize",
+        through,
+        summary: text2.trim() || "(no summary produced)"
+      });
+    }))));
+  })
+});
+
+class ContextCompactor extends exports_Context.Service()("@effect-agent/engine/ContextCompactor") {
+  static default = defaultCompactor();
+  static layer = exports_Layer.succeed(ContextCompactor, ContextCompactor.default);
+  static layerWithModel = (model) => exports_Layer.effect(ContextCompactor, exports_Effect.map(model.captureRequirements, (captured) => defaultCompactor(captured)));
+}
+
 // packages/engine/src/durable-step.ts
 var ToolExecutionClass = exports_Context.Reference("@effect-agent/engine/ToolExecutionClass", { defaultValue: () => "uncertain" });
 var getToolExecutionClass = (tool) => exports_Context.get(tool.annotations, ToolExecutionClass);
@@ -38178,111 +38248,117 @@ var stampProviderResultEvent = (context3, turnId, payload) => exports_Effect.map
       return ToolCallFailed.make({ ...base2, turnId, ...payload });
   }
 });
-var nextContextEstimate = (context3, view) => {
+var estimateContextTokens = exports_Effect.fn("AgentRuntime.estimateContextTokens")(function* (context3, messages) {
+  return yield* exports_Schema.decodeUnknownEffect(exports_Schema.Natural)(context3.compactor.estimate(messages)).pipe(exports_Effect.mapError((cause) => CompactionError.make({ message: "Compactor returned an invalid token estimate", cause })));
+});
+var nextContextEstimate = exports_Effect.fn("AgentRuntime.nextContextEstimate")(function* (context3, view) {
   const state = context3.compaction;
   if (context3.lastInputTokens > 0 && state.lastViewLength >= 0 && state.lastViewLength <= view.length) {
-    return context3.lastInputTokens + context3.lastOutputTokens + estimatePromptTokens(view.slice(state.lastViewLength));
+    return context3.lastInputTokens + context3.lastOutputTokens + (yield* estimateContextTokens(context3, view.slice(state.lastViewLength)));
   }
-  return estimatePromptTokens(view);
-};
+  return yield* estimateContextTokens(context3, view);
+});
 var overflowText = (error2) => `${error2.message} ${error2.reason.message}`;
 var compactContext = (agent2, context3, source, turn, options3, targetTokens, forceSummarize, allowSummarize = true) => exports_Effect.gen(function* () {
-  const policy2 = agent2.definition.policy;
   const state = context3.compaction;
   const events2 = [];
   const messages = source.content;
-  const before = estimatePromptTokens(buildCompactedView(messages, state));
-  const mode = policy2.compaction.mode;
-  const keepRecentTokens = targetTokens === undefined ? policy2.compaction.keepRecentTokens : Math.max(1, Math.min(policy2.compaction.keepRecentTokens, targetTokens));
-  const commitDurable = (commit) => options3.durability === undefined ? exports_Effect.void : options3.durability.commitCompaction(commit);
-  if (!forceSummarize && mode !== "summarize") {
-    const bound = choosePruneBound(messages, state, keepRecentTokens);
-    if (bound > state.clearedThrough) {
-      state.clearedThrough = bound;
-      state.lastViewLength = -1;
-      const after2 = estimatePromptTokens(buildCompactedView(messages, state));
-      events2.push(CompactionPerformed.make({
-        ...yield* eventBase(context3),
-        turn,
-        kind: "clear-tool-results",
-        tokensBeforeEstimate: before,
-        tokensAfterEstimate: after2
-      }));
-      yield* commitDurable({
-        turn,
-        kind: "clear-tool-results",
-        tokensBeforeEstimate: before,
-        tokensAfterEstimate: after2
-      });
-      if (targetTokens !== undefined && after2 <= targetTokens) {
-        return { events: events2 };
+  const before = yield* estimateContextTokens(context3, buildCompactedView(messages, state));
+  let summaryCalls = 0;
+  const summarize = (summarizerPrompt, model) => {
+    const generate = exports_Effect.gen(function* () {
+      if (summaryCalls++ > 0 || !allowSummarize && !forceSummarize) {
+        return yield* CompactionError.make({
+          message: "Compaction exceeded its summary-call allowance"
+        });
       }
-    }
-  }
-  if ((!allowSummarize || mode === "prune") && !forceSummarize) {
-    return { events: events2 };
-  }
-  const cut = chooseSummarizeCut(messages, state, keepRecentTokens);
-  const covered = collectCoveredMessages(messages, state, cut);
-  if (covered.length === 0) {
-    return { events: events2 };
-  }
-  const transcript = renderForSummary(covered, state.summary);
-  const summarizerPrompt = exports_Prompt.fromMessages([
-    exports_Prompt.makeMessage("user", {
-      content: [
-        exports_Prompt.makePart("text", {
-          text: `${COMPACTION_INSTRUCTION}
-
-<transcript>
-${transcript}
-</transcript>`
-        })
-      ]
-    })
-  ]);
-  const pieces = [];
-  const responseUsage = {
-    responsePartCount: 0,
-    responsePartBytes: 0
+      const pieces = [];
+      const responseUsage = {
+        responsePartCount: 0,
+        responsePartBytes: 0
+      };
+      let summaryUsage;
+      yield* guardBudgetStream(exports_LanguageModel.streamText({ prompt: summarizerPrompt }), options3.budget).pipe(exports_Stream.runForEach((part) => exports_Effect.gen(function* () {
+        const owned = yield* ownModelResponsePart(part, exports_Toolkit.empty, responseUsage, context3.bufferLimits);
+        yield* consumeModelResponsePart(responseUsage, owned.retainedBytes, context3.bufferLimits);
+        const ownedPart = owned.ownedPart;
+        if (ownedPart.type === "text-delta") {
+          pieces.push(ownedPart.delta);
+        } else if (ownedPart.type === "finish") {
+          summaryUsage = ownedPart.usage;
+        }
+      })));
+      const wasFinalizing = context3.finalizing;
+      context3.finalizing = true;
+      const consumed = yield* consumeUsage(agent2, context3, summaryUsage, 0, turn, options3).pipe(exports_Effect.ensuring(exports_Effect.sync(() => {
+        context3.finalizing = wasFinalizing;
+      })));
+      events2.push(...consumed.warnings);
+      return pieces.join("");
+    });
+    return model === undefined ? generate : exports_Effect.provide(generate, model);
   };
-  let summaryUsage;
-  yield* guardBudgetStream(exports_LanguageModel.streamText({ prompt: summarizerPrompt }), options3.budget).pipe(exports_Stream.runForEach((part) => exports_Effect.gen(function* () {
-    const owned = yield* ownModelResponsePart(part, exports_Toolkit.empty, responseUsage, context3.bufferLimits);
-    yield* consumeModelResponsePart(responseUsage, owned.retainedBytes, context3.bufferLimits);
-    const ownedPart = owned.ownedPart;
-    if (ownedPart.type === "text-delta") {
-      pieces.push(ownedPart.delta);
-    } else if (ownedPart.type === "finish") {
-      summaryUsage = ownedPart.usage;
+  const applied = new Set;
+  yield* context3.compactor.compact({
+    source,
+    state: Object.freeze({ ...state }),
+    policy: agent2.definition.policy.compaction,
+    targetTokens,
+    forceSummarize,
+    allowSummarize,
+    summarize
+  }).pipe(exports_Stream.runForEach((candidate) => exports_Effect.gen(function* () {
+    const decision = yield* exports_Schema.decodeUnknownEffect(CompactionDecision)(candidate).pipe(exports_Effect.mapError((cause) => CompactionError.make({ message: "Invalid compaction decision", cause })));
+    if (applied.has(decision.kind) || applied.has("summarize")) {
+      return yield* CompactionError.make({
+        message: "Compaction exceeded its decision allowance"
+      });
     }
+    const next2 = { ...state, lastViewLength: -1 };
+    if (decision.kind === "summarize") {
+      if (utf8ByteLength2(decision.summary) > context3.bufferLimits.maxModelResponseBytes) {
+        return yield* CompactionError.make({
+          message: "Compaction summary exceeded the response-buffer limit"
+        });
+      }
+      if (decision.through <= state.summarizedThrough || decision.through >= messages.length || messages[decision.through]?.role === "tool" || collectCoveredMessages(messages, state, decision.through).length === 0) {
+        return yield* CompactionError.make({
+          message: "Compaction must advance coverage without splitting Tool pairs or removing the recent tail"
+        });
+      }
+      next2.summary = decision.summary;
+      next2.summarizedThrough = decision.through;
+    } else {
+      const newestTool = messages.findLastIndex((message) => message.role === "tool");
+      if (decision.through <= state.clearedThrough || decision.through > newestTool) {
+        return yield* CompactionError.make({
+          message: "Compaction must advance pruning while retaining the newest Tool result"
+        });
+      }
+      next2.clearedThrough = decision.through;
+    }
+    const after = yield* estimateContextTokens(context3, buildCompactedView(messages, next2));
+    const commit = {
+      turn,
+      source,
+      through: decision.through,
+      kind: decision.kind,
+      ...decision.kind === "summarize" ? { summary: decision.summary } : {},
+      tokensBeforeEstimate: before,
+      tokensAfterEstimate: after
+    };
+    if (options3.durability !== undefined)
+      yield* options3.durability.commitCompaction(commit);
+    Object.assign(state, next2);
+    applied.add(decision.kind);
+    events2.push(CompactionPerformed.make({
+      ...yield* eventBase(context3),
+      turn,
+      kind: decision.kind,
+      tokensBeforeEstimate: before,
+      tokensAfterEstimate: after
+    }));
   })));
-  const wasFinalizing = context3.finalizing;
-  context3.finalizing = true;
-  const consumed = yield* consumeUsage(agent2, context3, summaryUsage, 0, turn, options3).pipe(exports_Effect.ensuring(exports_Effect.sync(() => {
-    context3.finalizing = wasFinalizing;
-  })));
-  events2.push(...consumed.warnings);
-  const summaryText = pieces.join("").trim();
-  const summary2 = summaryText.length === 0 ? "(no summary produced)" : summaryText;
-  state.summary = summary2;
-  state.summarizedThrough = cut;
-  state.lastViewLength = -1;
-  const after = estimatePromptTokens(buildCompactedView(messages, state));
-  events2.push(CompactionPerformed.make({
-    ...yield* eventBase(context3),
-    turn,
-    kind: "summarize",
-    tokensBeforeEstimate: before,
-    tokensAfterEstimate: after
-  }));
-  yield* commitDurable({
-    turn,
-    kind: "summarize",
-    summary: summary2,
-    tokensBeforeEstimate: before,
-    tokensAfterEstimate: after
-  });
   return { events: events2 };
 });
 var decodeInput = exports_Effect.fn("AgentRuntime.decodeInput")((agent2, input) => exports_Schema.decodeUnknownEffect(agent2.definition.input)(input).pipe(exports_Effect.mapError((cause) => AgentInputError.make({
@@ -38816,11 +38892,11 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
       reason: outputContract.reason
     }));
   }
-  const outputContractTokens = outputContractMessage === undefined ? 0 : estimatePromptTokens([
+  const outputContractTokens = outputContractMessage === undefined ? 0 : yield* estimateContextTokens(context3, [
     exports_Prompt.makeMessage("system", { content: outputContractMessage })
   ]);
   const derivedPrompt = yield* outgoingModelPrompt(policy2, context3, exports_Prompt.fromMessages([]), turn, priorToolCalls);
-  const derivedPromptTokens = outputContractTokens + estimatePromptTokens(derivedPrompt.content);
+  const derivedPromptTokens = outputContractTokens + (yield* estimateContextTokens(context3, derivedPrompt.content));
   let preEvents = [];
   if (!context3.finalizing) {
     const consumedTokens = context3.inputTokens + context3.outputTokens;
@@ -38829,7 +38905,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
     const fullTarget = tokenCallTarget === undefined ? contextCallTarget : contextCallTarget === undefined ? tokenCallTarget : Math.min(tokenCallTarget, contextCallTarget);
     const sourceTarget = fullTarget === undefined ? undefined : Math.max(0, fullTarget - derivedPromptTokens);
     const view = buildCompactedView(modelContext.prompt.content, context3.compaction);
-    const estimate = nextContextEstimate(context3, view) + derivedPromptTokens;
+    const estimate = (yield* nextContextEstimate(context3, view)) + derivedPromptTokens;
     const contextPressure = contextCallTarget !== undefined && estimate > contextCallTarget;
     const tokenPressure = tokenCallTarget !== undefined && estimate > tokenCallTarget;
     if ((contextPressure || tokenPressure) && sourceTarget !== undefined && sourceTarget > 0 && context3.compaction.lastCompactionTurn !== turn) {
@@ -38838,7 +38914,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
       preEvents = outcome.events;
     }
     const prepared = buildCompactedView(modelContext.prompt.content, context3.compaction);
-    const preparedEstimate = nextContextEstimate(context3, prepared) + derivedPromptTokens;
+    const preparedEstimate = (yield* nextContextEstimate(context3, prepared)) + derivedPromptTokens;
     if (context3.tokenExhausted) {
       finalAnswerOnly = true;
     }
@@ -38903,7 +38979,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
         retried: true
       }) : inner));
       const retryView = buildCompactedView(modelContext.prompt.content, context3.compaction);
-      const retryEstimate = nextContextEstimate(context3, retryView) + derivedPromptTokens;
+      const retryEstimate = (yield* nextContextEstimate(context3, retryView)) + derivedPromptTokens;
       if (retryEstimate > contextTokenLimit) {
         return yield* ContextBudgetError.make({
           message: `Overflow compaction could not fit the retry inside the ${contextTokenLimit} token context target`,
@@ -39396,6 +39472,7 @@ var stream3 = (agent2, input, options3 = {}) => {
       tokenExhausted: false,
       exhaustedDimension: undefined,
       compaction: initialCompactionState(),
+      compactor: exports_Option.getOrElse(yield* exports_Effect.serviceOption(ContextCompactor), () => ContextCompactor.default),
       bufferLimits: effectiveRunBufferLimits(options3.bufferLimits),
       sequence: 0,
       programmaticToolCalls: 0
@@ -41560,25 +41637,6 @@ class ContextLimitExceeded extends exports_Schema.TaggedError()("ContextLimitExc
   observedValue: exports_Schema.Natural
 }) {
 }
-
-class ContextCompactor extends exports_Context.Service()("@effect-agent/capabilities/ContextCompactor") {
-}
-var messageText = (message) => {
-  if (message.role === "system")
-    return message.content;
-  const content = message.content.map((part) => {
-    if (part.type === "text" || part.type === "reasoning")
-      return part.text;
-    return `[${part.type}]`;
-  }).join(`
-`);
-  return content.slice(0, 64 * 1024);
-};
-var asModelMessages = (snapshot3) => snapshot3.messages.map((entry) => ModelContextMessage.make({
-  role: entry.message.role,
-  content: messageText(entry.message),
-  sourceSequences: [entry.sequence]
-}));
 var validateModelView = (messages, transformId) => {
   if (messages.length > MAX_CONTEXT_MESSAGES) {
     return exports_Effect.fail(ContextTransformError.make({
@@ -41592,11 +41650,6 @@ var validateModelView = (messages, transformId) => {
     message: `Transform produced ${bytes} UTF-8 bytes; maximum is ${MAX_CONTEXT_MESSAGE_BYTES}`
   })) : exports_Effect.succeed(messages);
 };
-var prepareModelContext = (snapshot3, transforms = []) => transforms.reduce((messages, transform5) => messages.pipe(exports_Effect.flatMap(transform5.apply), exports_Effect.flatMap((transformed) => validateModelView(transformed, transform5.id))), exports_Effect.succeed(asModelMessages(snapshot3))).pipe(exports_Effect.map((messages) => PreparedModelContext.make({
-  source: snapshot3,
-  messages,
-  compactions: []
-})));
 var exactSourceRange = (snapshot3, coversFrom, coversThrough) => {
   if (coversFrom > coversThrough || coversThrough >= snapshot3.nextSequence) {
     return exports_Effect.fail(InvalidCompactionArtifact.make({
@@ -41750,106 +41803,7 @@ var toRunConversationOptions = exports_Effect.fn("toRunConversationOptions")(fun
     onHistory: (history) => conversations.recordHistory(conversationId, runId, history).pipe(exports_Effect.asVoid)
   };
 });
-var CONTEXT_COMPACTOR_PREPARER_ID = "@effect-agent/capabilities/ContextCompactor";
-var DETERMINISTIC_CONTEXT_TIMESTAMP = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(0));
-var encodedBytes2 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
-var failureTag = (error2) => {
-  if (exports_Schema.isSchemaError(error2))
-    return "SchemaError";
-  if (exports_Schema.is(ContextTransformError)(error2))
-    return "ContextTransformError";
-  if (exports_Schema.is(CompactionDigestError)(error2))
-    return "CompactionDigestError";
-  if (exports_Schema.is(InvalidCompactionArtifact)(error2))
-    return "InvalidCompactionArtifact";
-  if (exports_Schema.is(ContextLimitExceeded)(error2))
-    return "ContextLimitExceeded";
-  return "UnknownContextPreparationFailure";
-};
-var contextPreparationError = (error2) => exports_Schema.is(RunContextPreparationError)(error2) ? error2 : RunContextPreparationError.make({
-  preparerId: CONTEXT_COMPACTOR_PREPARER_ID,
-  message: `Context compaction failed (${failureTag(error2)})`,
-  cause: error2
-});
-var snapshotFromRunContext = exports_Effect.fn("snapshotFromRunContext")(function* (request3) {
-  const messages = yield* exports_Effect.forEach(request3.source.content, (message, sequence) => exports_Schema.encodeEffect(exports_Prompt.Message)(message).pipe(exports_Effect.map((encoded) => JSON.stringify(encoded)), exports_Effect.map((encoded) => ConversationMessage.make({
-    conversationId: request3.conversationId,
-    sequence,
-    message,
-    encodedBytes: encodedBytes2(encoded),
-    timestamp: DETERMINISTIC_CONTEXT_TIMESTAMP
-  }))));
-  const snapshot3 = ConversationSnapshot.make({
-    version: 1,
-    conversationId: request3.conversationId,
-    nextSequence: messages.length,
-    contentBytes: messages.reduce((total, message) => total + message.encodedBytes, 0),
-    messages
-  });
-  yield* exports_Schema.encodeEffect(ConversationSnapshot)(snapshot3);
-  return snapshot3;
-});
-var summaryPromptMessage = (summary2) => {
-  switch (summary2.role) {
-    case "system":
-      return exports_Effect.succeed(exports_Prompt.systemMessage({ content: summary2.content }));
-    case "user":
-      return exports_Effect.succeed(exports_Prompt.userMessage({ content: [exports_Prompt.textPart({ text: summary2.content })] }));
-    case "assistant":
-      return exports_Effect.succeed(exports_Prompt.assistantMessage({ content: [exports_Prompt.textPart({ text: summary2.content })] }));
-    case "tool":
-      return exports_Effect.fail(RunContextPreparationError.make({
-        preparerId: CONTEXT_COMPACTOR_PREPARER_ID,
-        message: "Context compaction produced a tool-role prose summary, which cannot form a native Effect AI ToolMessage"
-      }));
-  }
-};
-var startsCorrelatedToolBlock = (message) => message.role === "assistant" && message.content.some((part) => part.type === "tool-call" || part.type === "tool-approval-request");
-var validateCompactionBoundary = (prompt, coversFrom, coversThrough) => {
-  const isCovered = (index2) => index2 >= coversFrom && index2 <= coversThrough;
-  for (let index2 = 0;index2 < prompt.content.length; index2 += 1) {
-    const message = prompt.content[index2];
-    if (message === undefined || !startsCorrelatedToolBlock(message))
-      continue;
-    const covered = isCovered(index2);
-    let following = index2 + 1;
-    while (prompt.content[following]?.role === "tool") {
-      if (isCovered(following) !== covered) {
-        return exports_Effect.fail(RunContextPreparationError.make({
-          preparerId: CONTEXT_COMPACTOR_PREPARER_ID,
-          message: "Context compaction coverage splits a native Tool call/result or approval pair"
-        }));
-      }
-      following += 1;
-    }
-  }
-  return exports_Effect.void;
-};
-var prepareWithContextCompactor = exports_Effect.fn("prepareWithContextCompactor")(function* (request3, compactor) {
-  const snapshot3 = yield* snapshotFromRunContext(request3);
-  const source = yield* prepareModelContext(snapshot3);
-  const artifact = yield* compactor.compact(snapshot3);
-  yield* exports_Schema.encodeEffect(CompactionArtifact)(artifact);
-  yield* applyCompaction(source, artifact);
-  yield* validateCompactionBoundary(request3.source, artifact.coversFrom, artifact.coversThrough);
-  const summary2 = yield* summaryPromptMessage(artifact.summary);
-  return {
-    prompt: exports_Prompt.fromMessages([
-      ...request3.source.content.slice(0, artifact.coversFrom),
-      summary2,
-      ...request3.source.content.slice(artifact.coversThrough + 1)
-    ])
-  };
-});
-var contextCompactorRunContextLayer = exports_Layer.effect(RunContextPreparation, exports_Effect.gen(function* () {
-  const compactor = yield* ContextCompactor;
-  const crypto2 = yield* exports_Crypto.Crypto;
-  return RunContextPreparation.of({
-    hook: {
-      prepare: (request3) => prepareWithContextCompactor(request3, compactor).pipe(exports_Effect.provideService(exports_Crypto.Crypto, crypto2), exports_Effect.mapError(contextPreparationError))
-    }
-  });
-}));
+var contextCompactorRunContextLayer = exports_Layer.effect(RunContextPreparation, exports_Effect.map(ContextCompactor, (compactor) => RunContextPreparation.of({ compactor })));
 var RunApprovalAdapterPolicySchema = exports_Schema.Struct({
   expiresInMillis: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
   risk: exports_Schema.Literals(["low", "medium", "high", "critical"]),
@@ -42738,7 +42692,7 @@ class McpDiscovery extends exports_Schema.Class("@effect-agent/capabilities/McpD
 
 class McpConnector extends exports_Context.Service()("@effect-agent/capabilities/McpConnector") {
 }
-var encodedBytes3 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
+var encodedBytes2 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
 var flattenTopLevelRef = (schema3) => {
   const ref = schema3["$ref"];
   const defs = schema3["$defs"];
@@ -42801,7 +42755,7 @@ var validateMcpDiscovery = exports_Effect.fn("validateMcpDiscovery")(function* (
     });
   }
   for (const tool of server.tools) {
-    const descriptionBytes = encodedBytes3(tool.description ?? "");
+    const descriptionBytes = encodedBytes2(tool.description ?? "");
     if (descriptionBytes > request3.maxToolDescriptionBytes) {
       return yield* McpDiscoveryLimitExceeded.make({
         serverId: request3.serverId,
@@ -42870,7 +42824,7 @@ var validateMcpDiscovery = exports_Effect.fn("validateMcpDiscovery")(function* (
     serverId: request3.serverId,
     message: `Could not serialize MCP discovery response: ${error2.message}`
   })));
-  const discoveryBytes = encodedBytes3(discoveryText);
+  const discoveryBytes = encodedBytes2(discoveryText);
   if (discoveryBytes > request3.maxDiscoveryBytes) {
     return yield* McpDiscoveryLimitExceeded.make({
       serverId: request3.serverId,

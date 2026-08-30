@@ -8,7 +8,13 @@ import {
   ToolCallId,
   type IdGenerator,
 } from "@effect-agent/core";
-import { COMPACTION_SUMMARY_PREFIX, ToolExecutionClass } from "@effect-agent/engine";
+import {
+  COMPACTION_SUMMARY_PREFIX,
+  ContextCompactor,
+  RunContextPreparation,
+  estimatePromptTokens,
+  ToolExecutionClass,
+} from "@effect-agent/engine";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -2937,7 +2943,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           }),
         });
         const second = yield* makeScriptedModel((call) =>
-          call === 0 || call === 1
+          call === 0
             ? finalParts("Goal: prior run booked the flight")
             : finalParts('{"answer":"compacted"}'),
         );
@@ -2986,7 +2992,101 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         const lastPrompt = second.prompts.at(-1);
         if (lastPrompt === undefined) throw new Error("expected captured prompts");
         expect(promptTexts(lastPrompt)).toContain(COMPACTION_SUMMARY_PREFIX);
+        // The canonical cutoff is the actual covered prefix, so recovery does not summarize it again.
+        expect(second.prompts).toHaveLength(2);
       }),
+  );
+
+  it.effect(
+    "commits only a custom strategy's covered prefix and recovers it before calling the Run Model",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const conversation = "custom-compaction-coverage";
+        const prior = yield* makeScriptedModel((call) =>
+          finalParts(
+            JSON.stringify({
+              answer: call === 0 ? `FIRST ${"x".repeat(5_000)}` : "SECOND KEEP",
+            }),
+          ),
+        );
+        const original = Agent.withModel(plannerDefinition, prior.model);
+        for (const key of ["first", "second"]) {
+          yield* runtime.submit(original, { question: key }, submitOptions(conversation, key));
+          yield* runtime.processConversation(original, decodeConversationId(conversation));
+        }
+        const definition = Agent.define("custom-coverage", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Answer from retained history.",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({
+            maxTurns: 2,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            contextTokenLimit: 1_000,
+            compaction: CompactionPolicy.make({ mode: "summarize", keepRecentTokens: 1 }),
+          }),
+        });
+        const model = yield* makeScriptedModel(() => finalParts('{"answer":"retained"}'));
+        const agent = Agent.withModel(definition, model.model);
+        yield* runtime.submit(
+          agent,
+          { question: "continue" },
+          submitOptions(conversation, "third"),
+        );
+        yield* armFailpoint("compaction:after-canonical-append");
+        const interrupted = yield* runtime
+          .processConversation(agent, decodeConversationId(conversation))
+          .pipe(Effect.exit);
+        expect(failureTag(interrupted)).toBe("DurableRuntimeFailpointError");
+        expect(model.prompts).toHaveLength(0);
+        yield* clearFailpoint;
+        const settled = yield* runtime.processConversation(
+          agent,
+          decodeConversationId(conversation),
+        );
+        expect(settled[0]?.outcome).toBe("completed");
+        expect(model.prompts).toHaveLength(1);
+        expect(promptTexts(model.prompts[0] ?? Prompt.empty)).toContain("SECOND KEEP");
+        expect(promptTexts(model.prompts[0] ?? Prompt.empty)).toContain(
+          "custom first-only summary",
+        );
+        const records = yield* readLog(conversation);
+        const responses = records.filter(
+          (entry) => entry.record.payload._tag === "ModelResponseRecorded",
+        );
+        const compactions = records.filter(
+          (entry) => entry.record.payload._tag === "CompactionCreated",
+        );
+        expect(compactions).toHaveLength(1);
+        const payload = compactions[0]?.record.payload;
+        if (payload?._tag !== "CompactionCreated") return yield* Effect.die("missing compaction");
+        expect(payload.coversThrough).toBe(responses[0]?.sequence);
+        const replay = yield* promptFromCanonicalRecords(records);
+        expect(promptTexts(replay)).toContain("SECOND KEEP");
+        expect(promptTexts(replay)).not.toContain("FIRST");
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(DurableAgentRuntime.layerWithContext).pipe(
+            Layer.provide(
+              Layer.succeed(RunContextPreparation, {
+                compactor: ContextCompactor.of({
+                  estimate: estimatePromptTokens,
+                  compact: () =>
+                    Stream.succeed({
+                      kind: "summarize",
+                      through: 1,
+                      summary: "custom first-only summary",
+                    }),
+                }),
+              }),
+            ),
+            Layer.provideMerge(baseLayer),
+          ),
+        ),
+      ),
   );
 
   it.effect(

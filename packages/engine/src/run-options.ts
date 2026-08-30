@@ -14,6 +14,7 @@ import type {
 import { type Cause, type Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
+import type { ContextCompactor } from "./context-compactor.ts";
 import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
 
 /** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
@@ -333,6 +334,8 @@ export class RunContextPreparation extends Context.Service<
   {
     /** Optional transformation of the model-visible prompt. */
     readonly hook?: RunContextHook<RunContextPreparationError, never> | undefined;
+    /** Replaces native compaction after prompt reconstruction; acquired with the host Layer. */
+    readonly compactor?: ContextCompactor["Service"] | undefined;
     /** Optional action-time Tool authorization, closed over all host dependencies. */
     readonly toolAuthorization?: RunToolAuthorizationHook<never, never> | undefined;
   }
@@ -359,13 +362,14 @@ export interface RunTurnResponseCommit {
 
 /**
  * One compaction decision the engine applied to its model-visible view
- * (RUN-026). The durable coordinator owns the canonical
- * `coversThrough` selection — the engine reports only what it decided and the
- * summary it produced, because in-memory message indices do not map to
- * canonical record sequences at this seam.
+ * (RUN-026). The durable coordinator maps the covered source prefix to complete prior-Run
+ * records. It must never infer a wider cutoff from policy or token estimates.
  */
 export interface RunCompactionCommit {
   readonly turn: number;
+  /** Exact pre-compaction source and exclusive message bound; live values, never persisted. */
+  readonly source: Prompt.Prompt;
+  readonly through: number;
   readonly kind: "clear-tool-results" | "summarize";
   /** Present exactly when `kind` is `"summarize"`. */
   readonly summary?: string | undefined;

@@ -31,6 +31,7 @@ import {
   CurrentToolFailureObserver,
   getToolExecutionClass,
   RunContextPreparation,
+  ContextCompactor,
   RunContextPreparationPassthrough,
   type RunContextPreparationError,
   type AgentRuntimeRequirements,
@@ -169,6 +170,7 @@ import {
   type OperationDenied,
 } from "./operation-authorizer.ts";
 import { PreparedToolCallEvidence, ToolReconciler } from "./reconciler.ts";
+import type { CanonicalRecordPayload } from "./records.ts";
 import {
   type CanonicalRecordEnvelope,
   type DeploymentId,
@@ -177,7 +179,6 @@ import {
   AbortRequested,
   BatchId,
   CanonicalBatch,
-  CanonicalRecordPayload,
   CanonicalSequence,
   CompactionCreated,
   ConversationCreated,
@@ -764,7 +765,6 @@ const nowUtc: Effect.Effect<DateTime.Utc> = Effect.map(Clock.currentTimeMillis, 
 const decodePrompt = Schema.decodeUnknownEffect(Prompt.Prompt);
 const decodePersisted = Schema.decodeUnknownEffect(PersistedJson);
 const encodePersistedJsonString = Schema.encodeEffect(Schema.fromJsonString(PersistedJson));
-const encodeCanonicalPayloadJson = Schema.encodeSync(Schema.fromJsonString(CanonicalRecordPayload));
 
 const encodeRunInput = (input: PersistedJson): Effect.Effect<string, RunJournalError> =>
   encodePersistedJsonString(input).pipe(
@@ -913,6 +913,9 @@ const make = Effect.gen(function* () {
   // `RunContextPreparationPassthrough`; custom assemblies may install prompt preparation,
   // action-time Tool authorization, or both.
   const runContextPreparation = yield* RunContextPreparation;
+  const compactor =
+    runContextPreparation.compactor ??
+    Option.getOrElse(yield* Effect.serviceOption(ContextCompactor), () => ContextCompactor.default);
   // Possession-default authorization reference (P7 WP1): the default allows everything —
   // exactly the pre-P7 service-possession boundary — and a host-supplied non-default Layer is
   // consulted fail-closed by observe, the admin operations, and the two resolution paths.
@@ -3691,16 +3694,6 @@ const make = Effect.gen(function* () {
           break;
         }
       }
-      /** Rough chars/4 estimate of one record's prompt contribution (selection only). */
-      const estimateRecordTokens = (envelope: CanonicalRecordEnvelope): number => {
-        let text: string | undefined;
-        try {
-          text = encodeCanonicalPayloadJson(envelope.record.payload);
-        } catch {
-          text = undefined;
-        }
-        return text === undefined ? 0 : Math.ceil(text.length / 4);
-      };
       /** Pre-existing joins of this host Run, loaded lazily at the first drain seam. */
       let joinBacklog: ReadonlyArray<JoinSnapshot> | undefined;
       /** Joined inputs already handed to the engine during THIS Attempt (never re-deliver). */
@@ -4035,35 +4028,52 @@ const make = Effect.gen(function* () {
                 }
               }
               if (coverable.length === 0) return;
-              // Keep the newest ~keepRecentTokens of prompt-visible records;
-              // the cut lands only immediately before a ModelResponseRecorded
-              // so a Turn is always covered atomically (pairing preserved).
-              const keepRecentTokens = agent.definition.policy.compaction.keepRecentTokens;
-              let kept = 0;
-              let cutIndex = -1;
-              for (let index = coverable.length - 1; index >= 0; index -= 1) {
-                const envelope = coverable[index];
-                if (envelope === undefined) continue;
-                kept += estimateRecordTokens(envelope);
-                if (kept >= keepRecentTokens) {
-                  cutIndex = index;
-                  break;
-                }
+              // Map only a prefix the strategy actually covered. Reprojection retains prior
+              // compaction records, so indices remain correct after earlier summaries. A host
+              // prompt transform that breaks this correspondence cannot authorize deletion.
+              const encodedSource = yield* Schema.encodeEffect(Prompt.Prompt)(commit.source).pipe(
+                Effect.mapError((cause) =>
+                  RunJournalError.make({
+                    message: "Could not encode the compaction source",
+                    cause,
+                  }),
+                ),
+              );
+              let lastCovered: CanonicalRecordEnvelope | undefined;
+              for (let index = 0; index < coverable.length; index += 1) {
+                const candidate = coverable[index];
+                if (candidate === undefined) continue;
+                const following = coverable[index + 1];
+                if (
+                  following !== undefined &&
+                  following.record.payload._tag !== "ModelResponseRecorded"
+                )
+                  continue;
+                const prefix = yield* projectRunJournal(
+                  records.filter(
+                    (entry) =>
+                      entry.sequence <= candidate.sequence ||
+                      entry.record.payload._tag === "CompactionCreated",
+                  ),
+                  runId,
+                );
+                const length = prefix.prompt.content.length;
+                if (length === 0 || length > commit.through) continue;
+                const encodedPrefix = yield* Schema.encodeEffect(Prompt.Prompt)(prefix.prompt).pipe(
+                  Effect.mapError((cause) =>
+                    RunJournalError.make({
+                      message: "Could not encode the canonical compaction prefix",
+                      cause,
+                    }),
+                  ),
+                );
+                if (
+                  JSON.stringify(encodedPrefix.content) !==
+                  JSON.stringify(encodedSource.content.slice(0, length))
+                )
+                  continue;
+                lastCovered = candidate;
               }
-              if (cutIndex === -1) return;
-              // The threshold-crossing record's tokens were counted as kept,
-              // so its WHOLE Turn stays retained: walk BACK to that Turn's
-              // ModelResponseRecorded and end the covered prefix just before
-              // it. Walking forward instead would fold the counted Turn — and
-              // for a newest-Turn threshold could cover all prior history.
-              while (
-                cutIndex >= 0 &&
-                coverable[cutIndex]?.record.payload._tag !== "ModelResponseRecorded"
-              ) {
-                cutIndex -= 1;
-              }
-              if (cutIndex < 0) return;
-              const lastCovered = cutIndex > 0 ? coverable[cutIndex - 1] : undefined;
               if (lastCovered === undefined) return;
               if (commit.kind === "summarize" && (commit.summary ?? "").length === 0) {
                 return yield* RunJournalError.make({
@@ -5121,6 +5131,7 @@ const make = Effect.gen(function* () {
       const consume = Stream.runForEach(
         AgentRuntime.stream(agent, submission.inputPayload, options).pipe(
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
+          Stream.provideService(ContextCompactor, compactor),
         ),
         (event) => halt(handleEvent(event)),
       ).pipe(Effect.as({ _tag: "run" as const }));

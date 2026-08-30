@@ -60,7 +60,7 @@ const abortIncarnation = (conversation: string): Promise<void> =>
     () => undefined,
   );
 
-describe("Cloudflare host-supplied context preparation", () => {
+describe("Cloudflare replaceable compaction", () => {
   it("keeps the existing no-compactor construction behavior", async () => {
     const conversation = lane("default");
     const result = await submitAndSettle(
@@ -77,6 +77,7 @@ describe("Cloudflare host-supplied context preparation", () => {
   it("invokes the provided compactor without replacing canonical history", async () => {
     const conversation = lane("provided");
     const original = "preserve this exact canonical input";
+    await submitAndSettle(conversation, original, `${conversation}-seed`, "CONTEXT_COMPACTOR");
     const result = await submitAndSettle(
       conversation,
       original,
@@ -92,11 +93,14 @@ describe("Cloudflare host-supplied context preparation", () => {
     });
     const canonical = JSON.stringify(result.records);
     expect(canonical).toContain(original);
-    expect(canonical).not.toContain("[host-compacted-context]");
+    expect(result.records.some((entry) => entry.record.payload._tag === "CompactionCreated")).toBe(
+      true,
+    );
   });
 
   it("settles a typed compactor failure without persisting its cause", async () => {
     const conversation = lane("typed-failure");
+    await submitAndSettle(conversation, "seed", `${conversation}-seed`, "CONTEXT_COMPACTOR");
     const result = await submitAndSettle(
       conversation,
       "[host-compactor-failure] preserve the refused input",
@@ -106,8 +110,8 @@ describe("Cloudflare host-supplied context preparation", () => {
 
     expect(result.settlement.outcome).toBe("failed");
     expect(result.terminal.result).toMatchObject({
-      errorTag: "RunContextPreparationError",
-      message: "Context compaction failed (ContextTransformError)",
+      errorTag: "CompactionError",
+      message: "Context compaction refused",
     });
     expect(result.terminal.result).not.toHaveProperty("cause");
     const canonical = JSON.stringify(result.records);
@@ -122,10 +126,7 @@ describe("Cloudflare host-supplied context preparation", () => {
 
     const beforeEviction = contextCompactorProbe(conversation);
     expect(beforeEviction.acquisitions).toBe(1);
-    expect(beforeEviction.invocations).toBe(2);
-    expect(beforeEviction.sourceMessageCounts[1]).toBeGreaterThan(
-      beforeEviction.sourceMessageCounts[0] ?? 0,
-    );
+    expect(beforeEviction.invocations).toBe(1);
 
     await abortIncarnation(conversation);
     const reconstructed = await submitAndSettle(
@@ -138,11 +139,10 @@ describe("Cloudflare host-supplied context preparation", () => {
 
     const afterEviction = contextCompactorProbe(conversation);
     expect(afterEviction.acquisitions).toBe(2);
-    expect(afterEviction.invocations).toBe(3);
-    expect(afterEviction.sourceMessageCounts[2]).toBeGreaterThan(
-      afterEviction.sourceMessageCounts[1] ?? 0,
-    );
+    expect(afterEviction.invocations).toBe(2);
     expect(JSON.stringify(reconstructed.records)).toContain("third after eviction");
-    expect(JSON.stringify(reconstructed.records)).not.toContain("[host-compacted-context]");
+    expect(
+      reconstructed.records.filter((entry) => entry.record.payload._tag === "CompactionCreated"),
+    ).toHaveLength(2);
   });
 });

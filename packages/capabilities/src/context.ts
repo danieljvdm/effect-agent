@@ -1,5 +1,5 @@
 import { ConversationId } from "@effect-agent/core";
-import { Context, Crypto, Effect, Encoding, Schema } from "effect";
+import { Crypto, Effect, Encoding, Schema } from "effect";
 import type { Prompt } from "effect/unstable/ai";
 
 import { ConversationMessage, ConversationSnapshot, ConversationText } from "./conversation.ts";
@@ -122,15 +122,8 @@ export interface ContextTransform {
   ) => Effect.Effect<ReadonlyArray<ModelContextMessage>, ContextTransformError>;
 }
 
-/** Optional authority for obtaining an artifact, typically through a separately metered Model. */
-export class ContextCompactor extends Context.Service<
-  ContextCompactor,
-  {
-    readonly compact: (
-      snapshot: ConversationSnapshot,
-    ) => Effect.Effect<CompactionArtifact, ContextTransformError>;
-  }
->()("@effect-agent/capabilities/ContextCompactor") {}
+/** The shared interpreter compaction contract; artifacts below remain explicit data utilities. */
+export { ContextCompactor } from "@effect-agent/engine";
 
 const messageText = (message: Prompt.Message): string => {
   if (message.role === "system") return message.content;

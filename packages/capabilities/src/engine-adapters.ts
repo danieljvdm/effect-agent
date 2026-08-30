@@ -1,6 +1,6 @@
 import {
   RunContextPreparation,
-  RunContextPreparationError,
+  ContextCompactor,
   type PreparedRunContext,
   type RunApprovalDecision,
   type RunApprovalHook,
@@ -12,8 +12,8 @@ import {
   type RunOptions,
   type RunSchedulingHook,
 } from "@effect-agent/engine";
-import { Clock, Crypto, DateTime, Effect, Encoding, Layer, Schema } from "effect";
-import { Prompt } from "effect/unstable/ai";
+import { Clock, DateTime, Effect, Layer, Schema } from "effect";
+import type { Prompt } from "effect/unstable/ai";
 
 import {
   type ApprovalAudit,
@@ -28,19 +28,6 @@ import {
 import { type BudgetExceeded, UsageDelta, type UsageBudgetNode } from "./budget.ts";
 import type { RunCommandQueue } from "./commands.ts";
 import {
-  CompactionDigestError,
-  CompactionArtifact,
-  ContextCompactor,
-  ContextLimitExceeded,
-  ContextTransformError,
-  InvalidCompactionArtifact,
-  type ModelContextMessage,
-  applyCompaction,
-  prepareModelContext,
-} from "./context.ts";
-import {
-  ConversationMessage,
-  ConversationSnapshot,
   type ConversationEncodingError,
   type ConversationHistoryDiverged,
   type ConversationLimitExceeded,
@@ -263,165 +250,17 @@ export const toRunContextHook = <Error, Requirements>(
     transform.prepare(request.source, request).pipe(Effect.map((prompt) => ({ prompt }))),
 });
 
-const CONTEXT_COMPACTOR_PREPARER_ID = "@effect-agent/capabilities/ContextCompactor";
-const DETERMINISTIC_CONTEXT_TIMESTAMP = DateTime.toUtc(DateTime.makeUnsafe(0));
-
-const encodedBytes = (value: string): number => Encoding.encodeHex(value).length / 2;
-
-const failureTag = (error: unknown): string => {
-  if (Schema.isSchemaError(error)) return "SchemaError";
-  if (Schema.is(ContextTransformError)(error)) return "ContextTransformError";
-  if (Schema.is(CompactionDigestError)(error)) return "CompactionDigestError";
-  if (Schema.is(InvalidCompactionArtifact)(error)) return "InvalidCompactionArtifact";
-  if (Schema.is(ContextLimitExceeded)(error)) return "ContextLimitExceeded";
-  return "UnknownContextPreparationFailure";
-};
-
-const contextPreparationError = (error: unknown): RunContextPreparationError =>
-  Schema.is(RunContextPreparationError)(error)
-    ? error
-    : RunContextPreparationError.make({
-        preparerId: CONTEXT_COMPACTOR_PREPARER_ID,
-        // Full diagnostics stay in the live cause. Durable settlement stores this bounded,
-        // content-free projection, so a Schema diagnostic cannot copy prompt text into history.
-        message: `Context compaction failed (${failureTag(error)})`,
-        cause: error,
-      });
-
-const snapshotFromRunContext = Effect.fn("snapshotFromRunContext")(function* (
-  request: RunContextRequest,
-) {
-  const messages = yield* Effect.forEach(request.source.content, (message, sequence) =>
-    Schema.encodeEffect(Prompt.Message)(message).pipe(
-      Effect.map((encoded) => JSON.stringify(encoded)),
-      Effect.map((encoded) =>
-        ConversationMessage.make({
-          conversationId: request.conversationId,
-          sequence,
-          message,
-          encodedBytes: encodedBytes(encoded),
-          timestamp: DETERMINISTIC_CONTEXT_TIMESTAMP,
-        }),
-      ),
-    ),
-  );
-  const snapshot = ConversationSnapshot.make({
-    version: 1,
-    conversationId: request.conversationId,
-    nextSequence: messages.length,
-    contentBytes: messages.reduce((total, message) => total + message.encodedBytes, 0),
-    messages,
-  });
-  // Encoding validates the Type-side refinements while retaining the native DateTime/Prompt
-  // values needed by the compactor service.
-  yield* Schema.encodeEffect(ConversationSnapshot)(snapshot);
-  return snapshot;
-});
-
-const summaryPromptMessage = (
-  summary: ModelContextMessage,
-): Effect.Effect<Prompt.Message, RunContextPreparationError> => {
-  switch (summary.role) {
-    case "system":
-      return Effect.succeed(Prompt.systemMessage({ content: summary.content }));
-    case "user":
-      return Effect.succeed(
-        Prompt.userMessage({ content: [Prompt.textPart({ text: summary.content })] }),
-      );
-    case "assistant":
-      return Effect.succeed(
-        Prompt.assistantMessage({ content: [Prompt.textPart({ text: summary.content })] }),
-      );
-    case "tool":
-      return Effect.fail(
-        RunContextPreparationError.make({
-          preparerId: CONTEXT_COMPACTOR_PREPARER_ID,
-          message:
-            "Context compaction produced a tool-role prose summary, which cannot form a native Effect AI ToolMessage",
-        }),
-      );
-  }
-};
-
-const startsCorrelatedToolBlock = (message: Prompt.Message): boolean =>
-  message.role === "assistant" &&
-  message.content.some(
-    (part) => part.type === "tool-call" || part.type === "tool-approval-request",
-  );
-
-const validateCompactionBoundary = (
-  prompt: Prompt.Prompt,
-  coversFrom: number,
-  coversThrough: number,
-): Effect.Effect<void, RunContextPreparationError> => {
-  const isCovered = (index: number): boolean => index >= coversFrom && index <= coversThrough;
-  for (let index = 0; index < prompt.content.length; index += 1) {
-    const message = prompt.content[index];
-    if (message === undefined || !startsCorrelatedToolBlock(message)) continue;
-    const covered = isCovered(index);
-    let following = index + 1;
-    while (prompt.content[following]?.role === "tool") {
-      if (isCovered(following) !== covered) {
-        return Effect.fail(
-          RunContextPreparationError.make({
-            preparerId: CONTEXT_COMPACTOR_PREPARER_ID,
-            message:
-              "Context compaction coverage splits a native Tool call/result or approval pair",
-          }),
-        );
-      }
-      following += 1;
-    }
-  }
-  return Effect.void;
-};
-
-const prepareWithContextCompactor = Effect.fn("prepareWithContextCompactor")(function* (
-  request: RunContextRequest,
-  compactor: ContextCompactor["Service"],
-) {
-  const snapshot = yield* snapshotFromRunContext(request);
-  const source = yield* prepareModelContext(snapshot);
-  const artifact = yield* compactor.compact(snapshot);
-  // `ContextCompactor` is host code: validate the complete Schema value before trusting fields.
-  yield* Schema.encodeEffect(CompactionArtifact)(artifact);
-  // Recompute the digest and validate provenance/bounds before the artifact can affect a prompt.
-  yield* applyCompaction(source, artifact);
-  yield* validateCompactionBoundary(request.source, artifact.coversFrom, artifact.coversThrough);
-  const summary = yield* summaryPromptMessage(artifact.summary);
-  return {
-    prompt: Prompt.fromMessages([
-      ...request.source.content.slice(0, artifact.coversFrom),
-      summary,
-      ...request.source.content.slice(artifact.coversThrough + 1),
-    ]),
-  } satisfies PreparedRunContext;
-});
-
 /**
- * Adapt `ContextCompactor` to the generic engine service used by durable platform assemblies.
- * Both services are captured while the Layer is acquired, so each `prepare` call is closed and
- * Object eviction can reconstruct the same adapter from its declared Layers.
+ * Install the inward-owned compactor in durable assemblies. It runs at the native compaction
+ * seam, after canonical reconstruction, with the same metering and commits as ephemeral Runs.
  */
 export const contextCompactorRunContextLayer: Layer.Layer<
   RunContextPreparation,
   never,
-  ContextCompactor | Crypto.Crypto
+  ContextCompactor
 > = Layer.effect(
   RunContextPreparation,
-  Effect.gen(function* () {
-    const compactor = yield* ContextCompactor;
-    const crypto = yield* Crypto.Crypto;
-    return RunContextPreparation.of({
-      hook: {
-        prepare: (request) =>
-          prepareWithContextCompactor(request, compactor).pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
-            Effect.mapError(contextPreparationError),
-          ),
-      },
-    });
-  }),
+  Effect.map(ContextCompactor, (compactor) => RunContextPreparation.of({ compactor })),
 );
 
 /** Scheduling values are structurally aligned and only reduce finite concurrency. */
