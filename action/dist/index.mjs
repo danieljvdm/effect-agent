@@ -36979,6 +36979,8 @@ var RunResumeUsageSchema = exports_Schema.Struct({
   costMicrousd: exports_Schema.Natural
 }).check(exports_Schema.makeFilter((usage2) => usage2.lastInputTokens <= usage2.inputTokens && usage2.lastOutputTokens <= usage2.outputTokens, {
   expected: "last-call token usage no greater than cumulative token usage"
+}), exports_Schema.makeFilter((usage2) => usage2.modelCalls >= usage2.committedTurns && usage2.consecutiveToolFailures <= usage2.toolCalls, {
+  expected: "model calls covering committed Turns and a failure streak within declared Tool calls"
 }));
 // packages/engine/src/run-events.ts
 class RunEventSinkClosedError extends exports_Schema.TaggedError()("RunEventSinkClosedError", {
@@ -39500,7 +39502,16 @@ var enforceDurationDeadline = (execution, durationDeadlineMillis, durationLimit)
 var guardBudgetStream = (stream3, budget) => budget === undefined ? stream3 : exports_Stream.transformPull(stream3, (pull) => exports_Effect.succeed(budget.guard(pull)));
 var stream3 = (agent2, input, options3 = {}) => {
   const interpreted = exports_Stream.unwrap(exports_Effect.gen(function* () {
-    const resumeUsage = options3.resumeUsage === undefined ? undefined : yield* decodeResumeUsage(options3.resumeUsage);
+    const resumed = options3.resume === undefined ? undefined : {
+      batch: options3.resume,
+      usage: yield* decodeResumeUsage(options3.resumeUsage)
+    };
+    const resumeUsage = resumed?.usage ?? (options3.resumeUsage === undefined ? undefined : yield* decodeResumeUsage(options3.resumeUsage));
+    if (resumed !== undefined && (resumed.usage.committedTurns !== resumed.batch.turn || resumed.usage.toolCalls < resumed.batch.calls.length || resumed.usage.consecutiveToolFailures > resumed.usage.toolCalls - resumed.batch.calls.length)) {
+      return yield* ModelProtocolError.make({
+        message: "Run resume accounting conflicts with the pending Turn and declared Tool Calls"
+      });
+    }
     const attemptStartedAtMillis = yield* exports_Clock.currentTimeMillis;
     const maxDurationMillis = exports_Duration.toMillis(agent2.definition.policy.maxDuration);
     const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
@@ -39598,8 +39609,8 @@ var stream3 = (agent2, input, options3 = {}) => {
         context3.compaction.protectedEnd = prompt.content.length;
       }
       yield* advanceHistory(context3, prompt, options3);
-      if (options3.resume !== undefined) {
-        return makeResumeTurn(agent2, context3, prompt, options3.resume, resumeUsage?.toolCalls ?? options3.resume.calls.length, options3);
+      if (resumed !== undefined) {
+        return makeResumeTurn(agent2, context3, prompt, resumed.batch, resumed.usage.toolCalls, options3);
       }
       const steering = yield* drainInputs(context3, options3);
       const initialPrompt = yield* appendInputs(context3, prompt, steering, options3);

@@ -67,6 +67,20 @@ const usage = {
   outputTokens: {},
 };
 
+const oneCallResumeUsage = {
+  committedTurns: 1,
+  toolCalls: 1,
+  programmaticToolCalls: 0,
+  consecutiveToolFailures: 0,
+  finalizationUsed: false,
+  modelCalls: 1,
+  inputTokens: 0,
+  outputTokens: 0,
+  lastInputTokens: 0,
+  lastOutputTokens: 0,
+  costMicrousd: 0,
+};
+
 const identifiers = Layer.succeed(IdGenerator, {
   nextConversationId: Effect.succeed(Schema.decodeSync(ConversationId)("conversation-1")),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-1")),
@@ -199,7 +213,12 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
             '"done"',
           );
           yield* AgentRuntime.run(Agent.withModel(definition, model), "q", {
-            ...(resumed ? { resume: { turn: 1, turnId: resumeTurnId, calls, settled: [] } } : {}),
+            ...(resumed
+              ? {
+                  resume: { turn: 1, turnId: resumeTurnId, calls, settled: [] },
+                  resumeUsage: { ...oneCallResumeUsage, toolCalls: 2 },
+                }
+              : {}),
             durability: {
               commitResponse: () => Effect.void,
               prepareToolCalls: (descriptors) =>
@@ -777,7 +796,11 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
         const result = yield* AgentRuntime.stream(
           Agent.withModel(definition, model),
           { question: "resume" },
-          { resume, durability: markingDurability(marks) },
+          {
+            resume,
+            resumeUsage: { ...oneCallResumeUsage, toolCalls: 2 },
+            durability: markingDurability(marks),
+          },
         ).pipe(
           Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
           Stream.runCollect,
@@ -888,7 +911,11 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
         const exit = yield* AgentRuntime.run(
           Agent.withModel(definition, model),
           { question: "resume" },
-          { resume, durability: markingDurability(marks) },
+          {
+            resume,
+            resumeUsage: { ...oneCallResumeUsage, toolCalls: 2 },
+            durability: markingDurability(marks),
+          },
         ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
         const failure = failureFrom(exit);
         expect(failure).toBeInstanceOf(ModelProtocolError);
@@ -920,7 +947,11 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       const accessorExit = yield* AgentRuntime.run(
         Agent.withModel(definition, model),
         { question: "resume" },
-        { resume: accessorResume, durability: markingDurability(marks) },
+        {
+          resume: accessorResume,
+          resumeUsage: { ...oneCallResumeUsage, toolCalls: 2 },
+          durability: markingDurability(marks),
+        },
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
       const accessorFailure = failureFrom(accessorExit);
       expect(accessorFailure).toBeInstanceOf(ModelProtocolError);
@@ -945,7 +976,11 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       const collectionAccessorExit = yield* AgentRuntime.run(
         Agent.withModel(definition, model),
         { question: "resume" },
-        { resume: collectionAccessorResume, durability: markingDurability(marks) },
+        {
+          resume: collectionAccessorResume,
+          resumeUsage: { ...oneCallResumeUsage, toolCalls: 2 },
+          durability: markingDurability(marks),
+        },
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
       const collectionAccessorFailure = failureFrom(collectionAccessorExit);
       expect(collectionAccessorFailure).toBeInstanceOf(ModelProtocolError);
@@ -1029,7 +1064,11 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
         const exit = yield* AgentRuntime.stream(
           Agent.withModel(definition, model),
           { question: "resume" },
-          { durationDeadline, resume },
+          {
+            durationDeadline,
+            resume,
+            resumeUsage: { ...oneCallResumeUsage, toolCalls: resume.calls.length },
+          },
         ).pipe(
           Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
           Stream.runDrain,
@@ -1107,7 +1146,7 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       const fiber = yield* AgentRuntime.stream(
         Agent.withModel(definition, model),
         { question: "resume" },
-        { durationDeadline, resume },
+        { durationDeadline, resume, resumeUsage: oneCallResumeUsage },
       ).pipe(
         Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
         Stream.runDrain,
@@ -1178,7 +1217,7 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       const exit = yield* AgentRuntime.run(
         Agent.withModel(definition, model),
         { question: "resume" },
-        { resume, durability: markingDurability(marks) },
+        { resume, resumeUsage: oneCallResumeUsage, durability: markingDurability(marks) },
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
       const failure = failureFrom(exit);
 

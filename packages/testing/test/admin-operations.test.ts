@@ -799,6 +799,60 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
     }),
   );
 
+  it.effect("rejects a receipt mixing an authorized Conversation with another Submission", () =>
+    Effect.gen(function* () {
+      yield* resetAuthorizer;
+      const allowed = yield* makeSettledLane("conversation-receipt-allowed", "allowed");
+      const forbidden = yield* makeSettledLane("conversation-receipt-forbidden", "forbidden");
+      const ledger = yield* SubmissionLedger;
+      const accesses: Array<string> = [];
+      const note = (name: string) =>
+        Effect.sync(() => {
+          accesses.push(name);
+        });
+      const guardedLedger = SubmissionLedger.of({
+        ...ledger,
+        lookup: (request) => note("lookup").pipe(Effect.andThen(ledger.lookup(request))),
+        finalizeSettlement: (request) =>
+          note("finalize").pipe(Effect.andThen(ledger.finalizeSettlement(request))),
+        loadRecoverySnapshot: (request) =>
+          note("recovery").pipe(Effect.andThen(ledger.loadRecoverySnapshot(request))),
+      });
+      const authorizer: OperationAuthorizerService = {
+        authorize: (request) =>
+          request.conversationId === allowed.conversationId
+            ? Effect.void
+            : Effect.fail(
+                OperationDenied.make({
+                  operation: request.operation,
+                  reason: "Conversation denied",
+                }),
+              ),
+      };
+      yield* Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        expect(failureTag(yield* Effect.exit(runtime.awaitSettlement(forbidden)))).toBe(
+          "OperationDenied",
+        );
+        expect(accesses).toEqual([]);
+
+        const mixed = { ...forbidden, conversationId: allowed.conversationId };
+        expect(failureTag(yield* Effect.exit(runtime.awaitSettlement(mixed)))).toBe(
+          "OperationDenied",
+        );
+        expect(accesses).toEqual(["lookup"]);
+
+        const settlement = yield* runtime.awaitSettlement(allowed);
+        expect(settlement.submissionId).toBe(allowed.submissionId);
+        expect(settlement.outcome).toBe("completed");
+      }).pipe(
+        Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+        Effect.provideService(SubmissionLedger, guardedLedger),
+        Effect.provideService(OperationAuthorizer, authorizer),
+      );
+    }),
+  );
+
   it.effect("a non-default authorizer denies every consulted surface fail-closed", () =>
     Effect.gen(function* () {
       yield* resetAuthorizer;

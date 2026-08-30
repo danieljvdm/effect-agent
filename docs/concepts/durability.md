@@ -116,6 +116,10 @@ finalization reserve their allowance canonically before execution. A crash after
 can consume allowance without execution; it cannot restore allowance. Token, cost, and duration
 accounting retain their existing contracts. `RunStarted.policyAccountingVersion` identifies this
 accounting contract; incompatible private-development histories must be reset, not migrated.
+Custom coordinators must supply `resumeUsage` when resuming a declared batch. The seed includes
+the pending Turn and its declared calls, while its failure streak excludes that batch. Missing
+seeds, a different Turn count, too few declared calls, or a failure streak exceeding the prior
+declared calls fail with `ModelProtocolError` before execution.
 
 A durable child owns a distinct Conversation and Attempt. Under the parent's fence, reserve its
 budget, append `SubagentRequested` with the intended identity and exact binding/input digests,

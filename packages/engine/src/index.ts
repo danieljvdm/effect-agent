@@ -5293,10 +5293,29 @@ const stream = <
 > => {
   const interpreted = Stream.unwrap(
     Effect.gen(function* () {
-      const resumeUsage =
-        options.resumeUsage === undefined
+      const resumed =
+        options.resume === undefined
           ? undefined
-          : yield* decodeResumeUsage(options.resumeUsage);
+          : {
+              batch: options.resume,
+              usage: yield* decodeResumeUsage(options.resumeUsage),
+            };
+      const resumeUsage =
+        resumed?.usage ??
+        (options.resumeUsage === undefined
+          ? undefined
+          : yield* decodeResumeUsage(options.resumeUsage));
+      if (
+        resumed !== undefined &&
+        (resumed.usage.committedTurns !== resumed.batch.turn ||
+          resumed.usage.toolCalls < resumed.batch.calls.length ||
+          resumed.usage.consecutiveToolFailures >
+            resumed.usage.toolCalls - resumed.batch.calls.length)
+      ) {
+        return yield* ModelProtocolError.make({
+          message: "Run resume accounting conflicts with the pending Turn and declared Tool Calls",
+        });
+      }
       const attemptStartedAtMillis = yield* Clock.currentTimeMillis;
       const maxDurationMillis = Duration.toMillis(agent.definition.policy.maxDuration);
       const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
@@ -5452,7 +5471,7 @@ const stream = <
             context.compaction.protectedEnd = prompt.content.length;
           }
           yield* advanceHistory(context, prompt, options);
-          if (options.resume !== undefined) {
+          if (resumed !== undefined) {
             // A declared-batch resume re-enters mid-Turn: steering seams
             // reopen only after the resumed batch settles, so the initial
             // drain is skipped and the continuation drains at the safe seam.
@@ -5460,8 +5479,8 @@ const stream = <
               agent,
               context,
               prompt,
-              options.resume,
-              resumeUsage?.toolCalls ?? options.resume.calls.length,
+              resumed.batch,
+              resumed.usage.toolCalls,
               options,
             );
           }

@@ -643,7 +643,12 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
       yield* AgentRuntime.run(
         Agent.withModel(definition, model),
         { question: "status" },
-        { runStartedAt, durationDeadline, resume },
+        {
+          runStartedAt,
+          durationDeadline,
+          resume,
+          resumeUsage: { ...emptyResumeUsage, committedTurns: 1, toolCalls: 1, modelCalls: 1 },
+        },
       ).pipe(Effect.provide(toolLayer));
 
       const request = requests[0];
@@ -1286,6 +1291,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             ],
             settled: [],
           },
+          resumeUsage: { ...emptyResumeUsage, committedTurns: 2, toolCalls: 1, modelCalls: 2 },
         },
       ).pipe(Effect.provide(toolLayer), Effect.exit);
       const beyondFailure = failureFrom(beyondExit);
@@ -1469,6 +1475,8 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             resume,
             resumeUsage: {
               ...emptyPolicyUsage,
+              committedTurns: 1,
+              toolCalls: 1,
               modelCalls: 1,
               inputTokens: 90,
               outputTokens: 20,
@@ -2089,6 +2097,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
               resumeUsage: {
                 ...emptyResumeUsage,
                 committedTurns: limit === "turns" ? 3 : 1,
+                modelCalls: limit === "turns" ? 3 : 1,
                 toolCalls: 2,
                 programmaticToolCalls: limit === "tool-calls" ? 2 : 0,
               },
@@ -2150,6 +2159,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             resumeUsage: {
               ...emptyResumeUsage,
               committedTurns: 2,
+              modelCalls: 2,
               toolCalls: 2,
               programmaticToolCalls: 2,
               consecutiveToolFailures: 1,
@@ -2225,7 +2235,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
               reserved = usage.finalizationUsed;
             }).pipe(Effect.andThen(Effect.interrupt)),
         };
-        const seed = { ...emptyResumeUsage, committedTurns: 1 };
+        const seed = { ...emptyResumeUsage, committedTurns: 1, modelCalls: 1 };
         const interrupted = yield* AgentRuntime.run(Agent.withModel(definition, model), "q", {
           resumeUsage: seed,
           durability,
@@ -2241,6 +2251,76 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         });
         expect(requests).toHaveLength(0);
       }),
+  );
+
+  it.effect("rejects missing or contradictory pending-batch accounting before execution", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("invalid-pending-accounting", {
+        input: Schema.String,
+        output: answerOutput,
+        instructions: "Answer.",
+        toolkit: emitToolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 4,
+          maxToolCalls: 4,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const { model, requests } = scriptedModel([finalParts('{"answer":"must not run"}')]);
+      const seed = {
+        ...emptyResumeUsage,
+        modelCalls: 2,
+        committedTurns: 2,
+        toolCalls: 3,
+        consecutiveToolFailures: 1,
+      };
+      let inputStarts = 0;
+      let handlerStarts = 0;
+      for (const resumeUsage of [
+        undefined,
+        { ...seed, modelCalls: 1 },
+        { ...seed, committedTurns: 1 },
+        { ...seed, committedTurns: 3 },
+        { ...seed, toolCalls: 1 },
+        { ...seed, consecutiveToolFailures: 2 },
+      ]) {
+        const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), "q", {
+          resumeUsage,
+          resume: {
+            turn: 2,
+            turnId: Schema.decodeSync(TurnId)("invalid-pending-turn"),
+            calls: [
+              { id: "pending-a", name: "emit", params: {} },
+              { id: "pending-b", name: "emit", params: {} },
+            ],
+            settled: [],
+          },
+          input: {
+            start: () =>
+              Effect.sync(() => {
+                inputStarts += 1;
+              }),
+            drain: () => Effect.succeed([]),
+          },
+        }).pipe(
+          Effect.provide(
+            emitToolkit.toLayer({
+              emit: () =>
+                Effect.sync(() => {
+                  handlerStarts += 1;
+                  return { data: "unexpected" };
+                }),
+            }),
+          ),
+          Effect.exit,
+        );
+        expect(failureFrom(exit)).toBeInstanceOf(ModelProtocolError);
+      }
+      expect(inputStarts).toBe(0);
+      expect(handlerStarts).toBe(0);
+      expect(requests).toEqual([]);
+    }),
   );
 
   it.effect("RUN-023: invalid restored usage fails before Run input or model execution", () =>
@@ -2264,6 +2344,8 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         { ...emptyResumeUsage, toolCalls: Number.MAX_SAFE_INTEGER + 1 },
         { ...emptyResumeUsage, programmaticToolCalls: -1 },
         { ...emptyResumeUsage, consecutiveToolFailures: 0.5 },
+        { ...emptyResumeUsage, consecutiveToolFailures: 1 },
+        { ...emptyResumeUsage, committedTurns: 1 },
         {
           ...emptyPolicyUsage,
           modelCalls: 1,

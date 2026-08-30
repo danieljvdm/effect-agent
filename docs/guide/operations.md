@@ -82,6 +82,8 @@ after that parent abort is durably accepted. It does not choose the parent's out
 ## Observe a Submission outcome
 
 `awaitSettlement` authorizes the Receipt's Conversation and Submission before its first lookup.
+The stored Submission must belong to that Conversation. A mixed Receipt fails with
+`OperationDenied` before settlement finalization, recovery reads, or polling.
 Authorization lasts for that wait, just as one `observe` subscription authorizes once at
 subscription time. Hosts enforcing revocation during a long wait must interrupt it and start a
 new authorized wait. Neither operation accepts an authenticated caller identity from the wire;

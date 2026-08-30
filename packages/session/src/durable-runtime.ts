@@ -166,7 +166,7 @@ import {
 import {
   OperationAuthorizationRequest,
   OperationAuthorizer,
-  type OperationDenied,
+  OperationDenied,
 } from "./operation-authorizer.ts";
 import { PreparedToolCallEvidence, ToolReconciler } from "./reconciler.ts";
 import {
@@ -6903,6 +6903,14 @@ const make = Effect.gen(function* () {
         return yield* LedgerError.make({
           operation: "awaitSettlement",
           message: `Unknown Submission ${receipt.submissionId}`,
+        });
+      }
+      if (snapshot.value.conversationId !== receipt.conversationId) {
+        return yield* OperationDenied.make({
+          operation: "awaitSettlement",
+          reason: "Receipt Submission does not belong to the authorized Conversation",
+          conversationId: receipt.conversationId,
+          submissionId: receipt.submissionId,
         });
       }
       if (snapshot.value.state === "settled") {

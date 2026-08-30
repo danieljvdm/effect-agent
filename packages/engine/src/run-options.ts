@@ -599,7 +599,8 @@ export type RunTurnResumeSettledCall = typeof RunTurnResumeSettledCallSchema.Typ
  * Programmatic reservations include pending work and are never refunded.
  *
  * Counts and microdollars are non-negative safe integers. The most recent
- * call cannot exceed its cumulative total.
+ * call cannot exceed its cumulative total. Every committed Turn has a model
+ * call, and a failure streak cannot exceed the declared Tool call count.
  */
 export const RunResumeUsageSchema = Schema.Struct({
   ...RunPolicyUsage.fields,
@@ -615,6 +616,14 @@ export const RunResumeUsageSchema = Schema.Struct({
       usage.lastInputTokens <= usage.inputTokens && usage.lastOutputTokens <= usage.outputTokens,
     {
       expected: "last-call token usage no greater than cumulative token usage",
+    },
+  ),
+  Schema.makeFilter(
+    (usage) =>
+      usage.modelCalls >= usage.committedTurns && usage.consecutiveToolFailures <= usage.toolCalls,
+    {
+      expected:
+        "model calls covering committed Turns and a failure streak within declared Tool calls",
     },
   ),
 );
@@ -756,6 +765,8 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   /**
    * Resume a declared, canonically committed Tool batch without re-invoking
    * the model (durable batch-resume seam). Consumed by the Run's first Turn.
+   * Requires `resumeUsage`; missing or contradictory accounting fails with
+   * `ModelProtocolError` before input, model, or Tool execution.
    */
   readonly resume?: RunTurnResume | undefined;
   /**
@@ -764,6 +775,9 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * `committedTurns + 1`; a pending batch uses the already-counted declarations
    * and folds its terminal outcomes onto the prior failure streak once.
    * Omit only for fresh Runs. Incomplete or invalid seeds fail typed before execution.
+   * For a pending batch, `committedTurns` must equal `resume.turn`, `toolCalls`
+   * must include every pending declaration, and the failure streak cannot
+   * exceed the declared calls before that batch.
    */
   readonly resumeUsage?: RunResumeUsage | undefined;
   /**
