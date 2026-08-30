@@ -31,6 +31,7 @@ import {
   CurrentToolFailureObserver,
   getToolExecutionClass,
   RunContextPreparation,
+  RunToolAuthorization,
   ContextCompactor,
   CompactionError,
   RunContextPreparationPassthrough,
@@ -927,10 +928,9 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const reconciler = yield* ToolReconciler;
   const approvalResolver = yield* DurableApprovalResolver;
-  // Generic host Run context is an explicit Layer requirement. Compatible assemblies provide
-  // `RunContextPreparationPassthrough`; custom assemblies may install prompt preparation,
-  // action-time Tool authorization, or both.
+  // Capture independent host choices at acquisition so worker callers cannot replace them.
   const runContextPreparation = yield* RunContextPreparation;
+  const runToolAuthorization = yield* RunToolAuthorization;
   const compactor =
     runContextPreparation.compactor ??
     (yield* Effect.serviceOption(ContextCompactor).pipe(
@@ -4922,19 +4922,15 @@ const make = Effect.gen(function* () {
         join: joinSubagent,
       };
 
-      const externalToolAuthorization = runContextPreparation.toolAuthorization;
-      const toolAuthorization =
-        externalToolAuthorization === undefined
-          ? undefined
-          : ({
-              authorize: (request: RunToolAuthorizationRequest) =>
-                externalToolAuthorization.authorize({
-                  ...request,
-                  // Preserve the admitted wire value even when an Agent Schema's decode/encode
-                  // pair normalizes differently on a second pass.
-                  input: submission.inputPayload,
-                }),
-            } satisfies RunToolAuthorizationHook<never, never>);
+      const toolAuthorization: RunToolAuthorizationHook = {
+        authorize: (request: RunToolAuthorizationRequest) =>
+          runToolAuthorization.authorize({
+            ...request,
+            // Preserve the admitted wire value even when an Agent Schema's decode/encode
+            // pair normalizes differently on a second pass.
+            input: submission.inputPayload,
+          }),
+      };
 
       const options: RunOptions<
         CoordinatorHalt | CompactionError | RunContextPreparationError,
@@ -4946,7 +4942,7 @@ const make = Effect.gen(function* () {
         onHistory,
         input,
         approval,
-        ...(toolAuthorization === undefined ? {} : { toolAuthorization }),
+        toolAuthorization,
         durability,
         subagent,
         runStartedAt: runTiming.startedAt,
@@ -7834,7 +7830,7 @@ export class DurableAgentRuntime extends Context.Service<
     readonly runRecovery: Effect.Effect<ReadonlyArray<RecoveryReport>, DurableWorkerFailure>;
   }
 >()("@effect-agent/session/DurableAgentRuntime") {
-  /** Generic assembly whose host Run-context dependency remains visible in `R`. */
+  /** Generic assembly whose independent context and Tool authority requirements remain in `R`. */
   static readonly layerWithContext: Layer.Layer<
     DurableAgentRuntime,
     never,
@@ -7845,10 +7841,11 @@ export class DurableAgentRuntime extends Context.Service<
     | DurableRuntimeConfig
     | ToolReconciler
     | RunContextPreparation
+    | RunToolAuthorization
     | Crypto.Crypto
   > = Layer.effect(DurableAgentRuntime)(make);
 
-  /** Compatible default assembly with no host context hook or Tool authorizer. */
+  /** Compatible defaults: no host prompt transformation and allow-all Tool authorization. */
   static readonly layer: Layer.Layer<
     DurableAgentRuntime,
     never,
@@ -7859,5 +7856,7 @@ export class DurableAgentRuntime extends Context.Service<
     | DurableRuntimeConfig
     | ToolReconciler
     | Crypto.Crypto
-  > = DurableAgentRuntime.layerWithContext.pipe(Layer.provide(RunContextPreparationPassthrough));
+  > = DurableAgentRuntime.layerWithContext.pipe(
+    Layer.provide([RunContextPreparationPassthrough, RunToolAuthorization.allowAll]),
+  );
 }

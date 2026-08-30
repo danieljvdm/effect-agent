@@ -29,17 +29,13 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-import {
-  type Prompt,
-  LanguageModel,
-  Model,
-  type Response,
-  Tool,
-  Toolkit,
-} from "effect/unstable/ai";
+import { Prompt, LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 import {
   AgentRuntime,
+  RunContextPreparation,
+  RunContextPreparationError,
+  RunToolAuthorization,
   DurableStep,
   DurableStepError,
   ToolExecutionClass,
@@ -171,6 +167,111 @@ const policy = (overrides?: Partial<Parameters<typeof AgentPolicy.make>[0]>) =>
   });
 
 layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
+  for (const outcome of ["allowed", "denied", "preparation-failed"] as const) {
+    it.effect(`composes independent host services through ephemeral hooks: ${outcome}`, () => {
+      const seen: Array<string> = [];
+      const tools = Toolkit.make(
+        Tool.make("book", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        }),
+      );
+      const model = scriptedModel(
+        [
+          { type: "tool-call", id: "book-1", name: "book", params: {}, providerExecuted: false },
+          { type: "finish", reason: "tool-calls", usage },
+        ],
+        '"done"',
+      );
+      const agent = Agent.withModel(
+        Agent.define("independent-services", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Book it.",
+          toolkit: tools,
+          policy: policy(),
+        }),
+        model,
+      );
+      const program = Effect.gen(function* () {
+        const preparation = yield* RunContextPreparation;
+        const authorization = yield* RunToolAuthorization;
+        return yield* AgentRuntime.run(agent, "book", {
+          context: preparation.hook,
+          toolAuthorization: authorization,
+        });
+      });
+      const preparationRequired: RunContextPreparation extends Effect.Services<typeof program>
+        ? true
+        : false = true;
+      const authorizationRequired: RunToolAuthorization extends Effect.Services<typeof program>
+        ? true
+        : false = true;
+      const preparationError: RunContextPreparationError extends Effect.Error<typeof program>
+        ? true
+        : false = true;
+      return Effect.gen(function* () {
+        const result = yield* program.pipe(Effect.exit);
+        if (outcome === "allowed") {
+          expect(Exit.isSuccess(result)).toBe(true);
+          expect(seen).toEqual(["prepare", "authorize", "handler", "prepare"]);
+        } else {
+          expect(Exit.isFailure(result)).toBe(true);
+          if (Exit.isFailure(result)) {
+            expect(Cause.findErrorOption(result.cause)).toMatchObject({
+              _tag: "Some",
+              value: {
+                _tag:
+                  outcome === "denied"
+                    ? "AgentToolAuthorizationDenied"
+                    : "RunContextPreparationError",
+              },
+            });
+          }
+          expect(seen).toEqual(outcome === "denied" ? ["prepare", "authorize"] : ["prepare"]);
+        }
+        expect(preparationRequired && authorizationRequired && preparationError).toBe(true);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.succeed(RunContextPreparation, {
+              hook: {
+                prepare: ({ source }) =>
+                  Effect.gen(function* () {
+                    seen.push("prepare");
+                    if (outcome === "preparation-failed") {
+                      return yield* RunContextPreparationError.make({
+                        preparerId: "host",
+                        message: "unavailable",
+                      });
+                    }
+                    return { prompt: Prompt.fromMessages(source.content) };
+                  }),
+              },
+            }),
+            Layer.succeed(RunToolAuthorization, {
+              authorize: () =>
+                Effect.sync(() => {
+                  seen.push("authorize");
+                  return outcome === "denied"
+                    ? { _tag: "denied" as const, reason: "revoked" }
+                    : { _tag: "allowed" as const };
+                }),
+            }),
+            tools.toLayer({
+              book: () =>
+                Effect.sync(() => {
+                  seen.push("handler");
+                  return "booked";
+                }),
+            }),
+          ),
+        ),
+        Effect.scoped,
+      );
+    });
+  }
+
   it.effect(
     "classifies fresh and resumed calls from definition annotations, never name prefixes",
     () =>

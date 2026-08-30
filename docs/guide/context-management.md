@@ -222,6 +222,44 @@ characters. Larger summaries fail instead of being truncated; accepted summaries
 text in the live view and recovery. These decision failures settle the Run as failed, while storage
 failures retain the coordinator's retry behavior. Canonical history remains append-only.
 
+### Composing preparation and Tool authorization
+
+`RunContextPreparation` owns prompt transformation and compactor selection.
+`RunToolAuthorization` owns action-time authorization for model-declared application Tools.
+Their Layers provide distinct service tags, so installing or replacing a compactor cannot discard
+the authorization policy.
+
+Custom durable assemblies use `DurableAgentRuntime.layerWithContext` and provide both services:
+
+```ts
+const runtime = DurableAgentRuntime.layerWithContext.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      contextCompactorRunContextLayer.pipe(Layer.provide(compactorLayer)),
+      toolAuthorizationLayer,
+    ),
+  ),
+  Layer.provide(infrastructureLayer),
+);
+```
+
+The coordinator captures both implementations when its Layer is acquired. Worker callers cannot
+replace either choice on a later Attempt. Authorization receives the canonical admitted input and
+the exact executable Tool Call, including on recovery. A denial fails with
+`AgentToolAuthorizationDenied` before preparation of external effects or Handler execution.
+Prompt-hook failures remain `RunContextPreparationError`; compactor failures remain `CompactionError`.
+
+`DurableAgentRuntime.layer` explicitly provides `RunContextPreparationPassthrough` and
+`RunToolAuthorization.allowAll`, preserving the default behavior. Supply either default explicitly
+when a custom assembly only replaces the other service. Node hosts accept the independent Layers
+through `NodeDurableRuntime.layer({ ...options, runContext, toolAuthorization })`. Both Layers may
+require platform Crypto; hosts must close their application dependencies before passing them in.
+Their resources belong to the runtime Scope.
+
+BEHAVIOR CHANGE: move `RunContextPreparation.toolAuthorization` implementations into a separate
+`Layer.succeed(RunToolAuthorization, { authorize })`. Custom `layerWithContext` assemblies must now
+provide this service as well as context preparation.
+
 ### Supplying a Cloudflare compactor
 
 Cloudflare Conversation Objects can install a host compactor without putting it in global state.
@@ -238,12 +276,15 @@ export class Conversations extends makeConversationObjectClass({
     contextCompactorRunContextLayer.pipe(
       Layer.provide(makeContextCompactorLayer(env)),
     ),
+  toolAuthorization: ({ env }) => makeToolAuthorizationLayer(env),
 });
 ```
 
 Everything specific to your compactor must already be provided. The adapter itself no longer
 requires `Crypto.Crypto`. The Layer is acquired once per Durable Object incarnation and rebuilt
-after eviction. It installs the same compaction service used by ephemeral Runs, invoked under
+after eviction. The independent `toolAuthorization` Layer or factory follows the same lifecycle;
+omitting it explicitly selects `RunToolAuthorization.allowAll`. The compactor adapter installs the
+same compaction service used by ephemeral Runs, invoked under
 context pressure after canonical prompt reconstruction. Usage, events, and `CompactionCreated`
 commits follow the native path. Expected strategy failures settle as `CompactionError`; defects
 remain defects for the host to supervise.

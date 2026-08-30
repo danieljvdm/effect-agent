@@ -7,6 +7,7 @@ import type {
 import {
   CurrentToolFailureObserver,
   RunContextPreparationPassthrough,
+  RunToolAuthorization,
   toolFailureObserverLayer,
 } from "@effect-agent/engine";
 import {
@@ -134,13 +135,16 @@ export interface CloudflareDurableRuntimeOptions {
    */
   readonly bindings?: CloudflareBindingSource | undefined;
   /**
-   * Generic Run context acquired with this Durable Object incarnation. It may prepare model
-   * context and/or authorize exact model-declared application Tool Calls at action time. The
-   * Layer may depend
+   * Prompt preparation/compaction acquired with this Durable Object incarnation. The Layer may depend
    * only on `Crypto.Crypto`, which this platform supplies with `BrowserCrypto`; hosts must close
-   * every application-specific service before passing it here. Default absent.
+   * every application-specific service before passing it here. Default pass-through.
    */
   readonly runContext?: CloudflareRunContextSource | undefined;
+  /**
+   * Independent action-time Tool authorization acquired once per incarnation, including after
+   * eviction. Close application dependencies before passing the Layer; default allow-all.
+   */
+  readonly toolAuthorization?: CloudflareToolAuthorizationSource | undefined;
 }
 
 /** Per-incarnation host values available to Effect-native runtime extension factories. */
@@ -159,13 +163,25 @@ export type CloudflareBindingSource = (
   context: CloudflareBindingSourceContext,
 ) => Effect.Effect<ReadonlyArray<ResolvedBinding>, never, never>;
 
-/** Prompt preparation, compaction, and Tool authority captured once; only platform Crypto may remain. */
+/** Prompt preparation and compaction captured once; only platform Crypto may remain. */
 export type CloudflareRunContextLayer = Layer.Layer<RunContextPreparation, never, Crypto.Crypto>;
 
 /** One Layer or a per-incarnation factory over explicit Cloudflare host values. */
 export type CloudflareRunContextSource =
   | CloudflareRunContextLayer
   | ((context: CloudflareRuntimeSourceContext) => CloudflareRunContextLayer);
+
+/** Action-time Tool policy captured separately from prompt preparation. */
+export type CloudflareToolAuthorizationLayer = Layer.Layer<
+  RunToolAuthorization,
+  never,
+  Crypto.Crypto
+>;
+
+/** One Layer or a per-incarnation factory over explicit Cloudflare host values. */
+export type CloudflareToolAuthorizationSource =
+  | CloudflareToolAuthorizationLayer
+  | ((context: CloudflareRuntimeSourceContext) => CloudflareToolAuthorizationLayer);
 
 /** Every construction failure of the assembled Cloudflare durable runtime stack. */
 export type CloudflareDurableRuntimeInitializationError =
@@ -408,6 +424,14 @@ export class CloudflareDurableRuntime {
             : resolveRunContext(options.runContext, { ctx, env, conversationId, producerId }).pipe(
                 Layer.provide(BrowserCrypto.layer),
               );
+        const toolAuthorizationSource = options.toolAuthorization;
+        const toolAuthorizationLayer =
+          toolAuthorizationSource === undefined
+            ? RunToolAuthorization.allowAll
+            : (typeof toolAuthorizationSource === "function"
+                ? toolAuthorizationSource({ ctx, env, conversationId, producerId })
+                : toolAuthorizationSource
+              ).pipe(Layer.provide(BrowserCrypto.layer));
 
         const base = Layer.mergeAll(
           identityLayer,
@@ -429,6 +453,7 @@ export class CloudflareDurableRuntime {
               authorizerLayer,
               observerLayer,
               runContextLayer,
+              toolAuthorizationLayer,
               BrowserCrypto.layer,
             ),
           ),
