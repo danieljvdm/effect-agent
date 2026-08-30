@@ -22,9 +22,13 @@ The reviewer does not resolve previous findings or declare a partial review safe
 to merge. GitHub history, credentials, diff collection, and publication belong to
 the host channel.
 
-The engine owns a cumulative 416,000-token stop policy and reserves 160,000 tokens for a final
-context and completion response. The model sees its current turn, tool, and token usage. Token,
-turn, or tool exhaustion permits one constrained completion through `submit_review`; it returns
+The engine allows eight research turns and one constrained final turn, with 128 tool calls.
+Its cumulative token policy is 1,440,000 tokens: nine calls at a 128,000-token context plus the
+Action's 32,000-token output allowance. It reserves 160,000 tokens for final delivery. The model
+sees the usable research balance separately from that reserve and receives a warning before a
+context the size of its previous call would consume the remaining research balance. Each model
+call logs input, output, cumulative usage, and the remaining research balance, without source text.
+Token, turn, or tool exhaustion permits one constrained completion through `submit_review`; it returns
 validated findings and accounted usage with `ReviewOutcome.exhausted` naming the limit. Hosts must
 treat that outcome as incomplete, even when it contains no findings. Measured usage can exceed a
 policy threshold before the engine observes it; this is not a provider-side spending cap.

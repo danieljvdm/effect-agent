@@ -325,9 +325,12 @@ describe("review output boundary", () => {
       }),
   );
 
-  it.effect(
-    "reserves a completion turn and preserves findings and usage when research runs out",
-    () =>
+  it.effect.each([
+    { researchTurns: 7, exhausted: undefined },
+    { researchTurns: 8, exhausted: "turns" },
+  ] as const)(
+    "admits sustained research and preserves the final result after $researchTurns research turns",
+    ({ researchTurns, exhausted }) =>
       Effect.gen(function* () {
         const reads = yield* Ref.make(0);
         const calls = yield* Ref.make(0);
@@ -336,20 +339,20 @@ describe("review output boundary", () => {
             Ref.updateAndGet(calls, (count) => count + 1).pipe(
               Effect.map((call) => {
                 expect(JSON.stringify(prompt.content)).toContain("<run-status>");
-                if (call <= 2) {
+                if (call <= researchTurns) {
                   expect(toolChoice).toBe("required");
                   return Stream.fromIterable([
-                    {
-                      type: "tool-call",
-                      id: `read-${String(call)}`,
+                    ...Array.from({ length: 12 }, (_, index) => ({
+                      type: "tool-call" as const,
+                      id: `read-${String(call)}-${String(index)}`,
                       name: "read_file",
                       params: {
                         path: "src/index.ts",
                         revision: "head",
-                        startLine: 1,
+                        startLine: (call - 1) * 12 + index + 1,
                         lineCount: 1,
                       },
-                    },
+                    })),
                     {
                       type: "finish",
                       reason: "tool-calls",
@@ -365,8 +368,12 @@ describe("review output boundary", () => {
                     },
                   ]);
                 }
-                expect(call).toBe(3);
-                expect(toolChoice).toEqual({ mode: "required", oneOf: ["submit_review"] });
+                expect(call).toBe(researchTurns + 1);
+                expect(toolChoice).toEqual(
+                  exhausted === undefined
+                    ? "required"
+                    : { mode: "required", oneOf: ["submit_review"] },
+                );
                 return response(
                   { findings: [submittedFinding(blocker, 1)] },
                   {
@@ -405,21 +412,23 @@ describe("review output boundary", () => {
                 ),
             }),
           );
-        expect(yield* Ref.get(reads)).toBe(2);
-        expect(yield* Ref.get(calls)).toBe(3);
+        expect(yield* Ref.get(reads)).toBe(researchTurns * 12);
+        expect(yield* Ref.get(calls)).toBe(researchTurns + 1);
         expect(outcome).toMatchObject({
-          turns: 3,
-          exhausted: "tokens",
+          turns: researchTurns + 1,
           report: { findings: [blocker] },
           usage: {
-            inputTokens: 270_000,
-            uncachedInputTokens: 190_000,
+            inputTokens: (researchTurns + 1) * 90_000,
+            uncachedInputTokens: researchTurns * 90_000 + 10_000,
             cachedInputTokens: 80_000,
-            outputTokens: 41_000,
-            estimatedCostMicrousd: 369,
+            outputTokens: researchTurns * 20_000 + 1_000,
+            estimatedCostMicrousd: (researchTurns + 1) * 123,
           },
         });
-        expect(outcome.report.summary).toContain("remaining change has not been verified");
+        expect(outcome.exhausted).toBe(exhausted);
+        expect(outcome.report.summary.includes("remaining change has not been verified")).toBe(
+          exhausted !== undefined,
+        );
       }),
   );
 

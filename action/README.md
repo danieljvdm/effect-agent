@@ -19,6 +19,10 @@ head. A failed run publishes an honest failure marker and no
 findings. Blocking findings request changes and fail the Action after publication; other outcomes
 remain comments and cannot clear an older change request.
 
+Admission is bounded to 100 changed files, 256,000 aggregate patch characters, 80,000 patch
+characters per file, and 8 MB of hydrated base-plus-head source. Files beyond a bound remain
+explicitly unavailable; the Action cannot report complete coverage when a file was excluded.
+
 Automatic waves use the configured limit, defaulting to two; zero disables automatic reviews.
 Only trusted bot-authored terminal markers count. Failed attempts count but cannot become diff
 baselines. An owner, member, or collaborator can request `@effect-agent review` for incremental

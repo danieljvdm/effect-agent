@@ -44,10 +44,10 @@ import {
 } from "./presentation.ts";
 import { reviewModeFromCommand, selectReview, unresolvedChangeRequestCount } from "./selection.ts";
 
-const MAX_REVIEW_PATCH_CHARS = 120_000;
+const MAX_REVIEW_PATCH_CHARS = 256_000;
 const MAX_PATCH_CHARS = 80_000;
 const MAX_REVIEW_FILES = 100;
-const MAX_HYDRATED_SOURCE_BYTES = 4_000_000;
+const MAX_HYDRATED_SOURCE_BYTES = 8_000_000;
 
 interface Gpt56Pricing {
   readonly label: string;

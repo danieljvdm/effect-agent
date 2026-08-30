@@ -565,12 +565,12 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         const firstLast = first.prompt.content.at(-1);
         expect(firstLast?.role).toBe("user");
         expect(messageText(firstLast!)).toBe(
-          "<run-status>turn 1/10 · tool-calls 0/10 · tokens 0/1000 · last-context 0 · elapsed 0s/30s</run-status>",
+          "<run-status>turn 1/10 · tool-calls 0/10 · tokens 0/1000 · research-remaining 800 · completion-reserve 200 · last-context 0 · elapsed 0s/30s</run-status>",
         );
 
         const secondLast = second.prompt.content.at(-1);
         expect(messageText(secondLast!)).toBe(
-          "<run-status>turn 2/10 · tool-calls 1/10 · tokens 120/1000 · last-context 100 · elapsed 0s/30s</run-status>",
+          "<run-status>turn 2/10 · tool-calls 1/10 · tokens 120/1000 · research-remaining 680 · completion-reserve 200 · last-context 100 · elapsed 0s/30s</run-status>",
         );
         expect(occurrences(promptText(second.prompt), "<run-status>")).toBe(1);
 
@@ -716,7 +716,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         if (first === undefined || second === undefined) throw new Error("expected two requests");
         expect(promptText(first.prompt)).not.toContain("WARNING:");
         expect(messageText(second.prompt.content.at(-1)!)).toBe(
-          "<run-status>turn 2/10 · tool-calls 1/10 · tokens 8500/10000 · last-context 7000 · elapsed 0s/30s · WARNING: approaching limits — converge and deliver your final result now.</run-status>",
+          "<run-status>turn 2/10 · tool-calls 1/10 · tokens 8500/10000 · research-remaining 0 · completion-reserve 2000 · last-context 7000 · elapsed 0s/30s · WARNING: approaching limits — converge and deliver your final result now.</run-status>",
         );
       }),
   );
@@ -738,6 +738,26 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
       ).toBe(
         "<run-status>turn 3/16 · tool-calls 5/32 · tokens 1234/unbounded · last-context 456 · elapsed 78s/360s</run-status>",
       );
+    }),
+  );
+
+  it.effect("warns before the final reserve makes the next research call unaffordable", () =>
+    Effect.sync(() => {
+      const status = formatRunStatus({
+        turn: 4,
+        maxTurns: 8,
+        toolCallsUsed: 30,
+        maxToolCalls: 128,
+        tokensConsumed: 180_000,
+        tokenBudget: 416_000,
+        completionReserveTokens: 160_000,
+        lastInputTokens: 80_000,
+        elapsedSeconds: 80,
+        maxDurationSeconds: 300,
+      });
+      expect(status).toContain("tokens 180000/416000");
+      expect(status).toContain("research-remaining 76000 · completion-reserve 160000");
+      expect(status).toContain("WARNING:");
     }),
   );
 
@@ -1158,6 +1178,132 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         expect(requests).toHaveLength(1);
         expect(yield* Ref.get(handlerStarts)).toBe(0);
       }),
+  );
+
+  it.effect.each([2, 3])("resumes recorded completion only through the final Turn: %s", (turn) =>
+    Effect.gen(function* () {
+      const handlerStarts = yield* Ref.make(0);
+      const definition = Agent.define("resume-grace-completion", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
+        instructions: "Deliver with post_message.",
+        toolkit: postMessageToolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 1,
+          maxToolCalls: 5,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          onExhaustion: "final-answer",
+        }),
+        completion: {
+          tool: "post_message",
+          required: true,
+          project: ({ parameters, result }) => ({
+            message: parameters.message,
+            messageId: result.messageId,
+          }),
+        },
+      });
+      const { model, requests } = scriptedModel([finalParts("must not call model")]);
+      const turnId = yield* Schema.decodeEffect(TurnId)("recorded-completion");
+      const exit = yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "resume" },
+        {
+          resumeUsage: {
+            ...emptyResumeUsage,
+            committedTurns: turn,
+            modelCalls: turn,
+            toolCalls: 1,
+            finalizationUsed: true,
+          },
+          resume: {
+            turn,
+            turnId,
+            calls: [{ id: "delivery", name: "post_message", params: { message: "delivered" } }],
+            settled: [{ id: "delivery", result: { messageId: "message-1" }, isFailure: false }],
+          },
+        },
+      ).pipe(
+        Effect.provide(
+          postMessageToolkit.toLayer({
+            post_message: () =>
+              Ref.update(handlerStarts, (count) => count + 1).pipe(
+                Effect.as({ messageId: "must-not-repeat" }),
+              ),
+          }),
+        ),
+        Effect.exit,
+      );
+      expect(requests).toHaveLength(0);
+      expect(yield* Ref.get(handlerStarts)).toBe(0);
+      if (turn === 2) {
+        expect(Exit.isSuccess(exit)).toBe(true);
+        if (Exit.isSuccess(exit))
+          expect(exit.value).toMatchObject({
+            output: { message: "delivered", messageId: "message-1" },
+            finishReason: "budget-exhausted",
+            exhausted: "turns",
+          });
+      } else {
+        expect(failureFrom(exit)).toMatchObject({ _tag: "AgentPolicyError", limit: "turns" });
+      }
+    }),
+  );
+
+  it.effect("does not retry a failed completion after the single final Turn", () =>
+    Effect.gen(function* () {
+      const deliveryStarts = yield* Ref.make(0);
+      const Finish = Tool.make("finish", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+        failure: Schema.String,
+        failureMode: "return",
+      });
+      const toolkit = Toolkit.make(SearchTool, Finish);
+      const definition = Agent.define("failed-grace-completion", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Search then finish.",
+        toolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 1,
+          maxToolCalls: 5,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          repeatedFailureLimit: 0,
+          onExhaustion: "final-answer",
+        }),
+        completion: {
+          tool: "finish",
+          required: true,
+          project: ({ result }) => ({ answer: result }),
+        },
+      });
+      const { model, requests } = scriptedModel([
+        toolCallParts("research", "search", {}),
+        toolCallParts("delivery", "finish", {}),
+        toolCallParts("must-not-retry", "finish", {}),
+      ]);
+      const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+        question: "deliver",
+      }).pipe(
+        Effect.provide(
+          toolkit.toLayer({
+            search: () => Effect.succeed("found"),
+            finish: () =>
+              Ref.update(deliveryStarts, (count) => count + 1).pipe(
+                Effect.andThen(Effect.fail("delivery failed")),
+              ),
+          }),
+        ),
+        Effect.exit,
+      );
+      expect(failureFrom(exit)).toMatchObject({ _tag: "AgentPolicyError", limit: "turns" });
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.toolChoice).toEqual({ mode: "required", oneOf: ["finish"] });
+      expect(yield* Ref.get(deliveryStarts)).toBe(1);
+    }),
   );
 
   it.effect("RUN-032: fail mode constrains terminal delivery exactly at the Turn limit", () =>

@@ -86,6 +86,12 @@ constrained final answer, so it cannot loop or spend without a bound.
 
 ## Per-Run allowances
 
+With `runStatus: "appended"`, outgoing prompts show the total token usage, remaining research
+tokens, and completion reserve separately. The model receives a wrap-up warning at 80% of its
+usable research budget, or when the remaining research balance cannot fit a context as large as
+the previous model input. This warning can precede the total-budget `BudgetWarning` event because
+the reserve is unavailable for further research. Neither message changes the accounting limits.
+
 A caller can tighten the countable bounds per Run. It cannot widen them.
 
 ```ts

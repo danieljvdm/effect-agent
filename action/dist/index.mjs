@@ -37933,8 +37933,11 @@ var boundEncodedToolResult = (encodedResult, bounds) => {
 var RUN_STATUS_WARNING = " · WARNING: approaching limits — converge and deliver your final result now.";
 var nearingLimit = (consumed, limit) => consumed * 5 >= limit * 4;
 var formatRunStatus = (view) => {
-  const warn2 = nearingLimit(view.turn, view.maxTurns) || nearingLimit(view.toolCallsUsed, view.maxToolCalls) || view.tokenBudget !== undefined && nearingLimit(view.tokensConsumed, view.tokenBudget) || nearingLimit(view.elapsedSeconds, view.maxDurationSeconds);
-  return `<run-status>turn ${view.turn}/${view.maxTurns} · tool-calls ${view.toolCallsUsed}/${view.maxToolCalls} · tokens ${view.tokensConsumed}/${view.tokenBudget ?? "unbounded"} · last-context ${view.lastInputTokens} · elapsed ${view.elapsedSeconds}s/${view.maxDurationSeconds}s${warn2 ? RUN_STATUS_WARNING : ""}</run-status>`;
+  const researchBudget = view.tokenBudget === undefined ? undefined : Math.max(0, view.tokenBudget - (view.completionReserveTokens ?? 0));
+  const remainingResearch = researchBudget === undefined ? undefined : Math.max(0, researchBudget - view.tokensConsumed);
+  const warn2 = nearingLimit(view.turn, view.maxTurns) || nearingLimit(view.toolCallsUsed, view.maxToolCalls) || researchBudget !== undefined && (nearingLimit(view.tokensConsumed, researchBudget) || view.lastInputTokens > 0 && (remainingResearch ?? 0) <= view.lastInputTokens) || nearingLimit(view.elapsedSeconds, view.maxDurationSeconds);
+  const reserveStatus = view.tokenBudget === undefined ? "" : ` · research-remaining ${remainingResearch} · completion-reserve ${view.completionReserveTokens ?? 0}`;
+  return `<run-status>turn ${view.turn}/${view.maxTurns} · tool-calls ${view.toolCallsUsed}/${view.maxToolCalls} · tokens ${view.tokensConsumed}/${view.tokenBudget ?? "unbounded"}${reserveStatus} · last-context ${view.lastInputTokens} · elapsed ${view.elapsedSeconds}s/${view.maxDurationSeconds}s${warn2 ? RUN_STATUS_WARNING : ""}</run-status>`;
 };
 var outgoingModelPrompt = (policy2, context3, prepared, turn, declaredToolCalls) => exports_Effect.gen(function* () {
   if (policy2.runStatus !== "appended") {
@@ -37948,6 +37951,7 @@ var outgoingModelPrompt = (policy2, context3, prepared, turn, declaredToolCalls)
     maxToolCalls: policy2.maxToolCalls,
     tokensConsumed: context3.inputTokens + context3.outputTokens,
     tokenBudget: policy2.tokenBudget,
+    completionReserveTokens: policy2.completionReserveTokens,
     lastInputTokens: context3.lastInputTokens,
     elapsedSeconds: Math.max(0, Math.floor((now3 - context3.startedAtMillis) / 1000)),
     maxDurationSeconds: Math.floor(exports_Duration.toMillis(policy2.maxDuration) / 1000)
@@ -39186,7 +39190,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
           message: `Model declared Tool Calls with incompatible finish reason ${trace3.finishReason}`
         }));
       }
-      const turnsBlocked = turn > bounds.maxTurns || policy2.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch;
+      const turnsBlocked = turn > bounds.maxTurns && !(turn === bounds.maxTurns + 1 && finalAnswerOnly && completionBatch) || policy2.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch;
       if (turnsBlocked) {
         return failRunEventStream(AgentPolicyError.make({
           limit: "turns",
@@ -39438,7 +39442,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, countedToolCalls, option
       message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
     }));
   }
-  const turnsBlocked = turn > bounds.maxTurns && !(completionBatch && context3.finalizationUsed) || policy2.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch;
+  const turnsBlocked = turn > bounds.maxTurns && !(policy2.onExhaustion === "final-answer" && turn === bounds.maxTurns + 1 && context3.finalizationUsed && completionBatch) || policy2.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch;
   if (turnsBlocked) {
     return failRunEventStream(AgentPolicyError.make({
       limit: "turns",
@@ -43878,7 +43882,7 @@ For each finding, write the body first: state the supported trigger, broken term
 
 Treat unreviewedPaths and unavailable tool results as evidence limits. Never claim unavailable source was inspected. Omit style, praise, generic test requests, speculative hardening, compiler diagnostics, and failures reachable only from ill-typed callers. A stale typed test caller of a changed signature is a compiler diagnostic, not a production runtime finding, unless the same call reaches a supported production boundary. For ordinary completion, an empty findings array is valid only after checking all admitted changes. If budget exhaustion forces completion earlier, submit only established findings, even if none, without inventing defects to fill the response.
 
-You have at most 8 research turns and 64 tool calls. The run-status message shows your remaining budget. Prioritize the changed behaviors, read focused ranges of at most 200 lines, and reuse evidence already present. Finish by calling submit_review alone; ordinary assistant text cannot complete the review. When the host restricts you to submit_review, stop investigating and submit the concrete findings already established. The host will mark a budget-limited review incomplete.`;
+You have at most 8 research turns and 128 tool calls. The run-status message shows your remaining research budget and reserved completion capacity. Prioritize the changed behaviors, read focused ranges of at most 200 lines, and reuse evidence already present. Finish by calling submit_review alone; ordinary assistant text cannot complete the review. When the host restricts you to submit_review, stop investigating and submit the concrete findings already established. The host will mark a budget-limited review incomplete.`;
 var ReviewPriority = exports_Schema.Literals([0, 1, 2, 3]).annotate({
   description: "P0 urgent unconditional critical; P1 core failure, lost required work, or unsafe supported operation even when conditional; P2 lower-impact nonblocking; P3 minor."
 });
@@ -43988,12 +43992,12 @@ class ReviewVerificationError extends exports_Schema.TaggedError()("ReviewVerifi
 }
 var reviewPolicy = AgentPolicy.make({
   maxTurns: 8,
-  maxToolCalls: 64,
+  maxToolCalls: 128,
   maxDuration: "5 minutes",
   toolConcurrency: 4,
   repeatedFailureLimit: 0,
   contextTokenLimit: 128000,
-  tokenBudget: 416000,
+  tokenBudget: 9 * (128000 + 32000),
   completionReserveTokens: 160000,
   onExhaustion: "final-answer",
   runStatus: "appended"
@@ -44082,8 +44086,23 @@ var makeReviewer = (options3) => {
   }), options3.model);
   const review = exports_Effect.fn("Reviewer.review")(function* (request3) {
     const budget2 = yield* makeUsageBudget(UsageBudgetLimits.make({}));
+    const accounting = toRunBudgetHook(budget2);
     const runOptions = {
-      budget: toRunBudgetHook(budget2),
+      budget: {
+        ...accounting,
+        consume: exports_Effect.fn("Reviewer.consumeUsage")(function* (delta) {
+          yield* accounting.consume(delta);
+          if (delta.modelCalls === 0)
+            return;
+          const totals = yield* budget2.snapshot;
+          yield* exports_Effect.logInfo("Review model usage", {
+            inputTokens: delta.inputTokens,
+            outputTokens: delta.outputTokens,
+            cumulativeTokens: totals.inputTokens + totals.outputTokens,
+            researchTokensRemaining: Math.max(0, (reviewPolicy.tokenBudget ?? 0) - reviewPolicy.completionReserveTokens - totals.inputTokens - totals.outputTokens)
+          });
+        })
+      },
       ...options3.estimateCostMicrousd === undefined ? {} : { estimateCostMicrousd: options3.estimateCostMicrousd }
     };
     const result4 = yield* AgentRuntime.run(reviewer, formatRequest(request3), runOptions);
@@ -49256,10 +49275,10 @@ var withReviewMarker = (body, automatic, completed = true) => {
 var withReviewPauseMarker = (body, automaticReviewLimit) => withTerminalMarker(body, reviewPauseMarker(automaticReviewLimit));
 
 // packages/pr-review-action/src/action.ts
-var MAX_REVIEW_PATCH_CHARS = 120000;
+var MAX_REVIEW_PATCH_CHARS = 256000;
 var MAX_PATCH_CHARS = 80000;
 var MAX_REVIEW_FILES = 100;
-var MAX_HYDRATED_SOURCE_BYTES = 4000000;
+var MAX_HYDRATED_SOURCE_BYTES = 8000000;
 var GPT_56_SOL_PRICING = {
   label: "GPT-5.6 Sol",
   url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",

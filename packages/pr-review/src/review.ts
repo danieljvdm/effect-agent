@@ -6,6 +6,7 @@ import {
   IdGenerator,
   makeUsageBudget,
   type RunCostEstimator,
+  type RunUsageDelta,
   toRunBudgetHook,
   UsageBudgetLimits,
 } from "effect-agent";
@@ -120,7 +121,7 @@ For each finding, write the body first: state the supported trigger, broken term
 
 Treat unreviewedPaths and unavailable tool results as evidence limits. Never claim unavailable source was inspected. Omit style, praise, generic test requests, speculative hardening, compiler diagnostics, and failures reachable only from ill-typed callers. A stale typed test caller of a changed signature is a compiler diagnostic, not a production runtime finding, unless the same call reaches a supported production boundary. For ordinary completion, an empty findings array is valid only after checking all admitted changes. If budget exhaustion forces completion earlier, submit only established findings, even if none, without inventing defects to fill the response.
 
-You have at most 8 research turns and 64 tool calls. The run-status message shows your remaining budget. Prioritize the changed behaviors, read focused ranges of at most 200 lines, and reuse evidence already present. Finish by calling submit_review alone; ordinary assistant text cannot complete the review. When the host restricts you to submit_review, stop investigating and submit the concrete findings already established. The host will mark a budget-limited review incomplete.`;
+You have at most 8 research turns and 128 tool calls. The run-status message shows your remaining research budget and reserved completion capacity. Prioritize the changed behaviors, read focused ranges of at most 200 lines, and reuse evidence already present. Finish by calling submit_review alone; ordinary assistant text cannot complete the review. When the host restricts you to submit_review, stop investigating and submit the concrete findings already established. The host will mark a budget-limited review incomplete.`;
 
 const ReviewPriority = Schema.Literals([0, 1, 2, 3]).annotate({
   description:
@@ -246,12 +247,14 @@ export class ReviewVerificationError extends Schema.TaggedError<ReviewVerificati
 
 const reviewPolicy = AgentPolicy.make({
   maxTurns: 8,
-  maxToolCalls: 64,
+  maxToolCalls: 128,
   maxDuration: "5 minutes",
   toolConcurrency: 4,
   repeatedFailureLimit: 0,
   contextTokenLimit: 128_000,
-  tokenBudget: 416_000,
+  // Eight research requests and one constrained final request, each bounded by
+  // the context target plus the host's 32k maximum output allowance.
+  tokenBudget: 9 * (128_000 + 32_000),
   // Reserve a full 128k context and a 32k completion response.
   completionReserveTokens: 160_000,
   onExhaustion: "final-answer",
@@ -373,8 +376,28 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
     function* (request: ReviewRequest) {
       // The Stop Policy owns limits and finalization; this ledger only records usage and cost.
       const budget = yield* makeUsageBudget(UsageBudgetLimits.make({}));
+      const accounting = toRunBudgetHook(budget);
       const runOptions = {
-        budget: toRunBudgetHook(budget),
+        budget: {
+          ...accounting,
+          consume: Effect.fn("Reviewer.consumeUsage")(function* (delta: RunUsageDelta) {
+            yield* accounting.consume(delta);
+            if (delta.modelCalls === 0) return;
+            const totals = yield* budget.snapshot;
+            yield* Effect.logInfo("Review model usage", {
+              inputTokens: delta.inputTokens,
+              outputTokens: delta.outputTokens,
+              cumulativeTokens: totals.inputTokens + totals.outputTokens,
+              researchTokensRemaining: Math.max(
+                0,
+                (reviewPolicy.tokenBudget ?? 0) -
+                  reviewPolicy.completionReserveTokens -
+                  totals.inputTokens -
+                  totals.outputTokens,
+              ),
+            });
+          }),
+        },
         ...(options.estimateCostMicrousd === undefined
           ? {}
           : { estimateCostMicrousd: options.estimateCostMicrousd }),

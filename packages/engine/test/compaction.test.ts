@@ -367,7 +367,7 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
         ...basePolicy,
         tokenBudget: 12_000,
         completionReserveTokens: 1_000,
-        contextTokenLimit: 1_500,
+        contextTokenLimit: 2_000,
         compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
       });
       const { exit, requests, events } = yield* driveRun({
