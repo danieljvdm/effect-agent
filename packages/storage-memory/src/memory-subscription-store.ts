@@ -868,7 +868,7 @@ const makeMemorySubscriptionStore = Effect.fn("makeMemorySubscriptionStore")(fun
     yield* failpoint.hit("subscription:advance-scan-cursors:after");
   });
 
-  const nextDeadline = Effect.fn("MemorySubscriptionStore.nextDeadline")(function* () {
+  const nextDeadline = Effect.gen(function* () {
     let deadline: number | null = null;
     const current = yield* Ref.get(state);
     if (
@@ -888,7 +888,7 @@ const makeMemorySubscriptionStore = Effect.fn("makeMemorySubscriptionStore")(fun
     for (const record of current.registrationIndex.values())
       if (record.state === "active" && record.recoveryAt !== null) consider(record.recoveryAt);
     return deadline;
-  })();
+  }).pipe(Effect.withSpan("MemorySubscriptionStore.nextDeadline"));
 
   return SubscriptionStore.of({
     partition,

@@ -43,10 +43,7 @@ describe("Durable Object SubscriptionStore conformance", () => {
                 ),
               ),
             );
-          }).pipe(
-            Effect.provide(SqliteClient.layer({ storage })),
-            Effect.provide(TestClock.layer()),
-          ),
+          }).pipe(Effect.provide(Layer.merge(SqliteClient.layer({ storage }), TestClock.layer()))),
         ),
       ).resolves.toBeUndefined(),
     );
