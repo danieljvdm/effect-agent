@@ -1,4 +1,9 @@
-import type { ReviewFinding, ReviewReport, ReviewSeverity } from "@effect-agent/pr-review";
+import type {
+  ReviewFinding,
+  ReviewOutcome,
+  ReviewReport,
+  ReviewSeverity,
+} from "@effect-agent/pr-review";
 import { Context } from "effect";
 
 import { reviewMarker, reviewPauseMarker } from "./selection.ts";
@@ -42,10 +47,14 @@ const renderVerdict = (
   report: ReviewReport,
   complete: boolean,
   unresolvedChangeRequests: number,
+  exhausted: ReviewOutcome["exhausted"],
 ): string => {
   const counts = severityCounts(report);
   if (counts.blocking > 0) {
     return `> [!CAUTION]\n> **${countNoun(counts.blocking, "blocking finding")}.** Do not merge until ${counts.blocking === 1 ? "it is" : "they are"} addressed.`;
+  }
+  if (exhausted !== undefined) {
+    return `> [!CAUTION]\n> **Review stopped at the ${exhausted} budget.** Findings are preserved, but coverage is incomplete and this result does not clear the change.`;
   }
   if (!complete) {
     return "> [!CAUTION]\n> **Review coverage is incomplete.** Unavailable paths were not inspected, so this result does not clear the change.";
@@ -94,6 +103,7 @@ export interface ReviewPresentationInput {
   readonly ignoredFiles: number;
   readonly modelTurns: number;
   readonly complete: boolean;
+  readonly exhausted?: ReviewOutcome["exhausted"];
   readonly unresolvedChangeRequests: number;
   readonly inputTokens: number;
   readonly uncachedInputTokens: number;
@@ -112,7 +122,7 @@ export interface ReviewCostEstimate {
 
 const renderCoverage = (input: ReviewPresentationInput): string =>
   [
-    `${String(input.reviewedFiles)} reviewed`,
+    `${String(input.reviewedFiles)} ${input.exhausted === undefined ? "reviewed" : "supplied"}`,
     ...(input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} unavailable`] : []),
     ...(input.ignoredFiles > 0 ? [`${String(input.ignoredFiles)} ignored`] : []),
   ].join(" · ");
@@ -139,7 +149,7 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
   const unanchored = input.report.findings.filter((finding) => finding.line === undefined);
   const parts = [
     "## Effect Agent review",
-    renderVerdict(input.report, input.complete, input.unresolvedChangeRequests),
+    renderVerdict(input.report, input.complete, input.unresolvedChangeRequests, input.exhausted),
     [
       "| Scope | Files | New findings |",
       "| :-- | :-- | :-- |",

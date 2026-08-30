@@ -5,6 +5,7 @@ import {
   ReviewContextError,
   ReviewFileList,
   ReviewFinding,
+  type ReviewOutcome,
   ReviewReport,
   ReviewRepository,
   ReviewRequest,
@@ -184,11 +185,18 @@ export const reviewPublicationFailure = (input: {
   readonly blockingFindings: number;
   readonly unreviewedPaths: number;
   readonly unresolvedChangeRequests: number;
-}): BlockingFindings | IncompleteReview | UnresolvedChangeRequests | undefined => {
+  readonly exhausted?: ReviewOutcome["exhausted"];
+}):
+  | BlockingFindings
+  | IncompleteReview
+  | UnresolvedChangeRequests
+  | ReviewAttemptIncomplete
+  | undefined => {
   if (input.blockingFindings > 0) return BlockingFindings.make({ count: input.blockingFindings });
   if (input.unreviewedPaths > 0) {
     return IncompleteReview.make({ unreviewedPaths: input.unreviewedPaths });
   }
+  if (input.exhausted !== undefined) return ReviewAttemptIncomplete.make({});
   if (input.unresolvedChangeRequests > 0) {
     return UnresolvedChangeRequests.make({ count: input.unresolvedChangeRequests });
   }
@@ -701,6 +709,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       return {
         surface,
         modelTurns: 0,
+        exhausted: undefined,
         inputTokens: 0,
         uncachedInputTokens: 0,
         cachedInputTokens: 0,
@@ -753,6 +762,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     return {
       surface,
       modelTurns: result.turns,
+      exhausted: result.exhausted,
       inputTokens: result.usage.inputTokens,
       uncachedInputTokens: result.usage.uncachedInputTokens,
       cachedInputTokens: result.usage.cachedInputTokens,
@@ -821,8 +831,9 @@ export const reviewActionProgram = Effect.gen(function* () {
     outputTokens,
     estimatedCostMicrousd,
     report,
+    exhausted,
   } = attemptExit.value;
-  const complete = surface.unreviewedPaths.length === 0;
+  const complete = surface.unreviewedPaths.length === 0 && exhausted === undefined;
 
   const pricing = GPT_56_PRICING[modelName];
   const estimatedCost: ReviewCostEstimate | undefined =
@@ -845,6 +856,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       ignoredFiles: surface.ignoredPaths.length,
       modelTurns,
       complete,
+      exhausted,
       unresolvedChangeRequests,
       inputTokens,
       uncachedInputTokens,
@@ -897,6 +909,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     blockingFindings: blocking,
     unreviewedPaths: surface.unreviewedPaths.length,
     unresolvedChangeRequests,
+    exhausted,
   });
   if (publicationFailure !== undefined) return yield* publicationFailure;
 });

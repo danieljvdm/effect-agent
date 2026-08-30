@@ -13,9 +13,9 @@ Rebuild the committed bundle with `vp run action:build`.
 
 ## Review behavior
 
-One wave reviews up to four bounded diff shards, each with one tool-free model turn. The host
-validates paths and RIGHT-side anchors, merges the results, and publishes against the inspected
-head only after every shard settles. A failed wave publishes an honest failure marker and no
+One bounded review run receives the admitted diff and reads immutable base and head source as
+needed. The host validates paths and RIGHT-side anchors and publishes against the inspected
+head. A failed run publishes an honest failure marker and no
 findings. Blocking findings request changes and fail the Action after publication; other outcomes
 remain comments and cannot clear an older change request.
 
@@ -32,3 +32,9 @@ attempted. The queued review can proceed while allowance remains. Any original e
 remains in that attempt's log; budget failures include the exhausted limit and observed usage.
 Failure comments on an unchanged head also report budget exhaustion without exposing provider
 diagnostics or model output.
+
+The reviewer sees its remaining budget and reserves a final turn to submit findings. If token,
+turn, or tool limits stop research, the Action publishes those findings with an incomplete-coverage
+warning and fails the check, including when no defects were found. Such an attempt cannot become
+an incremental baseline or clear an earlier change request. This preserves useful findings without
+claiming the full change was reviewed.

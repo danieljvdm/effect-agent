@@ -402,6 +402,14 @@ describe("Incremental review scope", () => {
     expect(
       reviewPublicationFailure({
         blockingFindings: 0,
+        unreviewedPaths: 0,
+        unresolvedChangeRequests: 0,
+        exhausted: "tokens",
+      })?._tag,
+    ).toBe("ReviewAttemptIncomplete");
+    expect(
+      reviewPublicationFailure({
+        blockingFindings: 0,
         unreviewedPaths: 1,
         unresolvedChangeRequests: 0,
       })?._tag,
