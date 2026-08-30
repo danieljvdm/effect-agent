@@ -109,7 +109,9 @@ Missing classification grants no delegation replay authority; conflicting eviden
 Run limits survive replacement Attempts. Canonical responses account for Turns and declared
 Tool Calls, including a pending batch; fully settled batches account for the trailing failure
 streak in declaration order. Replaying a pending batch folds its outcomes once. Synthetic budget
-rejections neither advance nor reset that streak. Programmatic Tool Calls and the single grace
+rejections neither advance nor reset that streak. Provider-executed outcomes remain in canonical
+assistant content and resume alongside application outcomes in their original declaration order.
+Programmatic Tool Calls and the single grace
 finalization reserve their allowance canonically before execution. A crash after reservation
 can consume allowance without execution; it cannot restore allowance. Token, cost, and duration
 accounting retain their existing contracts. `RunStarted.policyAccountingVersion` identifies this

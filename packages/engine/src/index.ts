@@ -944,7 +944,7 @@ const effectiveRunBounds = (
 });
 
 const decodeResumedSettledCall = Effect.fn("AgentRuntime.decodeResumedSettledCall")(
-  (input: unknown, maxResultBytes: number) =>
+  (input: unknown, maxResultBytes: number, providerCallIds: ReadonlySet<string>) =>
     Effect.gen(function* () {
       const raw = yield* Effect.try({
         try: () => {
@@ -974,7 +974,12 @@ const decodeResumedSettledCall = Effect.fn("AgentRuntime.decodeResumedSettledCal
             message: "Turn resume contains an invalid settled Tool Call",
           }),
       });
-      const result = boundedCanonicalJsonSnapshot(raw.result, maxResultBytes);
+      const result = boundedCanonicalJsonSnapshot(
+        raw.result,
+        typeof raw.id === "string" && providerCallIds.has(raw.id)
+          ? MAX_STAGED_PROVIDER_BYTES
+          : maxResultBytes,
+      );
       if (result === undefined) {
         return yield* ModelProtocolError.make({
           message: "Turn resume settled Tool result is not bounded canonical JSON",
@@ -4960,7 +4965,7 @@ const makeResumeTurn = <
       };
       const declarationByCallId = new Map<
         string,
-        { readonly index: number; readonly name: string }
+        { readonly index: number; readonly name: string; readonly providerExecuted: boolean }
       >();
       for (const call of resume.calls) {
         if (!hasTool(tools, call.name)) {
@@ -4977,19 +4982,22 @@ const makeResumeTurn = <
         const toolCallId = yield* decodeToolCallId(call.id);
         yield* decodeToolCallParameters<Tools>(tool, call.name, call.params, "resume");
         const parameters = yield* decodeEventJson(call.params, "Tool parameters");
+        const providerExecuted = call.providerExecuted === true;
         declarationByCallId.set(call.id, {
           index: trace.applicationToolCalls.length,
           name: call.name,
+          providerExecuted,
         });
         trace.parts.push(
           Response.makePart("tool-call", {
             id: call.id,
             name: call.name,
             params: parameters,
-            providerExecuted: false,
+            providerExecuted,
           }),
         );
-        trace.toolCalls.set(call.id, { name: call.name, providerExecuted: false });
+        trace.toolCalls.set(call.id, { name: call.name, providerExecuted });
+        if (providerExecuted) continue;
         trace.applicationToolCalls.push(
           Response.makePart("tool-call", {
             id: call.id,
@@ -5030,11 +5038,15 @@ const makeResumeTurn = <
         );
       }
       const settledIds = new Set<string>();
+      const providerCallIds = new Set(
+        [...declarationByCallId].filter(([, call]) => call.providerExecuted).map(([id]) => id),
+      );
       const settledInputs = yield* snapshotResumedSettledCalls(resume, declarationByCallId.size);
       for (const settledInput of settledInputs) {
         const settledCall = yield* decodeResumedSettledCall(
           settledInput,
           agent.definition.policy.toolResultBounds.maxBytes,
+          providerCallIds,
         );
         const declared = declarationByCallId.get(settledCall.id);
         if (declared === undefined) {
@@ -5053,6 +5065,20 @@ const makeResumeTurn = <
         }
         settledIds.add(settledCall.id);
         trace.finalToolResultIds.add(settledCall.id);
+        if (declared.providerExecuted) {
+          trace.parts.push(
+            Response.makePart("tool-result", {
+              id: settledCall.id,
+              name: declared.name,
+              result: settledCall.result,
+              encodedResult: settledCall.result,
+              isFailure: settledCall.isFailure,
+              providerExecuted: true,
+              preliminary: false,
+            }),
+          );
+          continue;
+        }
         trace.applicationToolResults[declared.index] = {
           id: settledCall.id,
           name: declared.name,
@@ -5066,6 +5092,15 @@ const makeResumeTurn = <
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
       const toolCalls = countedToolCalls;
+      for (const [id, call] of declarationByCallId) {
+        if (call.providerExecuted && !settledIds.has(id)) {
+          return failRunEventStream(
+            ModelProtocolError.make({
+              message: `Turn resume lacks the canonical provider result for ${id}`,
+            }),
+          );
+        }
+      }
       const overToolBudget = toolCalls + context.programmaticToolCalls > bounds.maxToolCalls;
       if (overToolBudget && policy.onExhaustion === "fail") {
         return failRunEventStream(

@@ -571,6 +571,8 @@ export interface RunTurnResumeCall {
   readonly name: string;
   /** Canonical encoded parameters; re-validated through the Tool's parameter Schema before anything executes. */
   readonly params: unknown;
+  /** Provider calls must have a canonical settled result and are never dispatched locally. */
+  readonly providerExecuted?: boolean;
 }
 
 /**

@@ -2860,6 +2860,132 @@ layer(corruptedRunDispositionTestLayer)("RUN-029 recovered run disposition valid
 });
 
 layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
+  it.effect(
+    "mixed pending batches restore provider failures in declaration order exactly once",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        for (const providerFirst of [true, false]) {
+          yield* clearFailpoint;
+          const hosted = Tool.providerDefined({
+            id: "test.hosted_probe",
+            customName: "HostedProbe",
+            providerName: "hosted_probe",
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+          })(undefined);
+          const probe = Tool.make("probe", {
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+            failure: Schema.String,
+            failureMode: "return",
+          });
+          const toolkit = Toolkit.make(hosted, probe);
+          const definition = Agent.define("mixed-resume-policy", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Probe.",
+            toolkit,
+            policy: AgentPolicy.make({
+              maxTurns: 5,
+              maxToolCalls: 4,
+              maxDuration: "30 seconds",
+              toolConcurrency: 1,
+              repeatedFailureLimit: 2,
+              onExhaustion: "fail",
+              toolResultBounds: { maxBytes: 512 },
+            }),
+          });
+          const providerCall: Response.StreamPartEncoded = {
+            type: "tool-call",
+            id: "hosted-1",
+            name: "HostedProbe",
+            params: {},
+            providerExecuted: true,
+          };
+          const appCall: Response.StreamPartEncoded = {
+            type: "tool-call",
+            id: "app-1",
+            name: "probe",
+            params: {},
+            providerExecuted: false,
+          };
+          const scripted = yield* makeScriptedModel((call) =>
+            call === 0
+              ? [
+                  ...(providerFirst ? [providerCall, appCall] : [appCall, providerCall]),
+                  {
+                    type: "tool-result",
+                    id: "hosted-1",
+                    name: "HostedProbe",
+                    result: "provider outcome".repeat(100),
+                    isFailure: providerFirst,
+                    providerExecuted: true,
+                  },
+                  { type: "finish", reason: "tool-calls", usage },
+                ]
+              : call === 1
+                ? [
+                    {
+                      type: "tool-call",
+                      id: "app-2",
+                      name: "probe",
+                      params: {},
+                      providerExecuted: false,
+                    },
+                    { type: "finish", reason: "tool-calls", usage },
+                  ]
+                : finalParts('"done"'),
+          );
+          const agent = Agent.withModel(definition, scripted.model);
+          const starts = yield* Ref.make(0);
+          const handlers = toolkit.toLayer({
+            probe: () =>
+              Ref.update(starts, (n) => n + 1).pipe(Effect.andThen(Effect.fail("failed"))),
+          });
+          const receipt = yield* runtime.submit(
+            agent,
+            "probe",
+            submitOptions(`mixed-provider-${providerFirst}`, "mixed"),
+          );
+          const run = runtime
+            .processConversation(agent, receipt.conversationId)
+            .pipe(Effect.provide(handlers));
+          yield* armFailpoint("turn:after-response-append");
+          expect(failureTag(yield* Effect.exit(run))).toBe("DurableRuntimeFailpointError");
+          expect(yield* Ref.get(starts)).toBe(0);
+          const before = yield* readLog(receipt.conversationId);
+          const response = before.find(
+            ({ record }) => record.payload._tag === "ModelResponseRecorded",
+          )?.record.payload;
+          if (response?._tag !== "ModelResponseRecorded")
+            throw new Error("Expected canonical response");
+          const recordedPrompt = yield* Schema.decodeUnknownEffect(Prompt.Prompt)(
+            response.messages,
+          );
+          expect(
+            recordedPrompt.content.flatMap((message) =>
+              message.role === "assistant"
+                ? message.content.filter((part) => part.type === "tool-result")
+                : [],
+            ),
+          ).toMatchObject([{ id: "hosted-1", isFailure: providerFirst }]);
+          expect(
+            (yield* projectRunJournal(before, runIdForSubmission(receipt.submissionId)))
+              .policyUsage,
+          ).toMatchObject({ toolCalls: 2, consecutiveToolFailures: 0 });
+          yield* clearFailpoint;
+          expect((yield* run)[0]?.outcome).toBe(providerFirst ? "failed" : "completed");
+          expect(scripted.prompts).toHaveLength(providerFirst ? 1 : 3);
+          expect(yield* Ref.get(starts)).toBe(providerFirst ? 1 : 2);
+          const journal = yield* projectRunJournal(
+            yield* readLog(receipt.conversationId),
+            runIdForSubmission(receipt.submissionId),
+          );
+          expect(journal.policyUsage.consecutiveToolFailures).toBe(providerFirst ? 0 : 1);
+        }
+      }),
+  );
   it.effect("programmatic reservations survive loss before the inner Handler starts", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;

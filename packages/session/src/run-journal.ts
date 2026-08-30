@@ -664,8 +664,16 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
     policyUsage.toolCalls += calls.length;
     if (incompleteToolTurns.has(record.recordId)) continue;
     for (const call of calls) {
-      const result = settledById.get(`tool-settled:${ownerRunId}:${payload.turn}:${call.id}`);
-      if (result === undefined || result.budgetRejected === true) continue;
+      const result = call.providerExecuted
+        ? messages.content
+            .flatMap((message) => (message.role === "assistant" ? message.content : []))
+            .find(
+              (part) => part.type === "tool-result" && part.providerExecuted && part.id === call.id,
+            )
+        : settledById.get(`tool-settled:${ownerRunId}:${payload.turn}:${call.id}`);
+      if (result === undefined || ("budgetRejected" in result && result.budgetRejected === true))
+        continue;
+      if (!("isFailure" in result)) continue;
       policyUsage.consecutiveToolFailures = result.isFailure
         ? policyUsage.consecutiveToolFailures + 1
         : 0;
@@ -1093,7 +1101,8 @@ export const turnCanonicalBatch = Effect.fn("RunJournal.turnCanonicalBatch")(fun
 });
 
 /**
- * Commit 1 of a tool-declaring Turn (plan §2.1): ONLY the Turn's `ModelResponseRecorded` record
+ * Commit 1 of a tool-declaring Turn: the Turn's `ModelResponseRecorded` record, including
+ * provider results retained in assistant content before application Tools execute.
  * — pending steering plus the assistant response with its declared tool calls — under batch
  * identity `turn-response:{runId}:{turn}`. Committing the response before preparation creates
  * the provably-safe durability §15 window ("after model item commit, before tool preparation →

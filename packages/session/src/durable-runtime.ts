@@ -786,11 +786,14 @@ interface DeclaredApplicationCall {
   readonly name: string;
   /** Encoded JSON parameters exactly as canonical history carries them. */
   readonly params: unknown;
+  readonly providerExecuted?: boolean;
 }
 
 interface DeclaredToolCalls {
   readonly total: number;
   readonly application: Array<DeclaredApplicationCall>;
+  readonly all: Array<DeclaredApplicationCall>;
+  readonly providerResults: Array<Prompt.ToolResultPart>;
 }
 
 /**
@@ -810,17 +813,26 @@ const declaredToolCalls = Effect.fn("DurableAgentRuntime.declaredToolCalls")(
       Effect.map((prompt) => {
         let total = 0;
         const application: Array<DeclaredApplicationCall> = [];
+        const all: Array<DeclaredApplicationCall> = [];
+        const providerResults: Array<Prompt.ToolResultPart> = [];
         for (const message of prompt.content) {
           if (message.role !== "assistant") continue;
           for (const part of message.content) {
+            if (part.type === "tool-result" && part.providerExecuted) providerResults.push(part);
             if (part.type !== "tool-call") continue;
             total += 1;
+            all.push({
+              id: part.id,
+              name: part.name,
+              params: part.params,
+              providerExecuted: part.providerExecuted,
+            });
             if (!part.providerExecuted) {
               application.push({ id: part.id, name: part.name, params: part.params });
             }
           }
         }
-        return { total, application };
+        return { total, application, all, providerResults };
       }),
     ),
 );
@@ -1198,7 +1210,7 @@ const make = Effect.gen(function* () {
     let hostSettlementOutcome: SettlementOutcome | undefined;
     let hostRespondedAfterInput = false;
     const prepared: Array<OpenToolCallEvidence> = [];
-    const preparedKinds = new Map<ToolCallId, ToolCallPrepared["executionKind"]>();
+    const preparedKinds = new Map<RecordId, ToolCallPrepared["executionKind"]>();
     const preparedTurns = new Set<number>();
     const settledIds = new Set<string>();
     const resolvedIds = new Set<string>();
@@ -1233,10 +1245,13 @@ const make = Effect.gen(function* () {
       switch (payload._tag) {
         case "ToolCallPrepared": {
           if (payload.runId !== runId) break;
-          if (preparedKinds.has(payload.toolCallId)) {
-            return yield* RunJournalError.make({ message: "Duplicate Tool preparation evidence" });
+          const identity = toolCallPreparedRecordId(runId, payload.turn, payload.toolCallId);
+          if (preparedKinds.has(identity)) {
+            return yield* RunJournalError.make({
+              message: "Duplicate canonical Tool preparation evidence",
+            });
           }
-          preparedKinds.set(payload.toolCallId, payload.executionKind);
+          preparedKinds.set(identity, payload.executionKind);
           prepared.push(
             OpenToolCallEvidence.make({
               toolCallId: payload.toolCallId,
@@ -1303,7 +1318,12 @@ const make = Effect.gen(function* () {
     // Only canonical classification authorizes the idempotent establishment protocol.
     // A lifecycle record cannot silently upgrade an ordinary or unclassified preparation.
     const subagent = subagentRecordsOf(records, runId);
-    const openByCallId = new Map(allOpenCalls.map((call) => [call.toolCallId, call]));
+    const isPreparedDelegation = (call: OpenToolCallEvidence): boolean =>
+      preparedKinds.get(toolCallPreparedRecordId(runId, call.turn, call.toolCallId)) ===
+      "delegation";
+    const openByCallId = new Map(
+      allOpenCalls.filter(isPreparedDelegation).map((call) => [call.toolCallId, call]),
+    );
     const delegationCallIds: Array<ToolCallId> = [];
     const seenDelegationIds = new Set<ToolCallId>();
     const noteDelegation = (toolCallId: ToolCallId): void => {
@@ -1315,14 +1335,19 @@ const make = Effect.gen(function* () {
     for (const toolCallId of subagent.started.keys()) noteDelegation(toolCallId);
     for (const toolCallId of subagent.joined.keys()) noteDelegation(toolCallId);
     for (const toolCallId of delegationCallIds) {
-      if (preparedKinds.get(toolCallId) !== "delegation") {
+      const request = subagent.requested.get(toolCallId);
+      if (
+        request === undefined ||
+        preparedKinds.get(toolCallPreparedRecordId(runId, request.turn, toolCallId)) !==
+          "delegation"
+      ) {
         return yield* RunJournalError.make({
           message: "Subagent evidence conflicts with Tool preparation classification",
         });
       }
     }
     for (const call of allOpenCalls) {
-      if (preparedKinds.get(call.toolCallId) === "delegation") noteDelegation(call.toolCallId);
+      if (isPreparedDelegation(call)) noteDelegation(call.toolCallId);
     }
     const openDelegationCalls: Array<OpenDelegationCallEvidence> = [];
     for (const toolCallId of delegationCallIds) {
@@ -1378,7 +1403,7 @@ const make = Effect.gen(function* () {
         }),
       );
     }
-    const openToolCalls = allOpenCalls.filter((call) => !seenDelegationIds.has(call.toolCallId));
+    const openToolCalls = allOpenCalls.filter((call) => !isPreparedDelegation(call));
 
     let declaredPendingBatch: DeclaredPendingBatchEvidence | undefined;
     if (lastResponse !== undefined && !preparedTurns.has(lastResponse.turn)) {
@@ -1443,8 +1468,17 @@ const make = Effect.gen(function* () {
       }
     }
     if (lastResponse === undefined) return undefined;
-    const calls = yield* declaredApplicationCalls(lastResponse.messages);
-    if (calls.length === 0) return undefined;
+    const declared = yield* declaredToolCalls(lastResponse.messages);
+    if (declared.application.length === 0) return undefined;
+    const calls = declared.all;
+    for (const part of declared.providerResults) {
+      const result = yield* decodePersisted(part.result).pipe(
+        Effect.mapError((cause) =>
+          RunJournalError.make({ message: `Invalid canonical provider result ${part.id}`, cause }),
+        ),
+      );
+      settledByCallId.set(part.id, { result, isFailure: part.isFailure });
+    }
     const settled: Array<{
       id: string;
       result: PersistedJson;
@@ -1453,6 +1487,11 @@ const make = Effect.gen(function* () {
     }> = [];
     for (const call of calls) {
       const recorded = settledByCallId.get(call.id);
+      if (call.providerExecuted === true && recorded === undefined) {
+        return yield* RunJournalError.make({
+          message: `Pending Turn lacks canonical provider result for ${call.id}`,
+        });
+      }
       if (recorded !== undefined) {
         settled.push({ id: call.id, ...recorded });
       }
@@ -3961,7 +4000,7 @@ const make = Effect.gen(function* () {
                 }),
               );
               yield* appendBatch(ctx, batch);
-              knownIds.add(responseId);
+              for (const record of batch.records) knownIds.add(record.recordId);
               yield* hit("turn:after-response-append");
             }),
           ),
