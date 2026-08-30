@@ -11,13 +11,11 @@ import {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
-import type {
-  RunEventSink,
-  SubagentDurability,
-  SubagentDurabilityError,
-  ToolCallWaiting,
-} from "@effect-agent/engine";
 import {
+  type RunEventSink,
+  type SubagentDurability,
+  type SubagentDurabilityError,
+  type ToolCallWaiting,
   AgentChildPending,
   AgentRuntime,
   AgentSpawner,

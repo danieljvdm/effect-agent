@@ -168,16 +168,17 @@ type InstructionRequirementsOf<Instructions, Input> =
 
 import {
   buildCompactedView,
-  chooseSummarizeCut,
-  choosePruneBound,
   collectCoveredMessages,
-  COMPACTION_INSTRUCTION,
-  estimatePromptTokens,
   initialCompactionState,
   isContextOverflowMessage,
-  renderForSummary,
   type ContextCompactionState,
 } from "./compaction.ts";
+import {
+  CompactionDecision,
+  CompactionError,
+  ContextCompactor,
+  type CompactionModelLayer,
+} from "./context-compactor.ts";
 import {
   DurableStep,
   DurableStepError,
@@ -216,12 +217,16 @@ export * from "./durable-step.ts";
 export * from "./run-events.ts";
 export * from "./run-options.ts";
 export * from "./tool-broker.ts";
+export * from "./context-compactor.ts";
 export {
   CLEARED_TOOL_RESULT,
   COMPACTION_INSTRUCTION,
   COMPACTION_SUMMARY_PREFIX,
   estimateMessageTokens,
   estimatePromptTokens,
+  buildCompactedView,
+  initialCompactionState,
+  type ContextCompactionState,
   isContextOverflowMessage,
 } from "./compaction.ts";
 
@@ -281,6 +286,7 @@ export type AgentRuntimeFailure<
   | AgentPolicyError
   | ContextBudgetError
   | ContextOverflowError
+  | CompactionError
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentToolAuthorizationDenied
@@ -376,6 +382,13 @@ interface RunContext {
   exhaustedDimension: "tokens" | "tool-calls" | "turns" | undefined;
   /** Model-visible view state for engine-native compaction (RUN-026). */
   readonly compaction: ContextCompactionState;
+  readonly compactor: ContextCompactor["Service"];
+  /** One allowance shared by threshold compaction and the same Turn's overflow retry. */
+  readonly compactionTurn: {
+    turn: number;
+    summaryCalls: number;
+    readonly applied: Set<CompactionDecision["kind"]>;
+  };
   /** Finite engine-owned memory ceilings, optionally tightened per Run. */
   readonly bufferLimits: EffectiveRunBufferLimits;
   sequence: number;
@@ -2819,7 +2832,23 @@ const stampProviderResultEvent = (
  * since then; a fresh Run or a just-compacted view falls back to the full
  * chars/4 estimate.
  */
-const nextContextEstimate = (context: RunContext, view: ReadonlyArray<Prompt.Message>): number => {
+const estimateContextTokens = Effect.fn("AgentRuntime.estimateContextTokens")(function* (
+  context: RunContext,
+  messages: ReadonlyArray<Prompt.Message>,
+) {
+  return yield* Schema.decodeUnknownEffect(Schema.Natural)(
+    context.compactor.estimate(messages),
+  ).pipe(
+    Effect.mapError((cause) =>
+      CompactionError.make({ message: "Compactor returned an invalid token estimate", cause }),
+    ),
+  );
+});
+
+const nextContextEstimate = Effect.fn("AgentRuntime.nextContextEstimate")(function* (
+  context: RunContext,
+  view: ReadonlyArray<Prompt.Message>,
+) {
   const state = context.compaction;
   if (
     context.lastInputTokens > 0 &&
@@ -2829,11 +2858,11 @@ const nextContextEstimate = (context: RunContext, view: ReadonlyArray<Prompt.Mes
     return (
       context.lastInputTokens +
       context.lastOutputTokens +
-      estimatePromptTokens(view.slice(state.lastViewLength))
+      (yield* estimateContextTokens(context, view.slice(state.lastViewLength)))
     );
   }
-  return estimatePromptTokens(view);
-};
+  return yield* estimateContextTokens(context, view);
+});
 
 /** Text a provider overflow classification matches against (message + reason). */
 const overflowText = (error: AiError.AiError): string => `${error.message} ${error.reason.message}`;
@@ -2844,16 +2873,9 @@ interface CompactionOutcome {
 }
 
 /**
- * RUN-026: compact the model-visible view of `source` in place on
- * `context.compaction`. Stage 1 clears old tool results; stage 2 folds the
- * covered span into a summary through one metered model call on the Run's
- * bound model. Official history is never mutated — the durable commit
- * machinery slices it by length, so only the outgoing view may change. The
- * summarizer call's usage is consumed like any other model call, with
- * `context.finalizing` held during its accounting so a budget breach
- * surfaces at the next response's check instead of recursing into finalize
- * mid-compaction. Durable coordinators stage it as a distinct call in the
- * same canonical Turn as the response that follows.
+ * Consume the installed strategy under engine-owned bounds. Validate each decision, commit it,
+ * then update the disposable view. Summary model calls retain the Run's response-buffer and
+ * budget guards; pricing reads the selected Model's identity inside the same provision scope.
  */
 const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirements>(
   agent: AgentValue,
@@ -2866,205 +2888,230 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
   allowSummarize = true,
 ): Effect.Effect<
   CompactionOutcome,
-  AgentPolicyError | ModelProtocolError | AiError.AiError | HookError,
+  AgentPolicyError | ModelProtocolError | AiError.AiError | CompactionError | HookError,
   HookRequirements | LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName
 > =>
   Effect.gen(function* () {
-    const policy = agent.definition.policy;
     const state = context.compaction;
     const events: Array<RunEvent> = [];
     const messages = source.content;
-    const before = estimatePromptTokens(buildCompactedView(messages, state));
-    const mode = policy.compaction.mode;
-    const keepRecentTokens =
-      targetTokens === undefined
-        ? policy.compaction.keepRecentTokens
-        : Math.max(1, Math.min(policy.compaction.keepRecentTokens, targetTokens));
-
-    const commitDurable = (commit: RunCompactionCommit) =>
-      options.durability === undefined ? Effect.void : options.durability.commitCompaction(commit);
-
-    if (!forceSummarize && mode !== "summarize") {
-      const bound = choosePruneBound(messages, state, keepRecentTokens);
-      if (bound > state.clearedThrough) {
-        state.clearedThrough = bound;
-        state.lastViewLength = -1;
-        const after = estimatePromptTokens(buildCompactedView(messages, state));
-        events.push(
-          CompactionPerformed.make({
-            ...(yield* eventBase(context)),
-            turn,
-            kind: "clear-tool-results",
-            tokensBeforeEstimate: before,
-            tokensAfterEstimate: after,
-          }),
-        );
-        yield* commitDurable({
-          turn,
-          kind: "clear-tool-results",
-          tokensBeforeEstimate: before,
-          tokensAfterEstimate: after,
-        });
-        if (targetTokens !== undefined && after <= targetTokens) {
-          return { events };
+    const allowance = context.compactionTurn;
+    if (allowance.turn !== turn) {
+      allowance.turn = turn;
+      allowance.summaryCalls = 0;
+      allowance.applied.clear();
+    }
+    if (allowance.applied.has("summarize")) {
+      return yield* CompactionError.make({
+        message: "Compaction already summarized this Turn",
+      });
+    }
+    const before = yield* estimateContextTokens(context, buildCompactedView(messages, state));
+    const summarize = (summarizerPrompt: Prompt.Prompt, model?: CompactionModelLayer) => {
+      const generate = Effect.gen(function* () {
+        if (allowance.summaryCalls++ > 0 || (!allowSummarize && !forceSummarize)) {
+          return yield* CompactionError.make({
+            message: "Compaction exceeded its summary-call allowance",
+          });
         }
-      }
-    }
-    if ((!allowSummarize || mode === "prune") && !forceSummarize) {
-      // Pruning may legitimately reclaim nothing (for example, one protected
-      // result). The caller re-estimates the rebuilt prompt and either enters
-      // finalization or fails locally; known-over-target work never reaches
-      // the provider.
-      return { events };
-    }
-
-    const cut = chooseSummarizeCut(messages, state, keepRecentTokens);
-    const covered = collectCoveredMessages(messages, state, cut);
-    if (covered.length === 0) {
-      return { events };
-    }
-    const transcript = renderForSummary(covered, state.summary);
-    const summarizerPrompt = Prompt.fromMessages([
-      Prompt.makeMessage("user", {
-        content: [
-          Prompt.makePart("text", {
-            text: `${COMPACTION_INSTRUCTION}\n\n<transcript>\n${transcript}\n</transcript>`,
-          }),
-        ],
-      }),
-    ]);
-    const pieces: Array<string> = [];
-    const responseUsage: ModelResponseBufferUsage = {
-      responsePartCount: 0,
-      responsePartBytes: 0,
-    };
-    let summaryUsage: Response.Usage | undefined;
-    let summaryFinished = false;
-    let summaryFailure: ModelProtocolError | undefined;
-    const textParts = new Map<string, PartLifecycle>();
-    const reasoningParts = new Map<string, PartLifecycle>();
-    yield* guardBudgetStream(
-      LanguageModel.streamText({ prompt: summarizerPrompt }),
-      options.budget,
-    ).pipe(
-      Stream.runForEach((part) =>
-        Effect.gen(function* () {
-          const owned = yield* ownModelResponsePart(
-            part,
-            Toolkit.empty,
-            responseUsage,
-            context.bufferLimits,
-          );
-          yield* consumeModelResponsePart(responseUsage, owned.retainedBytes, context.bufferLimits);
-          const ownedPart = owned.ownedPart;
-          // Keep consuming a malformed response to retain its reported usage.
-          // Validation must succeed before either summary or coverage changes.
-          if (ownedPart.type === "text-delta") {
-            pieces.push(ownedPart.delta);
-          } else if (ownedPart.type === "finish") {
-            summaryUsage = ownedPart.usage;
-          }
-          yield* Effect.gen(function* () {
-            if (summaryFinished) {
-              return yield* ModelProtocolError.make({
-                message: "Compaction response emitted content after its finish part",
-              });
-            }
-            switch (ownedPart.type) {
-              case "text-start":
-                return yield* startPart(textParts, ownedPart.id, "compaction text");
-              case "text-delta":
-                return yield* continuePart(textParts, ownedPart.id, "compaction text delta");
-              case "text-end":
-                return yield* endPart(textParts, ownedPart.id, "compaction text");
-              case "reasoning-start":
-                return yield* startPart(reasoningParts, ownedPart.id, "compaction reasoning");
-              case "reasoning-delta":
-                return yield* continuePart(
-                  reasoningParts,
-                  ownedPart.id,
-                  "compaction reasoning delta",
-                );
-              case "reasoning-end":
-                return yield* endPart(reasoningParts, ownedPart.id, "compaction reasoning");
-              case "finish": {
-                summaryFinished = true;
-                if (
-                  ownedPart.reason !== "stop" ||
-                  [...textParts.values(), ...reasoningParts.values()].includes("open")
-                ) {
+        const pieces: Array<string> = [];
+        const responseUsage: ModelResponseBufferUsage = {
+          responsePartCount: 0,
+          responsePartBytes: 0,
+        };
+        let summaryUsage: Response.Usage | undefined;
+        let summaryFinished = false;
+        let summaryFailure: ModelProtocolError | undefined;
+        const textParts = new Map<string, PartLifecycle>();
+        const reasoningParts = new Map<string, PartLifecycle>();
+        yield* guardBudgetStream(
+          LanguageModel.streamText({ prompt: summarizerPrompt }),
+          options.budget,
+        ).pipe(
+          Stream.runForEach((part) =>
+            Effect.gen(function* () {
+              const owned = yield* ownModelResponsePart(
+                part,
+                Toolkit.empty,
+                responseUsage,
+                context.bufferLimits,
+              );
+              yield* consumeModelResponsePart(
+                responseUsage,
+                owned.retainedBytes,
+                context.bufferLimits,
+              );
+              const ownedPart = owned.ownedPart;
+              if (ownedPart.type === "text-delta") {
+                pieces.push(ownedPart.delta);
+              } else if (ownedPart.type === "finish") {
+                summaryUsage = ownedPart.usage;
+              }
+              // Drain malformed responses within the buffer bounds so reported usage is charged.
+              yield* Effect.gen(function* () {
+                if (summaryFinished) {
                   return yield* ModelProtocolError.make({
-                    message:
-                      "Compaction response did not finish with complete text and a stop reason",
+                    message: "Compaction response emitted content after its finish part",
                   });
                 }
-                return;
-              }
-              case "tool-params-start":
-              case "tool-params-delta":
-              case "tool-params-end":
-              case "tool-approval-request":
-              case "error":
-                return yield* ModelProtocolError.make({
-                  message: `Compaction response contained an unusable ${ownedPart.type} part`,
-                });
-              case "file":
-              case "response-metadata":
-              case "source":
-                return;
+                switch (ownedPart.type) {
+                  case "text-start":
+                    return yield* startPart(textParts, ownedPart.id, "compaction text");
+                  case "text-delta":
+                    return yield* continuePart(textParts, ownedPart.id, "compaction text delta");
+                  case "text-end":
+                    return yield* endPart(textParts, ownedPart.id, "compaction text");
+                  case "reasoning-start":
+                    return yield* startPart(reasoningParts, ownedPart.id, "compaction reasoning");
+                  case "reasoning-delta":
+                    return yield* continuePart(
+                      reasoningParts,
+                      ownedPart.id,
+                      "compaction reasoning delta",
+                    );
+                  case "reasoning-end":
+                    return yield* endPart(reasoningParts, ownedPart.id, "compaction reasoning");
+                  case "finish": {
+                    summaryFinished = true;
+                    if (
+                      ownedPart.reason !== "stop" ||
+                      [...textParts.values(), ...reasoningParts.values()].includes("open")
+                    ) {
+                      return yield* ModelProtocolError.make({
+                        message:
+                          "Compaction response did not finish with complete text and a stop reason",
+                      });
+                    }
+                    return;
+                  }
+                  case "tool-params-start":
+                  case "tool-params-delta":
+                  case "tool-params-end":
+                  case "tool-approval-request":
+                  case "error":
+                    return yield* ModelProtocolError.make({
+                      message: `Compaction response contained an unusable ${ownedPart.type} part`,
+                    });
+                  case "file":
+                  case "response-metadata":
+                  case "source":
+                    return;
+                }
+              }).pipe(
+                Effect.catch((error) =>
+                  Effect.sync(() => {
+                    summaryFailure ??= error;
+                  }),
+                ),
+              );
+            }),
+          ),
+        );
+        if (!summaryFinished) {
+          return yield* ModelProtocolError.make({
+            message: "Compaction response ended without a finish part",
+          });
+        }
+        const wasFinalizing = context.finalizing;
+        context.finalizing = true;
+        const consumed = yield* consumeUsage(agent, context, summaryUsage, 0, turn, options).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              context.finalizing = wasFinalizing;
+            }),
+          ),
+        );
+        events.push(...consumed.warnings);
+        const summary = pieces.join("").trim();
+        if (summaryFailure !== undefined) return yield* summaryFailure;
+        if (summary.length === 0) {
+          return yield* ModelProtocolError.make({
+            message: "Compaction response requires non-whitespace text and a valid finish part",
+          });
+        }
+        return summary;
+      });
+      return model === undefined ? generate : Effect.provide(generate, model);
+    };
+    const applied = allowance.applied;
+    yield* context.compactor
+      .compact({
+        source,
+        state: Object.freeze({ ...state }),
+        policy: agent.definition.policy.compaction,
+        targetTokens,
+        forceSummarize,
+        allowSummarize,
+        summarize,
+      })
+      .pipe(
+        Stream.runForEach((candidate) =>
+          Effect.gen(function* () {
+            const decision = yield* Schema.decodeUnknownEffect(CompactionDecision)(candidate).pipe(
+              Effect.mapError((cause) =>
+                CompactionError.make({ message: "Invalid compaction decision", cause }),
+              ),
+            );
+            if (applied.has(decision.kind) || applied.has("summarize")) {
+              return yield* CompactionError.make({
+                message: "Compaction exceeded its decision allowance",
+              });
             }
-          }).pipe(
-            Effect.catch((error) =>
-              Effect.sync(() => {
-                summaryFailure ??= error;
+            const next = { ...state, lastViewLength: -1 };
+            if (decision.kind === "summarize") {
+              if (utf8ByteLength(decision.summary) > context.bufferLimits.maxModelResponseBytes) {
+                return yield* CompactionError.make({
+                  message: "Compaction summary exceeded the response-buffer limit",
+                });
+              }
+              if (
+                decision.through <= state.summarizedThrough ||
+                decision.through >= messages.length ||
+                messages[decision.through]?.role === "tool" ||
+                collectCoveredMessages(messages, state, decision.through).length === 0
+              ) {
+                return yield* CompactionError.make({
+                  message:
+                    "Compaction must advance coverage without splitting Tool pairs or removing the recent tail",
+                });
+              }
+              next.summary = decision.summary;
+              next.summarizedThrough = decision.through;
+            } else {
+              const newestTool = messages.findLastIndex((message) => message.role === "tool");
+              if (decision.through <= state.clearedThrough || decision.through > newestTool) {
+                return yield* CompactionError.make({
+                  message: "Compaction must advance pruning while retaining the newest Tool result",
+                });
+              }
+              next.clearedThrough = decision.through;
+            }
+            const after = yield* estimateContextTokens(context, buildCompactedView(messages, next));
+            const commit: RunCompactionCommit = {
+              turn,
+              source,
+              through: decision.through,
+              kind: decision.kind,
+              ...(decision.kind === "summarize" ? { summary: decision.summary } : {}),
+              tokensBeforeEstimate: before,
+              tokensAfterEstimate: after,
+            };
+            if (options.durability !== undefined)
+              yield* options.durability.commitCompaction(commit);
+            Object.assign(state, next);
+            applied.add(decision.kind);
+            events.push(
+              CompactionPerformed.make({
+                ...(yield* eventBase(context)),
+                turn,
+                kind: decision.kind,
+                tokensBeforeEstimate: before,
+                tokensAfterEstimate: after,
               }),
-            ),
-          );
-        }),
-      ),
-    );
-    if (!summaryFinished) {
-      return yield* ModelProtocolError.make({
-        message: "Compaction response ended without a finish part",
-      });
-    }
-    const wasFinalizing = context.finalizing;
-    context.finalizing = true;
-    const consumed = yield* consumeUsage(agent, context, summaryUsage, 0, turn, options).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          context.finalizing = wasFinalizing;
-        }),
-      ),
-    );
-    events.push(...consumed.warnings);
-    const summary = pieces.join("").trim();
-    if (summaryFailure !== undefined) return yield* summaryFailure;
-    if (summary.length === 0) {
-      return yield* ModelProtocolError.make({
-        message: "Compaction response requires non-whitespace text and a valid finish part",
-      });
-    }
-    state.summary = summary;
-    state.summarizedThrough = cut;
-    state.lastViewLength = -1;
-    const after = estimatePromptTokens(buildCompactedView(messages, state));
-    events.push(
-      CompactionPerformed.make({
-        ...(yield* eventBase(context)),
-        turn,
-        kind: "summarize",
-        tokensBeforeEstimate: before,
-        tokensAfterEstimate: after,
-      }),
-    );
-    yield* commitDurable({
-      turn,
-      kind: "summarize",
-      summary,
-      tokensBeforeEstimate: before,
-      tokensAfterEstimate: after,
-    });
+            );
+          }),
+        ),
+      );
     return { events };
   });
 
@@ -3976,7 +4023,7 @@ const makeTurn = <
       const outputContractTokens =
         outputContractMessage === undefined
           ? 0
-          : estimatePromptTokens([
+          : yield* estimateContextTokens(context, [
               Prompt.makeMessage("system", { content: outputContractMessage }),
             ]);
       const derivedPrompt = yield* outgoingModelPrompt(
@@ -3987,7 +4034,7 @@ const makeTurn = <
         priorToolCalls,
       );
       const derivedPromptTokens =
-        outputContractTokens + estimatePromptTokens(derivedPrompt.content);
+        outputContractTokens + (yield* estimateContextTokens(context, derivedPrompt.content));
       let preEvents: ReadonlyArray<RunEvent> = [];
       if (!context.finalizing) {
         const consumedTokens = context.inputTokens + context.outputTokens;
@@ -4005,7 +4052,7 @@ const makeTurn = <
         const sourceTarget =
           fullTarget === undefined ? undefined : Math.max(0, fullTarget - derivedPromptTokens);
         const view = buildCompactedView(modelContext.prompt.content, context.compaction);
-        const estimate = nextContextEstimate(context, view) + derivedPromptTokens;
+        const estimate = (yield* nextContextEstimate(context, view)) + derivedPromptTokens;
         const contextPressure = contextCallTarget !== undefined && estimate > contextCallTarget;
         const tokenPressure = tokenCallTarget !== undefined && estimate > tokenCallTarget;
         if (
@@ -4031,7 +4078,8 @@ const makeTurn = <
           preEvents = outcome.events;
         }
         const prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
-        const preparedEstimate = nextContextEstimate(context, prepared) + derivedPromptTokens;
+        const preparedEstimate =
+          (yield* nextContextEstimate(context, prepared)) + derivedPromptTokens;
         // A summarizing compaction is itself a priced model call. Recompute
         // admission from its reported usage instead of carrying the stale
         // pre-compaction balance into the research call that follows.
@@ -4211,7 +4259,8 @@ const makeTurn = <
                   modelContext.prompt.content,
                   context.compaction,
                 );
-                const retryEstimate = nextContextEstimate(context, retryView) + derivedPromptTokens;
+                const retryEstimate =
+                  (yield* nextContextEstimate(context, retryView)) + derivedPromptTokens;
                 if (retryEstimate > contextTokenLimit) {
                   return yield* ContextBudgetError.make({
                     message: `Overflow compaction could not fit the retry inside the ${contextTokenLimit} token context target`,
@@ -5338,6 +5387,14 @@ const stream = <
           ? yield* ids.nextConversationId
           : options.conversationId;
       const runId = options.runId === undefined ? yield* ids.nextRunId : options.runId;
+      const compactor = yield* Effect.serviceOption(ContextCompactor).pipe(
+        Effect.flatMap(
+          Option.match({
+            onSome: Effect.succeed,
+            onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
+          }),
+        ),
+      );
       const context: RunContext = {
         agentId: agent.definition.id,
         conversationId,
@@ -5364,6 +5421,8 @@ const stream = <
         tokenExhausted: false,
         exhaustedDimension: undefined,
         compaction: initialCompactionState(),
+        compactionTurn: { turn: 0, summaryCalls: 0, applied: new Set() },
+        compactor,
         bufferLimits: effectiveRunBufferLimits(options.bufferLimits),
         sequence: 0,
         programmaticToolCalls: resumeUsage?.programmaticToolCalls ?? 0,

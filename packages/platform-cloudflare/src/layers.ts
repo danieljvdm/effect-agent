@@ -159,7 +159,7 @@ export type CloudflareBindingSource = (
   context: CloudflareBindingSourceContext,
 ) => Effect.Effect<ReadonlyArray<ResolvedBinding>, never, never>;
 
-/** A closed Run-context service whose only remaining requirement is platform Crypto. */
+/** Prompt preparation, compaction, and Tool authority captured once; only platform Crypto may remain. */
 export type CloudflareRunContextLayer = Layer.Layer<RunContextPreparation, never, Crypto.Crypto>;
 
 /** One Layer or a per-incarnation factory over explicit Cloudflare host values. */

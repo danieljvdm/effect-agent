@@ -418,15 +418,15 @@ export class ModelResponseInterrupted extends Schema.TaggedClass<ModelResponseIn
 }) {}
 
 /**
- * One engine-native compaction applied at the pre-Turn seam (RUN-026,
- * RUN-026). `coversThrough` is a Conversation record sequence: the projection
+ * One engine-native compaction committed before the pre-Turn view changes (RUN-026).
+ * `coversThrough` is a Conversation record sequence: the projection
  * renders records at or below it as the summary (kind `summarize`) or with
  * cleared tool results (kind `clear-tool-results`), never erasing source
  * history. The record carries no digest by decision: it is appended by the
  * fenced owner into the very log it covers, and re-verifying a digest would
  * re-read the covered range on every wake — the O(history) work compaction
- * exists to remove. Digest-bound artifacts remain the contract for
- * host-supplied compaction (`@effect-agent/capabilities` `context.ts`).
+ * exists to remove. Host-supplied ContextCompactor decisions use this same commit path.
+ * Summaries exceeding BoundedText are rejected before append, never truncated.
  * `summary` is present exactly for `summarize` records; the projection
  * treats a summarize record without one as invalid and ignores it fail-safe.
  */

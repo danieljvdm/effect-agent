@@ -1,13 +1,12 @@
-import {
-  CompactionArtifact,
-  ContextCompactor,
-  ContextTransformError,
-  ModelContextMessage,
-  contextCompactorRunContextLayer,
-  digestCompactionSource,
-} from "@effect-agent/capabilities";
+import { ContextCompactor, contextCompactorRunContextLayer } from "@effect-agent/capabilities";
 import { Agent, AgentPolicy, ConversationId, ToolCallId } from "@effect-agent/core";
-import { DurableStep, DurableStepError, ToolExecutionClass } from "@effect-agent/engine";
+import {
+  CompactionError,
+  estimatePromptTokens,
+  DurableStep,
+  DurableStepError,
+  ToolExecutionClass,
+} from "@effect-agent/engine";
 import {
   DefinitionDigests,
   Digest,
@@ -33,7 +32,7 @@ import {
   type DoStorageFailpointHandler,
   type DoStorageFailpointLocation,
 } from "@effect-agent/storage-cloudflare";
-import { Crypto, Duration, Effect, Layer, Schema, Stream } from "effect";
+import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import type {
@@ -547,7 +546,6 @@ const contextCompactorLayer = (conversationId: string) =>
     ContextCompactor,
     Effect.acquireRelease(
       Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
         yield* Effect.sync(() =>
           updateContextCompactorProbe(conversationId, (probe) => ({
             ...probe,
@@ -555,47 +553,40 @@ const contextCompactorLayer = (conversationId: string) =>
           })),
         );
         return ContextCompactor.of({
-          compact: (snapshot) =>
-            Effect.gen(function* () {
-              yield* Effect.sync(() =>
-                updateContextCompactorProbe(conversationId, (probe) => ({
-                  ...probe,
-                  invocations: probe.invocations + 1,
-                  sourceMessageCounts: [...probe.sourceMessageCounts, snapshot.messages.length],
-                })),
-              );
-              const sourceText = JSON.stringify(snapshot.messages.map((entry) => entry.message));
-              if (sourceText.includes(COMPACTION_FAILURE_MARKER)) {
-                return yield* ContextTransformError.make({
-                  transformId: "cloudflare-test-compactor",
-                  message: "the host compactor refused this context",
-                });
-              }
-              const sourceDigest = yield* digestCompactionSource(snapshot, 0, 0).pipe(
-                Effect.provideService(Crypto.Crypto, crypto),
-                Effect.mapError((error) =>
-                  ContextTransformError.make({
-                    transformId: "cloudflare-test-compactor",
-                    message: error.message,
-                  }),
-                ),
-              );
-              return CompactionArtifact.make({
-                version: 1,
-                conversationId: snapshot.conversationId,
-                coversFrom: 0,
-                coversThrough: 0,
-                summary: ModelContextMessage.make({
-                  role: "system",
-                  content: COMPACTION_MARKER,
-                  sourceSequences: [0],
-                }),
-                retainedFacts: [],
-                tokenEstimate: 4,
-                sourceDigest,
-                compactorVersion: "cloudflare-test-compactor@1",
-              });
-            }),
+          estimate: (messages) =>
+            messages.some((message) => message.role === "assistant")
+              ? 2_001
+              : estimatePromptTokens(messages),
+          compact: (request) =>
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* Effect.sync(() =>
+                  updateContextCompactorProbe(conversationId, (probe) => ({
+                    ...probe,
+                    invocations: probe.invocations + 1,
+                    sourceMessageCounts: [
+                      ...probe.sourceMessageCounts,
+                      request.source.content.length,
+                    ],
+                  })),
+                );
+                const sourceText = JSON.stringify(request.source);
+                if (sourceText.includes(COMPACTION_FAILURE_MARKER)) {
+                  return yield* CompactionError.make({
+                    message: "Context compaction refused",
+                    cause: "the host compactor refused this context",
+                  });
+                }
+                return {
+                  kind: "summarize" as const,
+                  through:
+                    request.source.content.findLastIndex(
+                      (message) => message.role === "assistant",
+                    ) + 1,
+                  summary: COMPACTION_MARKER,
+                };
+              }),
+            ),
         });
       }),
       () =>
@@ -724,7 +715,7 @@ export const contextCompactorDefinition = Agent.define("cf-context-compactor", {
   output: FixtureOutput,
   instructions: ({ question, ref }) => `Answer ${question} as JSON. [ref:${ref}]`,
   toolkit: Toolkit.empty,
-  policy: fixturePolicy,
+  policy: AgentPolicy.make({ ...fixturePolicy, contextTokenLimit: 2_000 }),
 });
 
 // `readonly`: no external mutation, so a crash between start and settlement is a free re-run

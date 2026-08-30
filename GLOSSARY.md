@@ -241,10 +241,11 @@ Limit or would consume the Completion Reserve. It prunes old Tool results, summa
 metered model call, and records
 each compaction in the DN and DC assemblies as a canonical `CompactionCreated` record that
 projections fold
-(RUN-026). Host-supplied, digest-bound compaction artifacts remain a separate capability.
-Cloudflare Conversation Objects may install that capability through a scoped, generic
-`RunContextPreparation` Layer; it runs after canonical resume reconstruction and changes only the
-model-visible prompt, so eviction rebuilds it without making its artifact authoritative.
+(RUN-026). The engine-owned `ContextCompactor` service selects the strategy, token estimator,
+summary prompt, and Model. `ContextCompactor.layer` supplies the bounded default. Cloudflare
+Conversation Objects install the same service through a scoped `RunContextPreparation` Layer,
+rebuilt after eviction. The interpreter owns metering, protected messages, events, and commits;
+the durable coordinator maps actual covered messages to complete prior-Run records.
 
 **Context Token Limit**  
 The optional `AgentPolicy.contextTokenLimit` bound on one model call's live context, supplied by

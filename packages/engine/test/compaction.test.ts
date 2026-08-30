@@ -12,7 +12,20 @@ import {
   type RunEvent,
 } from "@effect-agent/core";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
 import {
   AiError,
   LanguageModel,
@@ -35,6 +48,12 @@ import {
 } from "../src/compaction.ts";
 import {
   AgentRuntime,
+  CompactionError,
+  ContextCompactor,
+  initialCompactionState,
+  type CompactionDecision,
+  type CompactionRequest,
+  type RunUsageDelta,
   type RunCompactionCommit,
   type RunDurabilityHook,
   type RunTurnUsage,
@@ -89,11 +108,11 @@ const overflowFailure = (description: string): AiError.AiError =>
   });
 
 /** Scripted multi-call model; an entry may fail the whole request typed. */
-const scriptedModel = (script: ReadonlyArray<ScriptEntry>) => {
+const scriptedModel = (script: ReadonlyArray<ScriptEntry>, name = "compaction") => {
   const requests: Array<CapturedRequest> = [];
   const model = Model.make(
     "scripted",
-    "compaction",
+    name,
     Layer.effect(
       LanguageModel.LanguageModel,
       LanguageModel.make({
@@ -167,6 +186,7 @@ interface RunSetup {
   readonly results: ReadonlyArray<string>;
   readonly commitCompaction?: (commit: RunCompactionCommit) => Effect.Effect<void>;
   readonly noteTurnUsage?: (usage: RunTurnUsage) => Effect.Effect<void>;
+  readonly consume?: (delta: RunUsageDelta) => Effect.Effect<void>;
 }
 
 const basePolicy = {
@@ -207,13 +227,17 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
               commit: () => Effect.void,
             },
             commitCompaction,
-            // Required by the durability protocol; usage staging is not under test here.
             noteTurnUsage: setup.noteTurnUsage ?? (() => Effect.void),
           };
     const exit = yield* AgentRuntime.stream(
       Agent.withModel(definition, model),
       { question: "compact?" },
-      durability === undefined ? {} : { durability },
+      {
+        ...(durability === undefined ? {} : { durability }),
+        ...(setup.consume === undefined
+          ? {}
+          : { budget: { guard: (effect) => effect, consume: setup.consume } }),
+      },
     ).pipe(
       Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
       Stream.runDrain,
@@ -226,7 +250,336 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
 /** Drive one scripted run and capture requests, events, and the exit. */
 const driveRun = (setup: RunSetup) => driveRunWith(answerOutput, setup);
 
-layer(identifiers)("engine compaction and overflow recovery", (it) => {
+const compactionTestLayer = Layer.merge(identifiers, ContextCompactor.layer);
+
+layer(compactionTestLayer)("engine compaction and overflow recovery", (it) => {
+  const replacementSetup: RunSetup = {
+    policy: AgentPolicy.make({
+      ...basePolicy,
+      contextTokenLimit: 1_500,
+      compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
+    }),
+    script: [
+      toolCallParts("s1", "search", {}, usageOf(100, 5)),
+      toolCallParts("s2", "search", {}, usageOf(1_300, 5)),
+      finalParts('{"answer":"done"}', usageOf(400, 5)),
+    ],
+    results: ["a".repeat(4_000), "b".repeat(4_000)],
+  };
+
+  it.effect(
+    "decorates the injected strategy and estimator while retaining summary Model metering and history",
+    () =>
+      Effect.gen(function* () {
+        const summaryModel = scriptedModel(
+          [finalParts("Application summary", usageOf(50, 20))],
+          "summary-only",
+        );
+        const commits: Array<RunCompactionCommit> = [];
+        const usage: Array<RunUsageDelta> = [];
+        const estimates: Array<number> = [];
+        const baseCompactor = Layer.effect(
+          ContextCompactor,
+          Effect.map(summaryModel.model.captureRequirements, (model) =>
+            ContextCompactor.of({
+              estimate: (messages) => {
+                estimates.push(messages.length);
+                return estimatePromptTokens(messages);
+              },
+              compact: (request) =>
+                Stream.fromEffect(
+                  request
+                    .summarize(Prompt.make("Transcript from the injected strategy."), model)
+                    .pipe(
+                      Effect.map(
+                        (summary) =>
+                          ({ kind: "summarize", through: 4, summary }) satisfies CompactionDecision,
+                      ),
+                    ),
+                ),
+            }),
+          ),
+        );
+        const summaryDecorator = Layer.effect(
+          ContextCompactor,
+          Effect.gen(function* () {
+            const underlying = yield* ContextCompactor;
+            return ContextCompactor.of({
+              estimate: underlying.estimate,
+              compact: (request) =>
+                underlying.compact({
+                  ...request,
+                  summarize: (prompt, model) =>
+                    request.summarize(
+                      Prompt.fromMessages([
+                        Prompt.systemMessage({ content: "Keep the application decisions." }),
+                        ...prompt.content,
+                      ]),
+                      model,
+                    ),
+                }),
+            });
+          }),
+        );
+        const compactor = summaryDecorator.pipe(Layer.provide(baseCompactor));
+        const decoratorRequiresBase: ContextCompactor extends Layer.Services<
+          typeof summaryDecorator
+        >
+          ? true
+          : false = true;
+        const compositionClosesBase: ContextCompactor extends Layer.Services<typeof compactor>
+          ? false
+          : true = true;
+        expect([decoratorRequiresBase, compositionClosesBase]).toEqual([true, true]);
+        const result = yield* driveRun({
+          ...replacementSetup,
+          commitCompaction: (commit) =>
+            Effect.sync(() => {
+              commits.push(commit);
+            }),
+          consume: (delta) =>
+            Effect.sync(() => {
+              usage.push(delta);
+            }),
+        }).pipe(Effect.provide(compactor));
+        expect(Exit.isSuccess(result.exit)).toBe(true);
+        expect(result.requests).toHaveLength(3);
+        expect(summaryModel.requests).toHaveLength(1);
+        expect(promptText(summaryModel.requests[0]?.prompt ?? Prompt.empty)).toBe(
+          "Keep the application decisions.\nTranscript from the injected strategy.",
+        );
+        const outgoing = result.requests[2]?.prompt ?? Prompt.empty;
+        expect(promptText(outgoing)).toContain("Application summary");
+        expect(promptText(outgoing)).toContain("Research the question with the search tool");
+        expect(promptText(outgoing)).toContain("compact?");
+        expect(toolResultValues(outgoing)).toEqual(["b".repeat(4_000)]);
+        expect(commits).toHaveLength(1);
+        expect(toolResultValues(commits[0]?.source ?? Prompt.empty)).toEqual(
+          replacementSetup.results,
+        );
+        expect(commits[0]?.through).toBe(4);
+        expect(usage.map((delta) => delta.modelUsage?.model)).toEqual([
+          "compaction",
+          "compaction",
+          "summary-only",
+          "compaction",
+        ]);
+        expect(usage.reduce((sum, delta) => sum + delta.totalTokens, 0)).toBe(1_885);
+        expect(estimates.length).toBeGreaterThan(0);
+        expect(compactionEvents(result.events)).toHaveLength(1);
+      }),
+  );
+
+  it.effect(
+    "runs the default directly in a harness and retains callback E/R and Model construction requirements",
+    () =>
+      Effect.gen(function* () {
+        class SummaryConfig extends Context.Service<SummaryConfig, { readonly text: string }>()(
+          "test/SummaryConfig",
+        ) {}
+        class SummaryFailure extends Schema.TaggedError<SummaryFailure>()("SummaryFailure", {}) {}
+        const source = Prompt.fromMessages([
+          Prompt.assistantMessage({ content: [Prompt.textPart({ text: "older history" })] }),
+          Prompt.userMessage({ content: [Prompt.textPart({ text: "latest input" })] }),
+        ]);
+        const compactor = yield* ContextCompactor;
+        const summarize = () =>
+          Effect.gen(function* () {
+            const config = yield* SummaryConfig;
+            if (config.text === "") return yield* SummaryFailure.make({});
+            return config.text;
+          });
+        const program = compactor
+          .compact({
+            source,
+            state: initialCompactionState(),
+            policy: CompactionPolicy.make({ keepRecentTokens: 1, mode: "summarize" }),
+            targetTokens: 10,
+            forceSummarize: false,
+            allowSummarize: true,
+            summarize,
+          })
+          .pipe(Stream.runCollect);
+        const errorProof: SummaryFailure extends Effect.Error<typeof program> ? true : false = true;
+        const requirementProof: SummaryConfig extends Effect.Services<typeof program>
+          ? true
+          : false = true;
+        const model = Model.make(
+          "test",
+          "configured",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            Effect.gen(function* () {
+              const config = yield* SummaryConfig;
+              return yield* LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: () => Stream.fromIterable(finalParts(config.text)),
+              });
+            }),
+          ),
+        );
+        const configured = ContextCompactor.layerWithModel(model);
+        const modelRequirements: SummaryConfig extends Layer.Services<typeof configured>
+          ? true
+          : false = true;
+        expect([errorProof, requirementProof, modelRequirements]).toEqual([true, true, true]);
+        expect(
+          yield* program.pipe(Effect.provideService(SummaryConfig, { text: "harness summary" })),
+        ).toEqual([{ kind: "summarize", through: 1, summary: "harness summary" }]);
+        expect(
+          failureFrom(
+            yield* program.pipe(Effect.provideService(SummaryConfig, { text: "" }), Effect.exit),
+          ),
+        ).toBeInstanceOf(SummaryFailure);
+      }),
+  );
+
+  it.effect(
+    "rejects invalid custom coverage and estimates before any compaction commit or next model call",
+    () =>
+      Effect.gen(function* () {
+        for (const compactor of [
+          ContextCompactor.of({
+            estimate: estimatePromptTokens,
+            compact: () => Stream.succeed({ kind: "summarize", through: 3, summary: "split pair" }),
+          }),
+          ContextCompactor.of({ estimate: () => Number.NaN, compact: () => Stream.empty }),
+          ContextCompactor.of({
+            estimate: estimatePromptTokens,
+            compact: () => Stream.succeed({ kind: "summarize", through: 4, summary: " \n\t " }),
+          }),
+        ]) {
+          const commits: Array<RunCompactionCommit> = [];
+          const result = yield* driveRun({
+            ...replacementSetup,
+            commitCompaction: (commit) =>
+              Effect.sync(() => {
+                commits.push(commit);
+              }),
+          }).pipe(Effect.provide(Layer.succeed(ContextCompactor, compactor)));
+          expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
+          expect(result.requests.length).toBeLessThanOrEqual(2);
+          expect(commits).toEqual([]);
+        }
+      }),
+  );
+
+  it.effect(
+    "preserves custom typed failures and defects and default summary provider failures",
+    () =>
+      Effect.gen(function* () {
+        const expected = CompactionError.make({ message: "summary refused" });
+        const typed = yield* driveRun(replacementSetup).pipe(
+          Effect.provide(
+            Layer.succeed(ContextCompactor, {
+              estimate: estimatePromptTokens,
+              compact: () => Stream.fail(expected),
+            }),
+          ),
+        );
+        expect(failureFrom(typed.exit)).toBe(expected);
+        const defect = yield* driveRun(replacementSetup).pipe(
+          Effect.provide(
+            Layer.succeed(ContextCompactor, {
+              estimate: estimatePromptTokens,
+              compact: () => Stream.die("strategy defect"),
+            }),
+          ),
+        );
+        expect(Exit.isFailure(defect.exit) && Cause.hasDies(defect.exit.cause)).toBe(true);
+        const failedModel = scriptedModel([{ fail: "summary provider unavailable" }]);
+        const failed = yield* driveRun(replacementSetup).pipe(
+          Effect.provide(ContextCompactor.layerWithModel(failedModel.model)),
+        );
+        expect(failureFrom(failed.exit)).toBeInstanceOf(AiError.AiError);
+        expect(typed.requests).toHaveLength(2);
+        expect(defect.requests).toHaveLength(2);
+        expect(failed.requests).toHaveLength(2);
+      }),
+  );
+
+  for (const strategy of ["default", "custom"] as const) {
+    for (const termination of ["interrupt", "timeout"] as const) {
+      it.effect(
+        `${strategy} compaction releases its Model and Layer on ${termination} without committing`,
+        () =>
+          Effect.gen(function* () {
+            const entered = yield* Deferred.make<void>();
+            const closed: Array<string> = [];
+            const commits: Array<RunCompactionCommit> = [];
+            const model = Model.make(
+              "test",
+              "blocked-summary",
+              Layer.effect(
+                LanguageModel.LanguageModel,
+                Effect.acquireRelease(
+                  LanguageModel.make({
+                    generateText: () => Effect.succeed([]),
+                    streamText: () =>
+                      Stream.fromEffect(
+                        Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+                      ),
+                  }),
+                  () =>
+                    Effect.sync(() => {
+                      closed.push("model");
+                    }),
+                ),
+              ),
+            );
+            const custom = Layer.effect(
+              ContextCompactor,
+              Effect.acquireRelease(
+                Effect.map(model.captureRequirements, (captured) =>
+                  ContextCompactor.of({
+                    estimate: estimatePromptTokens,
+                    compact: <E, R>(request: CompactionRequest<E, R>) =>
+                      Stream.fromEffect(
+                        request.summarize(Prompt.make("custom summary"), captured).pipe(
+                          Effect.map((summary) => ({
+                            kind: "summarize" as const,
+                            through: 4,
+                            summary,
+                          })),
+                        ),
+                      ),
+                  }),
+                ),
+                () =>
+                  Effect.sync(() => {
+                    closed.push("strategy");
+                  }),
+              ),
+            );
+            const fiber = yield* driveRun({
+              ...replacementSetup,
+              commitCompaction: (commit) =>
+                Effect.sync(() => {
+                  commits.push(commit);
+                }),
+            }).pipe(
+              Effect.provide(
+                strategy === "default" ? ContextCompactor.layerWithModel(model) : custom,
+              ),
+              Effect.forkChild,
+            );
+            yield* Deferred.await(entered);
+            if (termination === "interrupt") {
+              yield* Fiber.interrupt(fiber);
+            } else {
+              yield* TestClock.adjust("1 minute");
+              const result = yield* Fiber.join(fiber);
+              expect(failureFrom(result.exit)).toMatchObject({
+                _tag: "AgentPolicyError",
+                limit: "duration",
+              });
+            }
+            expect(closed).toEqual(strategy === "default" ? ["model"] : ["model", "strategy"]);
+            expect(commits).toEqual([]);
+          }),
+      );
+    }
+  }
   // ------------------------------------------------------------ pure helpers
 
   it.effect("RUN-027: classifies provider overflow messages and nothing else", () =>
@@ -419,6 +772,13 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
         { type: "finish", reason: "stop", usage: usageOf(50, 20) },
       ],
     },
+    {
+      name: "content after finish",
+      parts: [
+        ...finalParts("summary", usageOf(50, 20)),
+        { type: "text-delta", id: "answer", delta: "late text" },
+      ],
+    },
   ];
 
   for (const invalid of invalidSummaries) {
@@ -429,11 +789,7 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
           const commits: Array<RunCompactionCommit> = [];
           const usage: Array<RunTurnUsage> = [];
           const { exit, requests, events } = yield* driveRun({
-            policy: AgentPolicy.make({
-              ...basePolicy,
-              contextTokenLimit: 1_500,
-              compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
-            }),
+            policy: replacementSetup.policy,
             script: [
               toolCallParts("s1", "search", {}, usageOf(100, 5)),
               toolCallParts("s2", "search", {}, usageOf(1_300, 5)),
@@ -665,6 +1021,105 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
   );
 
   // ------------------------------------------------------------ RUN-027 flows
+
+  for (const scenario of [
+    { name: "second summary", first: "summarize", retry: "summarize" },
+    { name: "second prune", first: "clear-tool-results", retry: "clear-tool-results" },
+    { name: "first summary after pruning", first: "clear-tool-results", retry: "summarize" },
+  ] as const) {
+    it.effect(
+      `shares the Turn's compaction allowance with overflow recovery: ${scenario.name}`,
+      () =>
+        Effect.gen(function* () {
+          const commits: Array<RunCompactionCommit> = [];
+          const passes: Array<boolean> = [];
+          const result = yield* driveRun({
+            policy: AgentPolicy.make({ ...basePolicy, contextTokenLimit: 800, runStatus: "off" }),
+            script: [
+              toolCallParts("s1", "search", {}),
+              toolCallParts("s2", "search", {}),
+              toolCallParts("s3", "search", {}),
+              ...(scenario.first === "summarize" ? [finalParts("summary-first")] : []),
+              { fail: "context_length_exceeded" },
+              ...(scenario.retry === "summarize" ? [finalParts("summary-retry")] : []),
+              finalParts('{"answer":"done"}'),
+            ],
+            results: ["first result", "second result", "third result"],
+            commitCompaction: (commit) =>
+              Effect.sync(() => {
+                commits.push(commit);
+              }),
+          }).pipe(
+            Effect.provide(
+              Layer.succeed(ContextCompactor, {
+                // Three active results trigger pressure; clearing or summarizing one fits the target.
+                estimate: (messages) =>
+                  300 *
+                  messages.filter(
+                    (message) =>
+                      message.role === "tool" &&
+                      message.content.some(
+                        (part) =>
+                          part.type === "tool-result" && part.result !== CLEARED_TOOL_RESULT,
+                      ),
+                  ).length,
+                compact: (request) =>
+                  Stream.suspend(() => {
+                    passes.push(request.forceSummarize);
+                    const kind = request.forceSummarize ? scenario.retry : scenario.first;
+                    const through = request.forceSummarize ? 6 : 4;
+                    if (kind === "clear-tool-results") return Stream.succeed({ kind, through });
+                    return Stream.fromEffect(
+                      request.summarize(
+                        Prompt.fromMessages([
+                          Prompt.userMessage({
+                            content: [Prompt.textPart({ text: "Summarize requested coverage." })],
+                          }),
+                        ]),
+                      ),
+                    ).pipe(
+                      Stream.map((summary): CompactionDecision => ({ kind, through, summary })),
+                    );
+                  }),
+              }),
+            ),
+          );
+
+          const canRetry =
+            scenario.first === "clear-tool-results" && scenario.retry === "summarize";
+          expect(commits.map(({ turn, kind }) => [turn, kind])).toEqual(
+            canRetry
+              ? [
+                  [4, "clear-tool-results"],
+                  [4, "summarize"],
+                ]
+              : [[4, scenario.first]],
+          );
+          expect(compactionEvents(result.events).map((event) => event.kind)).toEqual(
+            canRetry ? ["clear-tool-results", "summarize"] : [scenario.first],
+          );
+          expect(passes).toEqual(scenario.first === "summarize" ? [false] : [false, true]);
+          expect(
+            result.requests.filter(({ prompt }) =>
+              promptText(prompt).includes("Summarize requested coverage."),
+            ),
+          ).toHaveLength(scenario.name === "second prune" ? 0 : 1);
+          if (canRetry) {
+            expect(Exit.isSuccess(result.exit)).toBe(true);
+            expect(result.requests).toHaveLength(6);
+            expect(promptText(result.requests.at(-1)?.prompt ?? Prompt.empty)).toContain(
+              "summary-retry",
+            );
+            expect(toolResultValues(result.requests.at(-1)?.prompt ?? Prompt.empty)).toEqual([
+              "third result",
+            ]);
+          } else {
+            expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
+            expect(result.requests).toHaveLength(scenario.first === "summarize" ? 5 : 4);
+          }
+        }),
+    );
+  }
 
   it.effect("RUN-027: a classified overflow compacts and retries exactly once", () =>
     Effect.gen(function* () {
