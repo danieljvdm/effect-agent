@@ -32,6 +32,7 @@ import {
 } from "@effect-agent/sandbox";
 import {
   Context,
+  Clock,
   Duration,
   Effect,
   Layer,
@@ -42,6 +43,9 @@ import {
   Semaphore,
   type Scope,
 } from "effect";
+
+import { BrowserRunSessionLifecycle } from "./browser-session-lifecycle.ts";
+export { BrowserRunCleanupError, BrowserRunSessionLifecycle } from "./browser-session-lifecycle.ts";
 
 export const browserRunInteractiveImplementation = SandboxImplementation.make({
   isolation: "isolated",
@@ -57,7 +61,6 @@ const MAX_LIVE_VIEW_EXPIRY_MILLIS = 60 * 60_000;
 const MAX_HANDOFF_TIMEOUT_MILLIS = 30 * 60_000;
 const MAX_HOST_TEXT_LENGTH = 8 * 1024;
 const CLEANUP_STEP_TIMEOUT_MILLIS = 10_000;
-const CLOSE_SESSION_TIMEOUT_MILLIS = 10_000;
 const ACTION_NETWORK_QUIET_MILLIS = 200;
 const ACTION_NETWORK_SETTLE_MILLIS = 2_000;
 const ACTION_POST_STATE_MILLIS = 250;
@@ -330,15 +333,23 @@ export class BrowserRunInteractiveBinding extends Context.Service<
   BrowserRunInteractiveBinding,
   {
     readonly launch: (keepAliveMillis: number) => Promise<BrowserRunInteractiveBrowser>;
-    readonly connect: (sessionId: string) => Promise<BrowserRunInteractiveBrowser>;
+    /** Success proves whole-browser termination or exact-session absence. */
+    readonly closeSession: (
+      sessionId: Redacted.Redacted<string>,
+    ) => Effect.Effect<void, InteractiveBrowserError>;
   }
 >()("@effect-agent/platform-cloudflare/BrowserRunInteractiveBinding") {
   static layer(options: {
     readonly browser: BrowserRun;
     readonly viewport?: BrowserRunViewport;
-  }): Layer.Layer<BrowserRunInteractiveBinding, InteractiveBrowserPolicyDeniedError> {
+  }): Layer.Layer<
+    BrowserRunInteractiveBinding,
+    InteractiveBrowserPolicyDeniedError,
+    BrowserRunSessionLifecycle
+  > {
     return Layer.effect(BrowserRunInteractiveBinding)(
       Effect.gen(function* () {
+        const lifecycle = yield* BrowserRunSessionLifecycle;
         const viewport =
           options.viewport === undefined ? undefined : yield* decodeViewport(options.viewport);
         return {
@@ -349,8 +360,10 @@ export class BrowserRunInteractiveBinding extends Context.Service<
                 ...(viewport === undefined ? {} : { defaultViewport: { ...viewport } }),
               }),
             ),
-          connect: async (sessionId: string) =>
-            makeProductionBrowser(await puppeteer.connect(options.browser, sessionId)),
+          closeSession: (sessionId: Redacted.Redacted<string>) =>
+            lifecycle
+              .close(sessionId)
+              .pipe(Effect.mapError((cause) => actionError("close", cause))),
         };
       }),
     );
@@ -383,6 +396,7 @@ export interface BrowserRunInteractiveSession {
 export class BrowserRunInteractiveHost extends Context.Service<
   BrowserRunInteractiveHost,
   {
+    readonly cleanupSemantics?: "confirmed-terminal";
     readonly open: (
       policy: InteractiveBrowserPolicy,
     ) => Effect.Effect<BrowserRunInteractiveSession, InteractiveBrowserError, Scope.Scope>;
@@ -1719,6 +1733,55 @@ const cdpCommand = <A>(
 const makeHostService = (
   binding: BrowserRunInteractiveBinding["Service"],
 ): BrowserRunInteractiveHost["Service"] => {
+  const closeSession = binding.closeSession;
+  const terminate = Effect.fn("BrowserRunInteractiveHost.terminate")(function* (
+    sessionId: Redacted.Redacted<string>,
+    entries: ReadonlyArray<CloseEntry>,
+  ) {
+    const deadline = (yield* Clock.currentTimeMillis) + 10_000;
+    yield* closeSession(sessionId).pipe(
+      Effect.interruptible,
+      Effect.timeoutOrElse({
+        duration: "10 seconds",
+        orElse: () => Effect.fail(actionError("close")),
+      }),
+    );
+    const remaining = deadline - (yield* Clock.currentTimeMillis);
+    if (remaining <= 0)
+      return yield* Effect.logWarning(
+        "Local browser teardown skipped after confirmed termination deadline",
+      );
+    // Remote termination is authoritative. Local cleanup must not veto it or extend the deadline.
+    yield* runTeardown(entries).pipe(
+      Effect.flatMap((failures) =>
+        Effect.forEach(failures, (failure) => Effect.logWarning(failure.warning), {
+          discard: true,
+        }),
+      ),
+      Effect.interruptible,
+      Effect.timeout(`${remaining} millis`),
+      Effect.catchCause(() =>
+        Effect.logWarning("Local browser teardown incomplete after confirmed termination"),
+      ),
+    );
+  });
+  const closeAcquired = Effect.fn("BrowserRunInteractiveHost.closeAcquired")(function* (
+    browser: BrowserRunInteractiveBrowser,
+  ) {
+    const sessionId = yield* Effect.try({
+      try: browser.sessionId,
+      catch: () => actionError("close"),
+    }).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(BrowserRunSessionId)),
+      Effect.mapError(() => actionError("close")),
+      Effect.onError(() =>
+        closeWithWarning(browser.close, "Closing an unidentified browser failed"),
+      ),
+    );
+    yield* terminate(Redacted.make(sessionId), [
+      closeEntry(browser.close, "Closing the local browser connection failed"),
+    ]);
+  });
   const open = Effect.fn("BrowserRunInteractiveHost.open")(function* (
     policy: InteractiveBrowserPolicy,
   ): Effect.fn.Return<BrowserRunInteractiveSession, InteractiveBrowserError, Scope.Scope> {
@@ -1733,7 +1796,6 @@ const makeHostService = (
     };
     const lifecycle = {
       managedTeardownInstalled: false,
-      explicitCloseInvoked: false,
     };
     const closers: Array<CloseEntry> = [];
     const releaseBeforeManaged = (entry: CloseEntry): Effect.Effect<void> =>
@@ -1750,7 +1812,7 @@ const makeHostService = (
             closeLateAcquisition(
               signal,
               () => binding.launch(keepAliveMillis(fixedPolicy)),
-              (acquired) => acquired.close(),
+              (acquired) => Effect.runPromise(closeAcquired(acquired)),
             ),
           catch: (cause) =>
             isCapacityRefusal(cause)
@@ -1765,9 +1827,11 @@ const makeHostService = (
       ),
       (acquired) => {
         state.disconnected.value = true;
-        return releaseBeforeManaged(
-          closeEntry(acquired.close, "Closing the interactive browser failed"),
-        );
+        return lifecycle.managedTeardownInstalled
+          ? Effect.void
+          : closeAcquired(acquired).pipe(
+              Effect.catch(() => Effect.logWarning("Whole-browser cleanup remains unconfirmed")),
+            );
       },
       { interruptible: true },
     );
@@ -1901,7 +1965,7 @@ const makeHostService = (
 
     const teardown = yield* Effect.uninterruptible(
       Effect.gen(function* () {
-        const cached = yield* Effect.cached(runTeardown(closers));
+        const cached = yield* Effect.cached(terminate(Redacted.make(sessionIdValue), closers));
         lifecycle.managedTeardownInstalled = true;
         yield* Effect.addFinalizer(() =>
           Effect.uninterruptible(
@@ -1910,13 +1974,7 @@ const makeHostService = (
               state.disconnected.value = true;
             }).pipe(
               Effect.andThen(cached),
-              Effect.flatMap((failures) =>
-                lifecycle.explicitCloseInvoked
-                  ? Effect.void
-                  : Effect.forEach(failures, (failure) => Effect.logWarning(failure.warning)).pipe(
-                      Effect.asVoid,
-                    ),
-              ),
+              Effect.catch(() => Effect.logWarning("Whole-browser cleanup remains unconfirmed")),
             ),
           ),
         );
@@ -1926,15 +1984,9 @@ const makeHostService = (
 
     const close: Effect.Effect<void, InteractiveBrowserError> = Effect.uninterruptible(
       Effect.sync(() => {
-        lifecycle.explicitCloseInvoked = true;
         state.closed.value = true;
         state.disconnected.value = true;
-      }).pipe(
-        Effect.andThen(teardown),
-        Effect.flatMap((failures) =>
-          failures[0] === undefined ? Effect.void : Effect.fail(failures[0].error),
-        ),
-      ),
+      }).pipe(Effect.andThen(teardown)),
     );
 
     const runtime = yield* makeHandle(page, fixedPolicy, startedAt, state, close);
@@ -2057,52 +2109,11 @@ const makeHostService = (
     };
   });
 
-  const closeSession = Effect.fn("BrowserRunInteractiveHost.closeSession")(function* (
-    sessionId: Redacted.Redacted<string>,
-  ) {
-    const decoded = yield* Schema.decodeUnknownEffect(Schema.Redacted(BrowserRunSessionId))(
-      sessionId,
-    ).pipe(
-      Effect.mapError(() => policyError("The Browser Run cleanup session identity is malformed")),
-    );
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        const closeAttempted = { value: false };
-        const browser = yield* Effect.acquireRelease(
-          Effect.tryPromise({
-            try: (signal) =>
-              closeLateAcquisition(
-                signal,
-                () => binding.connect(Redacted.value(decoded)),
-                (acquired) => acquired.close(),
-              ),
-            catch: (cause) => actionError("close", cause),
-          }),
-          (acquired) =>
-            closeAttempted.value
-              ? Effect.void
-              : closeWithWarning(acquired.close, "Closing the leaked Browser Run session failed"),
-          { interruptible: true },
-        );
-        return yield* Effect.tryPromise({
-          try: () => {
-            // Mark and start are synchronous so interruption cannot suppress the
-            // Scope fallback before the one remote close attempt begins.
-            closeAttempted.value = true;
-            return browser.close();
-          },
-          catch: (cause) => actionError("close", cause),
-        });
-      }),
-    ).pipe(
-      Effect.timeoutOrElse({
-        duration: Duration.millis(CLOSE_SESSION_TIMEOUT_MILLIS),
-        orElse: () => Effect.fail(actionError("close")),
-      }),
-    );
+  return BrowserRunInteractiveHost.of({
+    open,
+    closeSession,
+    cleanupSemantics: "confirmed-terminal",
   });
-
-  return BrowserRunInteractiveHost.of({ open, closeSession });
 };
 
 /** Cloudflare host controls and private session identity for one scoped Browser Run pass. */

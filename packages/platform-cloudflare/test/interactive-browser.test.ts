@@ -88,11 +88,6 @@ interface FixtureOptions {
   readonly connectionStateError?: unknown;
   readonly urlError?: unknown;
   readonly sessionId?: unknown;
-  readonly connectError?: unknown;
-  readonly connect?: (
-    sessionId: string,
-    browser: BrowserRunInteractiveBrowser,
-  ) => Promise<BrowserRunInteractiveBrowser>;
   readonly closeErrors?: ReadonlySet<CloseTarget>;
   readonly enableInterception?: (controls: FixtureControls) => Promise<void>;
   readonly launch?: (
@@ -357,11 +352,10 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
       if (options.launchError !== undefined) throw options.launchError;
       return options.launch === undefined ? browser : options.launch(browser);
     },
-    connect: async (sessionId) => {
-      calls.push(`binding.connect:${sessionId}`);
-      if (options.connectError !== undefined) throw options.connectError;
-      return options.connect === undefined ? browser : options.connect(sessionId, browser);
-    },
+    closeSession: (sessionId) =>
+      Effect.sync(() => {
+        calls.push(`binding.terminate:${Redacted.value(sessionId)}`);
+      }),
   };
 
   return { binding, browser, calls, keepAliveMillis, controls };
@@ -1453,7 +1447,7 @@ describe("Browser Run interactive browser adapter", () => {
       }),
   );
 
-  it.effect("bounds each explicit cleanup step and continues reverse-order teardown", () =>
+  it.effect("does not let local teardown exceed the deadline or veto confirmed termination", () =>
     Effect.gen(function* () {
       const pageClose = makeGate<void>();
       const fixture = makeFixture({
@@ -1470,14 +1464,12 @@ describe("Browser Run interactive browser adapter", () => {
           const closing = yield* handle.close.pipe(Effect.forkChild);
           yield* awaitPromise(pageClose.started);
           yield* TestClock.adjust(Duration.seconds(10));
-          const error = yield* Fiber.join(closing).pipe(Effect.flip);
-          expect(error).toMatchObject({
-            _tag: "InteractiveBrowserActionError",
-            operation: "close",
-          });
+          yield* Fiber.join(closing);
+          expect(fixture.calls).toContain("binding.terminate:session-id");
+          pageClose.resolve(undefined);
         }),
       );
-      expectResourcesClosedOnce(fixture);
+      expect(fixture.calls.filter((call) => call === "page.close")).toHaveLength(1);
     }),
   );
 
@@ -1658,38 +1650,11 @@ describe("Browser Run interactive browser adapter", () => {
     }),
   );
 
-  it.effect("uses one finite cleanup-only connection and closes late acquisition", () =>
+  it.effect("closes the exact provider session without a browser connection", () =>
     Effect.gen(function* () {
-      const success = makeFixture();
-      yield* withHost(success, (host) => host.closeSession(Redacted.make("leaked_session")));
-      expect(success.calls).toContain("binding.connect:leaked_session");
-      expect(success.calls.filter((call) => call === "browser.close")).toHaveLength(1);
-
-      const gate = makeGate<BrowserRunInteractiveBrowser>();
-      const late = makeFixture({
-        connect: async () => {
-          gate.markStarted();
-          return gate.promise;
-        },
-      });
-      yield* withHost(late, (host) =>
-        Effect.gen(function* () {
-          const closing = yield* host
-            .closeSession(Redacted.make("late_session"))
-            .pipe(Effect.forkChild);
-          yield* awaitPromise(gate.started);
-          yield* TestClock.adjust(Duration.seconds(10));
-          expect(yield* Fiber.join(closing).pipe(Effect.flip)).toMatchObject({
-            _tag: "InteractiveBrowserActionError",
-            operation: "close",
-          });
-          gate.resolve(late.browser);
-          yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
-        }),
-      );
-      expect(late.calls.filter((call) => call === "browser.close")).toHaveLength(1);
-      expect(late.calls.filter((call) => call.startsWith("binding.connect:"))).toHaveLength(1);
+      const fixture = makeFixture();
+      yield* withHost(fixture, (host) => host.closeSession(Redacted.make("leaked_session")));
+      expect(fixture.calls).toEqual(["binding.terminate:leaked_session"]);
     }),
   );
 

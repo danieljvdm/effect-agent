@@ -25,17 +25,22 @@ metadata. It uses no language model or Workers AI extraction. The scroll check p
 was accepted on the current page; the short Example Domain page may not have vertical overflow.
 
 The live workflow generates a fresh Worker name, rejects an existing name, deploys through the
-example's direct Wrangler dependency, waits 15 seconds for route propagation, invokes the Worker
+example's direct Wrangler dependency, provisions its narrow Browser Rendering token, waits 15 seconds for route propagation, invokes the Worker
 once, and deletes the deployment when its Scope closes. The propagation wait and invocation share
 a 150-second timeout. It never retries an unresolved invocation. The deletion
 finalizer is registered only after Wrangler confirms deployment, and a deletion failure fails the
 task instead of being logged and ignored.
+The deployment credential stays in the local workflow. Only the account ID and the narrow browser
+token enter the temporary Worker; deleting the Worker also removes that secret. Remote browser
+cleanup must confirm exact-session termination before the proof succeeds.
 
 Set these values before opting in:
 
 - `CLOUDFLARE_ACCOUNT_ID`: the 32-character account ID;
 - `CLOUDFLARE_API_TOKEN`: a token that can read and edit Workers Scripts, held as an Effect
   `Redacted` value;
+- `BROWSER_RENDERING_API_TOKEN`: an account-scoped Browser Rendering Write token, uploaded only
+  to the temporary Worker after its deletion finalizer is registered;
 - `CLOUDFLARE_WORKERS_SUBDOMAIN`: the account's workers.dev subdomain without `.workers.dev`.
 
 Run the proof from the repository root:

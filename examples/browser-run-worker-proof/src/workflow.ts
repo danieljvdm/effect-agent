@@ -15,10 +15,11 @@ import {
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { BrowserRunWorkerProofResult } from "./contract.ts";
+import { BrowserRunWorkerProofFailure, BrowserRunWorkerProofResult } from "./contract.ts";
 
 const CLOUDFLARE_ACCOUNT_ID = "CLOUDFLARE_ACCOUNT_ID";
 const CLOUDFLARE_API_TOKEN = "CLOUDFLARE_API_TOKEN";
+const BROWSER_RENDERING_API_TOKEN = "BROWSER_RENDERING_API_TOKEN";
 const CLOUDFLARE_WORKERS_SUBDOMAIN = "CLOUDFLARE_WORKERS_SUBDOMAIN";
 const MAX_PROCESS_OUTPUT_BYTES = 64 * 1_024;
 const PROCESS_TIMEOUT = Duration.seconds(120);
@@ -66,6 +67,7 @@ export interface WorkerDeploymentOperations {
 const proofConfig = Config.all({
   accountId: Config.schema(AccountId, CLOUDFLARE_ACCOUNT_ID),
   apiToken: Config.redacted(CLOUDFLARE_API_TOKEN),
+  browserToken: Config.redacted(BROWSER_RENDERING_API_TOKEN),
   workersSubdomain: Config.schema(WorkersSubdomain, CLOUDFLARE_WORKERS_SUBDOMAIN),
   executableSearchPath: Config.nonEmptyString("PATH"),
   userHome: Config.nonEmptyString("HOME"),
@@ -76,7 +78,7 @@ const loadProofConfig = proofConfig.pipe(
     WorkerProofError.make({
       reason: "configuration",
       operation: "load Cloudflare proof configuration",
-      message: `Set ${CLOUDFLARE_ACCOUNT_ID}, ${CLOUDFLARE_API_TOKEN}, and ${CLOUDFLARE_WORKERS_SUBDOMAIN} before running the live proof`,
+      message: `Set ${CLOUDFLARE_ACCOUNT_ID}, ${CLOUDFLARE_API_TOKEN}, ${BROWSER_RENDERING_API_TOKEN}, and ${CLOUDFLARE_WORKERS_SUBDOMAIN} before running the live proof`,
       cause,
     }),
   ),
@@ -225,13 +227,49 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
       runProcess({
         spawner,
         executable: wranglerExecutable,
-        args: ["deploy", "--name", name, "--config", wranglerConfig],
+        args: [
+          "deploy",
+          "--name",
+          name,
+          "--config",
+          wranglerConfig,
+          "--var",
+          `CLOUDFLARE_ACCOUNT_ID:${config.accountId}`,
+        ],
         cwd: repositoryRoot,
         env: subprocessEnv,
         operation: "deployment",
       });
 
     const invoke = Effect.fn("BrowserRunWorkerProof.invoke")(function* (name: string) {
+      // The deployment finalizer is registered before provisioning its secret.
+      // This request's body contains a token; never include it or its cause in diagnostics.
+      const secretResponse = yield* execute(
+        HttpClientRequest.put(`${scriptUrl(name)}/secrets`).pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            name: BROWSER_RENDERING_API_TOKEN,
+            text: Redacted.value(config.browserToken),
+            type: "secret_text",
+          }),
+        ),
+        () =>
+          workerProofError(
+            "deployment",
+            "provision browser token",
+            "Cloudflare could not provision the temporary Worker's browser token",
+          ),
+      ).pipe(
+        Effect.withTracerEnabled(false),
+        Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
+      );
+      if (secretResponse.status < 200 || secretResponse.status >= 300) {
+        return yield* workerProofError(
+          "deployment",
+          "provision browser token",
+          "Cloudflare rejected the temporary Worker's browser token",
+          { status: secretResponse.status },
+        );
+      }
       yield* Effect.sleep(DEPLOYMENT_PROPAGATION_DELAY);
       const response = yield* client
         .execute(HttpClientRequest.get(invocationUrl(name)))
@@ -246,10 +284,16 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
           ),
         );
       if (response.status < 200 || response.status >= 300) {
+        const failure = yield* response.json.pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(BrowserRunWorkerProofFailure)),
+          Effect.option,
+        );
         return yield* workerProofError(
           "invocation",
           "invoke temporary Worker",
-          `The temporary Worker returned HTTP ${String(response.status)}`,
+          Option.isSome(failure)
+            ? `The temporary Worker proof failed at ${failure.value.stage}${failure.value.cleanupReason === undefined ? "" : ` (${failure.value.cleanupReason}, HTTP ${failure.value.cleanupStatus ?? "none"})`}`
+            : `The temporary Worker returned HTTP ${String(response.status)}`,
           { status: response.status },
         );
       }
@@ -307,9 +351,10 @@ export const temporaryWorker = Effect.fn("BrowserRunWorkerProof.temporaryWorker"
       return name;
     }),
     (deployedName) =>
-      operations
-        .delete(deployedName)
-        .pipe(Effect.catch((error) => Ref.set(deletionFailure, Option.some(error)))),
+      operations.delete(deployedName).pipe(
+        Effect.tap(() => Effect.logInfo(`Temporary Worker ${deployedName} was deleted`)),
+        Effect.catch((error) => Ref.set(deletionFailure, Option.some(error))),
+      ),
   );
 });
 

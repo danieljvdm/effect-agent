@@ -3,6 +3,40 @@ import { Schema } from "effect";
 export const PROOF_SOURCE_URL = "https://example.com/";
 export const PROOF_FACT = "Example Domain";
 
+export const BrowserRunProofStage = Schema.Literals([
+  "capture",
+  "scrape",
+  "screenshot",
+  "open",
+  "navigate",
+  "read",
+  "scroll",
+  "interactive-screenshot",
+  "live-view",
+  "handoff",
+  "handoff-state",
+  "close",
+  "closed-handle",
+]);
+export class BrowserRunWorkerProofFailure extends Schema.Class<BrowserRunWorkerProofFailure>(
+  "BrowserRunWorkerProofFailure",
+)({
+  error: Schema.Literal("The Browser Run binding proof failed"),
+  stage: BrowserRunProofStage,
+  cleanupReason: Schema.optionalKey(
+    Schema.Literals([
+      "configuration",
+      "authorization",
+      "rate-limited",
+      "provider",
+      "malformed",
+      "timeout",
+      "pending",
+    ]),
+  ),
+  cleanupStatus: Schema.optionalKey(Schema.Int),
+}) {}
+
 const ScreenshotProof = Schema.Struct({
   mediaType: Schema.Literal("image/png"),
   pngSignatureValid: Schema.Literal(true),
