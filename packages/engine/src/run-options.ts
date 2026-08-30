@@ -9,8 +9,10 @@ import type {
   SubagentParentLink,
   SubmissionId,
   ToolCallId,
+  ToolExecutionKind,
   TurnId,
 } from "@effect-agent/core";
+import { RunPolicyUsage } from "@effect-agent/core";
 import { type Cause, type Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
@@ -290,6 +292,8 @@ export interface RunToolCallDescriptor {
   /** Encoded JSON parameters — the same value official history and canonical records carry. */
   readonly parameters: unknown;
   readonly executionClass: ToolExecutionClassValue;
+  /** Definition-owned classification; never inferred from the Tool name. */
+  readonly executionKind: ToolExecutionKind;
 }
 
 /** Decision returned by a host's action-time Tool authorization policy. */
@@ -387,12 +391,23 @@ export interface RunTurnUsage {
  * provider/Turn events have been emitted, but before approval preflight (making the response
  * canonical before any Tool work — the provably-safe resume window); `prepareToolCalls` fires after
  * every approval and host authorization resolved allowed and before any handler acquires a
- * scheduler permit, with the non-`readonly` calls of the batch (it is skipped
+ * scheduler permit, with all delegations and non-`readonly` ordinary calls (it is skipped
  * entirely when no call needs preparation); `step` persists Durable Step
  * results mid-flight. When the hook is absent the engine behaves exactly as
  * the ephemeral runtime always has.
  */
 export interface RunDurabilityHook<Error = never, Requirements = never> {
+  /**
+   * Reserve cumulative programmatic calls and grace finalization before external execution.
+   * Calls are serialized across the Run. A committed reservation
+   * is never refunded, even if ownership is lost before the Handler or model starts.
+   * Coordinators must append fenced, schema-backed records before returning.
+   */
+  readonly reservePolicyUsage?:
+    | ((
+        usage: Pick<RunPolicyUsage, "programmaticToolCalls" | "finalizationUsed">,
+      ) => Effect.Effect<void, Error, Requirements>)
+    | undefined;
   /** After validated staged response events are emitted, before approval preflight. */
   readonly commitResponse: (
     commit: RunTurnResponseCommit,
@@ -569,17 +584,23 @@ export const RunTurnResumeSettledCallSchema = Schema.Struct({
   id: Schema.NonEmptyString,
   result: Schema.Json,
   isFailure: Schema.Boolean,
+  /** Engine-owned rejection evidence; never inferred from the encoded result. */
+  budgetRejected: Schema.optionalKey(Schema.Literal(true)),
 });
 
 export type RunTurnResumeSettledCall = typeof RunTurnResumeSettledCallSchema.Type;
 
 /**
- * Canonical cumulative usage restored from prior Attempts.
+ * Canonical cumulative usage and Stop Policy accounting restored from prior Attempts.
+ * Turns and declared Tool calls include a pending resumed batch. The failure
+ * streak excludes that entire batch, whose terminal outcomes the engine folds once.
+ * Programmatic reservations include pending work and are never refunded.
  *
  * Counts and microdollars are non-negative safe integers. The most recent
  * call cannot exceed its cumulative total.
  */
 export const RunResumeUsageSchema = Schema.Struct({
+  ...RunPolicyUsage.fields,
   modelCalls: Schema.Natural,
   inputTokens: Schema.Natural,
   outputTokens: Schema.Natural,
@@ -736,11 +757,11 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    */
   readonly resume?: RunTurnResume | undefined;
   /**
-   * RUN-023: cumulative usage of the Run's PRIOR Attempts, projected from the
-   * canonical response records, seeding the fresh Attempt's counters so token
-   * budgets and the compaction trigger keep accounting across ownership
-   * changes. Absent for fresh Runs and for records written before usage
-   * re-seeding existed (seeds zero).
+   * Cumulative usage and Stop Policy accounting of the Run's prior Attempts,
+   * projected from canonical records. A fresh continuation starts at
+   * `committedTurns + 1`; a pending batch uses the already-counted declarations
+   * and folds its terminal outcomes onto the prior failure streak once.
+   * Omit only for fresh Runs. Incomplete or invalid seeds fail typed before execution.
    */
   readonly resumeUsage?: RunResumeUsage | undefined;
   /**

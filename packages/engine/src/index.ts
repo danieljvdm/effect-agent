@@ -20,6 +20,7 @@ import {
   ConversationId,
   type Definition,
   DelegationDepth,
+  DelegationTool,
   type DelegationId,
   IdGenerator,
   InputTokenUsage,
@@ -196,6 +197,7 @@ import {
   type RunApprovalDecision,
   type RunBufferLimits,
   type RunResumeUsage,
+  type RunDurabilityHook,
   RunResumeUsageSchema,
   type RunOptions,
   type RunSchedulingHook,
@@ -378,11 +380,14 @@ interface RunContext {
   readonly bufferLimits: EffectiveRunBufferLimits;
   sequence: number;
   /**
-   * Run-wide count of programmatic (broker) Tool invocations whose handler
-   * started (RUN-017). The broker consumes it mid-pass; the Turn-seam
+   * Run-wide count of reserved programmatic (broker) Tool invocations.
+   * A committed reservation survives interruption before Handler start.
+   * The broker consumes it mid-pass; the Turn-seam
    * `maxToolCalls` checks add it to the declared-call count.
    */
   programmaticToolCalls: number;
+  finalizationUsed: boolean;
+  readonly policyReservations: Semaphore.Semaphore;
 }
 
 const runCounter = Metric.counter("effect_agent_runs_total", {
@@ -953,10 +958,15 @@ const decodeResumedSettledCall = Effect.fn("AgentRuntime.decodeResumedSettledCal
             }
             return descriptor.value;
           };
+          const rejected = Object.getOwnPropertyDescriptor(input, "budgetRejected");
+          if (rejected !== undefined && !("value" in rejected)) {
+            throw new TypeError("settled Tool Call budgetRejected must be an own data property");
+          }
           return {
             id: readOwnDataProperty("id"),
             result: readOwnDataProperty("result"),
             isFailure: readOwnDataProperty("isFailure"),
+            ...(rejected === undefined ? {} : { budgetRejected: rejected.value }),
           };
         },
         catch: () =>
@@ -1046,6 +1056,11 @@ const decodeResumeUsage = Effect.fn("AgentRuntime.decodeResumeUsage")((input: un
           lastInputTokens: read("lastInputTokens"),
           lastOutputTokens: read("lastOutputTokens"),
           costMicrousd: read("costMicrousd"),
+          committedTurns: read("committedTurns"),
+          toolCalls: read("toolCalls"),
+          programmaticToolCalls: read("programmaticToolCalls"),
+          consecutiveToolFailures: read("consecutiveToolFailures"),
+          finalizationUsed: read("finalizationUsed"),
         };
       },
       catch: () =>
@@ -1070,6 +1085,7 @@ const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(functi
   turnId: TurnId,
   call: Response.ToolCallPart<string, unknown>,
   error: unknown,
+  budgetRejected?: true,
 ): Effect.fn.Return<RunEvent, ModelProtocolError> {
   const toolCallId = yield* decodeToolCallId(call.id);
   return ToolCallFailed.make({
@@ -1080,6 +1096,7 @@ const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(functi
     errorTag: errorTag(error),
     message: errorMessage(error),
     providerExecuted: false,
+    ...(budgetRejected === undefined ? {} : { budgetRejected }),
   });
 });
 
@@ -1120,7 +1137,7 @@ const settleRejectedBatch = Effect.fn("AgentRuntime.settleRejectedBatch")(functi
       isFailure: true,
       budgetRejected: true,
     };
-    events.push(yield* makeToolFailedEvent(context, turnId, call, policyError));
+    events.push(yield* makeToolFailedEvent(context, turnId, call, policyError, true));
   }
   return events;
 });
@@ -1897,9 +1914,10 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       );
 
       // Durable preparation runs strictly after every approval resolved
-      // approved and before any handler acquires a permit. `readonly` calls
-      // need no uncertainty protocol; a batch whose calls are all `readonly`
-      // skips the hook entirely. A resumed batch replays the identical full
+      // approved and before any handler acquires a permit. Ordinary `readonly`
+      // calls need no uncertainty protocol. Delegations always prepare their
+      // classification, including a caller-annotated readonly delegation.
+      // A resumed batch replays the identical full
       // descriptor list so the prepared batch identity stays stable.
       const preparation: Stream.Stream<never, HookError, HookRequirements> =
         durability === undefined
@@ -1907,7 +1925,8 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           : Stream.fromEffect(
               Effect.suspend(() => {
                 const preparedDescriptors = descriptors.filter(
-                  (call) => call.executionClass !== "readonly",
+                  (call) =>
+                    call.executionClass !== "readonly" || call.executionKind === "delegation",
                 );
                 return preparedDescriptors.length === 0
                   ? Effect.void
@@ -1935,6 +1954,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           maxToolCalls: brokerAccounting.maxToolCalls,
           declaredToolCalls: brokerAccounting.declaredToolCalls,
           budget: options.budget,
+          reservePolicyUsage: options.durability?.reservePolicyUsage,
           hookServices,
         });
         liveBrokers.set(call.call.id, broker);
@@ -3335,6 +3355,7 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
           toolName: part.name,
           parameters,
           executionClass: getToolExecutionClass(tool),
+          executionKind: Context.get(tool.annotations, DelegationTool) ? "delegation" : "ordinary",
         });
       }
       const declared = ToolCallDeclared.make({
@@ -3751,6 +3772,19 @@ const makeTurn = <
           }),
         );
       }
+      if (context.finalizationUsed) {
+        return failRunEventStream(
+          AgentPolicyError.make({
+            limit:
+              turn > bounds.maxTurns
+                ? "turns"
+                : priorToolCalls + context.programmaticToolCalls > bounds.maxToolCalls
+                  ? "tool-calls"
+                  : "tokens",
+            message: "Agent already used its one grace finalization",
+          }),
+        );
+      }
       const ids = yield* IdGenerator;
       const turnId = yield* ids.nextTurnId;
       // Model-visible final-output contract (RUN-028):
@@ -3956,6 +3990,19 @@ const makeTurn = <
           context.exhaustedDimension ??= "tokens";
           finalAnswerOnly = true;
         }
+      }
+      if (finalAnswerOnly) {
+        yield* context.policyReservations.withPermit(
+          Effect.gen(function* () {
+            context.finalizationUsed = true;
+            if (options.durability?.reservePolicyUsage !== undefined) {
+              yield* options.durability.reservePolicyUsage({
+                programmaticToolCalls: context.programmaticToolCalls,
+                finalizationUsed: true,
+              });
+            }
+          }),
+        );
       }
       /** The model-visible view of the Turn basis under current compaction state. */
       const compactedOutgoing = (): Prompt.Prompt => {
@@ -4793,6 +4840,7 @@ const makeResumeTurn = <
   context: RunContext,
   prompt: Prompt.Prompt,
   resume: RunTurnResume,
+  countedToolCalls: number,
   options: RunOptions<HookError, HookRequirements>,
 ): Stream.Stream<
   RunEvent,
@@ -4883,6 +4931,7 @@ const makeResumeTurn = <
           toolName: call.name,
           parameters,
           executionClass: getToolExecutionClass(tool),
+          executionKind: Context.get(tool.annotations, DelegationTool) ? "delegation" : "ordinary",
         });
       }
       const completionTool = agent.definition.completion?.tool;
@@ -4901,6 +4950,13 @@ const makeResumeTurn = <
         completionTool !== undefined &&
         trace.toolCalls.size === 1 &&
         trace.applicationToolCalls[0]?.name === completionTool;
+      if (context.finalizationUsed && !completionBatch) {
+        return failRunEventStream(
+          ModelProtocolError.make({
+            message: "A resumed grace finalization may only execute the completion Tool",
+          }),
+        );
+      }
       const settledIds = new Set<string>();
       const settledInputs = yield* snapshotResumedSettledCalls(resume, declarationByCallId.size);
       for (const settledInput of settledInputs) {
@@ -4930,11 +4986,14 @@ const makeResumeTurn = <
           name: declared.name,
           encodedResult: settledCall.result,
           isFailure: settledCall.isFailure,
+          ...(settledCall.budgetRejected === undefined
+            ? {}
+            : { budgetRejected: settledCall.budgetRejected }),
         };
       }
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
-      const toolCalls = trace.toolCalls.size;
+      const toolCalls = countedToolCalls;
       const overToolBudget = toolCalls + context.programmaticToolCalls > bounds.maxToolCalls;
       if (overToolBudget && policy.onExhaustion === "fail") {
         return failRunEventStream(
@@ -4945,7 +5004,7 @@ const makeResumeTurn = <
         );
       }
       const turnsBlocked =
-        turn > bounds.maxTurns ||
+        (turn > bounds.maxTurns && !(completionBatch && context.finalizationUsed)) ||
         (policy.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch);
       if (turnsBlocked) {
         return failRunEventStream(
@@ -5167,7 +5226,7 @@ const stream = <
         // canonical response records so token budgets and the compaction
         // trigger keep accounting across ownership changes.
         modelCalls: resumeUsage?.modelCalls ?? 0,
-        consecutiveToolFailures: 0,
+        consecutiveToolFailures: resumeUsage?.consecutiveToolFailures ?? 0,
         inputTokens: resumeUsage?.inputTokens ?? 0,
         outputTokens: resumeUsage?.outputTokens ?? 0,
         lastInputTokens: resumeUsage?.lastInputTokens ?? 0,
@@ -5181,12 +5240,43 @@ const stream = <
         compaction: initialCompactionState(),
         bufferLimits: effectiveRunBufferLimits(options.bufferLimits),
         sequence: 0,
-        programmaticToolCalls: 0,
+        programmaticToolCalls: resumeUsage?.programmaticToolCalls ?? 0,
+        finalizationUsed: resumeUsage?.finalizationUsed ?? false,
+        policyReservations: yield* Semaphore.make(1),
       };
       // Restored totals can already breach the token budget (runtime spec §9):
       // the resumed Attempt must never issue an unconstrained external call.
       // "fail" rejects before any model call or resumed handler runs.
       if (resumeUsage !== undefined) {
+        const bounds = effectiveRunBounds(agent.definition.policy, options);
+        if (context.finalizationUsed) {
+          context.exhaustedDimension =
+            resumeUsage.committedTurns > bounds.maxTurns
+              ? "turns"
+              : resumeUsage.toolCalls + context.programmaticToolCalls > bounds.maxToolCalls
+                ? "tool-calls"
+                : "tokens";
+        }
+        if (
+          agent.definition.policy.onExhaustion === "fail" &&
+          resumeUsage.toolCalls + context.programmaticToolCalls > bounds.maxToolCalls
+        ) {
+          return failRunEventStream(
+            AgentPolicyError.make({
+              limit: "tool-calls",
+              message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`,
+            }),
+          );
+        }
+        const failureLimit = agent.definition.policy.repeatedFailureLimit;
+        if (failureLimit > 0 && context.consecutiveToolFailures >= failureLimit) {
+          return failRunEventStream(
+            AgentPolicyError.make({
+              limit: "repeated-failures",
+              message: `Agent reached its ${failureLimit} consecutive Tool Call failure limit`,
+            }),
+          );
+        }
         // Cost is an unconditional hard rail with no grace call in either
         // exhaustion mode (runtime spec §3): a resume whose seeded spend
         // already breaches the budget rejects before input, resumed
@@ -5259,11 +5349,25 @@ const stream = <
             // A declared-batch resume re-enters mid-Turn: steering seams
             // reopen only after the resumed batch settles, so the initial
             // drain is skipped and the continuation drains at the safe seam.
-            return makeResumeTurn(agent, context, prompt, options.resume, options);
+            return makeResumeTurn(
+              agent,
+              context,
+              prompt,
+              options.resume,
+              resumeUsage?.toolCalls ?? options.resume.calls.length,
+              options,
+            );
           }
           const steering = yield* drainInputs(context, options);
           const initialPrompt = yield* appendInputs(context, prompt, steering, options);
-          return makeTurn(agent, context, initialPrompt, 1, 0, options);
+          return makeTurn(
+            agent,
+            context,
+            initialPrompt,
+            (resumeUsage?.committedTurns ?? 0) + 1,
+            resumeUsage?.toolCalls ?? 0,
+            options,
+          );
         }),
       );
 
@@ -5602,6 +5706,7 @@ interface ToolBrokerBinding<HookError, HookRequirements> {
   /** Model-declared Tool Calls committed through this batch (the outer call included). */
   readonly declaredToolCalls: number;
   readonly budget: RunOptions<HookError, HookRequirements>["budget"];
+  readonly reservePolicyUsage: RunDurabilityHook<HookError, HookRequirements>["reservePolicyUsage"];
   readonly hookServices: Context.Context<HookRequirements>;
 }
 
@@ -5859,53 +5964,73 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
               return invalidParameters;
             }
 
-            // Mid-pass budget consumption (RUN-017). The policy check and the
-            // Run-wide reservation are adjacent with no interleaving point, so
-            // parallel outer handlers cannot both observe the last remaining
-            // slot; a rejection after the reservation rolls it back so the
-            // counter always equals the handlers that actually started. A
-            // budget-hook failure becomes a call outcome rather than failing
-            // the Run mid-pass: exhaustion is re-enforced at the next Turn
-            // seam, where `consumeUsage` and the stream guards stop the Run.
-            const used = binding.declaredToolCalls + binding.context.programmaticToolCalls;
-            if (used + 1 > binding.maxToolCalls) {
-              return yield* preflightFailure(
-                input,
-                "infrastructure",
-                "AgentPolicyError",
-                `Agent exceeded its ${binding.maxToolCalls} Tool Call limit`,
-              );
-            }
-            binding.context.programmaticToolCalls += 1;
-            if (binding.budget !== undefined) {
-              const exhausted = yield* provideHookServices(
-                binding.budget.consume({
-                  modelCalls: 0,
-                  inputTokens: 0,
-                  outputTokens: 0,
-                  totalTokens: 0,
-                  toolCalls: 1,
-                  costMicrousd: 0,
-                  usage: emptyProgrammaticUsage,
-                }),
-                binding.hookServices,
-              ).pipe(
-                Effect.map(() => undefined),
-                Effect.catchCauseFilter(Cause.findError, (error, cause) =>
-                  Effect.succeed({ error, cause }),
-                ),
-              );
-              if (exhausted !== undefined) {
-                binding.context.programmaticToolCalls -= 1;
-                return yield* preflightFailure(
-                  input,
-                  "infrastructure",
-                  errorTag(exhausted.error),
-                  errorMessage(exhausted.error),
-                  exhausted.cause,
-                );
-              }
-            }
+            // Serialize admission and durable reservation across outer handlers.
+            // Once reserved, a slot is never refunded: ownership may be lost
+            // after the append but before the Handler starts.
+            const rejected = yield* binding.context.policyReservations.withPermit(
+              Effect.gen(function* () {
+                const used = binding.declaredToolCalls + binding.context.programmaticToolCalls;
+                if (used + 1 > binding.maxToolCalls) {
+                  return yield* preflightFailure(
+                    input,
+                    "infrastructure",
+                    "AgentPolicyError",
+                    `Agent exceeded its ${binding.maxToolCalls} Tool Call limit`,
+                  );
+                }
+                if (binding.budget !== undefined) {
+                  const exhausted = yield* provideHookServices(
+                    binding.budget.consume({
+                      modelCalls: 0,
+                      inputTokens: 0,
+                      outputTokens: 0,
+                      totalTokens: 0,
+                      toolCalls: 1,
+                      costMicrousd: 0,
+                      usage: emptyProgrammaticUsage,
+                    }),
+                    binding.hookServices,
+                  ).pipe(
+                    Effect.map(() => undefined),
+                    Effect.catchCauseFilter(Cause.findError, (error, cause) =>
+                      Effect.succeed({ error, cause }),
+                    ),
+                  );
+                  if (exhausted !== undefined) {
+                    return yield* preflightFailure(
+                      input,
+                      "infrastructure",
+                      errorTag(exhausted.error),
+                      errorMessage(exhausted.error),
+                      exhausted.cause,
+                    );
+                  }
+                }
+                binding.context.programmaticToolCalls += 1;
+                if (binding.reservePolicyUsage !== undefined) {
+                  return yield* provideHookServices(
+                    binding.reservePolicyUsage({
+                      programmaticToolCalls: binding.context.programmaticToolCalls,
+                      finalizationUsed: binding.context.finalizationUsed,
+                    }),
+                    binding.hookServices,
+                  ).pipe(
+                    Effect.as(undefined),
+                    Effect.catchCauseFilter(Cause.findError, (error, cause) =>
+                      preflightFailure(
+                        input,
+                        "infrastructure",
+                        errorTag(error),
+                        errorMessage(error),
+                        cause,
+                      ),
+                    ),
+                  );
+                }
+                return undefined;
+              }),
+            );
+            if (rejected !== undefined) return rejected;
 
             const index = state.nextIndex++;
             const handleId = `${binding.outerToolCallId}#${index}`;
