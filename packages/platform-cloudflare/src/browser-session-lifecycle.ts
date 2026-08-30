@@ -13,6 +13,7 @@ export class BrowserRunCleanupError extends Schema.TaggedError<BrowserRunCleanup
       "timeout",
       "pending",
     ]),
+    status: Schema.optionalKey(Schema.Int),
   },
 ) {}
 
@@ -60,15 +61,25 @@ export class BrowserRunSessionLifecycle extends Context.Service<
               ).pipe(HttpClientRequest.bearerToken(options.apiToken)),
             )
             .pipe(
-              Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
+              // workerd supports manual/follow, not error. Reject every redirect below.
+              Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
               Effect.mapError(() => new BrowserRunCleanupError({ reason: "provider" })),
             );
           if (response.status === 401 || response.status === 403)
-            return yield* new BrowserRunCleanupError({ reason: "authorization" });
+            return yield* new BrowserRunCleanupError({
+              reason: "authorization",
+              status: response.status,
+            });
           if (response.status === 429)
-            return yield* new BrowserRunCleanupError({ reason: "rate-limited" });
+            return yield* new BrowserRunCleanupError({
+              reason: "rate-limited",
+              status: response.status,
+            });
           if (response.status !== 200 && response.status !== 404)
-            return yield* new BrowserRunCleanupError({ reason: "provider" });
+            return yield* new BrowserRunCleanupError({
+              reason: "provider",
+              status: response.status,
+            });
           if (response.headers["content-type"]?.split(";", 1)[0]?.trim() !== "application/json")
             return yield* new BrowserRunCleanupError({ reason: "malformed" });
           const bytes = yield* Stream.runFoldEffect(

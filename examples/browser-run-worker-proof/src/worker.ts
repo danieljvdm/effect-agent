@@ -6,6 +6,7 @@ import {
 } from "@effect-agent/platform-cloudflare/browser-quick-action";
 import {
   BrowserRunHandoffRequest,
+  BrowserRunCleanupError,
   BrowserRunInteractiveBinding,
   BrowserRunInteractiveHost,
   BrowserRunSessionLifecycle,
@@ -18,6 +19,7 @@ import {
   BrowserScreenshotRequest,
   BrowserScrollRequest,
   InteractiveBrowserPolicy,
+  InteractiveBrowserActionError,
   PageScreenshot,
   PageScreenshotLimits,
   PageScreenshotRequest,
@@ -38,8 +40,10 @@ import { Worker, WorkerEnvironment } from "effect-cf";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
+import type { BrowserRunProofStage } from "./contract.ts";
 import {
   BrowserRunInteractiveProof,
+  BrowserRunWorkerProofFailure,
   BrowserRunWorkerProofResult,
   PROOF_FACT,
   PROOF_SOURCE_URL,
@@ -120,148 +124,180 @@ const proofLayer = Layer.unwrap(
 );
 
 const runProof = Effect.gen(function* () {
-  const toolkit = yield* Toolkit.make(proofCapture.tool);
-  const results = yield* toolkit.handle("capture_example_domain", {
-    url: PROOF_SOURCE_URL,
-    action: "markdown",
-  });
-  const last = yield* Stream.runLast(results);
-  if (Option.isNone(last) || last.value.preliminary) {
-    return yield* WorkerCaptureProofError.make({
-      message: "The WebCapture handler did not return a final result",
-    });
-  }
-  const result = last.value.result;
-  if (!Schema.is(WebCaptureSuccess)(result) || !result.markdown?.includes(PROOF_FACT)) {
-    return yield* WorkerCaptureProofError.make({
-      message: "The Markdown capture did not contain the expected stable fact",
-    });
-  }
-  yield* Effect.sleep(QUICK_ACTION_PACING_DELAY);
-  const scrapeToolkit = yield* Toolkit.make(proofScrape.tool);
-  const scrapeResults = yield* scrapeToolkit.handle("scrape_example_domain", {
-    url: PROOF_SOURCE_URL,
-    selectors: PROOF_SCRAPE_SELECTORS,
-  });
-  const scrapeLast = yield* Stream.runLast(scrapeResults);
-  if (Option.isNone(scrapeLast) || scrapeLast.value.preliminary) {
-    return yield* WorkerCaptureProofError.make({
-      message: "The selector scrape handler did not return a final result",
-    });
-  }
-  const scrapeResult = scrapeLast.value.result;
-  const heading = Schema.is(WebCaptureScrapeSuccess)(scrapeResult)
-    ? scrapeResult.groups.find((group) => group.selector === "h1")
-    : undefined;
-  if (
-    heading === undefined ||
-    !heading.results.some((element) => element.text.includes(PROOF_FACT))
-  ) {
-    return yield* WorkerCaptureProofError.make({
-      message: "The selector scrape did not contain the expected stable heading",
-    });
-  }
-  yield* Effect.sleep(QUICK_ACTION_PACING_DELAY);
-  const screenshots = yield* PageScreenshot;
-  const screenshot = yield* screenshots.capture(screenshotRequest);
-  if (screenshot.mediaType !== "image/png" || !hasPngSignature(screenshot.bytes)) {
-    return yield* WorkerCaptureProofError.make({
-      message: "The screenshot was not a PNG with the expected signature",
-    });
-  }
-  const interactive = yield* Effect.scoped(
-    Effect.gen(function* () {
-      const browsers = yield* BrowserRunInteractiveHost;
-      const session = yield* browsers.open(interactivePolicy);
-      const handle = session.handle;
-      const navigation = yield* handle.navigate(interactiveNavigateRequest);
-      if (navigation.url !== PROOF_SOURCE_URL) {
-        return yield* WorkerCaptureProofError.make({
-          message: "The interactive browser did not finish at the expected URL",
-        });
-      }
-      const page = yield* handle.readText(interactiveReadTextRequest);
-      if (
-        !page.text.includes(PROOF_FACT) ||
-        new TextEncoder().encode(page.text).byteLength > INTERACTIVE_MAX_TEXT_BYTES
-      ) {
-        return yield* WorkerCaptureProofError.make({
-          message: "The interactive browser text did not contain the expected stable fact",
-        });
-      }
-      const scrolled = yield* handle.scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: 128 }));
-      if (scrolled.url !== PROOF_SOURCE_URL) {
-        return yield* WorkerCaptureProofError.make({
-          message: "The interactive scroll changed the expected page URL",
-        });
-      }
-      const image = yield* handle.screenshot(BrowserScreenshotRequest.make({ fullPage: false }));
-      if (image.mediaType !== "image/png" || !hasPngSignature(image.bytes)) {
-        return yield* WorkerCaptureProofError.make({
-          message: "The interactive screenshot was not a PNG with the expected signature",
-        });
-      }
-      const liveView = yield* session.getLiveView(
-        BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 }),
-      );
-      const handoff = yield* session.handoff(
-        BrowserRunHandoffRequest.make({
-          instructions: "Temporary browser proof. The host will close this session immediately.",
-          timeout: 5_000,
-        }),
-      );
-      const handoffState = yield* session.getHandoffState;
-      if (
-        !handoffState.active ||
-        handoffState.handoffId === undefined ||
-        Redacted.value(handoffState.handoffId) !== Redacted.value(handoff.handoffId) ||
-        !Redacted.isRedacted(session.sessionId) ||
-        !Redacted.isRedacted(liveView.devtoolsFrontendUrl)
-      ) {
-        return yield* WorkerCaptureProofError.make({
-          message: "The interactive host controls did not return the expected private state",
-        });
-      }
-      yield* session.close;
-      const afterClose = yield* handle.readText(interactiveReadTextRequest).pipe(Effect.flip);
-      if (afterClose._tag !== "InteractiveBrowserExpiredError") {
-        return yield* WorkerCaptureProofError.make({
-          message: "The explicitly closed browser handle did not reject further actions",
-        });
-      }
-      return BrowserRunInteractiveProof.make({
-        finalUrl: PROOF_SOURCE_URL,
-        readFact: PROOF_FACT,
-        screenshot: { mediaType: "image/png", pngSignatureValid: true },
-        scrolled: true,
-        liveViewCreated: true,
-        handoffActive: true,
-        closed: true,
-      });
-    }),
-  );
-  return Response.json(
-    BrowserRunWorkerProofResult.make({
-      sourceUrl: PROOF_SOURCE_URL,
+  let stage: typeof BrowserRunProofStage.Type = "capture";
+  return yield* Effect.gen(function* () {
+    const toolkit = yield* Toolkit.make(proofCapture.tool);
+    const results = yield* toolkit.handle("capture_example_domain", {
+      url: PROOF_SOURCE_URL,
       action: "markdown",
-      fact: PROOF_FACT,
-      scrape: {
-        selectors: PROOF_SCRAPE_SELECTORS,
-        headingFact: PROOF_FACT,
-      },
-      screenshot: {
-        mediaType: "image/png",
-        pngSignatureValid: true,
-      },
-      interactive,
-    }),
-  );
-}).pipe(
-  Effect.catch(() =>
-    Effect.succeed(
-      Response.json({ error: "The Browser Run binding proof failed" }, { status: 502 }),
+    });
+    const last = yield* Stream.runLast(results);
+    if (Option.isNone(last) || last.value.preliminary) {
+      return yield* WorkerCaptureProofError.make({
+        message: "The WebCapture handler did not return a final result",
+      });
+    }
+    const result = last.value.result;
+    if (!Schema.is(WebCaptureSuccess)(result) || !result.markdown?.includes(PROOF_FACT)) {
+      return yield* WorkerCaptureProofError.make({
+        message: "The Markdown capture did not contain the expected stable fact",
+      });
+    }
+    yield* Effect.sleep(QUICK_ACTION_PACING_DELAY);
+    stage = "scrape";
+    const scrapeToolkit = yield* Toolkit.make(proofScrape.tool);
+    const scrapeResults = yield* scrapeToolkit.handle("scrape_example_domain", {
+      url: PROOF_SOURCE_URL,
+      selectors: PROOF_SCRAPE_SELECTORS,
+    });
+    const scrapeLast = yield* Stream.runLast(scrapeResults);
+    if (Option.isNone(scrapeLast) || scrapeLast.value.preliminary) {
+      return yield* WorkerCaptureProofError.make({
+        message: "The selector scrape handler did not return a final result",
+      });
+    }
+    const scrapeResult = scrapeLast.value.result;
+    const heading = Schema.is(WebCaptureScrapeSuccess)(scrapeResult)
+      ? scrapeResult.groups.find((group) => group.selector === "h1")
+      : undefined;
+    if (
+      heading === undefined ||
+      !heading.results.some((element) => element.text.includes(PROOF_FACT))
+    ) {
+      return yield* WorkerCaptureProofError.make({
+        message: "The selector scrape did not contain the expected stable heading",
+      });
+    }
+    yield* Effect.sleep(QUICK_ACTION_PACING_DELAY);
+    const screenshots = yield* PageScreenshot;
+    stage = "screenshot";
+    const screenshot = yield* screenshots.capture(screenshotRequest);
+    if (screenshot.mediaType !== "image/png" || !hasPngSignature(screenshot.bytes)) {
+      return yield* WorkerCaptureProofError.make({
+        message: "The screenshot was not a PNG with the expected signature",
+      });
+    }
+    const interactive = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const browsers = yield* BrowserRunInteractiveHost;
+        stage = "open";
+        const session = yield* browsers.open(interactivePolicy);
+        const handle = session.handle;
+        stage = "navigate";
+        const navigation = yield* handle.navigate(interactiveNavigateRequest);
+        if (navigation.url !== PROOF_SOURCE_URL) {
+          return yield* WorkerCaptureProofError.make({
+            message: "The interactive browser did not finish at the expected URL",
+          });
+        }
+        stage = "read";
+        const page = yield* handle.readText(interactiveReadTextRequest);
+        if (
+          !page.text.includes(PROOF_FACT) ||
+          new TextEncoder().encode(page.text).byteLength > INTERACTIVE_MAX_TEXT_BYTES
+        ) {
+          return yield* WorkerCaptureProofError.make({
+            message: "The interactive browser text did not contain the expected stable fact",
+          });
+        }
+        stage = "scroll";
+        const scrolled = yield* handle.scroll(
+          BrowserScrollRequest.make({ deltaX: 0, deltaY: 128 }),
+        );
+        if (scrolled.url !== PROOF_SOURCE_URL) {
+          return yield* WorkerCaptureProofError.make({
+            message: "The interactive scroll changed the expected page URL",
+          });
+        }
+        stage = "interactive-screenshot";
+        const image = yield* handle.screenshot(BrowserScreenshotRequest.make({ fullPage: false }));
+        if (image.mediaType !== "image/png" || !hasPngSignature(image.bytes)) {
+          return yield* WorkerCaptureProofError.make({
+            message: "The interactive screenshot was not a PNG with the expected signature",
+          });
+        }
+        stage = "live-view";
+        const liveView = yield* session.getLiveView(
+          BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 }),
+        );
+        stage = "handoff";
+        const handoff = yield* session.handoff(
+          BrowserRunHandoffRequest.make({
+            instructions: "Temporary browser proof. The host will close this session immediately.",
+            timeout: 5_000,
+          }),
+        );
+        stage = "handoff-state";
+        const handoffState = yield* session.getHandoffState;
+        if (
+          !handoffState.active ||
+          handoffState.handoffId === undefined ||
+          Redacted.value(handoffState.handoffId) !== Redacted.value(handoff.handoffId) ||
+          !Redacted.isRedacted(session.sessionId) ||
+          !Redacted.isRedacted(liveView.devtoolsFrontendUrl)
+        ) {
+          return yield* WorkerCaptureProofError.make({
+            message: "The interactive host controls did not return the expected private state",
+          });
+        }
+        stage = "close";
+        yield* session.close;
+        stage = "closed-handle";
+        const afterClose = yield* handle.readText(interactiveReadTextRequest).pipe(Effect.flip);
+        if (afterClose._tag !== "InteractiveBrowserExpiredError") {
+          return yield* WorkerCaptureProofError.make({
+            message: "The explicitly closed browser handle did not reject further actions",
+          });
+        }
+        return BrowserRunInteractiveProof.make({
+          finalUrl: PROOF_SOURCE_URL,
+          readFact: PROOF_FACT,
+          screenshot: { mediaType: "image/png", pngSignatureValid: true },
+          scrolled: true,
+          liveViewCreated: true,
+          handoffActive: true,
+          closed: true,
+        });
+      }),
+    );
+    return Response.json(
+      BrowserRunWorkerProofResult.make({
+        sourceUrl: PROOF_SOURCE_URL,
+        action: "markdown",
+        fact: PROOF_FACT,
+        scrape: {
+          selectors: PROOF_SCRAPE_SELECTORS,
+          headingFact: PROOF_FACT,
+        },
+        screenshot: {
+          mediaType: "image/png",
+          pngSignatureValid: true,
+        },
+        interactive,
+      }),
+    );
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.succeed(
+        Response.json(
+          BrowserRunWorkerProofFailure.make({
+            error: "The Browser Run binding proof failed",
+            stage,
+            ...(Schema.is(InteractiveBrowserActionError)(error) &&
+            Schema.is(BrowserRunCleanupError)(error.cause)
+              ? {
+                  cleanupReason: error.cause.reason,
+                  ...(error.cause.status === undefined
+                    ? {}
+                    : { cleanupStatus: error.cause.status }),
+                }
+              : {}),
+          }),
+          { status: 502 },
+        ),
+      ),
     ),
-  ),
-);
+  );
+});
 
 export default Worker.make(proofLayer, runProof);

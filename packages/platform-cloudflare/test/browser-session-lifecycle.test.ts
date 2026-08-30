@@ -1,11 +1,30 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Redacted } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
 
 const sessionId = "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99";
 const accountId = "1234567890abcdef1234567890abcdef";
+
+it.effect("uses a credential-preserving redirect policy supported by the Worker runtime", () =>
+  Effect.gen(function* () {
+    yield* (yield* BrowserRunSessionLifecycle).close(Redacted.make(sessionId));
+  }).pipe(
+    Effect.provide(
+      BrowserRunSessionLifecycle.layer({ accountId, apiToken: Redacted.make("fixture-token") }),
+    ),
+    Effect.provide(FetchHttpClient.layer),
+    Effect.provideService(FetchHttpClient.Fetch, async (input, init) => {
+      // The real workerd Request constructor rejects unsupported fetch options.
+      const request = new Request(input, init);
+      expect(request.redirect).toBe("manual");
+      return new Response('{"status":"closed"}', {
+        headers: { "content-type": "application/json" },
+      });
+    }),
+  ),
+);
 
 it.effect(
   "confirms exact-session termination without treating pending or untrusted responses as absence",
