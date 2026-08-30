@@ -2,6 +2,7 @@ import {
   ConversationId,
   ModelCallUsage,
   RunId,
+  RunPolicyUsage,
   summarizeModelUsage,
   ToolCallId,
   TurnId,
@@ -353,6 +354,7 @@ export interface RunJournalUsage {
 }
 
 export interface RunJournalProjection {
+  readonly policyUsage: RunPolicyUsage;
   /** Canonical projection for the requested Run; may end at its resumable Tool declaration. */
   readonly prompt: Prompt.Prompt;
   /** Valid prior-Run history excluding the projected Run's records and orphan Tool batches. */
@@ -462,6 +464,7 @@ const withoutApplicationToolCallMessages = (prompt: Prompt.Prompt): ReadonlyArra
  * child-log lineage record is not model input.
  */
 const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
+  "RunPolicyUsageReserved",
   "RunStarted",
   "ToolCallPrepared",
   "ToolCallUnknown",
@@ -625,6 +628,63 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
     }
   }
 
+  const policyUsage = {
+    committedTurns: 0,
+    toolCalls: 0,
+    programmaticToolCalls: 0,
+    consecutiveToolFailures: 0,
+    finalizationUsed: false,
+  };
+  const settledById = new Map<string, ToolCallSettled>();
+  for (const { record } of records) {
+    if (record.payload._tag === "ToolCallSettled") settledById.set(record.recordId, record.payload);
+  }
+  for (const { record } of records) {
+    const payload = record.payload;
+    if (!("runId" in payload) || payload.runId !== ownerRunId) continue;
+    if (payload._tag === "RunPolicyUsageReserved") {
+      if (
+        payload.programmaticToolCalls < policyUsage.programmaticToolCalls ||
+        (policyUsage.finalizationUsed && !payload.finalizationUsed)
+      ) {
+        return yield* journalError("Run policy reservations must be monotonic");
+      }
+      policyUsage.programmaticToolCalls = payload.programmaticToolCalls;
+      policyUsage.finalizationUsed = payload.finalizationUsed;
+    }
+    if (payload._tag !== "ModelResponseRecorded") continue;
+    const messages = decodedResponses.get(record.recordId);
+    if (messages === undefined) return yield* journalError("Missing decoded policy response");
+    policyUsage.committedTurns = Math.max(policyUsage.committedTurns, payload.turn);
+    const calls = messages.content.flatMap((message) =>
+      message.role === "assistant"
+        ? message.content.filter((part) => part.type === "tool-call")
+        : [],
+    );
+    policyUsage.toolCalls += calls.length;
+    if (incompleteToolTurns.has(record.recordId)) continue;
+    for (const call of calls) {
+      const result = call.providerExecuted
+        ? messages.content
+            .flatMap((message) => (message.role === "assistant" ? message.content : []))
+            .find(
+              (part) => part.type === "tool-result" && part.providerExecuted && part.id === call.id,
+            )
+        : settledById.get(`tool-settled:${ownerRunId}:${payload.turn}:${call.id}`);
+      if (result === undefined || ("budgetRejected" in result && result.budgetRejected === true))
+        continue;
+      if (!("isFailure" in result)) continue;
+      policyUsage.consecutiveToolFailures = result.isFailure
+        ? policyUsage.consecutiveToolFailures + 1
+        : 0;
+    }
+  }
+  const validatedPolicyUsage = yield* Schema.decodeUnknownEffect(RunPolicyUsage)(policyUsage).pipe(
+    Effect.mapError((cause) =>
+      journalError("Run policy accounting exceeds its Schema bounds", cause),
+    ),
+  );
+
   const flushTools = Effect.fn("RunJournal.flushTools")(function* (
     current: FoldState,
   ): Effect.fn.Return<FoldState, RunJournalError> {
@@ -757,6 +817,7 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
   state = yield* flushTools(state);
 
   return {
+    policyUsage: validatedPolicyUsage,
     prompt: Prompt.fromMessages(state.all),
     historyBefore: Prompt.fromMessages(state.before),
     committedTurns: state.committedTurns,
@@ -801,6 +862,7 @@ const validStagedUsage = (label: string, value: number): Effect.Effect<number, R
       );
 
 export interface TurnCommitInput {
+  readonly budgetRejectedCalls?: ReadonlySet<string>;
   readonly runId: RunId;
   /** Canonical (Run-relative, Attempt-independent) Turn number; must be positive. */
   readonly turn: number;
@@ -978,6 +1040,7 @@ const toolSettledRecords = Effect.fn("RunJournal.toolSettledRecords")(function* 
           toolName: part.name,
           result,
           isFailure: part.isFailure,
+          ...(input.budgetRejectedCalls?.has(part.id) === true ? { budgetRejected: true } : {}),
         }),
       }),
     );
@@ -1038,7 +1101,8 @@ export const turnCanonicalBatch = Effect.fn("RunJournal.turnCanonicalBatch")(fun
 });
 
 /**
- * Commit 1 of a tool-declaring Turn (plan §2.1): ONLY the Turn's `ModelResponseRecorded` record
+ * Commit 1 of a tool-declaring Turn: the Turn's `ModelResponseRecorded` record, including
+ * provider results retained in assistant content before application Tools execute.
  * — pending steering plus the assistant response with its declared tool calls — under batch
  * identity `turn-response:{runId}:{turn}`. Committing the response before preparation creates
  * the provably-safe durability §15 window ("after model item commit, before tool preparation →

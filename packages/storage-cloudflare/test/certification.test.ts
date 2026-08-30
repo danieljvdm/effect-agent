@@ -102,7 +102,7 @@ describe("TEST-004 STORE-010 STORE-013 adapter certification — storage-cloudfl
     "TIER2: every coordinator failpoint leaves a classifiable state and re-drive converges",
     async () => {
       const report = await certified();
-      expect(report.tier2).toHaveLength(31 * CERTIFICATION_SCENARIOS.length);
+      expect(report.tier2).toHaveLength(34 * CERTIFICATION_SCENARIOS.length);
       expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
       expect(report.tier2.every((row) => row.digestChainVerified)).toBe(true);
       for (const scenario of CERTIFICATION_SCENARIOS) {

@@ -715,6 +715,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
       payload: {
         _tag: "RunStarted",
         runId: "run:{submissionId}",
+        policyAccountingVersion: 1,
         maxDurationMillis: 30_000,
       },
     },

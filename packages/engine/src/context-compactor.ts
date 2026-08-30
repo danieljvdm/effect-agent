@@ -41,7 +41,8 @@ export type CompactionModelLayer = Layer.Layer<
 /**
  * One bounded pass over an immutable source snapshot. A harness owns state, metering, and
  * application of decisions. The interpreter permits at most one prune, one summary decision,
- * and one call to summarize per pass. All model work must use summarize so it is metered.
+ * and one call to summarize per Turn, shared across pressure and overflow passes.
+ * All model work must use summarize so it is metered.
  * Callback failures and requirements pass through unchanged; strategy dependencies belong to
  * its construction Layer. Protected messages and Tool pairs cannot be removed by a decision.
  */

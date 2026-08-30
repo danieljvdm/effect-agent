@@ -16,13 +16,8 @@ import {
   reviewEventFor,
   withActionInputs,
 } from "../src/action.ts";
-import {
-  type ChangedFile,
-  GitHubApiFailure,
-  type RepositorySnapshot,
-  StaleReviewHead,
-} from "../src/github.ts";
-import { reviewMarker, selectReview } from "../src/selection.ts";
+import { type ChangedFile, GitHubApiFailure, type RepositorySnapshot } from "../src/github.ts";
+import { reviewMarker } from "../src/selection.ts";
 
 const file = (path: string, patch: string | undefined): ChangedFile => ({
   path,
@@ -33,7 +28,7 @@ const file = (path: string, patch: string | undefined): ChangedFile => ({
 });
 
 const PublishedReviewBody = Schema.Struct({
-  commit_id: Schema.optionalKey(Schema.String),
+  commit_id: Schema.String,
   event: Schema.String,
   body: Schema.String,
   comments: Schema.Array(Schema.Unknown),
@@ -252,169 +247,124 @@ describe("Action configuration", () => {
 });
 
 describe("stale-head publication", () => {
-  it.effect(
-    "replaces successful and failed stale result bodies with one neutral attempt marker",
-    () =>
-      Effect.gen(function* () {
-        for (const originalBody of [
-          "MODEL FINDING: reachable secret exposure",
-          "MODEL FAILURE: provider diagnostics",
-        ]) {
-          const attemptedBodies = yield* Ref.make<ReadonlyArray<string>>([]);
-          const markerBodies = yield* Ref.make<ReadonlyArray<string>>([]);
-          const stale = StaleReviewHead.make({
-            inspectedHead: "old-head",
-            currentHead: "new-head",
-          });
-          const publication = yield* publishHeadBoundReview({
-            publish: Ref.update(attemptedBodies, (current) => [...current, originalBody]).pipe(
-              Effect.andThen(Effect.fail(stale)),
-            ),
-            publishCurrentHeadAttemptMarker: (body) =>
-              Ref.update(markerBodies, (current) => [...current, body]).pipe(
-                Effect.as("https://github.test/review"),
-              ),
-            automatic: true,
-          });
-
-          expect(publication).toMatchObject({
-            _tag: "stale",
-            reviewUrl: "https://github.test/review",
-            failure: stale,
-          });
-          expect(yield* Ref.get(attemptedBodies)).toEqual([originalBody]);
-          const markers = yield* Ref.get(markerBodies);
-          expect(markers).toHaveLength(1);
-          expect(markers[0]).toContain(
-            "<!-- effect-agent-review:v3 automatic=true completed=false -->",
-          );
-          expect(markers[0]).not.toContain(originalBody);
-          expect(markers[0]).not.toContain("finding");
-          const history = [
-            {
-              id: 1,
-              authorLogin: "effect-agent[bot]",
-              authorType: "Bot",
-              body: markers[0] ?? "",
-              commitId: "new-head",
-              submittedAt: "2026-08-26T00:00:00Z",
-              state: "COMMENTED" as const,
-            },
-          ];
-          expect(
-            selectReview({
-              mode: "auto",
-              currentHead: "new-head",
-              reviewAuthor: "effect-agent[bot]",
-              automaticReviewLimit: 1,
-              history,
-            }),
-          ).toEqual({ _tag: "skip", reason: "head-review-incomplete" });
-          expect(
-            selectReview({
-              mode: "auto",
-              currentHead: "later-head",
-              reviewAuthor: "effect-agent[bot]",
-              automaticReviewLimit: 1,
-              history,
-            }),
-          ).toMatchObject({ _tag: "pause", automaticAttempts: 1 });
-        }
-      }),
-  );
-
-  it.effect("does not retry or post a marker after a generic publication failure", () =>
+  it.effect("preserves a generic publication failure without retrying", () =>
     Effect.gen(function* () {
-      const markerPosts = yield* Ref.make(0);
+      const attempts = yield* Ref.make(0);
       const failure = GitHubApiFailure.make({
         operation: "publish pull request review",
         reason: "POST failed after an uncertain transport outcome",
       });
-      const exit = yield* publishHeadBoundReview({
-        publish: Effect.fail(failure),
-        publishCurrentHeadAttemptMarker: () =>
-          Ref.update(markerPosts, (count) => count + 1).pipe(
-            Effect.andThen(Effect.succeed("https://github.test/extra-review")),
-          ),
-        automatic: true,
-      }).pipe(Effect.exit);
-
-      expect(Exit.isFailure(exit)).toBe(true);
-      expect(yield* Ref.get(markerPosts)).toBe(0);
-    }),
+      const exit = yield* publishHeadBoundReview(
+        Ref.update(attempts, (count) => count + 1).pipe(Effect.andThen(Effect.fail(failure))),
+        { publish: () => Effect.die("Must not retry uncertain publication"), automatic: true },
+      ).pipe(Effect.exit);
+      if (Exit.isSuccess(exit)) throw new Error("Expected publication to fail");
+      expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toEqual(failure);
+      expect(yield* Ref.get(attempts)).toBe(1);
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect(
-    "posts one marker-only review and leaves the action failed when preflight sees a push",
-    () =>
-      Effect.gen(function* () {
-        const pullReads = yield* Ref.make(0);
-        const postBodies = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
-        const client = HttpClient.make((request, url) => {
-          if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
-            return Ref.getAndUpdate(pullReads, (count) => count + 1).pipe(
-              Effect.map((count) =>
-                jsonResponse(
-                  request,
-                  pullRequestWire(
-                    "Move during publication",
-                    "base",
-                    count === 0 ? "inspected-head" : "current-head",
-                  ),
+  it.effect("leaves a stale run failed without blocking the queued review of the new head", () =>
+    Effect.gen(function* () {
+      const pullReads = yield* Ref.make(0);
+      const postBodies = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
+      const client = HttpClient.make((request, url) => {
+        if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
+          return Ref.getAndUpdate(pullReads, (count) => count + 1).pipe(
+            Effect.map((count) =>
+              jsonResponse(
+                request,
+                pullRequestWire(
+                  "Move during publication",
+                  "base",
+                  count === 0 ? "inspected-head" : "current-head",
                 ),
               ),
-            );
-          }
-          if (
-            request.method === "GET" &&
-            (url.pathname.endsWith("/reviews") || url.pathname.endsWith("/files"))
-          ) {
-            return Effect.succeed(jsonResponse(request, []));
-          }
-          if (request.method === "GET" && url.pathname.includes("/compare/")) {
-            return Effect.succeed(jsonResponse(request, { merge_base_commit: { sha: "base" } }));
-          }
-          if (request.method === "GET" && url.pathname.endsWith("/git/commits/base")) {
-            return Effect.succeed(
-              jsonResponse(request, { sha: "base", tree: { sha: "base-tree" } }),
-            );
-          }
-          if (request.method === "GET" && url.pathname.endsWith("/git/commits/inspected-head")) {
-            return Effect.succeed(
-              jsonResponse(request, { sha: "inspected-head", tree: { sha: "head-tree" } }),
-            );
-          }
-          if (
-            request.method === "GET" &&
-            (url.pathname.endsWith("/git/trees/base-tree") ||
-              url.pathname.endsWith("/git/trees/head-tree"))
-          ) {
-            const sha = url.pathname.endsWith("base-tree") ? "base-tree" : "head-tree";
-            return Effect.succeed(jsonResponse(request, { sha, tree: [], truncated: false }));
-          }
-          if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
-            return Ref.update(postBodies, (current) => [
-              ...current,
-              decodePublishedReview(request),
-            ]).pipe(Effect.as(jsonResponse(request, { html_url: "https://github.test/review" })));
-          }
-          return Effect.die(`unexpected request ${request.method} ${url.href}`);
-        });
-        const exit = yield* runReviewAction(client).pipe(Effect.exit);
+            ),
+          );
+        }
+        if (request.method === "GET" && url.pathname.endsWith("/reviews")) {
+          return Ref.get(postBodies).pipe(
+            Effect.map((posts) =>
+              jsonResponse(
+                request,
+                posts.map((post, index) =>
+                  reviewHistoryWire(index + 1, post.body, post.commit_id, "2026-08-30T21:18:06Z"),
+                ),
+              ),
+            ),
+          );
+        }
+        if (request.method === "GET" && url.pathname.endsWith("/files")) {
+          return Effect.succeed(jsonResponse(request, []));
+        }
+        if (request.method === "GET" && url.pathname.includes("/compare/")) {
+          return Effect.succeed(jsonResponse(request, { merge_base_commit: { sha: "base" } }));
+        }
+        if (request.method === "GET" && url.pathname.endsWith("/git/commits/base")) {
+          return Effect.succeed(jsonResponse(request, { sha: "base", tree: { sha: "base-tree" } }));
+        }
+        if (
+          request.method === "GET" &&
+          (url.pathname.endsWith("/git/commits/inspected-head") ||
+            url.pathname.endsWith("/git/commits/current-head"))
+        ) {
+          return Effect.succeed(
+            jsonResponse(request, {
+              sha: url.pathname.split("/").at(-1),
+              tree: { sha: "head-tree" },
+            }),
+          );
+        }
+        if (
+          request.method === "GET" &&
+          (url.pathname.endsWith("/git/trees/base-tree") ||
+            url.pathname.endsWith("/git/trees/head-tree"))
+        ) {
+          const sha = url.pathname.endsWith("base-tree") ? "base-tree" : "head-tree";
+          return Effect.succeed(jsonResponse(request, { sha, tree: [], truncated: false }));
+        }
+        if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
+          return Ref.update(postBodies, (current) => [
+            ...current,
+            decodePublishedReview(request),
+          ]).pipe(Effect.as(jsonResponse(request, { html_url: "https://github.test/review" })));
+        }
+        return Effect.die(`unexpected request ${request.method} ${url.href}`);
+      });
+      const exit = yield* runReviewAction(client, { PR_REVIEW_AUTOMATIC_LIMIT: "2" }).pipe(
+        Effect.exit,
+      );
 
-        expect(Exit.isFailure(exit)).toBe(true);
-        expect(yield* Ref.get(pullReads)).toBe(2);
-        const posts = yield* Ref.get(postBodies);
-        expect(posts).toHaveLength(1);
-        expect(posts[0]).toEqual({
+      if (Exit.isSuccess(exit)) throw new Error("Expected stale publication to fail");
+      expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
+        _tag: "StaleReviewHead",
+        inspectedHead: "inspected-head",
+        currentHead: "current-head",
+      });
+      expect(yield* Ref.get(pullReads)).toBe(2);
+      expect(yield* Ref.get(postBodies)).toEqual([
+        {
+          commit_id: "inspected-head",
           event: "COMMENT",
-          body: expect.stringContaining(
-            "<!-- effect-agent-review:v3 automatic=true completed=false -->",
-          ),
+          body: expect.stringContaining(reviewMarker(true, false)),
           comments: [],
-        });
-        expect(posts[0]).not.toHaveProperty("commit_id");
-      }),
+        },
+      ]);
+
+      yield* runReviewAction(client, { PR_REVIEW_AUTOMATIC_LIMIT: "2" });
+      const posts = yield* Ref.get(postBodies);
+      expect(posts).toHaveLength(2);
+      expect(posts[1]).toEqual({
+        commit_id: "current-head",
+        event: "COMMENT",
+        body: expect.stringContaining(
+          "<!-- effect-agent-review:v3 automatic=true completed=true -->",
+        ),
+        comments: [],
+      });
+      expect(posts[1]?.body).toContain("Automatic reviews are paused");
+    }),
   );
 });
 
@@ -449,6 +399,14 @@ describe("Incremental review scope", () => {
   });
 
   it("keeps incomplete coverage and prior change requests failing", () => {
+    expect(
+      reviewPublicationFailure({
+        blockingFindings: 0,
+        unreviewedPaths: 0,
+        unresolvedChangeRequests: 0,
+        exhausted: "tokens",
+      })?._tag,
+    ).toBe("ReviewAttemptIncomplete");
     expect(
       reviewPublicationFailure({
         blockingFindings: 0,
@@ -503,84 +461,92 @@ describe("Incremental review scope", () => {
       }),
   );
 
-  it.effect("publishes one incomplete attempt for tree and guidance preparation failures", () =>
-    Effect.gen(function* () {
-      for (const failureKind of ["truncated-tree", "missing-guidance"] as const) {
-        const publishedWires = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
-        const requests = yield* Ref.make<ReadonlyArray<string>>([]);
-        let pullReads = 0;
-        const client = HttpClient.make((request, url) => {
-          let response: unknown;
-          if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
-            response = pullRequestWire(
-              "Record preparation failures",
-              "base",
-              failureKind === "truncated-tree" && pullReads > 0 ? "moved-head" : "head",
-            );
-            pullReads += 1;
-          } else if (
-            request.method === "GET" &&
-            (url.pathname.endsWith("/reviews") || url.pathname.endsWith("/files"))
-          ) {
-            response = [];
-          } else if (request.method === "GET" && url.pathname.includes("/compare/")) {
-            response = { merge_base_commit: { sha: "base" } };
-          } else if (request.method === "GET" && url.pathname.endsWith("/git/commits/base")) {
-            response = { sha: "base", tree: { sha: "base-tree" } };
-          } else if (request.method === "GET" && url.pathname.endsWith("/git/commits/head")) {
-            response = { sha: "head", tree: { sha: "head-tree" } };
-          } else if (request.method === "GET" && url.pathname.endsWith("/git/trees/base-tree")) {
-            response = { sha: "base-tree", tree: [], truncated: false };
-          } else if (request.method === "GET" && url.pathname.endsWith("/git/trees/head-tree")) {
-            response = {
-              sha: "head-tree",
-              tree: [],
-              truncated: failureKind === "truncated-tree",
-            };
-          } else if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
-            const publishedWire = decodePublishedReview(request);
-            response = { html_url: "https://github.test/reve-ai/example/pull/12#review" };
-            return Ref.update(publishedWires, (current) => [...current, publishedWire]).pipe(
-              Effect.andThen(recordJsonResponse(requests, request, url, response)),
-            );
-          } else {
-            return Effect.die(`unexpected request ${request.method} ${url.href}`);
-          }
-          return recordJsonResponse(requests, request, url, response);
-        });
-        const exit = yield* runReviewAction(
-          client,
-          failureKind === "missing-guidance"
-            ? { PR_REVIEW_GUIDANCE_FILE: "/missing/effect-agent-review-guidance.md" }
-            : {},
-        ).pipe(Effect.exit);
+  it.effect(
+    "preserves preparation failures and publishes an attempt only on the inspected head",
+    () =>
+      Effect.gen(function* () {
+        for (const failureKind of ["truncated-tree", "missing-guidance"] as const) {
+          const publishedWires = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>(
+            [],
+          );
+          const requests = yield* Ref.make<ReadonlyArray<string>>([]);
+          let pullReads = 0;
+          const client = HttpClient.make((request, url) => {
+            let response: unknown;
+            if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
+              response = pullRequestWire(
+                "Record preparation failures",
+                "base",
+                failureKind === "truncated-tree" && pullReads > 0 ? "moved-head" : "head",
+              );
+              pullReads += 1;
+            } else if (
+              request.method === "GET" &&
+              (url.pathname.endsWith("/reviews") || url.pathname.endsWith("/files"))
+            ) {
+              response = [];
+            } else if (request.method === "GET" && url.pathname.includes("/compare/")) {
+              response = { merge_base_commit: { sha: "base" } };
+            } else if (request.method === "GET" && url.pathname.endsWith("/git/commits/base")) {
+              response = { sha: "base", tree: { sha: "base-tree" } };
+            } else if (request.method === "GET" && url.pathname.endsWith("/git/commits/head")) {
+              response = { sha: "head", tree: { sha: "head-tree" } };
+            } else if (request.method === "GET" && url.pathname.endsWith("/git/trees/base-tree")) {
+              response = { sha: "base-tree", tree: [], truncated: false };
+            } else if (request.method === "GET" && url.pathname.endsWith("/git/trees/head-tree")) {
+              response = {
+                sha: "head-tree",
+                tree: [],
+                truncated: failureKind === "truncated-tree",
+              };
+            } else if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
+              const publishedWire = decodePublishedReview(request);
+              response = { html_url: "https://github.test/reve-ai/example/pull/12#review" };
+              return Ref.update(publishedWires, (current) => [...current, publishedWire]).pipe(
+                Effect.andThen(recordJsonResponse(requests, request, url, response)),
+              );
+            } else {
+              return Effect.die(`unexpected request ${request.method} ${url.href}`);
+            }
+            return recordJsonResponse(requests, request, url, response);
+          });
+          const exit = yield* runReviewAction(
+            client,
+            failureKind === "missing-guidance"
+              ? { PR_REVIEW_GUIDANCE_FILE: "/missing/effect-agent-review-guidance.md" }
+              : {},
+          ).pipe(Effect.exit);
 
-        expect(Exit.isFailure(exit)).toBe(true);
-        const wires = yield* Ref.get(publishedWires);
-        expect(wires.map((wire) => wire.body)).toEqual([
-          expect.stringContaining("<!-- effect-agent-review:v3 automatic=true completed=false -->"),
-        ]);
-        expect(
-          (yield* Ref.get(requests)).filter((value) => value.startsWith("POST ")),
-        ).toHaveLength(1);
-        if (failureKind === "truncated-tree") {
-          if (!Exit.isFailure(exit)) return;
-          expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
-            _tag: "GitHubApiFailure",
-            operation: "get recursive Git tree",
-            reason: "GitHub truncated tree head-tree",
-          });
-          expect(wires[0]).toEqual({
-            event: "COMMENT",
-            body: expect.stringContaining(
-              "<!-- effect-agent-review:v3 automatic=true completed=false -->",
-            ),
-            comments: [],
-          });
-          expect(wires[0]).not.toHaveProperty("commit_id");
+          expect(Exit.isFailure(exit)).toBe(true);
+          const wires = yield* Ref.get(publishedWires);
+          if (failureKind === "truncated-tree") {
+            if (!Exit.isFailure(exit)) return;
+            expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
+              _tag: "GitHubApiFailure",
+              operation: "get recursive Git tree",
+              reason: "GitHub truncated tree head-tree",
+            });
+            expect(wires).toEqual([
+              {
+                commit_id: "head",
+                event: "COMMENT",
+                body: expect.stringContaining("A GitHub repository request failed."),
+                comments: [],
+              },
+            ]);
+          } else {
+            expect(wires).toHaveLength(1);
+            expect(wires[0]).toEqual({
+              commit_id: "head",
+              event: "COMMENT",
+              body: expect.stringContaining(
+                "<!-- effect-agent-review:v3 automatic=true completed=false -->",
+              ),
+              comments: [],
+            });
+          }
         }
-      }
-    }),
+      }),
   );
 
   it.effect("fails closed before repository hydration when the incremental merge base moved", () =>
@@ -657,6 +623,7 @@ describe("Incremental review scope", () => {
       expect(observed.some((value) => value.includes("/git/trees/"))).toBe(false);
       expect(observed.some((value) => value.includes("/git/blobs/"))).toBe(false);
       const published = yield* Ref.get(publishedWires);
+      expect(published[0]?.body).toContain("The merge base changed.");
       expect(published).toEqual([
         {
           commit_id: currentHead,

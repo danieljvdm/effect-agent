@@ -43,6 +43,24 @@ type FinishUsage = Extract<Response.StreamPartEncoded, { readonly type: "finish"
 
 const emptyUsage: FinishUsage = { inputTokens: {}, outputTokens: {} };
 
+const emptyPolicyUsage = {
+  committedTurns: 0,
+  toolCalls: 0,
+  programmaticToolCalls: 0,
+  consecutiveToolFailures: 0,
+  finalizationUsed: false,
+};
+
+const emptyResumeUsage = {
+  ...emptyPolicyUsage,
+  modelCalls: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  lastInputTokens: 0,
+  lastOutputTokens: 0,
+  costMicrousd: 0,
+};
+
 const usageOf = (input: number, output: number): FinishUsage => ({
   inputTokens: { total: input },
   outputTokens: { total: output },
@@ -625,7 +643,12 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
       yield* AgentRuntime.run(
         Agent.withModel(definition, model),
         { question: "status" },
-        { runStartedAt, durationDeadline, resume },
+        {
+          runStartedAt,
+          durationDeadline,
+          resume,
+          resumeUsage: { ...emptyResumeUsage, committedTurns: 1, toolCalls: 1, modelCalls: 1 },
+        },
       ).pipe(Effect.provide(toolLayer));
 
       const request = requests[0];
@@ -1268,6 +1291,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             ],
             settled: [],
           },
+          resumeUsage: { ...emptyResumeUsage, committedTurns: 2, toolCalls: 1, modelCalls: 2 },
         },
       ).pipe(Effect.provide(toolLayer), Effect.exit);
       const beyondFailure = failureFrom(beyondExit);
@@ -1450,6 +1474,9 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
           {
             resume,
             resumeUsage: {
+              ...emptyPolicyUsage,
+              committedTurns: 1,
+              toolCalls: 1,
               modelCalls: 1,
               inputTokens: 90,
               outputTokens: 20,
@@ -2033,6 +2060,269 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
     }),
   );
 
+  it.effect(
+    "restores logical Run turn and combined Tool budgets before the next model request",
+    () =>
+      Effect.gen(function* () {
+        for (const limit of ["turns", "tool-calls"] as const) {
+          for (const onExhaustion of ["fail", "final-answer"] as const) {
+            const definition = Agent.define("resume-policy", {
+              input: Schema.String,
+              output: answerOutput,
+              instructions: "Answer.",
+              toolkit: emitToolkit,
+              policy: AgentPolicy.make({
+                maxTurns: 3,
+                maxToolCalls: 3,
+                maxDuration: "30 seconds",
+                toolConcurrency: 1,
+                onExhaustion,
+              }),
+            });
+            const { model, requests } = scriptedModel([finalParts('{"answer":"remaining"}')]);
+            const reservations: Array<unknown> = [];
+            const durability: RunDurabilityHook = {
+              commitResponse: () => Effect.void,
+              prepareToolCalls: () => Effect.void,
+              commitCompaction: () => Effect.void,
+              noteTurnUsage: () => Effect.void,
+              step: { lookup: () => Effect.succeed(Option.none()), commit: () => Effect.void },
+              reservePolicyUsage: (usage) =>
+                Effect.sync(() => {
+                  reservations.push(usage);
+                }),
+            };
+            const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), "q", {
+              durability,
+              resumeUsage: {
+                ...emptyResumeUsage,
+                committedTurns: limit === "turns" ? 3 : 1,
+                modelCalls: limit === "turns" ? 3 : 1,
+                toolCalls: 2,
+                programmaticToolCalls: limit === "tool-calls" ? 2 : 0,
+              },
+            }).pipe(
+              Effect.provide(
+                emitToolkit.toLayer({ emit: () => Effect.succeed({ data: "unused" }) }),
+              ),
+              Effect.exit,
+            );
+            if (onExhaustion === "fail") {
+              expect(failureFrom(exit)).toMatchObject({ _tag: "AgentPolicyError", limit });
+              expect(requests).toHaveLength(0);
+              expect(reservations).toEqual([]);
+            } else {
+              expect(Exit.isSuccess(exit)).toBe(true);
+              if (Exit.isFailure(exit)) throw new Error("expected final answer");
+              expect(exit.value).toMatchObject({
+                turns: limit === "turns" ? 4 : 2,
+                finishReason: "budget-exhausted",
+                exhausted: limit,
+              });
+              expect(requests).toHaveLength(1);
+              expect(requests[0]?.toolChoice).toBe("none");
+              expect(reservations).toEqual([
+                { programmaticToolCalls: limit === "tool-calls" ? 2 : 0, finalizationUsed: true },
+              ]);
+            }
+          }
+        }
+      }),
+  );
+
+  it.effect(
+    "folds a pending batch once onto the restored failure streak without recounting calls",
+    () =>
+      Effect.gen(function* () {
+        for (const { repeatedFailureLimit, budgetRejected } of [
+          { repeatedFailureLimit: 2, budgetRejected: undefined },
+          { repeatedFailureLimit: 3, budgetRejected: undefined },
+          { repeatedFailureLimit: 2, budgetRejected: true as const },
+        ]) {
+          const definition = Agent.define("resume-failures", {
+            input: Schema.String,
+            output: answerOutput,
+            instructions: "Answer.",
+            toolkit: emitToolkit,
+            policy: AgentPolicy.make({
+              maxTurns: 4,
+              maxToolCalls: 4,
+              maxDuration: "30 seconds",
+              toolConcurrency: 1,
+              repeatedFailureLimit,
+              onExhaustion: "fail",
+            }),
+          });
+          const { model, requests } = scriptedModel([finalParts('{"answer":"done"}')]);
+          let starts = 0;
+          const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), "q", {
+            resumeUsage: {
+              ...emptyResumeUsage,
+              committedTurns: 2,
+              modelCalls: 2,
+              toolCalls: 2,
+              programmaticToolCalls: 2,
+              consecutiveToolFailures: 1,
+            },
+            resume: {
+              turn: 2,
+              turnId: Schema.decodeSync(TurnId)("pending-turn"),
+              calls: [{ id: "pending", name: "emit", params: {} }],
+              settled: [
+                {
+                  id: "pending",
+                  result: { _tag: "PriorFailure" },
+                  isFailure: true,
+                  ...(budgetRejected === undefined ? {} : { budgetRejected }),
+                },
+              ],
+            },
+          }).pipe(
+            Effect.provide(
+              emitToolkit.toLayer({
+                emit: () =>
+                  Effect.sync(() => {
+                    starts += 1;
+                    return { data: "never" };
+                  }),
+              }),
+            ),
+            Effect.exit,
+          );
+          expect(starts).toBe(0);
+          if (repeatedFailureLimit === 2 && budgetRejected !== true) {
+            expect(failureFrom(exit)).toMatchObject({
+              _tag: "AgentPolicyError",
+              limit: "repeated-failures",
+            });
+            expect(requests).toHaveLength(0);
+          } else {
+            expect(Exit.isSuccess(exit)).toBe(true);
+            if (Exit.isFailure(exit)) throw new Error("expected continuation");
+            expect(exit.value.turns).toBe(3);
+            expect(requests).toHaveLength(1);
+          }
+        }
+      }),
+  );
+
+  it.effect(
+    "reserves grace before provider execution and never grants it again after interruption",
+    () =>
+      Effect.gen(function* () {
+        const definition = Agent.define("resume-grace", {
+          input: Schema.String,
+          output: answerOutput,
+          instructions: "Answer.",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({
+            maxTurns: 1,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        });
+        const { model, requests } = scriptedModel([finalParts('{"answer":"never"}')]);
+        let reserved = false;
+        const durability: RunDurabilityHook = {
+          commitResponse: () => Effect.void,
+          prepareToolCalls: () => Effect.void,
+          commitCompaction: () => Effect.void,
+          noteTurnUsage: () => Effect.void,
+          step: { lookup: () => Effect.succeed(Option.none()), commit: () => Effect.void },
+          reservePolicyUsage: (usage) =>
+            Effect.sync(() => {
+              reserved = usage.finalizationUsed;
+            }).pipe(Effect.andThen(Effect.interrupt)),
+        };
+        const seed = { ...emptyResumeUsage, committedTurns: 1, modelCalls: 1 };
+        const interrupted = yield* AgentRuntime.run(Agent.withModel(definition, model), "q", {
+          resumeUsage: seed,
+          durability,
+        }).pipe(Effect.exit);
+        expect(Exit.isFailure(interrupted) && Cause.hasInterrupts(interrupted.cause)).toBe(true);
+        expect(reserved).toBe(true);
+        const replacement = yield* AgentRuntime.run(Agent.withModel(definition, model), "q", {
+          resumeUsage: { ...seed, finalizationUsed: reserved },
+        }).pipe(Effect.exit);
+        expect(failureFrom(replacement)).toMatchObject({
+          _tag: "AgentPolicyError",
+          limit: "turns",
+        });
+        expect(requests).toHaveLength(0);
+      }),
+  );
+
+  it.effect("rejects missing or contradictory pending-batch accounting before execution", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("invalid-pending-accounting", {
+        input: Schema.String,
+        output: answerOutput,
+        instructions: "Answer.",
+        toolkit: emitToolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 4,
+          maxToolCalls: 4,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const { model, requests } = scriptedModel([finalParts('{"answer":"must not run"}')]);
+      const seed = {
+        ...emptyResumeUsage,
+        modelCalls: 2,
+        committedTurns: 2,
+        toolCalls: 3,
+        consecutiveToolFailures: 1,
+      };
+      let inputStarts = 0;
+      let handlerStarts = 0;
+      for (const resumeUsage of [
+        undefined,
+        { ...seed, modelCalls: 1 },
+        { ...seed, committedTurns: 1 },
+        { ...seed, committedTurns: 3 },
+        { ...seed, toolCalls: 1 },
+        { ...seed, consecutiveToolFailures: 2 },
+      ]) {
+        const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), "q", {
+          resumeUsage,
+          resume: {
+            turn: 2,
+            turnId: Schema.decodeSync(TurnId)("invalid-pending-turn"),
+            calls: [
+              { id: "pending-a", name: "emit", params: {} },
+              { id: "pending-b", name: "emit", params: {} },
+            ],
+            settled: [],
+          },
+          input: {
+            start: () =>
+              Effect.sync(() => {
+                inputStarts += 1;
+              }),
+            drain: () => Effect.succeed([]),
+          },
+        }).pipe(
+          Effect.provide(
+            emitToolkit.toLayer({
+              emit: () =>
+                Effect.sync(() => {
+                  handlerStarts += 1;
+                  return { data: "unexpected" };
+                }),
+            }),
+          ),
+          Effect.exit,
+        );
+        expect(failureFrom(exit)).toBeInstanceOf(ModelProtocolError);
+      }
+      expect(inputStarts).toBe(0);
+      expect(handlerStarts).toBe(0);
+      expect(requests).toEqual([]);
+    }),
+  );
+
   it.effect("RUN-023: invalid restored usage fails before Run input or model execution", () =>
     Effect.gen(function* () {
       const definition = Agent.define("invalid-resume-usage", {
@@ -2050,7 +2340,14 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
       const { model, requests } = scriptedModel([finalParts('{"answer":"never"}')]);
       let inputStarts = 0;
       const invalidSeeds = [
+        { ...emptyResumeUsage, committedTurns: -1 },
+        { ...emptyResumeUsage, toolCalls: Number.MAX_SAFE_INTEGER + 1 },
+        { ...emptyResumeUsage, programmaticToolCalls: -1 },
+        { ...emptyResumeUsage, consecutiveToolFailures: 0.5 },
+        { ...emptyResumeUsage, consecutiveToolFailures: 1 },
+        { ...emptyResumeUsage, committedTurns: 1 },
         {
+          ...emptyPolicyUsage,
           modelCalls: 1,
           inputTokens: -1,
           outputTokens: 0,
@@ -2059,6 +2356,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
           costMicrousd: 0,
         },
         {
+          ...emptyPolicyUsage,
           modelCalls: 1,
           inputTokens: Number.NaN,
           outputTokens: 0,
@@ -2067,6 +2365,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
           costMicrousd: 0,
         },
         {
+          ...emptyPolicyUsage,
           modelCalls: 1,
           inputTokens: 1,
           outputTokens: 0,
@@ -2097,6 +2396,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
 
       let accessorReads = 0;
       const accessorUsage = {
+        ...emptyPolicyUsage,
         modelCalls: 1,
         inputTokens: 1,
         outputTokens: 0,
@@ -2157,6 +2457,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
           { question: "q" },
           {
             resumeUsage: {
+              ...emptyPolicyUsage,
               modelCalls: 2,
               inputTokens: 90,
               outputTokens: 20,
@@ -2199,6 +2500,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         { question: "q" },
         {
           resumeUsage: {
+            ...emptyPolicyUsage,
             modelCalls: 2,
             inputTokens: 90,
             outputTokens: 20,
@@ -2239,6 +2541,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         {
           estimateCostMicrousd: () => Effect.succeed(200),
           resumeUsage: {
+            ...emptyPolicyUsage,
             modelCalls: 1,
             inputTokens: 10,
             outputTokens: 5,
@@ -2285,6 +2588,7 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
             {
               estimateCostMicrousd: () => Effect.succeed(200),
               resumeUsage: {
+                ...emptyPolicyUsage,
                 modelCalls: 1,
                 inputTokens: 10,
                 outputTokens: 5,

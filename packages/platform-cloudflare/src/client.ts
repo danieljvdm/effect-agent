@@ -265,7 +265,12 @@ const ClientSubmitHostFailure = Schema.Union([
   DurableAlarmError,
   HostProtocolError,
 ]);
-const ClientAwaitHostFailure = Schema.Union([LedgerError, SettlementConflict, HostProtocolError]);
+const ClientAwaitHostFailure = Schema.Union([
+  LedgerError,
+  SettlementConflict,
+  OperationDenied,
+  HostProtocolError,
+]);
 const ClientObserveHostFailure = Schema.Union([
   ConversationStoreError,
   ConversationNotMaterialized,
@@ -273,6 +278,7 @@ const ClientObserveHostFailure = Schema.Union([
   HostProtocolError,
 ]);
 const ClientAbortHostFailure = Schema.Union([
+  OperationDenied,
   LedgerError,
   SettlementConflict,
   JoinedToHost,

@@ -12,20 +12,20 @@ import {
   TurnId,
 } from "@effect-agent/core";
 import {
+  type RunEventSink,
+  type SubagentDurability,
+  type SubagentDurabilityError,
+  type ToolCallWaiting,
   AgentChildPending,
   AgentRuntime,
   AgentSpawner,
   type ChildEstablishStatus,
-  RunEventSink,
   type RunSubagentChildIdentity,
   type RunSubagentEstablishRequest,
   type RunSubagentHook,
   type RunSubagentJoinRequest,
   type RunTurnResume,
   type RuntimeBinding,
-  SubagentDurability,
-  SubagentDurabilityError,
-  ToolCallWaiting,
 } from "@effect-agent/engine";
 import { describe, expect, it, layer } from "@effect/vitest";
 import {
@@ -1806,7 +1806,24 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       const exit = yield* AgentRuntime.run(
         parent,
         { mission: "m" },
-        { runId: decodeRunId("parent-run-durable-revoked"), subagent, resume },
+        {
+          runId: decodeRunId("parent-run-durable-revoked"),
+          subagent,
+          resume,
+          resumeUsage: {
+            committedTurns: 1,
+            toolCalls: 1,
+            programmaticToolCalls: 0,
+            consecutiveToolFailures: 0,
+            finalizationUsed: false,
+            modelCalls: 1,
+            inputTokens: 0,
+            outputTokens: 0,
+            lastInputTokens: 0,
+            lastOutputTokens: 0,
+            costMicrousd: 0,
+          },
+        },
       ).pipe(
         Effect.provide(Layer.provide(revokedLayer, probeToolLayer)),
         Effect.scoped,

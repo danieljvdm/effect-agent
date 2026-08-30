@@ -181,7 +181,11 @@ describe("review presentation", () => {
   });
 
   it("never renders a partial or unresolved follow-up as a clean review", () => {
-    const render = (complete: boolean, unresolvedChangeRequests: number) =>
+    const render = (
+      complete: boolean,
+      unresolvedChangeRequests: number,
+      exhausted?: "tokens" | "turns" | "tool-calls",
+    ) =>
       renderReviewBody({
         report: ReviewReport.make({ summary: "No new findings.", findings: [] }),
         automaticReviewsRemaining: 1,
@@ -191,6 +195,7 @@ describe("review presentation", () => {
         ignoredFiles: 0,
         modelTurns: 3,
         complete,
+        exhausted,
         unresolvedChangeRequests,
         inputTokens: 100,
         uncachedInputTokens: 100,
@@ -203,6 +208,11 @@ describe("review presentation", () => {
     expect(render(false, 0)).toContain("Review coverage is incomplete");
     expect(render(true, 2)).toContain("2 earlier change requests");
     expect(render(true, 2)).not.toContain("No actionable findings");
+    for (const exhausted of ["tokens", "turns", "tool-calls"] as const) {
+      const body = render(false, 0, exhausted);
+      expect(body).toContain(`Review stopped at the ${exhausted} budget`);
+      expect(body).not.toContain("No actionable findings");
+    }
   });
 
   it("renders all twenty-four unanchored findings once within the publication bound", () => {

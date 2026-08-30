@@ -1022,6 +1022,105 @@ layer(compactionTestLayer)("engine compaction and overflow recovery", (it) => {
 
   // ------------------------------------------------------------ RUN-027 flows
 
+  for (const scenario of [
+    { name: "second summary", first: "summarize", retry: "summarize" },
+    { name: "second prune", first: "clear-tool-results", retry: "clear-tool-results" },
+    { name: "first summary after pruning", first: "clear-tool-results", retry: "summarize" },
+  ] as const) {
+    it.effect(
+      `shares the Turn's compaction allowance with overflow recovery: ${scenario.name}`,
+      () =>
+        Effect.gen(function* () {
+          const commits: Array<RunCompactionCommit> = [];
+          const passes: Array<boolean> = [];
+          const result = yield* driveRun({
+            policy: AgentPolicy.make({ ...basePolicy, contextTokenLimit: 800, runStatus: "off" }),
+            script: [
+              toolCallParts("s1", "search", {}),
+              toolCallParts("s2", "search", {}),
+              toolCallParts("s3", "search", {}),
+              ...(scenario.first === "summarize" ? [finalParts("summary-first")] : []),
+              { fail: "context_length_exceeded" },
+              ...(scenario.retry === "summarize" ? [finalParts("summary-retry")] : []),
+              finalParts('{"answer":"done"}'),
+            ],
+            results: ["first result", "second result", "third result"],
+            commitCompaction: (commit) =>
+              Effect.sync(() => {
+                commits.push(commit);
+              }),
+          }).pipe(
+            Effect.provide(
+              Layer.succeed(ContextCompactor, {
+                // Three active results trigger pressure; clearing or summarizing one fits the target.
+                estimate: (messages) =>
+                  300 *
+                  messages.filter(
+                    (message) =>
+                      message.role === "tool" &&
+                      message.content.some(
+                        (part) =>
+                          part.type === "tool-result" && part.result !== CLEARED_TOOL_RESULT,
+                      ),
+                  ).length,
+                compact: (request) =>
+                  Stream.suspend(() => {
+                    passes.push(request.forceSummarize);
+                    const kind = request.forceSummarize ? scenario.retry : scenario.first;
+                    const through = request.forceSummarize ? 6 : 4;
+                    if (kind === "clear-tool-results") return Stream.succeed({ kind, through });
+                    return Stream.fromEffect(
+                      request.summarize(
+                        Prompt.fromMessages([
+                          Prompt.userMessage({
+                            content: [Prompt.textPart({ text: "Summarize requested coverage." })],
+                          }),
+                        ]),
+                      ),
+                    ).pipe(
+                      Stream.map((summary): CompactionDecision => ({ kind, through, summary })),
+                    );
+                  }),
+              }),
+            ),
+          );
+
+          const canRetry =
+            scenario.first === "clear-tool-results" && scenario.retry === "summarize";
+          expect(commits.map(({ turn, kind }) => [turn, kind])).toEqual(
+            canRetry
+              ? [
+                  [4, "clear-tool-results"],
+                  [4, "summarize"],
+                ]
+              : [[4, scenario.first]],
+          );
+          expect(compactionEvents(result.events).map((event) => event.kind)).toEqual(
+            canRetry ? ["clear-tool-results", "summarize"] : [scenario.first],
+          );
+          expect(passes).toEqual(scenario.first === "summarize" ? [false] : [false, true]);
+          expect(
+            result.requests.filter(({ prompt }) =>
+              promptText(prompt).includes("Summarize requested coverage."),
+            ),
+          ).toHaveLength(scenario.name === "second prune" ? 0 : 1);
+          if (canRetry) {
+            expect(Exit.isSuccess(result.exit)).toBe(true);
+            expect(result.requests).toHaveLength(6);
+            expect(promptText(result.requests.at(-1)?.prompt ?? Prompt.empty)).toContain(
+              "summary-retry",
+            );
+            expect(toolResultValues(result.requests.at(-1)?.prompt ?? Prompt.empty)).toEqual([
+              "third result",
+            ]);
+          } else {
+            expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
+            expect(result.requests).toHaveLength(scenario.first === "summarize" ? 5 : 4);
+          }
+        }),
+    );
+  }
+
   it.effect("RUN-027: a classified overflow compacts and retries exactly once", () =>
     Effect.gen(function* () {
       const policy = AgentPolicy.make({

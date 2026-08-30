@@ -1057,7 +1057,7 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
     }
   });
 
-  it("a delegation call left in openToolCalls is detected by the core naming rule and never marks Unknown (fail-closed)", () => {
+  it("an ordinary delegate-prefixed call remains Unknown without explicit delegation evidence", () => {
     const decision = classifyRecovery(
       snapshot("running", { ownership, inputApplied: inputMarker }),
       evidence({
@@ -1065,10 +1065,10 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
         openToolCalls: [openCall(CALL_DELEGATE, 1, "delegate_destination_research")],
       }),
     );
-    expect(decision._tag).toBe("ResumePendingToolBatch");
+    expect(decision._tag).toBe("MarkUnknown");
   });
 
-  it("a reservation row is durable delegation proof even for an unconventional Tool name", () => {
+  it("a reservation cannot authorize replay of an ordinary Tool", () => {
     const decision = classifyRecovery(
       snapshot("running", {
         ownership,
@@ -1077,7 +1077,7 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
       }),
       evidence({ inputRecorded: true, openToolCalls: [openCall(CALL_ONE)] }),
     );
-    expect(decision._tag).toBe("ResumePendingToolBatch");
+    expect(decision._tag).toBe("MarkUnknown");
   });
 
   it("suspended WaitingForChild with all children settled resumes the waiting parent", () => {

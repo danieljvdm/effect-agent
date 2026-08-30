@@ -194,7 +194,9 @@ A replacement `compact` may instead emit its own `CompactionDecision` stream. Ea
 selects an exclusive source-message prefix with `through`, and either clears old Tool results
 or supplies a summary. The interpreter validates decisions, preserves protected instructions
 and input, rejects cuts that split Tool pairs, and retains the recent tail. It allows one prune
-followed by one summary per pass, with at most one metered `request.summarize` call. All summary
+followed by one summary per Turn, with at most one metered `request.summarize` call. Pressure
+compaction and overflow recovery share that allowance: an overflow after pruning can add the
+first summary, but cannot repeat a prune or replace a summary already accepted in that Turn. All summary
 model calls must use that callback. It preserves callback errors and requirements; application
 strategy failures use `CompactionError`, while defects and interruption keep their Effect meaning.
 Response-buffer limits and the Run deadline also apply during compaction. Custom summary decisions

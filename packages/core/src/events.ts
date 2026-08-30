@@ -86,6 +86,8 @@ export class ToolCallFailed extends Schema.TaggedClass<ToolCallFailed>()("ToolCa
   errorTag: Schema.NonEmptyString,
   message: Schema.String,
   providerExecuted: Schema.Boolean,
+  /** Synthetic policy rejection; no handler ran and the failure streak is unchanged. */
+  budgetRejected: Schema.optionalKey(Schema.Literal(true)),
 }) {}
 
 /** Signals that a decoded Tool Call requires approval before execution. */
