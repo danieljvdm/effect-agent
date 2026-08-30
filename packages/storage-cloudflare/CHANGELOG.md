@@ -1,5 +1,12 @@
 # @effect-agent/storage-cloudflare
 
+## 0.1.0-beta.38
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/session@0.1.0-beta.38
+
 ## 0.1.0-beta.37
 
 ### Minor Changes

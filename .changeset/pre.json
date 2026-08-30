@@ -46,6 +46,7 @@
     "code-mode-drop-allow-experimental",
     "code-mode-pass-scope",
     "completion-tool-output-guidance",
+    "confirm-browser-terminal-cleanup",
     "context-economics",
     "context-review-fixes",
     "delegation-containment",

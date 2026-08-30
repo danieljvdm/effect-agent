@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.38
+
+### Patch Changes
+
+- [#222](https://github.com/danieljvdm/effect-agent/pull/222) [`22ee09d`](https://github.com/danieljvdm/effect-agent/commit/22ee09d279bf0561ef7eb96e3f80f4b29481a71c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Confirm exact Browser Run session termination before reporting cleanup success, including already-absent sessions. Provide `BrowserRunSessionLifecycle.layer({ accountId, apiToken })` with an account-scoped Browser Rendering Write token when constructing the interactive binding.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.38
+  - @effect-agent/engine@0.1.0-beta.38
+  - @effect-agent/sandbox@0.1.0-beta.38
+  - @effect-agent/session@0.1.0-beta.38
+  - @effect-agent/storage-cloudflare@0.1.0-beta.38
+
 ## 0.1.0-beta.37
 
 ### Minor Changes
