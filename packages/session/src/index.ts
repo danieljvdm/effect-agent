@@ -19,7 +19,7 @@ export * from "./subscription.ts";
 export * from "./subscription-transition.ts";
 export * from "./prepared-admission.ts";
 export * from "./event-source.ts";
-export * from "./github-workflow-source.ts";
+export * from "./subscription-input.ts";
 export * from "./subscriptions.ts";
 export * from "./subscription-tools.ts";
 export * from "./store.ts";

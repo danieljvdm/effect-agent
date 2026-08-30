@@ -2,6 +2,7 @@ import {
   EventAcknowledgement,
   EventSourceVersion,
   type EventSources,
+  type SubscriptionInputBindings,
   PersistedJson,
   Principal,
   SourcePartition,
@@ -586,7 +587,7 @@ export interface SubscriptionPartitionObjectClass {
  */
 export const makeSubscriptionPartitionObjectClass = <E>(
   host: Layer.Layer<
-    SubscriptionAuthorizer | EventSources | ConversationObjectNamespace,
+    SubscriptionAuthorizer | EventSources | SubscriptionInputBindings | ConversationObjectNamespace,
     E,
     | EffectCfDurableObjectState.DurableObjectState
     | WorkerEnvironment

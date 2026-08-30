@@ -5,9 +5,8 @@ import {
   DurableAgentRuntime,
   DurableRuntimeFailpointError,
   EventSources,
-  GitHubRepository,
-  GitHubWorkflowRunSourceVersion,
-  GitHubWorkflowRuns,
+  SubscriptionInputBindings,
+  makeSubscriptionInputBinding,
   IdempotencyKey,
   Principal,
   SourcePartition,
@@ -18,9 +17,16 @@ import {
   SubmissionLedger,
   SubmissionLookupByKey,
   defaultSubscriptionLimits,
-  makeGitHubWorkflowRunSource,
   type DurableRuntimeFailpointHandler,
 } from "@effect-agent/session";
+import {
+  GitHubRepository,
+  GitHubWorkflowRunSourceVersion,
+  GitHubWorkflowRuns,
+  GitHubWorkflowRunCompletion,
+  GitHubWorkflowRunWatch,
+  makeGitHubWorkflowRunSource,
+} from "@effect-agent/session/github";
 import {
   SqliteStorageConfig,
   SqliteStorageConfigValue,
@@ -73,6 +79,7 @@ const limits = {
 const authorizerLayer = Layer.succeed(SubscriptionAuthorizer)({
   manage: () => Effect.void,
   intake: () => Effect.void,
+  reconcile: () => Effect.void,
   prepare: () => Effect.succeed({ policyId: "node-subscription-policy", decisionId: "allow" }),
 });
 
@@ -91,33 +98,45 @@ const sqliteInfrastructure = (filename: string) =>
   );
 
 const sourceLayer = (calls: Ref.Ref<number>, completed: Ref.Ref<boolean>) =>
-  Layer.effect(
-    EventSources,
-    makeGitHubWorkflowRunSource({
-      repository,
-      context: Schema.Struct({ instruction: Schema.String }),
-      input: Schema.Struct({ instruction: Schema.String, conclusion: Schema.String }),
-      prepare: (completion, context) =>
-        Effect.succeed({ instruction: context.instruction, conclusion: completion.conclusion }),
-    }).pipe(
-      Effect.map((source) => ({ sources: [source] })),
-      Effect.provideService(
-        GitHubWorkflowRuns,
-        GitHubWorkflowRuns.of({
-          getAttempt: ({ runId, attempt }) =>
-            Ref.update(calls, (count) => count + 1).pipe(
-              Effect.andThen(Ref.get(completed)),
-              Effect.map((isCompleted) => ({
-                id: runId,
-                run_attempt: attempt,
-                head_sha: headSha,
-                status: isCompleted ? "completed" : "in_progress",
-                conclusion: isCompleted ? "success" : null,
-                repository: { id: repository.id },
-              })),
-            ),
-        }),
+  Layer.merge(
+    Layer.effect(
+      EventSources,
+      makeGitHubWorkflowRunSource({
+        repository,
+      }).pipe(
+        Effect.map((source) => ({ sources: [source] })),
+        Effect.provideService(
+          GitHubWorkflowRuns,
+          GitHubWorkflowRuns.of({
+            getAttempt: ({ runId, attempt }) =>
+              Ref.update(calls, (count) => count + 1).pipe(
+                Effect.andThen(Ref.get(completed)),
+                Effect.map((isCompleted) => ({
+                  id: runId,
+                  run_attempt: attempt,
+                  head_sha: headSha,
+                  status: isCompleted ? "completed" : "in_progress",
+                  conclusion: isCompleted ? "success" : null,
+                  repository: { id: repository.id },
+                })),
+              ),
+          }),
+        ),
       ),
+    ),
+    Layer.effect(
+      SubscriptionInputBindings,
+      makeSubscriptionInputBinding({
+        source: GitHubWorkflowRunSourceVersion,
+        agentId,
+        definitions,
+        event: GitHubWorkflowRunCompletion,
+        parameters: GitHubWorkflowRunWatch,
+        context: Schema.Struct({ instruction: Schema.String }),
+        input: Schema.Struct({ instruction: Schema.String, conclusion: Schema.String }),
+        prepare: (completion, _watch, context) =>
+          Effect.succeed({ instruction: context.instruction, conclusion: completion.conclusion }),
+      }).pipe(Effect.map((binding) => ({ bindings: [binding] }))),
     ),
   );
 

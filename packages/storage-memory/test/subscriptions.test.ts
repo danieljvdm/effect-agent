@@ -24,6 +24,9 @@ import {
   defaultSubscriptionLimits,
   digestJson,
   makeEventSource,
+  makeSubscriptionInputBinding,
+  SubscriptionInputBindings,
+  type SubscriptionInputBinding,
   type PreparedInput,
   type SubscribeOptions,
   type SubscriptionLimits,
@@ -86,6 +89,9 @@ interface Scenario {
   readonly reconcile?: () => Effect.Effect<Event | null, SubscriptionSourceError>;
   readonly submit?: PreparedInputAdmission["Service"]["submit"];
   readonly authorize?: SubscriptionAuthorizer["Service"]["prepare"];
+  readonly authorizeIntake?: SubscriptionAuthorizer["Service"]["intake"];
+  readonly authorizeReconcile?: SubscriptionAuthorizer["Service"]["reconcile"];
+  readonly bindings?: ReadonlyArray<SubscriptionInputBinding>;
   readonly failpoint?: {
     readonly hit: (point: string) => Effect.Effect<void, SubscriptionFailpointError>;
   };
@@ -100,22 +106,33 @@ const layer = (scenario: Scenario = {}) => {
       continuity: "Trusted caller registers before intake.",
       event: Event,
       parameters: Schema.Struct({ key: Schema.String }),
-      context: Schema.Struct({ text: Schema.String }),
-      input: Input,
       identity: (e) => e.id,
       eventKey: (e) => e.key,
       parameterKey: (p) => p.key,
       matches: (e, p) => e.key === p.key,
-      prepare: (e) => scenario.prepare?.(e) ?? Effect.succeed({ text: e.text }),
       ...(scenario.reconcile === undefined ? {} : { reconcile: scenario.reconcile }),
     }).pipe(Effect.map((value) => ({ sources: [value] }))),
   );
   const dependencies = Layer.mergeAll(
     NodeCrypto.layer,
     catalog,
+    Layer.effect(
+      SubscriptionInputBindings,
+      makeSubscriptionInputBinding({
+        source,
+        agentId,
+        definitions,
+        event: Event,
+        parameters: Schema.Struct({ key: Schema.String }),
+        context: Schema.Struct({ text: Schema.String }),
+        input: Input,
+        prepare: (e) => scenario.prepare?.(e) ?? Effect.succeed({ text: e.text }),
+      }).pipe(Effect.map((binding) => ({ bindings: scenario.bindings ?? [binding] }))),
+    ),
     Layer.succeed(SubscriptionAuthorizer, {
       manage: () => Effect.void,
-      intake: () => Effect.void,
+      intake: scenario.authorizeIntake ?? (() => Effect.void),
+      reconcile: scenario.authorizeReconcile ?? (() => Effect.void),
       prepare:
         scenario.authorize ??
         (() => Effect.succeed({ policyId: "policy", decisionId: "decision" })),
@@ -147,6 +164,168 @@ const registerAndAccept = Effect.gen(function* () {
 });
 
 describe("Durable subscription delivery", () => {
+  it.effect("prepares one event for different Agents and retained definition versions", () =>
+    Effect.gen(function* () {
+      const otherAgent = Schema.decodeSync(AgentId)("other-agent");
+      const nextDefinitions = { ...definitions, agent: Schema.decodeSync(Digest)("b".repeat(64)) };
+      const common = {
+        source,
+        event: Event,
+        parameters: Schema.Struct({ key: Schema.String }),
+      };
+      const original = yield* makeSubscriptionInputBinding({
+        ...common,
+        agentId,
+        definitions,
+        context: Schema.Struct({ text: Schema.String }),
+        input: Input,
+        prepare: (e, _p, c) => Effect.succeed({ text: `${c.text}:${e.text}` }),
+      });
+      const next = yield* makeSubscriptionInputBinding({
+        ...common,
+        agentId,
+        definitions: nextDefinitions,
+        context: Schema.Struct({ prefix: Schema.String }),
+        input: Input,
+        prepare: (e, _p, c) => Effect.succeed({ text: `${c.prefix}:${e.text}` }),
+      });
+      const other = yield* makeSubscriptionInputBinding({
+        ...common,
+        agentId: otherAgent,
+        definitions,
+        context: Schema.Struct({ count: Schema.Number }),
+        input: Schema.Struct({ count: Schema.Number, eventId: Schema.String }),
+        prepare: (e, _p, c) => Effect.succeed({ count: c.count, eventId: e.id }),
+      });
+      const admitted: Array<PreparedInput> = [];
+      yield* Effect.gen(function* () {
+        const subscriptions = yield* Subscriptions;
+        yield* subscriptions.subscribe(scope, options("old"));
+        yield* subscriptions.subscribe(scope, {
+          ...options("new"),
+          definitions: nextDefinitions,
+          context: { prefix: "new" },
+        });
+        yield* subscriptions.subscribe(scope, {
+          ...options("other"),
+          agentId: otherAgent,
+          context: { count: 7 },
+        });
+        yield* (yield* SubscriptionIntake).accept(principal, source, event("completion"));
+        yield* drain();
+        expect(admitted).toHaveLength(3);
+        expect(admitted.map((input) => input.input)).toEqual(
+          expect.arrayContaining([
+            { text: "private-continuation:completion" },
+            { text: "new:completion" },
+            { count: 7, eventId: "completion" },
+          ]),
+        );
+      }).pipe(
+        Effect.provide(
+          layer({
+            bindings: [original, next, other],
+            submit: (input) =>
+              Effect.sync(() => {
+                admitted.push(input);
+                return receipt(input);
+              }),
+          }),
+        ),
+      );
+    }),
+  );
+
+  it.effect("keeps selected work pending when its exact preparation binding is unavailable", () =>
+    Effect.gen(function* () {
+      let hold = true;
+      yield* Effect.gen(function* () {
+        yield* registerAndAccept;
+        expect((yield* (yield* SubscriptionStore).delivery(key()))?.state).toBe("selected");
+        hold = false;
+        const original = (yield* SubscriptionInputBindings).bindings[0];
+        if (original === undefined) return yield* Effect.die("Expected preparation binding");
+        const changed = {
+          ...original,
+          definitions: { ...definitions, agent: Schema.decodeSync(Digest)("b".repeat(64)) },
+        };
+        for (const bindings of [[], [changed], [original, original]]) {
+          yield* Effect.gen(function* () {
+            const driver = yield* SubscriptionDriver;
+            const rejected = yield* driver.processDelivery(key()).pipe(Effect.flip);
+            expect(rejected).toMatchObject({
+              reason: "unsupported-binding",
+              code: "input-binding",
+            });
+          }).pipe(
+            Effect.provide(
+              SubscriptionDriver.layer(limits).pipe(
+                Layer.provide(Layer.succeed(SubscriptionInputBindings, { bindings })),
+              ),
+            ),
+          );
+        }
+        yield* (yield* SubscriptionDriver).processDelivery(key());
+        expect((yield* (yield* SubscriptionStore).delivery(key()))?.state).toBe("delivered");
+      }).pipe(
+        Effect.provide(
+          layer({
+            failpoint: {
+              hit: (point) =>
+                hold && point === "subscription:delivery-prepare:before"
+                  ? SubscriptionFailpointError.make({ point })
+                  : Effect.void,
+            },
+          }),
+        ),
+      );
+    }),
+  );
+
+  it.effect("authorizes recovery independently of registration and webhook ingress", () => {
+    const webhook = Schema.decodeSync(Principal)("webhook");
+    let polls = 0;
+    return Effect.gen(function* () {
+      const subscriptions = yield* Subscriptions;
+      yield* subscriptions.subscribe(scope, options("watch"));
+      yield* subscriptions.subscribe(scope, {
+        ...options("denied"),
+        parameters: { key: "denied" },
+      });
+      const rejected = yield* (yield* SubscriptionIntake)
+        .accept(principal, source, event("completion"))
+        .pipe(Effect.flip);
+      expect(rejected).toMatchObject({ reason: "unauthorized" });
+      yield* drain();
+      const store = yield* SubscriptionStore;
+      expect((yield* store.delivery(key()))?.state).toBe("delivered");
+      expect((yield* store.get(key("denied").subscription))?.recovery).toMatchObject({
+        nextAttemptAtMillis: null,
+        lastFailure: "unauthorized",
+      });
+      expect(polls).toBe(1);
+      yield* (yield* SubscriptionIntake).accept(webhook, source, event("completion"));
+    }).pipe(
+      Effect.provide(
+        layer({
+          authorizeIntake: (_partition, _source, caller) =>
+            caller === webhook
+              ? Effect.void
+              : SubscriptionError.make({ reason: "unauthorized", code: "webhook-only" }),
+          authorizeReconcile: (subscription) =>
+            subscription.key.subscriptionId === "denied"
+              ? SubscriptionError.make({ reason: "unauthorized", code: "recovery-denied" })
+              : Effect.void,
+          reconcile: () =>
+            Effect.sync(() => {
+              polls++;
+              return event("completion");
+            }),
+        }),
+      ),
+    );
+  });
+
   it.effect("rejects duplicate intake when the retained payload no longer matches its digest", () =>
     Effect.gen(function* () {
       yield* (yield* SubscriptionIntake).accept(principal, source, event("completion"));

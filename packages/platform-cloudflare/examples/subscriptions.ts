@@ -1,5 +1,6 @@
 import {
   type EventSources,
+  type SubscriptionInputBindings,
   type SourcePartition,
   type SubscriptionAuthorizer,
   SubscriptionIntake,
@@ -23,7 +24,7 @@ import {
  */
 export const makeSubscriptionPartition = <E>(
   host: Layer.Layer<
-    SubscriptionAuthorizer | EventSources | ConversationObjectNamespace,
+    SubscriptionAuthorizer | EventSources | SubscriptionInputBindings | ConversationObjectNamespace,
     E,
     DurableObjectState.DurableObjectState | WorkerEnvironment | SubscriptionPartitionIdentity
   >,

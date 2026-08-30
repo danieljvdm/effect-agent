@@ -1,21 +1,22 @@
 import { AgentId, ConversationId } from "@effect-agent/core";
+import {
+  acceptVerifiedGitHubWorkflowRunWebhook,
+  GitHubRepository,
+  GitHubWebhookSignatureVerifier,
+  GitHubWorkflowRunAttempt,
+  GitHubWorkflowRuns,
+  makeGitHubWorkflowRunSource,
+  webCryptoGitHubWebhookSignatureVerifierLayer,
+} from "@effect-agent/session/github";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Redacted, Schema } from "effect";
 
 import {
-  acceptVerifiedGitHubWorkflowRunWebhook,
   DefinitionDigests,
   Digest,
-  GitHubRepository,
-  GitHubWebhookSignatureVerifier,
-  GitHubWorkflowRunAttempt,
-  GitHubWorkflowRunCompletion,
-  GitHubWorkflowRuns,
-  makeGitHubWorkflowRunSource,
   Principal,
   SubscriptionIntake,
   SubscriptionRecord,
-  webCryptoGitHubWebhookSignatureVerifierLayer,
 } from "../src/index.ts";
 
 const SHA = "a".repeat(40);
@@ -68,10 +69,6 @@ const completedAttempt = Schema.decodeUnknownSync(GitHubWorkflowRunAttempt)(comp
 const sourceWith = (attempt: typeof GitHubWorkflowRunAttempt.Type) =>
   makeGitHubWorkflowRunSource({
     repository,
-    context: Schema.Struct({ reason: Schema.String }),
-    input: Schema.Struct({ conclusion: GitHubWorkflowRunCompletion, reason: Schema.String }),
-    prepare: (completion, context) =>
-      Effect.succeed({ conclusion: completion, reason: context.reason }),
   }).pipe(
     Effect.provideService(
       GitHubWorkflowRuns,

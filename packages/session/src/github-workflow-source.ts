@@ -232,40 +232,17 @@ const completionFromWire = Effect.fn("GitHubWorkflowRun.completionFromWire")(fun
   });
 });
 
-export interface GitHubWorkflowRunSourceOptions<
-  Continuation extends Schema.Top,
-  Input extends Schema.Top,
-  PrepareRequirements,
-> {
+export interface GitHubWorkflowRunSourceOptions {
   readonly repository: GitHubRepository;
-  readonly context: Continuation;
-  readonly input: Input;
-  readonly prepare: (
-    completion: GitHubWorkflowRunCompletion,
-    context: Continuation["Type"],
-  ) => Effect.Effect<Input["Type"], SubscriptionSourceError, PrepareRequirements>;
 }
 
 /**
- * Build the exact-attempt completion source. Hosts should pass the destination Agent's input
- * Schema as `input`; the restricted Tool catalog separately binds this source version to that
- * Agent identity. Reconciliation depends on GitHub retaining a readable exact attempt.
+ * Build the exact-attempt completion source, shared by all destination Agents in this partition.
+ * Reconciliation depends on GitHub retaining a readable exact attempt.
  */
-export const makeGitHubWorkflowRunSource = Effect.fn("makeGitHubWorkflowRunSource")(function* <
-  Continuation extends Schema.Top,
-  Input extends Schema.Top,
-  PrepareRequirements,
->(
-  options: GitHubWorkflowRunSourceOptions<Continuation, Input, PrepareRequirements>,
-): Effect.fn.Return<
-  EventSource,
-  SubscriptionSourceError,
-  | GitHubWorkflowRuns
-  | PrepareRequirements
-  | Continuation["DecodingServices"]
-  | Continuation["EncodingServices"]
-  | Input["EncodingServices"]
-> {
+export const makeGitHubWorkflowRunSource = Effect.fn("makeGitHubWorkflowRunSource")(function* (
+  options: GitHubWorkflowRunSourceOptions,
+): Effect.fn.Return<EventSource, SubscriptionSourceError, GitHubWorkflowRuns> {
   const repository = yield* Schema.decodeUnknownEffect(GitHubRepository)(options.repository).pipe(
     Effect.mapError(() => sourceError("github-repository-configuration", false)),
   );
@@ -280,8 +257,6 @@ export const makeGitHubWorkflowRunSource = Effect.fn("makeGitHubWorkflowRunSourc
       }),
     ),
     parameters: GitHubWorkflowRunWatch,
-    context: options.context,
-    input: options.input,
     identity: completionIdentity,
     eventKey: completionIdentity,
     parameterKey: (watch) => watchIdentity(repository.id, watch),
@@ -290,7 +265,6 @@ export const makeGitHubWorkflowRunSource = Effect.fn("makeGitHubWorkflowRunSourc
       completion.runId === watch.runId &&
       completion.attempt === watch.attempt &&
       completion.headSha === watch.expectedHeadSha,
-    prepare: (completion, _watch, context) => options.prepare(completion, context),
     reconcile: (watch) =>
       runs.getAttempt({ repository, runId: watch.runId, attempt: watch.attempt }).pipe(
         Effect.mapError((error) => sourceError(`github-${error.reason}`, error.retryable)),

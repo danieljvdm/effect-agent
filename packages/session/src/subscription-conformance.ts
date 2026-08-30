@@ -310,6 +310,32 @@ const preparationLifecycle = conformanceCase(
         envelopeDigest: digest("5"),
         nowMillis: 30,
       });
+      const retry = {
+        attempts: 2,
+        nextAttemptAtMillis: 60,
+        lastAttemptAtMillis: 35,
+        lastFailure: "transport" as const,
+      };
+      yield* store.changeDelivery(selected.key, selected.deliveryId, {
+        _tag: "Retry",
+        retry,
+        nowMillis: 35,
+      });
+      for (const staleRetry of [
+        { ...retry, attempts: 1, nextAttemptAtMillis: 70 },
+        { ...retry, nextAttemptAtMillis: 70 },
+        { ...retry, attempts: 3, nextAttemptAtMillis: 50 },
+      ]) {
+        const retained = yield* store.changeDelivery(selected.key, selected.deliveryId, {
+          _tag: "Retry",
+          retry: staleRetry,
+          nowMillis: 36,
+        });
+        yield* ensure(
+          retained.retry.attempts === 2 && retained.retry.nextAttemptAtMillis === 60,
+          "stale retry overwrote newer retry state",
+        );
+      }
       yield* store.cancel(durable.key);
       const completed = yield* store.changeDelivery(selected.key, selected.deliveryId, {
         _tag: "Complete",

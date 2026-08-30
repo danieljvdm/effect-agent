@@ -281,6 +281,12 @@ an `EventAcknowledgement`. That acknowledgement is not a Submission Receipt. Del
 Conversation admission, ordering, and joining; each event does not necessarily start its own Run.
 No waiter or Run stays open to watch a source.
 
+::: warning Alpha retention limit
+Completed records consume quota permanently. A continuous subscription eventually exhausts
+partition or owner capacity even when every delivery succeeds. There is no automatic pruning;
+safe pruning requires a separate durability design. Plan capacity for the partition's full lifetime.
+:::
+
 The host assigns each source a stable `SourcePartition`, consisting of a tenant ID and source
 address, such as a repository identity. Every event and registration belongs to exactly one
 partition. Keep that address unchanged across deployments, source versions, and payload changes.
@@ -289,14 +295,27 @@ one addressed Subscription Partition Object. There is no cross-partition transac
 subscription directory. Hosts must bound the partitions accessible to each owner.
 
 Install exact, versioned behavior with `makeEventSource` and `EventSources`. The source supplies
-event, parameter, continuation, and Agent input Schemas; canonical event identity and matching keys;
-deterministic bounded matching; and Effect input preparation. Supply the destination Agent's input
-Schema and bind that Agent in host policy. Persisted data never includes callbacks, Schemas, Effects,
-credentials, or captured services. Keep old source versions installed while retained work needs
-them. Unsupported versions fail explicitly rather than borrowing newer behavior.
+event and parameter Schemas, canonical event identity and matching keys, deterministic bounded
+matching, and optional reconciliation. One source implementation serves every destination Agent
+in its partition.
+
+Install destination preparation with `makeSubscriptionInputBinding` and `SubscriptionInputBindings`.
+Each binding supplies the source event and parameter Schemas, continuation Schema, destination
+Agent input Schema, and Effect preparation callback. Resolution requires exactly one binding for
+the source name/version, Agent ID, and retained definition digests. Two Agents can consume the same
+event with different context and input shapes. Include the context Schema and mapper in the
+destination's definition version; changing either requires new definition digests. Keep old source
+versions and preparation bindings installed while retained work needs them. Missing or ambiguous
+bindings reject registration and leave selected work pending with an `unsupported-binding` failure.
+Prepared work retries its frozen envelope without resolving preparation code again. Persisted data
+never includes callbacks, Schemas, Effects, credentials, or captured services.
 
 Provide an explicit `SubscriptionAuthorizer`. It authorizes every management operation, intake,
-and preparation. `Subscriptions` exposes `subscribe`, `listSubscriptions`, `cancelSubscription`,
+reconciliation, and preparation. Its required `reconcile(subscription)` method grants host recovery
+authority separately from `intake(partition, source, principal)`. A subscribing user's identity is
+registration evidence and need not have webhook ingress permissions. Recovery checks this policy
+before reading the provider; denial records a conclusive recovery failure and stops polling.
+`Subscriptions` exposes `subscribe`, `listSubscriptions`, `cancelSubscription`,
 and redacted delivery status. Management is scoped to one partition and tenant-qualified owner;
 possession of a handle is not authority. Keep `SubscriptionStore`, `SubscriptionIntake`, and
 `SubscriptionDriver` out of model Tool environments. Restricted subscription Tools bind the owner,
@@ -360,6 +379,9 @@ intake pauses routing with the event and cursor intact. Size capacity for that r
 do not delete evidence still needed for routing, delivery, source recovery, or durable Tool replay.
 
 ### GitHub workflow run completion
+
+Import GitHub integration from `@effect-agent/session/github`. The session root exports generic
+subscription contracts and preparation bindings.
 
 `makeGitHubWorkflowRunSource` watches one repository, workflow run ID, attempt number, and expected
 head SHA. Both successful and unsuccessful completions reach the Agent. It does not aggregate all

@@ -191,6 +191,7 @@ export class SubscriptionError extends Schema.TaggedError<SubscriptionError>()(
       "capacity",
       "unauthorized",
       "unsupported-source",
+      "unsupported-binding",
       "storage",
       "corrupt",
     ]),
@@ -354,7 +355,10 @@ export class SubscriptionStore extends Context.Service<
       after: string,
       limit: number,
     ) => Effect.Effect<ReadonlyArray<SubscriptionDelivery>, SubscriptionError>;
-    /** A matching deliveryId fences stale outcomes. Prepare rechecks cancellation and expiry atomically. */
+    /**
+     * A matching deliveryId fences stale outcomes. Prepare rechecks cancellation and expiry atomically.
+     * Retry advances only with a higher attempt count and a nondecreasing next-attempt time.
+     */
     readonly changeDelivery: (
       key: SubscriptionDeliveryKey,
       deliveryId: Digest,
@@ -389,6 +393,10 @@ export class SubscriptionAuthorizer extends Context.Service<
       partition: SourcePartition,
       source: EventSourceVersion,
       principal: Principal,
+    ) => Effect.Effect<void, SubscriptionError>;
+    /** Host recovery authority, independent of the principal who registered the watch. */
+    readonly reconcile: (
+      subscription: SubscriptionRecord,
     ) => Effect.Effect<void, SubscriptionError>;
     readonly prepare: (
       subscription: SubscriptionRecord,

@@ -24,16 +24,11 @@ export interface EventSource {
     { readonly parameters: PersistedJson; readonly matchingKey: string },
     SubscriptionSourceError
   >;
-  readonly context: (value: unknown) => Effect.Effect<PersistedJson, SubscriptionSourceError>;
   readonly normalize: (value: unknown) => Effect.Effect<NormalizedEvent, SubscriptionSourceError>;
   readonly matches: (
     event: AcceptedEvent,
     subscription: SubscriptionRecord,
   ) => Effect.Effect<boolean, SubscriptionSourceError>;
-  readonly prepare: (
-    event: AcceptedEvent,
-    subscription: SubscriptionRecord,
-  ) => Effect.Effect<PersistedJson, SubscriptionSourceError>;
   readonly reconcile?: (
     subscription: SubscriptionRecord,
   ) => Effect.Effect<NormalizedEvent | null, SubscriptionSourceError>;
@@ -50,31 +45,22 @@ const invalid = () => SubscriptionSourceError.make({ code: "source-schema", retr
 
 /**
  * Capture the source's explicit Effect dependencies at host assembly. Matching and key functions
- * must be pure and bounded under this exact semantic version. Input uses the Agent's input Schema.
+ * must be pure and bounded under this exact semantic version.
  * The returned source accepts Schema-encoded values at intake and management boundaries.
  */
 export const makeEventSource = Effect.fn("Session.makeEventSource")(function* <
   Event extends Schema.Top,
   Parameters extends Schema.Top,
-  Continuation extends Schema.Top,
-  Input extends Schema.Top,
-  R,
+  R = never,
 >(options: {
   readonly source: EventSourceVersion;
   readonly continuity: string;
   readonly event: Event;
   readonly parameters: Parameters;
-  readonly context: Continuation;
-  readonly input: Input;
   readonly identity: (event: Event["Type"]) => string;
   readonly eventKey: (event: Event["Type"]) => string;
   readonly parameterKey: (parameters: Parameters["Type"]) => string;
   readonly matches: (event: Event["Type"], parameters: Parameters["Type"]) => boolean;
-  readonly prepare: (
-    event: Event["Type"],
-    parameters: Parameters["Type"],
-    context: Continuation["Type"],
-  ) => Effect.Effect<Input["Type"], SubscriptionSourceError, R>;
   readonly reconcile?: (
     parameters: Parameters["Type"],
   ) => Effect.Effect<Event["Type"] | null, SubscriptionSourceError, R>;
@@ -86,9 +72,6 @@ export const makeEventSource = Effect.fn("Session.makeEventSource")(function* <
   | Event["EncodingServices"]
   | Parameters["DecodingServices"]
   | Parameters["EncodingServices"]
-  | Continuation["DecodingServices"]
-  | Continuation["EncodingServices"]
-  | Input["EncodingServices"]
 > {
   const services = yield* Effect.context<
     | R
@@ -96,9 +79,6 @@ export const makeEventSource = Effect.fn("Session.makeEventSource")(function* <
     | Event["EncodingServices"]
     | Parameters["DecodingServices"]
     | Parameters["EncodingServices"]
-    | Continuation["DecodingServices"]
-    | Continuation["EncodingServices"]
-    | Input["EncodingServices"]
   >();
   const encode = <S extends Schema.Top>(schema: S, value: S["Type"]) =>
     Schema.encodeEffect(schema)(value).pipe(
@@ -130,13 +110,6 @@ export const makeEventSource = Effect.fn("Session.makeEventSource")(function* <
         matchingKey: options.parameterKey(decoded),
       };
     }).pipe(Effect.provideContext(services));
-  const context: EventSource["context"] = (value) =>
-    Schema.decodeUnknownEffect(PersistedJson)(value).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(options.context)),
-      Effect.mapError(invalid),
-      Effect.flatMap((decoded) => encode(options.context, decoded)),
-      Effect.provideContext(services),
-    );
   const matches: EventSource["matches"] = (event, subscription) =>
     Effect.gen(function* () {
       const e = yield* Schema.decodeUnknownEffect(options.event)(event.payload).pipe(
@@ -147,29 +120,13 @@ export const makeEventSource = Effect.fn("Session.makeEventSource")(function* <
       ).pipe(Effect.mapError(invalid));
       return options.matches(e, p);
     }).pipe(Effect.provideContext(services));
-  const prepare: EventSource["prepare"] = (event, subscription) =>
-    Effect.gen(function* () {
-      const e = yield* Schema.decodeUnknownEffect(options.event)(event.payload).pipe(
-        Effect.mapError(invalid),
-      );
-      const p = yield* Schema.decodeUnknownEffect(options.parameters)(
-        subscription.configuration.parameters,
-      ).pipe(Effect.mapError(invalid));
-      const c = yield* Schema.decodeUnknownEffect(options.context)(
-        subscription.configuration.context,
-      ).pipe(Effect.mapError(invalid));
-      const input = yield* options.prepare(e, p, c);
-      return yield* encode(options.input, input);
-    }).pipe(Effect.provideContext(services));
   const reconcile = options.reconcile;
   return {
     source: options.source,
     continuity: options.continuity,
     parameters,
-    context,
     normalize,
     matches,
-    prepare,
     ...(reconcile === undefined
       ? {}
       : {

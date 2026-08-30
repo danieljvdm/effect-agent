@@ -158,8 +158,13 @@ export const applySubscriptionDeliveryChange = (
         ? Result.fail(conflict("delivery-state"))
         : Result.succeed({ ...existing, state: "refused", refusal: change.refusal });
     case "Retry":
-      return existing.state === "delivered" || existing.state === "refused"
-        ? Result.fail(conflict("delivery-state"))
-        : Result.succeed({ ...existing, retry: change.retry });
+      if (existing.state === "delivered" || existing.state === "refused")
+        return Result.fail(conflict("delivery-state"));
+      if (
+        change.retry.attempts <= existing.retry.attempts ||
+        change.retry.nextAttemptAtMillis < existing.retry.nextAttemptAtMillis
+      )
+        return Result.succeed(existing);
+      return Result.succeed({ ...existing, retry: change.retry });
   }
 };

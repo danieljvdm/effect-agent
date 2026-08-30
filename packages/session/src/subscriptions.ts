@@ -18,6 +18,7 @@ import { IdempotencyKey, type Principal } from "./ledger.ts";
 import { admitPreparedInput, PreparedInputAdmission } from "./prepared-admission.ts";
 import { DefinitionDigests, type PersistedJson } from "./records.ts";
 import { type ScheduleRetryReason } from "./schedule.ts";
+import { resolveSubscriptionInput, SubscriptionInputBindings } from "./subscription-input.ts";
 import {
   AcceptedEvent,
   type EventAcknowledgement,
@@ -196,6 +197,7 @@ const pageLimit = (value: number) =>
 
 const makeManagement = Effect.fn("Subscriptions.make")(function* (requested: SubscriptionLimits) {
   const limits = yield* validate(SubscriptionLimits, requested);
+  const { bindings } = yield* SubscriptionInputBindings;
   const { store, authorizer, source, digest, scope } = yield* dependencies;
   const subscribe: Subscriptions["Service"]["subscribe"] = Effect.fn("Subscriptions.subscribe")(
     function* (scopeValue, options) {
@@ -203,7 +205,8 @@ const makeManagement = Effect.fn("Subscriptions.make")(function* (requested: Sub
       yield* authorizer.manage("subscribe", owner);
       const behavior = yield* source(options.source);
       const params = yield* behavior.parameters(options.parameters);
-      const context = yield* behavior.context(options.context);
+      const binding = yield* resolveSubscriptionInput(bindings, options);
+      const context = yield* binding.context(options.context);
       const configuration = yield* validate(SubscriptionConfiguration, {
         ...options,
         parameters: params.parameters,
@@ -397,6 +400,7 @@ const makeIntake = Effect.fn("SubscriptionIntake.make")(function* (requested: Su
 
 const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: SubscriptionLimits) {
   const limits = yield* validate(SubscriptionLimits, requested);
+  const { bindings } = yield* SubscriptionInputBindings;
   const { store, authorizer, source, digest } = yield* dependencies;
   const admission = yield* PreparedInputAdmission;
   const failpoint = yield* SubscriptionFailpoint;
@@ -579,11 +583,11 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
       );
       return null;
     }
-    const behavior = yield* source(delivery.source);
+    const binding = yield* resolveSubscriptionInput(bindings, subscription.configuration);
     if ((yield* digest(event.payload)) !== event.payloadDigest)
       return yield* failure("corrupt", "event-digest");
     const authorization = yield* authorizer.prepare(subscription, event);
-    const input = yield* behavior.prepare(event, subscription);
+    const input = yield* binding.prepare(event, subscription);
     if (bytes(input) > limits.maxPayloadBytes)
       return yield* SubscriptionSourceError.make({ code: "input-bounds", retryable: false });
     const envelope = yield* validate(PreparedInput, {
@@ -679,7 +683,7 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
     const behavior = yield* source(subscription.configuration.source);
     if (behavior.reconcile === undefined)
       return yield* failure("unsupported-source", "source-reconciliation");
-    yield* authorizer.intake(store.partition, behavior.source, subscription.createdBy);
+    yield* authorizer.reconcile(subscription);
     const observation = yield* behavior.reconcile(subscription).pipe(
       Effect.timeout(limits.operationTimeoutMillis),
       Effect.map((event) => ({ _tag: "Observed" as const, event })),

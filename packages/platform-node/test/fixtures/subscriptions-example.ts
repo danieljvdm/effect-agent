@@ -1,21 +1,26 @@
 import {
-  acceptVerifiedGitHubWorkflowRunWebhook,
   EventSources,
-  githubWorkflowRunsHttpLayer,
-  type GitHubRepository,
-  type GitHubWebhookSignatureVerifier,
-  GitHubWorkflowRunCompletion,
-  GitHubWorkflowRunSourceVersion,
-  type GitHubWorkflowRunWatch,
-  makeGitHubWorkflowRunSource,
+  SubscriptionInputBindings,
+  makeSubscriptionInputBinding,
+  type SubscriptionInputBinding,
   type SourcePartition,
   SubscriptionAuthorizer,
   SubscriptionIntake,
   Subscriptions,
   type EventSource,
+} from "@effect-agent/session";
+import {
+  acceptVerifiedGitHubWorkflowRunWebhook,
+  githubWorkflowRunsHttpLayer,
+  type GitHubRepository,
+  type GitHubWebhookSignatureVerifier,
+  GitHubWorkflowRunCompletion,
+  GitHubWorkflowRunSourceVersion,
+  GitHubWorkflowRunWatch,
+  makeGitHubWorkflowRunSource,
   type VerifiedGitHubWorkflowRunWebhookRequest,
   webCryptoGitHubWebhookSignatureVerifierLayer,
-} from "@effect-agent/session";
+} from "@effect-agent/session/github";
 import {
   SqliteStorageConfig,
   SqliteStorageConfigValue,
@@ -49,7 +54,7 @@ const sqliteSubscriptionInfrastructure = (filename: string) =>
 const subscriptionRuntimeFromSourcesLayer = <E, R>(options: {
   readonly runtime: NodeDurableRuntimeOptions;
   readonly partition: SourcePartition;
-  readonly sources: Layer.Layer<EventSources, E, R>;
+  readonly sources: Layer.Layer<EventSources | SubscriptionInputBindings, E, R>;
   readonly authorizer: SubscriptionAuthorizer["Service"];
 }) => {
   const dependencies = Layer.mergeAll(
@@ -71,11 +76,15 @@ export const subscriptionRuntimeLayer = (options: {
   readonly runtime: NodeDurableRuntimeOptions;
   readonly partition: SourcePartition;
   readonly sources: ReadonlyArray<EventSource>;
+  readonly bindings: ReadonlyArray<SubscriptionInputBinding>;
   readonly authorizer: SubscriptionAuthorizer["Service"];
 }) =>
   subscriptionRuntimeFromSourcesLayer({
     ...options,
-    sources: Layer.succeed(EventSources)({ sources: options.sources }),
+    sources: Layer.merge(
+      Layer.succeed(EventSources)({ sources: options.sources }),
+      Layer.succeed(SubscriptionInputBindings)({ bindings: options.bindings }),
+    ),
   });
 
 /** Durable context retained while the exact workflow attempt is still running. */
@@ -102,22 +111,36 @@ export const githubWorkflowSubscriptionRuntimeLayer = (options: {
   readonly repository: GitHubRepository;
   readonly githubToken: Redacted.Redacted<string>;
   readonly webhookSecret: Redacted.Redacted<string>;
+  readonly agentId: SubscribeOptions["agentId"];
+  readonly definitions: SubscribeOptions["definitions"];
   readonly authorizer: SubscriptionAuthorizer["Service"];
 }) => {
   const github = githubWorkflowRunsHttpLayer({
     repository: options.repository,
     token: options.githubToken,
   }).pipe(Layer.provide(NodeHttpClient.layerUndici));
-  const sources = Layer.effect(
-    EventSources,
-    makeGitHubWorkflowRunSource({
-      repository: options.repository,
-      context: GitHubWorkflowContinuation,
-      input: GitHubWorkflowContinuationInput,
-      prepare: (completion, continuation) =>
-        Effect.succeed({ instruction: continuation.instruction, workflowRun: completion }),
-    }).pipe(Effect.map((source) => ({ sources: [source] }))),
-  ).pipe(Layer.provide(github));
+  const sources = Layer.merge(
+    Layer.effect(
+      EventSources,
+      makeGitHubWorkflowRunSource({
+        repository: options.repository,
+      }).pipe(Effect.map((source) => ({ sources: [source] }))),
+    ).pipe(Layer.provide(github)),
+    Layer.effect(
+      SubscriptionInputBindings,
+      makeSubscriptionInputBinding({
+        source: GitHubWorkflowRunSourceVersion,
+        agentId: options.agentId,
+        definitions: options.definitions,
+        event: GitHubWorkflowRunCompletion,
+        parameters: GitHubWorkflowRunWatch,
+        context: GitHubWorkflowContinuation,
+        input: GitHubWorkflowContinuationInput,
+        prepare: (completion, _watch, continuation) =>
+          Effect.succeed({ instruction: continuation.instruction, workflowRun: completion }),
+      }).pipe(Effect.map((binding) => ({ bindings: [binding] }))),
+    ),
+  );
   const subscriptions = subscriptionRuntimeFromSourcesLayer({ ...options, sources });
   const verifier = webCryptoGitHubWebhookSignatureVerifierLayer(
     options.webhookSecret,

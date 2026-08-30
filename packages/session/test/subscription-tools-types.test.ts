@@ -1,19 +1,27 @@
+import { AgentId } from "@effect-agent/core";
+import {
+  GitHubWorkflowRunCompletion,
+  GitHubWorkflowRunWatch,
+  GitHubWorkflowRunSourceVersion,
+  type GitHubWorkflowRuns,
+  GitHubRepository,
+  makeGitHubWorkflowRunSource,
+} from "@effect-agent/session/github";
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Schema } from "effect";
 import type { Layer, Crypto } from "effect";
 import type { Tool } from "effect/unstable/ai";
 
 import {
-  type GitHubWorkflowRunCompletion,
-  type GitHubWorkflowRuns,
   type SubscribeToEvent,
   type Subscriptions,
-  GitHubRepository,
-  makeGitHubWorkflowRunSource,
   type SubscriptionError,
   type SubscriptionSourceError,
   type SubscriptionToolsOptions,
   subscriptionToolsLayer,
+  makeSubscriptionInputBinding,
+  DefinitionDigests,
+  Digest,
 } from "../src/index.ts";
 
 type Equal<Left, Right> =
@@ -44,9 +52,17 @@ class PrepareInput extends Context.Service<PrepareInput, { readonly prefix: stri
 
 const sourceEffect = makeGitHubWorkflowRunSource({
   repository: GitHubRepository.make({ id: 1, owner: "effect", name: "agent" }),
+});
+const digest = Schema.decodeSync(Digest)("a".repeat(64));
+const bindingEffect = makeSubscriptionInputBinding({
+  source: GitHubWorkflowRunSourceVersion,
+  agentId: Schema.decodeSync(AgentId)("agent"),
+  definitions: DefinitionDigests.make({ agent: digest, model: digest, tools: digest }),
+  event: GitHubWorkflowRunCompletion,
+  parameters: GitHubWorkflowRunWatch,
   context: Schema.Struct({ message: Schema.String }),
   input: Schema.Struct({ message: Schema.String }),
-  prepare: (_completion: GitHubWorkflowRunCompletion, context) =>
+  prepare: (_completion, _watch, context) =>
     Effect.gen(function* () {
       const service = yield* PrepareInput;
       return { message: `${service.prefix}${context.message}` };
@@ -55,8 +71,10 @@ const sourceEffect = makeGitHubWorkflowRunSource({
 
 type SourceFailureProof = Assert<Equal<Effect.Error<typeof sourceEffect>, SubscriptionSourceError>>;
 type SourceRequirementsProof = Assert<
-  Equal<Effect.Services<typeof sourceEffect>, GitHubWorkflowRuns | PrepareInput>
+  Equal<Effect.Services<typeof sourceEffect>, GitHubWorkflowRuns>
 >;
+type BindingFailureProof = Assert<Equal<Effect.Error<typeof bindingEffect>, never>>;
+type BindingRequirementsProof = Assert<Equal<Effect.Services<typeof bindingEffect>, PrepareInput>>;
 
 describe("Subscription Tool and GitHub source public types", () => {
   it("keeps typed failures, requirements, and sanitized Tool failures visible", () => {
@@ -66,7 +84,9 @@ describe("Subscription Tool and GitHub source public types", () => {
       NoDurableStepFailurePayloadProof,
       SourceFailureProof,
       SourceRequirementsProof,
-    ] = [true, true, true, true, true];
-    expect(proofs).toEqual([true, true, true, true, true]);
+      BindingFailureProof,
+      BindingRequirementsProof,
+    ] = [true, true, true, true, true, true, true];
+    expect(proofs).toEqual([true, true, true, true, true, true, true]);
   });
 });

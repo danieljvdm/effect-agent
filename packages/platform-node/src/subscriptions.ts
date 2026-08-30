@@ -2,6 +2,7 @@ import type { AgentId } from "@effect-agent/core";
 import {
   type DurableSubmitAgent,
   type EventSources,
+  type SubscriptionInputBindings,
   PersistedJson,
   type PreparedInput,
   PreparedInputAdmission,
@@ -172,7 +173,11 @@ export class NodeSubscriptions {
   ): Layer.Layer<
     Subscriptions | SubscriptionIntake,
     SubscriptionError,
-    NodeDurableHost | SubscriptionStore | SubscriptionAuthorizer | EventSources
+    | NodeDurableHost
+    | SubscriptionStore
+    | SubscriptionAuthorizer
+    | EventSources
+    | SubscriptionInputBindings
   > {
     const limits = options.limits ?? defaultSubscriptionLimits;
     const publicServices = Layer.merge(
