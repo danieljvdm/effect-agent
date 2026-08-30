@@ -104,7 +104,8 @@ const PublishReviewWire = Schema.Struct({
     }),
   ).check(Schema.isMaxLength(24)),
 });
-const PublishCurrentHeadCommentWire = Schema.Struct({
+const PublishAttemptWire = Schema.Struct({
+  commit_id: Revision,
   event: Schema.Literal("COMMENT"),
   body: Schema.String.check(Schema.isMaxLength(100_000)),
   comments: Schema.Tuple([]),
@@ -494,24 +495,26 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       );
     });
 
-  /** Publish only a host-authored incomplete-attempt marker on GitHub's current head. */
-  const publishCurrentHeadAttemptMarker = Effect.fn("GitHubClient.publishCurrentHeadAttemptMarker")(
-    function* (bodyText: string) {
-      const body = yield* Schema.encodeEffect(PublishCurrentHeadCommentWire)({
-        event: "COMMENT",
-        body: bodyText,
-        comments: [],
-      }).pipe(Effect.mapError((cause) => failure("encode stale review marker", cause)));
-      const reviewRequest = yield* HttpClientRequest.post(`${pullUrl}/reviews`).pipe(
-        HttpClientRequest.bodyJson(body),
-        Effect.mapError((cause) => failure("encode stale review marker", cause)),
-      );
-      return yield* execute("publish stale review marker", reviewRequest).pipe(
-        Effect.flatMap(decode(PublishedReviewWire, "publish stale review marker")),
-        Effect.map((wire) => wire.html_url),
-      );
-    },
-  );
+  /** Record a host-authored incomplete attempt on the inspected commit, even after a push. */
+  const publishAttemptMarker = Effect.fn("GitHubClient.publishAttemptMarker")(function* (input: {
+    readonly commitId: string;
+    readonly body: string;
+  }) {
+    const body = yield* Schema.encodeEffect(PublishAttemptWire)({
+      commit_id: input.commitId,
+      event: "COMMENT",
+      body: input.body,
+      comments: [],
+    }).pipe(Effect.mapError((cause) => failure("encode stale review marker", cause)));
+    const reviewRequest = yield* HttpClientRequest.post(`${pullUrl}/reviews`).pipe(
+      HttpClientRequest.bodyJson(body),
+      Effect.mapError((cause) => failure("encode stale review marker", cause)),
+    );
+    return yield* execute("publish stale review marker", reviewRequest).pipe(
+      Effect.flatMap(decode(PublishedReviewWire, "publish stale review marker")),
+      Effect.map((wire) => wire.html_url),
+    );
+  });
 
   return {
     getPullRequest,
@@ -521,6 +524,6 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     compareTrees,
     acknowledgeComment,
     publishReview,
-    publishCurrentHeadAttemptMarker,
+    publishAttemptMarker,
   } as const;
 });

@@ -180,45 +180,6 @@ export class IncrementalScopeUnavailable extends Schema.TaggedError<IncrementalS
   },
 ) {}
 
-type ReviewPublication =
-  | { readonly _tag: "published"; readonly reviewUrl: string }
-  | {
-      readonly _tag: "stale";
-      readonly reviewUrl: string;
-      readonly failure: StaleReviewHead;
-    };
-
-const staleAttemptBody = (automatic: boolean): string =>
-  withReviewMarker(
-    [
-      "## Effect Agent review",
-      "",
-      "> [!CAUTION]",
-      "> **The review result was discarded because the pull request changed during publication.**",
-      "> This attempt is incomplete and does not clear the change.",
-    ].join("\n"),
-    automatic,
-    false,
-  );
-
-/** Recover only a known pre-POST head mismatch with a neutral marker on GitHub's current head. */
-export const publishHeadBoundReview = Effect.fn("publishHeadBoundReview")(function* (input: {
-  readonly publish: Effect.Effect<string, GitHubApiFailure | StaleReviewHead>;
-  readonly publishCurrentHeadAttemptMarker: (
-    body: string,
-  ) => Effect.Effect<string, GitHubApiFailure>;
-  readonly automatic: boolean;
-}): Effect.fn.Return<ReviewPublication, GitHubApiFailure> {
-  return yield* input.publish.pipe(
-    Effect.map((reviewUrl) => ({ _tag: "published", reviewUrl }) as const),
-    Effect.catchTag("StaleReviewHead", (failure) =>
-      input
-        .publishCurrentHeadAttemptMarker(staleAttemptBody(input.automatic))
-        .pipe(Effect.map((reviewUrl) => ({ _tag: "stale", reviewUrl, failure }) as const)),
-    ),
-  );
-});
-
 export const reviewPublicationFailure = (input: {
   readonly blockingFindings: number;
   readonly unreviewedPaths: number;
@@ -244,6 +205,48 @@ const writeOutputs = Effect.fn("writeReviewOutputs")(function* (
     outputPath,
     `${entries.map(([key, value]) => `${key}=${String(value)}`).join("\n")}\n`,
     { flag: "a" },
+  );
+});
+
+/** Count stale attempts only against the inspected commit, without publishing their findings. */
+export const publishHeadBoundReview = Effect.fn("publishHeadBoundReview")(function* (
+  publish: Effect.Effect<string, GitHubApiFailure | StaleReviewHead>,
+  staleAttempt: {
+    readonly publish: (input: {
+      readonly commitId: string;
+      readonly body: string;
+    }) => Effect.Effect<string, GitHubApiFailure>;
+    readonly automatic: boolean;
+    readonly failureSummary?: string | undefined;
+  },
+) {
+  return yield* publish.pipe(
+    Effect.tapErrorTag(
+      "StaleReviewHead",
+      Effect.fn(function* (failure) {
+        yield* Console.log(
+          `PR review publication stopped: inspected ${failure.inspectedHead}, current head ${failure.currentHead}. Recording an incomplete attempt on the inspected commit only.`,
+        );
+        const reviewUrl = yield* staleAttempt.publish({
+          commitId: failure.inspectedHead,
+          body: withReviewMarker(
+            [
+              "## Effect Agent review",
+              "> [!CAUTION]\n> This attempt is incomplete because the pull request moved to a newer commit.",
+              staleAttempt.failureSummary ?? "No findings were published from this attempt.",
+              "This notice records the attempt on the inspected commit. The newer commit still needs its own review.",
+            ].join("\n\n"),
+            staleAttempt.automatic,
+            false,
+          ),
+        });
+        yield* writeOutputs([
+          ["skipped", "false"],
+          ["reason", "stale-review-head"],
+          ["review-url", reviewUrl],
+        ]);
+      }),
+    ),
   );
 });
 
@@ -658,20 +661,6 @@ export const reviewActionProgram = Effect.gen(function* () {
     return;
   }
 
-  const reviewUrlOrFailStale = Effect.fn("reviewUrlOrFailStale")(function* (
-    publication: ReviewPublication,
-  ) {
-    if (publication._tag === "published") return publication.reviewUrl;
-    yield* writeOutputs([
-      ["skipped", "false"],
-      ["reason", "stale-review-head"],
-      ["blocking-findings", 0],
-      ["unresolved-change-requests", unresolvedChangeRequests],
-      ["review-url", publication.reviewUrl],
-    ]);
-    return yield* publication.failure;
-  });
-
   const attemptExit = yield* Effect.gen(function* () {
     const fullFiles = yield* github.listFiles;
     const currentMergeBase = yield* github.getMergeBase(pull.baseRevision, pull.headRevision);
@@ -774,26 +763,45 @@ export const reviewActionProgram = Effect.gen(function* () {
     };
   }).pipe(Effect.exit);
   if (Exit.isFailure(attemptExit)) {
-    yield* Console.error(`PR review attempt failed:\n${Cause.pretty(attemptExit.cause)}`);
-    const publication = yield* publishHeadBoundReview({
-      publish: github.publishReview({
+    const failureSummary = attemptExit.cause.reasons
+      .flatMap((reason) => {
+        if (!Cause.isFailReason(reason)) return [];
+        const failure = reason.error;
+        switch (failure._tag) {
+          case "BudgetExceeded":
+            return [
+              `Review budget exceeded (${failure.limit}): observed ${String(failure.observedValue)}, limit ${String(failure.limitValue)}.`,
+            ];
+          case "IncrementalScopeUnavailable":
+            return [
+              "The merge base changed. Request a full review before incremental reviews can resume.",
+            ];
+          case "GitHubApiFailure":
+            return ["A GitHub repository request failed."];
+          default:
+            return [];
+        }
+      })
+      .at(0);
+    yield* Console.error(
+      `PR review attempt failed${failureSummary === undefined ? "" : `: ${failureSummary}`}\n${Cause.pretty(attemptExit.cause)}`,
+    );
+    const reviewUrl = yield* publishHeadBoundReview(
+      github.publishReview({
         commitId: pull.headRevision,
         event: "COMMENT",
         body: withReviewMarker(
           presentation.renderFailure({
             automaticReviewsRemaining: selection.automaticReviewsRemaining,
+            failureSummary,
           }),
           selection.automatic,
           false,
         ),
         comments: [],
       }),
-      publishCurrentHeadAttemptMarker: github.publishCurrentHeadAttemptMarker,
-      automatic: selection.automatic,
-    });
-    const reviewUrl = yield* reviewUrlOrFailStale(publication).pipe(
-      Effect.catchTag("StaleReviewHead", () => Effect.failCause(attemptExit.cause)),
-    );
+      { publish: github.publishAttemptMarker, automatic: selection.automatic, failureSummary },
+    ).pipe(Effect.catchTag("StaleReviewHead", () => Effect.failCause(attemptExit.cause)));
     yield* writeOutputs([
       ["skipped", "false"],
       ["reason", "review-failed"],
@@ -849,8 +857,8 @@ export const reviewActionProgram = Effect.gen(function* () {
     selection.automatic,
     complete,
   );
-  const publication = yield* publishHeadBoundReview({
-    publish: github.publishReview({
+  const reviewUrl = yield* publishHeadBoundReview(
+    github.publishReview({
       commitId: pull.headRevision,
       event: reviewEventFor(blocking),
       body,
@@ -866,10 +874,8 @@ export const reviewActionProgram = Effect.gen(function* () {
             ],
       ),
     }),
-    publishCurrentHeadAttemptMarker: github.publishCurrentHeadAttemptMarker,
-    automatic: selection.automatic,
-  });
-  const reviewUrl = yield* reviewUrlOrFailStale(publication);
+    { publish: github.publishAttemptMarker, automatic: selection.automatic },
+  );
   yield* writeOutputs([
     ["skipped", "false"],
     ["reason", selection.reason],

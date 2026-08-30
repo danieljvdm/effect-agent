@@ -25,4 +25,10 @@ baselines. An owner, member, or collaborator can request `@effect-agent review` 
 review or `@effect-agent review full` for the whole admitted diff. Manual waves do not consume the
 automatic allowance. Missing baselines or incomplete comparisons stop incremental review instead
 of silently expanding scope. The workflow runs trusted default-branch code, serializes attempts,
-and refuses stale heads.
+and refuses stale findings. If a push makes an attempt stale before publication, the Action logs
+the inspected and current commits and posts only an incomplete notice bound to the inspected commit.
+The stale attempt counts toward the automatic allowance, but cannot mark the new commit as already
+attempted. The queued review can proceed while allowance remains. Any original execution failure
+remains in that attempt's log; budget failures include the exhausted limit and observed usage.
+Failure comments on an unchanged head also report budget exhaustion without exposing provider
+diagnostics or model output.

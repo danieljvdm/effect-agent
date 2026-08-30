@@ -48544,7 +48544,8 @@ var PublishReviewWire = exports_Schema.Struct({
     body: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(4096))
   })).check(exports_Schema.isMaxLength(24))
 });
-var PublishCurrentHeadCommentWire = exports_Schema.Struct({
+var PublishAttemptWire = exports_Schema.Struct({
+  commit_id: Revision3,
   event: exports_Schema.Literal("COMMENT"),
   body: exports_Schema.String.check(exports_Schema.isMaxLength(1e5)),
   comments: exports_Schema.Tuple([])
@@ -48756,10 +48757,11 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
     const request4 = yield* exports_HttpClientRequest.post(`${pullUrl}/reviews`).pipe(exports_HttpClientRequest.bodyJson(body), exports_Effect.mapError((cause) => failure("encode pull request review", cause)));
     return yield* execute2("publish pull request review", request4).pipe(exports_Effect.flatMap(decode4(PublishedReviewWire, "publish pull request review")), exports_Effect.map((wire) => wire.html_url));
   });
-  const publishCurrentHeadAttemptMarker = exports_Effect.fn("GitHubClient.publishCurrentHeadAttemptMarker")(function* (bodyText2) {
-    const body = yield* exports_Schema.encodeEffect(PublishCurrentHeadCommentWire)({
+  const publishAttemptMarker = exports_Effect.fn("GitHubClient.publishAttemptMarker")(function* (input) {
+    const body = yield* exports_Schema.encodeEffect(PublishAttemptWire)({
+      commit_id: input.commitId,
       event: "COMMENT",
-      body: bodyText2,
+      body: input.body,
       comments: []
     }).pipe(exports_Effect.mapError((cause) => failure("encode stale review marker", cause)));
     const reviewRequest = yield* exports_HttpClientRequest.post(`${pullUrl}/reviews`).pipe(exports_HttpClientRequest.bodyJson(body), exports_Effect.mapError((cause) => failure("encode stale review marker", cause)));
@@ -48773,7 +48775,7 @@ var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3
     compareTrees,
     acknowledgeComment,
     publishReview,
-    publishCurrentHeadAttemptMarker
+    publishAttemptMarker
   };
 });
 
@@ -49009,8 +49011,9 @@ var renderReviewFailureBody = (input) => {
     "## Effect Agent review",
     `> [!CAUTION]
 > The review failed before it could publish findings.`,
-    "Review preparation or a model pass failed. This attempt does not advance the baseline or clear earlier change requests.",
-    "Check the Action log for the cause. A changed merge base requires `@effect-agent review full` before incremental reviews can resume."
+    input.failureSummary ?? "Review preparation or a model pass failed.",
+    "This attempt does not advance the baseline or clear earlier change requests.",
+    "Check the Action log for details. Comment `@effect-agent review full` to retry the full diff."
   ];
   const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
   if (automaticPause !== undefined)
@@ -49166,17 +49169,6 @@ class IncrementalScopeUnavailable extends exports_Schema.TaggedError()("Incremen
   currentMergeBase: exports_Schema.String
 }) {
 }
-var staleAttemptBody = (automatic) => withReviewMarker([
-  "## Effect Agent review",
-  "",
-  "> [!CAUTION]",
-  "> **The review result was discarded because the pull request changed during publication.**",
-  "> This attempt is incomplete and does not clear the change."
-].join(`
-`), automatic, false);
-var publishHeadBoundReview = exports_Effect.fn("publishHeadBoundReview")(function* (input) {
-  return yield* input.publish.pipe(exports_Effect.map((reviewUrl) => ({ _tag: "published", reviewUrl })), exports_Effect.catchTag("StaleReviewHead", (failure) => input.publishCurrentHeadAttemptMarker(staleAttemptBody(input.automatic)).pipe(exports_Effect.map((reviewUrl) => ({ _tag: "stale", reviewUrl, failure })))));
-});
 var reviewPublicationFailure = (input) => {
   if (input.blockingFindings > 0)
     return BlockingFindings.make({ count: input.blockingFindings });
@@ -49196,6 +49188,28 @@ var writeOutputs = exports_Effect.fn("writeReviewOutputs")(function* (entries3) 
   yield* fs.writeFileString(outputPath, `${entries3.map(([key, value4]) => `${key}=${String(value4)}`).join(`
 `)}
 `, { flag: "a" });
+});
+var publishHeadBoundReview = exports_Effect.fn("publishHeadBoundReview")(function* (publish2, staleAttempt) {
+  return yield* publish2.pipe(exports_Effect.tapErrorTag("StaleReviewHead", exports_Effect.fn(function* (failure) {
+    yield* exports_Console.log(`PR review publication stopped: inspected ${failure.inspectedHead}, current head ${failure.currentHead}. Recording an incomplete attempt on the inspected commit only.`);
+    const reviewUrl = yield* staleAttempt.publish({
+      commitId: failure.inspectedHead,
+      body: withReviewMarker([
+        "## Effect Agent review",
+        `> [!CAUTION]
+> This attempt is incomplete because the pull request moved to a newer commit.`,
+        staleAttempt.failureSummary ?? "No findings were published from this attempt.",
+        "This notice records the attempt on the inspected commit. The newer commit still needs its own review."
+      ].join(`
+
+`), staleAttempt.automatic, false)
+    });
+    yield* writeOutputs([
+      ["skipped", "false"],
+      ["reason", "stale-review-head"],
+      ["review-url", reviewUrl]
+    ]);
+  })));
 });
 var skip = exports_Effect.fn("skipReview")(function* (reason, reviewUrl, unresolvedChangeRequests = 0) {
   yield* exports_Console.log(reviewUrl === undefined ? `PR review skipped: ${reason}` : `Posted PR review: ${reviewUrl}`);
@@ -49472,18 +49486,6 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     }
     return;
   }
-  const reviewUrlOrFailStale = exports_Effect.fn("reviewUrlOrFailStale")(function* (publication2) {
-    if (publication2._tag === "published")
-      return publication2.reviewUrl;
-    yield* writeOutputs([
-      ["skipped", "false"],
-      ["reason", "stale-review-head"],
-      ["blocking-findings", 0],
-      ["unresolved-change-requests", unresolvedChangeRequests],
-      ["review-url", publication2.reviewUrl]
-    ]);
-    return yield* publication2.failure;
-  });
   const attemptExit = yield* exports_Effect.gen(function* () {
     const fullFiles = yield* github.listFiles;
     const currentMergeBase = yield* github.getMergeBase(pull.baseRevision, pull.headRevision);
@@ -49562,21 +49564,36 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     };
   }).pipe(exports_Effect.exit);
   if (exports_Exit.isFailure(attemptExit)) {
-    yield* exports_Console.error(`PR review attempt failed:
+    const failureSummary = attemptExit.cause.reasons.flatMap((reason) => {
+      if (!exports_Cause.isFailReason(reason))
+        return [];
+      const failure = reason.error;
+      switch (failure._tag) {
+        case "BudgetExceeded":
+          return [
+            `Review budget exceeded (${failure.limit}): observed ${String(failure.observedValue)}, limit ${String(failure.limitValue)}.`
+          ];
+        case "IncrementalScopeUnavailable":
+          return [
+            "The merge base changed. Request a full review before incremental reviews can resume."
+          ];
+        case "GitHubApiFailure":
+          return ["A GitHub repository request failed."];
+        default:
+          return [];
+      }
+    }).at(0);
+    yield* exports_Console.error(`PR review attempt failed${failureSummary === undefined ? "" : `: ${failureSummary}`}
 ${exports_Cause.pretty(attemptExit.cause)}`);
-    const publication2 = yield* publishHeadBoundReview({
-      publish: github.publishReview({
-        commitId: pull.headRevision,
-        event: "COMMENT",
-        body: withReviewMarker(presentation.renderFailure({
-          automaticReviewsRemaining: selection.automaticReviewsRemaining
-        }), selection.automatic, false),
-        comments: []
-      }),
-      publishCurrentHeadAttemptMarker: github.publishCurrentHeadAttemptMarker,
-      automatic: selection.automatic
-    });
-    const reviewUrl2 = yield* reviewUrlOrFailStale(publication2).pipe(exports_Effect.catchTag("StaleReviewHead", () => exports_Effect.failCause(attemptExit.cause)));
+    const reviewUrl2 = yield* publishHeadBoundReview(github.publishReview({
+      commitId: pull.headRevision,
+      event: "COMMENT",
+      body: withReviewMarker(presentation.renderFailure({
+        automaticReviewsRemaining: selection.automaticReviewsRemaining,
+        failureSummary
+      }), selection.automatic, false),
+      comments: []
+    }), { publish: github.publishAttemptMarker, automatic: selection.automatic, failureSummary }).pipe(exports_Effect.catchTag("StaleReviewHead", () => exports_Effect.failCause(attemptExit.cause)));
     yield* writeOutputs([
       ["skipped", "false"],
       ["reason", "review-failed"],
@@ -49623,23 +49640,18 @@ ${exports_Cause.pretty(attemptExit.cause)}`);
     estimatedCost,
     headRevision: pull.headRevision
   }), selection.automatic, complete);
-  const publication = yield* publishHeadBoundReview({
-    publish: github.publishReview({
-      commitId: pull.headRevision,
-      event: reviewEventFor(blocking),
-      body,
-      comments: report2.findings.flatMap((finding) => finding.line === undefined ? [] : [
-        {
-          path: finding.path,
-          line: finding.line,
-          body: presentation.renderFinding(finding, pull.headRevision)
-        }
-      ])
-    }),
-    publishCurrentHeadAttemptMarker: github.publishCurrentHeadAttemptMarker,
-    automatic: selection.automatic
-  });
-  const reviewUrl = yield* reviewUrlOrFailStale(publication);
+  const reviewUrl = yield* publishHeadBoundReview(github.publishReview({
+    commitId: pull.headRevision,
+    event: reviewEventFor(blocking),
+    body,
+    comments: report2.findings.flatMap((finding) => finding.line === undefined ? [] : [
+      {
+        path: finding.path,
+        line: finding.line,
+        body: presentation.renderFinding(finding, pull.headRevision)
+      }
+    ])
+  }), { publish: github.publishAttemptMarker, automatic: selection.automatic });
   yield* writeOutputs([
     ["skipped", "false"],
     ["reason", selection.reason],

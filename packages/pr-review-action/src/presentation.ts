@@ -185,14 +185,17 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
 
 export interface ReviewFailurePresentationInput {
   readonly automaticReviewsRemaining: number;
+  /** Host-authored explanation; never raw provider diagnostics or model output. */
+  readonly failureSummary?: string | undefined;
 }
 
 export const renderReviewFailureBody = (input: ReviewFailurePresentationInput): string => {
   const parts = [
     "## Effect Agent review",
     "> [!CAUTION]\n> The review failed before it could publish findings.",
-    "Review preparation or a model pass failed. This attempt does not advance the baseline or clear earlier change requests.",
-    "Check the Action log for the cause. A changed merge base requires `@effect-agent review full` before incremental reviews can resume.",
+    input.failureSummary ?? "Review preparation or a model pass failed.",
+    "This attempt does not advance the baseline or clear earlier change requests.",
+    "Check the Action log for details. Comment `@effect-agent review full` to retry the full diff.",
   ];
   const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
   if (automaticPause !== undefined) parts.push(automaticPause);
