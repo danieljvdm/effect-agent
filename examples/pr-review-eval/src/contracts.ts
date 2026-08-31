@@ -161,6 +161,7 @@ export class EvalReviewerFailure extends Schema.TaggedError<EvalReviewerFailure>
   },
 ) {}
 
+/** The invocation returned an outcome; its incomplete/exhausted flags still limit review coverage. */
 export class EvalTrialSucceeded extends Schema.TaggedClass<EvalTrialSucceeded>()("Succeeded", {
   outcome: ReviewOutcome,
 }) {}

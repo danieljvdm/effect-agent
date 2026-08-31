@@ -43,6 +43,7 @@ import {
   EvalVariantId,
   digestText,
   makeCurrentOpenAiVariant,
+  makeQualityReport,
   runEvalSuite,
   validateEvalSuite,
   writeObservations,
@@ -186,6 +187,90 @@ describe("PR-review model eval", () => {
       );
       expect((yield* decodeObservationLines(historical))[0]?.runnerVersion).toBe("0.0.9");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "retains a recorded finding after an AI failure without counting a successful trial",
+    () =>
+      Effect.gen(function* () {
+        const suite = yield* makeSuite();
+        const scripted = yield* Layer.build(
+          ScriptedModel.layer([
+            {
+              _tag: "Stream",
+              parts: [
+                {
+                  type: "tool-call",
+                  id: "recorded",
+                  name: "record_finding",
+                  params: {
+                    path: "src/read.ts",
+                    line: 1,
+                    category: "correctness",
+                    title: "Handle undefined before reading the length",
+                    body: "Passing undefined now throws at value.length. Preserve the optional handling.",
+                    priority: 1,
+                  },
+                },
+                {
+                  type: "finish",
+                  reason: "tool-calls",
+                  usage: {
+                    inputTokens: { total: 10, uncached: 10, cacheRead: 0, cacheWrite: 0 },
+                    outputTokens: { total: 4 },
+                  },
+                },
+              ],
+              termination: { _tag: "Complete" },
+            },
+            {
+              _tag: "Stream",
+              parts: [],
+              termination: { _tag: "Fail", description: "Provider disconnected after recording" },
+            },
+          ]),
+        );
+        const reviewer = makeReviewer({
+          model: Model.make("scripted", "eval", Layer.succeedContext(scripted)),
+          estimateCostMicrousd: () => Effect.succeed({ costMicrousd: 12 }),
+        });
+        const variant: EvalVariant<ReviewRepository> = {
+          configuration: configuration("partial"),
+          review: (input) =>
+            reviewer.review(input).pipe(
+              Effect.mapError((error) =>
+                EvalReviewerFailure.make({
+                  errorTag: error._tag,
+                  message: "Scripted reviewer failed",
+                }),
+              ),
+            ),
+        };
+        const observations = yield* runEvalSuite(suite, [variant], {
+          trials: 1,
+          concurrency: 1,
+          caseIds: [],
+        }).pipe(Stream.runCollect);
+        expect(observations[0]?.result).toMatchObject({
+          _tag: "Succeeded",
+          outcome: { incomplete: true, report: { findings: [{ path: "src/read.ts", line: 1 }] } },
+        });
+        const report = yield* makeQualityReport(suite, observations, 1);
+        expect(report.variants[0]?.resources).toMatchObject({
+          attemptedTrials: 1,
+          succeededTrials: 0,
+          incompleteTrials: 1,
+          failedTrials: 0,
+          costedIncompleteTrials: 1,
+          estimatedCostMicrousd: 12,
+          inputTokens: 10,
+          outputTokens: 4,
+        });
+        expect(report.unjudgedFindings).toHaveLength(1);
+        expect(report.unjudgedFindings[0]?.finding.title).toBe(
+          "Handle undefined before reading the length",
+        );
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("derives output-affecting guidance identity inside the live variant", () =>
