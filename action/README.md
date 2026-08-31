@@ -55,12 +55,13 @@ reasoning. Admission never assumes a cache hit. The ledger releases unused reser
 validating the response's usage, model, tier, and counted bounds. Failed, interrupted, or unmetered
 requests retain their possible charge; the transport does not automatically retry them.
 
-Research retains the 32,000-token maximum output allowance. When another research request cannot
-fit, the Action permits at most one affordable request restricted to `submit_review`, with its
-output allowance reduced to the remaining balance. It counts the changed final request again.
-If even that request cannot fit, the host delivers already recorded findings with no further model
-call. Both paths report incomplete coverage. Large changes may therefore remain incomplete under
-the ceiling; the Action does not call a partial empty result a successful review.
+The output allowance starts at 32,000 tokens and is reduced before each request when needed to fit
+the remaining balance. Research can continue with that smaller allowance; the model, reasoning
+effort, tool definitions, and tool choice stay unchanged. Logs show the requested and admitted
+output allowances. If a response is truncated by the cost limit, or no further request fits, the
+host delivers already recorded findings without another paid call and reports incomplete coverage.
+Large changes may therefore remain incomplete under the ceiling. An incomplete empty result is
+labeled `None recorded · incomplete`, never given a green check or counted as a successful review.
 
 This is a client admission guarantee under the pinned pricing and token-count contracts, not an
 invoice audit or an OpenAI account spending limit. Usage estimates remain separate from outstanding

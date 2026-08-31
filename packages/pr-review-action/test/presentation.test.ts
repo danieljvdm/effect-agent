@@ -206,12 +206,16 @@ describe("review presentation", () => {
       });
 
     expect(render(false, 0)).toContain("Review coverage is incomplete");
+    expect(render(false, 0)).not.toContain("✅ None");
     expect(render(true, 2)).toContain("2 earlier change requests");
     expect(render(true, 2)).not.toContain("No actionable findings");
+    expect(render(true, 2)).not.toContain("✅ None");
     for (const exhausted of ["tokens", "turns", "tool-calls", "cost"] as const) {
       const body = render(false, 0, exhausted);
       expect(body).toContain(`Review stopped at the ${exhausted} budget`);
       expect(body).not.toContain("No actionable findings");
+      expect(body).not.toContain("✅ None");
+      expect(body).toContain("None recorded · incomplete");
     }
   });
 
