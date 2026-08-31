@@ -39143,9 +39143,9 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
       prompt: outputContractMessage === undefined ? outgoing : insertOutputContract(outgoing, outputContractMessage),
       toolkit: agent2.definition.toolkit,
       disableToolCallResolution: true,
-      ...terminalToolChoiceOnly ? agent2.definition.completion === undefined ? { toolChoice: "none" } : {
+      ...terminalToolChoiceOnly ? agent2.definition.completion === undefined ? { toolChoice: "none" } : agent2.definition.completion.required === true ? { toolChoice: { tool: agent2.definition.completion.tool } } : {
         toolChoice: {
-          mode: agent2.definition.completion.required === true ? "required" : "auto",
+          mode: "auto",
           oneOf: [agent2.definition.completion.tool]
         }
       } : agent2.definition.completion?.required === true ? { toolChoice: "required" } : {}
@@ -44059,15 +44059,14 @@ var reviewRecording = exports_Toolkit.make(exports_Tool.make("record_finding", {
   failure: ReviewVerificationError,
   failureMode: "return"
 }).annotate(exports_Tool.Strict, true).annotate(exports_Tool.Readonly, true));
-var reviewPolicy = AgentPolicy.make({
+var reviewPolicy = (costAdmitted) => AgentPolicy.make({
   maxTurns: 8,
   maxToolCalls: 64,
   maxDuration: "5 minutes",
   toolConcurrency: 4,
   repeatedFailureLimit: 0,
   contextTokenLimit: 128000,
-  tokenBudget: 416000,
-  completionReserveTokens: 160000,
+  ...costAdmitted ? { completionReserveTokens: 0 } : { tokenBudget: 416000, completionReserveTokens: 160000 },
   onExhaustion: "final-answer",
   runStatus: "appended"
 });
@@ -44150,7 +44149,7 @@ var makeReviewer = (options3) => {
       required: true,
       project: ({ parameters }) => parameters
     },
-    policy: reviewPolicy,
+    policy: reviewPolicy(options3.costControl !== undefined),
     description: "Review every admitted change and report concrete defects.",
     metadata: { deploymentClass: "E", surface: "read-only" }
   }), options3.model);
@@ -44199,12 +44198,16 @@ var makeReviewer = (options3) => {
     const result4 = yield* AgentRuntime.run(reviewer, request3, runOptions).pipe(exports_Effect.provide(recordingLayer), exports_Effect.result);
     const saved = yield* exports_Ref.get(recorded);
     const cost = options3.costControl === undefined ? undefined : yield* options3.costControl.snapshot;
-    if (exports_Result.isFailure(result4) && cost?.stopped !== true && saved.length === 0) {
+    const preserveAttempt = cost?.stopped === true || (cost?.modelCalls ?? 0) > 0 || saved.length > 0;
+    if (exports_Result.isFailure(result4) && !preserveAttempt) {
       return yield* result4.failure;
     }
     const submitted = exports_Result.isSuccess(result4) ? yield* validatedFindings(request3, result4.success.output.findings).pipe(exports_Effect.result) : exports_Result.succeed(ReviewReport.make({ summary: "Research stopped before completion.", findings: [] }));
-    if (exports_Result.isFailure(submitted) && saved.length === 0)
+    if (exports_Result.isFailure(submitted) && !preserveAttempt)
       return yield* submitted.failure;
+    const failure = exports_Result.isFailure(result4) ? result4.failure : exports_Result.isFailure(submitted) ? submitted.failure : undefined;
+    if (failure !== undefined)
+      yield* exports_Effect.logWarning("Review stopped before completion", { failureType: failure._tag });
     const combined = [...saved];
     if (exports_Result.isSuccess(submitted)) {
       for (const finding of submitted.success.findings) {
@@ -44216,7 +44219,7 @@ var makeReviewer = (options3) => {
     const exhausted = cost?.stopped === true ? "cost" : exports_Result.isSuccess(result4) ? result4.success.exhausted : undefined;
     const report2 = ReviewReport.make({
       findings: combined.slice(0, 24),
-      summary: exhausted !== undefined ? `Review stopped at the ${exhausted} budget. These findings cover the investigation completed before finalization; the remaining change has not been verified.` : incomplete ? "The investigation did not complete. Recorded findings are preserved; the remaining change has not been verified." : reviewSummary(request3, combined)
+      summary: exhausted !== undefined ? `Review stopped at the ${exhausted} budget. These findings cover the investigation completed before finalization; the remaining change has not been verified.` : incomplete ? `${failure?._tag === "ModelProtocolError" ? "The review stopped after a model protocol error." : "The investigation did not complete."} Recorded findings are preserved; the remaining change has not been verified.` : reviewSummary(request3, combined)
     });
     yield* exports_Effect.logDebug("Review completed", { findingCount: report2.findings.length });
     const usage2 = yield* budget2.snapshot;
@@ -49720,6 +49723,7 @@ var makeReviewOpenAi = exports_Effect.fn("makeReviewOpenAi")(function* (options3
     }));
     yield* exports_Effect.logInfo("Review request admitted", {
       modelCall: reservation.id,
+      toolDefinitions: payload.tools?.length ?? 0,
       inputTokens,
       requestedMaxOutputTokens: requestedOutputTokens,
       maxOutputTokens: outputTokens,
@@ -49769,6 +49773,8 @@ var makeReviewOpenAi = exports_Effect.fn("makeReviewOpenAi")(function* (options3
     const totals = yield* exports_Ref.get(state);
     yield* exports_Effect.logInfo("Review model usage", {
       modelCall: reservation.id,
+      functionCalls: response.output.filter((item) => item.type === "function_call").length,
+      completionCalls: response.output.filter((item) => item.type === "function_call" && item.name === "submit_review").length,
       inputTokens: usage2.input_tokens,
       uncachedInputTokens: ordinary,
       cachedInputTokens: read2,

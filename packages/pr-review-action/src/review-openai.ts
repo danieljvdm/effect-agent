@@ -311,6 +311,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     }));
     yield* Effect.logInfo("Review request admitted", {
       modelCall: reservation.id,
+      toolDefinitions: payload.tools?.length ?? 0,
       inputTokens,
       requestedMaxOutputTokens: requestedOutputTokens,
       maxOutputTokens: outputTokens,
@@ -383,6 +384,10 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     const totals = yield* Ref.get(state);
     yield* Effect.logInfo("Review model usage", {
       modelCall: reservation.id,
+      functionCalls: response.output.filter((item) => item.type === "function_call").length,
+      completionCalls: response.output.filter(
+        (item) => item.type === "function_call" && item.name === "submit_review",
+      ).length,
       inputTokens: usage.input_tokens,
       uncachedInputTokens: ordinary,
       cachedInputTokens: read,

@@ -371,7 +371,7 @@ describe("review output boundary", () => {
                   ]);
                 }
                 expect(call).toBe(3);
-                expect(toolChoice).toEqual({ mode: "required", oneOf: ["submit_review"] });
+                expect(toolChoice).toEqual({ tool: "submit_review" });
                 return response(
                   { findings: [submittedFinding(blocker, 1)] },
                   {

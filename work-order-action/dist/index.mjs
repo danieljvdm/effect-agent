@@ -39320,9 +39320,9 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
       prompt: outputContractMessage === undefined ? outgoing : insertOutputContract(outgoing, outputContractMessage),
       toolkit: agent2.definition.toolkit,
       disableToolCallResolution: true,
-      ...terminalToolChoiceOnly ? agent2.definition.completion === undefined ? { toolChoice: "none" } : {
+      ...terminalToolChoiceOnly ? agent2.definition.completion === undefined ? { toolChoice: "none" } : agent2.definition.completion.required === true ? { toolChoice: { tool: agent2.definition.completion.tool } } : {
         toolChoice: {
-          mode: agent2.definition.completion.required === true ? "required" : "auto",
+          mode: "auto",
           oneOf: [agent2.definition.completion.tool]
         }
       } : agent2.definition.completion?.required === true ? { toolChoice: "required" } : {}

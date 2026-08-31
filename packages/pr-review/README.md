@@ -29,16 +29,21 @@ The reviewer does not resolve previous findings or declare a partial review safe
 to merge. GitHub history, credentials, diff collection, and publication belong to
 the host channel.
 
-The engine owns a cumulative 416,000-token stop policy and reserves 160,000 tokens for a final
-context and completion response. The model sees its current turn, tool, and token usage. Token,
-turn, or tool exhaustion permits one constrained completion through `submit_review`; it returns
-validated findings and accounted usage with `ReviewOutcome.exhausted` naming the limit. Hosts must
+Without host spending admission, the engine owns a cumulative 416,000-token stop policy and
+reserves 160,000 tokens for a final context and completion response. The model sees its current
+turn, tool, and token usage. Token, turn, or tool exhaustion permits one constrained completion
+through `submit_review`; it returns validated findings and accounted usage with
+`ReviewOutcome.exhausted` naming the limit. Hosts must
 treat that outcome as incomplete, even when it contains no findings. Measured usage can exceed a
 policy threshold before the engine observes it; this is not a provider-side spending cap.
 The usage ledger records research, compaction, and finalization without a second token limit that
 could abort delivery.
 
 An optional `costControl` reports the host's pre-request spending admission and provider usage.
+Supplying it replaces the cumulative token quota and completion reserve with that admission.
+Cached reads still contribute to usage diagnostics, but cannot force early token finalization.
+The 8-turn, 64-tool-call, 5-minute, and 128,000-token context bounds remain in force. A cost
+estimator alone does not disable the token quota.
 When the host stops research for cost, the reviewer returns `exhausted: "cost"` and delivers
 recorded findings without requiring another paid call. Hosts must reserve the full possible charge
 before sending each request; the port itself does not enforce a cap. The
@@ -48,7 +53,9 @@ unknown, separately from the observed usage estimate.
 
 Recorded findings also survive a later expected execution or verification failure. Such a result
 has `incomplete: true`; hosts must not treat an empty or partial result as clearing the change.
-Without recorded findings, ordinary failures remain typed. Defects and interruption still
+With `costControl`, an accounted provider attempt also returns an incomplete outcome after an
+expected failure, even without findings, so hosts can publish its usage and outstanding charges.
+Otherwise failures without recorded findings remain typed. Defects and interruption still
 propagate, and these records belong to the current run's Scope, not persistent storage.
 The report retains recorded findings before adding newly submitted findings, removes exact
 duplicates, and marks coverage incomplete if the combined report exceeds 24 findings.
