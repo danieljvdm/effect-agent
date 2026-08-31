@@ -1,7 +1,6 @@
 import type { SubmissionId } from "@effect-agent/core";
 import {
   AbortCommand,
-  AgentBindingResolver,
   ConversationStore,
   ConversationTailRequest,
   DurableAgentRuntime,
@@ -82,11 +81,7 @@ const submitCoordinator = (conversation: string, key: string) =>
 const driveWith = (bindings: ReadonlyArray<ResolvedBinding>) => (conversation: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
-    return yield* runtime
-      .processConversationResolved(decodeConversationId(conversation))
-      .pipe(
-        Effect.provideService(AgentBindingResolver, AgentBindingResolver.fromBindings(bindings)),
-      );
+    return yield* runtime.processConversationResolved(decodeConversationId(conversation), bindings);
   });
 
 /** Restart-drive bindings: the parent model always answers final (batch resume, P5 precedent). */
@@ -1078,10 +1073,10 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               }),
               {
                 workerConcurrency: 1,
-                bindings: [...bindings],
                 wakeScanInterval: 200,
                 settlementPollInterval: 50,
               },
+              bindings,
             );
           }),
         ),

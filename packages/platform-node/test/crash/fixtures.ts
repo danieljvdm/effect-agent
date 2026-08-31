@@ -92,8 +92,8 @@ export const CrashEnv = {
  * - `resolve-unknown` — second-process driver: record `resolveUnknown(NeverHappened)` for the
  *   book Tool Call through the shared ledger.
  *
- * S2 durable-Subagent scenarios (plan §4.4) — all resolve claimed heads through an
- * `AgentBindingResolver` built from `makeCrashSubagentBindings`:
+ * S2 durable-Subagent scenarios (plan §4.4) — all resolve claimed heads through a
+ * binding array built by `makeCrashSubagentBindings`:
  *
  * - `subagent-run` — submit the coordinator, then drive parent → child → parent lanes to the
  *   join; armed kill/block failpoints land inside establishment (drive 1), the child Settlement

@@ -1,7 +1,7 @@
 import type { AgentId } from "@effect-agent/core";
 import { Context, Effect, Schema } from "effect";
 
-import { definitionDigestsEqual } from "./binding-resolver.ts";
+import { definitionDigestsEqual } from "./agent-registration.ts";
 import { type DefinitionDigests, PersistedJson } from "./records.ts";
 import {
   type AcceptedEvent,

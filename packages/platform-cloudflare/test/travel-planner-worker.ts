@@ -4,8 +4,10 @@ import {
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
 } from "@effect-agent/testing/fixtures/travel-planner";
+import { Effect, Layer } from "effect";
 
 import { ConversationObject } from "../src/index.ts";
+import { layerFromBindings } from "../src/layers.ts";
 import { runtimeEvictionFailpoint, storageEvictionFailpoint } from "./fixtures.ts";
 
 /**
@@ -44,13 +46,13 @@ const baseOptions: ConversationObject.Options = {
 
 /** The Travel Planner DC suite's Conversation Object. */
 export class TravelPlannerConversationObject extends ConversationObject.make(
-  makePhase6TravelPlannerBindings,
+  Layer.unwrap(Effect.map(makePhase6TravelPlannerBindings, layerFromBindings)),
   baseOptions,
 ) {}
 
 /** Tight quotas for the Travel Planner admission-limits rows (refusal before any row). */
 export class TravelPlannerLimitedObject extends ConversationObject.make(
-  makePhase6TravelPlannerBindings,
+  Layer.unwrap(Effect.map(makePhase6TravelPlannerBindings, layerFromBindings)),
   {
     ...baseOptions,
     namespaceBinding: "LIMITED",

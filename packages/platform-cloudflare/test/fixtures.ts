@@ -9,6 +9,7 @@ import {
   ToolExecutionClass,
 } from "@effect-agent/engine";
 import {
+  DefinitionDigestInput,
   DefinitionDigests,
   Digest,
   DurableRuntimeFailpointError,
@@ -40,6 +41,7 @@ import type {
   ConversationMaintenanceFailpointHandler,
   ConversationMaintenanceFailpointLocation,
 } from "../src/index.ts";
+import { layerFromBindings } from "../src/layers.ts";
 
 /**
  * Workerd-safe eviction-harness fixtures (plan §3, §4 WP3). The vitest pool runs test files
@@ -866,7 +868,7 @@ export const joinDefinition = Agent.make("cf-join-host", {
 // Models
 // ---------------------------------------------------------------------------
 
-const plannerModel = promptAwareModel("cf-planner", () =>
+export const plannerModel = promptAwareModel("cf-planner", () =>
   Stream.fromIterable(finalParts(FINAL_ANSWER)),
 );
 
@@ -972,3 +974,11 @@ export const makeTestBindings: Effect.Effect<ReadonlyArray<ResolvedBinding>> = E
     return [planner, contextCompactor, search, book, approval, itinerary, join];
   },
 );
+
+export const testRuntimeLayer = Layer.unwrap(Effect.map(makeTestBindings, layerFromBindings));
+
+export const registrationDefinitions = DefinitionDigestInput.make({
+  agent: { id: plannerDefinition.id, revision: 1 },
+  model: { provider: "scripted", name: "cf-planner" },
+  tools: [],
+});

@@ -13,6 +13,7 @@ import {
   childConversationIdFor,
   runIdForSubmission,
   type CanonicalRecordEnvelope,
+  type ResolvedBinding,
 } from "@effect-agent/session";
 import {
   assertDiscoveryMatchesAuthoredToolkit,
@@ -84,10 +85,10 @@ const submitMission = (conversation: string, key: string) =>
   });
 
 /** Drive one Conversation lane through the S2 multi-binding worker entry point. */
-const drive = (conversationId: ConversationId) =>
+const drive = (bindings: ReadonlyArray<ResolvedBinding>, conversationId: ConversationId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
-    return yield* runtime.processConversationResolved(conversationId);
+    return yield* runtime.processConversationResolved(conversationId, bindings);
   });
 
 const readLog = (conversationId: ConversationId) =>
@@ -179,7 +180,7 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             // Phase 1: one coordinator Turn declares BOTH delegation calls; the
             // parent suspends waitingForChild, holds no worker permit, and no
             // child model ran (spec §12 step 10, SUB-030).
-            const first = yield* drive(receipt.conversationId);
+            const first = yield* drive(harness.bindings, receipt.conversationId);
             expect(first).toHaveLength(0);
             expect((yield* submissionState(receipt.submissionId)).state).toBe("suspended");
             const ledger = yield* SubmissionLedger;
@@ -198,7 +199,7 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             // Phase 2: each child lane runs to Settlement under its own Attempt.
             // Every summarizer consulted the MCP content tool exactly once.
             for (const childConversationId of childConversations) {
-              const settlements = yield* drive(childConversationId);
+              const settlements = yield* drive(harness.bindings, childConversationId);
               expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             }
             for (const documentId of documents) {
@@ -216,7 +217,7 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
 
             // Phase 3: the woken parent joins BOTH verified settlements and
             // settles completed with the digest of bounded findings.
-            const settlements = yield* drive(receipt.conversationId);
+            const settlements = yield* drive(harness.bindings, receipt.conversationId);
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             const log = yield* readLog(receipt.conversationId);
             expect(payloadsOf(log, "SubagentJoined")).toHaveLength(documents.length);
@@ -272,11 +273,7 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             expect(yield* harness.parentModelCalls).toBe(2);
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(
-                runtimeOptions(`${directory}/docs-researcher.sqlite`, {
-                  bindings: harness.bindings,
-                }),
-              ),
+              NodeDurableRuntime.layer(runtimeOptions(`${directory}/docs-researcher.sqlite`)),
             ),
           );
         }),

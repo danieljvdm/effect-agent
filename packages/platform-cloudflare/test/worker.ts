@@ -1,5 +1,6 @@
+import { Agent } from "@effect-agent/core";
 import { OperationDenied, ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/session";
-import { Crypto, Effect, Layer } from "effect";
+import { Context, Crypto, Effect, Layer } from "effect";
 import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
 
@@ -12,6 +13,7 @@ import {
   ScheduleOwnerIdentity,
   type ConversationObjectRpc,
 } from "../src/index.ts";
+import { layerFromBindings } from "../src/layers.ts";
 import {
   CONVERSATIONS_BINDING,
   DEPLOYMENT_ID,
@@ -20,7 +22,10 @@ import {
   maintenanceRaceFailpoint,
   makeContextCompactorRunContextLayer,
   makeContextAuthorizationLayer,
-  makeTestBindings,
+  plannerDefinition,
+  plannerModel,
+  registrationDefinitions,
+  testRuntimeLayer,
   runtimeEvictionFailpoint,
   scheduleAuthorizer,
   scheduleFailpoint,
@@ -134,22 +139,63 @@ interface BindingSourceProbe {
 let nextBindingSourceIncarnation = 0;
 const bindingSourceProbes = new WeakMap<DurableObjectState, BindingSourceProbe>();
 
-const dynamicBindings = Effect.gen(function* () {
-  const { raw: ctx } = yield* DurableObjectState.DurableObjectState;
-  const env = yield* WorkerEnvironment;
-  const { conversationId, producerId } = yield* ConversationObjectIdentity;
-  yield* Crypto.Crypto;
-  const previous = bindingSourceProbes.get(ctx);
-  const probe = {
-    evaluationCount: (previous?.evaluationCount ?? 0) + 1,
-    incarnation: previous?.incarnation ?? ++nextBindingSourceIncarnation,
-    conversationId,
-    producerId,
-    rawEnvHasNamespace: env.DYNAMIC_BINDINGS !== undefined,
-  };
-  bindingSourceProbes.set(ctx, probe);
-  return yield* makeTestBindings;
-});
+class RegistrationResource extends Context.Service<
+  RegistrationResource,
+  {
+    readonly check: Effect.Effect<void, string>;
+  }
+>()("@effect-agent/platform-cloudflare/test/RegistrationResource") {}
+
+const registrationResourceLayer = Layer.effect(
+  RegistrationResource,
+  Effect.gen(function* () {
+    const { raw: ctx } = yield* DurableObjectState.DurableObjectState;
+    const env = yield* WorkerEnvironment;
+    const { conversationId, producerId } = yield* ConversationObjectIdentity;
+    yield* Crypto.Crypto;
+    const previous = bindingSourceProbes.get(ctx);
+    bindingSourceProbes.set(ctx, {
+      evaluationCount: (previous?.evaluationCount ?? 0) + 1,
+      incarnation: previous?.incarnation ?? ++nextBindingSourceIncarnation,
+      conversationId,
+      producerId,
+      rawEnvHasNamespace: env.DYNAMIC_BINDINGS !== undefined,
+    });
+    const resource = yield* Effect.acquireRelease(
+      Effect.sync(() => ({ open: true })),
+      (resource) =>
+        Effect.sync(() => {
+          resource.open = false;
+        }),
+    );
+    return {
+      check: Effect.suspend(() =>
+        resource.open ? Effect.void : Effect.fail("registration resource closed"),
+      ),
+    };
+  }),
+);
+
+const dynamicRuntime = ConversationObject.layer([
+  {
+    agent: Agent.withModel(
+      Agent.make(plannerDefinition.id, {
+        input: plannerDefinition.input,
+        output: plannerDefinition.output,
+        toolkit: plannerDefinition.toolkit,
+        policy: plannerDefinition.policy,
+        instructions: (input: Agent.Input<typeof plannerDefinition>) =>
+          Effect.gen(function* () {
+            const resource = yield* RegistrationResource;
+            yield* resource.check;
+            return plannerDefinition.instructions(input);
+          }),
+      }),
+      plannerModel,
+    ),
+    definitions: registrationDefinitions,
+  },
+]).pipe(Layer.provideMerge(registrationResourceLayer));
 
 /** The eviction/alarm/chaos suites' Conversation Object. */
 const progressWaiterCounts = new WeakMap<DurableObjectState, number>();
@@ -200,7 +246,7 @@ const progressIncarnation = (ctx: DurableObjectState): number => {
   return created;
 };
 
-export class TestConversationObject extends ConversationObject.make(makeTestBindings, baseOptions) {
+export class TestConversationObject extends ConversationObject.make(testRuntimeLayer, baseOptions) {
   override async awaitProgressEncoded(encoded: unknown): Promise<unknown> {
     progressIncarnation(this.ctx);
     setProgressWaiterCount(this.ctx, (progressWaiterCounts.get(this.ctx) ?? 0) + 1);
@@ -235,7 +281,7 @@ export class TestConversationObject extends ConversationObject.make(makeTestBind
 }
 
 /** Tight queue-depth and input-size quotas for the admission-limits gate rows. */
-export class LimitedConversationObject extends ConversationObject.make(makeTestBindings, {
+export class LimitedConversationObject extends ConversationObject.make(testRuntimeLayer, {
   ...baseOptions,
   namespaceBinding: "LIMITED",
   maxQueueDepthPerLane: 2,
@@ -243,14 +289,14 @@ export class LimitedConversationObject extends ConversationObject.make(makeTestB
 }) {}
 
 /** A database-size ceiling below any real database: every admission must refuse typed. */
-export class TinyDatabaseConversationObject extends ConversationObject.make(makeTestBindings, {
+export class TinyDatabaseConversationObject extends ConversationObject.make(testRuntimeLayer, {
   ...baseOptions,
   namespaceBinding: "TINYDB",
   maxDatabaseBytes: 1,
 }) {}
 
 /** Fail-closed authorization fixture for host-protocol error-tag fidelity. */
-export class DeniedConversationObject extends ConversationObject.make(makeTestBindings, {
+export class DeniedConversationObject extends ConversationObject.make(testRuntimeLayer, {
   ...baseOptions,
   namespaceBinding: "DENIED",
   operationAuthorizer: {
@@ -269,9 +315,12 @@ export class DeniedConversationObject extends ConversationObject.make(makeTestBi
 }) {}
 
 /** Registration acquisition through yielded effect-cf and platform services. */
-export class DynamicBindingsConversationObject extends ConversationObject.make(dynamicBindings, {
+export class DynamicBindingsConversationObject extends ConversationObject.make(dynamicRuntime, {
   ...baseOptions,
   namespaceBinding: "DYNAMIC_BINDINGS",
+  eventLayer: Layer.effectDiscard(
+    Effect.flatMap(RegistrationResource, (resource) => resource.check),
+  ),
 }) {
   async bindingSourceProbe(): Promise<BindingSourceProbe & { readonly stateMatches: boolean }> {
     const probe = bindingSourceProbes.get(this.ctx);
@@ -281,24 +330,37 @@ export class DynamicBindingsConversationObject extends ConversationObject.make(d
 }
 
 /** Issue #49: a scoped run-context Layer captured once per Object incarnation. */
-export class ContextCompactorConversationObject extends ConversationObject.make(makeTestBindings, {
-  ...baseOptions,
-  namespaceBinding: "CONTEXT_COMPACTOR",
-  runContext: ({ conversationId }) => makeContextCompactorRunContextLayer(conversationId),
-  toolAuthorization: ({ conversationId }) => makeContextAuthorizationLayer(conversationId),
-}) {}
-
-/** Minimal integration proof that effect-cf owns native RPC event scopes and OTLP flushing. */
-const TelemetryConversationObjectBase = ConversationObject.make(
-  makeTestBindings,
+export class ContextCompactorConversationObject extends ConversationObject.make(
+  testRuntimeLayer.pipe(
+    Layer.provide(
+      Layer.unwrap(
+        Effect.map(ConversationObjectIdentity, ({ conversationId }) =>
+          makeContextCompactorRunContextLayer(conversationId),
+        ),
+      ),
+    ),
+    Layer.provide(
+      Layer.unwrap(
+        Effect.map(ConversationObjectIdentity, ({ conversationId }) =>
+          makeContextAuthorizationLayer(conversationId),
+        ),
+      ),
+    ),
+  ),
   {
     ...baseOptions,
-    namespaceBinding: "TELEMETRY",
-    wakeScanInterval: 60_000,
-    rpcTracing: true,
+    namespaceBinding: "CONTEXT_COMPACTOR",
   },
-  observabilityProbeLayer,
-);
+) {}
+
+/** Minimal integration proof that effect-cf owns native RPC event scopes and OTLP flushing. */
+const TelemetryConversationObjectBase = ConversationObject.make(testRuntimeLayer, {
+  ...baseOptions,
+  namespaceBinding: "TELEMETRY",
+  wakeScanInterval: 60_000,
+  rpcTracing: true,
+  eventLayer: observabilityProbeLayer,
+});
 
 type TelemetryServices = Effect.Services<
   Parameters<
@@ -345,10 +407,13 @@ export class TelemetryConversationObject extends TelemetryConversationObjectBase
  * `PortTransportError` (and `AdmissionIndeterminate` on `resolveAdmission`, SUB-031). Wake
  * hints fail at the same seam and remain droppable. Unarmed, every stub is a passthrough.
  */
-const SubagentConversationObjectBase = ConversationObject.make(makeSubagentTestBindings, {
-  ...baseOptions,
-  namespaceBinding: "SUBAGENTS",
-});
+const SubagentConversationObjectBase = ConversationObject.make(
+  Layer.unwrap(Effect.map(makeSubagentTestBindings, layerFromBindings)),
+  {
+    ...baseOptions,
+    namespaceBinding: "SUBAGENTS",
+  },
+);
 
 const faultableStub = <RpcService extends ConversationObjectRpc>(
   stub: DurableObjectStub<RpcService>,

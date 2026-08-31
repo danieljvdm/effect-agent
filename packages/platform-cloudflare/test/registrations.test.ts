@@ -1,5 +1,7 @@
+import { digestDefinitions } from "@effect-agent/session";
+import { BrowserCrypto } from "@effect/platform-browser";
 import { env, runInDurableObject } from "cloudflare:test";
-import { Context, Crypto, Effect, Exit, Layer, Schema } from "effect";
+import { Cause, Context, Crypto, Effect, Exit, Layer, Schema } from "effect";
 import { DurableObjectState, WorkerEnvironment } from "effect-cf";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
@@ -10,7 +12,12 @@ import {
   ConversationObjectNamespace,
   DurableObjectContext,
 } from "../src/index.ts";
-import { PRODUCER_PREFIX, plannerDefinition, submitOptions } from "./fixtures.ts";
+import {
+  PRODUCER_PREFIX,
+  plannerDefinition,
+  registrationDefinitions,
+  submitOptions,
+} from "./fixtures.ts";
 import { allSettled, drainAlarmsUntil, runClient, stubFor } from "./harness.ts";
 
 class BindingSetupError extends Schema.TaggedError<BindingSetupError>()("BindingSetupError", {}) {}
@@ -53,12 +60,15 @@ describe("Cloudflare Agent registrations", () => {
 
     const receipt = await runClient(
       CloudflareConversationClient.use((client) =>
-        client.submit(
-          { definition: plannerDefinition },
-          { question: "plan", ref: firstConversation },
-          submitOptions(firstConversation, "binding-layer"),
-        ),
-      ),
+        Effect.gen(function* () {
+          const definitions = yield* digestDefinitions(registrationDefinitions);
+          return yield* client.submit(
+            { definition: plannerDefinition },
+            { question: "plan", ref: firstConversation },
+            { ...submitOptions(firstConversation, "binding-layer"), definitions },
+          );
+        }),
+      ).pipe(Effect.provide(BrowserCrypto.layer)),
       "DYNAMIC_BINDINGS",
     );
     await drainAlarmsUntil(firstConversation, allSettled(firstConversation, "DYNAMIC_BINDINGS"), {
@@ -73,17 +83,19 @@ describe("Cloudflare Agent registrations", () => {
   });
 
   it("retains application requirements and initialization failures in the Layer types", () => {
-    const bindings = Effect.gen(function* () {
-      const config = yield* ApplicationConfig;
-      yield* WorkerEnvironment;
-      yield* DurableObjectState.DurableObjectState;
-      yield* ConversationObjectIdentity;
-      yield* Crypto.Crypto;
-      yield* Effect.scope;
-      if (!config.enabled) return yield* BindingSetupError.make({});
-      return [];
-    });
-    const runtime = ConversationObject.layer(bindings, options);
+    const registrations = Layer.unwrap(
+      Effect.gen(function* () {
+        const config = yield* ApplicationConfig;
+        yield* WorkerEnvironment;
+        yield* DurableObjectState.DurableObjectState;
+        yield* ConversationObjectIdentity;
+        yield* Crypto.Crypto;
+        yield* Effect.scope;
+        if (!config.enabled) return yield* BindingSetupError.make({});
+        return ConversationObject.layer([]);
+      }),
+    );
+    const runtime = registrations.pipe(Layer.provide(ConversationObject.layerConfig(options)));
     expectTypeOf<Layer.Error<typeof runtime>>().toEqualTypeOf<
       BindingSetupError | ConversationObject.InitializationError
     >();
@@ -96,38 +108,51 @@ describe("Cloudflare Agent registrations", () => {
     >();
 
     const objectOptions = { ...options, namespaceBinding: "CONVERSATIONS" };
-    type FactoryBindings = Parameters<typeof ConversationObject.make>[0];
-    expectTypeOf<typeof bindings>().not.toExtend<FactoryBindings>();
-    const provided = bindings.pipe(
-      Effect.provide(Layer.succeed(ApplicationConfig, { enabled: true })),
+    type FactoryLayer = Parameters<typeof ConversationObject.make>[0];
+    expectTypeOf<typeof registrations>().not.toExtend<FactoryLayer>();
+    const provided = registrations.pipe(
+      Layer.provide(Layer.succeed(ApplicationConfig, { enabled: true })),
     );
-    expectTypeOf<Effect.Error<typeof provided>>().toEqualTypeOf<BindingSetupError>();
     ConversationObject.make(provided, objectOptions);
-    expectTypeOf<typeof Effect.void>().not.toExtend<FactoryBindings>();
+    expectTypeOf<typeof Effect.void>().not.toExtend<FactoryLayer>();
+    expectTypeOf<typeof Layer.empty>().not.toExtend<FactoryLayer>();
+
+    // ApplicationConfig was consumed by Layer.provide, so an event cannot require it.
+    // @ts-expect-error The application must expose event dependencies with Layer.provideMerge.
+    ConversationObject.make(provided, {
+      ...objectOptions,
+      eventLayer: Layer.effectDiscard(ApplicationConfig),
+    });
   });
 
-  it("keeps application resources alive until the runtime Scope closes", () =>
+  it("keeps ordinary application Layers alive until the runtime Scope closes", () =>
     runInDurableObject(stubFor("registration-scope"), (_instance, state) =>
       Effect.runPromise(
         Effect.gen(function* () {
           const lifecycle: Array<string> = [];
           const application = Layer.effect(
             ApplicationConfig,
-            Effect.acquireRelease(
-              Effect.sync(() => {
-                lifecycle.push("acquired");
-                return { enabled: true };
-              }),
-              () => Effect.sync(() => lifecycle.push("released")),
-            ),
+            Effect.gen(function* () {
+              const identity = yield* ConversationObjectIdentity;
+              yield* Crypto.Crypto;
+              expect(identity.conversationId).toBe("registration-scope");
+              return yield* Effect.acquireRelease(
+                Effect.sync(() => {
+                  lifecycle.push("acquired");
+                  return { enabled: true };
+                }),
+                () => Effect.sync(() => lifecycle.push("released")),
+              );
+            }),
           );
-          const registrations = Effect.gen(function* () {
-            const services = yield* Layer.build(application);
-            const config = yield* ApplicationConfig.pipe(Effect.provide(services));
-            expect(config.enabled).toBe(true);
-            return [];
-          });
-          const runtime = ConversationObject.layer(registrations, options).pipe(
+          const runtime = Layer.unwrap(
+            Effect.map(ApplicationConfig, (config) => {
+              expect(config.enabled).toBe(true);
+              return ConversationObject.layer([]);
+            }),
+          ).pipe(
+            Layer.provide(application),
+            Layer.provide(ConversationObject.layerConfig(options)),
             Layer.provide([
               DurableObjectContext.layer(state, env),
               ConversationObjectNamespace.layer(env.CONVERSATIONS),
@@ -142,24 +167,32 @@ describe("Cloudflare Agent registrations", () => {
       ),
     ));
 
-  it.each(["failure", "defect", "interruption"] as const)(
-    "preserves registration %s and releases acquired resources",
+  it.each(["failure", "defect", "interruption", "timeout"] as const)(
+    "preserves initialization %s and releases acquired resources",
     (kind) =>
       runInDurableObject(stubFor(`registration-${kind}`), (_instance, state) =>
         Effect.runPromise(
           Effect.gen(function* () {
             const lifecycle: Array<string> = [];
             const failure = BindingSetupError.make({});
-            const bindings = Effect.gen(function* () {
-              yield* Effect.acquireRelease(
-                Effect.sync(() => lifecycle.push("acquired")),
-                () => Effect.sync(() => lifecycle.push("released")),
-              );
-              if (kind === "failure") return yield* failure;
-              if (kind === "defect") return yield* Effect.die("registration defect");
-              return yield* Effect.interrupt;
-            });
-            const runtime = ConversationObject.layer(bindings, options).pipe(
+            const application = Layer.effect(
+              ApplicationConfig,
+              Effect.gen(function* () {
+                yield* Effect.acquireRelease(
+                  Effect.sync(() => lifecycle.push("acquired")),
+                  () => Effect.sync(() => lifecycle.push("released")),
+                );
+                if (kind === "failure") return yield* failure;
+                if (kind === "defect") return yield* Effect.die("registration defect");
+                if (kind === "timeout") return yield* Effect.never.pipe(Effect.timeout("0 millis"));
+                return yield* Effect.interrupt;
+              }),
+            );
+            const runtime = Layer.unwrap(
+              Effect.as(ApplicationConfig, ConversationObject.layer([])),
+            ).pipe(
+              Layer.provide(application),
+              Layer.provide(ConversationObject.layerConfig(options)),
               Layer.provide([
                 DurableObjectContext.layer(state, env),
                 ConversationObjectNamespace.layer(env.CONVERSATIONS),
@@ -168,6 +201,10 @@ describe("Cloudflare Agent registrations", () => {
             const exit = yield* Layer.build(runtime).pipe(Effect.scoped, Effect.exit);
             if (kind === "failure") expect(exit).toEqual(Exit.fail(failure));
             else if (kind === "defect") expect(exit).toEqual(Exit.die("registration defect"));
+            else if (kind === "timeout")
+              expect(
+                Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : undefined,
+              ).toMatchObject({ _tag: "Some", value: { _tag: "TimeoutError" } });
             else expect(Exit.hasInterrupts(exit)).toBe(true);
             expect(lifecycle).toEqual(["acquired", "released"]);
           }),

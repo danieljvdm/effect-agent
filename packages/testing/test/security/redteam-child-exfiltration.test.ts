@@ -13,6 +13,7 @@ import {
   childConversationIdFor,
   runIdForSubmission,
   type CanonicalRecordEnvelope,
+  type ResolvedBinding,
 } from "@effect-agent/session";
 import {
   docsCoordinatorConfidentialMarker,
@@ -90,10 +91,10 @@ const submitMission = (conversation: string, key: string) =>
     );
   });
 
-const drive = (conversationId: ConversationId) =>
+const drive = (bindings: ReadonlyArray<ResolvedBinding>, conversationId: ConversationId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
-    return yield* runtime.processConversationResolved(conversationId);
+    return yield* runtime.processConversationResolved(conversationId, bindings);
   });
 
 const readLog = (conversationId: ConversationId) =>
@@ -129,12 +130,12 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
             );
 
             // Establish, run each child, and join — the full durable delegation.
-            yield* drive(receipt.conversationId);
+            yield* drive(harness.bindings, receipt.conversationId);
             for (const childConversationId of childConversations) {
-              const settlements = yield* drive(childConversationId);
+              const settlements = yield* drive(harness.bindings, childConversationId);
               expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             }
-            const settlements = yield* drive(receipt.conversationId);
+            const settlements = yield* drive(harness.bindings, receipt.conversationId);
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
 
             // The child DID read the secret: each child log holds the fetched body verbatim.
@@ -188,11 +189,7 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
             }
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(
-                runtimeOptions(`${directory}/redteam-exfiltration.sqlite`, {
-                  bindings: harness.bindings,
-                }),
-              ),
+              NodeDurableRuntime.layer(runtimeOptions(`${directory}/redteam-exfiltration.sqlite`)),
             ),
           );
         }),

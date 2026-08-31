@@ -97,19 +97,16 @@ a daemon fiber or survive process loss.
 
 ## Run durably on Cloudflare
 
-`ConversationObject.make` uses `effect-cf`'s `DurableObject.make`. Export the returned class
-from your Worker and supply an Effect that constructs the Agents it can execute. This example
-assumes your generated `Cloudflare.Env` includes the `OPENAI_API_KEY` secret and the
-`CONVERSATIONS` Durable Object namespace:
+Compose Agent registrations and application services as a Layer, then pass that Layer to
+`ConversationObject.make`. The factory uses `effect-cf`'s `DurableObject.make` and supplies
+native services, configuration, identity, and Crypto before the application graph acquires.
+This example assumes your generated `Cloudflare.Env` includes the `OPENAI_API_KEY` secret and
+the `CONVERSATIONS` Durable Object namespace:
 
 ```ts
 import { Agent, AgentPolicy } from "@effect-agent/core";
 import { ConversationObject } from "@effect-agent/platform-cloudflare";
-import {
-  DefinitionDigestInput,
-  DurableWorkerBinding,
-  digestDefinitions,
-} from "@effect-agent/session";
+import { DefinitionDigestInput } from "@effect-agent/session";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";
@@ -138,83 +135,75 @@ export const travelDefinitions = DefinitionDigestInput.make({
   tools: [],
 });
 
-const travelAgents = Effect.gen(function* () {
-  const env = yield* WorkerEnvironment;
-  const model = OpenAiLanguageModel.model(modelName).pipe(
-    Layer.provide(
-      OpenAiClient.layer({
-        apiKey: Redacted.make(env.OPENAI_API_KEY),
-      }).pipe(Layer.provide(FetchHttpClient.layer)),
+const OpenAiLive = Layer.unwrap(
+  Effect.map(WorkerEnvironment, (env) =>
+    OpenAiClient.layer({ apiKey: Redacted.make(env.OPENAI_API_KEY) }).pipe(
+      Layer.provide(FetchHttpClient.layer),
     ),
-  );
-  const digests = yield* digestDefinitions(travelDefinitions);
-  const registered = yield* DurableWorkerBinding.make(
-    Agent.withModel(TravelPlanner, model),
-    digests,
-  );
-  return [registered];
-});
+  ),
+);
 
-const options = {
+const RuntimeLive = ConversationObject.layer([
+  {
+    agent: Agent.withModel(TravelPlanner, OpenAiLanguageModel.model(modelName)),
+    definitions: travelDefinitions,
+  },
+]).pipe(Layer.provide(OpenAiLive));
+
+export class TravelConversation extends ConversationObject.make(RuntimeLive, {
   namespaceBinding: "CONVERSATIONS",
   deploymentId: "travel-planner",
   producerPrefix: "travel-worker",
-} satisfies ConversationObject.Options;
-
-export class TravelConversation extends ConversationObject.make(travelAgents, options) {}
+}) {}
 ```
 
-`travelAgents` returns executable registrations without running the Agents. The platform builds
-the resolver internally and matches queued Submissions against their Agent ID and exact definition
-digests. These digests hash the explicit version declarations, not JavaScript implementation code.
-Bump the Agent revision when its instructions, input/output Schemas, or policy change; version
-Tool implementations and model configuration when those change too. Submit the same result of
+Each registration pairs one model-bound Agent with its version declarations. The platform hashes
+those declarations, captures the Agent's required services, and matches queued Submissions by
+Agent ID and exact digests. It does not hash JavaScript implementation code. Bump the Agent
+revision when instructions, input/output Schemas, or policy change, and version Tool implementations
+and model configuration when those change. The submitter supplies the same result of
 `digestDefinitions(travelDefinitions)` through `DurableSubmitOptions.definitions`.
 
-`namespaceBinding` names the Wrangler binding, `deploymentId` identifies the deployment in durable
-records, and `producerPrefix` prefixes each Object's derived writer identity. The registration
-Effect can yield `effect-cf`'s `WorkerEnvironment` for typed Worker bindings,
-`DurableObjectState.DurableObjectState` for Object state, and `ConversationObjectIdentity` for the
-derived Conversation and producer IDs. The platform also provides Crypto and the Layer's Scope.
-Supply other application services with `Effect.provide`; missing dependencies are type errors at
-the class factory. Wrap already constructed registrations in `Effect.succeed(registrations)`.
+`Layer.provide(AppLive)` supplies shared clients and Tool handlers for the runtime's lifetime.
+Application Layers can yield `effect-cf`'s `WorkerEnvironment` and
+`DurableObjectState.DurableObjectState`, plus `ConversationObjectIdentity` and Crypto. Their
+initialization failures remain in `E`; missing application services remain in `R` and are rejected
+at the class factory. `ConversationObject.layer([])` explicitly registers no Agents and refuses
+every claimed Agent identity.
 
-When a registration captures services from a resource-owning application Layer, build it in the
-supplied Scope and provide the resulting Context:
+Use ordinary `Layer.unwrap` when registration values themselves need effectful setup:
 
 ```ts
-const registrations = Effect.gen(function* () {
-  const services = yield* Layer.build(AppLive);
-  return yield* travelAgents.pipe(Effect.provide(services));
-});
+const RuntimeLive = Layer.unwrap(
+  Effect.gen(function* () {
+    const settings = yield* ApplicationSettings;
+    return ConversationObject.layer(makeRegistrations(settings));
+  }),
+).pipe(Layer.provide(ApplicationSettingsLive));
 ```
 
-Here `AppLive` is the application's service Layer, such as Tool handlers backed by a database.
-`Effect.provide(AppLive)` directly around registration would close that Layer as soon as
-registration returns, before the captured services execute a Run. `Layer.build` keeps those
-resources in the enclosing runtime Scope. With `ConversationObject.layer`, ordinary
-`Layer.provide(AppLive)` around the returned runtime Layer also preserves that lifetime.
+Provide `RunContextPreparation` and `RunToolAuthorization` through Layers to customize prompt
+preparation and Tool authorization. The bootstrap supplies pass-through preparation and
+`RunToolAuthorization.allowAll` as defaults. `options.eventLayer` accepts an effect-cf event Layer
+with access to the runtime's exposed services. Use `Layer.provideMerge` when an application service
+must also be available to the event Layer.
 
-The registration Effect is acquired once per Object incarnation and rebuilt after eviction.
-Construction errors fail initialization; they never become an empty registration. The platform
-owns SQLite, the constructor gate, alarms, and recovery. Keep acquisition local and bounded.
-Resources acquired directly into the supplied Scope live with the runtime, but eviction does not
-guarantee finalizers; acquire resources needing cleanup within scoped operations.
+The application graph acquires once per Object incarnation, inside the local constructor gate,
+and rebuilds after eviction. Construction failures remain failures. The platform owns SQLite,
+alarms, and recovery. Keep acquisition local and bounded. Cloudflare eviction does not guarantee
+finalizers; acquire resources needing timely release in scoped operations or `eventLayer`.
+
 Register `TravelConversation` as a SQLite Durable Object under `CONVERSATIONS` in your Worker
-configuration. `ConversationObject.Options` names the factory's configuration type;
-`ConversationObject.Class` and `ConversationObject.Instance` describe the returned constructor
-and its instances.
+configuration. `ConversationObject.Options` describes native construction;
+`ConversationObject.Class` and `ConversationObject.Instance` describe the exported class and its
+instances. Custom Effect hosts provide `ConversationObject.layerConfig(options)` around the
+complete application Layer, then supply the native context and namespace Layers.
 
-For a custom Effect runtime, use `ConversationObject.layer(travelAgents, options)` with
-`ConversationObject.RuntimeOptions`. It preserves application dependencies and initialization
-errors in the returned Layer; the native class boundary is supplied by `ConversationObject.make`.
-
-BEHAVIOR CHANGE: replace `makeConversationObjectClass` with `ConversationObject.make` and
-`CloudflareDurableRuntime.layer` with `ConversationObject.layer`. Pass the registration Effect
-as the first argument instead of the `bindings` callback option. Construction types and
-administrative schemas/decoders now live under `ConversationObject` too. The former
-`CloudflareBindingSource` and `CloudflareBindingSourceContext` types have been removed. Use
-`Effect.succeed([])` when intentionally registering no Agents.
+BEHAVIOR CHANGE: replace `makeConversationObjectClass` with `ConversationObject.make`, passing
+a composed runtime Layer. Replace the `bindings`, `runContext`, and `toolAuthorization` callback
+options with typed registration values and ordinary Layer composition. Pass observability as
+`options.eventLayer`. The class factory supplies runtime configuration, so
+`ConversationObject.layer` takes only the registration array.
 
 ## Turn boundaries
 

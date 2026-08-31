@@ -22,7 +22,7 @@ import {
   TEST_PRINCIPAL,
   decodeConversationId,
   fixtureReconcilerLayer,
-  makeTestBindings,
+  testRuntimeLayer,
   plannerDefinition,
 } from "../fixtures.ts";
 
@@ -53,7 +53,7 @@ const conversationOptions: ConversationObject.Options = {
 const SubmissionIdRow = Schema.Struct({ submission_id: Schema.String });
 
 export class SchedulingRestartConversation extends ConversationObject.make(
-  makeTestBindings,
+  testRuntimeLayer,
   conversationOptions,
 ) {
   async submissionIds(): Promise<ReadonlyArray<string>> {

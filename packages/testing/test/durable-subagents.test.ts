@@ -17,7 +17,6 @@ import {
 import { ToolExecutionClass } from "@effect-agent/engine";
 import {
   AbortCommand,
-  AgentBindingResolver,
   ClaimRequest,
   ConversationRead,
   ConversationStore,
@@ -33,6 +32,7 @@ import {
   ProducerId,
   RecoverySnapshotRequest,
   RecordEnvelope,
+  ReleaseOwnershipRequest,
   SettlementFinalization,
   SubmissionLedger,
   SubmissionLookupById,
@@ -218,6 +218,19 @@ const mixedCoordinatorDefinition = Agent.make("travel-coordinator-mixed", {
   }),
 });
 
+const versionedRootDefinition = Agent.make("versioned-root", {
+  input: Schema.Struct({ mission: Schema.String }),
+  output: Schema.Struct({ report: Schema.String }),
+  instructions: "Look up the mission, then answer as JSON.",
+  toolkit: Toolkit.make(Lookup),
+  policy: AgentPolicy.make({
+    maxTurns: 2,
+    maxToolCalls: 1,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+});
+
 const mapChildFailure = (failure: { readonly _tag: string }) =>
   ResearchDelegationFailed.make({ childErrorTag: failure._tag });
 
@@ -334,7 +347,7 @@ const submitParentWith =
 /**
  * One durable parent/child fixture: the parent coordinator delegates
  * `delegate_research` to the scripted child; both bindings register with the
- * resolver under their exact digests (the child optionally under WRONG
+ * binding array under their exact digests (the child optionally under WRONG
  * digests to force the compatibility path).
  */
 const makeHarness = (options?: { readonly childRegistrationDigests?: DefinitionDigests }) =>
@@ -358,9 +371,8 @@ const makeHarness = (options?: { readonly childRegistrationDigests?: DefinitionD
       childBinding,
       options?.childRegistrationDigests ?? CHILD_DIGESTS,
     );
-    const resolver = AgentBindingResolver.fromBindings([parentResolved, childResolved]);
     return {
-      resolver,
+      bindings: [parentResolved, childResolved],
       childInvocations: childScripted.calls,
       parentPrompts: parentScripted.prompts,
       submitParent: submitParentWith(coordinatorDefinition),
@@ -413,9 +425,8 @@ const makeSiblingHarnessWith = (pendingSibling = false, retryableSibling = true)
       childBinding,
       CHILD_DIGESTS,
     );
-    const resolver = AgentBindingResolver.fromBindings([parentResolved, childResolved]);
     return {
-      resolver,
+      bindings: [parentResolved, childResolved],
       childInvocations: childScripted.calls,
       parentPrompts: parentScripted.prompts,
       submitParent: submitParentWith(mixedCoordinatorDefinition),
@@ -429,13 +440,11 @@ const makeSiblingHarness = makeSiblingHarnessWith();
 const DELEGATE_CALL = decodeToolCallId("delegate-1");
 
 const drive =
-  (harness: { readonly resolver: (typeof AgentBindingResolver)["Service"] }) =>
+  (harness: { readonly bindings: ReadonlyArray<ResolvedBinding> }) =>
   (conversationId: ConversationId) =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
-      return yield* runtime
-        .processConversationResolved(conversationId)
-        .pipe(Effect.provideService(AgentBindingResolver, harness.resolver));
+      return yield* runtime.processConversationResolved(conversationId, harness.bindings);
     });
 
 const readLog = (conversationId: ConversationId) =>
@@ -501,6 +510,93 @@ const payloadsOf = <Tag extends string>(
   records.filter((envelope) => envelope.record.payload._tag === tag);
 
 layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
+  it.effect(
+    "selects the exact root Binding version and releases claims after strict registration refusals",
+    () =>
+      Effect.gen(function* () {
+        yield* clearFailpoint;
+        const runtime = yield* DurableAgentRuntime;
+        const ledger = yield* SubmissionLedger;
+        const exactScripted = yield* makeScriptedModel((call) =>
+          call === 0
+            ? toolTurn(toolCall("lookup-version", "lookup", { key: "version-a" }))
+            : finalParts('{"report":"version-a"}'),
+        );
+        const wrongScripted = yield* makeScriptedModel(() => finalParts('{"report":"wrong"}'));
+        const toolInvocations = yield* Ref.make(0);
+        const lookupLayer = Toolkit.make(Lookup).toLayer({
+          lookup: ({ key }) =>
+            Ref.update(toolInvocations, (count) => count + 1).pipe(
+              Effect.as({ value: `found-${key}` }),
+            ),
+        });
+        const exactAgent = Agent.withModel(versionedRootDefinition, exactScripted.model);
+        const wrongAgent = Agent.withModel(versionedRootDefinition, wrongScripted.model);
+        const exactBinding = yield* DurableWorkerBinding.make(exactAgent, PARENT_DIGESTS).pipe(
+          Effect.provide(lookupLayer),
+        );
+        const wrongBinding = yield* DurableWorkerBinding.make(wrongAgent, WRONG_CHILD_DIGESTS).pipe(
+          Effect.provide(lookupLayer),
+        );
+        const receipt = yield* runtime.submit(
+          exactAgent,
+          { mission: "select version A" },
+          submitOptions("conversation-versioned-root", "versioned-root-1"),
+        );
+
+        const assertClaimReleased = Effect.gen(function* () {
+          expect((yield* parentState(receipt.submissionId)).state).toBe("running");
+          const reclaimed = yield* ledger.claim(
+            ClaimRequest.make({
+              conversationId: receipt.conversationId,
+              producerId: Schema.decodeSync(ProducerId)("producer-versioned-root-proof"),
+            }),
+          );
+          expect(Option.isSome(reclaimed)).toBe(true);
+          if (Option.isNone(reclaimed))
+            throw new Error("Expected the refused root claim to release");
+          yield* ledger.releaseOwnership(
+            ReleaseOwnershipRequest.make({
+              submissionId: reclaimed.value.submissionId,
+              ownershipToken: reclaimed.value.ownershipToken,
+            }),
+          );
+        });
+
+        expect(
+          failureTag(
+            yield* Effect.exit(runtime.processConversationResolved(receipt.conversationId, [])),
+          ),
+        ).toBe("BindingUnavailable");
+        expect(yield* exactScripted.calls).toBe(0);
+        expect(yield* wrongScripted.calls).toBe(0);
+        expect(yield* Ref.get(toolInvocations)).toBe(0);
+        yield* assertClaimReleased;
+
+        expect(
+          failureTag(
+            yield* Effect.exit(
+              runtime.processConversationResolved(receipt.conversationId, [wrongBinding]),
+            ),
+          ),
+        ).toBe("BindingDigestMismatch");
+        expect(yield* exactScripted.calls).toBe(0);
+        expect(yield* wrongScripted.calls).toBe(0);
+        expect(yield* Ref.get(toolInvocations)).toBe(0);
+        yield* assertClaimReleased;
+
+        const settlements = yield* runtime.processConversationResolved(receipt.conversationId, [
+          wrongBinding,
+          exactBinding,
+        ]);
+        expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
+        expect((yield* parentState(receipt.submissionId)).state).toBe("settled");
+        expect(yield* exactScripted.calls).toBe(2);
+        expect(yield* wrongScripted.calls).toBe(0);
+        expect(yield* Ref.get(toolInvocations)).toBe(1);
+      }),
+  );
+
   it.effect(
     "establishes the child, suspends waitingForChild without a worker permit, and joins the settled child",
     () =>
@@ -1378,7 +1474,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             CHILD_DIGESTS,
           );
           const harness = {
-            resolver: AgentBindingResolver.fromBindings([parentResolved, childResolved]),
+            bindings: [parentResolved, childResolved],
             childInvocations: childScripted.calls,
             parentPrompts: parentScripted.prompts,
             submitParent: submitParentWith(containedCoordinatorDefinition),

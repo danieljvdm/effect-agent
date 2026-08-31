@@ -30,6 +30,7 @@ import {
   type DurableRuntimeFailpointHandler,
   type DurableRuntimeFailpointLocation,
   type Receipt,
+  type ResolvedBinding,
 } from "@effect-agent/session";
 import {
   DestinationShortlist,
@@ -54,7 +55,7 @@ import {
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
-import { Cause, Duration, Effect, Exit, FileSystem, Option, Schema, Stream } from "effect";
+import { Cause, Duration, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 const decodeConversationId = Schema.decodeSync(ConversationId);
@@ -136,10 +137,10 @@ const submitParent = (conversation: string, key: string) =>
   });
 
 /** Drive one Conversation lane through the S2 multi-binding worker entry point. */
-const drive = (conversationId: ConversationId) =>
+const drive = (bindings: ReadonlyArray<ResolvedBinding>, conversationId: ConversationId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
-    return yield* runtime.processConversationResolved(conversationId);
+    return yield* runtime.processConversationResolved(conversationId, bindings);
   });
 
 const readLog = (conversationId: ConversationId) =>
@@ -216,14 +217,18 @@ const awaitSettledState = (submissionId: SubmissionId) =>
   });
 
 /** Drive parent → child → parent to full settlement and return the shared identities. */
-const runHappyPath = (conversation: string, key: string) =>
+const runHappyPath = (
+  bindings: ReadonlyArray<ResolvedBinding>,
+  conversation: string,
+  key: string,
+) =>
   Effect.gen(function* () {
     const receipt = yield* submitParent(conversation, key);
     const childConversationId = childConversationIdFor(receipt.submissionId, DELEGATE_CALL);
-    yield* drive(receipt.conversationId);
-    const childSettlements = yield* drive(childConversationId);
+    yield* drive(bindings, receipt.conversationId);
+    const childSettlements = yield* drive(bindings, childConversationId);
     expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
-    const settlements = yield* drive(receipt.conversationId);
+    const settlements = yield* drive(bindings, receipt.conversationId);
     expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
     return { receipt, childConversationId };
   });
@@ -266,7 +271,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             // Phase 1: establishment ends with the parent suspended waitingForChild. The lane
             // holds no worker permit and is not claimable (SUB-030), and no in-process child
             // fiber ever ran (spec §12 step 10).
-            const first = yield* drive(receipt.conversationId);
+            const first = yield* drive(harness.bindings, receipt.conversationId);
             expect(first).toHaveLength(0);
             expect((yield* parentState(receipt.submissionId)).state).toBe("suspended");
             const ledger = yield* SubmissionLedger;
@@ -295,7 +300,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
 
             // Phase 2: the child lane runs to Settlement under its own Attempt ownership and
             // wakes the parent durably (recordChildSettled → input-applied).
-            const childSettlements = yield* drive(childConversationId);
+            const childSettlements = yield* drive(harness.bindings, childConversationId);
             expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             expect(yield* harness.childModelCalls).toBe(2);
             expect(yield* harness.guideInvocations).toBe(1);
@@ -312,7 +317,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
 
             // Phase 3: the woken parent joins the VERIFIED child Settlement in one atomic
             // batch (SUB-019) and settles completed with the projected shortlist.
-            const settlements = yield* drive(receipt.conversationId);
+            const settlements = yield* drive(harness.bindings, receipt.conversationId);
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             const log = yield* readLog(receipt.conversationId);
             expect(yield* shortlistFromSettlement(log)).toEqual(durableResearchShortlist("LHR"));
@@ -366,11 +371,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(finalPrompt).not.toContain("Barbican brutalism walk");
             expect(yield* harness.parentModelCalls).toBe(2);
           }).pipe(
-            Effect.provide(
-              NodeDurableRuntime.layer(
-                runtimeOptions(`${directory}/happy.sqlite`, { bindings: harness.bindings }),
-              ),
-            ),
+            Effect.provide(NodeDurableRuntime.layer(runtimeOptions(`${directory}/happy.sqlite`))),
           );
         }),
       ),
@@ -388,7 +389,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             const childConversationId = childConversationIdFor(receipt.submissionId, DELEGATE_CALL);
 
             arm.location = "subagent:after-request-append";
-            const exit = yield* Effect.exit(drive(receipt.conversationId));
+            const exit = yield* Effect.exit(drive(harness.bindings, receipt.conversationId));
             expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
             arm.location = undefined;
             yield* expireAbandonedLease;
@@ -396,10 +397,10 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             // Idempotent handler re-entry replays establishment from the canonical
             // SubagentRequested record: the derived admission idempotency key converges on ONE
             // child — a duplicate admission attempt can never create a second Conversation.
-            yield* drive(receipt.conversationId);
-            const childSettlements = yield* drive(childConversationId);
+            yield* drive(harness.bindings, receipt.conversationId);
+            const childSettlements = yield* drive(harness.bindings, childConversationId);
             expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
-            const settlements = yield* drive(receipt.conversationId);
+            const settlements = yield* drive(harness.bindings, receipt.conversationId);
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             expect(yield* harness.childModelCalls).toBe(2);
 
@@ -433,7 +434,6 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             Effect.provide(
               NodeDurableRuntime.layer(
                 runtimeOptions(`${directory}/duplicate.sqlite`, {
-                  bindings: harness.bindings,
                   runtimeFailpoint: armableFailpoint(arm),
                   ownershipLeaseDuration: FAILPOINT_LEASE_MILLIS,
                 }),
@@ -465,15 +465,15 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
                 DELEGATE_CALL,
               );
 
-              yield* drive(receipt.conversationId);
-              const childSettlements = yield* drive(childConversationId);
+              yield* drive(harness.bindings, receipt.conversationId);
+              const childSettlements = yield* drive(harness.bindings, childConversationId);
               expect(childSettlements.map((settlement) => settlement.outcome)).toEqual([
                 "completed",
               ]);
               expect(yield* harness.childModelCalls).toBe(2);
 
               arm.location = location;
-              const exit = yield* Effect.exit(drive(receipt.conversationId));
+              const exit = yield* Effect.exit(drive(harness.bindings, receipt.conversationId));
               expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
               arm.location = undefined;
               yield* expireAbandonedLease;
@@ -481,7 +481,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               // The canonical SubagentJoined record (or the frozen releasePending decision) is
               // the replay source: re-entry completes the release idempotently and the settled
               // child is NEVER re-executed merely because the acknowledgment was lost.
-              const settlements = yield* drive(receipt.conversationId);
+              const settlements = yield* drive(harness.bindings, receipt.conversationId);
               expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
               expect(yield* harness.childModelCalls).toBe(2);
               expect(yield* harness.guideInvocations).toBe(1);
@@ -493,7 +493,6 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               Effect.provide(
                 NodeDurableRuntime.layer(
                   runtimeOptions(`${directory}/${slug}.sqlite`, {
-                    bindings: harness.bindings,
                     runtimeFailpoint: armableFailpoint(arm),
                     ownershipLeaseDuration: FAILPOINT_LEASE_MILLIS,
                   }),
@@ -547,11 +546,12 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             // drains and the SQLite resources close — no fiber outlives its subscriber.
             Effect.scoped,
             Effect.provide(
-              NodeDurableHost.layerStack(
-                runtimeOptions(`${directory}/pool.sqlite`, {
-                  bindings: harness.bindings,
-                  workerConcurrency: 1,
-                }),
+              NodeDurableHost.layer(harness.bindings).pipe(
+                Layer.provideMerge(
+                  NodeDurableRuntime.layer(
+                    runtimeOptions(`${directory}/pool.sqlite`, { workerConcurrency: 1 }),
+                  ),
+                ),
               ),
             ),
           );
@@ -575,14 +575,14 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
           const crashed = yield* Effect.gen(function* () {
             const receipt = yield* submitParent("travel-planner-s2-unknown", "s2-unknown-1");
             const childConversationId = childConversationIdFor(receipt.submissionId, DELEGATE_CALL);
-            yield* drive(receipt.conversationId);
+            yield* drive(harness.bindings, receipt.conversationId);
             expect((yield* parentState(receipt.submissionId)).state).toBe("suspended");
             const started = payloadsOf(yield* readLog(receipt.conversationId), "SubagentStarted")[0]
               ?.record.payload;
             if (started?._tag !== "SubagentStarted") throw new Error("Expected SubagentStarted");
 
             arm.location = "tools:after-prepared-append";
-            const exit = yield* Effect.exit(drive(childConversationId));
+            const exit = yield* Effect.exit(drive(harness.bindings, childConversationId));
             expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
             arm.location = undefined;
             expect(yield* harness.childModelCalls).toBe(1);
@@ -592,7 +592,6 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             Effect.provide(
               NodeDurableRuntime.layer(
                 runtimeOptions(filename, {
-                  bindings: harness.bindings,
                   runtimeFailpoint: armableFailpoint(arm),
                 }),
               ),
@@ -620,8 +619,8 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
 
             // The blocked lanes grant no claims and fabricate nothing: driving either lane
             // settles nothing and the child model/guide never re-execute.
-            expect(yield* drive(crashed.childConversationId)).toEqual([]);
-            expect(yield* drive(crashed.receipt.conversationId)).toEqual([]);
+            expect(yield* drive(harness.bindings, crashed.childConversationId)).toEqual([]);
+            expect(yield* drive(harness.bindings, crashed.receipt.conversationId)).toEqual([]);
             expect(yield* harness.childModelCalls).toBe(1);
             expect(yield* harness.guideInvocations).toBe(0);
             const childRunId = runIdForSubmission(crashed.childSubmissionId);
@@ -644,7 +643,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
                 }),
               }),
             );
-            const childSettlements = yield* drive(crashed.childConversationId);
+            const childSettlements = yield* drive(harness.bindings, crashed.childConversationId);
             expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             // Turn 1 was never re-invoked; only the report Turn ran after resolution.
             expect(yield* harness.childModelCalls).toBe(2);
@@ -661,14 +660,16 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             ).toEqual(encodedDestinationFacts("LHR"));
 
             // The wake converges the parent: verified join, completed settlement.
-            const settlements = yield* drive(crashed.receipt.conversationId);
+            const settlements = yield* drive(harness.bindings, crashed.receipt.conversationId);
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             const log = yield* readLog(crashed.receipt.conversationId);
             expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
             expect(yield* shortlistFromSettlement(log)).toEqual(durableResearchShortlist("LHR"));
           }).pipe(
             Effect.provide(
-              NodeDurableHost.layerStack(runtimeOptions(filename, { bindings: harness.bindings })),
+              NodeDurableHost.layer(harness.bindings).pipe(
+                Layer.provideMerge(NodeDurableRuntime.layer(runtimeOptions(filename))),
+              ),
             ),
           );
         }),
@@ -686,7 +687,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             const receipt = yield* submitParent("travel-planner-s2-abort", "s2-abort-1");
             const parentRunId = runIdForSubmission(receipt.submissionId);
 
-            yield* drive(receipt.conversationId);
+            yield* drive(harness.bindings, receipt.conversationId);
             expect((yield* parentState(receipt.submissionId)).state).toBe("suspended");
             const started = payloadsOf(yield* readLog(receipt.conversationId), "SubagentStarted")[0]
               ?.record.payload;
@@ -733,7 +734,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(parent.state).toBe("input-applied");
 
             // The woken parent joins the child's ACTUAL aborted outcome, then settles aborted.
-            const settlements = yield* drive(receipt.conversationId);
+            const settlements = yield* drive(harness.bindings, receipt.conversationId);
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["aborted"]);
 
             const log = yield* readLog(receipt.conversationId);
@@ -776,11 +777,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               (yield* childReservations(receipt.submissionId)).map((row) => row.status),
             ).toEqual(["released"]);
           }).pipe(
-            Effect.provide(
-              NodeDurableRuntime.layer(
-                runtimeOptions(`${directory}/abort.sqlite`, { bindings: harness.bindings }),
-              ),
-            ),
+            Effect.provide(NodeDurableRuntime.layer(runtimeOptions(`${directory}/abort.sqlite`))),
           );
         }),
       ),
@@ -800,7 +797,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             // Crash after the canonical request: the intended child identity (Conversation,
             // principal, idempotency key) is now deterministic, guessable knowledge.
             arm.location = "subagent:after-request-append";
-            const exit = yield* Effect.exit(drive(receipt.conversationId));
+            const exit = yield* Effect.exit(drive(harness.bindings, receipt.conversationId));
             expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
             arm.location = undefined;
             yield* expireAbandonedLease;
@@ -836,7 +833,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             // The resumed establishment verifies the admitted row against the canonical
             // request and fails closed (SUB-016): no start link, no join, no child execution,
             // and the reservation stays an unavailable, visible obligation.
-            const resumed = yield* Effect.exit(drive(receipt.conversationId));
+            const resumed = yield* Effect.exit(drive(harness.bindings, receipt.conversationId));
             expect(failureTag(resumed)).toBe("LedgerError");
             const failure = failureOf(resumed);
             expect(
@@ -861,7 +858,6 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             Effect.provide(
               NodeDurableRuntime.layer(
                 runtimeOptions(`${directory}/idor.sqlite`, {
-                  bindings: harness.bindings,
                   runtimeFailpoint: armableFailpoint(arm),
                   ownershipLeaseDuration: FAILPOINT_LEASE_MILLIS,
                 }),
@@ -880,7 +876,11 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
           const harness = yield* makeDurableResearchHarness();
           yield* Effect.gen(function* () {
             const runtime = yield* DurableAgentRuntime;
-            const settled = yield* runHappyPath("travel-planner-s2-observed", "s2-observe-1");
+            const settled = yield* runHappyPath(
+              harness.bindings,
+              "travel-planner-s2-observed",
+              "s2-observe-1",
+            );
             const started = payloadsOf(
               yield* readLog(settled.receipt.conversationId),
               "SubagentStarted",
@@ -912,11 +912,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(observedJson).not.toContain("Barbican brutalism walk");
             expect(observedJson).not.toContain("London favors museum mornings");
           }).pipe(
-            Effect.provide(
-              NodeDurableRuntime.layer(
-                runtimeOptions(`${directory}/observe.sqlite`, { bindings: harness.bindings }),
-              ),
-            ),
+            Effect.provide(NodeDurableRuntime.layer(runtimeOptions(`${directory}/observe.sqlite`))),
           );
         }),
       ),

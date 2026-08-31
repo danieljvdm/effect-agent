@@ -132,7 +132,9 @@ The coordinator captures the Tool failure observer at construction and explicitl
 fresh and replacement Attempts. Already-settled calls injected on resume bypass observation.
 It also owns the durable Subagent protocol: the requested/started/joined/lineage record
 Schemas, the child budget reservation and `waitingForChild` ledger operations, and the
-host-supplied `AgentBindingResolver` port for exact-digest Binding resolution.
+exact-digest matching of explicit worker bindings. `processConversationResolved(conversationId, bindings)`
+and `runResolvedWorker(bindings)` receive those bindings directly. `compileRegistrations` hashes
+typed Agent version declarations and captures each Agent's required services.
 Adapter certification reports, port runners, and the TestClock-dependent conformance case arrays
 are available only from `@effect-agent/session/testing`; the package root has no transitive
 test-runtime dependency. Mutable coordinator failpoint controls and their test Layer also live
@@ -164,7 +166,7 @@ Only the current stored version is supported, with no upgrade migration promise.
 Assembles the class `DN` Node/SQLite runtime: one shared SQLite client behind both stores,
 validated typed configuration, the in-process wake scheduler with ledger-scan fallback, graceful
 ownership drain, Agent Binding registration for durable workers
-(`NodeDurableRuntimeOptions.bindings` behind `NodeDurableHost.runResolvedWorkers`; an empty
+(`NodeDurableHost.layer(bindings)` behind `NodeDurableHost.runResolvedWorkers`; an empty
 roster fails every claim closed), and the `NodeDurableHost` startup gates (storage compatibility,
 recovery before admission) and shutdown order (close admission → release ownership → close
 storage). It is a Layer-assembly library, not an application entrypoint.
@@ -205,12 +207,13 @@ and the typed admission-limits gate before `submit`), and the Worker-side
 `CloudflareConversationClient`, whose `awaitProgress` RPC retries Object resets with a fresh stub
 and sends explicit scoped cancellation on interruption. The client Layer requires `Crypto.Crypto`
 so its composition root owns collision-resistant cancellation identity generation instead of the
-client reading ambient time or randomness. The Conversation Object factory accepts an Effect
-returning Agent registrations whose dependencies can include effect-cf's `WorkerEnvironment` and
-`DurableObjectState`, plus platform Crypto, `ConversationObjectIdentity`, and Scope. It acquires
-that Effect once per incarnation after identity derivation and builds the exact-digest resolver
-internally. The lower-level `ConversationObject.layer(registrations, options)` retains additional application requirements
-and initialization errors in its type. See [Cloudflare execution](../guide/run-agents#run-durably-on-cloudflare).
+client reading ambient time or randomness. The Conversation Object factory accepts a composed
+application Layer. `ConversationObject.layer(registrations)` hashes typed version declarations and
+captures each Agent's dependencies. Application Layers can yield effect-cf's `WorkerEnvironment`
+and `DurableObjectState`, plus platform Crypto and `ConversationObjectIdentity`. The complete graph
+acquires once per incarnation inside the constructor gate. Application requirements and
+initialization errors remain visible in its type; `options.eventLayer` can consume its exposed
+services. See [Cloudflare execution](../guide/run-agents#run-durably-on-cloudflare).
 `BrowserQuickActionBrowserBinding.layer` lifts a host-resolved Wrangler `browser`
 binding into an explicit Effect service. `browserQuickActionCaptureLayer` visibly requires that
 service to adapt `quickAction()` to the `PageCapture` port without granting Workers AI authority.

@@ -1,5 +1,6 @@
 import type { ConversationId } from "@effect-agent/core";
-import { AgentBindingResolver, DurableAgentRuntime, SubmissionLedger } from "@effect-agent/session";
+import { DurableAgentRuntime, SubmissionLedger } from "@effect-agent/session";
+import { NodeRuntime } from "@effect/platform-node";
 import { Cause, Duration, Effect, Exit, Option, Schema, Stream } from "effect";
 
 import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "../../src/index.ts";
@@ -53,11 +54,9 @@ const tolerateTyped = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<v
 const workerLoop = Effect.gen(function* () {
   const runtime = yield* DurableAgentRuntime;
   const ledger = yield* SubmissionLedger;
-  const resolver = yield* makeSoakBindings();
+  const bindings = yield* makeSoakBindings();
   const driveResolved = (conversation: ConversationId) =>
-    runtime
-      .processConversationResolved(conversation)
-      .pipe(Effect.provideService(AgentBindingResolver, resolver));
+    runtime.processConversationResolved(conversation, bindings);
   while (true) {
     // Heal what a killed sibling left behind, then drive every discovered lane once.
     yield* tolerateTyped(runtime.runRecovery);
@@ -75,11 +74,4 @@ const workerLoop = Effect.gen(function* () {
   }
 });
 
-const exit = await Effect.runPromiseExit(
-  workerLoop.pipe(Effect.provide(NodeDurableRuntime.layer(options))),
-);
-
-if (Exit.isFailure(exit)) {
-  console.error(Cause.pretty(exit.cause));
-  process.exitCode = 1;
-}
+NodeRuntime.runMain(workerLoop.pipe(Effect.provide(NodeDurableRuntime.layer(options))));

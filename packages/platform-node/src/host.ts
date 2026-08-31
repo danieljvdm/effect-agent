@@ -1,6 +1,5 @@
 import type { ConversationId, SubmissionId } from "@effect-agent/core";
 import {
-  AgentBindingResolver,
   DurableAgentRuntime,
   type AbortCommand,
   type AbortIntent,
@@ -9,6 +8,7 @@ import {
   type ConversationStoreError,
   type DurableAbortFailure,
   type DurableAwaitFailure,
+  type ResolvedBinding,
   type DurableBindingFailure,
   type DurableExplainFailure,
   type DurableObserveOptions,
@@ -47,76 +47,74 @@ export class AdmissionClosed extends Schema.TaggedError<AdmissionClosed>()("Admi
   message: Schema.String,
 }) {}
 
-const makeHost = Effect.gen(function* () {
-  const runtime = yield* DurableAgentRuntime;
-  const config = yield* NodeDurableRuntimeConfig;
-  const bindingResolver = yield* AgentBindingResolver;
+const makeHost = (bindings: ReadonlyArray<ResolvedBinding>) =>
+  Effect.gen(function* () {
+    const runtime = yield* DurableAgentRuntime;
+    const config = yield* NodeDurableRuntimeConfig;
 
-  // Startup gate (deployment §5, plan §host): configuration decoding and storage compatibility
-  // already gated this Layer's dependencies; the last gate before admission opens is recovering
-  // EVERY nonterminal Submission. Work needing a live Agent Binding is reported `deferred` and
-  // stays a visible obligation for `runWorkers`; lanes durably blocked on an Unknown Outcome are
-  // reported `unknown` and wait for the authorized `resolveUnknown` path (DUR-017) — they consume
-  // no worker permit while the settlement obligation stays owed.
-  const startupRecovery = yield* runtime.runRecovery;
+    // Startup gate (deployment §5, plan §host): configuration decoding and storage compatibility
+    // already gated this Layer's dependencies; the last gate before admission opens is recovering
+    // EVERY nonterminal Submission. Work needing a live Agent Binding is reported `deferred` and
+    // stays a visible obligation for `runWorkers`; lanes durably blocked on an Unknown Outcome are
+    // reported `unknown` and wait for the authorized `resolveUnknown` path (DUR-017) — they consume
+    // no worker permit while the settlement obligation stays owed.
+    const startupRecovery = yield* runtime.runRecovery;
 
-  const admission = yield* Ref.make(true);
-  // Shutdown step 1 (DEPLOY-005): admission closes before the ownership drain in the runtime
-  // Layer below releases claims and before the stores close in reverse acquisition order.
-  yield* Effect.addFinalizer(() => Ref.set(admission, false));
+    const admission = yield* Ref.make(true);
+    // Shutdown step 1 (DEPLOY-005): admission closes before the ownership drain in the runtime
+    // Layer below releases claims and before the stores close in reverse acquisition order.
+    yield* Effect.addFinalizer(() => Ref.set(admission, false));
 
-  const requireAdmission: Effect.Effect<void, AdmissionClosed> = Ref.get(admission).pipe(
-    Effect.flatMap((open) =>
-      open
-        ? Effect.void
-        : Effect.fail(
-            AdmissionClosed.make({ message: "The host is shutting down; admission is closed." }),
-          ),
-    ),
-  );
-
-  const submit = <InputSchema extends Schema.Top>(
-    agent: DurableSubmitAgent<InputSchema>,
-    input: InputSchema["Type"],
-    options: DurableSubmitOptions,
-  ): Effect.Effect<
-    Receipt,
-    AdmissionClosed | DurableSubmitFailure,
-    InputSchema["EncodingServices"]
-  > => requireAdmission.pipe(Effect.andThen(runtime.submit(agent, input, options)));
-
-  const runWorkers = <A, E, R>(worker: Effect.Effect<A, E, R>): Effect.Effect<void, E, R> =>
-    Effect.forEach(
-      Array.from({ length: config.workerConcurrency }, (_, index) => index),
-      () => worker,
-      { concurrency: "unbounded", discard: true },
+    const requireAdmission: Effect.Effect<void, AdmissionClosed> = Ref.get(admission).pipe(
+      Effect.flatMap((open) =>
+        open
+          ? Effect.void
+          : Effect.fail(
+              AdmissionClosed.make({ message: "The host is shutting down; admission is closed." }),
+            ),
+      ),
     );
 
-  // S2 multi-binding pool: every claimed head resolves its exact registered Binding through
-  // the host's `AgentBindingResolver` (`NodeDurableRuntimeOptions.bindings`), so ONE bounded
-  // pool serves parent and child lanes — the spec §12 smallest-pool suspension/wakeup proof
-  // runs `workerConcurrency: 1` over exactly this loop.
-  const runResolvedWorkers = runWorkers(
-    runtime.runResolvedWorker.pipe(Effect.provideService(AgentBindingResolver, bindingResolver)),
-  );
+    const submit = <InputSchema extends Schema.Top>(
+      agent: DurableSubmitAgent<InputSchema>,
+      input: InputSchema["Type"],
+      options: DurableSubmitOptions,
+    ): Effect.Effect<
+      Receipt,
+      AdmissionClosed | DurableSubmitFailure,
+      InputSchema["EncodingServices"]
+    > => requireAdmission.pipe(Effect.andThen(runtime.submit(agent, input, options)));
 
-  return NodeDurableHost.of({
-    startupRecovery,
-    admissionOpen: Ref.get(admission),
-    submit,
-    awaitSettlement: runtime.awaitSettlement,
-    observe: runtime.observe,
-    abort: runtime.abort,
-    explain: runtime.explain,
-    explainConversation: runtime.explainConversation,
-    verify: runtime.verify,
-    retry: runtime.retry,
-    wake: runtime.wake,
-    scanObligations: runtime.scanObligations,
-    runWorkers,
-    runResolvedWorkers,
+    const runWorkers = <A, E, R>(worker: Effect.Effect<A, E, R>): Effect.Effect<void, E, R> =>
+      Effect.forEach(
+        Array.from({ length: config.workerConcurrency }, (_, index) => index),
+        () => worker,
+        { concurrency: "unbounded", discard: true },
+      );
+
+    // S2 multi-binding pool: every claimed head resolves its exact registered Binding through
+    // the host's exact registrations, so one bounded
+    // pool serves parent and child lanes — the spec §12 smallest-pool suspension/wakeup proof
+    // runs `workerConcurrency: 1` over exactly this loop.
+    const runResolvedWorkers = runWorkers(runtime.runResolvedWorker(bindings));
+
+    return NodeDurableHost.of({
+      startupRecovery,
+      admissionOpen: Ref.get(admission),
+      submit,
+      awaitSettlement: runtime.awaitSettlement,
+      observe: runtime.observe,
+      abort: runtime.abort,
+      explain: runtime.explain,
+      explainConversation: runtime.explainConversation,
+      verify: runtime.verify,
+      retry: runtime.retry,
+      wake: runtime.wake,
+      scanObligations: runtime.scanObligations,
+      runWorkers,
+      runResolvedWorkers,
+    });
   });
-});
 
 /**
  * Operational host lifecycle for the DN runtime (deployment §2/§5/§6).
@@ -196,20 +194,28 @@ export class NodeDurableHost extends Context.Service<
     readonly runResolvedWorkers: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
   }
 >()("@effect-agent/platform-node/NodeDurableHost") {
-  /** Host gates over an already-assembled `NodeDurableRuntime` stack. */
-  static readonly layer: Layer.Layer<
+  /**
+   * Host gates over an assembled `NodeDurableRuntime` stack. Bindings must carry the exact
+   * digests stored by submitters. Omission registers no Agents, so resolved work fails closed.
+   */
+  static readonly layer = (
+    bindings: ReadonlyArray<ResolvedBinding> = [],
+  ): Layer.Layer<
     NodeDurableHost,
     DurableWorkerFailure,
-    DurableAgentRuntime | NodeDurableRuntimeConfig | AgentBindingResolver
-  > = Layer.effect(NodeDurableHost)(makeHost);
+    DurableAgentRuntime | NodeDurableRuntimeConfig
+  > => Layer.effect(NodeDurableHost)(makeHost(bindings));
 
   /** The complete DN host: `NodeDurableRuntime.layer(options)` plus the host lifecycle gates. */
   static layerStack(
-    options: NodeDurableRuntimeOptions,
+    options: NodeDurableRuntimeOptions & { readonly bindings?: ReadonlyArray<ResolvedBinding> },
   ): Layer.Layer<
     NodeDurableHost | NodeDurableRuntimeServices,
     DurableWorkerFailure | NodeDurableRuntimeInitializationError
   > {
-    return NodeDurableHost.layer.pipe(Layer.provideMerge(NodeDurableRuntime.layer(options)));
+    const { bindings = [], ...runtimeOptions } = options;
+    return NodeDurableHost.layer(bindings).pipe(
+      Layer.provideMerge(NodeDurableRuntime.layer(runtimeOptions)),
+    );
   }
 }

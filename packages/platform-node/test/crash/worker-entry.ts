@@ -3,7 +3,6 @@ import * as fs from "node:fs";
 import { Agent, type ConversationId } from "@effect-agent/core";
 import {
   AbortCommand,
-  AgentBindingResolver,
   ApprovalDecisionCommand,
   DurableAgentRuntime,
   DurableRuntimeFailpointLocation,
@@ -14,6 +13,7 @@ import {
   childConversationIdFor,
   type DurableRuntimeFailpointHandler,
   type Receipt,
+  type ResolvedBinding,
   type Settlement,
   type SubmissionSnapshot,
 } from "@effect-agent/session";
@@ -266,10 +266,10 @@ const requireSupplierDir = (): string =>
 /**
  * S2 fixture assembly for one worker process (plan §4.4): the coordinator/researcher bindings
  * registered under their exact digests, with the optional blocked child model and projection
- * gate taken from the environment. The resolver serves `processConversationResolved`, so one
- * worker process can drive BOTH the parent and the derived child Conversation lane.
+ * gate taken from the environment. The binding array lets one worker process drive BOTH the
+ * parent and the derived child Conversation lane.
  */
-const makeSubagentResolver = Effect.gen(function* () {
+const makeSubagentBindings = Effect.gen(function* () {
   const supplierDir = requireSupplierDir();
   const childBlock =
     env.EFFECT_AGENT_CHILD_BLOCK_FILE === undefined
@@ -288,24 +288,18 @@ const makeSubagentResolver = Effect.gen(function* () {
             "EFFECT_AGENT_PROJECT_RELEASE_FILE",
           ),
         };
-  const bindings = yield* makeCrashSubagentBindings({
+  return yield* makeCrashSubagentBindings({
     supplierDir,
     parentScript: "delegate-then-final",
     childBlock,
     projectionGate,
   });
-  return AgentBindingResolver.fromBindings([...bindings]);
 });
 
-const driveResolved = (
-  resolver: (typeof AgentBindingResolver)["Service"],
-  conversation: ConversationId,
-) =>
+const driveResolved = (bindings: ReadonlyArray<ResolvedBinding>, conversation: ConversationId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
-    return yield* runtime
-      .processConversationResolved(conversation)
-      .pipe(Effect.provideService(AgentBindingResolver, resolver));
+    return yield* runtime.processConversationResolved(conversation, bindings);
   });
 
 const submitCoordinator = (key: string) =>
@@ -520,34 +514,34 @@ const scenario = Effect.gen(function* () {
     case "subagent-run": {
       // Establishment → child Settlement → join, all in one process over one pool of resolved
       // Bindings; armed kill/block failpoints land at exactly one durable step of that flow.
-      const resolver = yield* makeSubagentResolver;
+      const bindings = yield* makeSubagentBindings;
       const receipt = yield* submitCoordinator(idempotencyKey);
       const childConversation = childConversationIdFor(
         receipt.submissionId,
         decodeToolCallId(DELEGATE_CALL_ID),
       );
-      const establishment = yield* driveResolved(resolver, conversationId);
-      const child = yield* driveResolved(resolver, childConversation);
-      const join = yield* driveResolved(resolver, conversationId);
+      const establishment = yield* driveResolved(bindings, conversationId);
+      const child = yield* driveResolved(bindings, childConversation);
+      const join = yield* driveResolved(bindings, conversationId);
       yield* emitSettlements([...establishment, ...child, ...join]);
       return;
     }
     case "subagent-child": {
       // Second-process child worker: derive the child Conversation from the parent Submission's
       // durable identity and drive ONLY that lane (independent ownership, SUB-020).
-      const resolver = yield* makeSubagentResolver;
+      const bindings = yield* makeSubagentBindings;
       const parent = yield* lookupSubmission;
       const childConversation = childConversationIdFor(
         parent.submissionId,
         decodeToolCallId(DELEGATE_CALL_ID),
       );
-      yield* emitSettlements(yield* driveResolved(resolver, childConversation));
+      yield* emitSettlements(yield* driveResolved(bindings, childConversation));
       return;
     }
     case "subagent-abort": {
-      const resolver = yield* makeSubagentResolver;
+      const bindings = yield* makeSubagentBindings;
       const receipt = yield* submitCoordinator(idempotencyKey);
-      yield* driveResolved(resolver, conversationId);
+      yield* driveResolved(bindings, conversationId);
       yield* runtime.abort(
         AbortCommand.make({
           submissionId: receipt.submissionId,
@@ -565,7 +559,7 @@ const scenario = Effect.gen(function* () {
         Effect.gen(function* () {
           const host = yield* NodeDurableHost;
           yield* emit({ kind: "resolved", value: String(host.startupRecovery.length) });
-        }).pipe(Effect.provide(NodeDurableHost.layer)),
+        }).pipe(Effect.provide(NodeDurableHost.layer())),
       );
       return;
     }

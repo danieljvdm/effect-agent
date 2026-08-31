@@ -17,7 +17,6 @@ import {
 } from "@effect-agent/core";
 import { DurableStep, DurableStepError } from "@effect-agent/engine";
 import {
-  AgentBindingResolver,
   ApprovalDecisionCommand,
   ConversationExportRequest,
   ConversationStore,
@@ -419,7 +418,7 @@ const delegationSupport = Layer.mergeAll(SubagentReservationsMemoryLive, identif
 // ---------------------------------------------------------------------------
 
 interface CertificationCell {
-  readonly resolver: (typeof AgentBindingResolver)["Service"];
+  readonly bindings: ReadonlyArray<ResolvedBinding>;
   /** Idempotent submission batch — safe to replay verbatim after a submit-boundary fault. */
   readonly submit: Effect.Effect<ReadonlyArray<Receipt>, DurableSubmitFailure, DurableAgentRuntime>;
   /** All lanes of the cell in drive order, computed from the (possibly replayed) receipts. */
@@ -450,7 +449,7 @@ const makeSingleAgentCell = (
     return [receipt];
   });
   return {
-    resolver: AgentBindingResolver.fromBindings([resolved]),
+    bindings: [resolved],
     submit,
     lanes: () => [conversationId],
   };
@@ -556,7 +555,7 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
           );
         });
       const cell: CertificationCell = {
-        resolver: AgentBindingResolver.fromBindings([resolved]),
+        bindings: [resolved],
         submit: Effect.gen(function* () {
           const host = yield* submitOne(`certify-key-${slug}-host`, "host question");
           const queued = yield* submitOne(`certify-key-${slug}-queued`, "queued question");
@@ -595,7 +594,7 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
       const childResolved = yield* DurableWorkerBinding.make(childBinding, CHILD_DIGESTS);
       const conversationId = decodeConversationId(`certify-${slug}`);
       const cell: CertificationCell = {
-        resolver: AgentBindingResolver.fromBindings([parentResolved, childResolved]),
+        bindings: [parentResolved, childResolved],
         submit: Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
           const receipt = yield* runtime.submit(
@@ -740,9 +739,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
   const lanes = cell.lanes(receipts);
 
   const driveLane = (lane: ConversationId) =>
-    runtime
-      .processConversationResolved(lane)
-      .pipe(Effect.provideService(AgentBindingResolver, cell.resolver));
+    runtime.processConversationResolved(lane, cell.bindings);
 
   const allSettled = Effect.gen(function* () {
     for (const receipt of receipts) {

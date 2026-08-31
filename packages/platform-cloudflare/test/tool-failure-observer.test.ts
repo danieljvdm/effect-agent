@@ -31,18 +31,21 @@ it.each([false, true])(
       });
       const tools = Toolkit.make(Failed);
       const usage = { inputTokens: {}, outputTokens: {} };
-      const runtimeLayer = ConversationObject.layer(Effect.succeed([]), {
-        deploymentId: "observer-test",
-        producerPrefix: "observer-test",
-        toolFailureObserver: configured
-          ? {
-              observe: (observation) =>
-                Effect.sync(() => {
-                  observations.push(observation);
-                }),
-            }
-          : undefined,
-      }).pipe(
+      const runtimeLayer = ConversationObject.layer([]).pipe(
+        Layer.provide(
+          ConversationObject.layerConfig({
+            deploymentId: "observer-test",
+            producerPrefix: "observer-test",
+            toolFailureObserver: configured
+              ? {
+                  observe: (observation) =>
+                    Effect.sync(() => {
+                      observations.push(observation);
+                    }),
+                }
+              : undefined,
+          }),
+        ),
         Layer.provide([
           DurableObjectContext.layer(state, env),
           conversationNamespaceLayer(env, "CONVERSATIONS"),
