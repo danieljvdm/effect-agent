@@ -2368,6 +2368,7 @@ export interface RunStatusView {
   readonly maxToolCalls: number;
   readonly tokensConsumed: number;
   readonly tokenBudget: number | undefined;
+  readonly completionReserveTokens?: number;
   readonly lastInputTokens: number;
   readonly elapsedSeconds: number;
   readonly maxDurationSeconds: number;
@@ -2384,12 +2385,24 @@ const nearingLimit = (consumed: number, limit: number): boolean => consumed * 5 
  * model request. The format is pinned here — tests target this function.
  */
 export const formatRunStatus = (view: RunStatusView): string => {
+  const researchBudget =
+    view.tokenBudget === undefined
+      ? undefined
+      : Math.max(0, view.tokenBudget - (view.completionReserveTokens ?? 0));
+  const remainingResearch =
+    researchBudget === undefined ? undefined : Math.max(0, researchBudget - view.tokensConsumed);
   const warn =
     nearingLimit(view.turn, view.maxTurns) ||
     nearingLimit(view.toolCallsUsed, view.maxToolCalls) ||
-    (view.tokenBudget !== undefined && nearingLimit(view.tokensConsumed, view.tokenBudget)) ||
+    (researchBudget !== undefined &&
+      (nearingLimit(view.tokensConsumed, researchBudget) ||
+        (view.lastInputTokens > 0 && (remainingResearch ?? 0) <= view.lastInputTokens))) ||
     nearingLimit(view.elapsedSeconds, view.maxDurationSeconds);
-  return `<run-status>turn ${view.turn}/${view.maxTurns} · tool-calls ${view.toolCallsUsed}/${view.maxToolCalls} · tokens ${view.tokensConsumed}/${view.tokenBudget ?? "unbounded"} · last-context ${view.lastInputTokens} · elapsed ${view.elapsedSeconds}s/${view.maxDurationSeconds}s${warn ? RUN_STATUS_WARNING : ""}</run-status>`;
+  const reserveStatus =
+    view.tokenBudget === undefined
+      ? ""
+      : ` · research-remaining ${remainingResearch} · completion-reserve ${view.completionReserveTokens ?? 0}`;
+  return `<run-status>turn ${view.turn}/${view.maxTurns} · tool-calls ${view.toolCallsUsed}/${view.maxToolCalls} · tokens ${view.tokensConsumed}/${view.tokenBudget ?? "unbounded"}${reserveStatus} · last-context ${view.lastInputTokens} · elapsed ${view.elapsedSeconds}s/${view.maxDurationSeconds}s${warn ? RUN_STATUS_WARNING : ""}</run-status>`;
 };
 
 /**
@@ -2416,6 +2429,7 @@ const outgoingModelPrompt = (
       maxToolCalls: policy.maxToolCalls,
       tokensConsumed: context.inputTokens + context.outputTokens,
       tokenBudget: policy.tokenBudget,
+      completionReserveTokens: policy.completionReserveTokens,
       lastInputTokens: context.lastInputTokens,
       elapsedSeconds: Math.max(0, Math.floor((now - context.startedAtMillis) / 1000)),
       maxDurationSeconds: Math.floor(Duration.toMillis(policy.maxDuration) / 1000),
@@ -4711,7 +4725,8 @@ const makeTurn = <
               );
             }
             const turnsBlocked =
-              turn > bounds.maxTurns ||
+              (turn > bounds.maxTurns &&
+                !(turn === bounds.maxTurns + 1 && finalAnswerOnly && completionBatch)) ||
               (policy.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch);
             if (turnsBlocked) {
               return failRunEventStream(
@@ -5231,7 +5246,13 @@ const makeResumeTurn = <
         );
       }
       const turnsBlocked =
-        (turn > bounds.maxTurns && !(completionBatch && context.finalizationUsed)) ||
+        (turn > bounds.maxTurns &&
+          !(
+            policy.onExhaustion === "final-answer" &&
+            turn === bounds.maxTurns + 1 &&
+            context.finalizationUsed &&
+            completionBatch
+          )) ||
         (policy.onExhaustion === "fail" && turn === bounds.maxTurns && !completionBatch);
       if (turnsBlocked) {
         return failRunEventStream(

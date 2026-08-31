@@ -1,5 +1,5 @@
-import type { ConversationId } from "@effect-agent/core";
 import {
+  type ConversationId,
   AgentId,
   type InputPromptSource,
   type RunDispositionDeclaration,

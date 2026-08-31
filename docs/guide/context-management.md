@@ -15,6 +15,7 @@ AgentPolicy.make({
   toolConcurrency: 4,
 
   tokenBudget: 200_000, // cumulative input+output across the Run
+  completionReserveTokens: 32_000, // withheld from research for delivery
   costBudgetMicrousd: 2_000_000, // spend, measured by your cost estimator
   contextTokenLimit: 150_000, // compact before one call exceeds this size
 
@@ -73,13 +74,18 @@ The model cannot see policy counters unless the runtime includes them in the pro
 `runStatus: "appended"` (the default), each outgoing request ends with one derived line:
 
 ```text
-<run-status>turn 3/12 · tool-calls 11/24 · tokens 84210/200000 · last-context 23480 · elapsed 74s/300s</run-status>
+<run-status>turn 3/12 · tool-calls 11/24 · tokens 84210/200000 · research-remaining 83790 · completion-reserve 32000 · last-context 23480 · elapsed 74s/300s</run-status>
 ```
 
-Past 80% of any dimension it appends a wrap-up warning, so the model converges instead of
-starting new work it cannot finish. The message is derived at prompt-assembly time and is never
+Past 80% of a limit it appends a wrap-up warning. For tokens, that threshold uses the research
+balance after withholding the completion reserve. It also warns when the remaining research
+balance would not cover another input as large as the last call. The message is derived at prompt-assembly time and is never
 persisted: canonical history stays append-only, and replays are unaffected. Set
 `runStatus: "off"` for prompt-sensitive evaluations.
+
+This changing suffix needs a reusable cache boundary before it on providers whose implicit cache
+boundary falls at the last user message. The PR review Action adds explicit OpenAI boundaries at
+the provider request boundary; the engine does not persist provider cache fields in history.
 
 ## Warnings and the token soft landing
 

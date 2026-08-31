@@ -3,8 +3,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Schema } from "effect";
 import { Toolkit, type LanguageModel, type Model } from "effect/unstable/ai";
 
-import type { DurableAgentRuntime } from "../src/index.ts";
 import {
+  type DurableAgentRuntime,
   DurableWorkerBinding,
   type DefinitionDigests,
   type DurableWorkerRequirements,

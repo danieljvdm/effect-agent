@@ -120,6 +120,13 @@ Later trials expose instability and cannot repair a first-trial miss. Named judg
 exact observation digest; unjudged or unclear findings leave the relevant precision unresolved.
 New valid findings require corpus repair, not invented matches to existing defects.
 
+Quality reports distinguish succeeded, incomplete, and failed trials. An outcome with `incomplete`
+or `exhausted` counts as incomplete even though the invocation returned findings. Those findings
+remain eligible for adjudication and recall/precision scoring, and their tokens and cost remain
+in resource totals. Incomplete first trials cannot pass clean controls or count as complete cases.
+The text summary and version 3 report JSON expose incomplete counts, including costed and uncosted
+incomplete trials. Regenerate older reports from the saved observations; their format is unchanged.
+
 Run `vp run pr-review-eval -- --help` from the repository root. Validate case selection before
 creating output. Each completed trial is appended and synchronized to a new, exclusive file;
 interruption keeps completed rows and never retries provider calls. Reports require the intended

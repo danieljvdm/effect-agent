@@ -1026,7 +1026,7 @@ describe("exact review delta", () => {
 
   it.effect("stops blob hydration after the aggregate patch budget is exhausted", () =>
     Effect.gen(function* () {
-      const paths = ["src/a.ts", "src/b.ts", "src/c.ts"];
+      const paths = ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"];
       const surface = yield* hydrateExactChanges({
         files: paths.map((path) => file(path, undefined)),
         changedPaths: paths,
@@ -1035,16 +1035,22 @@ describe("exact review delta", () => {
           "head",
           {
             "src/a.ts": "a".repeat(70_000),
-            "src/b.ts": "b".repeat(60_000),
-            "src/c.ts": "must not be read",
+            "src/b.ts": "b".repeat(70_000),
+            "src/c.ts": "c".repeat(70_000),
+            "src/d.ts": "d".repeat(70_000),
+            "src/e.ts": "must not be read",
           },
-          new Set(["src/c.ts"]),
+          new Set(["src/e.ts"]),
         ),
         ignore: [],
       });
 
-      expect(surface.changes.map((change) => change.path)).toEqual(["src/a.ts"]);
-      expect(surface.unreviewedPaths).toEqual(["src/b.ts", "src/c.ts"]);
+      expect(surface.changes.map((change) => change.path)).toEqual([
+        "src/a.ts",
+        "src/b.ts",
+        "src/c.ts",
+      ]);
+      expect(surface.unreviewedPaths).toEqual(["src/d.ts", "src/e.ts"]);
     }),
   );
 

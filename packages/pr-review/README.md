@@ -1,8 +1,9 @@
 # @effect-agent/pr-review
 
 A small, provider-neutral review agent. One bounded model run receives every admitted patch as
-numbered new and old hunks, reads immutable base or head source when needed, and returns findings
-through a required native completion Tool. There is no voting, candidate cache, private hypothesis
+numbered new and old hunks, reads immutable base or head source when needed, records established
+findings with `record_finding`, and returns findings through a required native completion Tool.
+There is no voting, candidate cache, private hypothesis
 handoff, or repository code execution.
 
 The reviewer traces changed entry points and boundaries through downstream consumers, guards,
@@ -29,10 +30,25 @@ validated findings and accounted usage with `ReviewOutcome.exhausted` naming the
 treat that outcome as incomplete, even when it contains no findings. Measured usage can exceed a
 policy threshold before the engine observes it; this is not a provider-side spending cap.
 The usage ledger records research, compaction, and finalization without a second token limit that
-could abort delivery. Duration and protocol failures still fail through the typed error channel.
+could abort delivery.
+
+An optional `costControl` reports the host's pre-request spending admission and provider usage.
+When the host stops research for cost, the reviewer returns `exhausted: "cost"` and delivers
+recorded findings without requiring another paid call. Hosts must reserve the full possible charge
+before sending each request; the port itself does not enforce a cap. The
+[GitHub Action](../../action/README.md) supplies that implementation for its supported OpenAI models.
+`reservedCostMicrousd` reports the maximum additional charge for requests whose usage is still
+unknown, separately from the observed usage estimate.
+
+Recorded findings also survive a later expected execution or verification failure. Such a result
+has `incomplete: true`; hosts must not treat an empty or partial result as clearing the change.
+Without recorded findings, ordinary failures remain typed. Defects and interruption still
+propagate, and these records belong to the current run's Scope, not persistent storage.
+The report retains recorded findings before adding newly submitted findings, removes exact
+duplicates, and marks coverage incomplete if the combined report exceeds 24 findings.
 
 ```ts
-const reviewer = makeReviewer({ model, guidance, estimateCostMicrousd });
+const reviewer = makeReviewer({ model, guidance, estimateCostMicrousd, costControl });
 const program = reviewer.review(request).pipe(Effect.provideService(ReviewRepository, repository));
 ```
 

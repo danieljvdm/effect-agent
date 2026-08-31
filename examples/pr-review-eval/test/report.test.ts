@@ -31,6 +31,7 @@ import {
   loadObservationFiles,
   loadEvalSuite,
   makeQualityReport,
+  renderQualityReport,
   writeObservations,
   writeQualityReport,
 } from "../src/index.ts";
@@ -60,9 +61,14 @@ const finding = (title: string, severity: ReviewSeverity = "blocking"): ReviewFi
     body: `${title}.`,
   });
 
-const succeeded = (findings: ReadonlyArray<ReviewFinding>, cost?: number) =>
+const succeeded = (
+  findings: ReadonlyArray<ReviewFinding>,
+  cost?: number,
+  coverage: Pick<ReviewOutcome, "incomplete" | "exhausted"> = {},
+) =>
   EvalTrialSucceeded.make({
     outcome: ReviewOutcome.make({
+      ...coverage,
       report: ReviewReport.make({
         summary: findings.length === 0 ? "No findings." : "Review findings.",
         findings,
@@ -337,6 +343,83 @@ describe("PR-review eval quality report", () => {
         Schema.decodeSync(EvalQualityReport)(Schema.encodeSync(EvalQualityReport)(report)),
       ).toEqual(report);
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "separates incomplete trials and their costs while retaining adjudicated findings",
+    () =>
+      Effect.gen(function* () {
+        const suite = yield* loadEvalSuite(fixturePath);
+        const known = suite.cases.find((evalCase) => evalCase.kind === "known-defects");
+        const clean = suite.cases.find((evalCase) => evalCase.kind === "clean-control");
+        if (known === undefined || clean === undefined) throw new Error("Missing eval fixtures");
+        const defectId = known.expectedDefects[0]?.id;
+        if (defectId === undefined) throw new Error("Missing expected blocker");
+        const variant = configuration("partial");
+        const observations = [
+          observation(
+            known,
+            variant,
+            1,
+            succeeded([finding("Recorded blocker")], 5, { incomplete: true }),
+          ),
+          observation(known, variant, 2, succeeded([], 3)),
+          observation(clean, variant, 1, succeeded([], undefined, { exhausted: "cost" })),
+          observation(
+            clean,
+            variant,
+            2,
+            EvalTrialFailed.make({
+              errorTag: "AiError",
+              message: "Unavailable",
+              estimatedCostMicrousd: 1,
+            }),
+          ),
+        ];
+        const judgments = judgmentSet(yield* digestObservationSet(observations), [
+          judgment(known, variant, 1, 0, "matches-expected", [defectId]),
+        ]);
+        const report = yield* makeQualityReport(suite, observations, 2, judgments);
+        const result = report.variants[0];
+        expect(result?.resources).toMatchObject({
+          attemptedTrials: 4,
+          succeededTrials: 1,
+          incompleteTrials: 2,
+          failedTrials: 1,
+          costedSucceededTrials: 1,
+          costedIncompleteTrials: 1,
+          uncostedIncompleteTrials: 1,
+          costedFailedTrials: 1,
+          estimatedCostMicrousd: 9,
+          inputTokens: 30,
+          outputTokens: 9,
+        });
+        expect(result?.blockerRecall).toMatchObject({
+          numerator: 1,
+          denominator: 1,
+          status: "measured",
+        });
+        expect(result?.firstTrialFindings.valid).toBe(1);
+        expect(result?.allTrialFindings.valid).toBe(1);
+        expect(result?.blockerCases).toMatchObject({ complete: 0, incomplete: 1, total: 1 });
+        expect(result?.cleanControls).toMatchObject({ passed: 0, total: 1 });
+        expect(result?.cases.find((entry) => entry.caseId === known.id)?.resources).toMatchObject({
+          succeededTrials: 1,
+          incompleteTrials: 1,
+          failedTrials: 0,
+        });
+        expect(result?.cases.find((entry) => entry.caseId === clean.id)?.cleanControlPassed).toBe(
+          false,
+        );
+        expect(renderQualityReport(report)).toContain("incomplete 2/4; failures 1/4");
+        expect(renderQualityReport(report)).toContain(
+          "cost 9µUSD (1 succeeded + 1 incomplete + 1 failed costed)",
+        );
+        expect(report.version).toBe(3);
+        expect(
+          Schema.decodeSync(EvalQualityReport)(Schema.encodeSync(EvalQualityReport)(report)),
+        ).toEqual(report);
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("separates blocker detection from merge-gating severity", () =>

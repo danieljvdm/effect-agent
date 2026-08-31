@@ -1,4 +1,4 @@
-import { ReviewFinding } from "@effect-agent/pr-review";
+import { ReviewFinding, type ReviewOutcome } from "@effect-agent/pr-review";
 import { Effect, Schema } from "effect";
 
 import {
@@ -111,6 +111,7 @@ export class EvalFailureCount extends Schema.Class<EvalFailureCount>(
 const ResourceSummaryFields = Schema.Struct({
   attemptedTrials: Schema.Natural,
   succeededTrials: Schema.Natural,
+  incompleteTrials: Schema.Natural,
   failedTrials: Schema.Natural,
   failuresByTag: Schema.Array(EvalFailureCount).check(Schema.isMaxLength(100)),
   turns: Schema.Natural,
@@ -120,8 +121,10 @@ const ResourceSummaryFields = Schema.Struct({
   cacheWriteInputTokens: Schema.Natural,
   outputTokens: Schema.Natural,
   costedSucceededTrials: Schema.Natural,
+  costedIncompleteTrials: Schema.Natural,
   costedFailedTrials: Schema.Natural,
   uncostedSucceededTrials: Schema.Natural,
+  uncostedIncompleteTrials: Schema.Natural,
   estimatedCostMicrousd: Schema.Natural,
   elapsedMillis: Schema.Natural,
 }).check(
@@ -129,7 +132,8 @@ const ResourceSummaryFields = Schema.Struct({
     (resources) => {
       const failureTags = resources.failuresByTag.map((failure) => failure.errorTag);
       return (
-        resources.attemptedTrials === resources.succeededTrials + resources.failedTrials &&
+        resources.attemptedTrials ===
+          resources.succeededTrials + resources.incompleteTrials + resources.failedTrials &&
         resources.failedTrials ===
           resources.failuresByTag.reduce((total, failure) => total + failure.count, 0) &&
         new Set(failureTags).size === failureTags.length &&
@@ -139,6 +143,8 @@ const ResourceSummaryFields = Schema.Struct({
             resources.cacheWriteInputTokens &&
         resources.succeededTrials ===
           resources.costedSucceededTrials + resources.uncostedSucceededTrials &&
+        resources.incompleteTrials ===
+          resources.costedIncompleteTrials + resources.uncostedIncompleteTrials &&
         resources.costedFailedTrials <= resources.failedTrials
       );
     },
@@ -255,7 +261,7 @@ export class EvalCaseIdentity extends Schema.Class<EvalCaseIdentity>(
 export class EvalQualityReport extends Schema.Class<EvalQualityReport>(
   "@effect-agent/example-pr-review-eval/EvalQualityReport",
 )({
-  version: Schema.Literal(2),
+  version: Schema.Literal(3),
   observationSetDigest: EvalObservationSetDigest,
   runnerVersion: EvalRunnerVersion,
   trialCount: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -389,8 +395,12 @@ const blockingFindingQuality = (
   });
 };
 
+const isIncompleteReview = (outcome: ReviewOutcome): boolean =>
+  outcome.incomplete === true || outcome.exhausted !== undefined;
+
 const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalResourceSummary => {
   let succeededTrials = 0;
+  let incompleteTrials = 0;
   let failedTrials = 0;
   let turns = 0;
   let inputTokens = 0;
@@ -399,6 +409,7 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
   let cacheWriteInputTokens = 0;
   let outputTokens = 0;
   let costedSucceededTrials = 0;
+  let costedIncompleteTrials = 0;
   let costedFailedTrials = 0;
   let estimatedCostMicrousd = 0;
   let elapsedMillis = 0;
@@ -418,7 +429,9 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
       }
       continue;
     }
-    succeededTrials += 1;
+    const incomplete = isIncompleteReview(observation.result.outcome);
+    if (incomplete) incompleteTrials += 1;
+    else succeededTrials += 1;
     const { usage } = observation.result.outcome;
     turns += observation.result.outcome.turns;
     inputTokens += usage.inputTokens;
@@ -427,7 +440,8 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
     cacheWriteInputTokens += usage.cacheWriteInputTokens;
     outputTokens += usage.outputTokens;
     if (usage.estimatedCostMicrousd !== undefined) {
-      costedSucceededTrials += 1;
+      if (incomplete) costedIncompleteTrials += 1;
+      else costedSucceededTrials += 1;
       estimatedCostMicrousd += usage.estimatedCostMicrousd;
     }
   }
@@ -435,6 +449,7 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
   return EvalResourceSummary.make({
     attemptedTrials: observations.length,
     succeededTrials,
+    incompleteTrials,
     failedTrials,
     failuresByTag: [...failureCounts]
       .sort(([left], [right]) => left.localeCompare(right))
@@ -446,8 +461,10 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
     cacheWriteInputTokens,
     outputTokens,
     costedSucceededTrials,
+    costedIncompleteTrials,
     costedFailedTrials,
     uncostedSucceededTrials: succeededTrials - costedSucceededTrials,
+    uncostedIncompleteTrials: incompleteTrials - costedIncompleteTrials,
     estimatedCostMicrousd,
     elapsedMillis,
   });
@@ -692,10 +709,13 @@ const caseReport = (
     firstDetected.size < expectedBlockers.length &&
     firstObservation.result._tag === "Succeeded" &&
     unresolvedDetectionFindings.length > 0;
+  const firstIncomplete =
+    firstObservation.result._tag === "Succeeded" &&
+    isIncompleteReview(firstObservation.result.outcome);
   const blockerStatus: EvalBlockerCaseStatus =
     expectedBlockers.length === 0
       ? "not-applicable"
-      : firstObservation.result._tag === "Failed"
+      : firstObservation.result._tag === "Failed" || firstIncomplete
         ? "incomplete"
         : firstMatched.size === expectedBlockers.length
           ? "complete"
@@ -746,7 +766,9 @@ const caseReport = (
     ...(evalCase.kind === "clean-control"
       ? {
           cleanControlPassed:
-            firstObservation.result._tag === "Succeeded" && firstFindings.length === 0,
+            firstObservation.result._tag === "Succeeded" &&
+            !firstIncomplete &&
+            firstFindings.length === 0,
         }
       : {}),
     laterOnlyBlockingDefects,
@@ -885,7 +907,7 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
   }
 
   return EvalQualityReport.make({
-    version: 2,
+    version: 3,
     observationSetDigest: validated.observationSetDigest,
     runnerVersion: validated.runnerVersion,
     trialCount: validated.trialCount,
@@ -926,11 +948,15 @@ export const renderQualityReport = (report: EvalQualityReport): string =>
         `unclear ${quality.unclear}`,
         `unjudged ${quality.unjudged}`,
         `later-only ${variant.laterOnlyBlockingDefects.length}`,
+        `incomplete ${variant.resources.incompleteTrials}/${variant.resources.attemptedTrials}`,
         `failures ${variant.resources.failedTrials}/${variant.resources.attemptedTrials}`,
         `tokens ${variant.resources.inputTokens} in/${variant.resources.outputTokens} out`,
-        variant.resources.costedSucceededTrials + variant.resources.costedFailedTrials === 0
+        variant.resources.costedSucceededTrials +
+          variant.resources.costedIncompleteTrials +
+          variant.resources.costedFailedTrials ===
+        0
           ? "cost unavailable"
-          : `cost ${variant.resources.estimatedCostMicrousd}µUSD (${variant.resources.costedSucceededTrials} succeeded + ${variant.resources.costedFailedTrials} failed costed)`,
+          : `cost ${variant.resources.estimatedCostMicrousd}µUSD (${variant.resources.costedSucceededTrials} succeeded + ${variant.resources.costedIncompleteTrials} incomplete + ${variant.resources.costedFailedTrials} failed costed)`,
         `elapsed ${variant.resources.elapsedMillis}ms`,
       ].join("; ");
     })

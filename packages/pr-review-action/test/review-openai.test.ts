@@ -1,0 +1,722 @@
+import {
+  makeReviewer,
+  ReviewChange,
+  ReviewFileList,
+  ReviewRepository,
+  ReviewRequest,
+  ReviewSource,
+} from "@effect-agent/pr-review";
+import type { OpenAiSchema } from "@effect/ai-openai";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { NodeServices } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import {
+  Cause,
+  ConfigProvider,
+  Deferred,
+  Effect,
+  Encoding,
+  Exit,
+  Fiber,
+  Logger,
+  Option,
+  Redacted,
+  Schema,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+
+import { reviewActionProgram, reviewPublicationFailure } from "../src/action.ts";
+import {
+  makeReviewOpenAi,
+  REVIEW_COST_LIMIT_MICROUSD,
+  reviewCostEstimator,
+} from "../src/review-openai.ts";
+import { reviewMarker } from "../src/selection.ts";
+
+const WireRequest = Schema.Struct({
+  model: Schema.String,
+  input: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
+  tools: Schema.optional(Schema.Array(Schema.Json)),
+  tool_choice: Schema.optional(Schema.Json),
+  reasoning: Schema.optional(Schema.Json),
+  text: Schema.optional(Schema.Json),
+  max_output_tokens: Schema.optional(Schema.Natural),
+  service_tier: Schema.optional(Schema.String),
+  store: Schema.optional(Schema.Boolean),
+  stream: Schema.optional(Schema.Boolean),
+  prompt_cache_key: Schema.optional(Schema.String),
+  prompt_cache_options: Schema.optional(Schema.Json),
+});
+type WireRequest = typeof WireRequest.Type;
+type HttpRequest = Parameters<typeof HttpClientResponse.fromWeb>[0];
+const decodeWire = (request: HttpRequest) => {
+  if (request.body._tag !== "Uint8Array") throw new Error("Expected encoded JSON request");
+  return Schema.decodeUnknownSync(Schema.fromJsonString(WireRequest))(
+    new TextDecoder().decode(request.body.body),
+  );
+};
+const json = (request: HttpRequest, body: unknown, status = 200) =>
+  HttpClientResponse.fromWeb(
+    request,
+    new globalThis.Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    }),
+  );
+
+const finding = {
+  path: "src/value.ts",
+  line: 2,
+  category: "correctness",
+  title: "Preserve the acknowledged value",
+  body: "Returning zero loses the acknowledged value on the supported caller. Return the saved value.",
+  priority: 1,
+};
+const read = {
+  name: "read_file",
+  parameters: { path: "src/value.ts", revision: "head", startLine: 1, lineCount: 3 },
+};
+const record = { name: "record_finding", parameters: finding };
+const submit = { name: "submit_review", parameters: { findings: [] } };
+const request = ReviewRequest.make({
+  title: "Preserve values",
+  description: "",
+  baseRevision: "base",
+  headRevision: "head",
+  changes: [
+    ReviewChange.make({
+      path: "src/value.ts",
+      patch: "@@ -1,2 +1,2 @@\n export const value = 1;\n-return value;\n+return 0;",
+    }),
+  ],
+  unreviewedPaths: [],
+});
+const repository = ReviewRepository.of({
+  readFile: (input) =>
+    Effect.succeed(
+      ReviewSource.make({ ...input, totalLines: 3, content: "private-source-fixture" }),
+    ),
+  findFiles: () =>
+    Effect.succeed(ReviewFileList.make({ paths: ["src/value.ts"], truncated: false })),
+});
+const rawUsage = (input: number, output: number, read = 0, write = input - read) => ({
+  input_tokens: input,
+  input_tokens_details: { cached_tokens: read, cache_write_tokens: write },
+  output_tokens: output,
+  output_tokens_details: { reasoning_tokens: output - 10 },
+  total_tokens: input + output,
+});
+const response = (usage: unknown) => ({
+  id: "resp_fixture",
+  object: "response",
+  model: "gpt-5.6-sol",
+  created_at: 1_788_000_000,
+  service_tier: "default",
+  output: [],
+  usage,
+});
+const sse = (
+  httpRequest: HttpRequest,
+  call: number,
+  calls: ReadonlyArray<{ readonly name: string; readonly parameters: Schema.Json }>,
+  usage: unknown,
+) => {
+  const reasoning = {
+    type: "reasoning",
+    id: `rs_${call}`,
+    summary: [],
+    encrypted_content: `opaque-fixture-${call}`,
+  };
+  const output = calls.map((tool, index) => ({
+    type: "function_call",
+    id: `fc_${call}_${index}`,
+    call_id: `call_${call}_${index}`,
+    name: tool.name,
+    arguments: JSON.stringify(tool.parameters),
+    status: "completed",
+  }));
+  const events = [
+    { type: "response.created", response: response(null) },
+    { type: "response.output_item.added", output_index: 0, item: reasoning },
+    { type: "response.output_item.done", output_index: 0, item: reasoning },
+    ...output.flatMap((item, index) => [
+      { type: "response.output_item.added", output_index: index + 1, item },
+      {
+        type: "response.function_call_arguments.done",
+        output_index: index + 1,
+        item_id: item.id,
+        arguments: item.arguments,
+      },
+      { type: "response.output_item.done", output_index: index + 1, item },
+    ]),
+    {
+      type: "response.completed",
+      response: { ...response(usage), output: [reasoning, ...output] },
+    },
+  ];
+  return HttpClientResponse.fromWeb(
+    httpRequest,
+    new globalThis.Response(
+      events
+        .map(
+          (event, sequence_number) => `data: ${JSON.stringify({ ...event, sequence_number })}\n\n`,
+        )
+        .join(""),
+      { headers: { "content-type": "text/event-stream" } },
+    ),
+  );
+};
+
+const makeNative = (http: HttpClient.HttpClient) =>
+  OpenAiClient.make({ apiKey: Redacted.make("test-key-never-log") }).pipe(
+    Effect.provideService(HttpClient.HttpClient, http),
+  );
+const model = OpenAiLanguageModel.model("gpt-5.6-sol", {
+  max_output_tokens: 32_000,
+  service_tier: "default",
+  store: false,
+  strictJsonSchema: true,
+  reasoning: { effort: "xhigh" },
+});
+const payload: OpenAiSchema.CreateResponse = {
+  model: "gpt-5.6-sol",
+  input: [{ role: "user", content: "fixture" }],
+  max_output_tokens: 32_000,
+  service_tier: "default",
+  store: false,
+};
+
+describe("review provider boundary", () => {
+  it.effect.each([false, true])(
+    "publishes a head-bound incomplete cost stop, with blocking finding=%s",
+    (hasFinding) =>
+      Effect.gen(function* () {
+        const published: Array<{
+          readonly commit_id: string;
+          readonly event: string;
+          readonly body: string;
+          readonly comments: ReadonlyArray<unknown>;
+        }> = [];
+        let modelCalls = 0;
+        const sources = {
+          base: "export const value = 1;\nreturn value;\n",
+          head: "export const value = 1;\nreturn 0;\n",
+        };
+        const client = HttpClient.make((httpRequest, url) =>
+          Effect.sync(() => {
+            if (url.pathname === "/v1/responses/input_tokens")
+              return json(httpRequest, { object: "response.input_tokens", input_tokens: 70_000 });
+            if (url.pathname === "/v1/responses") {
+              modelCalls += 1;
+              return sse(
+                httpRequest,
+                modelCalls,
+                hasFinding ? [record, read] : [read],
+                rawUsage(70_000, 32_000),
+              );
+            }
+            if (httpRequest.method === "GET" && url.pathname.endsWith("/pulls/12"))
+              return json(httpRequest, {
+                number: 12,
+                title: "Value change",
+                body: null,
+                draft: false,
+                html_url: "https://github.test/fixtures/example/pull/12",
+                base: { sha: "base" },
+                head: { sha: "head" },
+              });
+            if (httpRequest.method === "GET" && url.pathname.endsWith("/pulls/12/reviews"))
+              return json(httpRequest, []);
+            if (url.pathname.endsWith("/pulls/12/files"))
+              return json(httpRequest, [
+                {
+                  filename: "src/value.ts",
+                  status: "modified",
+                  additions: 1,
+                  deletions: 1,
+                  patch: request.changes[0]?.patch,
+                },
+              ]);
+            if (url.pathname.includes("/compare/"))
+              return json(httpRequest, { merge_base_commit: { sha: "base" } });
+            if (url.pathname.includes("/git/commits/")) {
+              const revision = url.pathname.endsWith("/base") ? "base" : "head";
+              return json(httpRequest, { sha: revision, tree: { sha: `${revision}-tree` } });
+            }
+            if (url.pathname.includes("/git/trees/")) {
+              const revision = url.pathname.endsWith("/base-tree") ? "base" : "head";
+              return json(httpRequest, {
+                sha: `${revision}-tree`,
+                truncated: false,
+                tree: [
+                  {
+                    path: "src/value.ts",
+                    type: "blob",
+                    mode: "100644",
+                    sha: `${revision}-blob`,
+                    size: sources[revision].length,
+                  },
+                ],
+              });
+            }
+            if (url.pathname.includes("/git/blobs/")) {
+              const revision = url.pathname.endsWith("/base-blob") ? "base" : "head";
+              const text = sources[revision];
+              return json(httpRequest, {
+                sha: `${revision}-blob`,
+                encoding: "base64",
+                size: text.length,
+                content: Encoding.encodeBase64(new TextEncoder().encode(text)),
+              });
+            }
+            if (httpRequest.method === "POST" && url.pathname.endsWith("/pulls/12/reviews")) {
+              if (httpRequest.body._tag !== "Uint8Array") throw new Error("Expected review JSON");
+              published.push(
+                Schema.decodeUnknownSync(
+                  Schema.fromJsonString(
+                    Schema.Struct({
+                      commit_id: Schema.String,
+                      event: Schema.String,
+                      body: Schema.String,
+                      comments: Schema.Array(Schema.Unknown),
+                    }),
+                  ),
+                )(new TextDecoder().decode(httpRequest.body.body)),
+              );
+              return json(httpRequest, {
+                html_url: "https://github.test/fixtures/example/pull/12#review",
+              });
+            }
+            throw new Error(`Unexpected fixture request: ${httpRequest.method} ${url.pathname}`);
+          }),
+        );
+        const exit = yield* reviewActionProgram.pipe(
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromEnv({
+              env: {
+                GITHUB_REPOSITORY: "fixtures/example",
+                GITHUB_TOKEN: "github-fixture",
+                GITHUB_API_URL: "https://api.github.test",
+                OPENAI_API_KEY: "openai-fixture",
+                PR_REVIEW_PULL_REQUEST: "12",
+              },
+            }),
+          ),
+          Effect.provideService(HttpClient.HttpClient, client),
+          Effect.provide(NodeServices.layer),
+          Effect.exit,
+        );
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isSuccess(exit)) throw new Error("An incomplete review must fail its Action");
+        expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
+          _tag: hasFinding ? "BlockingFindings" : "ReviewAttemptIncomplete",
+        });
+        expect(modelCalls).toBe(1);
+        expect(published).toHaveLength(1);
+        expect(published[0]).toMatchObject({
+          commit_id: "head",
+          event: hasFinding ? "REQUEST_CHANGES" : "COMMENT",
+        });
+        expect(published[0]?.comments).toHaveLength(hasFinding ? 1 : 0);
+        expect(published[0]?.body).toContain(reviewMarker(true, false));
+        expect(published[0]?.body).not.toContain(reviewMarker(true, true));
+        expect(published[0]?.body).not.toContain("**No actionable findings.**");
+        expect(published[0]?.body).toContain("$0.999999 spending ceiling");
+        expect(published[0]?.body).toContain("1 supplied");
+      }),
+  );
+
+  it.effect(
+    "proves the missing implicit prefix and preserves explicit prefixes on the encoded wire",
+    () =>
+      Effect.gen(function* () {
+        for (const guarded of [false, true]) {
+          const sent: Array<WireRequest> = [];
+          const counted: Array<WireRequest> = [];
+          const logs: Array<unknown> = [];
+          const native = yield* makeNative(
+            HttpClient.make((httpRequest, url) =>
+              Effect.sync(() => {
+                const wire = decodeWire(httpRequest);
+                if (url.pathname === "/v1/responses/input_tokens") {
+                  counted.push(wire);
+                  return json(httpRequest, {
+                    object: "response.input_tokens",
+                    input_tokens: 20_000 + sent.length * 1_000,
+                  });
+                }
+                expect(url.pathname).toBe("/v1/responses");
+                sent.push(wire);
+                const call = sent.length;
+                const tools =
+                  call === 1
+                    ? [read]
+                    : call === 2
+                      ? [
+                          record,
+                          { name: "find_files", parameters: { query: "value", revision: "head" } },
+                        ]
+                      : [submit];
+                const usage =
+                  call === 1
+                    ? rawUsage(20_000, 1_000, 0, 19_800)
+                    : rawUsage(19_000 + call * 1_000, 1_000, 18_000 + call * 1_000, 800);
+                return sse(httpRequest, call, tools, usage);
+              }),
+            ),
+          );
+          const provider = yield* makeReviewOpenAi({
+            client: native,
+            model: "gpt-5.6-sol",
+            cacheKey: "review-fixture",
+          });
+          const result = yield* makeReviewer({
+            model,
+            ...(guarded ? { costControl: provider.costControl } : {}),
+            estimateCostMicrousd: reviewCostEstimator("gpt-5.6-sol"),
+          })
+            .review(request)
+            .pipe(
+              Effect.provideService(OpenAiClient.OpenAiClient, guarded ? provider.client : native),
+              Effect.provideService(ReviewRepository, repository),
+              Effect.provide(
+                Logger.layer([
+                  Logger.make<unknown, void>(({ message }) => {
+                    logs.push(message);
+                  }),
+                ]),
+              ),
+            );
+          expect(sent).toHaveLength(3);
+          const [first, second, third] = sent;
+          if (first === undefined || second === undefined || third === undefined)
+            throw new Error("Missing model request");
+          expect(first.tools).toEqual(second.tools);
+          expect(second.tools).toEqual(third.tools);
+          expect(first.reasoning).toEqual({ effort: "xhigh" });
+          expect(first.reasoning).toEqual(third.reasoning);
+          expect(first.input.at(-1)).not.toEqual(second.input.at(-1));
+          expect(JSON.stringify(second.input)).not.toContain("turn 1/8");
+          expect(second.input.slice(0, first.input.length - 1)).toEqual(first.input.slice(0, -1));
+          expect(third.input.slice(0, second.input.length - 1)).toEqual(second.input.slice(0, -1));
+          expect(JSON.stringify(third.input)).toContain("opaque-fixture-1");
+          expect(JSON.stringify(third.input)).toContain("private-source-fixture");
+          if (guarded) {
+            expect(first.prompt_cache_options).toEqual({ mode: "explicit", ttl: "30m" });
+            expect(first.prompt_cache_key).toBe(third.prompt_cache_key);
+            expect(JSON.stringify(first.input.slice(0, -1))).toContain(
+              '"prompt_cache_breakpoint":{"mode":"explicit"}',
+            );
+            expect(JSON.stringify(first.input.at(-1))).not.toContain("prompt_cache_breakpoint");
+            expect(second.input.find((item) => item.type === "function_call_output")).toMatchObject(
+              {
+                output: [{ type: "input_text", prompt_cache_breakpoint: { mode: "explicit" } }],
+              },
+            );
+            for (const [index, countedRequest] of counted.entries()) {
+              expect(countedRequest.input).toEqual(sent[index]?.input);
+              expect(countedRequest.tools).toEqual(sent[index]?.tools);
+              expect(countedRequest.tool_choice).toEqual(sent[index]?.tool_choice);
+              expect(countedRequest.reasoning).toEqual(sent[index]?.reasoning);
+              expect(countedRequest.text).toEqual(sent[index]?.text);
+            }
+            expect(result.usage).toMatchObject({
+              inputTokens: 63_000,
+              cachedInputTokens: 41_000,
+              cacheWriteInputTokens: 21_400,
+              uncachedInputTokens: 600,
+              outputTokens: 3_000,
+              estimatedCostMicrousd: 185_800,
+              reservedCostMicrousd: 0,
+            });
+            expect(JSON.stringify(logs)).toContain("cacheHitRatio");
+            expect(JSON.stringify(logs)).not.toContain("private-source-fixture");
+            expect(JSON.stringify(logs)).not.toContain("test-key-never-log");
+          } else {
+            expect(counted).toHaveLength(0);
+            expect(first.prompt_cache_options).toBeUndefined();
+            expect(JSON.stringify(first.input)).not.toContain("prompt_cache_breakpoint");
+          }
+          // A later empty submission cannot erase an already validated finding.
+          expect(result.report.findings.map((item) => item.title)).toEqual([finding.title]);
+          expect(result.exhausted).toBeUndefined();
+        }
+      }),
+  );
+
+  it.effect.each([false, true])(
+    "keeps all-miss maximum-output reviews below $1, with recorded finding=%s",
+    (recorded) =>
+      Effect.gen(function* () {
+        const sent: Array<WireRequest> = [];
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.sync(() => {
+              if (url.pathname.endsWith("/input_tokens"))
+                return json(httpRequest, { object: "response.input_tokens", input_tokens: 70_000 });
+              sent.push(decodeWire(httpRequest));
+              return sse(
+                httpRequest,
+                sent.length,
+                recorded ? [record, read] : [read],
+                rawUsage(70_000, 32_000),
+              );
+            }),
+          ),
+        );
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "misses",
+        });
+        const result = yield* makeReviewer({ model, costControl: provider.costControl })
+          .review(request)
+          .pipe(
+            Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+            Effect.provideService(ReviewRepository, repository),
+          );
+        expect(sent).toHaveLength(1);
+        expect(result.exhausted).toBe("cost");
+        expect(result.report.findings).toHaveLength(recorded ? 1 : 0);
+        expect(result.report.summary).toContain("remaining change has not been verified");
+        expect(result.usage.estimatedCostMicrousd).toBe(990_000);
+        expect(
+          reviewPublicationFailure({
+            blockingFindings: 0,
+            unreviewedPaths: 0,
+            unresolvedChangeRequests: 0,
+            exhausted: result.exhausted,
+          }),
+        ).toMatchObject({ _tag: "ReviewAttemptIncomplete" });
+      }),
+  );
+
+  it.effect.each([true, false])(
+    "prices the only final request and enforces completion-only delivery: %s",
+    (validCompletion) =>
+      Effect.gen(function* () {
+        const sent: Array<WireRequest> = [];
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.sync(() => {
+              if (url.pathname.endsWith("/input_tokens"))
+                return json(httpRequest, {
+                  object: "response.input_tokens",
+                  input_tokens: sent.length === 0 ? 70_000 : 72_000,
+                });
+              const wire = decodeWire(httpRequest);
+              sent.push(wire);
+              return sse(
+                httpRequest,
+                sent.length,
+                sent.length === 1 ? [record, read] : validCompletion ? [submit] : [read],
+                rawUsage(
+                  sent.length === 1 ? 70_000 : 72_000,
+                  sent.length === 1 ? 1_000 : (wire.max_output_tokens ?? 0),
+                ),
+              );
+            }),
+          ),
+        );
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "final",
+        });
+        let reads = 0;
+        const result = yield* makeReviewer({ model, costControl: provider.costControl })
+          .review(request)
+          .pipe(
+            Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+            Effect.provideService(ReviewRepository, {
+              ...repository,
+              readFile: (input) =>
+                Effect.suspend(() => {
+                  reads += 1;
+                  return repository.readFile(input);
+                }),
+            }),
+          );
+        expect(sent).toHaveLength(2);
+        expect(sent[1]?.max_output_tokens).toBe(13_499);
+        expect(sent[1]?.tool_choice).toEqual({
+          type: "allowed_tools",
+          mode: "required",
+          tools: [{ type: "function", name: "submit_review" }],
+        });
+        expect(sent[1]?.tools).toEqual(sent[0]?.tools);
+        expect(result.exhausted).toBe("cost");
+        expect(result.report.findings).toHaveLength(1);
+        expect(reads).toBe(1);
+        expect(result.usage.estimatedCostMicrousd).toBe(999_980);
+        expect(result.usage.estimatedCostMicrousd).toBeLessThan(1_000_000);
+        yield* provider.client.createResponse(payload).pipe(Effect.flip);
+        expect(sent).toHaveLength(2);
+      }),
+  );
+
+  it.effect.each(["gpt-5.6", "gpt-5.6-sol"])(
+    "settles nonstreaming and streaming calls in one ledger when the alias resolves to %s",
+    (responseModel) =>
+      Effect.gen(function* () {
+        let calls = 0;
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.sync(() => {
+              if (url.pathname.endsWith("/input_tokens"))
+                return json(httpRequest, { object: "response.input_tokens", input_tokens: 20_000 });
+              calls += 1;
+              const usage = rawUsage(20_000, 1_000);
+              return decodeWire(httpRequest).stream === true
+                ? sse(httpRequest, calls, [submit], usage)
+                : json(httpRequest, { ...response(usage), model: responseModel });
+            }),
+          ),
+        );
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6",
+          cacheKey: "alias",
+        });
+        const aliasPayload = { ...payload, model: "gpt-5.6" };
+        yield* provider.client.createResponse(aliasPayload);
+        const [, stream] = yield* provider.client.createResponseStream(aliasPayload);
+        yield* Stream.runDrain(stream);
+        const snapshot = yield* provider.costControl.snapshot;
+        expect(calls).toBe(2);
+        expect(snapshot).toMatchObject({
+          stopped: false,
+          modelCalls: 2,
+          usage: {
+            inputTokens: 40_000,
+            cacheWriteInputTokens: 40_000,
+            outputTokens: 2_000,
+            estimatedCostMicrousd: 240_000,
+            reservedCostMicrousd: 0,
+          },
+        });
+      }),
+  );
+
+  it.effect.each(["http", "missing-usage", "malformed-count", "stream-eof"])(
+    "fails closed on %s without refunding unknown charges",
+    (failure) =>
+      Effect.gen(function* () {
+        let sends = 0;
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.sync(() => {
+              if (url.pathname.endsWith("/input_tokens"))
+                return json(httpRequest, {
+                  object: "response.input_tokens",
+                  input_tokens: failure === "malformed-count" ? -1 : 70_000,
+                });
+              sends += 1;
+              if (failure === "http")
+                return json(httpRequest, { error: { message: "private-source-fixture" } }, 500);
+              if (failure === "stream-eof")
+                return HttpClientResponse.fromWeb(
+                  httpRequest,
+                  new globalThis.Response("", { headers: { "content-type": "text/event-stream" } }),
+                );
+              return json(httpRequest, response(null));
+            }),
+          ),
+        );
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "failed",
+        });
+        if (failure === "stream-eof") {
+          const [, stream] = yield* provider.client.createResponseStream(payload);
+          yield* Stream.runDrain(stream);
+        } else {
+          yield* provider.client.createResponse(payload).pipe(Effect.flip);
+        }
+        const snapshot = yield* provider.costControl.snapshot;
+        expect(snapshot.stopped).toBe(false);
+        expect(snapshot.usage.estimatedCostMicrousd).toBe(0);
+        expect(snapshot.usage.reservedCostMicrousd).toBe(
+          failure === "malformed-count" ? 0 : 990_000,
+        );
+        yield* provider.client.createResponse(payload).pipe(Effect.flip);
+        expect(sends).toBe(failure === "malformed-count" ? 0 : 1);
+      }),
+  );
+
+  it.effect("reserves concurrent requests atomically and retains interrupted liability", () =>
+    Effect.gen(function* () {
+      const dispatched = yield* Deferred.make<void>();
+      let sends = 0;
+      const native = yield* makeNative(
+        HttpClient.make((httpRequest, url) => {
+          if (url.pathname.endsWith("/input_tokens"))
+            return Effect.succeed(
+              json(httpRequest, { object: "response.input_tokens", input_tokens: 70_000 }),
+            );
+          sends += 1;
+          return Deferred.succeed(dispatched, undefined).pipe(Effect.andThen(Effect.never));
+        }),
+      );
+      const provider = yield* makeReviewOpenAi({
+        client: native,
+        model: "gpt-5.6-sol",
+        cacheKey: "concurrent",
+      });
+      const first = yield* Effect.forkChild(provider.client.createResponse(payload));
+      yield* Deferred.await(dispatched);
+      yield* provider.client.createResponse(payload).pipe(Effect.flip);
+      yield* Fiber.interrupt(first);
+      const snapshot = yield* provider.costControl.snapshot;
+      expect(sends).toBe(1);
+      expect(snapshot.usage.reservedCostMicrousd).toBe(990_000);
+      expect(
+        (snapshot.usage.estimatedCostMicrousd ?? 0) + (snapshot.usage.reservedCostMicrousd ?? 0),
+      ).toBeLessThanOrEqual(REVIEW_COST_LIMIT_MICROUSD);
+    }),
+  );
+
+  it.effect(
+    "refuses unknown models, service tiers, provider tools, and stale pricing before inference",
+    () =>
+      Effect.gen(function* () {
+        let calls = 0;
+        const native = yield* makeNative(
+          HttpClient.make(() => {
+            calls += 1;
+            return Effect.die("Must not dispatch");
+          }),
+        );
+        for (const name of ["custom-model", "toString", "__proto__"]) {
+          yield* makeReviewOpenAi({ client: native, model: name, cacheKey: "config" }).pipe(
+            Effect.flip,
+          );
+        }
+        for (const change of [
+          { service_tier: "priority" },
+          { store: true },
+          { max_output_tokens: 0 },
+          { tools: [{ type: "web_search" as const }] },
+        ]) {
+          const provider = yield* makeReviewOpenAi({
+            client: native,
+            model: "gpt-5.6-sol",
+            cacheKey: "config",
+          });
+          yield* provider.client.createResponse({ ...payload, ...change }).pipe(Effect.flip);
+        }
+        yield* TestClock.setTime(1_795_305_600_000);
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "expired",
+        });
+        yield* provider.client.createResponse(payload).pipe(Effect.flip);
+        expect(calls).toBe(0);
+      }),
+  );
+});
