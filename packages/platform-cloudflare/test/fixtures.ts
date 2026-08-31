@@ -91,7 +91,7 @@ export const armedEvictionsRemaining = (conversation: string): number =>
   (armedStorageEvictions.get(conversation)?.length ?? 0) +
   (armedRuntimeEvictions.get(conversation)?.length ?? 0);
 
-/** Storage failpoint factory for `makeConversationObjectClass`: armed hit → `ctx.abort()`. */
+/** Storage failpoint factory for `ConversationObject.make`: armed hit → `ctx.abort()`. */
 export const storageEvictionFailpoint = (ctx: DurableObjectState): DoStorageFailpointHandler =>
   evictionFailpointHandler({
     isArmed: (location) =>

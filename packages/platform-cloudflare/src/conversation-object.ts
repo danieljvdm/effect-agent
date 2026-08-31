@@ -28,6 +28,7 @@ import {
   SubmissionLedger,
   SubmissionLookupByKey,
   WakeScheduler,
+  type AgentBindingResolver,
   type DurableSubmitAgent,
 } from "@effect-agent/session";
 import {
@@ -35,7 +36,7 @@ import {
   encodePortResponse,
   type PortRequest,
 } from "@effect-agent/storage-cloudflare";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Stream, type Crypto } from "effect";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectState as EffectCfDurableObjectState,
@@ -81,7 +82,7 @@ import {
 } from "./client.ts";
 import { AdmissionLimitExceeded, CloudflareDurableRuntimeConfig } from "./config.ts";
 import {
-  CloudflareDurableRuntime,
+  layer as runtimeLayer,
   ConversationObjectPorts,
   type CloudflareDurableRuntimeInitializationError,
   type CloudflareDurableRuntimeOptions,
@@ -89,8 +90,20 @@ import {
 } from "./layers.ts";
 import { ProgressWaitRegistry } from "./progress-wait.ts";
 
+export {
+  layer,
+  type CloudflareDurableRuntimeOptions as RuntimeOptions,
+  type CloudflareDurableRuntimeServices as Services,
+  type CloudflareDurableRuntimeInitializationError as InitializationError,
+  type CloudflareRuntimeSourceContext as RuntimeSourceContext,
+  type CloudflareRunContextLayer as RunContextLayer,
+  type CloudflareRunContextSource as RunContextSource,
+  type CloudflareToolAuthorizationLayer as ToolAuthorizationLayer,
+  type CloudflareToolAuthorizationSource as ToolAuthorizationSource,
+} from "./layers.ts";
+
 /**
- * `makeConversationObjectClass(options, observability?)` — the Conversation Durable Object
+ * `ConversationObject.make(bindings, options, observability?)` — the Conversation Durable Object
  * (plan §1.4,
  * D-P6-1): a factory returning a class that applications export from their Worker entry.
  * One SQLite-backed Object per Conversation is the serialized owner (durability §6); the
@@ -108,7 +121,7 @@ import { ProgressWaitRegistry } from "./progress-wait.ts";
  */
 
 /** Construction options for one deployed Conversation Object class. */
-export interface ConversationObjectOptions extends CloudflareDurableRuntimeOptions {
+export interface Options extends CloudflareDurableRuntimeOptions {
   /** Accept transient native RPC tracing through effect-cf; disabled by default. */
   readonly rpcTracing?: boolean;
   /**
@@ -704,7 +717,7 @@ const effectCfPlatformLayer = (
 };
 
 /** The public endpoints and effect-cf invocation hook of one Conversation Object instance. */
-export interface ConversationObjectInstance<EventServices = never> extends InstanceType<
+export interface Instance<EventServices = never> extends InstanceType<
   EffectCfDurableObject.DurableObjectClass<Record<never, never>, RuntimeServices | EventServices>
 > {
   submitEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
@@ -725,8 +738,8 @@ export interface ConversationObjectInstance<EventServices = never> extends Insta
 }
 
 /** The constructor shape workerd instantiates for each Conversation Object. */
-export interface ConversationObjectClass<EventServices = never> {
-  new (ctx: DurableObjectState, env: Cloudflare.Env): ConversationObjectInstance<EventServices>;
+export interface Class<EventServices = never> {
+  new (ctx: DurableObjectState, env: Cloudflare.Env): Instance<EventServices>;
 }
 
 /**
@@ -735,9 +748,26 @@ export interface ConversationObjectClass<EventServices = never> {
  * OTLP flush scheduling for RPC and alarm events. The optional outer Layer is built per native
  * event, so a host can install Tracer/Logger/Metric services and `OtlpExporter.Flusher` without
  * Effect Agent owning exporter lifecycle machinery.
+ *
+ * Supply an `AgentBindingResolver` Layer. It can yield effect-cf's `WorkerEnvironment` and
+ * `DurableObjectState`, the platform context/namespace, `ConversationObjectIdentity`, and
+ * Crypto. Provide application dependencies through ordinary Layer composition. Acquisition
+ * runs once per incarnation inside the constructor gate, so keep it local and bounded.
+ * Cloudflare eviction does not guarantee finalizers; acquire resources needing cleanup inside
+ * scoped operations rather than the cached Layer.
  */
-export const makeConversationObjectClass = <EventLayerError = never, EventServices = never>(
-  options: ConversationObjectOptions,
+export const make = <BindingLayerError, EventLayerError = never, EventServices = never>(
+  bindings: Layer.Layer<
+    AgentBindingResolver,
+    BindingLayerError,
+    | EffectCfDurableObjectState.DurableObjectState
+    | WorkerEnvironment
+    | DurableObjectContext
+    | ConversationObjectNamespace
+    | ConversationObjectIdentity
+    | Crypto.Crypto
+  >,
+  options: Options,
   observability?: Layer.Layer<
     EventServices,
     EventLayerError,
@@ -746,12 +776,12 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
     | EffectCfDurableObjectState.DurableObjectState
     | WorkerEnvironment
   >,
-): ConversationObjectClass<EventServices> => {
+): Class<EventServices> => {
   const application: Layer.Layer<
     RuntimeServices,
-    CloudflareDurableRuntimeInitializationError | CloudflareBindingError,
+    CloudflareDurableRuntimeInitializationError | CloudflareBindingError | BindingLayerError,
     EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
-  > = CloudflareDurableRuntime.layer(options).pipe(
+  > = runtimeLayer(bindings, options).pipe(
     Layer.provideMerge(effectCfPlatformLayer(options.namespaceBinding, options.rpcTracing)),
   );
 
@@ -760,7 +790,7 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
   // before migration, compatibility checks, or alarm inspection touch Object storage.
   const runtime: Layer.Layer<
     RuntimeServices,
-    ConversationObjectInitializationError,
+    ConversationObjectInitializationError | BindingLayerError,
     EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
   > = Layer.effectContext(
     Effect.gen(function* () {
@@ -795,7 +825,7 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
 
   const EffectCfConversationObject = EffectCfDurableObject.make<
     RuntimeServices,
-    ConversationObjectInitializationError,
+    ConversationObjectInitializationError | BindingLayerError,
     EventServices,
     EventLayerError,
     typeof rpc

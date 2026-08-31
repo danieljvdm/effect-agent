@@ -95,6 +95,60 @@ subscriptions are interrupted. Each observer consumption owns its subscription a
 work after delivery. "Detached" means observers cannot backpressure completion; it does not create
 a daemon fiber or survive process loss.
 
+## Run durably on Cloudflare
+
+`ConversationObject.make` uses `effect-cf`'s `DurableObject.make`. Export the returned class
+from your Worker and supply registered Agents through an `AgentBindingResolver` Layer:
+
+```ts
+import { ConversationObject } from "@effect-agent/platform-cloudflare";
+import { AgentBindingResolver } from "@effect-agent/session";
+import { Effect, Layer } from "effect";
+import { travelBindings } from "./agents";
+
+const Agents = Layer.effect(
+  AgentBindingResolver,
+  Effect.gen(function* () {
+    const bindings = yield* travelBindings;
+    return AgentBindingResolver.fromBindings(bindings);
+  }),
+);
+
+export class TravelConversation extends ConversationObject.make(Agents, {
+  namespaceBinding: "CONVERSATIONS",
+  deploymentId: "travel-planner",
+  producerPrefix: "travel-worker",
+}) {}
+```
+
+`travelBindings` is your Effect that registers Agent Bindings with
+`DurableWorkerBinding.make(binding, digests)`. It can yield `effect-cf`'s `WorkerEnvironment`
+for typed Worker bindings, `DurableObjectState.DurableObjectState` for Object state, and
+`ConversationObjectIdentity` for the derived Conversation and producer IDs. The platform also
+provides Crypto. Supply other application services with `Layer.provide`; missing dependencies
+are type errors at the class factory. Already constructed registrations use
+`AgentBindingResolver.layer(bindings)` directly.
+
+The Layer is acquired once per Object incarnation and rebuilt after eviction. Construction
+errors fail initialization; they never become an empty registration. The platform owns SQLite,
+the constructor gate, alarms, and recovery. Keep Layer acquisition local and bounded, and acquire
+resources needing cleanup within scoped operations because eviction does not guarantee finalizers.
+Register `TravelConversation` as a SQLite Durable Object under `CONVERSATIONS` in your Worker
+configuration. `ConversationObject.Options` names the factory's configuration type;
+`ConversationObject.Class` and `ConversationObject.Instance` describe the returned constructor
+and its instances.
+
+For a custom Effect runtime, use `ConversationObject.layer(Agents, options)` with
+`ConversationObject.RuntimeOptions`. It preserves application dependencies and initialization
+errors in the returned Layer; the native class boundary is supplied by `ConversationObject.make`.
+
+BEHAVIOR CHANGE: replace `makeConversationObjectClass` with `ConversationObject.make` and
+`CloudflareDurableRuntime.layer` with `ConversationObject.layer`. Pass an `AgentBindingResolver`
+Layer as the first argument instead of the `bindings` callback option. Construction types and
+administrative schemas/decoders now live under `ConversationObject` too. The former
+`CloudflareBindingSource` and `CloudflareBindingSourceContext` types have been removed. Use
+`AgentBindingResolver.layer([])` when intentionally registering no Agents.
+
 ## Turn boundaries
 
 Each Turn follows one visible sequence:
@@ -193,7 +247,7 @@ the observer. These values are never serialized or persisted. Replacement Attemp
 IDs and observations, and replay-injected settled calls are not observed.
 
 Durable hosts pass the same closed value as `NodeDurableRuntimeOptions.toolFailureObserver` or
-`CloudflareDurableRuntimeOptions.toolFailureObserver`. The coordinator captures it when its Layer
+`ConversationObject.Options.toolFailureObserver`. The coordinator captures it when its Layer
 is built and uses that choice for each Attempt, independently of the worker caller's context.
 Omitting the platform option disables observation even if an observer surrounds Layer construction.
 Direct errors that propagate to the Run, interruption, waiting, provider-executed results, and

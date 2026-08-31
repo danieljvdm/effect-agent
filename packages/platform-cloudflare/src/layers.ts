@@ -10,8 +10,8 @@ import {
   RunToolAuthorization,
   toolFailureObserverLayer,
 } from "@effect-agent/engine";
+import type { AgentBindingResolver } from "@effect-agent/session";
 import {
-  AgentBindingResolver,
   DurableAgentRuntime,
   DurableRuntimeConfig,
   DurableRuntimeFailpoint,
@@ -21,7 +21,6 @@ import {
   type ConversationStore,
   type DurableRuntimeFailpointHandler,
   type OperationAuthorizerService,
-  type ResolvedBinding,
   type SubmissionLedger,
   type WakeScheduler,
 } from "@effect-agent/session";
@@ -66,7 +65,7 @@ import { conversationPortTransportLayer } from "./transport.ts";
 import { cloudflareWakeSchedulerLayer } from "./wake-scheduler.ts";
 
 /**
- * Raw (unvalidated) construction options for `CloudflareDurableRuntime.layer`, mirroring
+ * Raw (unvalidated) construction options for `ConversationObject.layer`, mirroring
  * `NodeDurableRuntimeOptions`. Optional fields default to the documented production values
  * (`CLOUDFLARE_RUNTIME_DEFAULTS`); everything is schema-decoded into
  * `CloudflareDurableRuntimeConfigValue` before any resource opens (deployment §5 gate 1).
@@ -128,13 +127,6 @@ export interface CloudflareDurableRuntimeOptions {
    */
   readonly toolReconciler?: Layer.Layer<ToolReconciler> | undefined;
   /**
-   * Registered worker Bindings resolved at durable claim time:
-   * build each with `DurableWorkerBinding.make(binding, digests)`. The callback receives the live
-   * Object context and derived identities and is evaluated once per incarnation during Layer
-   * construction. Defaults to the empty registration (every resolved claim fails closed).
-   */
-  readonly bindings?: CloudflareBindingSource | undefined;
-  /**
    * Prompt preparation/compaction acquired with this Durable Object incarnation. The Layer may depend
    * only on `Crypto.Crypto`, which this platform supplies with `BrowserCrypto`; hosts must close
    * every application-specific service before passing it here. Default pass-through.
@@ -154,14 +146,6 @@ export interface CloudflareRuntimeSourceContext {
   readonly conversationId: ConversationId;
   readonly producerId: ProducerId;
 }
-
-/** Per-incarnation host values available while registered worker Bindings are captured. */
-export interface CloudflareBindingSourceContext extends CloudflareRuntimeSourceContext {}
-
-/** Captures registered worker Bindings once for each Durable Object incarnation. */
-export type CloudflareBindingSource = (
-  context: CloudflareBindingSourceContext,
-) => Effect.Effect<ReadonlyArray<ResolvedBinding>, never, never>;
 
 /** Prompt preparation and compaction captured once; only platform Crypto may remain. */
 export type CloudflareRunContextLayer = Layer.Layer<RunContextPreparation, never, Crypto.Crypto>;
@@ -188,7 +172,7 @@ export type CloudflareDurableRuntimeInitializationError =
   | CloudflarePlatformConfigError
   | DoStorageInitializationError;
 
-/** The services `CloudflareDurableRuntime.layer` provides. */
+/** The services `ConversationObject.layer` provides. */
 export type CloudflareDurableRuntimeServices =
   | DurableAgentRuntime
   | SubmissionLedger
@@ -284,12 +268,6 @@ const conversationIdFromState = (
         ),
       );
 
-const resolveBindings = (
-  source: CloudflareDurableRuntimeOptions["bindings"],
-  context: CloudflareBindingSourceContext,
-): Effect.Effect<ReadonlyArray<ResolvedBinding>> =>
-  source === undefined ? Effect.succeed([]) : Effect.suspend(() => source(context));
-
 const resolveRunContext = (
   source: CloudflareRunContextSource,
   context: CloudflareRuntimeSourceContext,
@@ -297,7 +275,7 @@ const resolveRunContext = (
 
 /**
  * The DC Layer assembly (deployment §12: a Layer-assembly library, not an app entrypoint;
- * plan §1.4). `layer(options)` decodes the configuration, derives this Object's Conversation
+ * plan §1.4). `layer(bindings, options)` decodes the configuration, derives this Object's Conversation
  * and producer identities, opens the Object's private SQLite database through
  * `@effect/sql-sqlite-do` for BOTH the Conversation Log and the Submission Ledger (so claims
  * fence the same producer epochs — ADR-0011 D7 transposed), wraps the local port facets with
@@ -308,164 +286,160 @@ const resolveRunContext = (
  * Storage compatibility is verified during construction: an incompatible database fails the
  * Layer typed (`DoStorageCompatibilityError`) before anything is mutated (DEPLOY-008).
  *
- * Requires only the two binding services (`DurableObjectContext`,
- * `ConversationObjectNamespace`) — platform values enter exclusively through Layers
- * (DEPLOY-010).
+ * The bindings Layer supplies `AgentBindingResolver` once per incarnation. It can yield
+ * `ConversationObjectIdentity` and platform Crypto; other requirements and construction
+ * failures remain visible in the returned Layer. Empty registrations must be explicit through
+ * `AgentBindingResolver.layer([])` and fail closed at claim time.
  */
-export class CloudflareDurableRuntime {
-  static layer(
-    options: CloudflareDurableRuntimeOptions,
-  ): Layer.Layer<
-    CloudflareDurableRuntimeServices,
-    CloudflareDurableRuntimeInitializationError,
-    DurableObjectContext | ConversationObjectNamespace
-  > {
-    return Layer.unwrap(
-      Effect.gen(function* () {
-        const { ctx, env } = yield* DurableObjectContext;
-        const config = yield* configFromOptions(options);
-        const conversationId = yield* conversationIdFromState(ctx);
-        const producerId = yield* decodeProducerId(
-          `${config.producerPrefix}:${conversationId}`,
-        ).pipe(
-          Effect.mapError((error) =>
-            CloudflarePlatformConfigError.make({
-              message: `The minted producer identity is invalid: ${error.message}`,
-              cause: error,
-            }),
-          ),
-        );
+export const layer = <E, R>(
+  bindings: Layer.Layer<AgentBindingResolver, E, R>,
+  options: CloudflareDurableRuntimeOptions,
+): Layer.Layer<
+  CloudflareDurableRuntimeServices,
+  CloudflareDurableRuntimeInitializationError | E,
+  | DurableObjectContext
+  | ConversationObjectNamespace
+  | Exclude<R, ConversationObjectIdentity | Crypto.Crypto>
+> => {
+  return Layer.unwrap(
+    Effect.gen(function* () {
+      const { ctx, env } = yield* DurableObjectContext;
+      const config = yield* configFromOptions(options);
+      const conversationId = yield* conversationIdFromState(ctx);
+      const producerId = yield* decodeProducerId(`${config.producerPrefix}:${conversationId}`).pipe(
+        Effect.mapError((error) =>
+          CloudflarePlatformConfigError.make({
+            message: `The minted producer identity is invalid: ${error.message}`,
+            cause: error,
+          }),
+        ),
+      );
 
-        const identityLayer = Layer.succeed(ConversationObjectIdentity)({
-          conversationId,
+      const identityLayer = Layer.succeed(ConversationObjectIdentity)({
+        conversationId,
+        producerId,
+      });
+      const cloudflareConfigLayer = Layer.succeed(CloudflareDurableRuntimeConfig)(config);
+
+      const storageOptions: DoStorageOptions = {
+        storage: ctx.storage,
+        observationPollInterval: config.observationPollInterval,
+        ownershipLeaseDuration: config.ownershipLeaseDuration,
+        maxStoredValueBytes: config.maxStoredValueBytes,
+        verifyOnOpen: config.verifyOnOpen,
+        failpoint: options.storageFailpoint?.(ctx),
+      };
+      const infrastructure = Layer.mergeAll(
+        storageConfigLayer(storageOptions),
+        storageFailpointLayer(storageOptions),
+        SqliteClient.layer({ storage: ctx.storage }),
+        BrowserCrypto.layer,
+      );
+
+      /**
+       * ONE local-facet instance (a shared Layer value) serves both the routed decorators
+       * and the owner-side `portCall` executor — the executor must never see the routed
+       * ports (plan §1.3: re-routing could bounce a request between Objects).
+       */
+      const localPorts = Layer.mergeAll(conversationStoreLayer, submissionLedgerLayer).pipe(
+        Layer.provide(infrastructure),
+      );
+
+      const portsEndpointLayer = Layer.effect(ConversationObjectPorts)(
+        Effect.gen(function* () {
+          const local = yield* Effect.context<SubmissionLedger | ConversationStore>();
+          return ConversationObjectPorts.of({
+            handle: (request) => executePortRequest(request).pipe(Effect.provide(local)),
+          });
+        }),
+      ).pipe(Layer.provide(localPorts));
+
+      const routedPorts = Layer.mergeAll(
+        routedSubmissionLedgerLayer({ localConversationId: conversationId }),
+        routedConversationStoreLayer({ localConversationId: conversationId }),
+      ).pipe(Layer.provide(localPorts), Layer.provide(conversationPortTransportLayer));
+
+      const runtimeConfigLayer = Layer.succeed(DurableRuntimeConfig)(
+        DurableRuntimeConfig.make({
+          deploymentId: config.deploymentId,
           producerId,
-        });
-        const cloudflareConfigLayer = Layer.succeed(CloudflareDurableRuntimeConfig)(config);
+          settlementPollInterval: Duration.millis(config.settlementPollInterval),
+          leaseRenewalInterval: Duration.millis(config.leaseRenewalInterval),
+          abortPollInterval: Duration.millis(config.abortPollInterval),
+          ...(options.estimateCostMicrousd === undefined
+            ? {}
+            : { estimateCostMicrousd: options.estimateCostMicrousd }),
+        }),
+      );
 
-        const storageOptions: DoStorageOptions = {
-          storage: ctx.storage,
-          observationPollInterval: config.observationPollInterval,
-          ownershipLeaseDuration: config.ownershipLeaseDuration,
-          maxStoredValueBytes: config.maxStoredValueBytes,
-          verifyOnOpen: config.verifyOnOpen,
-          failpoint: options.storageFailpoint?.(ctx),
-        };
-        const infrastructure = Layer.mergeAll(
-          storageConfigLayer(storageOptions),
-          storageFailpointLayer(storageOptions),
-          SqliteClient.layer({ storage: ctx.storage }),
-          BrowserCrypto.layer,
-        );
-
-        /**
-         * ONE local-facet instance (a shared Layer value) serves both the routed decorators
-         * and the owner-side `portCall` executor — the executor must never see the routed
-         * ports (plan §1.3: re-routing could bounce a request between Objects).
-         */
-        const localPorts = Layer.mergeAll(conversationStoreLayer, submissionLedgerLayer).pipe(
-          Layer.provide(infrastructure),
-        );
-
-        const portsEndpointLayer = Layer.effect(ConversationObjectPorts)(
-          Effect.gen(function* () {
-            const local = yield* Effect.context<SubmissionLedger | ConversationStore>();
-            return ConversationObjectPorts.of({
-              handle: (request) => executePortRequest(request).pipe(Effect.provide(local)),
+      const runtimeFailpointLayer =
+        options.runtimeFailpoint === undefined
+          ? DurableRuntimeFailpoint.layer
+          : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint(ctx) });
+      const maintenanceFailpointLayer =
+        options.maintenanceFailpoint === undefined
+          ? ConversationMaintenanceFailpoint.layer
+          : Layer.succeed(ConversationMaintenanceFailpoint)({
+              hit: options.maintenanceFailpoint(ctx),
             });
-          }),
-        ).pipe(Layer.provide(localPorts));
+      const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
+      const authorizerLayer =
+        options.operationAuthorizer === undefined
+          ? Layer.empty
+          : operationAuthorizerLayer(options.operationAuthorizer);
+      const observerLayer =
+        options.toolFailureObserver === undefined
+          ? Layer.succeed(CurrentToolFailureObserver)(undefined)
+          : toolFailureObserverLayer(options.toolFailureObserver);
+      const runContextLayer =
+        options.runContext === undefined
+          ? RunContextPreparationPassthrough
+          : resolveRunContext(options.runContext, { ctx, env, conversationId, producerId }).pipe(
+              Layer.provide(BrowserCrypto.layer),
+            );
+      const toolAuthorizationSource = options.toolAuthorization;
+      const toolAuthorizationLayer =
+        toolAuthorizationSource === undefined
+          ? RunToolAuthorization.allowAll
+          : (typeof toolAuthorizationSource === "function"
+              ? toolAuthorizationSource({ ctx, env, conversationId, producerId })
+              : toolAuthorizationSource
+            ).pipe(Layer.provide(BrowserCrypto.layer));
 
-        const routedPorts = Layer.mergeAll(
-          routedSubmissionLedgerLayer({ localConversationId: conversationId }),
-          routedConversationStoreLayer({ localConversationId: conversationId }),
-        ).pipe(Layer.provide(localPorts), Layer.provide(conversationPortTransportLayer));
+      const base = Layer.mergeAll(
+        identityLayer,
+        cloudflareConfigLayer,
+        DurableAlarmService.layer,
+        maintenanceFailpointLayer,
+        ProgressWaitRegistry.layer,
+      );
 
-        const runtimeConfigLayer = Layer.succeed(DurableRuntimeConfig)(
-          DurableRuntimeConfig.make({
-            deploymentId: config.deploymentId,
-            producerId,
-            settlementPollInterval: Duration.millis(config.settlementPollInterval),
-            leaseRenewalInterval: Duration.millis(config.leaseRenewalInterval),
-            abortPollInterval: Duration.millis(config.abortPollInterval),
-            ...(options.estimateCostMicrousd === undefined
-              ? {}
-              : { estimateCostMicrousd: options.estimateCostMicrousd }),
-          }),
-        );
-
-        const runtimeFailpointLayer =
-          options.runtimeFailpoint === undefined
-            ? DurableRuntimeFailpoint.layer
-            : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint(ctx) });
-        const maintenanceFailpointLayer =
-          options.maintenanceFailpoint === undefined
-            ? ConversationMaintenanceFailpoint.layer
-            : Layer.succeed(ConversationMaintenanceFailpoint)({
-                hit: options.maintenanceFailpoint(ctx),
-              });
-        const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
-        const authorizerLayer =
-          options.operationAuthorizer === undefined
-            ? Layer.empty
-            : operationAuthorizerLayer(options.operationAuthorizer);
-        const observerLayer =
-          options.toolFailureObserver === undefined
-            ? Layer.succeed(CurrentToolFailureObserver)(undefined)
-            : toolFailureObserverLayer(options.toolFailureObserver);
-        const bindingResolverLayer = Layer.effect(AgentBindingResolver)(
-          Effect.map(
-            resolveBindings(options.bindings, { ctx, env, conversationId, producerId }),
-            (bindings) => AgentBindingResolver.fromBindings(bindings),
+      const runtimeStack = DurableAgentRuntime.layerWithContext.pipe(
+        Layer.provideMerge(routedPorts),
+        Layer.provideMerge(cloudflareWakeSchedulerLayer),
+        Layer.provideMerge(runtimeConfigLayer),
+        Layer.provide(
+          Layer.mergeAll(
+            runtimeFailpointLayer,
+            reconcilerLayer,
+            authorizerLayer,
+            observerLayer,
+            runContextLayer,
+            toolAuthorizationLayer,
+            BrowserCrypto.layer,
           ),
-        );
-        const runContextLayer =
-          options.runContext === undefined
-            ? RunContextPreparationPassthrough
-            : resolveRunContext(options.runContext, { ctx, env, conversationId, producerId }).pipe(
-                Layer.provide(BrowserCrypto.layer),
-              );
-        const toolAuthorizationSource = options.toolAuthorization;
-        const toolAuthorizationLayer =
-          toolAuthorizationSource === undefined
-            ? RunToolAuthorization.allowAll
-            : (typeof toolAuthorizationSource === "function"
-                ? toolAuthorizationSource({ ctx, env, conversationId, producerId })
-                : toolAuthorizationSource
-              ).pipe(Layer.provide(BrowserCrypto.layer));
+        ),
+        Layer.provideMerge(base),
+        Layer.provideMerge(
+          bindings.pipe(Layer.provide(Layer.merge(identityLayer, BrowserCrypto.layer))),
+        ),
+      );
 
-        const base = Layer.mergeAll(
-          identityLayer,
-          cloudflareConfigLayer,
-          DurableAlarmService.layer,
-          maintenanceFailpointLayer,
-          ProgressWaitRegistry.layer,
-        );
-
-        const runtimeStack = DurableAgentRuntime.layerWithContext.pipe(
-          Layer.provideMerge(routedPorts),
-          Layer.provideMerge(cloudflareWakeSchedulerLayer),
-          Layer.provideMerge(runtimeConfigLayer),
-          Layer.provideMerge(bindingResolverLayer),
-          Layer.provide(
-            Layer.mergeAll(
-              runtimeFailpointLayer,
-              reconcilerLayer,
-              authorizerLayer,
-              observerLayer,
-              runContextLayer,
-              toolAuthorizationLayer,
-              BrowserCrypto.layer,
-            ),
-          ),
-          Layer.provideMerge(base),
-        );
-
-        return Layer.mergeAll(
-          runtimeStack,
-          ConversationMaintenance.layer.pipe(Layer.provide(runtimeStack)),
-          portsEndpointLayer,
-        );
-      }),
-    );
-  }
-}
+      return Layer.mergeAll(
+        runtimeStack,
+        ConversationMaintenance.layer.pipe(Layer.provide(runtimeStack)),
+        portsEndpointLayer,
+      );
+    }),
+  );
+};

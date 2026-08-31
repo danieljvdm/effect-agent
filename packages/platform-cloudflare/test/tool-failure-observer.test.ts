@@ -1,13 +1,13 @@
 import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
 import { toolFailureObserverLayer, type ToolFailureObservation } from "@effect-agent/engine";
-import { DurableAgentRuntime } from "@effect-agent/session";
+import { AgentBindingResolver, DurableAgentRuntime } from "@effect-agent/session";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import { expect, it } from "vite-plus/test";
 
 import {
-  CloudflareDurableRuntime,
+  ConversationObject,
   DurableObjectContext,
   conversationNamespaceLayer,
 } from "../src/index.ts";
@@ -31,7 +31,7 @@ it.each([false, true])(
       });
       const tools = Toolkit.make(Failed);
       const usage = { inputTokens: {}, outputTokens: {} };
-      const runtimeLayer = CloudflareDurableRuntime.layer({
+      const runtimeLayer = ConversationObject.layer(AgentBindingResolver.layer([]), {
         deploymentId: "observer-test",
         producerPrefix: "observer-test",
         toolFailureObserver: configured

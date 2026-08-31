@@ -1,13 +1,32 @@
-import { env } from "cloudflare:test";
-import { describe, expect, it } from "vite-plus/test";
+import { AgentBindingResolver } from "@effect-agent/session";
+import { env, runInDurableObject } from "cloudflare:test";
+import { Context, Crypto, Effect, Exit, Layer, Schema } from "effect";
+import { DurableObjectState, WorkerEnvironment } from "effect-cf";
+import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
-import { PRODUCER_PREFIX } from "./fixtures.ts";
+import {
+  CloudflareConversationClient,
+  ConversationObject,
+  ConversationObjectIdentity,
+  ConversationObjectNamespace,
+  DurableObjectContext,
+} from "../src/index.ts";
+import { PRODUCER_PREFIX, plannerDefinition, submitOptions } from "./fixtures.ts";
+import { allSettled, drainAlarmsUntil, runClient, stubFor } from "./harness.ts";
+
+class BindingSetupError extends Schema.TaggedError<BindingSetupError>()("BindingSetupError", {}) {}
+
+class ApplicationConfig extends Context.Service<ApplicationConfig, { readonly enabled: boolean }>()(
+  "@effect-agent/platform-cloudflare/test/ApplicationConfig",
+) {}
+
+const options = { deploymentId: "binding-layer", producerPrefix: "binding-layer" };
 
 const dynamicStub = (conversation: string) =>
   env.DYNAMIC_BINDINGS.get(env.DYNAMIC_BINDINGS.idFromName(conversation));
 
-describe("Cloudflare Binding sources", () => {
-  it("evaluates the callback once with each incarnation's live host context and identities", async () => {
+describe("Cloudflare Binding Layers", () => {
+  it("acquires once with each incarnation's yielded host services and identities", async () => {
     const firstConversation = `binding-source-first-${crypto.randomUUID()}`;
     const secondConversation = `binding-source-second-${crypto.randomUUID()}`;
     const first = dynamicStub(firstConversation);
@@ -32,5 +51,90 @@ describe("Cloudflare Binding sources", () => {
       stateMatches: true,
     });
     expect(secondProbe.incarnation).not.toBe(firstProbe.incarnation);
+
+    const receipt = await runClient(
+      CloudflareConversationClient.use((client) =>
+        client.submit(
+          { definition: plannerDefinition },
+          { question: "plan", ref: firstConversation },
+          submitOptions(firstConversation, "binding-layer"),
+        ),
+      ),
+      "DYNAMIC_BINDINGS",
+    );
+    await drainAlarmsUntil(firstConversation, allSettled(firstConversation, "DYNAMIC_BINDINGS"), {
+      namespace: "DYNAMIC_BINDINGS",
+    });
+    const settlement = await runClient(
+      CloudflareConversationClient.use((client) => client.awaitSettlement(receipt)),
+      "DYNAMIC_BINDINGS",
+    );
+    expect(settlement.outcome).toBe("completed");
+    expect(await first.bindingSourceProbe()).toEqual(firstProbe);
   });
+
+  it("retains application requirements and initialization failures in the Layer types", () => {
+    const bindings = Layer.effect(
+      AgentBindingResolver,
+      Effect.gen(function* () {
+        const config = yield* ApplicationConfig;
+        yield* WorkerEnvironment;
+        yield* DurableObjectState.DurableObjectState;
+        yield* ConversationObjectIdentity;
+        yield* Crypto.Crypto;
+        if (!config.enabled) return yield* BindingSetupError.make({});
+        return AgentBindingResolver.fromBindings([]);
+      }),
+    );
+    const runtime = ConversationObject.layer(bindings, options);
+    expectTypeOf<Layer.Error<typeof runtime>>().toEqualTypeOf<
+      BindingSetupError | ConversationObject.InitializationError
+    >();
+    expectTypeOf<Layer.Services<typeof runtime>>().toEqualTypeOf<
+      | ApplicationConfig
+      | WorkerEnvironment
+      | DurableObjectState.DurableObjectState
+      | DurableObjectContext
+      | ConversationObjectNamespace
+    >();
+
+    const objectOptions = { ...options, namespaceBinding: "CONVERSATIONS" };
+    type FactoryBindings = Parameters<typeof ConversationObject.make>[0];
+    expectTypeOf<typeof bindings>().not.toExtend<FactoryBindings>();
+    const provided = bindings.pipe(
+      Layer.provide(Layer.succeed(ApplicationConfig, { enabled: true })),
+    );
+    expectTypeOf<Layer.Error<typeof provided>>().toEqualTypeOf<BindingSetupError>();
+    ConversationObject.make(provided, objectOptions);
+    expectTypeOf<typeof Layer.empty>().not.toExtend<FactoryBindings>();
+  });
+
+  it("preserves a failed binding acquisition and releases its scoped resources", () =>
+    runInDurableObject(stubFor("binding-layer-failed-acquisition"), (_instance, state) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const lifecycle: Array<string> = [];
+          const failure = BindingSetupError.make({});
+          const bindings = Layer.effect(
+            AgentBindingResolver,
+            Effect.gen(function* () {
+              yield* Effect.acquireRelease(
+                Effect.sync(() => lifecycle.push("acquired")),
+                () => Effect.sync(() => lifecycle.push("released")),
+              );
+              return yield* failure;
+            }),
+          );
+          const runtime = ConversationObject.layer(bindings, options).pipe(
+            Layer.provide([
+              DurableObjectContext.layer(state, env),
+              ConversationObjectNamespace.layer(env.CONVERSATIONS),
+            ]),
+          );
+          const exit = yield* Layer.build(runtime).pipe(Effect.scoped, Effect.exit);
+          expect(exit).toEqual(Exit.fail(failure));
+          expect(lifecycle).toEqual(["acquired", "released"]);
+        }),
+      ),
+    ));
 });

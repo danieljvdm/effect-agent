@@ -200,14 +200,18 @@ Assembles the class `DC` Cloudflare runtime and is the only package that imports
 configuration, the single multiplexed `DurableAlarmService` with the idempotent
 `ConversationMaintenance` pass (pre-armed alarm invariant: committed nonterminal work implies a
 committed alarm), the alarm/RPC wake scheduler, the Durable Object RPC port transport,
-`CloudflareDurableRuntime.layer`, `makeConversationObjectClass` (local-only constructor gates
+`ConversationObject.layer`, `ConversationObject.make` (local-only constructor gates
 and the typed admission-limits gate before `submit`), and the Worker-side
 `CloudflareConversationClient`, whose `awaitProgress` RPC retries Object resets with a fresh stub
 and sends explicit scoped cancellation on interruption. The client Layer requires `Crypto.Crypto`
 so its composition root owns collision-resistant cancellation identity generation instead of the
-client reading ambient time or randomness. `CloudflareBindingSource` may capture registered worker
-Bindings from `CloudflareBindingSourceContext` once per Object incarnation, after identity
-derivation. `BrowserQuickActionBrowserBinding.layer` lifts a host-resolved Wrangler `browser`
+client reading ambient time or randomness. The Conversation Object factory accepts an
+`AgentBindingResolver` Layer whose dependencies can include effect-cf's `WorkerEnvironment` and
+`DurableObjectState`, plus platform Crypto and `ConversationObjectIdentity`. It acquires that
+Layer once per incarnation after identity derivation. The lower-level
+`ConversationObject.layer(bindings, options)` retains additional application requirements
+and initialization errors in its type. See [Cloudflare execution](../guide/run-agents#run-durably-on-cloudflare).
+`BrowserQuickActionBrowserBinding.layer` lifts a host-resolved Wrangler `browser`
 binding into an explicit Effect service. `browserQuickActionCaptureLayer` visibly requires that
 service to adapt `quickAction()` to the `PageCapture` port without granting Workers AI authority.
 `browserQuickActionWorkersAiCaptureLayer` requires both the browser-binding service and the
@@ -280,7 +284,7 @@ payload or persistence. The consumer must authorize resizing, including viewer o
 handoff fencing.
 
 This is a Layer-assembly library, not an application entrypoint.
-`CloudflareDurableRuntimeOptions.toolFailureObserver` installs the same closed trusted observer
+`ConversationObject.Options.toolFailureObserver` installs the same closed trusted observer
 for the Object's coordinator. It adds no journal data or Code Mode durability claim.
 
 ### `@effect-agent/pr-review`

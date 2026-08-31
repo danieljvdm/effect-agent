@@ -1,4 +1,5 @@
 import {
+  AgentBindingResolver,
   ScheduleAuthorizer,
   ScheduleFailpoint,
   ScheduleFailpointError,
@@ -12,9 +13,8 @@ import {
   CloudflareSchedulingClient,
   ConversationObjectNamespace,
   ScheduleOwnerNamespace,
-  makeConversationObjectClass,
+  ConversationObject,
   makeScheduleOwnerObjectClass,
-  type ConversationObjectOptions,
 } from "../../src/index.ts";
 import {
   DEPLOYMENT_ID,
@@ -36,7 +36,7 @@ declare global {
   }
 }
 
-const conversationOptions: ConversationObjectOptions = {
+const conversationOptions: ConversationObject.Options = {
   namespaceBinding: "RESTART_CONVERSATIONS",
   deploymentId: DEPLOYMENT_ID,
   producerPrefix: PRODUCER_PREFIX,
@@ -48,13 +48,16 @@ const conversationOptions: ConversationObjectOptions = {
   alarmBackoffBase: 10,
   alarmBackoffCap: 100,
   observationPollInterval: 10,
-  bindings: () => makeTestBindings,
   toolReconciler: fixtureReconcilerLayer,
 };
 
 const SubmissionIdRow = Schema.Struct({ submission_id: Schema.String });
 
-export class SchedulingRestartConversation extends makeConversationObjectClass(
+export class SchedulingRestartConversation extends ConversationObject.make(
+  Layer.effect(
+    AgentBindingResolver,
+    Effect.map(makeTestBindings, AgentBindingResolver.fromBindings),
+  ),
   conversationOptions,
 ) {
   async submissionIds(): Promise<ReadonlyArray<string>> {

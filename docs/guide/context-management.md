@@ -292,17 +292,14 @@ Build your `ContextCompactor` as a Layer, close its model/configuration dependen
 environment, and adapt it through `contextCompactorRunContextLayer`:
 
 ```ts
-export class Conversations extends makeConversationObjectClass({
+export class Conversations extends ConversationObject.make(bindingsLayer, {
   namespaceBinding: "CONVERSATIONS",
   deploymentId: "production",
   producerPrefix: "conversation",
-  bindings: makeBindings,
   runContext: ({ env }) =>
-    contextCompactorRunContextLayer.pipe(
-      Layer.provide(makeContextCompactorLayer(env)),
-    ),
+    contextCompactorRunContextLayer.pipe(Layer.provide(makeContextCompactorLayer(env))),
   toolAuthorization: ({ env }) => makeToolAuthorizationLayer(env),
-});
+}) {}
 ```
 
 Everything specific to your compactor must already be provided. The adapter itself no longer
