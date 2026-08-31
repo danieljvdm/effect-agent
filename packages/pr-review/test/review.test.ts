@@ -134,6 +134,24 @@ const reviewInput = (prompt: Prompt.Prompt): string =>
     .at(0) ?? "";
 
 describe("review output boundary", () => {
+  it.effect("preserves findings when the model explicitly reports unfinished coverage", () =>
+    Effect.gen(function* () {
+      const model = scriptedModel(() =>
+        response({
+          findings: [submittedFinding(blocker, 1)],
+          incomplete: true,
+        }),
+      );
+      const outcome = yield* makeReviewer({ model })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+      expect(outcome.report.findings).toEqual([blocker]);
+      expect(outcome.incomplete).toBe(true);
+      expect(outcome.exhausted).toBeUndefined();
+      expect(outcome.report.summary).toContain("remaining change has not been verified");
+    }),
+  );
+
   it.effect("PRR-002 completes one native review and keeps independent same-line blockers", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0);

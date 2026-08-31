@@ -7,7 +7,7 @@ import {
 import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
 import { Clock, Effect, Exit, Ref, Schema, Semaphore, Stream } from "effect";
 import { AiError, type Response } from "effect/unstable/ai";
-import { HttpBody, HttpClientResponse } from "effect/unstable/http";
+import { HttpBody, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 
 /** Strictly below one dollar, including outstanding reservations. Not configurable upward. */
 export const REVIEW_COST_LIMIT_MICROUSD = 999_999;
@@ -220,9 +220,9 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
   const close = Ref.update(state, (current) => ({ ...current, closed: true }));
   const refuse = (message: string) =>
     close.pipe(Effect.andThen(Effect.fail(admissionError(message))));
-  const count = Effect.fn("ReviewOpenAi.count")(function* (payload: Payload) {
-    // Token-affecting fields emitted by the pinned native encoder. No inference, retry,
-    // truncation, provider tools, or mutable server-side conversation is used.
+  const countAttempt = Effect.fn("ReviewOpenAi.countAttempt")(function* (payload: Payload) {
+    // This endpoint does no inference. Count the exact outgoing token-affecting
+    // fields, without truncation or mutable server-side conversation.
     const response = yield* options.client.client.post("/responses/input_tokens", {
       body: HttpBody.jsonUnsafe({
         model: payload.model,
@@ -236,6 +236,30 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       }),
     });
     return (yield* HttpClientResponse.schemaBodyJson(InputTokenCount)(response)).input_tokens;
+  }, Effect.timeout("10 seconds"));
+  const transientCountFailure = (error: Effect.Error<ReturnType<typeof countAttempt>>): boolean =>
+    error._tag === "TimeoutError" ||
+    (HttpClientError.isHttpClientError(error) &&
+      (error.reason._tag === "TransportError" ||
+        [408, 429, 500, 502, 503, 504].includes(error.response?.status ?? 0)));
+  const count = Effect.fn("ReviewOpenAi.count")(function* (payload: Payload) {
+    let attempt = 0;
+    return yield* Effect.suspend(() => {
+      attempt += 1;
+      return countAttempt(payload).pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning("Review preflight failed", {
+            phase: "input-token-count",
+            attempt,
+            failureType: error._tag,
+            ...(HttpClientError.isHttpClientError(error)
+              ? { reason: error.reason._tag, status: error.response?.status }
+              : {}),
+            retrying: attempt === 1 && transientCountFailure(error),
+          }),
+        ),
+      );
+    }).pipe(Effect.retry({ times: 1, while: transientCountFailure }));
   });
   const admit = Effect.fn("ReviewOpenAi.admit")(function* (original: Payload) {
     const now = yield* Clock.currentTimeMillis;
@@ -257,8 +281,28 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     }
     const before = yield* Ref.get(state);
     if (before.closed) return yield* refuse("Review spending admission has already stopped.");
+    const balance = REVIEW_COST_LIMIT_MICROUSD - before.cost - reservedCost(before);
+    // Outgoing-only host feedback. Count these exact bytes before reserving or
+    // dispatching; withReviewPromptCache leaves run-status outside the cache.
+    // The output allowance is determined after this count, so do not advertise
+    // a token allowance calculated for an earlier or smaller prompt.
+    const spendingStatus = [
+      "<run-status>",
+      `Review balance before this request: $${(balance / 1_000_000).toFixed(6)} of the $${(REVIEW_COST_LIMIT_MICROUSD / 1_000_000).toFixed(6)} ceiling. Estimated charges: $${(before.cost / 1_000_000).toFixed(6)}. Outstanding reservations: $${(reservedCost(before) / 1_000_000).toFixed(6)}.`,
+      `This request must first reserve its entire input at the full cache-miss rate of $${(pricing.write / 100).toFixed(2)} per million tokens; only the remainder can fund reasoning and output at $${(pricing.output / 100).toFixed(2)} per million tokens. Cache hits reduce the settled charge, not the required reservation.`,
+      "</run-status>",
+    ].join("\n");
     const payload: Payload = withReviewPromptCache(
-      { ...original, truncation: "disabled" },
+      {
+        ...original,
+        truncation: "disabled",
+        input: [
+          ...(typeof original.input === "string"
+            ? [{ role: "user" as const, content: original.input }]
+            : (original.input ?? [])),
+          { role: "user", content: spendingStatus },
+        ],
+      },
       options.cacheKey,
     );
     const inputTokens = yield* count(payload).pipe(
@@ -267,7 +311,6 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     if (inputTokens > MAX_INPUT_TOKENS) {
       return yield* refuse("The counted review input exceeds the 128,000-token price boundary.");
     }
-    const balance = REVIEW_COST_LIMIT_MICROUSD - before.cost - reservedCost(before);
     const requestedOutputTokens = original.max_output_tokens ?? MAX_OUTPUT_TOKENS;
     const outputTokens = Math.min(
       requestedOutputTokens,

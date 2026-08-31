@@ -115,6 +115,21 @@ The private `examples/pr-review-eval` bench replays saved requests and scores fi
 source-adjudicated defects. Public fixtures are examples, not an unbiased quality estimate. Live
 runs require `EFFECT_AGENT_LIVE=1` and credentials; ordinary tests make no provider calls.
 
+The current OpenAI variant uses the Action's `makeReviewOpenAi` adapter, with Sol, `xhigh`
+reasoning, explicit prompt caching, and a separate $0.999999 spending ledger for each trial.
+Admission reserves full cache-miss input and the affordable output allowance before every
+request. Unmetered requests keep their reservations. Saved usage is an estimate, not an invoice.
+Only the non-inference input-token count can retry once, after a transient failure; each count
+attempt has a 10-second timeout. Permanent or exhausted preflight failures prevent admission.
+The focused diff-first variant records `diff-review-v5-capped` and `costLimitMicrousd` so it
+can be distinguished from the earlier exhaustive `source-review-v4-capped` profile and uncapped
+eval observations. It reads source to resolve concrete defect questions and can explicitly
+report unfinished coverage. The provider appends its spending balance before token counting.
+
+Use `unadjudicated` for operational replay cases without an established defect oracle.
+These cases have no expected defects and never count as clean controls or completed blocker
+cases. A completed review on such a case does not measure defect-detection quality.
+
 Judge trial one separately. Detection counts an expected blocker found at any severity; blocking
 recall requires `blocking` severity. Blocking precision penalizes invalid or overstated findings.
 Later trials expose instability and cannot repair a first-trial miss. Named judgments bind to the

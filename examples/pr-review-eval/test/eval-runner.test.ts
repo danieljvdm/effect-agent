@@ -9,7 +9,7 @@ import {
 import { ScriptedModel } from "@effect-agent/testing";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import {
   Deferred,
   Effect,
@@ -279,8 +279,14 @@ describe("PR-review model eval", () => {
         id: Schema.decodeSync(EvalVariantId)("candidate-guidance-v1"),
         guidance: "  Keep the public error channel typed.  ",
       });
+      type Review = ReturnType<typeof variant.review>;
+      expectTypeOf<Effect.Error<Review>>().toEqualTypeOf<EvalReviewerFailure>();
+      expectTypeOf<Effect.Services<Review>>().toEqualTypeOf<
+        OpenAiClient.OpenAiClient | ReviewRepository
+      >();
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
-      expect(variant.configuration.reviewerProfile).toBe("source-review-v4");
+      expect(variant.configuration.reviewerProfile).toBe("diff-review-v5-capped");
+      expect(variant.configuration.costLimitMicrousd).toBe(999_999);
       expect(variant.configuration.guidanceDigest).toBe(
         yield* digestText("Keep the public error channel typed."),
       );
@@ -321,10 +327,159 @@ describe("PR-review model eval", () => {
         _tag: "Failed",
         errorTag: "AiError/InvalidRequestError",
         message: "AI failure; retryable=false",
+        estimatedCostMicrousd: 0,
       });
       expect(JSON.stringify(observations)).not.toContain(privateText);
       expect(JSON.stringify(observations)).not.toContain("private-api-key");
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "caps each live-variant trial independently through the Action's cached wire path",
+    () =>
+      Effect.gen(function* () {
+        const suite = yield* makeSuite();
+        const variant = yield* makeCurrentOpenAiVariant({ id: "capped-wire" });
+        const sent: Array<Schema.Json> = [];
+        let counts = 0;
+        const client = HttpClient.make((httpRequest) => {
+          if (httpRequest.url.endsWith("/responses/input_tokens")) {
+            counts += 1;
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                httpRequest,
+                new Response(
+                  JSON.stringify({ object: "response.input_tokens", input_tokens: 100_000 }),
+                  { headers: { "content-type": "application/json" } },
+                ),
+              ),
+            );
+          }
+          if (httpRequest.body._tag !== "Uint8Array") return Effect.die("Expected JSON body");
+          sent.push(
+            Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(
+              new TextDecoder().decode(httpRequest.body.body),
+            ),
+          );
+          const item = {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read_file",
+            arguments: JSON.stringify({
+              path: "src/read.ts",
+              revision: "head",
+              startLine: 1,
+              lineCount: 1,
+            }),
+            status: "completed",
+          };
+          const events = [
+            { type: "response.output_item.added", output_index: 0, item },
+            {
+              type: "response.function_call_arguments.done",
+              output_index: 0,
+              item_id: item.id,
+              arguments: item.arguments,
+            },
+            { type: "response.output_item.done", output_index: 0, item },
+            {
+              type: "response.completed",
+              response: {
+                id: "resp_fixture",
+                object: "response",
+                model: "gpt-5.6-sol",
+                created_at: 1_788_000_000,
+                service_tier: "default",
+                output: [item],
+                usage: {
+                  input_tokens: 100_000,
+                  output_tokens: 12_000,
+                  total_tokens: 112_000,
+                  input_tokens_details: { cached_tokens: 0, cache_write_tokens: 100_000 },
+                  output_tokens_details: { reasoning_tokens: 11_900 },
+                },
+              },
+            },
+          ];
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              httpRequest,
+              new Response(
+                events
+                  .map(
+                    (event, sequence_number) =>
+                      `data: ${JSON.stringify({ ...event, sequence_number })}\n\n`,
+                  )
+                  .join(""),
+                { headers: { "content-type": "text/event-stream" } },
+              ),
+            ),
+          );
+        });
+        const observations = yield* runEvalSuite(suite, [variant], {
+          trials: 2,
+          concurrency: 2,
+          caseIds: [],
+        }).pipe(
+          Stream.runCollect,
+          Effect.provide(
+            OpenAiClient.layer({ apiKey: Redacted.make("offline-key") }).pipe(
+              Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
+            ),
+          ),
+        );
+        expect(counts).toBe(4);
+        expect(sent).toHaveLength(2);
+        for (const payload of sent) {
+          expect(payload).toMatchObject({
+            model: "gpt-5.6-sol",
+            reasoning: { effort: "xhigh" },
+            store: false,
+            service_tier: "default",
+            max_output_tokens: 24_999,
+            prompt_cache_key: "pr-review-v2:head",
+            prompt_cache_options: { mode: "explicit", ttl: "30m" },
+            tools: expect.arrayContaining([
+              expect.objectContaining({ name: "read_file", strict: true }),
+              expect.objectContaining({ name: "submit_review", strict: true }),
+            ]),
+          });
+          expect(JSON.stringify(payload)).toContain(
+            '"prompt_cache_breakpoint":{"mode":"explicit"}',
+          );
+        }
+        for (const observation of observations) {
+          expect(observation.result).toMatchObject({
+            _tag: "Succeeded",
+            outcome: {
+              exhausted: "cost",
+              incomplete: true,
+              turns: 1,
+              usage: {
+                estimatedCostMicrousd: 740_000,
+                reservedCostMicrousd: 0,
+                cachedInputTokens: 0,
+                cacheWriteInputTokens: 100_000,
+              },
+            },
+          });
+        }
+        const unadjudicated = EvalSuite.make({
+          ...suite,
+          cases: suite.cases.map((evalCase) =>
+            EvalCase.make({
+              ...evalCase,
+              kind: "unadjudicated",
+              expectedDefects: [],
+            }),
+          ),
+        });
+        const report = yield* makeQualityReport(unadjudicated, observations, 2);
+        expect(report.variants[0]?.cleanControls).toEqual({ passed: 0, total: 0 });
+        expect(report.variants[0]?.blockerCases.total).toBe(0);
+        expect(report.variants[0]?.cases[0]?.blockerStatus).toBe("not-applicable");
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("selects cases and records elapsed time from the Effect clock", () =>
