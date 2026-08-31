@@ -32,6 +32,7 @@ import {
   Ref,
   References,
   Schema,
+  Scope,
   Stream,
   Tracer,
 } from "effect";
@@ -5423,6 +5424,59 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const failure = failureFrom(yield* Fiber.join(fiber).pipe(Effect.exit));
 
       expect(failure).toBe(budgetFailure);
+    }),
+  );
+
+  it.effect("closing the detached owner interrupts execution and terminates observers", () =>
+    Effect.gen(function* () {
+      const acquired = yield* Deferred.make<void>();
+      const observing = yield* Deferred.make<void>();
+      const modelFinalized = yield* Ref.make(0);
+      const streamFinalized = yield* Ref.make(0);
+      const observerFinalized = yield* Ref.make(0);
+      const owner = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+        Scope.close(scope, Exit.void),
+      );
+      const model = Model.make(
+        "scripted",
+        "detached-owner-close",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          Effect.gen(function* () {
+            yield* Effect.addFinalizer(() => Ref.update(modelFinalized, (n) => n + 1));
+            return yield* LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: () =>
+                Stream.fromEffect(
+                  Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Effect.never)),
+                ).pipe(Stream.ensuring(Ref.update(streamFinalized, (n) => n + 1))),
+            });
+          }),
+        ),
+      );
+      const detached = yield* AgentRuntime.start(Agent.withModel(runtimeDefinition, model), {
+        question: "wait for owner closure",
+      }).pipe(Scope.provide(owner));
+      yield* Deferred.await(acquired);
+      const observer = yield* detached.observe.pipe(
+        Stream.runForEach(() => Deferred.succeed(observing, undefined)),
+        Effect.ensuring(Ref.update(observerFinalized, (n) => n + 1)),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(observing);
+      yield* Scope.close(owner, Exit.void);
+
+      const executionExit = yield* detached.await.pipe(Effect.exit);
+      expect(Exit.isFailure(executionExit) && Cause.hasInterrupts(executionExit.cause)).toBe(true);
+      expect(yield* Ref.get(modelFinalized)).toBe(1);
+      expect(yield* Ref.get(streamFinalized)).toBe(1);
+      // The observer may finish normally or be interrupted by PubSub shutdown.
+      yield* Fiber.await(observer);
+      expect(yield* Ref.get(observerFinalized)).toBe(1);
+      const subscriptionExit = yield* detached.observe.pipe(Stream.runDrain, Effect.exit);
+      expect(Exit.isFailure(subscriptionExit) && Cause.hasInterrupts(subscriptionExit.cause)).toBe(
+        true,
+      );
     }),
   );
 

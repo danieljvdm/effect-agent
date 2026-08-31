@@ -20,7 +20,10 @@ The examples below assume the application provides that Layer and the Agent's ot
 const result = yield * AgentRuntime.run(agent, input);
 ```
 
-`run` reduces the semantic event stream and decodes the terminal output Schema.
+`run` completes execution and closes run-owned resources before returning the decoded terminal
+result. A self-contained Run needs no caller `Effect.scoped`. Requirements contributed by your
+instructions, input projection, hooks, or output decoder remain visible, including `Scope` when
+those operations require it.
 
 ```ts
 interface AgentResult<Output> {
@@ -63,8 +66,8 @@ Events include Run and Turn lifecycle, text and reasoning deltas, Tool declarati
 approval requests, and exactly one complete terminal classification. Provider SDK chunks do not
 enter the stable event union.
 
-Local streams use bounded backpressure. Interrupting the sole ephemeral consumer interrupts the
-Run and closes its Scope.
+Local streams use bounded backpressure. Consumption owns the stream's resources; completion,
+failure, and interruption close them. Interrupting the sole ephemeral consumer interrupts the Run.
 
 ## Start and re-observe locally
 
@@ -76,10 +79,15 @@ const completeTrace = yield * detached.events;
 const live = detached.observe;
 ```
 
-`start` is still scoped. `observe` is a live multicast subscription. Each subscription replays the
-events already emitted, follows the Run as it progresses, and ends once the Run settles. `events`
-is the complete replay, available after settlement. "Detached" means observers cannot backpressure
-completion; it does not create a daemon fiber or survive process loss.
+`start` requires a caller Scope that owns ongoing execution and the event source. `observe` is a
+live multicast subscription. Each subscription replays the events already emitted, follows the
+Run as it progresses, and ends once the Run settles. `events`
+is the complete replay, available after settlement. Execution resources close before `await`
+returns, while replay remains available within the owner's lifetime. Closing the owner interrupts
+ongoing execution and shuts down the event source; waiting observers terminate and new
+subscriptions are interrupted. Each observer consumption owns its subscription and any downstream
+work after delivery. "Detached" means observers cannot backpressure completion; it does not create
+a daemon fiber or survive process loss.
 
 ## Turn boundaries
 
@@ -136,7 +144,7 @@ const run = Effect.gen(function* () {
     context: preparation.hook,
     toolAuthorization: authorization,
   });
-}).pipe(Effect.provide(Layer.mergeAll(preparationLayer, authorizationLayer)), Effect.scoped);
+}).pipe(Effect.provide(Layer.mergeAll(preparationLayer, authorizationLayer)));
 ```
 
 Ephemeral compactor selection still uses `ContextCompactor` directly. Per-run hooks can retain
@@ -192,6 +200,10 @@ A Run Scope owns its Model stream, Tool fibers, and resources acquired for that 
 run-local input queues, MCP clients, or sandbox processes. Closing it interrupts children and
 runs their finalizers. Shared model, provider, and client services supplied by an enclosing
 application Layer remain owned by the application Scope and can serve multiple Runs.
+
+`Effect.provide(AppLive)` owns the supplied Layer's lifetime around the Effect it wraps. Provide
+shared services around a program containing several Runs to reuse them. Keep caller scoping for
+`start`, explicit resource acquisition, and operations that contribute their own `Scope` requirement.
 
 Successful history retention waits for run-local cleanup, then result validation where applicable,
 then history commit, before publishing `RunCompleted`. It does not close application-owned

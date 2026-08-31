@@ -6,7 +6,8 @@ import {
   type AgentPolicyError,
   type ContextBudgetError,
   type ContextOverflowError,
-  type IdGenerator,
+  IdGenerator,
+  type RunEvent,
   type ModelProtocolError,
   Agent,
   AgentPolicy,
@@ -15,11 +16,14 @@ import {
 import {
   type AgentChildPending,
   AgentRuntime,
-  type ConversationHistory,
+  ConversationHistory,
   type ConversationHistoryError,
   type CompactionError,
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
+  type AgentResult,
+  type DetachedRun,
+  type RunOptions,
 } from "@effect-agent/engine";
 import type { DurableWorkerRequirements } from "@effect-agent/session";
 import { ScriptedModel } from "@effect-agent/testing";
@@ -35,7 +39,7 @@ import type {
   TravelPlannerToolkit,
 } from "@effect-agent/testing/fixtures/travel-planner";
 import { phase1Trip, TravelPlanner } from "@effect-agent/testing/fixtures/travel-planner";
-import { Context, Effect, Schema, SchemaGetter, type Scope } from "effect";
+import { Context, Effect, Schema, SchemaGetter, Scope, type Stream } from "effect";
 import { type AiError, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -50,6 +54,8 @@ type Assert<Value extends true> = Value;
 const model = Model.make("scripted", "travel-planner-type-proof", ScriptedModel.layer([]));
 const agent = Agent.withModel(TravelPlanner, model);
 const program = AgentRuntime.run(agent, phase1Trip);
+const events = AgentRuntime.stream(agent, phase1Trip);
+const started = AgentRuntime.start(agent, phase1Trip);
 
 class CompletionResultDecoder extends Context.Service<
   CompletionResultDecoder,
@@ -94,8 +100,7 @@ type ExpectedRequirements =
   | TravelGuidance
   | Tool.HandlersFor<Toolkit.Tools<typeof TravelPlannerToolkit>>
   | IdGenerator
-  | ConversationHistory
-  | Scope.Scope;
+  | ConversationHistory;
 type ExpectedFailure =
   | FlightUnavailable
   | LodgingUnavailable
@@ -118,7 +123,7 @@ type ExpectedFailure =
 type RequirementsProof = Assert<Equal<Effect.Services<typeof program>, ExpectedRequirements>>;
 type FailureProof = Assert<Equal<Effect.Error<typeof program>, ExpectedFailure>>;
 type PublicRequirementsProof = Assert<
-  Equal<AgentRuntimeRequirements<typeof agent> | Scope.Scope, ExpectedRequirements>
+  Equal<AgentRuntimeRequirements<typeof agent>, ExpectedRequirements>
 >;
 type PublicFailureProof = Assert<Equal<AgentRuntimeFailure<typeof agent>, ExpectedFailure>>;
 type CompletionRuntimeRequirementsProof = Assert<
@@ -129,6 +134,94 @@ type CompletionDurableRequirementsProof = Assert<
 >;
 
 describe("TEST-009 P1 Travel Planner public-contract inference", () => {
+  it("removes only runtime-owned Scope and preserves caller-contributed services", () => {
+    class CallerService extends Context.Service<CallerService, { readonly text: string }>()(
+      "@effect-agent/testing/ScopedCallerService",
+    ) {}
+    class HookFailure extends Schema.TaggedError<HookFailure>()("ScopedHookFailure", {}) {}
+    const scopedText = Effect.gen(function* () {
+      yield* Scope.Scope;
+      return (yield* CallerService).text;
+    });
+    const config = {
+      input: Schema.String,
+      output: Schema.String,
+      instructions: "Answer.",
+      toolkit: Toolkit.empty,
+      policy: AgentPolicy.make({
+        maxTurns: 1,
+        maxToolCalls: 1,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+      }),
+    };
+    const plain = Agent.withModel(Agent.define("scope-free", config), model);
+    const selfContained = AgentRuntime.run(plain, "question").pipe(
+      Effect.provide(IdGenerator.layer),
+      Effect.provide(ConversationHistory.layerTransient),
+    );
+    const instructionAgent = Agent.withModel(
+      Agent.define("scoped-instructions", {
+        ...config,
+        instructions: (_input: string) => scopedText,
+      }),
+      model,
+    );
+    const instructionRun = AgentRuntime.run(instructionAgent, "question");
+    const projectionAgent = Agent.withModel(
+      Agent.define("scoped-input-projection", { ...config, inputPrompt: () => scopedText }),
+      model,
+    );
+    const projectionRun = AgentRuntime.run(projectionAgent, "question");
+    const options: RunOptions<HookFailure, CallerService | Scope.Scope> = {
+      onHistory: () => scopedText.pipe(Effect.andThen(Effect.fail(new HookFailure()))),
+    };
+    const hookRun = AgentRuntime.run(plain, "question", options);
+    // run re-decodes this output after the inner stream has closed.
+    const scopedOutput = Schema.String.pipe(
+      Schema.decode({
+        decode: SchemaGetter.transformOrFail((value) => scopedText.pipe(Effect.as(value))),
+        encode: SchemaGetter.transform((value) => value),
+      }),
+    );
+    const outputAgent = Agent.withModel(
+      Agent.define("scoped-terminal-decoder", { ...config, output: scopedOutput }),
+      model,
+    );
+    const outputRun = AgentRuntime.run(outputAgent, "question");
+    type ScopedRequirements = IdGenerator | ConversationHistory | CallerService | Scope.Scope;
+    type BaseFailure = Exclude<
+      ExpectedFailure,
+      FlightUnavailable | LodgingUnavailable | ActivityUnavailable | GuidanceFailure
+    >;
+    const proofs: {
+      selfContained: Assert<Equal<Effect.Services<typeof selfContained>, never>>;
+      instructionsNoExtraServices: Assert<
+        Equal<Exclude<Effect.Services<typeof instructionRun>, ScopedRequirements>, never>
+      >;
+      instructionsNoMissingServices: Assert<
+        Equal<Exclude<ScopedRequirements, Effect.Services<typeof instructionRun>>, never>
+      >;
+      projection: Assert<Equal<Effect.Services<typeof projectionRun>, ScopedRequirements>>;
+      hook: Assert<Equal<Effect.Services<typeof hookRun>, ScopedRequirements>>;
+      output: Assert<Equal<Effect.Services<typeof outputRun>, ScopedRequirements>>;
+      hookFailure: Assert<Equal<Effect.Error<typeof hookRun>, BaseFailure | HookFailure>>;
+      outputFailure: Assert<Equal<Effect.Error<typeof outputRun>, BaseFailure>>;
+      outputSuccess: Assert<Equal<Effect.Success<typeof outputRun>, AgentResult<string>>>;
+    } = {
+      selfContained: true,
+      instructionsNoExtraServices: true,
+      instructionsNoMissingServices: true,
+      projection: true,
+      hook: true,
+      output: true,
+      hookFailure: true,
+      outputFailure: true,
+      outputSuccess: true,
+    };
+    expect(Object.values(proofs).every((proof) => proof)).toBe(true);
+  });
+
   it("preserves Tool and instruction failures and requirements in Run E/R", () => {
     const requirementsProof: RequirementsProof = true;
     const failureProof: FailureProof = true;
@@ -136,6 +229,48 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
     const publicFailureProof: PublicFailureProof = true;
     const completionRuntimeRequirementsProof: CompletionRuntimeRequirementsProof = true;
     const completionDurableRequirementsProof: CompletionDurableRequirementsProof = true;
+    const entrypointProofs: {
+      runSuccess: Assert<
+        Equal<Effect.Success<typeof program>, AgentResult<Agent.Output<typeof agent>>>
+      >;
+      streamSuccess: Assert<Equal<Stream.Success<typeof events>, RunEvent>>;
+      streamRequirements: Assert<Equal<Stream.Services<typeof events>, ExpectedRequirements>>;
+      streamFailure: Assert<Equal<Stream.Error<typeof events>, ExpectedFailure>>;
+      startRequirements: Assert<
+        Equal<Effect.Services<typeof started>, ExpectedRequirements | Scope.Scope>
+      >;
+      startFailure: Assert<Equal<Effect.Error<typeof started>, never>>;
+      startSuccess: Assert<
+        Equal<
+          Effect.Success<typeof started>,
+          DetachedRun<Agent.Output<typeof agent>, ExpectedFailure>
+        >
+      >;
+      awaitSuccess: Assert<
+        Equal<
+          Effect.Success<Effect.Success<typeof started>["await"]>,
+          AgentResult<Agent.Output<typeof agent>>
+        >
+      >;
+      awaitFailure: Assert<
+        Equal<Effect.Error<Effect.Success<typeof started>["await"]>, ExpectedFailure>
+      >;
+      awaitRequirements: Assert<
+        Equal<Effect.Services<Effect.Success<typeof started>["await"]>, never>
+      >;
+    } = {
+      runSuccess: true,
+      streamSuccess: true,
+      streamRequirements: true,
+      streamFailure: true,
+      startRequirements: true,
+      startFailure: true,
+      startSuccess: true,
+      awaitSuccess: true,
+      awaitFailure: true,
+      awaitRequirements: true,
+    };
+    expect(Object.values(entrypointProofs).every((proof) => proof)).toBe(true);
 
     expect({
       requirementsProof,

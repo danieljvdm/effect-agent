@@ -36,11 +36,13 @@ const program = Effect.gen(function* () {
   const history = yield* ConversationHistory;
   const prompt = yield* history.load(conversationId);
   return { first, second, prompt };
-}).pipe(Effect.provide(HistoryLive), Effect.scoped);
+}).pipe(Effect.provide(HistoryLive));
 ```
 
 Supply `IdGenerator` and the Agent's other services at the application boundary. Provide the
 history Layer around the whole program, including the lifetime of any `start` handle.
+Completed `run` calls need no extra caller Scope. The supplied history Layer owns its connection
+for the enclosing program; `start` and caller-supplied scoped operations still require scoping.
 The [runnable SQLite example](https://github.com/danieljvdm/effect-agent/blob/main/examples/providers/src/history.ts)
 supplies those Layers and runs without provider credentials:
 

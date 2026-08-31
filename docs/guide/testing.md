@@ -88,7 +88,6 @@ const TestRuntimeLive = Layer.mergeAll(
 it.effect("commits Tool results in declaration order", () =>
   AgentRuntime.run(TestAgent, input).pipe(
     Effect.provide(TestRuntimeLive),
-    Effect.scoped,
     Effect.tap((result) => Effect.sync(() => expect(result.output).toEqual(expected))),
   ),
 );
@@ -96,6 +95,10 @@ it.effect("commits Tool results in declaration order", () =>
 
 This path uses the actual Definition, Binding, Toolkit handlers, scheduler, Stream reducer, and
 output decoder. It is not a mock runtime.
+
+Completed `run` calls need no extra caller Scope. Assert run-local finalizers immediately after
+the call or interrupted fiber finishes, while any enclosing application Scope remains open.
+Keep scoping for `start` and for explicit resource acquisition in the test or its supplied operations.
 
 ## What to assert
 

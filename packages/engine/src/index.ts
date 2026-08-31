@@ -5906,7 +5906,11 @@ const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
     return result;
   });
 
-/** Reduce the runtime's event stream to its decoded terminal result. */
+/**
+ * Complete execution and close run-owned resources before returning the decoded result.
+ * Caller-contributed requirements, including Scope, remain visible; services supplied by
+ * application Layers retain their application's lifetime.
+ */
 const run = Effect.fn("AgentRuntime.run")(function* <
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
@@ -5943,9 +5947,8 @@ const run = Effect.fn("AgentRuntime.run")(function* <
 ): Effect.fn.Return<
   AgentResult<Agent.Output<typeof agent>>,
   AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
-  AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements> | Scope.Scope
+  AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
 > {
-  yield* Scope.Scope;
   return yield* reduceRunEvents(agent, (onCompleted) =>
     makeStream(onCompleted)(agent, input, options),
   );

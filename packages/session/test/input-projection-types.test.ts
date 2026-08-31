@@ -74,7 +74,7 @@ const proveWorkerRequirements = (
     { question: "hello", hostOnly: "private" },
     { conversationId },
   );
-  const retained = execution.pipe(Effect.provide(PersistentHistory.layer), Effect.scoped);
+  const retained = execution.pipe(Effect.provide(PersistentHistory.layer));
   const events = AgentRuntime.stream(
     agent,
     { question: "hello", hostOnly: "private" },
@@ -96,10 +96,7 @@ const proveWorkerRequirements = (
     Equal<Extract<Agent.Failure<typeof agent>, InputProjectionFailure>, InputProjectionFailure>
   >;
   type RunRequirementsProof = Assert<
-    Equal<
-      Effect.Services<typeof execution>,
-      Expected | ConversationHistory | IdGenerator | Scope.Scope
-    >
+    Equal<Effect.Services<typeof execution>, Expected | ConversationHistory | IdGenerator>
   >;
   type StreamRequirementsProof = Assert<
     Equal<Stream.Services<typeof events>, Expected | ConversationHistory | IdGenerator>

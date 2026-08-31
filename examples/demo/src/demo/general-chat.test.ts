@@ -20,7 +20,7 @@ import {
   type AgentRuntimeRequirements,
 } from "@effect-agent/engine";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, type Scope, Schema, Stream } from "effect";
+import { Effect, Schema, Stream } from "effect";
 import { type AiError, type Tool, type Toolkit } from "effect/unstable/ai";
 
 import type { CalculationFailure, FixtureChatToolkit, FixtureKnowledge } from "./general-chat";
@@ -48,8 +48,7 @@ type ExpectedRequirements =
   | FixtureKnowledge
   | Tool.HandlersFor<Toolkit.Tools<typeof FixtureChatToolkit>>
   | IdGenerator
-  | ConversationHistory
-  | Scope.Scope;
+  | ConversationHistory;
 type ExpectedFailure =
   | CalculationFailure
   | AiError.AiError
@@ -70,7 +69,7 @@ type RequirementsProof = Assert<
 >;
 type FailureProof = Assert<Equal<Effect.Error<typeof fixtureProgram>, ExpectedFailure>>;
 type PublicRequirementsProof = Assert<
-  Equal<AgentRuntimeRequirements<typeof fixtureAgent> | Scope.Scope, ExpectedRequirements>
+  Equal<AgentRuntimeRequirements<typeof fixtureAgent>, ExpectedRequirements>
 >;
 type PublicFailureProof = Assert<Equal<AgentRuntimeFailure<typeof fixtureAgent>, ExpectedFailure>>;
 
