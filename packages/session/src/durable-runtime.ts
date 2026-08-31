@@ -3427,6 +3427,7 @@ const make = Effect.gen(function* () {
         if (
           payload._tag === "UserInputRecorded" &&
           payload.runId === runId &&
+          payload.submissionId !== undefined &&
           payload.submissionId !== submissionId
         ) {
           joinedInputEnvelopes.set(payload.submissionId, envelope);
@@ -7315,7 +7316,7 @@ const make = Effect.gen(function* () {
         payload._tag === "SubmissionSettled" ||
         payload._tag === "AbortRequested"
       ) {
-        named.add(payload.submissionId);
+        if (payload.submissionId !== undefined) named.add(payload.submissionId);
       }
     }
     for (const submissionId of named) {
@@ -7329,20 +7330,23 @@ const make = Effect.gen(function* () {
     // integrity finding rather than an operation failure.
     const checkpointLoad:
       | { readonly _tag: "loaded"; readonly checkpoint: ConversationCheckpoint | undefined }
-      | { readonly _tag: "rejected"; readonly reason: string } = yield* store
-      .loadCheckpoint(LoadCheckpointRequest.make({ conversationId }))
-      .pipe(
-        Effect.map((checkpoint) => ({
-          _tag: "loaded" as const,
-          checkpoint: Option.getOrUndefined(checkpoint),
-        })),
-        Effect.catchTag("CheckpointRejected", (rejected) =>
-          Effect.succeed({ _tag: "rejected" as const, reason: rejected.reason }),
-        ),
-      );
+      | { readonly _tag: "rejected"; readonly reason: string }
+      | { readonly _tag: "unsupported" } =
+      store.checkpoints === undefined
+        ? { _tag: "unsupported" }
+        : yield* store.checkpoints.load(LoadCheckpointRequest.make({ conversationId })).pipe(
+            Effect.map((checkpoint) => ({
+              _tag: "loaded" as const,
+              checkpoint: Option.getOrUndefined(checkpoint),
+            })),
+            Effect.catchTag("CheckpointRejected", (rejected) =>
+              Effect.succeed({ _tag: "rejected" as const, reason: rejected.reason }),
+            ),
+          );
     const report = yield* verifyConversationInvariants({
       export: exported,
       submissions: [...rows.values()],
+      checkpointsSupported: checkpointLoad._tag !== "unsupported",
       ...(checkpointLoad._tag === "loaded" && checkpointLoad.checkpoint !== undefined
         ? { checkpoint: checkpointLoad.checkpoint }
         : {}),

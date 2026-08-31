@@ -136,7 +136,8 @@ lines. Keep private cases and raw results in the example's ignored `data/` and `
 ## Test storage contracts, not implementations
 
 Memory and SQLite stores run shared contract cases for materialization, idempotent append, tail
-conflict, producer fencing, observation offsets, export, checkpoints, and corruption. A memory fake
+conflict, producer fencing, observation offsets, export, and corruption. Adapters advertising
+`ConversationStore.checkpoints` additionally run `conversationCheckpointConformanceCases`. A memory fake
 must not teach the engine behavior that SQLite rejects.
 
 Durable adapters also add ledger conformance, failpoint, and process-kill crash coverage. See

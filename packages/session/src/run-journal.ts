@@ -292,10 +292,7 @@ const decodePromptMessages = Effect.fn("RunJournal.decodePromptMessages")(
   (messages: PersistedJson): Effect.Effect<Prompt.Prompt, RunJournalError> =>
     Schema.decodeUnknownEffect(Prompt.Prompt)(messages).pipe(
       Effect.mapError((cause) =>
-        journalError(
-          "ModelResponseRecorded messages are not Schema-encoded Prompt messages",
-          cause,
-        ),
+        journalError("Canonical messages are not Schema-encoded Prompt messages", cause),
       ),
     ),
 );
@@ -336,9 +333,11 @@ const toolMessageFromSettled = Effect.fn("RunJournal.toolMessageFromSettled")(
  *   Tool messages are excluded from `messages`.
  * - `ToolCallSettled` records (committed in the same per-Turn batch, in declaration order)
  *   deterministically rebuild the Turn's single Tool message.
- * - `UserInputRecorded` is the canonical admission fact, not a prompt-bearing record: its
+ * - `UserInputRecorded` records input, with a Submission identity only for durable admission. Its
  *   Prompt-visible form (instructions + user message) becomes canonical inside the owning Run's
  *   first `ModelResponseRecorded`. The projection consumes it only for Run correlation.
+ * - Immediate retained history uses `ModelCompleted.messages` for the successful Run's exact
+ *   native Prompt suffix, including any input examples. It has no resumable Turn state.
  */
 /** Cumulative committed usage of the projected Run (RUN-023 resume re-seed). */
 export interface RunJournalUsage {
@@ -763,6 +762,16 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
       continue;
     }
     state = yield* flushTools(state);
+    if (payload._tag === "ModelCompleted" && payload.messages !== undefined) {
+      const messages = yield* decodePromptMessages(payload.messages);
+      state = {
+        ...state,
+        all: [...state.all, ...messages.content],
+        before:
+          payload.runId === ownerRunId ? state.before : [...state.before, ...messages.content],
+      };
+      continue;
+    }
     if (payload._tag !== "ModelResponseRecorded") continue;
     const messages = decodedResponses.get(envelope.record.recordId);
     if (messages === undefined) {

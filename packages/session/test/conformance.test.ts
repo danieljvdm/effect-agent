@@ -102,6 +102,5 @@ describe("ConversationStore port schemas", () => {
   it("names every shared conformance case uniquely", () => {
     const names = conversationStoreConformanceCases.map((conformanceCase) => conformanceCase.name);
     expect(new Set(names).size).toBe(names.length);
-    expect(names.length).toBeGreaterThanOrEqual(8);
   });
 });

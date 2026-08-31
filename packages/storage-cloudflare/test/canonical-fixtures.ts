@@ -15,7 +15,7 @@ export const inputRecord = (recordId: string, input: string): CanonicalRecord =>
     createdAt: at(1),
     deploymentId: TEST_DEPLOYMENT,
     payload: UserInputRecorded.make({
-      submissionId: id(UserInputRecorded.fields.submissionId, "submission-do-store"),
+      submissionId: id(SubmissionId, "submission-do-store"),
       kind: "user",
       input,
     }),
@@ -31,3 +31,4 @@ export const batch = (
     producerId: TEST_PRODUCER,
     records,
   });
+import { SubmissionId } from "@effect-agent/core";

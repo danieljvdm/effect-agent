@@ -6,6 +6,7 @@
   "scripts": {
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
+    "history": "node --experimental-transform-types src/history-main.ts",
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
@@ -14,9 +15,12 @@
     "@effect-agent/engine": "workspace:*",
     "@effect-agent/platform-cloudflare": "workspace:*",
     "@effect-agent/sandbox": "workspace:*",
+    "@effect-agent/session": "workspace:*",
+    "@effect-agent/storage-sqlite": "workspace:*",
     "@effect-agent/testing": "workspace:*",
     "@effect/ai-anthropic": "catalog:",
     "@effect/ai-openai": "catalog:",
+    "@effect/platform-node": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {

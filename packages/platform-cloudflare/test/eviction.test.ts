@@ -1086,7 +1086,7 @@ describe("DC eviction matrix — checkpoints and export", () => {
           state: {},
           createdAt: DateTime.toUtc(DateTime.makeUnsafe(Date.now())),
         });
-        yield* store.saveCheckpoint(SaveCheckpointRequest.make({ checkpoint }));
+        yield* store.checkpoints!.save(SaveCheckpointRequest.make({ checkpoint }));
       }).pipe(
         Effect.provide(
           doConversationStoreLayer({

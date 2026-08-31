@@ -822,6 +822,14 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   readonly scheduling?: RunSchedulingHook | undefined;
   /** Optional tightening-only overrides for the engine's finite in-memory buffer ceilings. */
   readonly bufferLimits?: RunBufferLimits | undefined;
+  /**
+   * Observe the Agent-Schema encoded originating input after decoding and instruction evaluation,
+   * before input projection or any model/Tool call. Persistence adapters can retain this exact
+   * value without repeating Schema transformations. Failure prevents model and Tool execution.
+   */
+  readonly onInput?:
+    | ((input: unknown) => Effect.Effect<void, HookError, HookRequirements>)
+    | undefined;
   /** Internal/public observation seam invoked whenever official history advances. */
   readonly onHistory?:
     | ((history: Prompt.Prompt) => Effect.Effect<void, HookError, HookRequirements>)

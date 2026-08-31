@@ -1,13 +1,18 @@
-import { Agent, AgentPolicy, type ConversationId } from "@effect-agent/core";
+import { Agent, AgentPolicy, type ConversationId, type IdGenerator } from "@effect-agent/core";
+import type { AgentRuntimeFailure } from "@effect-agent/engine";
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Schema } from "effect";
 import { Toolkit, type LanguageModel, type Model } from "effect/unstable/ai";
 
+import { PersistentConversations, type PersistentConversationError } from "../src/history.ts";
 import {
   type DurableAgentRuntime,
   DurableWorkerBinding,
   type DefinitionDigests,
   type DurableWorkerRequirements,
+  type ConversationStore,
+  type ConversationStoreFailure,
+  type RunJournalError,
 } from "../src/index.ts";
 
 type Equal<Left, Right> =
@@ -62,6 +67,11 @@ const proveWorkerRequirements = (
   const worker = runtime.runWorker(agent);
   const registered = DurableWorkerBinding.make(agent, digests);
   const transparent = DurableWorkerBinding.makeDigestTransparent(agent);
+  const retained = PersistentConversations.run(
+    agent,
+    { question: "hello", hostOnly: "private" },
+    { conversationId },
+  );
 
   type Expected = InputProjection | InstructionContext;
   type ProcessProof = Assert<Equal<Effect.Services<typeof process>, Expected>>;
@@ -72,6 +82,19 @@ const proveWorkerRequirements = (
   type FailureProof = Assert<
     Equal<Extract<Agent.Failure<typeof agent>, InputProjectionFailure>, InputProjectionFailure>
   >;
+  type HistoryRequirementsProof = Assert<
+    Equal<Effect.Services<typeof retained>, Expected | ConversationStore | IdGenerator>
+  >;
+  type HistoryFailureProof = Assert<
+    Equal<
+      Effect.Error<typeof retained>,
+      | AgentRuntimeFailure<typeof agent>
+      | ConversationStoreFailure
+      | RunJournalError
+      | PersistentConversationError
+    >
+  >;
+  type HistoryOutputProof = Assert<Equal<Effect.Success<typeof retained>["output"], string>>;
   const proofs: readonly [
     ProcessProof,
     WorkerProof,
@@ -79,7 +102,10 @@ const proveWorkerRequirements = (
     TransparentProof,
     PublicProof,
     FailureProof,
-  ] = [true, true, true, true, true, true];
+    HistoryRequirementsProof,
+    HistoryFailureProof,
+    HistoryOutputProof,
+  ] = [true, true, true, true, true, true, true, true, true];
   return proofs;
 };
 

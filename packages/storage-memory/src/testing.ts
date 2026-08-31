@@ -1,5 +1,6 @@
 export {
   conversationStoreConformanceCases,
+  conversationCheckpointConformanceCases,
   ConversationStoreConformanceViolation,
   submissionLedgerConformanceCases,
   SubmissionLedgerConformanceViolation,

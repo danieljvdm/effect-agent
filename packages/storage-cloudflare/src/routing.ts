@@ -716,6 +716,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
   options: RoutedPortOptions,
 ) {
   const local = yield* ConversationStore;
+  const checkpoints = local.checkpoints;
   const transport = yield* ConversationPortTransport;
   const transportCall: TransportCall = makeTransportCall(transport);
 
@@ -851,22 +852,30 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
             ),
           ),
 
-    saveCheckpoint: (request) =>
-      request.checkpoint.conversationId === options.localConversationId
-        ? local.saveCheckpoint(request)
-        : Effect.fail(
-            crossConversationStoreError(
-              "conversation save checkpoint",
-              request.checkpoint.conversationId,
-            ),
-          ),
-
-    loadCheckpoint: (request) =>
-      request.conversationId === options.localConversationId
-        ? local.loadCheckpoint(request)
-        : Effect.fail(
-            crossConversationStoreError("conversation load checkpoint", request.conversationId),
-          ),
+    ...(checkpoints === undefined
+      ? {}
+      : {
+          checkpoints: {
+            save: (request) =>
+              request.checkpoint.conversationId === options.localConversationId
+                ? checkpoints.save(request)
+                : Effect.fail(
+                    crossConversationStoreError(
+                      "conversation save checkpoint",
+                      request.checkpoint.conversationId,
+                    ),
+                  ),
+            load: (request) =>
+              request.conversationId === options.localConversationId
+                ? checkpoints.load(request)
+                : Effect.fail(
+                    crossConversationStoreError(
+                      "conversation load checkpoint",
+                      request.conversationId,
+                    ),
+                  ),
+          },
+        }),
   });
 
   return Context.make(ConversationStore, routed);

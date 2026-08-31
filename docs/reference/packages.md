@@ -71,7 +71,7 @@ itself as `unisolated` and rejects isolation policy it cannot enforce.
 
 ### `@effect-agent/session`
 
-Owns canonical Conversation record Schemas, batches, digests, replay/checkpoints, the
+Owns canonical Conversation record Schemas, batches, digests, replay, optional checkpoints, the
 `ConversationStore`, `SubmissionLedger`, and `WakeScheduler` ports, the pure recovery classifier,
 the run journal, and the `DurableAgentRuntime` coordinator (Receipt, Attempt, Settlement), including
 the conversation-keyed `awaitProgress` boundary that subscribes before its authoritative canonical

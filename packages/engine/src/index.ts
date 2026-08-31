@@ -5614,6 +5614,7 @@ const stream = <
           >(agent.definition.instructions, decodedInput);
           const encodedInput = yield* encodeInput(agent, decodedInput);
           context.input = encodedInput;
+          if (options.onInput !== undefined) yield* options.onInput(encodedInput);
           const inputPrompt = yield* renderInputPrompt(
             agent.definition.inputPrompt,
             decodedInput,

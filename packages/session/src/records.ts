@@ -186,13 +186,13 @@ export class ConversationCreated extends Schema.TaggedClass<ConversationCreated>
 }) {}
 
 /**
- * One accepted conversational input. `kind` distinguishes the normal, steering, and follow-up
- * delivery seams without creating parallel wire families for the same logical value.
+ * One recorded conversational input. `submissionId` is present only for durably accepted work;
+ * retained history has no admission or settlement obligation. `kind` identifies the input seam.
  */
 export class UserInputRecorded extends Schema.TaggedClass<UserInputRecorded>(
   "@effect-agent/session/UserInputRecorded",
 )("UserInputRecorded", {
-  submissionId: SubmissionId,
+  submissionId: Schema.optionalKey(SubmissionId),
   kind: Schema.Literals(["user", "steering", "follow-up"]),
   runId: Schema.optionalKey(RunId),
   input: PersistedJson,
@@ -208,12 +208,28 @@ export class RunStartedRecord extends Schema.TaggedClass<RunStartedRecord>(
   maxDurationMillis: Schema.Finite.check(Schema.isGreaterThan(0)),
 }) {}
 
+const PersistedPromptMessages = Schema.toEncoded(Prompt.Prompt);
+const isPersistedPromptMessages = Schema.is(PersistedPromptMessages);
+
+/**
+ * Final model output. Immediate history may include the exact encoded Prompt suffix of the
+ * successful Run; durable execution instead journals individual ModelResponseRecorded Turns.
+ */
 export class ModelCompleted extends Schema.TaggedClass<ModelCompleted>(
   "@effect-agent/session/ModelCompleted",
-)("ModelCompleted", {
-  runId: RunId,
-  output: PersistedJson,
-}) {}
+)(
+  "ModelCompleted",
+  Schema.Struct({
+    runId: RunId,
+    output: PersistedJson,
+    messages: Schema.optionalKey(PersistedJson),
+  }).check(
+    Schema.makeFilter(
+      (record) => record.messages === undefined || isPersistedPromptMessages(record.messages),
+      { title: "Retained Run messages are Schema-encoded Effect AI Prompt messages" },
+    ),
+  ),
+) {}
 
 export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
   "@effect-agent/session/ToolCallSettled",
@@ -233,9 +249,6 @@ export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
  * Turn boundary so a recovering Attempt can rebuild the next Prompt from canonical records alone.
  * `messagesDigest` pins the exact encoded content.
  */
-const PersistedPromptMessages = Schema.toEncoded(Prompt.Prompt);
-const isPersistedPromptMessages = Schema.is(PersistedPromptMessages);
-
 const ModelResponseRecordedFields = Schema.Struct({
   runId: RunId,
   turnId: TurnId,

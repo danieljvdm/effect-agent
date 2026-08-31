@@ -1,4 +1,5 @@
 import { AgentId, ConversationId } from "@effect-agent/core";
+import type { ConversationRead, RecoveryDecision } from "@effect-agent/session";
 import {
   AbortCommand,
   AdmissionRequest,
@@ -8,7 +9,6 @@ import {
   ConversationCreated,
   ConversationMaterialization,
   ConversationNotMaterialized,
-  ConversationRead,
   ConversationStore,
   DefinitionDigests,
   DeploymentId,
@@ -23,7 +23,6 @@ import {
   Principal,
   ProducerEpoch,
   ProducerId,
-  RecoveryDecision,
   RepairAnnotated,
   SubmissionLedger,
   ToolReconciler,
@@ -70,8 +69,7 @@ const countingConversationStoreLayer = Layer.effectContext(
       observe: store.observe,
       export: store.export,
       inspectTail: store.inspectTail,
-      saveCheckpoint: store.saveCheckpoint,
-      loadCheckpoint: store.loadCheckpoint,
+      checkpoints: store.checkpoints,
     });
     return Context.make(ConversationStore, counted).pipe(
       Context.add(

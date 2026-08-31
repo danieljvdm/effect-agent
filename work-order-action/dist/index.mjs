@@ -39919,6 +39919,8 @@ var stream3 = (agent2, input, options3 = {}) => {
       const instructions = yield* evaluateInstructions(agent2.definition.instructions, decodedInput);
       const encodedInput = yield* encodeInput(agent2, decodedInput);
       context3.input = encodedInput;
+      if (options3.onInput !== undefined)
+        yield* options3.onInput(encodedInput);
       const inputPrompt = yield* renderInputPrompt(agent2.definition.inputPrompt, decodedInput, encodedInput);
       const priorHistoryLength = context3.history.content.length;
       const prompt = yield* makeInitialPrompt(instructions, inputPrompt, context3.history);
