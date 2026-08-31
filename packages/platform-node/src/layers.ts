@@ -12,7 +12,6 @@ import {
   type ScheduleStore,
   type ConversationStore,
   type WakeScheduler,
-  AgentBindingResolver,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   DeploymentId,
   DurableAgentRuntime,
@@ -24,7 +23,6 @@ import {
   ToolReconciler,
   type DurableRuntimeFailpointHandler,
   type OwnershipToken,
-  type ResolvedBinding,
 } from "@effect-agent/session";
 import {
   conversationStoreLayer,
@@ -145,15 +143,6 @@ export interface NodeDurableRuntimeOptions {
    * Both extension Layers must close application dependencies; the platform supplies Crypto.
    */
   readonly toolAuthorization?: Layer.Layer<RunToolAuthorization, never, Crypto.Crypto> | undefined;
-  /**
-   * Registered worker Bindings resolved at durable claim time:
-   * build each with `DurableWorkerBinding.make(binding, digests)` so
-   * `NodeDurableHost.runResolvedWorkers` / `DurableAgentRuntime.runResolvedWorker` can serve
-   * parent and child lanes from one pool with exact-digest resolution (SUB-023). Defaults to
-   * the empty registration: every resolved claim then fails closed (`BindingUnavailable` for a
-   * root, the framework `ChildCompatibilityFailure` Settlement for a parent-linked child).
-   */
-  readonly bindings?: ReadonlyArray<ResolvedBinding> | undefined;
 }
 
 /** Every construction failure of the assembled Node durable runtime stack. */
@@ -169,8 +158,7 @@ export type NodeDurableRuntimeServices =
   | ScheduleStore
   | WakeScheduler
   | DurableRuntimeConfig
-  | NodeDurableRuntimeConfig
-  | AgentBindingResolver;
+  | NodeDurableRuntimeConfig;
 
 const decodeConfigValue = Schema.decodeUnknownEffect(NodeDurableRuntimeConfigValue);
 
@@ -395,7 +383,6 @@ export class NodeDurableRuntime {
           options.toolFailureObserver === undefined
             ? Layer.succeed(CurrentToolFailureObserver)(undefined)
             : toolFailureObserverLayer(options.toolFailureObserver);
-        const bindingResolverLayer = AgentBindingResolver.layer(options.bindings ?? []);
         const ports = Layer.mergeAll(
           conversationStoreLayer,
           scheduleStoreLayer,
@@ -405,11 +392,7 @@ export class NodeDurableRuntime {
         );
         return DurableAgentRuntime.layerWithContext.pipe(
           Layer.provideMerge(
-            Layer.mergeAll(
-              ports,
-              durableRuntimeConfigLayer(options.estimateCostMicrousd),
-              bindingResolverLayer,
-            ),
+            Layer.mergeAll(ports, durableRuntimeConfigLayer(options.estimateCostMicrousd)),
           ),
           Layer.provide(
             Layer.mergeAll(

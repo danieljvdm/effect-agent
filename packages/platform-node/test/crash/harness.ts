@@ -13,6 +13,7 @@ import {
   submissionSettlementRecordId,
   type CanonicalRecordEnvelope,
   type DurableRuntimeFailpointLocation,
+  type ResolvedBinding,
   type SubmissionSnapshot,
 } from "@effect-agent/session";
 import type { SqliteStorageFailpointLocation } from "@effect-agent/storage-sqlite";
@@ -260,7 +261,12 @@ export const withHost = <A, E, R>(
   db: string,
   effect: Effect.Effect<A, E, R>,
   overrides?: Partial<NodeDurableRuntimeOptions>,
-) => Effect.provide(effect, NodeDurableHost.layerStack(runtimeOptions(db, overrides)));
+  bindings: ReadonlyArray<ResolvedBinding> = [],
+) =>
+  Effect.provide(
+    effect,
+    NodeDurableHost.layerStack({ ...runtimeOptions(db, overrides), bindings }),
+  );
 
 /** A restarted "client-only" process: the DN stack WITHOUT the host recovery gate. */
 export const withRuntime = <A, E, R>(

@@ -13,11 +13,7 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  CloudflareConversationClient,
-  decodeAdminResponse,
-  type AdminResponse,
-} from "../src/index.ts";
+import { CloudflareConversationClient, ConversationObject } from "../src/index.ts";
 import {
   armRuntimeEviction,
   armStorageEviction,
@@ -267,7 +263,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const explainedRaw: unknown = await Promise.resolve(
       stubFor(child, SUBAGENTS).explainEncoded({}),
     );
-    const explained: AdminResponse = await Effect.runPromise(decodeAdminResponse(explainedRaw));
+    const explained = await Effect.runPromise(ConversationObject.decodeAdminResponse(explainedRaw));
     expect(explained._tag).toBe("ExplainedRecovery");
     if (explained._tag === "ExplainedRecovery") {
       expect(explained.explanations).toHaveLength(1);

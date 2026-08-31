@@ -4,13 +4,15 @@ import {
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
 } from "@effect-agent/testing/fixtures/travel-planner";
+import { Effect, Layer } from "effect";
 
-import { makeConversationObjectClass, type ConversationObjectOptions } from "../src/index.ts";
+import { ConversationObject } from "../src/index.ts";
+import { layerFromBindings } from "../src/layers.ts";
 import { runtimeEvictionFailpoint, storageEvictionFailpoint } from "./fixtures.ts";
 
 /**
  * The WP5 Travel Planner test Worker entry (plan §6): the REAL
- * `makeConversationObjectClass` output serving the SAME cumulative Travel Planner fixtures as
+ * `ConversationObject.make` output serving the SAME cumulative Travel Planner fixtures as
  * the DN suites — the P4 planner, the P5 booking agent over the shared supplier desk with the
  * REAL supplier reconciliation policy, and the S2 coordinator/researcher delegation pair —
  * under the shared armed-failpoint eviction levers. It runs as its own vitest project (own
@@ -19,7 +21,7 @@ import { runtimeEvictionFailpoint, storageEvictionFailpoint } from "./fixtures.t
  * phase-6 fixture module (supplier desk, guide counter, gates) — never in Object fields.
  */
 
-const baseOptions: ConversationObjectOptions = {
+const baseOptions: ConversationObject.Options = {
   namespaceBinding: "CONVERSATIONS",
   deploymentId: phase6TravelPlannerDeploymentId,
   producerPrefix: phase6TravelPlannerProducerPrefix,
@@ -37,22 +39,27 @@ const baseOptions: ConversationObjectOptions = {
   alarmBackoffBase: 10,
   alarmBackoffCap: 100,
   observationPollInterval: 10,
-  bindings: () => makePhase6TravelPlannerBindings,
   toolReconciler: phase6SupplierReconcilerLayer,
   storageFailpoint: storageEvictionFailpoint,
   runtimeFailpoint: runtimeEvictionFailpoint,
 };
 
 /** The Travel Planner DC suite's Conversation Object. */
-export class TravelPlannerConversationObject extends makeConversationObjectClass(baseOptions) {}
+export class TravelPlannerConversationObject extends ConversationObject.make(
+  Layer.unwrap(Effect.map(makePhase6TravelPlannerBindings, layerFromBindings)),
+  baseOptions,
+) {}
 
 /** Tight quotas for the Travel Planner admission-limits rows (refusal before any row). */
-export class TravelPlannerLimitedObject extends makeConversationObjectClass({
-  ...baseOptions,
-  namespaceBinding: "LIMITED",
-  maxQueueDepthPerLane: 2,
-  maxInputBytes: 512,
-}) {}
+export class TravelPlannerLimitedObject extends ConversationObject.make(
+  Layer.unwrap(Effect.map(makePhase6TravelPlannerBindings, layerFromBindings)),
+  {
+    ...baseOptions,
+    namespaceBinding: "LIMITED",
+    maxQueueDepthPerLane: 2,
+    maxInputBytes: 512,
+  },
+) {}
 
 export default {
   fetch(): Response {

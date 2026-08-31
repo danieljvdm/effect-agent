@@ -6,7 +6,6 @@ import {
 } from "@effect-agent/capabilities";
 import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import {
-  AgentBindingResolver,
   DefinitionDigests,
   Digest,
   DurableWorkerBinding,
@@ -231,5 +230,5 @@ export const makeSoakBindings = Effect.fn("SoakFixtures.makeSoakBindings")(funct
     childBinding,
     SOAK_CHILD_DIGESTS,
   );
-  return AgentBindingResolver.fromBindings([plannerResolved, coordinatorResolved, childResolved]);
+  return [plannerResolved, coordinatorResolved, childResolved];
 });

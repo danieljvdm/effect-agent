@@ -92,15 +92,13 @@ import {
   type ObligationThresholds,
 } from "./admin.ts";
 import {
-  AgentBindingResolver,
-  BindingDigestMismatch,
   BindingUnavailable,
   definitionDigestsEqual,
-  DurableWorkerBinding,
   type DurableBindingFailure,
-  type ResolvedAttemptDriver,
+  makeLegacyWorkerBinding,
   type ResolvedBinding,
-} from "./binding-resolver.ts";
+  resolveWorkerBinding,
+} from "./agent-registration.ts";
 import { digestJson, type DigestError } from "./digest.ts";
 import {
   DurableRuntimeFailpoint,
@@ -5741,13 +5739,6 @@ const make = Effect.gen(function* () {
     });
 
   /**
-   * The one fenced-Attempt entry every resolved binding drives; passing `runAttempt` through
-   * this named value keeps the polymorphic driver instantiation explicit at the seam.
-   */
-  const attemptDriver: ResolvedAttemptDriver = (agent, conversationId, claim) =>
-    runAttempt(agent, conversationId, claim);
-
-  /**
    * Framework-owned Schema-stable `ChildCompatibilityFailure` Settlement for a parent-linked
    * child whose exact Binding cannot be resolved at claim time (spec §11, SUB-023/SUB-032): no
    * application code runs, the child never executes, and the parent joins the bounded failure
@@ -5795,15 +5786,17 @@ const make = Effect.gen(function* () {
 
   /**
    * Drain one Conversation lane under claim-time Binding resolution (plan §1.7): every claimed
-   * head's stored `(agentId, agentDigests)` resolves through the supplied resolver BEFORE any
-   * code runs. A refusal writes the framework `ChildCompatibilityFailure` Settlement for a
+   * head resolves through the selected private binding path before any code runs. A refusal
+   * writes the framework `ChildCompatibilityFailure` Settlement for a
    * parent-linked child and surfaces the typed refusal (after releasing the claim) for a root —
    * a worker never runs a claimed head against different code (SUB-023).
    */
+  type CapturedWorkerBinding = Effect.Success<ReturnType<typeof makeLegacyWorkerBinding>>;
+
   const drainConversation = (
     resolve: (
       submission: SubmissionSnapshot,
-    ) => Effect.Effect<ResolvedBinding, DurableBindingFailure | LedgerError>,
+    ) => Effect.Effect<CapturedWorkerBinding, DurableBindingFailure>,
     conversationId: ConversationId,
   ): Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
     Effect.gen(function* () {
@@ -5864,27 +5857,11 @@ const make = Effect.gen(function* () {
               Effect.succeed({ _tag: "refused" as const, failure }),
           }),
         );
-        let refusal: DurableBindingFailure | undefined;
         if (resolution._tag === "refused") {
-          refusal = resolution.failure;
-        } else if (resolution.binding.agentId !== submission.agentId) {
-          refusal = BindingUnavailable.make({
-            agentId: submission.agentId,
-            message: `The resolver answered with Binding ${resolution.binding.agentId} for Agent ${submission.agentId}; resolution fails closed (SUB-023)`,
-          });
-        } else if (
-          resolution.binding.digests !== undefined &&
-          !definitionDigestsEqual(resolution.binding.digests, submission.agentDigests)
-        ) {
-          refusal = BindingDigestMismatch.make({
-            agentId: submission.agentId,
-            message:
-              "The resolved Binding digests do not match the claimed head's stored digests byte-for-byte (SUB-023)",
-          });
-        }
-        if (refusal !== undefined) {
           if (submission.parentLinkage !== undefined) {
-            settlements.push(yield* settleChildCompatibility(claim, submission, refusal));
+            settlements.push(
+              yield* settleChildCompatibility(claim, submission, resolution.failure),
+            );
             continue;
           }
           // Root Submission: release the claim and surface the typed refusal — the obligation
@@ -5897,13 +5874,9 @@ const make = Effect.gen(function* () {
               }),
             )
             .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
-          return yield* refusal;
+          return yield* resolution.failure;
         }
-        if (resolution._tag !== "resolved") {
-          // Unreachable: `refusal` covered every refused shape above.
-          continue;
-        }
-        const settlement = yield* resolution.binding.attempt(attemptDriver, conversationId, claim);
+        const settlement = yield* resolution.binding.attempt(runAttempt, conversationId, claim);
         if (Option.isNone(settlement)) {
           // The head is durably blocked (Unknown Outcome, approval suspension, or a
           // waitingForChild suspension): the lane frees its worker permit while the settlement
@@ -5949,7 +5922,7 @@ const make = Effect.gen(function* () {
       // The legacy single-binding worker is a singleton resolver (plan §1.7): identity-exact —
       // a claimed head with a different Agent never runs against this binding (the latent P4
       // gap) — and digest-transparent, because this call site registers no digest authority.
-      const binding = yield* DurableWorkerBinding.makeDigestTransparent(agent);
+      const binding = yield* makeLegacyWorkerBinding(agent);
       return yield* drainConversation(
         (submission) =>
           submission.agentId === binding.agentId
@@ -5966,18 +5939,12 @@ const make = Effect.gen(function* () {
 
   const processConversationResolvedImpl = (
     conversationId: ConversationId,
-  ): Effect.Effect<
-    ReadonlyArray<Settlement>,
-    DurableWorkerFailure | DurableBindingFailure,
-    AgentBindingResolver
-  > =>
-    Effect.gen(function* () {
-      const resolver = yield* AgentBindingResolver;
-      return yield* drainConversation(
-        (submission) => resolver.resolve(submission.agentId, submission.agentDigests),
-        conversationId,
-      );
-    });
+    bindings: ReadonlyArray<ResolvedBinding>,
+  ): Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
+    drainConversation(
+      (submission) => resolveWorkerBinding(bindings, submission.agentId, submission.agentDigests),
+      conversationId,
+    );
 
   const claimFor = Effect.fn("DurableAgentRuntime.claimFor")(function* (
     submission: SubmissionSnapshot,
@@ -7594,25 +7561,24 @@ const make = Effect.gen(function* () {
       );
     });
 
-  const runResolvedWorkerImpl: Effect.Effect<
-    void,
-    DurableWorkerFailure | DurableBindingFailure,
-    AgentBindingResolver
-  > = Effect.gen(function* () {
-    // The multi-binding worker (plan §1.7): every claimed head resolves its exact stored
-    // Binding through the host-supplied resolver, so one worker pool serves parent and child
-    // lanes (spec §12's smallest-pool wakeup proof runs over this loop).
-    const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
-    const seen = new Set<ConversationId>();
-    for (const submission of nonterminal) {
-      if (seen.has(submission.conversationId)) continue;
-      seen.add(submission.conversationId);
-      yield* processConversationResolvedImpl(submission.conversationId);
-    }
-    yield* Stream.runForEach(wake.wakes, (conversationId) =>
-      processConversationResolvedImpl(conversationId),
-    );
-  });
+  const runResolvedWorkerImpl = (
+    bindings: ReadonlyArray<ResolvedBinding>,
+  ): Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure> =>
+    Effect.gen(function* () {
+      // The multi-binding worker (plan §1.7): every claimed head resolves its exact stored
+      // Binding from the explicit registration array, so one worker pool serves parent and child
+      // lanes (spec §12's smallest-pool wakeup proof runs over this loop).
+      const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+      const seen = new Set<ConversationId>();
+      for (const submission of nonterminal) {
+        if (seen.has(submission.conversationId)) continue;
+        seen.add(submission.conversationId);
+        yield* processConversationResolvedImpl(submission.conversationId, bindings);
+      }
+      yield* Stream.runForEach(wake.wakes, (conversationId) =>
+        processConversationResolvedImpl(conversationId, bindings),
+      );
+    });
 
   return DurableAgentRuntime.of({
     submit,
@@ -7675,8 +7641,8 @@ const make = Effect.gen(function* () {
  *   reimplemented over a singleton identity-exact (digest-transparent) Binding resolution: a
  *   claimed head belonging to a different Agent never runs against this binding (SUB-023); a
  *   parent-linked head refused this way settles with the framework `ChildCompatibilityFailure`.
- * - `processConversationResolved(conversationId)` / `runResolvedWorker` — the S2 multi-binding
- *   equivalents over the host-supplied `AgentBindingResolver` (spec §11, D7): every claimed
+ * - `processConversationResolved(conversationId, bindings)` / `runResolvedWorker(bindings)` — the
+ *   S2 multi-binding equivalents over explicit exact registrations (spec §11, D7): every claimed
  *   head's stored `(agentId, agentDigests)` resolves to the exact registered Binding before any
  *   code runs; an unresolvable parent-linked child settles with the Schema-stable framework
  *   `ChildCompatibilityFailure` (no application code, the child never executes), and an
@@ -7824,11 +7790,8 @@ export class DurableAgentRuntime extends Context.Service<
     >;
     readonly processConversationResolved: (
       conversationId: ConversationId,
-    ) => Effect.Effect<
-      ReadonlyArray<Settlement>,
-      DurableWorkerFailure | DurableBindingFailure,
-      AgentBindingResolver
-    >;
+      bindings: ReadonlyArray<ResolvedBinding>,
+    ) => Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure>;
     readonly runWorker: <
       InputSchema extends Schema.Top,
       OutputSchema extends Schema.Top,
@@ -7879,11 +7842,9 @@ export class DurableAgentRuntime extends Context.Service<
         InstructionRequirements
       >
     >;
-    readonly runResolvedWorker: Effect.Effect<
-      void,
-      DurableWorkerFailure | DurableBindingFailure,
-      AgentBindingResolver
-    >;
+    readonly runResolvedWorker: (
+      bindings: ReadonlyArray<ResolvedBinding>,
+    ) => Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
     readonly runRecovery: Effect.Effect<ReadonlyArray<RecoveryReport>, DurableWorkerFailure>;
   }
 >()("@effect-agent/session/DurableAgentRuntime") {

@@ -15,6 +15,12 @@ An immutable pairing of one Agent Definition with a Layer providing the native L
 provider name, and model name. It fixes model selection for durable registration or Subagent
 construction without hiding Layer requirements or acquiring provider resources.
 
+**Agent Registration**
+
+An Agent Binding paired with explicit Agent, Model, and Tool version declarations. Runtime
+construction hashes the declarations and captures the Binding's required services in its Scope.
+Durable workers match the registered identity and hashes before executing queued work.
+
 **Agent Runtime**  
 The Effect module that interprets an Agent Definition or Binding. The ephemeral runtime executes immediately;
 the durable runtime admits a Submission and coordinates Attempts until Settlement.

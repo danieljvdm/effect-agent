@@ -20,7 +20,7 @@ export class CloudflareBindingError extends Schema.TaggedError<CloudflareBinding
 
 /**
  * The RPC surface one Conversation Durable Object exposes to Workers and to sibling
- * Conversation Objects. `makeConversationObjectClass` implements it; the Worker-side client
+ * Conversation Objects. `ConversationObject.make` implements it; the Worker-side client
  * and the cross-Object transport call it through `DurableObjectNamespace` stubs. Every
  * `encoded` value is a Schema-encoded envelope (`client.ts` wire schemas for host entry
  * points, `@effect-agent/storage-cloudflare` port envelopes for `portCall`), so the RPC

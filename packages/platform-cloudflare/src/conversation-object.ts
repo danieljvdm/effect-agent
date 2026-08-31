@@ -81,16 +81,26 @@ import {
 } from "./client.ts";
 import { AdmissionLimitExceeded, CloudflareDurableRuntimeConfig } from "./config.ts";
 import {
-  CloudflareDurableRuntime,
+  layerConfig,
   ConversationObjectPorts,
   type CloudflareDurableRuntimeInitializationError,
   type CloudflareDurableRuntimeOptions,
   type CloudflareDurableRuntimeServices,
+  type CloudflareBootstrapServices,
 } from "./layers.ts";
 import { ProgressWaitRegistry } from "./progress-wait.ts";
 
+export {
+  layer,
+  layerConfig,
+  type CloudflareDurableRuntimeOptions as RuntimeOptions,
+  type CloudflareDurableRuntimeServices as Services,
+  type CloudflareDurableRuntimeInitializationError as InitializationError,
+  type CloudflareBootstrapServices as BootstrapServices,
+} from "./layers.ts";
+
 /**
- * `makeConversationObjectClass(options, observability?)` — the Conversation Durable Object
+ * `ConversationObject.make(application, options)` — the Conversation Durable Object
  * (plan §1.4,
  * D-P6-1): a factory returning a class that applications export from their Worker entry.
  * One SQLite-backed Object per Conversation is the serialized owner (durability §6); the
@@ -108,7 +118,11 @@ import { ProgressWaitRegistry } from "./progress-wait.ts";
  */
 
 /** Construction options for one deployed Conversation Object class. */
-export interface ConversationObjectOptions extends CloudflareDurableRuntimeOptions {
+export interface Options<
+  ApplicationServices = never,
+  EventServices = never,
+  EventLayerError = never,
+> extends CloudflareDurableRuntimeOptions {
   /** Accept transient native RPC tracing through effect-cf; disabled by default. */
   readonly rpcTracing?: boolean;
   /**
@@ -117,9 +131,21 @@ export interface ConversationObjectOptions extends CloudflareDurableRuntimeOptio
    * and remote wakes (DEPLOY-010: the binding enters through a Layer, never ambiently).
    */
   readonly namespaceBinding: string;
+  /** Acquired and finalized per native event, with access to the complete application runtime. */
+  readonly eventLayer?: Layer.Layer<
+    EventServices,
+    EventLayerError,
+    | RuntimeServices
+    | ApplicationServices
+    | EffectCfDurableObjectState.DurableObjectState
+    | WorkerEnvironment
+  >;
 }
 
-type EndpointServices = CloudflareDurableRuntimeServices | DurableObjectContext;
+type EndpointServices =
+  | CloudflareDurableRuntimeServices
+  | CloudflareBootstrapServices
+  | DurableObjectContext;
 type RuntimeServices = EndpointServices | ConversationObjectNamespace;
 type ConversationObjectInitializationError =
   | CloudflareDurableRuntimeInitializationError
@@ -704,7 +730,7 @@ const effectCfPlatformLayer = (
 };
 
 /** The public endpoints and effect-cf invocation hook of one Conversation Object instance. */
-export interface ConversationObjectInstance<EventServices = never> extends InstanceType<
+export interface Instance<EventServices = never> extends InstanceType<
   EffectCfDurableObject.DurableObjectClass<Record<never, never>, RuntimeServices | EventServices>
 > {
   submitEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
@@ -725,33 +751,38 @@ export interface ConversationObjectInstance<EventServices = never> extends Insta
 }
 
 /** The constructor shape workerd instantiates for each Conversation Object. */
-export interface ConversationObjectClass<EventServices = never> {
-  new (ctx: DurableObjectState, env: Cloudflare.Env): ConversationObjectInstance<EventServices>;
+export interface Class<EventServices = never> {
+  new (ctx: DurableObjectState, env: Cloudflare.Env): Instance<EventServices>;
 }
 
 /**
- * Build the application's Conversation Object class (export it from the Worker entry).
- * effect-cf owns the cached ManagedRuntime, native RPC methods, event scopes, and post-handler
- * OTLP flush scheduling for RPC and alarm events. The optional outer Layer is built per native
- * event, so a host can install Tracer/Logger/Metric services and `OtlpExporter.Flusher` without
- * Effect Agent owning exporter lifecycle machinery.
+ * Export a composed application Layer as a native Durable Object class.
+ * Bootstrap services are provided to the whole graph before it acquires, so application Layers
+ * can yield effect-cf's WorkerEnvironment and DurableObjectState, derived identity, and Crypto.
+ * Application dependencies remain visible until Layer.provide satisfies them. effect-cf owns the
+ * cached ManagedRuntime, native RPC methods, event scopes, and telemetry flushing.
+ * Initialization is local and bounded inside the constructor gate. Cloudflare eviction does not
+ * guarantee finalizers; put resources requiring timely release in scoped operations or eventLayer.
  */
-export const makeConversationObjectClass = <EventLayerError = never, EventServices = never>(
-  options: ConversationObjectOptions,
-  observability?: Layer.Layer<
-    EventServices,
-    EventLayerError,
-    | DurableObjectContext
-    | ConversationObjectNamespace
+export const make = <
+  ApplicationServices,
+  ApplicationError,
+  EventServices = never,
+  EventLayerError = never,
+>(
+  applicationLayer: Layer.Layer<
+    CloudflareDurableRuntimeServices | ApplicationServices,
+    ApplicationError,
+    | CloudflareBootstrapServices
     | EffectCfDurableObjectState.DurableObjectState
     | WorkerEnvironment
+    | DurableObjectContext
+    | ConversationObjectNamespace
   >,
-): ConversationObjectClass<EventServices> => {
-  const application: Layer.Layer<
-    RuntimeServices,
-    CloudflareDurableRuntimeInitializationError | CloudflareBindingError,
-    EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
-  > = CloudflareDurableRuntime.layer(options).pipe(
+  options: Options<ApplicationServices, EventServices, EventLayerError>,
+): Class<ApplicationServices | EventServices> => {
+  const application = applicationLayer.pipe(
+    Layer.provideMerge(layerConfig(options)),
     Layer.provideMerge(effectCfPlatformLayer(options.namespaceBinding, options.rpcTracing)),
   );
 
@@ -759,8 +790,8 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
   // the ManagedRuntime, while this effectContext ensures its first Layer build enters the gate
   // before migration, compatibility checks, or alarm inspection touch Object storage.
   const runtime: Layer.Layer<
-    RuntimeServices,
-    ConversationObjectInitializationError,
+    RuntimeServices | ApplicationServices,
+    ConversationObjectInitializationError | ApplicationError,
     EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
   > = Layer.effectContext(
     Effect.gen(function* () {
@@ -791,17 +822,19 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
     obligationsEncoded: (encoded: unknown) => obligationsEndpoint(encoded),
     portCall: (encoded: unknown) => portCallEndpoint(encoded),
     wake: () => wakeEndpoint,
-  } satisfies EffectCfDurableObject.DurableObjectRpc<RuntimeServices | EventServices>;
+  } satisfies EffectCfDurableObject.DurableObjectRpc<
+    RuntimeServices | ApplicationServices | EventServices
+  >;
 
   const EffectCfConversationObject = EffectCfDurableObject.make<
-    RuntimeServices,
-    ConversationObjectInitializationError,
+    RuntimeServices | ApplicationServices,
+    ConversationObjectInitializationError | ApplicationError,
     EventServices,
     EventLayerError,
     typeof rpc
   >(runtime, {
     ...(options.rpcTracing === true ? { rpcTracing: { service: options.namespaceBinding } } : {}),
-    ...(observability === undefined ? {} : { eventLayer: observability }),
+    ...(options.eventLayer === undefined ? {} : { eventLayer: options.eventLayer }),
     // Force the gated runtime Layer when Cloudflare loads this Object incarnation. Recovery stays
     // in each bounded pass so cross-Object initialization cannot deadlock.
     initialize: Effect.void,

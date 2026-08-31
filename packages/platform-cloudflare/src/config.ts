@@ -119,7 +119,7 @@ export class CloudflareDurableRuntimeConfig extends Context.Service<
   CloudflareDurableRuntimeConfigValue
 >()("@effect-agent/platform-cloudflare/CloudflareDurableRuntimeConfig") {}
 
-/** Documented production defaults applied by `CloudflareDurableRuntime.layer`. */
+/** Documented production defaults applied by `ConversationObject.layer`. */
 export const CLOUDFLARE_RUNTIME_DEFAULTS = {
   ownershipLeaseDuration: Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION),
   alarmBackoffBase: 100,

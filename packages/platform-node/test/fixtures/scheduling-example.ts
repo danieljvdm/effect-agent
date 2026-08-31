@@ -1,5 +1,6 @@
 import {
   type DurableSubmitAgent,
+  type ResolvedBinding,
   type ScheduleCreateOptions,
   Scheduling,
 } from "@effect-agent/session";
@@ -12,8 +13,13 @@ import {
 } from "../../src/index.ts";
 
 /** The caller supplies registered bindings, their real digests, and an explicit authorizer. */
-export const schedulingRuntimeLayer = (runtimeOptions: NodeDurableRuntimeOptions) =>
-  NodeScheduling.layer().pipe(Layer.provideMerge(NodeDurableHost.layerStack(runtimeOptions)));
+export const schedulingRuntimeLayer = (
+  bindings: ReadonlyArray<ResolvedBinding>,
+  runtimeOptions: NodeDurableRuntimeOptions,
+) =>
+  NodeScheduling.layer().pipe(
+    Layer.provideMerge(NodeDurableHost.layerStack({ ...runtimeOptions, bindings })),
+  );
 
 /** Provide the runtime and application authorizer Layers once around this process workflow. */
 export const runScheduledHost = Effect.fn("Example.runScheduledHost")(function* <

@@ -287,29 +287,30 @@ provide this service as well as context preparation.
 
 ### Supplying a Cloudflare compactor
 
-Cloudflare Conversation Objects can install a host compactor without putting it in global state.
-Build your `ContextCompactor` as a Layer, close its model/configuration dependencies from the Worker
-environment, and adapt it through `contextCompactorRunContextLayer`:
+Cloudflare Conversation Objects compose compaction and Tool authorization as ordinary application
+Layers. Build the compactor with its model/configuration dependencies, then provide it through
+`contextCompactorRunContextLayer` alongside the [Agent registrations](./run-agents#run-durably-on-cloudflare):
 
 ```ts
-export class Conversations extends makeConversationObjectClass({
+const RuntimeLive = ConversationObject.layer(registrations).pipe(
+  Layer.provide(contextCompactorRunContextLayer.pipe(Layer.provide(compactorLayer))),
+  Layer.provide(toolAuthorizationLayer),
+  Layer.provide(AppLive),
+);
+
+export class Conversations extends ConversationObject.make(RuntimeLive, {
   namespaceBinding: "CONVERSATIONS",
   deploymentId: "production",
   producerPrefix: "conversation",
-  bindings: makeBindings,
-  runContext: ({ env }) =>
-    contextCompactorRunContextLayer.pipe(
-      Layer.provide(makeContextCompactorLayer(env)),
-    ),
-  toolAuthorization: ({ env }) => makeToolAuthorizationLayer(env),
-});
+}) {}
 ```
 
-Everything specific to your compactor must already be provided. The adapter itself no longer
-requires `Crypto.Crypto`. The Layer is acquired once per Durable Object incarnation and rebuilt
-after eviction. The independent `toolAuthorization` Layer or factory follows the same lifecycle;
-omitting it explicitly selects `RunToolAuthorization.allowAll`. The compactor adapter installs the
-same compaction service used by ephemeral Runs, invoked under
+Dependencies of both Layers remain visible until provided. They can yield effect-cf's
+`WorkerEnvironment` and `DurableObjectState`, plus platform Crypto and
+`ConversationObjectIdentity`. The entire graph acquires once per Object incarnation and rebuilds
+after eviction. Omission selects pass-through preparation and `RunToolAuthorization.allowAll`.
+
+The compactor adapter installs the same compaction service used by ephemeral Runs, invoked under
 context pressure after canonical prompt reconstruction. Usage, events, and `CompactionCreated`
 commits follow the native path. Expected strategy failures settle as `CompactionError`; defects
 remain defects for the host to supervise.

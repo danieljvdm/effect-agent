@@ -2,11 +2,7 @@ import { AbortCommand } from "@effect-agent/session";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  CloudflareConversationClient,
-  decodeAdminResponse,
-  type AdminResponse,
-} from "../src/index.ts";
+import { CloudflareConversationClient, ConversationObject } from "../src/index.ts";
 import { plannerDefinition, submitOptions } from "./fixtures.ts";
 import { allSettled, drainAlarmsUntil, runClient, stubFor } from "./harness.ts";
 
@@ -37,9 +33,9 @@ const submitPlanner = (conversation: string, key: string) =>
  * methods' results as `unknown`, so the resolution is normalized through `Promise.resolve`
  * instead of awaiting an untyped value directly.
  */
-const callAdmin = async (invoke: () => unknown): Promise<AdminResponse> => {
+const callAdmin = async (invoke: () => unknown): Promise<ConversationObject.AdminResponse> => {
   const raw: unknown = await Promise.resolve(invoke());
-  return Effect.runPromise(decodeAdminResponse(raw));
+  return Effect.runPromise(ConversationObject.decodeAdminResponse(raw));
 };
 
 describe("P7 admin encoded entry points (DC)", () => {
