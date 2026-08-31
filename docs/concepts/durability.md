@@ -21,6 +21,8 @@ protocol.
 All four classes are implemented. No package or example uses "durable" without naming the
 deployment class and tested adapter.
 
+For host setup, see the [Node.js](../platforms/node) and [Cloudflare](../platforms/cloudflare) guides.
+
 ## Canonical history
 
 The Conversation Log is an append-only sequence of versioned facts. It is authoritative for

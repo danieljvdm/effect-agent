@@ -163,6 +163,8 @@ Only the current stored version is supported, with no upgrade migration promise.
 
 ### `@effect-agent/platform-node`
 
+See the [Node.js guide](../platforms/node) for installation, host setup, and worker lifecycle.
+
 Assembles the class `DN` Node/SQLite runtime: one shared SQLite client behind both stores,
 validated typed configuration, the in-process wake scheduler with ledger-scan fallback, graceful
 ownership drain, Agent Binding registration for durable workers
@@ -191,6 +193,9 @@ construction values.
 clearly, with no upgrade migration promise.
 
 ### `@effect-agent/platform-cloudflare`
+
+See the [Cloudflare guide](../platforms/cloudflare) for Conversation Objects, Worker bindings,
+and the client Layer.
 
 The root exports the durable host and Code Mode integration. Browser Run adapters are available
 only from the four browser subpaths below. Install `@cloudflare/puppeteer@^1.1.0` directly when

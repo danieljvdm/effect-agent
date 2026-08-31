@@ -218,7 +218,6 @@ body::before {
 }
 
 .vp-doc table {
-  display: table;
   width: 100%;
   border-collapse: collapse;
   font-size: 0.88rem;

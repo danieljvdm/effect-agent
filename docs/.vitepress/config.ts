@@ -49,6 +49,10 @@ export default defineConfig({
             allowImportingTsExtensions: true,
             noEmit: true,
             strict: true,
+            // Worker examples use the platform package's own ambient types.
+            typeRoots: [
+              resolve(import.meta.dirname, "../../packages/platform-cloudflare/node_modules"),
+            ],
             types: [],
           },
         },
@@ -60,6 +64,7 @@ export default defineConfig({
     siteTitle: "Effect Agent",
     nav: [
       { text: "Guide", link: "/guide/getting-started", activeMatch: "/guide/" },
+      { text: "Platforms", link: "/platforms/", activeMatch: "/platforms/" },
       { text: "Architecture", link: "/concepts/effect-native", activeMatch: "/concepts/" },
       { text: "Reference", link: "/reference/packages", activeMatch: "/reference/" },
     ],
@@ -80,6 +85,14 @@ export default defineConfig({
           { text: "Conversations", link: "/guide/conversations" },
           { text: "Context management", link: "/guide/context-management" },
           { text: "Deterministic testing", link: "/guide/testing" },
+        ],
+      },
+      {
+        text: "Platforms",
+        items: [
+          { text: "Overview", link: "/platforms/" },
+          { text: "Node.js", link: "/platforms/node" },
+          { text: "Cloudflare", link: "/platforms/cloudflare" },
         ],
       },
       {
