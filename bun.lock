@@ -133,6 +133,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@effect-agent/pr-review": "workspace:*",
+        "@effect-agent/pr-review-action": "workspace:*",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-node": "catalog:",
         "effect": "catalog:",

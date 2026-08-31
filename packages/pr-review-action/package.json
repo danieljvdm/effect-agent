@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": {},
+  "exports": {
+    "./review-openai": "./src/review-openai.ts"
+  },
   "scripts": {
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vp test --passWithNoTests"

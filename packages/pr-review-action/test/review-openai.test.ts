@@ -25,7 +25,7 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 
 import { reviewActionProgram, reviewPublicationFailure } from "../src/action.ts";
 import {
@@ -237,6 +237,11 @@ describe("review provider boundary", () => {
 
       expect(sent).toHaveLength(3);
       expect(sent.map((wire) => wire.max_output_tokens)).toEqual([32_000, 26_762, 19_174]);
+      expect(JSON.stringify(sent[0]?.input.at(-1))).toContain("$0.999999");
+      expect(JSON.stringify(sent[1]?.input.at(-1))).toContain("$0.793920");
+      expect(JSON.stringify(sent[1]?.input.at(-1))).toContain("full cache-miss rate");
+      expect(JSON.stringify(sent[1]?.input.at(-1))).not.toContain("prompt_cache_breakpoint");
+      expect(JSON.stringify(sent[1]?.input)).not.toContain("turn 1/8");
       for (const wire of sent) {
         expect(wire.model).toBe("gpt-5.6-sol");
         expect(wire.reasoning).toEqual({ effort: "xhigh" });
@@ -870,6 +875,144 @@ describe("review provider boundary", () => {
             reservedCostMicrousd: 0,
           },
         });
+      }),
+  );
+
+  it.effect.each([503, 429, "transport", "persistent-503", 400, 401, 501, "malformed"] as const)(
+    "retries only transient preflight failures once: %s",
+    (failure) =>
+      Effect.gen(function* () {
+        const counted: Array<WireRequest> = [];
+        const sent: Array<WireRequest> = [];
+        const logs: Array<unknown> = [];
+        const recoverable = failure === 503 || failure === 429 || failure === "transport";
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.gen(function* () {
+              if (url.pathname.endsWith("/input_tokens")) {
+                counted.push(decodeWire(httpRequest));
+                if (counted.length === 1 || !recoverable) {
+                  if (failure === "transport")
+                    return yield* new HttpClientError.HttpClientError({
+                      reason: new HttpClientError.TransportError({
+                        request: httpRequest,
+                        cause: "private-preflight-data",
+                      }),
+                    });
+                  if (failure === "malformed") return json(httpRequest, { input_tokens: -1 });
+                  return json(
+                    httpRequest,
+                    { error: "private-preflight-data" },
+                    failure === "persistent-503" ? 503 : failure,
+                  );
+                }
+                return json(httpRequest, { object: "response.input_tokens", input_tokens: 20_000 });
+              }
+              sent.push(decodeWire(httpRequest));
+              return json(httpRequest, response(rawUsage(20_000, 1_000)));
+            }),
+          ),
+        );
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "preflight-retry",
+        });
+        const exit = yield* provider.client
+          .createResponse(payload)
+          .pipe(
+            Effect.exit,
+            Effect.provide(
+              Logger.layer([Logger.make<unknown, void>(({ message }) => logs.push(message))]),
+            ),
+          );
+        expect(Exit.isSuccess(exit)).toBe(recoverable);
+        expect(counted).toHaveLength(recoverable || failure === "persistent-503" ? 2 : 1);
+        expect(sent).toHaveLength(recoverable ? 1 : 0);
+        if (recoverable) {
+          expect(counted[0]).toEqual(counted[1]);
+          expect(counted[1]?.input).toEqual(sent[0]?.input);
+          expect(sent[0]?.max_output_tokens).toBe(32_000);
+        } else {
+          yield* provider.client.createResponse(payload).pipe(Effect.flip);
+          expect(counted).toHaveLength(failure === "persistent-503" ? 2 : 1);
+        }
+        expect(yield* provider.costControl.snapshot).toMatchObject({
+          modelCalls: recoverable ? 1 : 0,
+          usage: { estimatedCostMicrousd: recoverable ? 120_000 : 0, reservedCostMicrousd: 0 },
+        });
+        const diagnostic = JSON.stringify(logs);
+        expect(diagnostic).toContain('"phase":"input-token-count"');
+        if (typeof failure === "number") expect(diagnostic).toContain(`"status":${failure}`);
+        expect(diagnostic).not.toContain("private-preflight-data");
+        expect(diagnostic).not.toContain("test-key-never-log");
+        expect(diagnostic).not.toContain("api.openai.com");
+      }),
+  );
+
+  it.effect.each(["recover", "exhaust", "interrupt"] as const)(
+    "bounds and cancels preflight attempts without paid liability: %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>();
+        const secondStarted = yield* Deferred.make<void>();
+        let counts = 0;
+        let finalized = 0;
+        let sends = 0;
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.gen(function* () {
+              if (url.pathname.endsWith("/input_tokens")) {
+                counts += 1;
+                if (counts === 2 && mode === "recover") {
+                  expect(finalized).toBe(1);
+                  return json(httpRequest, {
+                    object: "response.input_tokens",
+                    input_tokens: 20_000,
+                  });
+                }
+                yield* Deferred.succeed(counts === 1 ? firstStarted : secondStarted, undefined);
+                return yield* Effect.never.pipe(Effect.ensuring(Effect.sync(() => finalized++)));
+              }
+              sends += 1;
+              return json(httpRequest, response(rawUsage(20_000, 1_000)));
+            }),
+          ),
+        );
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "preflight-timeout",
+        });
+        const pending = yield* provider.client.createResponse(payload).pipe(Effect.forkChild);
+        yield* Deferred.await(firstStarted);
+        if (mode === "interrupt") {
+          yield* Fiber.interrupt(pending);
+        } else {
+          yield* TestClock.adjust("10 seconds");
+          if (mode === "exhaust") {
+            yield* Deferred.await(secondStarted);
+            expect(finalized).toBe(1);
+            yield* TestClock.adjust("10 seconds");
+          }
+        }
+        const exit = yield* Fiber.await(pending);
+        expect(Exit.isSuccess(exit)).toBe(mode === "recover");
+        expect(Exit.hasInterrupts(exit)).toBe(mode === "interrupt");
+        expect(counts).toBe(mode === "interrupt" ? 1 : 2);
+        expect(finalized).toBe(mode === "exhaust" ? 2 : 1);
+        expect(sends).toBe(mode === "recover" ? 1 : 0);
+        expect(yield* provider.costControl.snapshot).toMatchObject({
+          modelCalls: mode === "recover" ? 1 : 0,
+          usage: {
+            estimatedCostMicrousd: mode === "recover" ? 120_000 : 0,
+            reservedCostMicrousd: 0,
+          },
+        });
+        if (mode !== "recover") {
+          yield* provider.client.createResponse(payload).pipe(Effect.flip);
+          expect(counts).toBe(mode === "interrupt" ? 1 : 2);
+        }
       }),
   );
 
