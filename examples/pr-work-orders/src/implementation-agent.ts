@@ -1,5 +1,12 @@
 import { Effect, Schema } from "effect";
-import { Agent, AgentPolicy, AgentRuntime, IdGenerator, ToolExecutionClass } from "effect-agent";
+import {
+  Agent,
+  AgentPolicy,
+  AgentRuntime,
+  ConversationHistory,
+  IdGenerator,
+  ToolExecutionClass,
+} from "effect-agent";
 import { Toolkit, Tool, type LanguageModel, type Model } from "effect/unstable/ai";
 
 import {
@@ -218,7 +225,7 @@ export const makeImplementationAgent = <Provider, ModelProvides, ModelRequires>(
         ImplementationWorkspaceService,
         ImplementationWorkspaceService.of(workspace),
       ),
-      Effect.provide(IdGenerator.layer),
+      Effect.provide([IdGenerator.layer, ConversationHistory.layerTransient]),
       Effect.scoped,
     );
   return { definition: PullRequestImplementer, binding, run } as const;

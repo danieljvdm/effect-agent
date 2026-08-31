@@ -124,7 +124,7 @@ requirements join the Run's `R`.
 ```ts
 import { Effect } from "effect";
 import { IdGenerator } from "@effect-agent/core";
-import { AgentRuntime } from "@effect-agent/engine";
+import { AgentRuntime, ConversationHistory } from "@effect-agent/engine";
 
 const program = AgentRuntime.run(Triage, {
   repo: "Effect-TS/effect",
@@ -133,6 +133,7 @@ const program = AgentRuntime.run(Triage, {
   Effect.provide(TriageToolkitLive),
   Effect.provide(IssueRepoLive),
   Effect.provide(IdGenerator.layer),
+  Effect.provide(ConversationHistory.layerTransient),
   Effect.provide(OpenAiClientLive),
   Effect.scoped,
 );

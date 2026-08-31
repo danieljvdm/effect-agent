@@ -35,6 +35,7 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
+import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentChildPending,
   AgentRuntime,
@@ -266,7 +267,9 @@ const scriptedHook = (
     joins === undefined ? Effect.void : Ref.update(joins, (all) => [...all, request]),
 });
 
-layer(identifiers)("S2 WP1 durable Subagent engine seam", (it) => {
+const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+
+layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
   it.effect("a waiting delegation call does not trigger the batch failure policy", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);

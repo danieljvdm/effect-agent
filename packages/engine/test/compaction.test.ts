@@ -46,6 +46,7 @@ import {
   renderForSummary,
   SUMMARY_INPUT_BUDGET,
 } from "../src/compaction.ts";
+import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentRuntime,
   CompactionError,
@@ -252,7 +253,9 @@ const driveRun = (setup: RunSetup) => driveRunWith(answerOutput, setup);
 
 const compactionTestLayer = Layer.merge(identifiers, ContextCompactor.layer);
 
-layer(compactionTestLayer)("engine compaction and overflow recovery", (it) => {
+const testLayer = Layer.merge(compactionTestLayer, ConversationHistory.layerTransient);
+
+layer(testLayer)("engine compaction and overflow recovery", (it) => {
   const replacementSetup: RunSetup = {
     policy: AgentPolicy.make({
       ...basePolicy,
@@ -293,7 +296,11 @@ layer(compactionTestLayer)("engine compaction and overflow recovery", (it) => {
                     .pipe(
                       Effect.map(
                         (summary) =>
-                          ({ kind: "summarize", through: 4, summary }) satisfies CompactionDecision,
+                          ({
+                            kind: "summarize",
+                            through: 4,
+                            summary,
+                          }) satisfies CompactionDecision,
                       ),
                     ),
                 ),

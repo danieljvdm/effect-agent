@@ -47,6 +47,7 @@ import {
 } from "effect/unstable/ai";
 
 import { boundedValueFootprint } from "../src/bounded-value-internal.ts";
+import { ConversationHistory } from "../src/conversation-history.ts";
 import { errorMessage, errorTag } from "../src/error-diagnostic-internal.ts";
 import {
   AgentResultSchema,
@@ -262,7 +263,9 @@ type ExportedLogObservation = ReturnType<typeof exportedLogObservation>;
 const renderedLogMessage = (message: unknown): string =>
   Array.isArray(message) ? message.join(" ") : String(message);
 
-layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
+const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+
+layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("preserves official prior history as the exact prefix of a new Run", () => {
     const priorHistory = Prompt.fromMessages([
       Prompt.makeMessage("system", { content: "Original conversation instructions." }),
@@ -5869,7 +5872,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
  * forbid tool use, and the Run completes with the honest
  * `finishReason: "budget-exhausted"` (RUN-011).
  */
-layer(identifiers)("RUN-018 budget soft landing", (it) => {
+layer(testLayer)("RUN-018 budget soft landing", (it) => {
   const Search = Tool.make("search", {
     parameters: Schema.Struct({}),
     success: Schema.String,
@@ -6531,7 +6534,7 @@ layer(identifiers)("RUN-018 budget soft landing", (it) => {
  * covers expected failures only — and `withTerminalDefectEvent` lets a host boundary append
  * ONE bounded terminal `RunFailed { errorTag: "Defect" }` before the cause is rethrown.
  */
-layer(identifiers)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) => {
+layer(testLayer)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) => {
   it.effect("a defect appends one bounded terminal RunFailed and rethrows the original cause", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);

@@ -1,5 +1,5 @@
 import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import { ToolExecutionClass, AgentRuntime } from "@effect-agent/engine";
+import { ToolExecutionClass, AgentRuntime, ConversationHistory } from "@effect-agent/engine";
 import {
   CodeExecutionHost,
   CodeExecutionResult,
@@ -323,7 +323,9 @@ const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number 
     } satisfies ScenarioOutcome;
   });
 
-layer(identifiers)("CAP-016 Code Mode handler through a scripted executor", (it) => {
+const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+
+layer(testLayer)("CAP-016 Code Mode handler through a scripted executor", (it) => {
   it.effect(
     "CAP-014 routes host calls to the allowlisted Tool and returns the budgeted egress",
     () =>

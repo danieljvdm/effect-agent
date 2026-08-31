@@ -79,6 +79,7 @@ const DeterministicIdGeneratorLive = Layer.effect(
 );
 
 const TestRuntimeLive = Layer.mergeAll(
+  ConversationHistory.layerTransient,
   ToolkitLive,
   DomainServicesTest,
   DeterministicIdGeneratorLive,

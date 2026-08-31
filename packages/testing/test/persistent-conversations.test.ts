@@ -1,4 +1,5 @@
-import { Agent, AgentPolicy, ConversationId, IdGenerator } from "@effect-agent/core";
+import { Agent, AgentPolicy, ConversationId, IdGenerator, type RunEvent } from "@effect-agent/core";
+import { AgentRuntime, ConversationHistory } from "@effect-agent/engine";
 import {
   BatchId,
   CanonicalBatch,
@@ -16,9 +17,9 @@ import {
   RepairAnnotated,
   replayConversation,
 } from "@effect-agent/session";
-import { PersistentConversations } from "@effect-agent/session/history";
+import { PersistentHistory } from "@effect-agent/session/history";
 import { MemoryConversationStoreLive } from "@effect-agent/storage-memory";
-import { layer as sqliteLayer, SqliteStorageFailpointError } from "@effect-agent/storage-sqlite";
+import { layer as sqliteStore, SqliteStorageFailpointError } from "@effect-agent/storage-sqlite";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -35,6 +36,8 @@ import {
   Ref,
   Schema,
   SchemaGetter,
+  SchemaIssue,
+  Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
 import { Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
@@ -96,7 +99,14 @@ const services = Layer.mergeAll(
   NodeCrypto.layer,
   toolkit.toLayer({ lookup: () => Effect.succeed("Kyoto") }),
 );
-const memory = MemoryConversationStoreLive.pipe(Layer.provideMerge(services));
+const memory = PersistentHistory.layer.pipe(
+  Layer.provideMerge(MemoryConversationStoreLive),
+  Layer.provideMerge(services),
+);
+const sqliteLayer = (options: Parameters<typeof sqliteStore>[0]) =>
+  PersistentHistory.layer.pipe(Layer.provideMerge(sqliteStore(options)));
+const loadHistory = (id: ConversationId) =>
+  Effect.flatMap(ConversationHistory, (history) => history.load(id));
 const exported = Effect.flatMap(ConversationStore, (store) =>
   store.export(ConversationExportRequest.make({ conversationId })),
 );
@@ -110,6 +120,118 @@ const withDatabase = <A, E, R>(use: (filename: string) => Effect.Effect<A, E, R>
   ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, services)));
 
 describe("persistent conversations", () => {
+  it.effect("rejects competing history ownership before model execution", () =>
+    Effect.gen(function* () {
+      yield* AgentRuntime.run(agent([answer("retained")]), "prior", options);
+      const before = yield* exported;
+      const calls = yield* Ref.make(0);
+      const binding = agent([
+        { ...answer("not retained"), onStreamStart: Ref.update(calls, (n) => n + 1) },
+      ]);
+      const rejected = yield* AgentRuntime.run(binding, "new", {
+        ...options,
+        history: Prompt.empty,
+      }).pipe(Effect.flip);
+      expect(rejected).toMatchObject({ _tag: "ConversationHistoryError", reason: "incompatible" });
+      expect(yield* Ref.get(calls)).toBe(0);
+      expect(yield* exported).toEqual(before);
+    }).pipe(Effect.provide(memory)),
+  );
+
+  it.effect("does not commit or publish completion when final result decoding fails", () =>
+    Effect.gen(function* () {
+      const decodes = yield* Ref.make(0);
+      const output = Schema.String.pipe(
+        Schema.decode({
+          decode: SchemaGetter.transformOrFail((value) =>
+            Ref.updateAndGet(decodes, (n) => n + 1).pipe(
+              Effect.flatMap((count) =>
+                count === 1
+                  ? Effect.succeed(value)
+                  : Effect.fail(
+                      new SchemaIssue.InvalidValue({ message: "Result decoder refused the value" }),
+                    ),
+              ),
+            ),
+          ),
+          encode: SchemaGetter.transform((value) => value),
+        }),
+      );
+      const binding = Agent.withModel(
+        Agent.define("history-result-codec", {
+          input: Schema.String,
+          output,
+          instructions: "Answer.",
+          toolkit: Toolkit.empty,
+          policy,
+        }),
+        Model.make("scripted", "result-codec", ScriptedModel.layer([answer("reply")])),
+      );
+      const started = yield* AgentRuntime.start(binding, "request", options);
+      expect((yield* started.await.pipe(Effect.flip))._tag).toBe("AgentOutputError");
+      expect(yield* Ref.get(decodes)).toBe(2);
+      expect((yield* started.events).some((event) => event._tag === "RunCompleted")).toBe(false);
+      expect((yield* exported).records).toEqual([]);
+    }).pipe(Effect.provide(memory)),
+  );
+
+  it.effect(
+    "run, start, and stream commit after model finalizers and before completion is visible",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* ConversationStore;
+        const finalized = yield* Ref.make(0);
+        const commits = yield* Ref.make(0);
+        const history = PersistentHistory.layer.pipe(
+          Layer.provide(
+            Layer.succeed(ConversationStore, {
+              ...store,
+              append: Effect.fn(function* (request: FencedAppendRequest) {
+                expect(yield* Ref.get(finalized)).toBe((yield* Ref.get(commits)) + 1);
+                const result = yield* store.append(request);
+                yield* Ref.update(commits, (n) => n + 1);
+                return result;
+              }),
+            }),
+          ),
+        );
+        const binding = Agent.withModel(
+          definition,
+          Model.make(
+            "scripted",
+            "scoped-history",
+            Layer.merge(
+              ScriptedModel.layer([answer("retained")]),
+              Layer.effectDiscard(Effect.addFinalizer(() => Ref.update(finalized, (n) => n + 1))),
+            ),
+          ),
+        );
+        yield* AgentRuntime.run(binding, "run", options).pipe(Effect.provide(history));
+        expect(yield* Ref.get(commits)).toBe(1);
+        const started = yield* AgentRuntime.start(binding, "start", options).pipe(
+          Effect.provide(history),
+        );
+        yield* started.observe.pipe(
+          Stream.runForEach((event) =>
+            Effect.gen(function* () {
+              if (event._tag === "RunCompleted") expect(yield* Ref.get(commits)).toBe(2);
+            }),
+          ),
+        );
+        expect((yield* started.await).output).toBe("retained");
+        yield* AgentRuntime.stream(binding, "stream", options).pipe(
+          Stream.runForEach((event) =>
+            Effect.gen(function* () {
+              if (event._tag === "RunCompleted") expect(yield* Ref.get(commits)).toBe(3);
+            }),
+          ),
+          Effect.provide(history),
+        );
+        expect((yield* exported).records).toHaveLength(9);
+        expect(yield* Ref.get(finalized)).toBe(3);
+      }).pipe(Effect.provide(MemoryConversationStoreLive.pipe(Layer.provideMerge(services)))),
+  );
+
   it.effect("retains the engine's encoded values without repeating Schema transformations", () =>
     Effect.gen(function* () {
       const decodes = yield* Ref.make(0);
@@ -142,7 +264,7 @@ describe("persistent conversations", () => {
         transformed,
         Model.make("scripted", "codecs", ScriptedModel.layer([answer("reply")])),
       );
-      const result = yield* PersistentConversations.run(binding, "request", options);
+      const result = yield* AgentRuntime.run(binding, "request", options);
       const log = yield* exported;
       const projection = replayConversation(conversationId, log.records);
       expect(yield* Ref.get(decodes)).toBe(1);
@@ -150,12 +272,10 @@ describe("persistent conversations", () => {
       expect(projection.inputs).toEqual(["request:1"]);
       expect(projection.modelOutputs).toEqual(["reply"]);
       expect(result.output).toBe("reply");
-      const refused = yield* PersistentConversations.run(
-        agent([]),
-        "x".repeat(1_048_577),
-        options,
-      ).pipe(Effect.flip);
-      expect(refused._tag).toBe("PersistentConversationError");
+      const refused = yield* AgentRuntime.run(agent([]), "x".repeat(1_048_577), options).pipe(
+        Effect.flip,
+      );
+      expect(refused._tag).toBe("ConversationHistoryError");
       expect(yield* exported).toEqual(log);
     }).pipe(Effect.provide(memory)),
   );
@@ -200,7 +320,7 @@ describe("persistent conversations", () => {
           examples,
           Model.make("scripted", "examples", ScriptedModel.layer([answer("actual answer")])),
         );
-        const result = yield* PersistentConversations.run(bound, "Actual question", options);
+        const result = yield* AgentRuntime.run(bound, "Actual question", options);
         const log = yield* exported;
         expect(result.turns).toBe(1);
         expect(
@@ -208,11 +328,9 @@ describe("persistent conversations", () => {
             record.payload._tag === "ModelCompleted" ? [record.payload.output] : [],
           ),
         ).toEqual(["actual answer"]);
-        expect(
-          (yield* PersistentConversations.load(conversationId)).content.map(
-            (message) => message.role,
-          ),
-        ).toEqual(["system", "user", "assistant", "tool", "user", "assistant"]);
+        expect((yield* loadHistory(conversationId)).content.map((message) => message.role)).toEqual(
+          ["system", "user", "assistant", "tool", "user", "assistant"],
+        );
       }).pipe(Effect.provide(memory)),
   );
 
@@ -221,15 +339,15 @@ describe("persistent conversations", () => {
     () =>
       withDatabase((filename) =>
         Effect.gen(function* () {
-          const first = yield* PersistentConversations.run(
+          const first = yield* AgentRuntime.run(
             agent([lookup, answer("Kyoto")]),
             "Find my city",
             options,
           ).pipe(Effect.provide(sqliteLayer({ filename })));
-          const before = yield* PersistentConversations.load(conversationId).pipe(
+          const before = yield* loadHistory(conversationId).pipe(
             Effect.provide(sqliteLayer({ filename })),
           );
-          const second = yield* PersistentConversations.run(
+          const second = yield* AgentRuntime.run(
             agent([
               {
                 ...answer("Welcome back to Kyoto"),
@@ -254,7 +372,7 @@ describe("persistent conversations", () => {
           ).pipe(Effect.provide(sqliteLayer({ filename })));
           const restored = yield* Effect.gen(function* () {
             return {
-              prompt: yield* PersistentConversations.load(conversationId),
+              prompt: yield* loadHistory(conversationId),
               log: yield* exported,
             };
           }).pipe(Effect.provide(sqliteLayer({ filename, verifyOnOpen: true })));
@@ -339,7 +457,7 @@ describe("persistent conversations", () => {
           })),
         );
         const run = (input: string) =>
-          PersistentConversations.run(binding, input, options).pipe(
+          AgentRuntime.run(binding, input, options).pipe(
             Effect.provide(
               toolkit.toLayer({
                 lookup: () => Ref.update(toolCalls, (n) => n + 1).pipe(Effect.as("Kyoto")),
@@ -348,7 +466,7 @@ describe("persistent conversations", () => {
           );
         expect((yield* run("last fitting Run")).output).toBe("retained");
         const before = yield* exported;
-        const prompt = yield* PersistentConversations.load(conversationId);
+        const prompt = yield* loadHistory(conversationId);
         expect(before.records).toHaveLength(65_535);
         expect(prompt.content.map((message) => message.role)).toEqual([
           "system",
@@ -358,13 +476,13 @@ describe("persistent conversations", () => {
           "assistant",
         ]);
         expect(yield* run("overflow").pipe(Effect.flip)).toMatchObject({
-          _tag: "PersistentConversationError",
+          _tag: "ConversationHistoryError",
           message: expect.stringContaining("65536"),
         });
         expect(yield* Ref.get(modelCalls)).toBe(2);
         expect(yield* Ref.get(toolCalls)).toBe(1);
         expect(yield* exported).toEqual(before);
-        expect(yield* PersistentConversations.load(conversationId)).toEqual(prompt);
+        expect(yield* loadHistory(conversationId)).toEqual(prompt);
       }).pipe(Effect.provide(memory)),
     30_000,
   );
@@ -378,7 +496,7 @@ describe("persistent conversations", () => {
         const releaseFirst = yield* Deferred.make<void>();
         const releaseSecond = yield* Deferred.make<void>();
         const calls = yield* Ref.make(0);
-        const first = yield* PersistentConversations.run(
+        const first = yield* AgentRuntime.run(
           agent([
             {
               ...answer("winner"),
@@ -392,7 +510,7 @@ describe("persistent conversations", () => {
           options,
         ).pipe(Effect.forkChild);
         yield* Deferred.await(firstStarted);
-        const second = yield* PersistentConversations.run(
+        const second = yield* AgentRuntime.run(
           agent([
             {
               ...answer("loser"),
@@ -411,16 +529,14 @@ describe("persistent conversations", () => {
         yield* Deferred.succeed(releaseSecond, undefined);
         const loser = yield* Fiber.await(second);
         expect(Exit.isFailure(loser) && Cause.findErrorOption(loser.cause)).toMatchObject({
-          value: { _tag: "AppendConflict", reason: "tail" },
+          value: { _tag: "ConversationHistoryError", reason: "conflict" },
         });
         const log = yield* exported;
         expect(replayConversation(conversationId, log.records).completedRuns).toEqual([
           winner.runId,
         ]);
         expect(yield* Ref.get(calls)).toBe(2);
-        expect(JSON.stringify(yield* PersistentConversations.load(conversationId))).not.toContain(
-          "loser",
-        );
+        expect(JSON.stringify(yield* loadHistory(conversationId))).not.toContain("loser");
       }).pipe(Effect.provide(memory)),
   );
 
@@ -430,7 +546,7 @@ describe("persistent conversations", () => {
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        const running = yield* PersistentConversations.run(
+        const running = yield* AgentRuntime.run(
           agent([
             {
               ...answer("stale"),
@@ -453,12 +569,10 @@ describe("persistent conversations", () => {
         yield* Deferred.succeed(release, undefined);
         const stale = yield* Fiber.await(running);
         expect(Exit.isFailure(stale) && Cause.findErrorOption(stale.cause)).toMatchObject({
-          value: { _tag: "FenceRejected" },
+          value: { _tag: "ConversationHistoryError", reason: "fenced" },
         });
-        const next = yield* PersistentConversations.run(agent([]), "next", options).pipe(
-          Effect.flip,
-        );
-        expect(next._tag).toBe("FenceRejected");
+        const next = yield* AgentRuntime.run(agent([]), "next", options).pipe(Effect.flip);
+        expect(next).toMatchObject({ _tag: "ConversationHistoryError", reason: "fenced" });
         expect((yield* exported).records).toEqual([]);
       }).pipe(Effect.provide(memory)),
   );
@@ -466,7 +580,7 @@ describe("persistent conversations", () => {
   for (const ending of ["failure", "defect", "timeout", "interruption"] as const) {
     it.effect(`retains no partial Run after ${ending} and closes model resources`, () =>
       Effect.gen(function* () {
-        yield* PersistentConversations.run(agent([answer("retained")]), "prior", options);
+        yield* AgentRuntime.run(agent([answer("retained")]), "prior", options);
         const before = yield* exported;
         const started = yield* Deferred.make<void>();
         const finalized = yield* Ref.make(0);
@@ -483,7 +597,7 @@ describe("persistent conversations", () => {
           ),
           onStreamFinalize: finalize,
         };
-        const fiber = yield* PersistentConversations.run(
+        const fiber = yield* AgentRuntime.run(
           agent([{ ...lookup, onStreamFinalize: finalize }, interruptedTurn]),
           "not retained",
           options,
@@ -509,36 +623,65 @@ describe("persistent conversations", () => {
     );
   }
 
-  for (const location of ["append:before", "append:after"] as const) {
-    it.effect(`reopening after ${location} sees either the whole Run or none of it`, () =>
-      withDatabase((filename) =>
-        Effect.gen(function* () {
-          const failure = yield* PersistentConversations.run(
-            agent([lookup, answer("Kyoto")]),
-            "city",
-            options,
-          ).pipe(
-            Effect.provide(
-              sqliteLayer({
-                filename,
-                failpoint: (hit) =>
-                  hit === location
-                    ? Effect.fail(SqliteStorageFailpointError.make({ location }))
-                    : Effect.void,
-              }),
-            ),
-            Effect.flip,
-          );
-          expect(failure._tag).toBe("ConversationStoreError");
-          const log = yield* exported.pipe(
-            Effect.provide(sqliteLayer({ filename, verifyOnOpen: true })),
-          );
-          const projection = replayConversation(conversationId, log.records, log.tailDigest);
-          expect(projection.inputs).toEqual(location === "append:after" ? ["city"] : []);
-          expect(projection.modelOutputs).toEqual(location === "append:after" ? ["Kyoto"] : []);
-          expect(projection.completedRuns).toHaveLength(location === "append:after" ? 1 : 0);
-        }),
-      ),
-    );
+  for (const entrypoint of ["run", "start", "stream"] as const) {
+    for (const location of ["append:before", "append:after"] as const) {
+      it.effect(
+        `${entrypoint}: reopening after ${location} sees either the whole Run or none of it`,
+        () =>
+          withDatabase((filename) =>
+            Effect.gen(function* () {
+              const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+              const binding = agent([lookup, answer("Kyoto")]);
+              const execution =
+                entrypoint === "run"
+                  ? AgentRuntime.run(binding, "city", options)
+                  : entrypoint === "stream"
+                    ? AgentRuntime.stream(binding, "city", options).pipe(
+                        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+                        Stream.runDrain,
+                      )
+                    : Effect.gen(function* () {
+                        const started = yield* AgentRuntime.start(binding, "city", options);
+                        return yield* started.await.pipe(
+                          Effect.onExit(() =>
+                            started.events.pipe(Effect.flatMap((all) => Ref.set(events, all))),
+                          ),
+                        );
+                      });
+              const failure = yield* execution.pipe(
+                Effect.provide(
+                  sqliteLayer({
+                    filename,
+                    failpoint: (hit) =>
+                      hit === location
+                        ? Effect.fail(SqliteStorageFailpointError.make({ location }))
+                        : Effect.void,
+                  }),
+                ),
+                Effect.flip,
+              );
+              expect(failure).toMatchObject({
+                _tag: "ConversationHistoryError",
+                reason: "storage",
+              });
+              if (entrypoint !== "run") {
+                const observed = yield* Ref.get(events);
+                expect(observed.some((event) => event._tag === "RunCompleted")).toBe(false);
+                expect(observed.at(-1)).toMatchObject({
+                  _tag: "RunFailed",
+                  errorTag: "ConversationHistoryError",
+                });
+              }
+              const log = yield* exported.pipe(
+                Effect.provide(sqliteLayer({ filename, verifyOnOpen: true })),
+              );
+              const projection = replayConversation(conversationId, log.records, log.tailDigest);
+              expect(projection.inputs).toEqual(location === "append:after" ? ["city"] : []);
+              expect(projection.modelOutputs).toEqual(location === "append:after" ? ["Kyoto"] : []);
+              expect(projection.completedRuns).toHaveLength(location === "append:after" ? 1 : 0);
+            }),
+          ),
+      );
+    }
   }
 });

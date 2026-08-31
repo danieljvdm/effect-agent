@@ -15,6 +15,8 @@ import {
 import {
   type AgentChildPending,
   AgentRuntime,
+  type ConversationHistory,
+  type ConversationHistoryError,
   type CompactionError,
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
@@ -92,6 +94,7 @@ type ExpectedRequirements =
   | TravelGuidance
   | Tool.HandlersFor<Toolkit.Tools<typeof TravelPlannerToolkit>>
   | IdGenerator
+  | ConversationHistory
   | Scope.Scope;
 type ExpectedFailure =
   | FlightUnavailable
@@ -105,6 +108,7 @@ type ExpectedFailure =
   | ContextBudgetError
   | ContextOverflowError
   | CompactionError
+  | ConversationHistoryError
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentToolAuthorizationDenied

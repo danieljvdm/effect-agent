@@ -30,7 +30,10 @@ Exports include `Agent`, `AgentPolicy`, identifiers, errors, `RunEvent`, and `Id
 Owns the one ephemeral interpreter, Turn loop, Effect AI Response reduction, Tool scheduling,
 policy enforcement, semantic events, and narrow `RunOptions` seams.
 
-Exports include `AgentRuntime`, `DetachedRun`, `RunOptions`, and the operational hook interfaces.
+Exports include `AgentRuntime`, `DetachedRun`, `RunOptions`, `ConversationHistory`,
+`ConversationHistoryError`, and the operational hook interfaces. Every runtime entry point
+requires a history policy Layer. The session package's `PersistentHistory.layer` implements
+retained history over any ConversationStore; `ConversationHistory.layerTransient` retains none.
 `CurrentToolFailureObserver`, `toolFailureObserverLayer`, `RunToolFailureObserver`, and
 `ToolFailureObservation` provide the opt-in trusted local interface for non-propagating Tool
 failures. The default is absent, installation is service-only, and observations are never

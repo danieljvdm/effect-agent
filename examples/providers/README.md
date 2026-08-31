@@ -28,5 +28,5 @@ vp run -F @effect-agent/example-providers history --database /tmp/effect-agent-h
 
 `seed` appends two complete Runs each time it executes. `show` loads their canonical history
 without constructing a model. The functions in [`src/history.ts`](src/history.ts) demonstrate
-`PersistentConversations.run` and `load`; an application can replace the scripted Model with
+`AgentRuntime.run` with `PersistentHistory.layer` and `ConversationHistory.load`; an application can replace the scripted Model with
 an upstream provider Model. An interrupted Run has no completion or recovery promise.

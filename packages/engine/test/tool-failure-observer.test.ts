@@ -31,6 +31,7 @@ import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import { expectTypeOf } from "vite-plus/test";
 
+import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentRuntime,
   CurrentToolFailureObserver,
@@ -213,7 +214,9 @@ const identity = {
 const invoke = (pass: ToolBrokerPass) =>
   pass.invoke({ toolName: "query", encodedArguments: { value: 1 } });
 
-layer(identifiers)("RUN-036 trusted Tool failure observation", (it) => {
+const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+
+layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
   it.effect(
     "observes a direct declared failure once on continuation and early close, without its payload",
     () =>
@@ -535,7 +538,11 @@ layer(identifiers)("RUN-036 trusted Tool failure observation", (it) => {
           },
           { _tag: "ProgrammaticPreflightFailure", kind: "protocol", tag: "ModelProtocolError" },
           { _tag: "ProgrammaticPreflightFailure", kind: "infrastructure", tag: "QueryFailure" },
-          { _tag: "ProgrammaticPreflightFailure", kind: "infrastructure", tag: "AgentPolicyError" },
+          {
+            _tag: "ProgrammaticPreflightFailure",
+            kind: "infrastructure",
+            tag: "AgentPolicyError",
+          },
         ]);
         for (const observation of observations) {
           expect(observation).toMatchObject({ ...identity, parentToolCallId: outerId });
@@ -917,7 +924,9 @@ layer(identifiers)("RUN-036 trusted Tool failure observation", (it) => {
             "go",
           ).pipe(Stream.provide(queries.toLayer({ query: () => Effect.succeed(null) }))),
           AgentRuntime.stream(binding(approvalTools, [call("approval")]), "go", {
-            approval: { request: () => Effect.succeed({ _tag: "denied", reason: "not allowed" }) },
+            approval: {
+              request: () => Effect.succeed({ _tag: "denied", reason: "not allowed" }),
+            },
           }).pipe(
             Stream.provide(approvalTools.toLayer({ approval: () => Effect.succeed("unexpected") })),
           ),

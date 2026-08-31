@@ -29,6 +29,7 @@ import {
 import {
   AgentChildPending,
   AgentRuntime,
+  ConversationHistory,
   CurrentToolFailureObserver,
   getToolExecutionClass,
   RunContextPreparation,
@@ -613,14 +614,18 @@ export const DurableApprovalResolver: Context.Reference<RunApprovalHook<never, n
 
 /**
  * Services a durable worker needs beyond the runtime's own Layer: the Agent Binding's inferred
- * requirements minus `IdGenerator`, which the coordinator provides itself so Run/Turn identity is
- * deterministic per Submission across Attempts.
+ * requirements minus its supplied identity and history services. The coordinator provides
+ * deterministic Run/Turn identity and transient history policy because its journal owns all
+ * durable reads and commits across Attempts.
  */
 export type DurableWorkerRequirements<
   AgentValue extends Agent.Any,
   InstructionRequirements = never,
 > =
-  | Exclude<AgentRuntimeRequirements<AgentValue, never, InstructionRequirements>, IdGenerator>
+  | Exclude<
+      AgentRuntimeRequirements<AgentValue, never, InstructionRequirements>,
+      IdGenerator | ConversationHistory
+    >
   | AgentCompletionProjectionRequirements<AgentValue>;
 
 export interface DurableRuntimeConfigOptions {
@@ -5299,6 +5304,7 @@ const make = Effect.gen(function* () {
 
       const consume = Stream.runForEach(
         AgentRuntime.stream(agent, submission.inputPayload, options).pipe(
+          Stream.provide(ConversationHistory.layerTransient),
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
           Stream.provideService(ContextCompactor, compactor),
         ),

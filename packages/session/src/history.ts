@@ -1,5 +1,6 @@
 /** Persistent history without durable admission or recovery coordination. */
-export * from "./persistent-conversations.ts";
+export { ConversationHistory, ConversationHistoryError } from "@effect-agent/engine";
+export { PersistentHistory } from "./persistent-history.ts";
 export {
   AppendConflict,
   ConversationExport,

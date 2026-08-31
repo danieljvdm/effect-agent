@@ -15,6 +15,7 @@ import { expect, layer } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
+import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentRuntime,
   AgentSpawner,
@@ -186,7 +187,9 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
 
 const isSubagentEvent = (event: RunEvent) => event._tag.startsWith("Subagent");
 
-layer(identifiers)("SUB S1 engine execution seam", (it) => {
+const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+
+layer(testLayer)("SUB S1 engine execution seam", (it) => {
   it.effect("honors preallocated Conversation and Run identity in every emitted event", () => {
     const conversationId = Schema.decodeSync(ConversationId)("conversation-preallocated");
     const runId = Schema.decodeSync(RunId)("run-preallocated");

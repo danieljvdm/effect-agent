@@ -3,6 +3,7 @@ import {
   Agent,
   AgentPolicy,
   AgentRuntime,
+  ConversationHistory,
   IdGenerator,
   makeUsageBudget,
   type RunCostEstimator,
@@ -523,6 +524,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
     },
     Effect.provide([
       IdGenerator.layer,
+      ConversationHistory.layerTransient,
       reviewToolkitLayer,
       reviewCompletion.toLayer({ submit_review: () => Effect.succeed(null) }),
     ]),

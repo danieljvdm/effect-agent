@@ -7,6 +7,6 @@
 "@effect-agent/testing": minor
 ---
 
-Run Agents with retained canonical history through `PersistentConversations` and the `session/history` subpath without admitting durable work. Make checkpoint storage an optional `ConversationStore.checkpoints` capability.
+Provide canonical conversation history to `AgentRuntime.run`, `start`, and `stream` through `PersistentHistory.layer` without admitting durable work. Make checkpoint storage an optional `ConversationStore.checkpoints` capability.
 
-BEHAVIOR CHANGE: Use `store.checkpoints.save` and `store.checkpoints.load` after checking capability availability; adapters without checkpoint support need only the base store methods. `UserInputRecorded.submissionId` is present only for durably accepted input.
+BEHAVIOR CHANGE: Provide `ConversationHistory.layerTransient` for transient execution or `PersistentHistory.layer` with a ConversationStore for retained history. Use `store.checkpoints.save` and `store.checkpoints.load` after checking capability availability. `UserInputRecorded.submissionId` is present only for durably accepted input.

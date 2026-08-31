@@ -1,6 +1,8 @@
 import "@tanstack/react-start/server-only";
-import type { ApprovalAdapterError, ApprovalAudit, Redactor } from "@effect-agent/capabilities";
 import {
+  type ApprovalAdapterError,
+  type ApprovalAudit,
+  type Redactor,
   ApprovalApproved,
   type ApprovalAuditLimitExceeded,
   type ApprovalDecision,
@@ -38,7 +40,12 @@ import {
   TurnId,
   type RunEvent,
 } from "@effect-agent/core";
-import { AgentRuntime, type RunInputHook, type RunOptions } from "@effect-agent/engine";
+import {
+  AgentRuntime,
+  ConversationHistory,
+  type RunInputHook,
+  type RunOptions,
+} from "@effect-agent/engine";
 import {
   NetworkDisabled,
   Sandbox,
@@ -948,6 +955,7 @@ const InteractiveRuntimeLive = Layer.effect(
 
           const controlsLayer = Layer.succeed(DemoRunControls)(controls);
           const commonRuntimeLayers = Layer.mergeAll(
+            ConversationHistory.layerTransient,
             DemoTravelToolkitLayer,
             DemoHoldGatewayLayer,
             makeIdLayer(conversationId, runId),
@@ -961,6 +969,7 @@ const InteractiveRuntimeLive = Layer.effect(
             TravelGuidanceLayer,
           ).pipe(Layer.provide(controlsLayer));
           const liveRuntimeLayer = Layer.mergeAll(
+            ConversationHistory.layerTransient,
             RealTravelToolkitLayer,
             DemoHoldGatewayLayer,
             makeIdLayer(conversationId, runId),

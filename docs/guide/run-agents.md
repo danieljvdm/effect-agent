@@ -8,6 +8,12 @@ description: Interpret one Agent Binding as a result, semantic event stream, or 
 The runtime exposes one semantic loop through three views. Choose based on how the caller needs to
 observe work. The choice does not change execution behavior.
 
+All three entry points require a provided `ConversationHistory` service. Choose
+`ConversationHistory.layerTransient` for execution without retained history, or provide
+`PersistentHistory.layer` with a store as shown in [Conversations](./conversations).
+History commits finish before successful results or `RunCompleted` events become visible.
+The examples below assume the application provides that Layer and the Agent's other services.
+
 ## Await one result
 
 ```ts

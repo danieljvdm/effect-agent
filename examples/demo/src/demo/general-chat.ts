@@ -1,4 +1,5 @@
 import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import { ConversationHistory } from "@effect-agent/engine";
 import { ScriptedModel } from "@effect-agent/testing";
 import { Context, Effect, Layer, Ref, Schema } from "effect";
 import { Model, Tool, Toolkit } from "effect/unstable/ai";
@@ -292,9 +293,14 @@ export const DemoIdGeneratorLayer = Layer.effect(
 );
 
 export const FixtureChatRuntimeLayer = Layer.mergeAll(
+  ConversationHistory.layerTransient,
   FixtureChatToolkitLayer,
   FixtureKnowledgeLayer,
   DemoIdGeneratorLayer,
 );
 
-export const LiveChatRuntimeLayer = Layer.mergeAll(CalculatorToolkitLayer, DemoIdGeneratorLayer);
+export const LiveChatRuntimeLayer = Layer.mergeAll(
+  CalculatorToolkitLayer,
+  DemoIdGeneratorLayer,
+  ConversationHistory.layerTransient,
+);

@@ -1,5 +1,5 @@
 import { IdGenerator } from "@effect-agent/core";
-import { AgentRuntime } from "@effect-agent/engine";
+import { AgentRuntime, ConversationHistory } from "@effect-agent/engine";
 import {
   dynamicWorkerCodeExecutorLayer,
   dynamicWorkerImplementation,
@@ -116,6 +116,7 @@ const runBound = (
       Layer.provide(dynamicWorkerCodeExecutorLayer({ loader: env.LOADER })),
     ),
     IdGenerator.layer,
+    ConversationHistory.layerTransient,
   );
   return Effect.gen(function* () {
     // Stream the Run and correlate each `run_javascript` call's declared

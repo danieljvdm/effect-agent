@@ -1,10 +1,14 @@
 import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
-import { PersistentConversations } from "@effect-agent/session/history";
-import { layer as sqliteHistory } from "@effect-agent/storage-sqlite";
+import { AgentRuntime, ConversationHistory } from "@effect-agent/engine";
+import { PersistentHistory } from "@effect-agent/session/history";
+import { layer as sqliteStore } from "@effect-agent/storage-sqlite";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
-import { Console, Effect, Schema } from "effect";
+import { Console, Effect, Layer, Schema } from "effect";
 import { Model, Prompt, Toolkit } from "effect/unstable/ai";
 import { Command, Flag } from "effect/unstable/cli";
+
+const sqliteHistory = (filename: string) =>
+  PersistentHistory.layer.pipe(Layer.provide(sqliteStore({ filename })));
 
 const conversationId = Schema.decodeSync(ConversationId)("persistent-history-example");
 const definition = Agent.define("history-example", {
@@ -44,22 +48,22 @@ const binding = (answer: string) => {
 
 /** Two inputs share one SQLite history; each call closes its connection before the next opens. */
 export const writeHistory = Effect.fn("example.writeHistory")(function* (filename: string) {
-  const first = yield* PersistentConversations.run(
-    binding("I'll remember Kyoto."),
-    "I'm visiting Kyoto.",
-    { conversationId },
-  ).pipe(Effect.provide(sqliteHistory({ filename })));
-  const second = yield* PersistentConversations.run(
+  const first = yield* AgentRuntime.run(binding("I'll remember Kyoto."), "I'm visiting Kyoto.", {
+    conversationId,
+  }).pipe(Effect.provide(sqliteHistory(filename)));
+  const second = yield* AgentRuntime.run(
     binding("You're visiting Kyoto."),
     "Which city am I visiting?",
     { conversationId },
-  ).pipe(Effect.provide(sqliteHistory({ filename })));
+  ).pipe(Effect.provide(sqliteHistory(filename)));
   return [first.output, second.output];
-});
+}, Effect.scoped);
 
 /** No model or Agent is needed to reconstruct the retained Prompt after the process restarts. */
 export const readHistory = Effect.fn("example.readHistory")((filename: string) =>
-  PersistentConversations.load(conversationId).pipe(Effect.provide(sqliteHistory({ filename }))),
+  Effect.flatMap(ConversationHistory, (history) => history.load(conversationId)).pipe(
+    Effect.provide(sqliteHistory(filename)),
+  ),
 );
 
 const history = Command.make("history").pipe(
