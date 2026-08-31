@@ -873,20 +873,23 @@ describe("review provider boundary", () => {
       }),
   );
 
-  it.effect.each(["http", "stream-eof", "malformed-count"] as const)(
+  it.effect.each(["http", "stream-eof", "timeout", "malformed-count"] as const)(
     "preserves an unmetered review after %s while leaving pre-dispatch failures typed",
     (failure) =>
       Effect.gen(function* () {
         let sends = 0;
+        const requestStarted = yield* Deferred.make<void>();
         const native = yield* makeNative(
           HttpClient.make((httpRequest, url) =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
               if (url.pathname.endsWith("/input_tokens"))
                 return json(httpRequest, {
                   object: "response.input_tokens",
                   input_tokens: failure === "malformed-count" ? -1 : 70_000,
                 });
               sends += 1;
+              yield* Deferred.succeed(requestStarted, undefined);
+              if (failure === "timeout") return yield* Effect.never;
               return failure === "http"
                 ? json(httpRequest, { error: { message: "private-provider-fixture" } }, 500)
                 : HttpClientResponse.fromWeb(
@@ -903,13 +906,19 @@ describe("review provider boundary", () => {
           model: "gpt-5.6-sol",
           cacheKey: "unmetered-review",
         });
-        const exit = yield* makeReviewer({ model, costControl: provider.costControl })
+        const pending = yield* makeReviewer({ model, costControl: provider.costControl })
           .review(request)
           .pipe(
             Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
             Effect.provideService(ReviewRepository, repository),
             Effect.exit,
+            Effect.forkChild,
           );
+        if (failure === "timeout") {
+          yield* Deferred.await(requestStarted);
+          yield* TestClock.adjust("5 minutes");
+        }
+        const exit = yield* Fiber.join(pending);
         const dispatched = failure !== "malformed-count";
         expect(sends).toBe(dispatched ? 1 : 0);
         expect(Exit.isSuccess(exit)).toBe(dispatched);
