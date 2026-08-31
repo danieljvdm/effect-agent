@@ -25,7 +25,7 @@ const OpenAiClientLayer = OpenAiClient.layerConfig({
 
 const LiveChatServerLayer = Layer.merge(LiveChatRuntimeLayer, OpenAiClientLayer);
 
-/** Converts schema-decoded browser history into the engine's official prior Prompt. */
+/** Explicit request context from schema-decoded browser history; the server does not retain it. */
 export const chatHistoryPrompt = (history: ReadonlyArray<DemoChatHistoryMessage>): Prompt.Prompt =>
   Prompt.fromMessages(
     history.map((message) =>

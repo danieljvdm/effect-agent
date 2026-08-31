@@ -26,6 +26,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   Array,
   Cause,
+  Context,
   DateTime,
   Deferred,
   Effect,
@@ -128,11 +129,19 @@ describe("persistent conversations", () => {
       const binding = agent([
         { ...answer("not retained"), onStreamStart: Ref.update(calls, (n) => n + 1) },
       ]);
-      const rejected = yield* AgentRuntime.run(binding, "new", {
-        ...options,
-        history: Prompt.empty,
-      }).pipe(Effect.flip);
-      expect(rejected).toMatchObject({ _tag: "ConversationHistoryError", reason: "incompatible" });
+      for (const hooks of [
+        { history: Prompt.empty },
+        { onHistory: () => Effect.die("Competing history callback must not run") },
+      ]) {
+        const rejected = yield* AgentRuntime.run(binding, "new", {
+          ...options,
+          ...hooks,
+        }).pipe(Effect.flip);
+        expect(rejected).toMatchObject({
+          _tag: "ConversationHistoryError",
+          reason: "incompatible",
+        });
+      }
       expect(yield* Ref.get(calls)).toBe(0);
       expect(yield* exported).toEqual(before);
     }).pipe(Effect.provide(memory)),
@@ -176,18 +185,38 @@ describe("persistent conversations", () => {
   );
 
   it.effect(
-    "run, start, and stream commit after model finalizers and before completion is visible",
+    "run, start, and stream close run-local resources before commit while sharing an application client",
     () =>
       Effect.gen(function* () {
         const store = yield* ConversationStore;
         const finalized = yield* Ref.make(0);
         const commits = yield* Ref.make(0);
+        const clientLifetime = yield* Ref.make<ReadonlyArray<string>>([]);
+        class SharedClient extends Context.Service<
+          SharedClient,
+          { readonly request: Effect.Effect<void> }
+        >()("test/persistent-conversations/SharedClient") {}
+        const clientLayer = Layer.effect(
+          SharedClient,
+          Effect.acquireRelease(
+            Ref.update(clientLifetime, (events) => [...events, "acquired"]).pipe(
+              Effect.as({
+                request: Ref.update(clientLifetime, (events) => [...events, "request"]),
+              }),
+            ),
+            () => Ref.update(clientLifetime, (events) => [...events, "released"]),
+          ),
+        );
         const history = PersistentHistory.layer.pipe(
           Layer.provide(
             Layer.succeed(ConversationStore, {
               ...store,
               append: Effect.fn(function* (request: FencedAppendRequest) {
                 expect(yield* Ref.get(finalized)).toBe((yield* Ref.get(commits)) + 1);
+                expect(yield* Ref.get(clientLifetime)).toEqual([
+                  "acquired",
+                  ...Array.replicate("request", (yield* Ref.get(commits)) + 1),
+                ]);
                 const result = yield* store.append(request);
                 yield* Ref.update(commits, (n) => n + 1);
                 return result;
@@ -201,32 +230,54 @@ describe("persistent conversations", () => {
             "scripted",
             "scoped-history",
             Layer.merge(
-              ScriptedModel.layer([answer("retained")]),
+              Layer.unwrap(
+                Effect.gen(function* () {
+                  const client = yield* SharedClient;
+                  return ScriptedModel.layer([
+                    { ...answer("retained"), onStreamStart: client.request },
+                  ]);
+                }),
+              ),
               Layer.effectDiscard(Effect.addFinalizer(() => Ref.update(finalized, (n) => n + 1))),
             ),
           ),
         );
-        yield* AgentRuntime.run(binding, "run", options).pipe(Effect.provide(history));
-        expect(yield* Ref.get(commits)).toBe(1);
-        const started = yield* AgentRuntime.start(binding, "start", options).pipe(
-          Effect.provide(history),
-        );
-        yield* started.observe.pipe(
-          Stream.runForEach((event) =>
-            Effect.gen(function* () {
-              if (event._tag === "RunCompleted") expect(yield* Ref.get(commits)).toBe(2);
-            }),
-          ),
-        );
-        expect((yield* started.await).output).toBe("retained");
-        yield* AgentRuntime.stream(binding, "stream", options).pipe(
-          Stream.runForEach((event) =>
-            Effect.gen(function* () {
-              if (event._tag === "RunCompleted") expect(yield* Ref.get(commits)).toBe(3);
-            }),
-          ),
-          Effect.provide(history),
-        );
+        yield* Effect.gen(function* () {
+          const application = yield* Layer.build(clientLayer);
+          yield* Effect.gen(function* () {
+            yield* AgentRuntime.run(binding, "run", options);
+            expect(yield* Ref.get(commits)).toBe(1);
+            const started = yield* AgentRuntime.start(binding, "start", options);
+            yield* started.observe.pipe(
+              Stream.runForEach((event) =>
+                Effect.gen(function* () {
+                  if (event._tag === "RunCompleted") expect(yield* Ref.get(commits)).toBe(2);
+                }),
+              ),
+            );
+            expect((yield* started.await).output).toBe("retained");
+            yield* AgentRuntime.stream(binding, "stream", options).pipe(
+              Stream.runForEach((event) =>
+                Effect.gen(function* () {
+                  if (event._tag === "RunCompleted") expect(yield* Ref.get(commits)).toBe(3);
+                }),
+              ),
+            );
+          }).pipe(Effect.provideContext(application), Effect.provide(history));
+          expect(yield* Ref.get(clientLifetime)).toEqual([
+            "acquired",
+            "request",
+            "request",
+            "request",
+          ]);
+        }).pipe(Effect.scoped);
+        expect(yield* Ref.get(clientLifetime)).toEqual([
+          "acquired",
+          "request",
+          "request",
+          "request",
+          "released",
+        ]);
         expect((yield* exported).records).toHaveLength(9);
         expect(yield* Ref.get(finalized)).toBe(3);
       }).pipe(Effect.provide(MemoryConversationStoreLive.pipe(Layer.provideMerge(services)))),
@@ -578,7 +629,7 @@ describe("persistent conversations", () => {
   );
 
   for (const ending of ["failure", "defect", "timeout", "interruption"] as const) {
-    it.effect(`retains no partial Run after ${ending} and closes model resources`, () =>
+    it.effect(`retains no partial Run after ${ending} and closes run-local model streams`, () =>
       Effect.gen(function* () {
         yield* AgentRuntime.run(agent([answer("retained")]), "prior", options);
         const before = yield* exported;

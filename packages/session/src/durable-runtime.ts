@@ -3879,6 +3879,8 @@ const make = Effect.gen(function* () {
         nextTurnId: Ref.modify(turnCounter, (turn) => [turnIdForRun(runId, turn + 1), turn + 1]),
       };
 
+      // Track live Prompt boundaries only. The journal owns durable per-Turn commits and recovery;
+      // successful-run ConversationHistory retention cannot replace those incremental commits.
       const onHistory = (history: Prompt.Prompt): Effect.Effect<void> =>
         Ref.update(stateRef, (state) =>
           state.baseLen === undefined

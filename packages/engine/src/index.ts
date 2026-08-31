@@ -5793,6 +5793,9 @@ const makeStream =
             completed = event;
             return false;
           }),
+          // Finish run-owned work and close its acquired resources before result validation,
+          // history commit, and observable completion. Services supplied by an enclosing
+          // application Layer keep that application's Scope, even when the model consumes them.
           Stream.scoped,
           Stream.concat(
             Stream.unwrap(

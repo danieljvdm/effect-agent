@@ -22,9 +22,13 @@ export class ConversationHistoryError extends Schema.TaggedError<ConversationHis
 ) {}
 
 /**
- * One Run's private staging area. Staging never commits history. The interpreter calls commit
- * only after successful execution and model resource closure, before publishing RunCompleted.
- * Schema-encoded input is opaque here; the adapter owns its persistence boundary.
+ * One Run's private staging area. Staging never commits history. Before commit, the interpreter
+ * finishes run-owned work and closes resources acquired for that Run, then validates the result
+ * for run/start.await. Shared model, provider, and client services supplied by an enclosing
+ * application Layer remain owned by that application's Scope and may outlive multiple Runs.
+ * Commit must succeed before RunCompleted becomes observable. Schema-encoded input is opaque
+ * here; the adapter owns its persistence boundary. A failed commit may have reached storage;
+ * callers must inspect history before retrying external execution.
  */
 export interface ConversationHistoryRun {
   readonly prompt: Prompt.Prompt;
@@ -34,8 +38,11 @@ export interface ConversationHistoryRun {
 }
 
 /**
- * History policy provided to AgentRuntime.run, start, and stream. Adapters capture storage
- * dependencies in their Layer; every Run gets its own staging area and append ownership.
+ * Standard public API for retaining successful Runs through AgentRuntime.run, start, and stream.
+ * Provide PersistentHistory.layer from session/history with a memory or SQLite ConversationStore
+ * Layer. Adapters capture storage dependencies; every Run gets private staging and append ownership.
+ * Retaining adapters cannot share ownership with explicit history/onHistory, input queues, or
+ * durable recovery hooks. Use layerTransient for those advanced integrations.
  * No implementation may retry model or Tool execution or claim interrupted-work recovery.
  */
 export class ConversationHistory extends Context.Service<

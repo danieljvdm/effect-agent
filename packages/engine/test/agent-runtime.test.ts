@@ -5245,12 +5245,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     }),
   );
 
-  it.effect("reuses explicit Conversation identity and returned history across Runs", () =>
+  it.effect("leaves incremental history caller-owned when later output validation fails", () =>
     Effect.gen(function* () {
       const conversationId = yield* Schema.decodeEffect(ConversationId)("shared-conversation");
       let history = Prompt.empty;
       const first = yield* AgentRuntime.run(
-        makeAgent(finalParts('{"answer":"first run"}')),
+        makeAgent(finalParts("invalid final output")),
         { question: "first" },
         {
           conversationId,
@@ -5259,7 +5259,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
               history = next;
             }),
         },
-      );
+      ).pipe(Effect.flip);
+      expect(first).toBeInstanceOf(AgentOutputError);
+      expect(JSON.stringify(history)).toContain("invalid final output");
       let secondPrompt = "";
       const secondModel = Model.make(
         "scripted",
@@ -5281,9 +5283,8 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         { conversationId, history },
       );
 
-      expect(first.conversationId).toBe(conversationId);
       expect(second.conversationId).toBe(conversationId);
-      expect(secondPrompt).toContain("first run");
+      expect(secondPrompt).toContain("invalid final output");
       expect(secondPrompt).toContain("second");
     }),
   );

@@ -854,6 +854,8 @@ const InteractiveRuntimeLive = Layer.effect(
             end: () => commandQueue.shutdown,
           };
 
+          // Interactive snapshots include incremental updates even if execution later fails.
+          // Successful-run retention through ConversationHistory would change that behavior.
           const conversationOptions = yield* toRunConversationOptions(
             conversations,
             conversationId,

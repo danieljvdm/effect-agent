@@ -88,7 +88,12 @@ export type ConversationError =
 export const conversationPrompt = (snapshot: ConversationSnapshot): Prompt.Prompt =>
   Prompt.fromMessages(snapshot.messages.map((entry) => entry.message));
 
-/** Process-local multi-Run conversation state. Scope closure releases all in-memory state. */
+/**
+ * Advanced process-local state for incremental interactive history. Updates remain visible even
+ * when a Run later fails; this service has no successful-Run commit boundary or durable recovery.
+ * Use ConversationHistory with a memory store for ordinary successful-run retention.
+ * Scope closure releases all in-memory state.
+ */
 export class EphemeralConversations extends Context.Service<
   EphemeralConversations,
   {
@@ -108,7 +113,8 @@ export class EphemeralConversations extends Context.Service<
      * suffix commits in one transaction or not at all: concurrent writers are
      * serialized, a writer whose history no longer extends the committed
      * official history fails with ConversationHistoryDiverged, and a limit
-     * failure inside the suffix records nothing.
+     * failure inside the suffix records nothing. Earlier updates remain committed if the Run
+     * later fails or is interrupted; this transaction covers one update, not the whole Run.
      */
     readonly recordHistory: (
       conversationId: ConversationId,

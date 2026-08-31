@@ -101,7 +101,10 @@ reduction of the Stream trace.
 
 ## Operational hooks
 
-`RunOptions` is a dependency-neutral seam for the capability adapters:
+`RunOptions` carries per-Run values and advanced capability hooks. For retained history, use
+`ConversationHistory` as shown in [Conversations](./conversations). The following interactive
+integration uses `ConversationHistory.layerTransient`; `history` supplies an explicit initial
+Prompt and `onHistory` receives incremental updates, including from Runs that later fail:
 
 ```ts
 const options: RunOptions<AppError, AppRequirements> = {
@@ -118,6 +121,9 @@ const options: RunOptions<AppError, AppRequirements> = {
 
 Hook failures join the Run's error channel. Hook requirements join `R`. Capability packages adapt
 richer domain contracts to this narrow engine boundary rather than creating a second runtime.
+`onHistory` runs inline before successful completion and resource cleanup. Its earlier writes are
+not rolled back on failure or interruption. A retaining history Layer rejects these competing
+history and input-queue hooks before model or Tool execution.
 
 Ephemeral callers can reuse independent host preparation and authorization services through these
 hooks. Yielding them keeps both requirements visible in the caller's `R`:
@@ -182,8 +188,14 @@ opening a broker pass without invoking a Tool creates no inner-call observation.
 
 ## Interruption is ownership
 
-A Run Scope owns its Model stream, Tool fibers, input queues, MCP clients, sandbox processes, and
-other acquired resources. Closing it interrupts children and runs finalizers.
+A Run Scope owns its Model stream, Tool fibers, and resources acquired for that Run, such as
+run-local input queues, MCP clients, or sandbox processes. Closing it interrupts children and
+runs their finalizers. Shared model, provider, and client services supplied by an enclosing
+application Layer remain owned by the application Scope and can serve multiple Runs.
+
+Successful history retention waits for run-local cleanup, then result validation where applicable,
+then history commit, before publishing `RunCompleted`. It does not close application-owned
+services at each commit.
 
 This is distinct from durable abort. Interrupting a local waiter for accepted durable work
 detaches that waiter; aborting the Submission requires an explicit persisted command
