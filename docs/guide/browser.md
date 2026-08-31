@@ -86,7 +86,7 @@ need to inspect an active page, follow a known flow, or perform host-approved UI
 a general browsing session and cannot become an agent Tool.
 
 Install `@cloudflare/puppeteer@^1.1.0` alongside
-`@effect-agent/platform-cloudflare@beta`. Then provide
+`@effect-agent/platform-cloudflare@beta` and `effect-cf@^0.37.0`. Then provide
 `BrowserRunInteractiveBinding.layer({ browser: env.BROWSER })` to
 `browserRunInteractiveLayer()` for browser actions. `browserRunInteractiveHostLayer()` adds trusted
 host controls for Live View and handoff. Both variants need `BrowserRunSessionLifecycle` with an
@@ -271,44 +271,59 @@ import {
 } from "@effect-agent/sandbox";
 import { Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
+import { WorkerEnvironment } from "effect-cf";
 
-interface BrowserEnv {
-  readonly BROWSER: BrowserRun;
-  readonly CLOUDFLARE_ACCOUNT_ID: string;
-  readonly BROWSER_RENDERING_API_TOKEN: string;
+// In an application, Wrangler generates these binding types.
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      readonly BROWSER: BrowserRun;
+      readonly CLOUDFLARE_ACCOUNT_ID: string;
+      readonly BROWSER_RENDERING_API_TOKEN: string;
+    }
+  }
 }
 
-export const readExampleDomain = Effect.fn("readExampleDomain")(function* (env: BrowserEnv) {
-  const lifecycle = BrowserRunSessionLifecycle.layer({
-    accountId: env.CLOUDFLARE_ACCOUNT_ID,
-    apiToken: Redacted.make(env.BROWSER_RENDERING_API_TOKEN),
-  }).pipe(Layer.provide(FetchHttpClient.layer));
-  const binding = BrowserRunInteractiveBinding.layer({ browser: env.BROWSER }).pipe(
-    Layer.provide(lifecycle),
-  );
-  const InteractiveLive = browserRunInteractiveLayer().pipe(Layer.provide(binding));
-
-  return yield* Effect.gen(function* () {
-    const browser = yield* InteractiveBrowser;
-    const handle = yield* browser.open(
-      InteractiveBrowserPolicy.make({
-        network: { _tag: "ExactHosts", allowedHosts: ["example.com"] },
-        maxActions: 3,
-        maxElapsedMillis: 30_000,
-        maxReturnedBytes: 16 * 1_024,
-      }),
+const InteractiveLive = Layer.unwrap(
+  Effect.gen(function* () {
+    const env = yield* WorkerEnvironment;
+    const lifecycle = BrowserRunSessionLifecycle.layer({
+      accountId: env.CLOUDFLARE_ACCOUNT_ID,
+      apiToken: Redacted.make(env.BROWSER_RENDERING_API_TOKEN),
+    }).pipe(Layer.provide(FetchHttpClient.layer));
+    const binding = BrowserRunInteractiveBinding.layer({ browser: env.BROWSER }).pipe(
+      Layer.provide(lifecycle),
     );
-    yield* handle.navigate(BrowserNavigateRequest.make({ url: "https://example.com/" }));
-    return yield* handle.readText(BrowserReadTextRequest.make({}));
-  }).pipe(Effect.scoped, Effect.provide(InteractiveLive));
-});
+
+    return browserRunInteractiveLayer().pipe(Layer.provide(binding));
+  }),
+);
+
+export const readExampleDomain = Effect.gen(function* () {
+  const browser = yield* InteractiveBrowser;
+  const handle = yield* browser.open(
+    InteractiveBrowserPolicy.make({
+      network: { _tag: "ExactHosts", allowedHosts: ["example.com"] },
+      maxActions: 3,
+      maxElapsedMillis: 30_000,
+      maxReturnedBytes: 16 * 1_024,
+    }),
+  );
+  yield* handle.navigate(BrowserNavigateRequest.make({ url: "https://example.com/" }));
+  return yield* handle.readText(BrowserReadTextRequest.make({}));
+}).pipe(Effect.scoped);
+
+export const program = readExampleDomain.pipe(Effect.provide(InteractiveLive));
 ```
 
-Call `readExampleDomain(env)` inside a Worker request. The Layer receives the binding and secrets
-at the trusted host boundary. It also installs
-`BrowserRunSessionLifecycle` even for ordinary actions because every session needs exact-session
-cleanup. The browser closes on Scope exit even after an interruption. Running `handle.close` ends
-the pass early and invalidates that handle.
+`readExampleDomain` requires only `InteractiveBrowser`. `InteractiveLive` yields `WorkerEnvironment`
+to construct the Cloudflare adapter, so the composed `program` retains `WorkerEnvironment` in `R`.
+Run it inside an `effect-cf` Worker, which supplies that service. Tests can provide a different
+`InteractiveBrowser` Layer to the same operation.
+
+The adapter installs `BrowserRunSessionLifecycle` even for ordinary actions because every session
+needs exact-session cleanup. The browser closes on Scope exit even after an interruption. Running
+`handle.close` ends the pass early and invalidates that handle.
 
 ## Host Live View and handoff
 

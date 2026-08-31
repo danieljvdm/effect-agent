@@ -30,7 +30,7 @@ In your application, install the packages used below:
 
 ```sh
 bun add @effect-agent/core@beta @effect-agent/engine@beta @effect-agent/capabilities@beta \
-  @effect-agent/platform-cloudflare@beta effect@4.0.0-rc.111 @effect/ai-openai@4.0.0-rc.111
+  @effect-agent/platform-cloudflare@beta effect@4.0.0-rc.111 @effect/ai-openai@4.0.0-rc.111 effect-cf@^0.37.0
 ```
 
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
@@ -49,6 +49,17 @@ import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
+import { WorkerEnvironment } from "effect-cf";
+
+// In an application, Wrangler generates these binding types.
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      readonly LOADER: WorkerLoader;
+      readonly OPENAI_API_KEY: string;
+    }
+  }
+}
 
 const ListInvoices = Tool.make("list_invoices", {
   description: "Read invoice totals for a region: emea or americas.",
@@ -86,33 +97,41 @@ const analyst = Agent.make("invoice-analyst", {
   }),
 });
 
-export const analyzeInvoices = Effect.fn("analyzeInvoices")(function* (
-  question: string,
-  loader: WorkerLoader,
-  apiKey: Redacted.Redacted<string>,
-) {
-  const CodeModeLive = codeMode.handlers.pipe(
-    Layer.provide(InvoiceHandlers),
-    Layer.provide(dynamicWorkerCodeExecutorLayer({ loader })),
-  );
-  const ModelLive = OpenAiLanguageModel.model("gpt-4.1-mini").pipe(
-    Layer.provide(OpenAiClient.layer({ apiKey }).pipe(Layer.provide(FetchHttpClient.layer))),
-  );
+const AnalystLive = Layer.unwrap(
+  Effect.gen(function* () {
+    const env = yield* WorkerEnvironment;
+    const CodeModeLive = codeMode.handlers.pipe(
+      Layer.provide(InvoiceHandlers),
+      Layer.provide(dynamicWorkerCodeExecutorLayer({ loader: env.LOADER })),
+    );
+    const ModelLive = OpenAiLanguageModel.model("gpt-4.1-mini").pipe(
+      Layer.provide(
+        OpenAiClient.layer({ apiKey: Redacted.make(env.OPENAI_API_KEY) }).pipe(
+          Layer.provide(FetchHttpClient.layer),
+        ),
+      ),
+    );
 
-  return yield* AgentRuntime.run(analyst, question).pipe(
-    Effect.provide(CodeModeLive),
-    Effect.provide(ModelLive),
-    Effect.provide(IdGenerator.layer),
-    Effect.provide(ConversationHistory.layerTransient),
-    Effect.scoped,
-  );
-});
+    return Layer.mergeAll(
+      CodeModeLive,
+      ModelLive,
+      IdGenerator.layer,
+      ConversationHistory.layerTransient,
+    );
+  }),
+);
+
+export const program = AgentRuntime.run(analyst, "What is the total invoice revenue in EMEA?").pipe(
+  Effect.provide(AnalystLive),
+  Effect.scoped,
+);
 ```
 
-Call `analyzeInvoices` inside your Worker's request with the question, `env.LOADER`, and your
-redacted provider key. The function returns an Effect with typed failures. The application owns
-the HTTP response and authentication; the [warehouse Worker](https://github.com/danieljvdm/effect-agent/blob/main/examples/code-mode-cloudflare/src/worker.ts)
-shows that boundary.
+Only the question is input to the agent. `AnalystLive` yields `WorkerEnvironment` to obtain the
+loader and provider key, leaving that service visible in the composed `program`'s requirements.
+An `effect-cf` Worker supplies it. The application owns the HTTP response and authentication;
+the [warehouse Worker](https://github.com/danieljvdm/effect-agent/blob/main/examples/code-mode-cloudflare/src/worker.ts)
+shows the example's HTTP behavior.
 
 `CodeMode.make` fixes the namespaces and methods visible to generated code. Include `codeMode.tool`
 in the agent's Toolkit and provide the selected Tool handlers and executor **to `codeMode.handlers`**.
