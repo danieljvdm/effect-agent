@@ -1,82 +1,187 @@
 ---
 title: The runtime model
-description: How runs alternate between model responses, tool batches, queued input, and policy checks.
+description: Follow an agent run through context preparation, model calls, tools, subagents, budgets, and durable recovery.
 ---
+
+<script setup>
+import RuntimeLoop from '../.vitepress/theme/components/RuntimeLoop.vue'
+</script>
 
 # The runtime model
 
-Each run repeats one model and tool loop until it produces valid output or stops under policy.
-
-## Terms {#domain-units}
-
-| Unit             | Meaning                                                            |
-| ---------------- | ------------------------------------------------------------------ |
-| Agent Definition | immutable program, Schemas, Toolkit, instructions, policy          |
-| Agent Binding    | one Definition paired with one Effect AI Model                     |
-| Run              | one logical request against a Conversation                         |
-| Turn             | one model response, optionally followed by one complete Tool batch |
-| Attempt          | one durable ownership period advancing a Submission                |
-| Conversation     | ordered history shared across Runs                                 |
-
-An ephemeral run has one process attempt. A durable run may span several attempts while keeping
-the same turn semantics.
+A run turns input into Schema-validated output through repeated model requests and tool batches.
+The engine prepares context, enforces budgets, and applies new input between turns. A durable host
+records progress so another worker can continue the same run after an interruption.
 
 <a id="one-interpreter"></a>
 
 ## One agent loop
 
-```text
-decode input
-  ↓
-evaluate instructions and prepare context
-  ↓
-stream and validate one Effect AI response
-  ├─ final → decode output → complete
-  └─ tools
-       ↓
-     preflight the complete tool batch
-       ↓
-     execute under finite permits
-       ↓
-     commit results in declaration order
-       ↓
-     drain steering → evaluate policy → next turn
-```
+<RuntimeLoop />
 
-`run`, `stream`, and `start` expose this loop. Durable hosts add canonical commits and
-recovery at the same transitions.
+`run`, `stream`, and `start` expose the same interpreter. Each turn contains one model request and
+its response, optionally followed by a complete tool batch. A final response can finish the run;
+tool results feed the next turn.
+
+## Prepare context and compact {#context-and-compaction}
+
+The runtime decodes input and evaluates the agent's instructions at run start. Before each model
+request, it transforms the conversation into a prompt, compacts it if needed, then adds the output
+contract and the current run status when enabled.
+
+Two token limits serve different purposes:
+
+| Limit               | What it controls                                  |
+| ------------------- | ------------------------------------------------- |
+| `contextTokenLimit` | The live context for one model request            |
+| `tokenBudget`       | Cumulative input and output tokens across the run |
+
+When context is too large, the default compactor first prunes old tool results outside the recent
+protected tail. If that is insufficient, it makes one metered summary call. Instructions, protected
+input, and tool call/result pairing survive compaction. The summary call consumes run budget too.
+
+Compaction changes what the model sees. The canonical conversation log retains its evidence.
+Durable hosts record each applied compaction as `CompactionCreated` before using the new view, so
+recovery restores the same summary and coverage. Durable compaction can cover complete prior-run
+records; it cannot summarize away the current run's canonical records.
+
+See [Context management](../guide/context-management) for prompt transforms, compaction strategies,
+context overflow recovery, and model-visible budget status.
 
 <a id="complete-before-consequential"></a>
 
 ## Validate before running tools
 
-The engine waits for the full assistant response and all tool arguments before starting a
-handler. A truncated response starts no tool. The next model request sees a complete tool batch or
-no batch.
+The model response must finish and all tool arguments must validate before any application handler
+starts. A truncated response starts no tool. The engine preflights the complete batch for approval,
+authorization, and applicable limits before execution.
+
+Durable hosts commit the validated response before tool preparation. If a worker disappears in
+that gap, its replacement can resume the declared batch without asking the model to choose again.
+
+Each application tool result passes through `toolResultBounds` before entering history or storage.
+Oversized output becomes a bounded envelope with its head, tail, and original byte count. The
+model and durable log receive the same bounded result.
+
+### Limit concurrency {#bounded-concurrency}
+
+Tool handlers run under a finite `Semaphore`. Progress can arrive in completion order, but canonical
+results keep the model's declaration order. The next model request sees the complete batch.
+Agent, tenant, and platform limits may further reduce concurrency.
+
+### Delegate to subagents {#subagents}
+
+[`Subagent.define`](../guide/tools#delegate-to-an-agent) exposes a child agent as a tool in the
+parent's toolkit. The child runs its own model/tool loop in a separate conversation. `prepareInput`
+selects what the child receives; `projectResult` selects what returns as the parent's tool result.
+The child's raw transcript stays private unless that projection exposes it.
+
+The parent reserves a bounded allowance before starting a child. Child policy and delegation policy
+limit turns, tool calls, tokens, cost, duration, concurrency, and result size. Child work uses the
+tool scheduler, and the parent joins the child outcome before settling that tool call.
+
+Ephemeral children share the parent's Scope. Durable children have their own attempts and stable
+parent linkage; a waiting parent releases its worker permit. Recovery rejoins the established child
+and releases its budget reservation once. It does not start a replacement child when admission is
+uncertain. Nested delegation, handoff, and detached children are currently unsupported.
+
+See [delegation budgets](./budgets#delegation-budgets) and
+[durable child recovery](./durability#attached-subagents).
 
 <a id="safe-seam-input"></a>
+<a id="when-queued-input-is-applied"></a>
 
-## When queued input is applied
+## Apply input between turns
 
-Input may arrive while a model or tool batch is active. Delivery waits for the current work to
-finish:
+New input can arrive while inference or tools are running. It waits for a safe boundary:
 
-- steering follows the complete response and tool batch;
-- follow-up arrives only when the run would stop;
-- the initial drain consumes one queued item.
+- **Steering** applies after the complete response and tool batch, before the next model request.
+- **Follow-up** applies when the run would otherwise stop. A final response may therefore lead to
+  another turn when queued input remains.
+- **Joined durable input** attaches an accepted submission to the active run at the same boundary
+  and settles with that run.
+
+The initial drain consumes one queued item. Queued input never edits an in-flight model request
+or tool call. See [Run & stream](../guide/run-agents) for the command interfaces.
+
+## Enforce budgets and finish {#budgets-and-stopping}
+
+Every agent has finite turn, tool call, and duration bounds. Optional token and cost budgets limit
+run usage. `completionReserveTokens` holds back token capacity for the final answer. A caller can
+tighten a run's turn and tool call allowances without raising the definition's ceiling.
+
+Policy checks govern admission to the next turn and tool batch. Usage checks account for completed
+model calls, including compaction. A duration deadline can interrupt work already in flight.
+Observed token and cost usage may cross a threshold; these checks do not reserve a provider's
+maximum charge before the request.
+
+| Stop condition                                 | Runtime behavior                                                                               |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Valid final output                             | Decode through the output Schema and complete when no queued input continues the run           |
+| Successful designated completion tool          | Project its singleton result through the output Schema and complete immediately                |
+| Turn, tool call, or token exhaustion           | Follow `onExhaustion`: fail, or produce a constrained final answer with at most one grace turn |
+| Duration, cost, or repeated tool failure limit | Fail with a typed policy error                                                                 |
+| Abort or interruption                          | End the current execution; durable ownership loss may leave work for a replacement attempt     |
+
+In final-answer mode, an over-budget tool batch starts no handlers. Finalization forbids further
+research tools, while allowing a designated completion tool. Results report
+`finishReason: "budget-exhausted"` and the exhausted dimension.
+
+See [Budgets & bounded autonomy](./budgets) for exact limits, shared usage budgets, and partial
+child results.
+
+## Store history and recover work {#storage-and-recovery}
+
+Persistent history lets a later run reload a conversation. Durable execution also tracks accepted
+work and owes a terminal settlement even if the process that started it disappears.
+
+| Runtime data                | Responsibility                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Conversation log            | Append-only canonical facts: applied input, model responses, tool outcomes, compaction, and settlements |
+| Submission ledger           | Accepted work, queue order, attempt ownership, abort intent, and outstanding settlement obligations     |
+| Projections and checkpoints | Rebuildable views and replay optimizations derived from the log                                         |
+
+The Node host uses SQLite; the Cloudflare host uses Durable Objects. The memory adapter supports
+tests and in-process storage. The host and adapter together determine the recovery guarantee.
+
+A durable host acknowledges input with a Receipt only after admission, conversation materialization,
+and readiness are committed. Each attempt writes under a fenced ownership token. A replacement
+restores the committed boundary, accounting, and original deadline; it receives no fresh run budget.
+
+::: warning External effects can be uncertain
+If an ordinary tool may have acted before its worker disappeared, recovery records an
+`UnknownToolOutcome` unless reconciliation establishes the result. It does not automatically replay
+the call. Durable Steps can reuse recorded results, but their external execution is at least once
+and may repeat. Applications still need idempotency or reconciliation.
+:::
+
+See [Persistence & durability](./durability) for execution modes and recovery at each boundary,
+or the [Node.js](../platforms/node) and [Cloudflare](../platforms/cloudflare) guides for storage setup.
 
 <a id="events-observe-commands-act"></a>
+<a id="events-and-commands"></a>
 
-## Events and commands
+## Observe and control a run
 
-`RunEvent` subscribers may render, trace, meter, or build projections. Steering, approval,
-follow-up, abort, and recovery use command or service interfaces.
+`RunEvent` subscribers render output, trace execution, meter usage, or build projections. Events
+describe progress; steering, follow-up, approval, abort, and recovery use commands or services.
+An event stream is not the canonical storage log.
 
-To report failures that the model recovers from, install a
-[tool failure observer](../guide/run-agents#observe-recovered-tool-failures).
+Install a [tool failure observer](../guide/run-agents#observe-recovered-tool-failures) to report
+failures that the model recovers from.
 
-## Limit concurrency {#bounded-concurrency}
+## Terms {#domain-units}
 
-Each tool batch runs through a finite `Semaphore`. Progress may follow completion order. Canonical
-results keep declaration order. Outer agent, tenant, or platform limits may lower concurrency.
-Attached Subagents use the same scheduler.
+| Unit             | Meaning                                                                      |
+| ---------------- | ---------------------------------------------------------------------------- |
+| Agent Definition | Immutable program: Schemas, Toolkit, instructions, and policy                |
+| Agent Binding    | One Definition paired with one Effect AI Model                               |
+| Conversation     | Ordered history shared across runs                                           |
+| Run              | One logical execution request against a conversation                         |
+| Turn             | One model request and response, optionally followed by a complete tool batch |
+| Submission       | Input accepted for durable processing                                        |
+| Attempt          | One durable ownership period advancing a submission                          |
+| Settlement       | The single durable terminal outcome owed to an accepted submission           |
+
+An ephemeral run lives for one Scope. A durable run may span several attempts while keeping the
+same turn semantics.
