@@ -13,10 +13,11 @@ Rebuild the committed bundle with `vp run action:build`.
 
 ## Review behavior
 
-One bounded review run receives the admitted diff and reads immutable base and head source as
-needed. The host validates paths and RIGHT-side anchors and publishes against the inspected
-head. A stopped run preserves findings recorded before research ended. A failure without recorded
-findings publishes a failure marker. Blocking findings request changes and fail the Action after publication; other outcomes
+One bounded review run assesses every admitted patch before using immutable base and head source
+to resolve specific questions about plausible defects. Straightforward changes can finish from
+the diff; source tools are not an exhaustive repository audit. The host validates paths and RIGHT-side anchors and publishes against the inspected
+head. A stopped run preserves findings recorded before research ended. Preparation failures
+publish a failure marker. Blocking findings request changes and fail the Action after publication; other outcomes
 remain comments and cannot clear an older change request.
 
 Automatic waves use the configured limit, defaulting to two; zero disables automatic reviews.
@@ -36,7 +37,8 @@ budget failures include the exhausted limit and observed usage.
 Failure comments on an unchanged head also report budget exhaustion without exposing provider
 diagnostics or model output.
 
-The reviewer sees its remaining turns and tool calls. If turn, tool, or cost limits stop
+The reviewer sees its actual spending balance before each request. It can explicitly report
+unfinished coverage while preserving established findings. If turn, tool, or cost limits stop
 research, the Action publishes established findings with an incomplete-coverage
 warning and fails the check, including when no defects were found. Such an attempt cannot become
 an incremental baseline or clear an earlier change request. This preserves useful findings without
@@ -57,6 +59,12 @@ then reserves every input token at the cache-write rate plus the full output all
 reasoning. Admission never assumes a cache hit. The ledger releases unused reservations only after
 validating the response's usage, model, tier, and counted bounds. Failed, interrupted, or unmetered
 requests retain their possible charge; the transport does not automatically retry them.
+
+The spending status is an outgoing-only, uncached suffix included in that token count. It shows
+the balance before dispatch, estimated charges, outstanding reservations, and full cache-miss
+input and output prices. It explains that additional source reduces future output capacity;
+it does not claim an output allowance before counting the actual request. The remaining-turn
+and tool counters are not presented as a research target. Their safety limits still apply.
 
 The output allowance starts at 32,000 tokens and is reduced before each request when needed to fit
 the remaining balance. Research can continue with that smaller allowance; the model, reasoning

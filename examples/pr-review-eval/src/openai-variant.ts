@@ -55,7 +55,7 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
       effectiveGuidance === undefined ? undefined : yield* digestText(effectiveGuidance);
     const configuration = EvalVariantConfiguration.make({
       id: options.id,
-      reviewerProfile: "source-review-v4-capped",
+      reviewerProfile: "diff-review-v5-capped",
       provider: "openai",
       model: "gpt-5.6-sol",
       reasoningEffort: "xhigh",

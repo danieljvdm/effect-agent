@@ -237,6 +237,11 @@ describe("review provider boundary", () => {
 
       expect(sent).toHaveLength(3);
       expect(sent.map((wire) => wire.max_output_tokens)).toEqual([32_000, 26_762, 19_174]);
+      expect(JSON.stringify(sent[0]?.input.at(-1))).toContain("$0.999999");
+      expect(JSON.stringify(sent[1]?.input.at(-1))).toContain("$0.793920");
+      expect(JSON.stringify(sent[1]?.input.at(-1))).toContain("full cache-miss rate");
+      expect(JSON.stringify(sent[1]?.input.at(-1))).not.toContain("prompt_cache_breakpoint");
+      expect(JSON.stringify(sent[1]?.input)).not.toContain("turn 1/8");
       for (const wire of sent) {
         expect(wire.model).toBe("gpt-5.6-sol");
         expect(wire.reasoning).toEqual({ effort: "xhigh" });

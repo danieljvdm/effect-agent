@@ -285,7 +285,7 @@ describe("PR-review model eval", () => {
         OpenAiClient.OpenAiClient | ReviewRepository
       >();
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
-      expect(variant.configuration.reviewerProfile).toBe("source-review-v4-capped");
+      expect(variant.configuration.reviewerProfile).toBe("diff-review-v5-capped");
       expect(variant.configuration.costLimitMicrousd).toBe(999_999);
       expect(variant.configuration.guidanceDigest).toBe(
         yield* digestText("Keep the public error channel typed."),

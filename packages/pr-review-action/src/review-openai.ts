@@ -257,8 +257,29 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     }
     const before = yield* Ref.get(state);
     if (before.closed) return yield* refuse("Review spending admission has already stopped.");
+    const balance = REVIEW_COST_LIMIT_MICROUSD - before.cost - reservedCost(before);
+    // Outgoing-only host feedback. Count these exact bytes before reserving or
+    // dispatching; withReviewPromptCache leaves run-status outside the cache.
+    // The output allowance is determined after this count, so do not advertise
+    // a token allowance calculated for an earlier or smaller prompt.
+    const spendingStatus = [
+      "<run-status>",
+      `Review balance before this request: $${(balance / 1_000_000).toFixed(6)} of the $${(REVIEW_COST_LIMIT_MICROUSD / 1_000_000).toFixed(6)} ceiling. Estimated charges: $${(before.cost / 1_000_000).toFixed(6)}. Outstanding reservations: $${(reservedCost(before) / 1_000_000).toFixed(6)}.`,
+      `This request must first reserve its entire input at the full cache-miss rate of $${(pricing.write / 100).toFixed(2)} per million tokens; only the remainder can fund reasoning and output at $${(pricing.output / 100).toFixed(2)} per million tokens. Cache hits reduce the settled charge, not the required reservation.`,
+      "More source grows future requests and shrinks their output allowance. Finish once the supplied patches and concrete defect questions are assessed. If coverage is unfinished, submit incomplete rather than claiming completion.",
+      "</run-status>",
+    ].join("\n");
     const payload: Payload = withReviewPromptCache(
-      { ...original, truncation: "disabled" },
+      {
+        ...original,
+        truncation: "disabled",
+        input: [
+          ...(typeof original.input === "string"
+            ? [{ role: "user" as const, content: original.input }]
+            : (original.input ?? [])),
+          { role: "user", content: spendingStatus },
+        ],
+      },
       options.cacheKey,
     );
     const inputTokens = yield* count(payload).pipe(
@@ -267,7 +288,6 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     if (inputTokens > MAX_INPUT_TOKENS) {
       return yield* refuse("The counted review input exceeds the 128,000-token price boundary.");
     }
-    const balance = REVIEW_COST_LIMIT_MICROUSD - before.cost - reservedCost(before);
     const requestedOutputTokens = original.max_output_tokens ?? MAX_OUTPUT_TOKENS;
     const outputTokens = Math.min(
       requestedOutputTokens,

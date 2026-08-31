@@ -147,6 +147,10 @@ export default defineConfig({
         cache: false,
         command: "bun --cwd examples/pr-review-eval src/main.ts",
       },
+      "pr-review-candidate-261": {
+        cache: false,
+        command: "bun examples/pr-review-eval/src/acceptance-259-main.ts",
+      },
     },
   },
 });
