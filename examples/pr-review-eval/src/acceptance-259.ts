@@ -33,7 +33,7 @@ const ignore = [
   ".claude/skills/**",
 ];
 const root = "examples/pr-review-eval";
-const directory = `${root}/results/efficient-261/candidate-4`;
+const directory = `${root}/results/efficient-261/candidate-5`;
 
 // Temporary fixed acceptance runner. Historical revisions are only GitHub blob data.
 // The final integration PR removes this one-shot execution machinery after archiving its outputs.

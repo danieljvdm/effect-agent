@@ -63,6 +63,13 @@ reasoning. Admission never assumes a cache hit. The ledger releases unused reser
 validating the response's usage, model, tier, and counted bounds. Failed, interrupted, or unmetered
 requests retain their possible charge; the transport does not automatically retry them.
 
+The non-inference token count has a 10-second timeout per attempt and retries at most once for
+timeouts, transport failures, or HTTP 408, 429, 500, 502, 503, and 504. Other HTTP failures and
+malformed counts fail immediately. Exhausted preflight fails closed before spending admission;
+it never authorizes an uncounted request. Cancellation interrupts the active attempt without a
+retry. Diagnostics report only the preflight phase, attempt, failure category, and HTTP status.
+Paid inference is never automatically retried.
+
 The spending status is an outgoing-only, uncached suffix included in that token count. It shows
 the balance before dispatch, estimated charges, outstanding reservations, and full cache-miss
 input and output prices. It does not tell the reviewer when to finish or claim an output allowance

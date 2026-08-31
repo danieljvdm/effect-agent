@@ -30588,6 +30588,18 @@ var file = (path, options) => flatMap5(FileSystem, (fs) => map8(fs.stat(path), (
 var fileFromInfo = (path, info2, options) => map8(FileSystem, (fs) => stream(fs.stream(path, options), options?.contentType, fileContentLength(info2.size, options)));
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpClientError.js
+var exports_HttpClientError = {};
+__export(exports_HttpClientError, {
+  isHttpClientError: () => isHttpClientError,
+  TransportError: () => TransportError,
+  StatusCodeError: () => StatusCodeError,
+  InvalidUrlError: () => InvalidUrlError,
+  HttpClientErrorSchema: () => HttpClientErrorSchema,
+  HttpClientError: () => HttpClientError,
+  EncodeError: () => EncodeError,
+  EmptyBodyError: () => EmptyBodyError,
+  DecodeError: () => DecodeError
+});
 var TypeId48 = "~effect/http/HttpClientError";
 var isHttpClientError = (u) => hasProperty(u, TypeId48);
 
@@ -30624,6 +30636,16 @@ class TransportError extends (/* @__PURE__ */ TaggedError2("TransportError")) {
     return formatMessage(formatReason(this._tag), this.description, this.methodAndUrl);
   }
 }
+
+class EncodeError extends (/* @__PURE__ */ TaggedError2("EncodeError")) {
+  get methodAndUrl() {
+    return `${this.request.method} ${this.request.url}`;
+  }
+  get message() {
+    return formatMessage(formatReason(this._tag), this.description, this.methodAndUrl);
+  }
+}
+
 class InvalidUrlError extends (/* @__PURE__ */ TaggedError2("InvalidUrlError")) {
   get methodAndUrl() {
     return `${this.request.method} ${this.request.url}`;
@@ -30660,6 +30682,20 @@ class EmptyBodyError extends (/* @__PURE__ */ TaggedError2("EmptyBodyError")) {
   get message() {
     const info2 = `${this.response.status} ${this.methodAndUrl}`;
     return formatMessage(formatReason(this._tag), this.description, info2);
+  }
+}
+
+class HttpClientErrorSchema extends (/* @__PURE__ */ Error4(TypeId48)({
+  _tag: /* @__PURE__ */ tag("HttpError"),
+  kind: /* @__PURE__ */ Literals(["EncodeError", "DecodeError", "TransportError", "InvalidUrlError", "StatusCodeError", "EmptyBodyError"]),
+  cause: /* @__PURE__ */ optional2(/* @__PURE__ */ Defect())
+})) {
+  static fromHttpClientError(error2) {
+    return new HttpClientErrorSchema({
+      _tag: "HttpError",
+      kind: error2.reason._tag,
+      cause: error2.reason
+    });
   }
 }
 
@@ -49666,7 +49702,7 @@ var makeReviewOpenAi = exports_Effect.fn("makeReviewOpenAi")(function* (options3
   const admissions = yield* exports_Semaphore.make(1);
   const close3 = exports_Ref.update(state, (current) => ({ ...current, closed: true }));
   const refuse = (message) => close3.pipe(exports_Effect.andThen(exports_Effect.fail(admissionError(message))));
-  const count2 = exports_Effect.fn("ReviewOpenAi.count")(function* (payload) {
+  const countAttempt = exports_Effect.fn("ReviewOpenAi.countAttempt")(function* (payload) {
     const response = yield* options3.client.client.post("/responses/input_tokens", {
       body: exports_HttpBody.jsonUnsafe({
         model: payload.model,
@@ -49680,6 +49716,20 @@ var makeReviewOpenAi = exports_Effect.fn("makeReviewOpenAi")(function* (options3
       })
     });
     return (yield* exports_HttpClientResponse.schemaBodyJson(InputTokenCount)(response)).input_tokens;
+  }, exports_Effect.timeout("10 seconds"));
+  const transientCountFailure = (error2) => error2._tag === "TimeoutError" || exports_HttpClientError.isHttpClientError(error2) && (error2.reason._tag === "TransportError" || [408, 429, 500, 502, 503, 504].includes(error2.response?.status ?? 0));
+  const count2 = exports_Effect.fn("ReviewOpenAi.count")(function* (payload) {
+    let attempt = 0;
+    return yield* exports_Effect.suspend(() => {
+      attempt += 1;
+      return countAttempt(payload).pipe(exports_Effect.tapError((error2) => exports_Effect.logWarning("Review preflight failed", {
+        phase: "input-token-count",
+        attempt,
+        failureType: error2._tag,
+        ...exports_HttpClientError.isHttpClientError(error2) ? { reason: error2.reason._tag, status: error2.response?.status } : {},
+        retrying: attempt === 1 && transientCountFailure(error2)
+      })));
+    }).pipe(exports_Effect.retry({ times: 1, while: transientCountFailure }));
   });
   const admit = exports_Effect.fn("ReviewOpenAi.admit")(function* (original) {
     const now3 = yield* exports_Clock.currentTimeMillis;
