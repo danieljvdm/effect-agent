@@ -6,6 +6,11 @@ import { defineConfig } from "vitepress";
 
 import tokyoNightLight from "./theme/tokyo-night-light.json";
 
+const siteUrl = "https://effect-agent.com";
+const socialImage = `${siteUrl}/social-card.png`;
+const socialImageAlt =
+  "Effect Agent. An agent harness toolkit for TypeScript. Built on Effect and Effect AI.";
+
 export default defineConfig({
   lang: "en-US",
   title: "Effect Agent",
@@ -16,17 +21,38 @@ export default defineConfig({
   srcExclude: ["TOOLCHAIN.md"],
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: "/mark.svg" }],
+    ["link", { rel: "icon", type: "image/png", sizes: "32x32", href: "/favicon-32x32.png" }],
+    ["link", { rel: "apple-touch-icon", sizes: "180x180", href: "/apple-touch-icon.png" }],
     ["meta", { name: "theme-color", content: "#161714" }],
     ["meta", { property: "og:type", content: "website" }],
-    ["meta", { property: "og:title", content: "Effect Agent" }],
-    [
-      "meta",
-      {
-        property: "og:description",
-        content: "An agent harness toolkit for TypeScript, built on Effect and Effect AI.",
-      },
-    ],
+    ["meta", { property: "og:site_name", content: "Effect Agent" }],
+    ["meta", { property: "og:locale", content: "en_US" }],
+    ["meta", { property: "og:image", content: socialImage }],
+    ["meta", { property: "og:image:type", content: "image/png" }],
+    ["meta", { property: "og:image:width", content: "1200" }],
+    ["meta", { property: "og:image:height", content: "630" }],
+    ["meta", { property: "og:image:alt", content: socialImageAlt }],
+    ["meta", { name: "twitter:card", content: "summary_large_image" }],
+    ["meta", { name: "twitter:image", content: socialImage }],
+    ["meta", { name: "twitter:image:alt", content: socialImageAlt }],
   ],
+  // Preview crawlers read the built HTML. Use VitePress's resolved title and
+  // description so guide links keep their own metadata, including title templates.
+  transformHead({ page, title, description }) {
+    if (page === "404.md") return [];
+
+    const path = page.replace(/(^|\/)index\.md$/, "$1").replace(/\.md$/, "");
+    const url = new URL(path, `${siteUrl}/`).href;
+
+    return [
+      ["link", { rel: "canonical", href: url }],
+      ["meta", { property: "og:url", content: url }],
+      ["meta", { property: "og:title", content: title }],
+      ["meta", { property: "og:description", content: description }],
+      ["meta", { name: "twitter:title", content: title }],
+      ["meta", { name: "twitter:description", content: description }],
+    ];
+  },
   markdown: {
     theme: { light: { ...tokyoNightLight, type: "light" }, dark: "tokyo-night" },
     languages: ["js", "jsx", "ts", "tsx"],
