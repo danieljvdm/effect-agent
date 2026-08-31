@@ -85,7 +85,7 @@ The [concept guides](docs/concepts/effect-native.md) explain these choices:
 
 ```text
 Application Agent Definitions
-   + explicit Model Bindings
+   + native Model Layers
  Effect AI Tool + Toolkit + Model
       Effect + Schema + Layer
                   |

@@ -79,7 +79,7 @@ const model = Model.make(
   ),
 );
 
-const definition = Agent.define("type-proof", {
+const definition = Agent.make("type-proof", {
   input: Schema.Struct({ destination: Schema.String }),
   output: Schema.Struct({ summary: Schema.String }),
   instructions: ({ destination }) =>
@@ -102,7 +102,7 @@ const definition = Agent.define("type-proof", {
 });
 const agent = Agent.withModel(definition, model);
 
-const inputPromptDefinition = Agent.define("input-prompt-type-proof", {
+const inputPromptDefinition = Agent.make("input-prompt-type-proof", {
   input: Schema.Struct({ destination: Schema.String }),
   output: Schema.Struct({ summary: Schema.String }),
   instructions: "Answer as JSON.",
@@ -126,7 +126,7 @@ const inputPromptDefinition = Agent.define("input-prompt-type-proof", {
 });
 
 const RunDisposition = Schema.Literal("application-complete");
-const dispositionDefinition = Agent.define("disposition-type-proof", {
+const dispositionDefinition = Agent.make("disposition-type-proof", {
   input: Schema.Struct({ destination: Schema.String }),
   output: Schema.Struct({
     summary: Schema.String,
@@ -146,7 +146,7 @@ const dispositionDefinition = Agent.define("disposition-type-proof", {
   },
 });
 
-const terminalDefinition = Agent.define("terminal-type-proof", {
+const terminalDefinition = Agent.make("terminal-type-proof", {
   input: Schema.Struct({ destination: Schema.String }),
   output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
   instructions: "Deliver the final message.",
@@ -197,7 +197,7 @@ type InputPromptFailureProof = Assert<
     InputPromptFailure
   >
 >;
-type DefinitionIsNotRunnableProof = Assert<
+type DefinitionIsNotBindingProof = Assert<
   Equal<typeof definition extends Agent.Any ? true : false, false>
 >;
 type BindingRetainsNativeModelProof = Assert<Equal<(typeof agent)["model"], typeof model>>;
@@ -247,7 +247,7 @@ describe("Agent type inference", () => {
     const failureProof: FailureProof = true;
     const inputPromptRequirementsProof: InputPromptRequirementsProof = true;
     const inputPromptFailureProof: InputPromptFailureProof = true;
-    const definitionIsNotRunnableProof: DefinitionIsNotRunnableProof = true;
+    const definitionIsNotBindingProof: DefinitionIsNotBindingProof = true;
     const bindingRetainsNativeModelProof: BindingRetainsNativeModelProof = true;
     const inputProjectionProof: InputProjectionProof = true;
     const outputProjectionProof: OutputProjectionProof = true;
@@ -274,7 +274,7 @@ describe("Agent type inference", () => {
     expect(failureProof).toBe(true);
     expect(inputPromptRequirementsProof).toBe(true);
     expect(inputPromptFailureProof).toBe(true);
-    expect(definitionIsNotRunnableProof).toBe(true);
+    expect(definitionIsNotBindingProof).toBe(true);
     expect(bindingRetainsNativeModelProof).toBe(true);
     expect(inputProjectionProof).toBe(true);
     expect(outputProjectionProof).toBe(true);

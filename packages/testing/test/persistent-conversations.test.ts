@@ -56,7 +56,7 @@ const Lookup = Tool.make("lookup", {
   success: Schema.String,
 });
 const toolkit = Toolkit.make(Lookup);
-const definition = Agent.define("retained-history", {
+const definition = Agent.make("retained-history", {
   input: Schema.String,
   output: Schema.String,
   instructions: "Use the retained conversation.",
@@ -167,7 +167,7 @@ describe("persistent conversations", () => {
         }),
       );
       const binding = Agent.withModel(
-        Agent.define("history-result-codec", {
+        Agent.make("history-result-codec", {
           input: Schema.String,
           output,
           instructions: "Answer.",
@@ -305,7 +305,7 @@ describe("persistent conversations", () => {
           encode: SchemaGetter.transform((value) => `reencoded:${value}`),
         }),
       );
-      const transformed = Agent.define("history-codecs", {
+      const transformed = Agent.make("history-codecs", {
         input,
         output,
         inputPrompt: (value) => Ref.set(seenInput, value).pipe(Effect.as(value)),
@@ -337,7 +337,7 @@ describe("persistent conversations", () => {
     "retains native Tool exchanges in the input without treating them as executed Turns",
     () =>
       Effect.gen(function* () {
-        const examples = Agent.define("history-examples", {
+        const examples = Agent.make("history-examples", {
           input: Schema.String,
           inputPrompt: (input) => [
             { role: "user", content: "Example question" },

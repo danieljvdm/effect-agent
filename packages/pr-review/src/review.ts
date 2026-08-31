@@ -331,7 +331,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
   options: ReviewerOptions<Provider, ModelProvides, ModelRequires>,
 ) => {
   const reviewer = Agent.withModel(
-    Agent.define("pr-review", {
+    Agent.make("pr-review", {
       input: ReviewRequest,
       inputPrompt: formatRequest,
       output: ReviewSubmission,

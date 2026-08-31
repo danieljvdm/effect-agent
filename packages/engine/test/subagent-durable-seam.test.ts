@@ -228,7 +228,7 @@ const Lookup = Tool.make("lookup", {
 });
 
 const batchTools = Toolkit.make(DelegateChild, Lookup);
-const batchDefinition = Agent.define("durable-delegating-parent", {
+const batchDefinition = Agent.make("durable-delegating-parent", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Delegate and look up, then answer as JSON.",
@@ -392,7 +392,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
           : { _tag: "waiting", ...childB },
       );
       const DelegateOnly = Toolkit.make(DelegateChild);
-      const definition = Agent.define("two-waiting-delegations", {
+      const definition = Agent.make("two-waiting-delegations", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Delegate twice.",
@@ -458,7 +458,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         failure: DelegationFailed,
       });
       const tools = Toolkit.make(DelegateChild, FailingLookup);
-      const definition = Agent.define("waiting-plus-failing-sibling", {
+      const definition = Agent.make("waiting-plus-failing-sibling", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Delegate and look up.",
@@ -736,7 +736,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
 
   it.effect("the ephemeral default keeps S1 behavior byte-identical", () =>
     Effect.gen(function* () {
-      const childDefinition = Agent.define("ephemeral-default-child", {
+      const childDefinition = Agent.make("ephemeral-default-child", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Answer as JSON.",
@@ -756,7 +756,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         .addDependency(IdGenerator)
         .addDependency(SubagentDurability);
       const tools = Toolkit.make(SpawningDelegate);
-      const definition = Agent.define("ephemeral-default-parent", {
+      const definition = Agent.make("ephemeral-default-parent", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Delegate, then answer as JSON.",

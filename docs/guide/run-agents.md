@@ -1,12 +1,18 @@
 ---
 title: Run and stream
-description: Interpret one Agent Binding as a result, semantic event stream, or scoped detached Run.
+description: Interpret an Agent Definition as a result, semantic event stream, or scoped detached Run.
 ---
 
 # Run and stream
 
 The runtime exposes one semantic loop through three views. Choose based on how the caller needs to
 observe work. The choice does not change execution behavior.
+
+Each view accepts a Definition and requires native model services supplied with `Effect.provide`
+or `Stream.provide`. Explicit Bindings remain supported for durable and Subagent composition.
+Inputs use the Schema's encoded representation. External data typed as `unknown` enters through
+`runUnknown`, `streamUnknown`, or `startUnknown`; all views decode before instructions execute.
+See [Agent definitions](./agents#typed-and-external-inputs) for transforming Schemas.
 
 All three entry points require a provided `ConversationHistory` service. Choose
 `ConversationHistory.layerTransient` for execution without retained history, or provide

@@ -116,7 +116,7 @@ const binding = <Tools extends Record<string, Tool.Any>>(
   overrides: Partial<Parameters<typeof AgentPolicy.make>[0]> = {},
 ) =>
   Agent.withModel(
-    Agent.define("observer-test", {
+    Agent.make("observer-test", {
       input: Schema.String,
       output: Schema.String,
       instructions: "Use the Tool, then recover.",

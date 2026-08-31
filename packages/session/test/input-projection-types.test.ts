@@ -5,7 +5,7 @@ import {
   type AgentRuntimeFailure,
 } from "@effect-agent/engine";
 import { describe, expect, it } from "@effect/vitest";
-import { type Stream, Context, Effect, Schema, type Scope } from "effect";
+import { type Stream, Context, Effect, Schema, type Scope, type Layer } from "effect";
 import { Toolkit, type LanguageModel, type Model } from "effect/unstable/ai";
 
 import { PersistentHistory } from "../src/history.ts";
@@ -39,7 +39,11 @@ class InstructionContext extends Context.Service<InstructionContext, { readonly 
   "@effect-agent/session/test/InstructionContext",
 ) {}
 
-const definition = Agent.define("durable-input-projection-types", {
+class ProviderInfrastructure extends Context.Service<ProviderInfrastructure, string>()(
+  "@effect-agent/session/test/ProviderInfrastructure",
+) {}
+
+const definition = Agent.make("durable-input-projection-types", {
   input: Schema.Struct({ question: Schema.String, hostOnly: Schema.String }),
   output: Schema.String,
   instructions: () => Effect.map(InstructionContext, ({ text }) => text),
@@ -60,7 +64,11 @@ const definition = Agent.define("durable-input-projection-types", {
 
 const proveWorkerRequirements = (
   runtime: DurableAgentRuntime["Service"],
-  model: Model.Model<"test", LanguageModel.LanguageModel, never>,
+  model: Layer.Layer<
+    LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName,
+    never,
+    ProviderInfrastructure
+  >,
   conversationId: ConversationId,
   digests: DefinitionDigests,
 ) => {
@@ -86,7 +94,7 @@ const proveWorkerRequirements = (
     { conversationId },
   );
 
-  type Expected = InputProjection | InstructionContext;
+  type Expected = InputProjection | InstructionContext | ProviderInfrastructure;
   type ProcessProof = Assert<Equal<Effect.Services<typeof process>, Expected>>;
   type WorkerProof = Assert<Equal<Effect.Services<typeof worker>, Expected>>;
   type RegisteredProof = Assert<Equal<Effect.Services<typeof registered>, Expected>>;
@@ -132,7 +140,7 @@ const proveWorkerRequirements = (
 };
 
 describe("durable input projection types", () => {
-  it("retains projection requirements when capturing a worker binding", () => {
+  it("retains projection and provider requirements when registering a native model Layer", () => {
     expect(proveWorkerRequirements).toBeInstanceOf(Function);
   });
 });

@@ -5305,7 +5305,7 @@ const make = Effect.gen(function* () {
       }
 
       const consume = Stream.runForEach(
-        AgentRuntime.stream(agent, submission.inputPayload, options).pipe(
+        AgentRuntime.streamUnknown(agent, submission.inputPayload, options).pipe(
           Stream.provide(ConversationHistory.layerTransient),
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
           Stream.provideService(ContextCompactor, compactor),

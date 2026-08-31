@@ -180,7 +180,7 @@ export const documentSummaryFor = (documentId: string): DocumentSummary =>
 export const encodedDocumentSummary = (documentId: string): string =>
   JSON.stringify(Schema.encodeSync(DocumentSummary)(documentSummaryFor(documentId)));
 
-export const DocSummarizer = Agent.define("doc-summarizer", {
+export const DocSummarizer = Agent.make("doc-summarizer", {
   input: SummaryBrief,
   output: DocumentSummary,
   instructions:
@@ -300,7 +300,7 @@ export const docsMissionConfidentialMarker = "docs-mission-dossier-42f";
 
 export const DocsResearcherToolkit = Toolkit.make(delegateDocumentSummary.tool);
 
-export const DocsResearcher = Agent.define("docs-researcher", {
+export const DocsResearcher = Agent.make("docs-researcher", {
   input: ResearchRequest,
   output: ResearchDigest,
   instructions: [

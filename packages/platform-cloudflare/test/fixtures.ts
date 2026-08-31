@@ -724,7 +724,7 @@ const fixturePolicy = AgentPolicy.make({
 });
 
 /** No tools: one final model response per Run. */
-export const plannerDefinition = Agent.define("cf-planner", {
+export const plannerDefinition = Agent.make("cf-planner", {
   input: FixtureInput,
   output: FixtureOutput,
   instructions: ({ question, ref }) => `Answer ${question} as JSON. [ref:${ref}]`,
@@ -733,7 +733,7 @@ export const plannerDefinition = Agent.define("cf-planner", {
 });
 
 /** Issue #49 fixture: its result proves which prompt crossed the real model boundary. */
-export const contextCompactorDefinition = Agent.define("cf-context-compactor", {
+export const contextCompactorDefinition = Agent.make("cf-context-compactor", {
   input: FixtureInput,
   output: FixtureOutput,
   instructions: ({ question, ref }) => `Answer ${question} as JSON. [ref:${ref}]`,
@@ -752,7 +752,7 @@ export const searchToolLayer = searchTools.toLayer({
   search: () => Effect.succeed({ available: true }),
 });
 
-export const searchDefinition = Agent.define("cf-search", {
+export const searchDefinition = Agent.make("cf-search", {
   input: FixtureInput,
   output: FixtureOutput,
   instructions: ({ ref }) => `Search before answering. [ref:${ref}]`,
@@ -778,7 +778,7 @@ export const bookToolLayer = bookTools.toLayer({
     }),
 });
 
-export const bookDefinition = Agent.define("cf-book", {
+export const bookDefinition = Agent.make("cf-book", {
   input: FixtureInput,
   output: FixtureOutput,
   instructions: ({ ref }) => `Book it. [ref:${ref}]`,
@@ -802,7 +802,7 @@ export const approvalToolLayer = approvalTools.toLayer({
     }),
 });
 
-export const approvalDefinition = Agent.define("cf-book-approval", {
+export const approvalDefinition = Agent.make("cf-book-approval", {
   input: FixtureInput,
   output: FixtureOutput,
   instructions: ({ ref }) => `Book after approval. [ref:${ref}]`,
@@ -845,7 +845,7 @@ export const itineraryToolLayer = itineraryTools.toLayer({
     }),
 });
 
-export const itineraryDefinition = Agent.define("cf-itinerary", {
+export const itineraryDefinition = Agent.make("cf-itinerary", {
   input: FixtureInput,
   output: FixtureOutput,
   instructions: ({ ref }) => `Reserve the itinerary. [ref:${ref}]`,
@@ -854,7 +854,7 @@ export const itineraryDefinition = Agent.define("cf-itinerary", {
 });
 
 /** Host agent whose FIRST model request hangs on the release gate (join/renewal rows). */
-export const joinDefinition = Agent.define("cf-join-host", {
+export const joinDefinition = Agent.make("cf-join-host", {
   input: FixtureInput,
   output: FixtureOutput,
   instructions: ({ ref }) => `Search, wait for the gate, and fold in queued input. [ref:${ref}]`,

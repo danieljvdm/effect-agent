@@ -187,7 +187,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         '"done"',
       );
       const agent = Agent.withModel(
-        Agent.define("independent-services", {
+        Agent.make("independent-services", {
           input: Schema.String,
           output: Schema.String,
           instructions: "Book it.",
@@ -290,7 +290,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           .annotate(DelegationTool, true)
           .annotate(ToolExecutionClass, "readonly");
         const toolkit = Toolkit.make(Ordinary, Delegated);
-        const definition = Agent.define("classification", {
+        const definition = Agent.make("classification", {
           input: Schema.String,
           output: Schema.String,
           instructions: "Answer.",
@@ -358,7 +358,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         needsApproval: true,
       });
       const tools = Toolkit.make(Book);
-      const definition = Agent.define("commit-response-ordering", {
+      const definition = Agent.make("commit-response-ordering", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Book after approval.",
@@ -450,7 +450,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           success: Schema.String,
         });
         const tools = Toolkit.make(HostedLookup, Read);
-        const definition = Agent.define("staged-provider-before-mutations", {
+        const definition = Agent.make("staged-provider-before-mutations", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Use both tools.",
@@ -584,7 +584,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         needsApproval: true,
       });
       const tools = Toolkit.make(Book);
-      const definition = Agent.define("prepare-ordering", {
+      const definition = Agent.make("prepare-ordering", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Book both after approval.",
@@ -705,7 +705,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         needsApproval: true,
       });
       const tools = Toolkit.make(Book);
-      const definition = Agent.define("denied-no-prepare", {
+      const definition = Agent.make("denied-no-prepare", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Book after approval.",
@@ -759,7 +759,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         success: Schema.String,
       });
       const tools = Toolkit.make(Search, Book);
-      const definition = Agent.define("readonly-skip", {
+      const definition = Agent.make("readonly-skip", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Search, then book.",
@@ -851,7 +851,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           success: Schema.String,
         });
         const tools = Toolkit.make(Lookup);
-        const definition = Agent.define("resume-open-calls", {
+        const definition = Agent.make("resume-open-calls", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Look everything up.",
@@ -970,7 +970,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         success: Schema.String,
       });
       const tools = Toolkit.make(Lookup);
-      const definition = Agent.define("resume-invalid-result", {
+      const definition = Agent.make("resume-invalid-result", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Look everything up.",
@@ -1112,7 +1112,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         success: Schema.String,
       });
       const tools = Toolkit.make(DelegateLookup, DelegateOther);
-      const definition = Agent.define("expired-forged-cleanup", {
+      const definition = Agent.make("expired-forged-cleanup", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Look everything up.",
@@ -1204,7 +1204,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         success: Schema.String,
       });
       const tools = Toolkit.make(DelegateLookup);
-      const definition = Agent.define("cleanup-deadline", {
+      const definition = Agent.make("cleanup-deadline", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Join, then answer.",
@@ -1283,7 +1283,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         success: Schema.String,
       });
       const tools = Toolkit.make(Lookup);
-      const definition = Agent.define("resume-truncated-arguments", {
+      const definition = Agent.make("resume-truncated-arguments", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Look everything up.",
@@ -1343,7 +1343,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         dependencies: [DurableStep],
       });
       const tools = Toolkit.make(Work);
-      const definition = Agent.define("step-pass-through", {
+      const definition = Agent.make("step-pass-through", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Do the work.",
@@ -1413,7 +1413,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         dependencies: [DurableStep],
       });
       const tools = Toolkit.make(Stamp);
-      const definition = Agent.define("step-replay", {
+      const definition = Agent.make("step-replay", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Issue the stamp.",
@@ -1485,7 +1485,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         dependencies: [DurableStep],
       });
       const tools = Toolkit.make(Work);
-      const definition = Agent.define("step-duplicate-name", {
+      const definition = Agent.make("step-duplicate-name", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Do the work.",
@@ -1565,7 +1565,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         dependencies: [DurableStep],
       });
       const tools = Toolkit.make(Flaky);
-      const definition = Agent.define("step-success-only", {
+      const definition = Agent.make("step-success-only", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Attempt the work.",
@@ -1657,7 +1657,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         dependencies: [DurableStep],
       });
       const tools = Toolkit.make(Work);
-      const definition = Agent.define("step-hook-failure", {
+      const definition = Agent.make("step-hook-failure", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Do the work.",
@@ -1717,7 +1717,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       success: Schema.String,
     });
     const tools = Toolkit.make(Empty);
-    const definition = Agent.define("durability-hook-types", {
+    const definition = Agent.make("durability-hook-types", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Answer.",

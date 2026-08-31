@@ -65,7 +65,7 @@ export class DestinationReport extends Schema.Class<DestinationReport>("Destinat
   advisory: Schema.NonEmptyString,
 }) {}
 
-export const DestinationResearcher = Agent.define("destination-researcher", {
+export const DestinationResearcher = Agent.make("destination-researcher", {
   input: DestinationBrief,
   output: DestinationReport,
   instructions:
@@ -291,7 +291,7 @@ export const missionConfidentialMarker = "traveler-dossier-19f";
 
 export const TravelCoordinatorToolkit = Toolkit.make(destinationResearchDelegation.tool);
 
-export const TravelCoordinator = Agent.define("travel-coordinator", {
+export const TravelCoordinator = Agent.make("travel-coordinator", {
   input: ResearchMission,
   output: DestinationShortlist,
   instructions: [

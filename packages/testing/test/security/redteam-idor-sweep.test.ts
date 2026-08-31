@@ -109,7 +109,7 @@ const policy = AgentPolicy.make({
   toolConcurrency: 1,
 });
 
-const plainDefinition = Agent.define("idor-plain", {
+const plainDefinition = Agent.make("idor-plain", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Answer.",

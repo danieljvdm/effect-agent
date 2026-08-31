@@ -201,7 +201,7 @@ const basePolicy = {
 const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup) =>
   Effect.gen(function* () {
     const { policy, script, results, commitCompaction } = setup;
-    const definition = Agent.define("compaction-agent", {
+    const definition = Agent.make("compaction-agent", {
       input: Schema.Struct({ question: Schema.String }),
       output,
       instructions: "Research the question with the search tool, then answer.",

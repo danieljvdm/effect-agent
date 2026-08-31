@@ -147,7 +147,7 @@ export const TravelPlannerPhase4ToolkitLayer = TravelPlannerPhase4Toolkit.toLaye
  * runtime. The searches are read-only and safe to repeat across Attempts (D6); supplier booking
  * is deliberately absent because DN does NOT claim replay-safe external mutation (P5 scope).
  */
-export const TravelPlannerPhase4 = Agent.define("travel-planner-phase-4", {
+export const TravelPlannerPhase4 = Agent.make("travel-planner-phase-4", {
   input: TripRequest,
   output: TravelPlan,
   instructions: (input) =>

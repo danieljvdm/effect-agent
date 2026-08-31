@@ -135,7 +135,7 @@ const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
       success: Schema.Any,
     }).addDependency(ToolBroker);
     const outerToolkit = Toolkit.make(Orchestrate);
-    const definition = Agent.define("broker-host", {
+    const definition = Agent.make("broker-host", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Orchestrate.",
@@ -188,7 +188,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
       let maxActiveReservations = 0;
       const reservations: Array<number> = [];
       let handlerStarts = 0;
-      const definition = Agent.define("parallel-reservations", {
+      const definition = Agent.make("parallel-reservations", {
         input: Schema.String,
         output: Schema.String,
         instructions: "Answer.",
@@ -362,7 +362,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         success: Schema.Any,
       }).addDependency(ToolBroker);
       const outerToolkit = Toolkit.make(Orchestrate);
-      const definition = Agent.define("broker-missing-options", {
+      const definition = Agent.make("broker-missing-options", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Orchestrate.",
@@ -420,7 +420,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         // Direct: the model declares the call itself, and the second model
         // request captures the recorded tool-result exactly as the model
         // sees it.
-        const directDefinition = Agent.define("direct-host", {
+        const directDefinition = Agent.make("direct-host", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Query.",
@@ -975,7 +975,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         success: Schema.Any,
       }).addDependency(ToolBroker);
       const outerToolkit = Toolkit.make(Orchestrate);
-      const definition = Agent.define("broker-turn-seam", {
+      const definition = Agent.make("broker-turn-seam", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Orchestrate twice.",

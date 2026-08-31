@@ -7,7 +7,7 @@
 //
 // 1. MCP discovery and Agent authoring do not meet in the type system. The
 //    connector's validated Toolkit arrives as `Toolkit.Any`, while
-//    `Agent.define` needs the statically typed toolkit — so the binding
+//    `Agent.make` needs the statically typed toolkit — so the binding
 //    between "what discovery served" and "what the child was authored
 //    against" had to be re-proved by hand (`assertDiscoveryMatchesAuthoredToolkit`
 //    re-deriving `Tool.getJsonSchema` on both sides). A framework helper that

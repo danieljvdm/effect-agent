@@ -371,7 +371,7 @@ const policy = AgentPolicy.make({
 const PlainInput = Schema.Struct({ question: Schema.String });
 const PlainOutput = Schema.Struct({ answer: Schema.String });
 
-const plainDefinition = Agent.define("chaos-plain", {
+const plainDefinition = Agent.make("chaos-plain", {
   input: PlainInput,
   output: PlainOutput,
   instructions: "Answer as JSON.",
@@ -385,7 +385,7 @@ const BookUncertain = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
 });
 const bookTools = Toolkit.make(BookUncertain);
-const bookDefinition = Agent.define("chaos-book", {
+const bookDefinition = Agent.make("chaos-book", {
   input: PlainInput,
   output: PlainOutput,
   instructions: "Book it.",
@@ -399,7 +399,7 @@ const BookApproval = Tool.make("book", {
   needsApproval: true,
 });
 const approvalTools = Toolkit.make(BookApproval);
-const approvalDefinition = Agent.define("chaos-approval", {
+const approvalDefinition = Agent.make("chaos-approval", {
   input: PlainInput,
   output: PlainOutput,
   instructions: "Book after approval.",
@@ -414,7 +414,7 @@ const Itinerary = Tool.make("itinerary", {
   dependencies: [DurableStep],
 }).annotate(ToolExecutionClass, "uncertain");
 const itineraryTools = Toolkit.make(Itinerary);
-const itineraryDefinition = Agent.define("chaos-itinerary", {
+const itineraryDefinition = Agent.make("chaos-itinerary", {
   input: PlainInput,
   output: PlainOutput,
   instructions: "Reserve the itinerary.",
@@ -422,7 +422,7 @@ const itineraryDefinition = Agent.define("chaos-itinerary", {
   policy,
 });
 
-const childDefinition = Agent.define("chaos-child", {
+const childDefinition = Agent.make("chaos-child", {
   input: PlainInput,
   output: PlainOutput,
   instructions: "Answer as JSON.",
@@ -457,7 +457,7 @@ const chaosDelegation = Subagent.define("delegate_chaos", {
   }),
 });
 
-const coordinatorDefinition = Agent.define("chaos-coordinator", {
+const coordinatorDefinition = Agent.make("chaos-coordinator", {
   input: Schema.Struct({ mission: Schema.String }),
   output: Schema.Struct({ report: Schema.String }),
   instructions: "Delegate, then report as JSON.",

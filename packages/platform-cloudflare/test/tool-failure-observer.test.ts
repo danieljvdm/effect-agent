@@ -94,7 +94,7 @@ it.each([false, true])(
             ),
           );
           const agent = Agent.withModel(
-            Agent.define("cloudflare-observer", {
+            Agent.make("cloudflare-observer", {
               input: Schema.Struct({ question: Schema.String, ref: Schema.String }),
               output: Schema.String,
               instructions: "Try the Tool, then answer.",

@@ -16,7 +16,8 @@ import {
   type ResolvedBinding,
 } from "@effect-agent/session";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/unstable/ai";
+import type { Prompt } from "effect/unstable/ai";
+import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 /**
  * P7 WP4 soak fixtures shared by the soak test (submitting client) and the soak worker entry
@@ -103,7 +104,7 @@ const promptScriptedModel = (
     ),
   );
 
-export const soakPlannerDefinition = Agent.define("soak-planner", {
+export const soakPlannerDefinition = Agent.make("soak-planner", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Answer as JSON.",
@@ -116,7 +117,7 @@ export const soakPlannerDefinition = Agent.define("soak-planner", {
   }),
 });
 
-export const soakChildDefinition = Agent.define("soak-child", {
+export const soakChildDefinition = Agent.make("soak-child", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Answer as JSON.",
@@ -151,7 +152,7 @@ export const soakDelegation = Subagent.define("delegate_soak", {
   }),
 });
 
-export const soakCoordinatorDefinition = Agent.define("soak-coordinator", {
+export const soakCoordinatorDefinition = Agent.make("soak-coordinator", {
   input: Schema.Struct({ mission: Schema.String }),
   output: Schema.Struct({ report: Schema.String }),
   instructions: "Delegate, then report as JSON.",

@@ -123,7 +123,7 @@ const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncoded> => 
   { type: "finish", reason: "stop", usage },
 ];
 
-const runtimeDefinition = Agent.define("runtime-test", {
+const runtimeDefinition = Agent.make("runtime-test", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: ({ question }) => `Answer ${question} as JSON.`,
@@ -144,7 +144,7 @@ const HostedSearch = Tool.providerDefined({
   success: Schema.Struct({ status: Schema.String }),
 })(undefined);
 const hostedTools = Toolkit.make(HostedSearch);
-const hostedDefinition = Agent.define("hosted-tool", {
+const hostedDefinition = Agent.make("hosted-tool", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Search before answering.",
@@ -159,6 +159,10 @@ const hostedDefinition = Agent.define("hosted-tool", {
 
 const makeAgent = (parts: ReadonlyArray<Response.StreamPartEncoded>) =>
   Agent.withModel(runtimeDefinition, modelFromParts(parts));
+
+class ModelConfiguration extends Context.Service<ModelConfiguration, string>()(
+  "@effect-agent/engine/test/ModelConfiguration",
+) {}
 
 const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
   expect(Exit.isFailure(exit)).toBe(true);
@@ -267,6 +271,127 @@ const renderedLogMessage = (message: unknown): string =>
 const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
 
 layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
+  it.effect("runs Definitions with composed native Layers and decodes encoded input", () =>
+    Effect.gen(function* () {
+      const received: Array<number> = [];
+      const definition = Agent.make("transformed-input", {
+        output: runtimeDefinition.output,
+        toolkit: Toolkit.empty,
+        policy: runtimeDefinition.policy,
+        input: Schema.Struct({ days: Schema.NumberFromString }),
+        instructions: ({ days }) => {
+          received.push(days);
+          return `Plan ${days} days.`;
+        },
+        inputPrompt: ({ days }) => `Decoded days: ${days}`,
+      });
+      const result = yield* AgentRuntime.run(definition, { days: "2" }).pipe(
+        Effect.provide(
+          Layer.mergeAll(modelFromParts(finalParts('{"answer":"two days"}')), identifiers),
+        ),
+      );
+      expect(result.output).toEqual({ answer: "two days" });
+      expect(received).toEqual([2]);
+    }),
+  );
+
+  it.effect("rejects external input before instructions or model execution in every view", () =>
+    Effect.gen(function* () {
+      let instructions = 0;
+      let modelCalls = 0;
+      const definition = Agent.make("external-input", {
+        input: runtimeDefinition.input,
+        output: runtimeDefinition.output,
+        toolkit: Toolkit.empty,
+        policy: runtimeDefinition.policy,
+        instructions: () => {
+          instructions++;
+          return "Answer the question.";
+        },
+      });
+      const model = Model.make(
+        "scripted",
+        "invalid-input",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () => {
+              modelCalls++;
+              return Stream.fromIterable(finalParts('{"answer":"unexpected"}'));
+            },
+          }),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const input: unknown = { question: 42 };
+        const runExit = yield* AgentRuntime.runUnknown(definition, input).pipe(Effect.exit);
+        const streamExit = yield* AgentRuntime.streamUnknown(definition, input).pipe(
+          Stream.runDrain,
+          Effect.exit,
+        );
+        const detached = yield* AgentRuntime.startUnknown(definition, input);
+        const startExit = yield* detached.await.pipe(Effect.exit);
+        for (const exit of [runExit, streamExit, startExit]) {
+          expect(failureFrom(exit)).toBeInstanceOf(AgentInputError);
+        }
+        expect(instructions).toBe(0);
+        expect(modelCalls).toBe(0);
+      }).pipe(Effect.provide(model));
+    }),
+  );
+
+  it.effect("keeps captured model resources alive through detached execution", () =>
+    Effect.gen(function* () {
+      for (const bound of [false, true]) {
+        const started = yield* Deferred.make<void>();
+        const finish = yield* Deferred.make<void>();
+        const finalized = yield* Deferred.make<void>();
+        const model = Model.make(
+          "scripted",
+          "captured",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            Effect.gen(function* () {
+              const answer = yield* ModelConfiguration;
+              yield* Effect.acquireRelease(Effect.void, () =>
+                Deferred.succeed(finalized, undefined),
+              );
+              return yield* LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: () =>
+                  Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+                    Stream.flatMap(() => Stream.fromEffect(Deferred.await(finish))),
+                    Stream.flatMap(() =>
+                      Stream.fromIterable(finalParts(JSON.stringify({ answer }))),
+                    ),
+                  ),
+              });
+            }),
+          ),
+        );
+        const captured = yield* model.captureRequirements.pipe(
+          Effect.provideService(ModelConfiguration, "captured answer"),
+        );
+        yield* Effect.gen(function* () {
+          const child = yield* bound
+            ? AgentRuntime.start(Agent.withModel(runtimeDefinition, captured), {
+                question: "hello",
+              })
+            : AgentRuntime.start(runtimeDefinition, { question: "hello" });
+          yield* Deferred.await(started);
+          expect(yield* Deferred.isDone(finalized)).toBe(false);
+          yield* Deferred.succeed(finish, undefined);
+          expect((yield* child.await).output).toEqual({ answer: "captured answer" });
+        }).pipe(
+          Effect.provide(bound ? modelFromParts(finalParts('{"answer":"ambient"}')) : captured),
+          Effect.scoped,
+        );
+        expect(yield* Deferred.isDone(finalized)).toBe(true);
+      }
+    }),
+  );
+
   it.effect("preserves official prior history as the exact prefix of a new Run", () => {
     const priorHistory = Prompt.fromMessages([
       Prompt.makeMessage("system", { content: "Original conversation instructions." }),
@@ -387,7 +512,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         }),
       ),
     );
-    const definition = Agent.define("two-turn", {
+    const definition = Agent.make("two-turn", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Search before answering.",
@@ -675,7 +800,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         }),
       ),
     );
-    const definition = Agent.define("tool-observability", {
+    const definition = Agent.make("tool-observability", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Call both Tools.",
@@ -840,7 +965,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         success: Schema.String,
       });
       const tools = Toolkit.make(Read);
-      const definition = Agent.define("invalid-tool-call-id", {
+      const definition = Agent.make("invalid-tool-call-id", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Call the Tool.",
@@ -1023,7 +1148,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       },
       { type: "finish", reason: "tool-calls", usage },
     ]);
-    const definition = Agent.define("early-close-tool-observability", {
+    const definition = Agent.make("early-close-tool-observability", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Call the Tool.",
@@ -1836,7 +1961,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         }),
       ),
     );
-    const definition = Agent.define("terminal-telemetry-defect", {
+    const definition = Agent.make("terminal-telemetry-defect", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Read once, then answer.",
@@ -2023,7 +2148,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
-      const definition = Agent.define("span-lifecycle-defects", {
+      const definition = Agent.make("span-lifecycle-defects", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Call all three Tools, then answer.",
@@ -2195,7 +2320,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       },
       { type: "finish", reason: "tool-calls", usage },
     ]);
-    const definition = Agent.define("post-terminal-tool-failure", {
+    const definition = Agent.make("post-terminal-tool-failure", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Look up the status.",
@@ -2390,7 +2515,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       success: Schema.Struct({ status: Schema.String }),
     })(undefined);
     const tools = Toolkit.make(HostedSearch, HostedLookup);
-    const definition = Agent.define("hosted-tool-name-correlation", {
+    const definition = Agent.make("hosted-tool-name-correlation", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Use one hosted Tool.",
@@ -2580,7 +2705,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         value === "application-complete" ? undefined : `Rejected disposition: ${value}`,
       ),
     );
-    const definition = Agent.define("run-disposition", {
+    const definition = Agent.make("run-disposition", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({
         answer: Schema.String,
@@ -2617,7 +2742,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(result.runDisposition).toBe("application-complete");
 
       const secret = "sensitive-run-disposition-must-not-enter-events";
-      const invalidDefinition = Agent.define("invalid-run-disposition", {
+      const invalidDefinition = Agent.make("invalid-run-disposition", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Answer as JSON.",
@@ -2677,7 +2802,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       cause: structuredCause,
     });
     selectorFailure.name = "SelectorFailure";
-    const definition = Agent.define("throwing-run-disposition", {
+    const definition = Agent.make("throwing-run-disposition", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Answer as JSON.",
@@ -2735,7 +2860,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     const agent = makeAgent(finalParts('{"answer":42}'));
 
     return Effect.gen(function* () {
-      const inputExit = yield* AgentRuntime.run(agent, {
+      const inputExit = yield* AgentRuntime.runUnknown(agent, {
         question: 42,
       }).pipe(Effect.exit);
       const outputExit = yield* AgentRuntime.run(agent, {
@@ -2802,7 +2927,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       success: Schema.String,
     });
     const tools = Toolkit.make(Search);
-    const definition = Agent.define("truncated-tool-parameters", {
+    const definition = Agent.make("truncated-tool-parameters", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Search before answering.",
@@ -2964,7 +3089,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             }),
           ),
         );
-        const definition = Agent.define("bounded-tools", {
+        const definition = Agent.make("bounded-tools", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Run all lookups.",
@@ -3050,7 +3175,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         success: Schema.String,
       });
       const tools = Toolkit.make(Lookup);
-      const definition = Agent.define("batch-preflight", {
+      const definition = Agent.make("batch-preflight", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Run lookups.",
@@ -3154,7 +3279,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         }),
       ),
     );
-    const definition = Agent.define("transformed-tool-parameters", {
+    const definition = Agent.make("transformed-tool-parameters", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Increment the encoded number.",
@@ -3217,7 +3342,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         failure: ScheduledToolFailure,
       });
       const tools = Toolkit.make(Fail);
-      const definition = Agent.define("typed-tool-failure", {
+      const definition = Agent.make("typed-tool-failure", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Call the failing Tool.",
@@ -3339,7 +3464,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
-      const definition = Agent.define("empty-success", {
+      const definition = Agent.make("empty-success", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Call maybe.",
@@ -3996,7 +4121,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
-      const definition = Agent.define("absolute-timeout", {
+      const definition = Agent.make("absolute-timeout", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: () => Effect.sleep("4 seconds").pipe(Effect.as("Wait, then answer.")),
@@ -4053,7 +4178,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           success: Schema.String,
         });
         const tools = Toolkit.make(Defect);
-        const definition = Agent.define("tool-defect", {
+        const definition = Agent.make("tool-defect", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Call defect.",
@@ -4154,7 +4279,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           ),
         ),
       );
-      const definition = Agent.define("interrupt-test", {
+      const definition = Agent.make("interrupt-test", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Wait for the Tool.",
@@ -4202,7 +4327,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         success: Schema.String,
       });
       const tools = Toolkit.make(Wait);
-      const definition = Agent.define("interrupted-tool-observability", {
+      const definition = Agent.make("interrupted-tool-observability", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Wait for interruption.",
@@ -4290,7 +4415,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         needsApproval: true,
       });
       const tools = Toolkit.make(Hold);
-      const definition = Agent.define("approval-no-start", {
+      const definition = Agent.make("approval-no-start", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Hold the itinerary.",
@@ -4355,7 +4480,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect('fails token exhaustion before a successful stop with onExhaustion "fail"', () =>
     Effect.gen(function* () {
-      const definition = Agent.define("token-budget", {
+      const definition = Agent.make("token-budget", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Answer.",
@@ -4438,7 +4563,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           success: Schema.String,
         });
         const tools = Toolkit.make(Search);
-        const definition = Agent.define("turn-exhaustion", {
+        const definition = Agent.make("turn-exhaustion", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Search until done.",
@@ -4527,7 +4652,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             }),
           ),
         );
-        const definition = Agent.define("tool-call-exhaustion", {
+        const definition = Agent.make("tool-call-exhaustion", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Search until done.",
@@ -4607,7 +4732,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             }),
           ),
         );
-        const definition = Agent.define("repeated-failures", {
+        const definition = Agent.make("repeated-failures", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Keep trying.",
@@ -4702,7 +4827,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
-      const definition = Agent.define("repeated-failure-reset", {
+      const definition = Agent.make("repeated-failure-reset", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Keep trying.",
@@ -4808,7 +4933,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
-      const definition = Agent.define("compaction-source", {
+      const definition = Agent.make("compaction-source", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Search.",
@@ -4900,7 +5025,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             }),
           ),
         );
-        const definition = Agent.define("steering-safe-seam", {
+        const definition = Agent.make("steering-safe-seam", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Wait, then incorporate changes.",
@@ -4995,7 +5120,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
-      const definition = Agent.define("follow-up-stop-seam", {
+      const definition = Agent.make("follow-up-stop-seam", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Search and answer.",
@@ -5112,7 +5237,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
-      const definition = Agent.define("scheduling-overrides", {
+      const definition = Agent.make("scheduling-overrides", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Run tools.",
@@ -5210,7 +5335,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
-      const definition = Agent.define("sequential-run", {
+      const definition = Agent.make("sequential-run", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Work.",
@@ -5292,7 +5417,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("requires cost estimation and fails typed cost exhaustion", () =>
     Effect.gen(function* () {
-      const definition = Agent.define("cost-budget", {
+      const definition = Agent.make("cost-budget", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Answer.",
@@ -5375,7 +5500,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         success: Schema.String,
       });
       const tools = Toolkit.make(Wait);
-      const definition = Agent.define("guarded-tool", {
+      const definition = Agent.make("guarded-tool", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Wait.",
@@ -5565,7 +5690,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             }),
           ),
         );
-        const definition = Agent.define("live-observer", {
+        const definition = Agent.make("live-observer", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Wait for the release signal.",
@@ -5637,7 +5762,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         success: Schema.String,
       });
       const tools = Toolkit.make(Plan);
-      const definition = Agent.define("class-shaped-parameters", {
+      const definition = Agent.make("class-shaped-parameters", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Plan the itinerary.",
@@ -5731,7 +5856,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         success: Schema.String,
       });
       const tools = Toolkit.make(Plan);
-      const definition = Agent.define("decoded-handler-parameters", {
+      const definition = Agent.make("decoded-handler-parameters", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Plan the itinerary.",
@@ -5808,7 +5933,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           success: Schema.String,
         });
         const tools = Toolkit.make(Lookup);
-        const definition = Agent.define("resume-leading-messages", {
+        const definition = Agent.make("resume-leading-messages", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Look everything up.",
@@ -5934,7 +6059,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
   });
   const softLandingTools = Toolkit.make(Search);
   const softLandingDefinition = (policy: AgentPolicy) =>
-    Agent.define("soft-landing", {
+    Agent.make("soft-landing", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Search until done.",

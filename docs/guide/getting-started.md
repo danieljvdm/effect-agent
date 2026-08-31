@@ -1,12 +1,12 @@
 ---
 title: Getting started
-description: Define, bind, and run a bounded Effect-native Agent.
+description: Define and run a bounded Agent with native model Layers.
 ---
 
 # Getting started
 
 An Effect Agent has five pieces: input and output Schemas, instructions, an Effect AI Toolkit, a
-finite policy, and an explicit Model Binding. This page builds one from scratch.
+finite policy, and a native model Layer. This page builds one from scratch.
 
 ## Installation and compatibility
 
@@ -144,7 +144,7 @@ Layer supplied by your application.
 ```ts
 import { Agent, AgentPolicy } from "@effect-agent/core";
 
-const TriageDefinition = Agent.define("triage", {
+const TriageDefinition = Agent.make("triage", {
   input: TriageInput,
   output: TriageResult,
   instructions: ({ repo, issueNumber }) =>
@@ -162,31 +162,31 @@ const TriageDefinition = Agent.define("triage", {
 The Agent ID is stable identity, not a display name. Every default policy is finite. Invalid or
 unbounded policy values fail at construction.
 
-## 4. Bind one Model
+## 4. Select a model Layer
 
-Definitions are model-agnostic. A Model becomes part of the runtime contract only at the explicit
-binding seam.
+Definitions are model-agnostic. Select a native model Layer at the application boundary.
 
 ```ts
 import { OpenAiLanguageModel } from "@effect/ai-openai";
 
-const Triage = Agent.withModel(TriageDefinition, OpenAiLanguageModel.model("gpt-4.1-mini"));
+const TriageModel = OpenAiLanguageModel.model("gpt-4.1-mini");
 ```
 
 The framework does not choose a Model from ambient configuration. The Effect AI Model's Layer
 requirements join the Run's `R`.
 
-## 5. Interpret the Binding
+## 5. Run the Definition
 
 ```ts
 import { Effect } from "effect";
 import { IdGenerator } from "@effect-agent/core";
 import { AgentRuntime, ConversationHistory } from "@effect-agent/engine";
 
-const program = AgentRuntime.run(Triage, {
+const program = AgentRuntime.run(TriageDefinition, {
   repo: "Effect-TS/effect",
   issueNumber: 4123,
 }).pipe(
+  Effect.provide(TriageModel),
   Effect.provide(TriageToolkitLive),
   Effect.provide(IssueRepoLive),
   Effect.provide(IdGenerator.layer),

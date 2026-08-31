@@ -14,7 +14,7 @@ the framework adds on top of Effect AI, and names the three persistence levels i
 ## One Agent, end to end
 
 An Effect Agent combines Schema-defined input and output, native Effect AI Tools, an explicit
-Model binding, and application Layers. `AgentRuntime.run` interprets that binding as an Effect
+model Layer, and application Layers. `AgentRuntime.run` interprets the Definition as an Effect
 that finishes run-owned cleanup before returning.
 
 ```ts [calculator-agent.ts]
@@ -41,8 +41,8 @@ const CalculatorLive = Calculator.toLayer({
   add: ({ left, right }) => Effect.succeed({ total: left + right }),
 });
 
-// 3. Define finite autonomous behavior, then bind exactly one Model.
-const Definition = Agent.define("calculator", {
+// 3. Define finite autonomous behavior.
+const CalculatorAgent = Agent.make("calculator", {
   input: Question,
   output: Answer,
   instructions: ({ question }) =>
@@ -55,8 +55,6 @@ const Definition = Agent.define("calculator", {
     toolConcurrency: 1,
   }),
 });
-
-const CalculatorAgent = Agent.withModel(Definition, OpenAiLanguageModel.model("gpt-4.1-mini"));
 
 // 4. Build the application's Effect environment.
 const OpenAiLive = OpenAiClient.layerConfig({
@@ -75,14 +73,15 @@ const program = AgentRuntime.run(CalculatorAgent, {
   question: "What is 20 + 22?",
 }).pipe(
   Effect.tap((result) => Effect.logInfo("answer", result.output)),
+  Effect.provide(OpenAiLanguageModel.model("gpt-4.1-mini")),
   Effect.provide(AppLive),
 );
 
 void Effect.runPromise(program);
 ```
 
-`Definition` contains the immutable Agent configuration. `CalculatorLive` supplies Tool behavior,
-`CalculatorAgent` fixes the Model selection, and `AppLive` provides the runtime dependencies.
+`CalculatorAgent` contains the immutable Agent configuration. `CalculatorLive` supplies Tool
+behavior, `Effect.provide` selects the model, and `AppLive` provides the runtime dependencies.
 `IdGenerator.layer` is the framework's default Web Crypto identity authority; the
 [testing guide](./testing) replaces it with deterministic IDs. The result remains an `Effect`
 until the application entrypoint executes it:
@@ -194,6 +193,6 @@ promised. Incompatible data fails clearly and may need a reset. Follow the
 
 ## Next steps
 
-- [Getting started](./getting-started) shows how to build a Definition and Binding.
+- [Getting started](./getting-started) shows how to build and run a Definition.
 - [Effect-native by construction](../concepts/effect-native) explains how the architecture keeps
   these properties.

@@ -75,7 +75,7 @@ export const TravelPlannerPhase2ToolkitLayer = TravelPlannerPhase2Toolkit.toLaye
     Effect.flatMap(ItineraryHoldGateway, (gateway) => gateway.hold(request)),
 });
 
-export const TravelPlannerPhase2 = Agent.define("travel-planner-phase-2", {
+export const TravelPlannerPhase2 = Agent.make("travel-planner-phase-2", {
   input: TripRequest,
   output: TravelPlan,
   instructions: (input) =>

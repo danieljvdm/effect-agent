@@ -247,7 +247,7 @@ const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncoded> => 
   { type: "finish", reason: "stop", usage },
 ];
 
-const initialAgentDefinition = Agent.define("node-subscription-agent", {
+const initialAgentDefinition = Agent.make("node-subscription-agent", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: ({ question }) => `Answer ${question} as JSON.`,

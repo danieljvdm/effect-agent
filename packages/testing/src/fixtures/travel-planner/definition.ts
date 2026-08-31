@@ -150,7 +150,7 @@ export const TravelPlannerToolkitLayer = TravelPlannerToolkit.toLayer({
   search_activities: (query) => Effect.flatMap(ActivityCatalog, (catalog) => catalog.search(query)),
 });
 
-export const TravelPlanner = Agent.define("travel-planner", {
+export const TravelPlanner = Agent.make("travel-planner", {
   input: TripRequest,
   output: TravelPlan,
   instructions: (input) =>

@@ -83,7 +83,7 @@ export const codeMode = CodeMode.make("run_javascript", {
   tools: { warehouse: { query: warehouseQueryTool } },
 });
 
-export const codeModeAgent = Agent.define("warehouse-analyst", {
+export const codeModeAgent = Agent.make("warehouse-analyst", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: [

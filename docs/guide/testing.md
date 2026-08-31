@@ -9,17 +9,13 @@ Agent correctness should not depend on network access, credentials, provider lat
 mood. `@effect-agent/testing` provides a deterministic Effect AI `LanguageModel` Layer that drives
 the real interpreter.
 
-## Bind a scripted Model
+## Provide a scripted model Layer
 
 ```ts
 import { Model } from "effect/unstable/ai";
-import { Agent } from "@effect-agent/core";
 import { ScriptedModel } from "@effect-agent/testing";
 
-const TestAgent = Agent.withModel(
-  Definition,
-  Model.make("scripted", "test-model", ScriptedModel.layer(turns)),
-);
+const TestModel = Model.make("scripted", "test-model", ScriptedModel.layer(turns));
 ```
 
 The script can emit text, reasoning, Tool Calls, usage, malformed sequences, typed model failures,
@@ -86,7 +82,8 @@ const TestRuntimeLive = Layer.mergeAll(
 );
 
 it.effect("commits Tool results in declaration order", () =>
-  AgentRuntime.run(TestAgent, input).pipe(
+  AgentRuntime.run(Definition, input).pipe(
+    Effect.provide(TestModel),
     Effect.provide(TestRuntimeLive),
     Effect.tap((result) => Effect.sync(() => expect(result.output).toEqual(expected))),
   ),

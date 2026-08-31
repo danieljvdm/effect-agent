@@ -184,7 +184,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     () =>
       Effect.gen(function* () {
         const bigData = "x".repeat(3_000);
-        const definition = Agent.define("bounds-oversized", {
+        const definition = Agent.make("bounds-oversized", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Use the tool once, then answer.",
@@ -240,7 +240,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
 
   it.effect("RUN-022: leaves within-bounds Tool results unchanged", () =>
     Effect.gen(function* () {
-      const definition = Agent.define("bounds-small", {
+      const definition = Agent.make("bounds-small", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Use the tool once, then answer.",
@@ -272,7 +272,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
 
   it.effect("RUN-022: the default policy bounds Tool results at 50 KiB", () =>
     Effect.gen(function* () {
-      const definition = Agent.define("bounds-default", {
+      const definition = Agent.make("bounds-default", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Use the tool once, then answer.",
@@ -312,7 +312,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     () =>
       Effect.gen(function* () {
         const deltas = yield* Ref.make<ReadonlyArray<RunUsageDelta>>([]);
-        const definition = Agent.define("live-context", {
+        const definition = Agent.make("live-context", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Search once, then answer.",
@@ -379,7 +379,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
   it.effect("RUN-023: separates cache writes already included in provider uncached input", () =>
     Effect.gen(function* () {
       const deltas = yield* Ref.make<ReadonlyArray<RunUsageDelta>>([]);
-      const definition = Agent.define("overlapping-cache-write", {
+      const definition = Agent.make("overlapping-cache-write", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Answer.",
@@ -425,7 +425,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
   it.effect("RUN-023: rejects malformed provider token usage instead of counting it as zero", () =>
     Effect.gen(function* () {
       const estimatorCalls = yield* Ref.make(0);
-      const definition = Agent.define("invalid-provider-usage", {
+      const definition = Agent.make("invalid-provider-usage", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Answer.",
@@ -486,7 +486,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
   it.effect("RUN-023: assigns aggregate remainders only to omitted provider components", () =>
     Effect.gen(function* () {
       const deltas = yield* Ref.make<ReadonlyArray<RunUsageDelta>>([]);
-      const definition = Agent.define("provider-usage-remainder", {
+      const definition = Agent.make("provider-usage-remainder", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Answer.",
@@ -530,7 +530,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     () =>
       Effect.gen(function* () {
         const histories: Array<Prompt.Prompt> = [];
-        const definition = Agent.define("status-appended", {
+        const definition = Agent.make("status-appended", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Search once, then answer.",
@@ -586,7 +586,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
 
   it.effect("RUN-024: a tightened deadline does not fabricate elapsed time or a warning", () =>
     Effect.gen(function* () {
-      const definition = Agent.define("status-tightened-deadline", {
+      const definition = Agent.make("status-tightened-deadline", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Answer.",
@@ -618,7 +618,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
 
   it.effect("RUN-024: a resumed Run reports elapsed time from its supplied logical start", () =>
     Effect.gen(function* () {
-      const definition = Agent.define("status-resumed-start", {
+      const definition = Agent.make("status-resumed-start", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Answer from the restored result.",
@@ -664,7 +664,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
 
   it.effect("RUN-024: omits the run-status message when policy runStatus is off", () =>
     Effect.gen(function* () {
-      const definition = Agent.define("status-off", {
+      const definition = Agent.make("status-off", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Answer.",
@@ -691,7 +691,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     "RUN-024: the run-status message carries the wrap-up warning at 80% of a dimension",
     () =>
       Effect.gen(function* () {
-        const definition = Agent.define("status-warning", {
+        const definition = Agent.make("status-warning", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Search once, then answer.",
@@ -771,7 +771,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     () =>
       Effect.gen(function* () {
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
-        const definition = Agent.define("token-warning", {
+        const definition = Agent.make("token-warning", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Search twice, then answer.",
@@ -812,7 +812,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     () =>
       Effect.gen(function* () {
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
-        const definition = Agent.define("ordinary-completion", {
+        const definition = Agent.make("ordinary-completion", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Answer.",
@@ -851,7 +851,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     () =>
       Effect.gen(function* () {
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
-        const definition = Agent.define("token-exhausted-stop", {
+        const definition = Agent.make("token-exhausted-stop", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Answer.",
@@ -896,7 +896,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         const handlerStarts = yield* Ref.make(0);
         const commits = yield* Ref.make(0);
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
-        const definition = Agent.define("token-exhausted-tools", {
+        const definition = Agent.make("token-exhausted-tools", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Search, then answer.",
@@ -974,7 +974,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     () =>
       Effect.gen(function* () {
         const SearchThenPost = Toolkit.make(SearchTool, PostMessageTool);
-        const definition = Agent.define("required-terminal-tool", {
+        const definition = Agent.make("required-terminal-tool", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
           instructions: "Research, then deliver with post_message.",
@@ -1020,7 +1020,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     () =>
       Effect.gen(function* () {
         const handlerStarts = yield* Ref.make(0);
-        const definition = Agent.define("required-terminal-tool-text-stop", {
+        const definition = Agent.make("required-terminal-tool-text-stop", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
           instructions: "Deliver with post_message.",
@@ -1070,7 +1070,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     () =>
       Effect.gen(function* () {
         const handlerStarts = yield* Ref.make(0);
-        const definition = Agent.define("token-exhausted-terminal-tool", {
+        const definition = Agent.make("token-exhausted-terminal-tool", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
           instructions: "Deliver the final answer with post_message.",
@@ -1135,7 +1135,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     () =>
       Effect.gen(function* () {
         const handlerStarts = yield* Ref.make(0);
-        const definition = Agent.define("token-exhausted-terminal-tool-fail", {
+        const definition = Agent.make("token-exhausted-terminal-tool-fail", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
           instructions: "Deliver the final answer with post_message.",
@@ -1186,7 +1186,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
   it.effect.each([2, 3])("resumes recorded completion only through the final Turn: %s", (turn) =>
     Effect.gen(function* () {
       const handlerStarts = yield* Ref.make(0);
-      const definition = Agent.define("resume-grace-completion", {
+      const definition = Agent.make("resume-grace-completion", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
         instructions: "Deliver with post_message.",
@@ -1264,7 +1264,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         failureMode: "return",
       });
       const toolkit = Toolkit.make(SearchTool, Finish);
-      const definition = Agent.define("failed-grace-completion", {
+      const definition = Agent.make("failed-grace-completion", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Search then finish.",
@@ -1314,7 +1314,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       const searchStarts = yield* Ref.make(0);
       const deliveryStarts = yield* Ref.make(0);
       const SearchThenPost = Toolkit.make(SearchTool, PostMessageTool);
-      const definition = Agent.define("turn-exhausted-terminal-tool-fail", {
+      const definition = Agent.make("turn-exhausted-terminal-tool-fail", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
         instructions: "Deliver the final answer with post_message.",
@@ -1364,7 +1364,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         finishReason: "completed",
       });
 
-      const optionalDefinition = Agent.define("optional-terminal-tool-at-turn-limit", {
+      const optionalDefinition = Agent.make("optional-terminal-tool-at-turn-limit", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
         instructions: "Deliver the final answer.",
@@ -1465,7 +1465,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         const failedToolkit = Toolkit.make(FailedPostMessage);
         const handlerStarts = yield* Ref.make(0);
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
-        const definition = Agent.define("failed-terminal-tool-at-turn-limit", {
+        const definition = Agent.make("failed-terminal-tool-at-turn-limit", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
           instructions: "Deliver through failed_post_message.",
@@ -1523,7 +1523,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       const SearchThenPost = Toolkit.make(SearchTool, PostMessageTool);
       const searchStarts = yield* Ref.make(0);
       const deliveryStarts = yield* Ref.make(0);
-      const definition = Agent.define("tool-exhausted-terminal-tool-fail", {
+      const definition = Agent.make("tool-exhausted-terminal-tool-fail", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
         instructions: "Research, then deliver the final answer with post_message.",
@@ -1575,7 +1575,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     () =>
       Effect.gen(function* () {
         const handlerStarts = yield* Ref.make(0);
-        const definition = Agent.define("resume-token-exhausted-terminal-tool-fail", {
+        const definition = Agent.make("resume-token-exhausted-terminal-tool-fail", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
           instructions: "Deliver the final answer with post_message.",
@@ -1648,7 +1648,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     Effect.gen(function* () {
       const mixedToolkit = Toolkit.make(PostMessageTool, SearchTool);
       const handlerStarts = yield* Ref.make(0);
-      const definition = Agent.define("mixed-terminal-tool-batch", {
+      const definition = Agent.make("mixed-terminal-tool-batch", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
         instructions: "Deliver the final message.",
@@ -1709,7 +1709,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     "RUN-034: completion reserve preserves terminal Tool choice with required=%s",
     (required) =>
       Effect.gen(function* () {
-        const definition = Agent.define("completion-reserve-terminal-tool", {
+        const definition = Agent.make("completion-reserve-terminal-tool", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
           instructions: `Research only while delivery capacity remains. ${"context ".repeat(100)}`,
@@ -1761,7 +1761,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       Effect.gen(function* () {
         const handlerStarts = yield* Ref.make(0);
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
-        const definition = Agent.define("tool-calls-exhausted", {
+        const definition = Agent.make("tool-calls-exhausted", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Search until done.",
@@ -1808,7 +1808,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       Effect.gen(function* () {
         const handlerStarts = yield* Ref.make(0);
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
-        const definition = Agent.define("turns-exhausted", {
+        const definition = Agent.make("turns-exhausted", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Search until done.",
@@ -1854,7 +1854,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       Effect.gen(function* () {
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
         const drained = yield* Ref.make(false);
-        const definition = Agent.define("turns-follow-up", {
+        const definition = Agent.make("turns-follow-up", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Answer.",
@@ -1904,7 +1904,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     "RUN-025: a grace-Turn response that declares Tool calls fails typed (the RUN-020 fail-closed constraint)",
     () =>
       Effect.gen(function* () {
-        const definition = Agent.define("finalize-declares-tools", {
+        const definition = Agent.make("finalize-declares-tools", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Search, then answer.",
@@ -1937,7 +1937,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     "RUN-025: a token-breaching stop response without decodable output fails as an ordinary decode failure",
     () =>
       Effect.gen(function* () {
-        const definition = Agent.define("finalize-bad-output", {
+        const definition = Agent.make("finalize-bad-output", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Search, then answer.",
@@ -1971,7 +1971,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
 
   it.effect("RUN-025: run results surface the exhausted marker", () =>
     Effect.gen(function* () {
-      const definition = Agent.define("result-exhausted", {
+      const definition = Agent.make("result-exhausted", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Answer.",
@@ -2001,7 +2001,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
   it.effect("RUN-025: a simultaneous token and cost breach fails typed on the cost rail", () =>
     Effect.gen(function* () {
       const estimatedInputTokens = yield* Ref.make<number | undefined>(undefined);
-      const definition = Agent.define("both-breach", {
+      const definition = Agent.make("both-breach", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Answer.",
@@ -2034,7 +2034,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
   it.effect("RUN-035: cumulative model cost fails typed before safe-integer overflow", () =>
     Effect.gen(function* () {
       const estimatorCalls = yield* Ref.make(0);
-      const definition = Agent.define("cost-overflow", {
+      const definition = Agent.make("cost-overflow", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Search, then answer.",
@@ -2078,7 +2078,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         success: Schema.Unknown,
       });
       const unknownToolkit = Toolkit.make(UnknownTool);
-      const definition = Agent.define("bounds-unserializable", {
+      const definition = Agent.make("bounds-unserializable", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Use the tool once, then answer.",
@@ -2124,7 +2124,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
           success: Schema.Unknown,
         });
         const unknownToolkit = Toolkit.make(UnknownTool);
-        const definition = Agent.define("bounds-canonicalize", {
+        const definition = Agent.make("bounds-canonicalize", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Use the tool once, then answer.",
@@ -2172,7 +2172,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         failureMode: "return",
       });
       const fragileToolkit = Toolkit.make(FragileTool);
-      const definition = Agent.define("bounds-failed-unserializable", {
+      const definition = Agent.make("bounds-failed-unserializable", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Use the tool once, then answer.",
@@ -2215,7 +2215,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       Effect.gen(function* () {
         for (const limit of ["turns", "tool-calls"] as const) {
           for (const onExhaustion of ["fail", "final-answer"] as const) {
-            const definition = Agent.define("resume-policy", {
+            const definition = Agent.make("resume-policy", {
               input: Schema.String,
               output: answerOutput,
               instructions: "Answer.",
@@ -2288,7 +2288,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
           { repeatedFailureLimit: 3, budgetRejected: undefined },
           { repeatedFailureLimit: 2, budgetRejected: true as const },
         ]) {
-          const definition = Agent.define("resume-failures", {
+          const definition = Agent.make("resume-failures", {
             input: Schema.String,
             output: answerOutput,
             instructions: "Answer.",
@@ -2359,7 +2359,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     "reserves grace before provider execution and never grants it again after interruption",
     () =>
       Effect.gen(function* () {
-        const definition = Agent.define("resume-grace", {
+        const definition = Agent.make("resume-grace", {
           input: Schema.String,
           output: answerOutput,
           instructions: "Answer.",
@@ -2404,7 +2404,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
 
   it.effect("rejects missing or contradictory pending-batch accounting before execution", () =>
     Effect.gen(function* () {
-      const definition = Agent.define("invalid-pending-accounting", {
+      const definition = Agent.make("invalid-pending-accounting", {
         input: Schema.String,
         output: answerOutput,
         instructions: "Answer.",
@@ -2474,7 +2474,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
 
   it.effect("RUN-023: invalid restored usage fails before Run input or model execution", () =>
     Effect.gen(function* () {
-      const definition = Agent.define("invalid-resume-usage", {
+      const definition = Agent.make("invalid-resume-usage", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Answer.",
@@ -2586,7 +2586,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     "RUN-025: restored totals that already breach fail before any model call under fail mode",
     () =>
       Effect.gen(function* () {
-        const definition = Agent.define("resume-breach-fail", {
+        const definition = Agent.make("resume-breach-fail", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Answer.",
@@ -2625,7 +2625,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
 
   it.effect("RUN-025: restored totals that already breach start final-answer constrained", () =>
     Effect.gen(function* () {
-      const definition = Agent.define("resume-breach-final", {
+      const definition = Agent.make("resume-breach-final", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Answer.",
@@ -2670,7 +2670,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
 
   it.effect("RUN-023: restored cost accumulates into the cost budget across resume", () =>
     Effect.gen(function* () {
-      const definition = Agent.define("resume-cost", {
+      const definition = Agent.make("resume-cost", {
         input: Schema.Struct({ question: Schema.String }),
         output: answerOutput,
         instructions: "Answer.",
@@ -2714,7 +2714,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         // grace call, so the seeded breach must reject before any external
         // model execution.
         for (const onExhaustion of ["final-answer", "fail"] as const) {
-          const definition = Agent.define(`resume-over-cost-${onExhaustion}`, {
+          const definition = Agent.make(`resume-over-cost-${onExhaustion}`, {
             input: Schema.Struct({ question: Schema.String }),
             output: answerOutput,
             instructions: "Answer.",
@@ -2770,7 +2770,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
           success: Schema.Struct({ status: Schema.String }),
         })(undefined);
         const hostedToolkit = Toolkit.make(HostedSearch, PostMessageTool);
-        const definition = Agent.define("provider-only-breach", {
+        const definition = Agent.make("provider-only-breach", {
           input: Schema.Struct({ question: Schema.String }),
           output: answerOutput,
           instructions: "Answer.",

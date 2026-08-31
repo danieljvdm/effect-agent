@@ -384,7 +384,7 @@ export const TravelSupplierReconcilerLayer: Layer.Layer<
  * idempotent-by-contract cancellation, and one Durable Tool whose Steps carry supplier
  * idempotency keys.
  */
-export const TravelPlannerPhase5 = Agent.define("travel-planner-phase-5", {
+export const TravelPlannerPhase5 = Agent.make("travel-planner-phase-5", {
   input: TripRequest,
   output: TravelBookingReport,
   instructions: [

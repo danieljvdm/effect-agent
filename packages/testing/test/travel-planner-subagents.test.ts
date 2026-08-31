@@ -183,7 +183,7 @@ const lhrShortlist = DestinationShortlist.make({
 // desk whose Toolkit contains the delegation Tool.
 // ---------------------------------------------------------------------------
 
-const travelDeskDefinition = Agent.define("travel-desk", {
+const travelDeskDefinition = Agent.make("travel-desk", {
   input: DestinationBrief,
   output: DestinationReport,
   instructions: "Delegate the destination research, then answer as JSON.",
@@ -211,7 +211,7 @@ const SpawnTravelDesk = Tool.make("spawn_travel_desk", {
   .addDependency(IdGenerator);
 const spawnDeskToolkit = Toolkit.make(SpawnTravelDesk);
 
-const nestedProbeDefinition = Agent.define("nested-delegation-probe", {
+const nestedProbeDefinition = Agent.make("nested-delegation-probe", {
   input: Schema.Struct({}),
   output: Schema.Struct({ denied: Schema.Boolean }),
   instructions: "Spawn the travel desk, then answer as JSON.",

@@ -80,7 +80,7 @@ layer(testLayer)("Agent input prompts", (it) => {
         Prompt.userMessage({ content: [Prompt.textPart({ text: "public question:2" }), file] }),
       ]);
       const agent = Agent.withModel(
-        Agent.define("native-input-prompt", {
+        Agent.make("native-input-prompt", {
           input: Schema.Struct({
             question: Schema.String,
             count: Schema.NumberFromString,
@@ -172,11 +172,11 @@ layer(testLayer)("Agent input prompts", (it) => {
         toolkit: Toolkit.empty,
         policy,
       };
-      yield* AgentRuntime.run(Agent.withModel(Agent.define("default-input", options), model), {
+      yield* AgentRuntime.run(Agent.withModel(Agent.make("default-input", options), model), {
         value: "2",
       });
       yield* AgentRuntime.run(
-        Agent.withModel(Agent.define("empty-input", { ...options, inputPrompt: () => [] }), model),
+        Agent.withModel(Agent.make("empty-input", { ...options, inputPrompt: () => [] }), model),
         { value: "2" },
       );
       expect(requests[0]?.content).toContainEqual(
@@ -195,7 +195,7 @@ layer(testLayer)("Agent input prompts", (it) => {
         const requests: Array<Prompt.Prompt> = [];
         const defect = new Error("input projection defect");
         const agent = Agent.withModel(
-          Agent.define(`input-${mode}`, {
+          Agent.make(`input-${mode}`, {
             input: Schema.String,
             output: Schema.String,
             instructions: "Answer.",

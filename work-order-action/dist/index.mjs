@@ -31943,7 +31943,7 @@ var EventOffset = identifier2("EventOffset");
 // packages/core/src/agent.ts
 var Agent;
 ((Agent) => {
-  function define(id2, options3) {
+  function make51(id2, options3) {
     return Object.freeze({
       ...options3,
       id: exports_Schema.decodeSync(AgentId)(id2),
@@ -31952,7 +31952,7 @@ var Agent;
       runDisposition: options3.runDisposition === undefined ? undefined : Object.freeze({ ...options3.runDisposition })
     });
   }
-  Agent.define = define;
+  Agent.make = make51;
   Agent.withModel = (definition, model) => Object.freeze({
     definition,
     model
@@ -39838,211 +39838,215 @@ var enforceDurationDeadline = (execution, durationDeadlineMillis, durationLimit)
   return execution.pipe(exports_Stream.interruptWhen(exports_Effect.sleep(remaining2).pipe(exports_Effect.andThen(exports_Effect.fail(durationLimit)))));
 }));
 var guardBudgetStream = (stream3, budget) => budget === undefined ? stream3 : exports_Stream.transformPull(stream3, (pull) => exports_Effect.succeed(budget.guard(pull)));
-var makeStream = (onCompleted) => (agent2, input, runOptions = {}) => exports_Stream.unwrap(exports_Effect.gen(function* () {
-  const history = yield* ConversationHistory;
-  const ids = yield* IdGenerator2;
-  const conversationId = runOptions.conversationId ?? (yield* ids.nextConversationId);
-  const runId = runOptions.runId ?? (yield* ids.nextRunId);
-  const retained = yield* history.open({ conversationId, runId });
-  if (retained !== undefined && (runOptions.history !== undefined || runOptions.onHistory !== undefined || runOptions.input !== undefined || runOptions.durability !== undefined || runOptions.subagent !== undefined || runOptions.resume !== undefined || runOptions.resumeUsage !== undefined)) {
-    return yield* ConversationHistoryError.make({
-      conversationId,
-      reason: "incompatible",
-      message: "Provided history cannot share ownership with explicit history, input queues, or durable recovery hooks"
-    });
-  }
-  const options3 = {
-    ...runOptions,
-    conversationId,
-    runId,
-    ...retained === undefined ? {} : { history: retained.prompt, onHistory: retained.stageHistory }
-  };
-  const interpreted = exports_Stream.unwrap(exports_Effect.gen(function* () {
-    const resumed = options3.resume === undefined ? undefined : {
-      batch: options3.resume,
-      usage: yield* decodeResumeUsage(options3.resumeUsage)
-    };
-    const resumeUsage = resumed?.usage ?? (options3.resumeUsage === undefined ? undefined : yield* decodeResumeUsage(options3.resumeUsage));
-    if (resumed !== undefined && (resumed.usage.committedTurns !== resumed.batch.turn || resumed.usage.toolCalls < resumed.batch.calls.length || resumed.usage.consecutiveToolFailures > resumed.usage.toolCalls - resumed.batch.calls.length)) {
-      return yield* ModelProtocolError.make({
-        message: "Run resume accounting conflicts with the pending Turn and declared Tool Calls"
+function streamWithCompletion(agentValue, input, runOptions = {}, onCompleted) {
+  const agent2 = { definition: "definition" in agentValue ? agentValue.definition : agentValue };
+  const model = "definition" in agentValue ? agentValue.model : undefined;
+  return exports_Stream.unwrap(exports_Effect.gen(function* () {
+    const history = yield* ConversationHistory;
+    const ids = yield* IdGenerator2;
+    const conversationId = runOptions.conversationId ?? (yield* ids.nextConversationId);
+    const runId = runOptions.runId ?? (yield* ids.nextRunId);
+    const retained = yield* history.open({ conversationId, runId });
+    if (retained !== undefined && (runOptions.history !== undefined || runOptions.onHistory !== undefined || runOptions.input !== undefined || runOptions.durability !== undefined || runOptions.subagent !== undefined || runOptions.resume !== undefined || runOptions.resumeUsage !== undefined)) {
+      return yield* ConversationHistoryError.make({
+        conversationId,
+        reason: "incompatible",
+        message: "Provided history cannot share ownership with explicit history, input queues, or durable recovery hooks"
       });
     }
-    const attemptStartedAtMillis = yield* exports_Clock.currentTimeMillis;
-    const maxDurationMillis = exports_Duration.toMillis(agent2.definition.policy.maxDuration);
-    const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
-    const durationDeadlineMillis = options3.durationDeadline === undefined ? attemptDeadlineMillis : Math.min(attemptDeadlineMillis, exports_DateTime.toEpochMillis(options3.durationDeadline));
-    const startedAtMillis = options3.runStartedAt === undefined ? attemptStartedAtMillis : exports_DateTime.toEpochMillis(options3.runStartedAt);
-    const compactor = yield* exports_Effect.serviceOption(ContextCompactor).pipe(exports_Effect.flatMap(exports_Option.match({
-      onSome: exports_Effect.succeed,
-      onNone: () => exports_Effect.provide(ContextCompactor, ContextCompactor.layer)
-    })));
-    const context3 = {
-      agentId: agent2.definition.id,
+    const options3 = {
+      ...runOptions,
       conversationId,
       runId,
-      toolFailureObserver: yield* CurrentToolFailureObserver,
-      input: undefined,
-      pendingFollowUps: [],
-      startedAtMillis,
-      durationDeadlineMillis,
-      history: options3.history ?? exports_Prompt.empty,
-      modelCalls: resumeUsage?.modelCalls ?? 0,
-      consecutiveToolFailures: resumeUsage?.consecutiveToolFailures ?? 0,
-      inputTokens: resumeUsage?.inputTokens ?? 0,
-      outputTokens: resumeUsage?.outputTokens ?? 0,
-      lastInputTokens: resumeUsage?.lastInputTokens ?? 0,
-      lastOutputTokens: resumeUsage?.lastOutputTokens ?? 0,
-      costMicrousd: resumeUsage?.costMicrousd ?? 0,
-      lastCostMicrousd: 0,
-      warnedLimits: new Set,
-      finalizing: false,
-      tokenExhausted: false,
-      exhaustedDimension: undefined,
-      compaction: initialCompactionState(),
-      compactionTurn: { turn: 0, summaryCalls: 0, applied: new Set },
-      compactor,
-      bufferLimits: effectiveRunBufferLimits(options3.bufferLimits),
-      sequence: 0,
-      programmaticToolCalls: resumeUsage?.programmaticToolCalls ?? 0,
-      finalizationUsed: resumeUsage?.finalizationUsed ?? false,
-      policyReservations: yield* exports_Semaphore.make(1)
+      ...retained === undefined ? {} : { history: retained.prompt, onHistory: retained.stageHistory }
     };
-    if (resumeUsage !== undefined) {
-      const bounds = effectiveRunBounds(agent2.definition.policy, options3);
-      if (context3.finalizationUsed) {
-        context3.exhaustedDimension = resumeUsage.committedTurns > bounds.maxTurns ? "turns" : resumeUsage.toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls ? "tool-calls" : "tokens";
+    const interpreted = exports_Stream.unwrap(exports_Effect.gen(function* () {
+      const resumed = options3.resume === undefined ? undefined : {
+        batch: options3.resume,
+        usage: yield* decodeResumeUsage(options3.resumeUsage)
+      };
+      const resumeUsage = resumed?.usage ?? (options3.resumeUsage === undefined ? undefined : yield* decodeResumeUsage(options3.resumeUsage));
+      if (resumed !== undefined && (resumed.usage.committedTurns !== resumed.batch.turn || resumed.usage.toolCalls < resumed.batch.calls.length || resumed.usage.consecutiveToolFailures > resumed.usage.toolCalls - resumed.batch.calls.length)) {
+        return yield* ModelProtocolError.make({
+          message: "Run resume accounting conflicts with the pending Turn and declared Tool Calls"
+        });
       }
-      if (agent2.definition.policy.onExhaustion === "fail" && resumeUsage.toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls) {
-        return failRunEventStream(AgentPolicyError.make({
-          limit: "tool-calls",
-          message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
-        }));
-      }
-      const failureLimit = agent2.definition.policy.repeatedFailureLimit;
-      if (failureLimit > 0 && context3.consecutiveToolFailures >= failureLimit) {
-        return failRunEventStream(AgentPolicyError.make({
-          limit: "repeated-failures",
-          message: `Agent reached its ${failureLimit} consecutive Tool Call failure limit`
-        }));
-      }
-      const seededCostBudget = agent2.definition.policy.costBudgetMicrousd;
-      if (seededCostBudget !== undefined && context3.costMicrousd > seededCostBudget) {
-        return failRunEventStream(AgentPolicyError.make({
-          limit: "cost",
-          message: `Agent exceeded its ${seededCostBudget} microdollar cost budget`
-        }));
-      }
-      const seededBudget = agent2.definition.policy.tokenBudget;
-      if (seededBudget !== undefined && context3.inputTokens + context3.outputTokens > seededBudget) {
-        if (agent2.definition.policy.onExhaustion === "fail") {
+      const attemptStartedAtMillis = yield* exports_Clock.currentTimeMillis;
+      const maxDurationMillis = exports_Duration.toMillis(agent2.definition.policy.maxDuration);
+      const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
+      const durationDeadlineMillis = options3.durationDeadline === undefined ? attemptDeadlineMillis : Math.min(attemptDeadlineMillis, exports_DateTime.toEpochMillis(options3.durationDeadline));
+      const startedAtMillis = options3.runStartedAt === undefined ? attemptStartedAtMillis : exports_DateTime.toEpochMillis(options3.runStartedAt);
+      const compactor = yield* exports_Effect.serviceOption(ContextCompactor).pipe(exports_Effect.flatMap(exports_Option.match({
+        onSome: exports_Effect.succeed,
+        onNone: () => exports_Effect.provide(ContextCompactor, ContextCompactor.layer)
+      })));
+      const context3 = {
+        agentId: agent2.definition.id,
+        conversationId,
+        runId,
+        toolFailureObserver: yield* CurrentToolFailureObserver,
+        input: undefined,
+        pendingFollowUps: [],
+        startedAtMillis,
+        durationDeadlineMillis,
+        history: options3.history ?? exports_Prompt.empty,
+        modelCalls: resumeUsage?.modelCalls ?? 0,
+        consecutiveToolFailures: resumeUsage?.consecutiveToolFailures ?? 0,
+        inputTokens: resumeUsage?.inputTokens ?? 0,
+        outputTokens: resumeUsage?.outputTokens ?? 0,
+        lastInputTokens: resumeUsage?.lastInputTokens ?? 0,
+        lastOutputTokens: resumeUsage?.lastOutputTokens ?? 0,
+        costMicrousd: resumeUsage?.costMicrousd ?? 0,
+        lastCostMicrousd: 0,
+        warnedLimits: new Set,
+        finalizing: false,
+        tokenExhausted: false,
+        exhaustedDimension: undefined,
+        compaction: initialCompactionState(),
+        compactionTurn: { turn: 0, summaryCalls: 0, applied: new Set },
+        compactor,
+        bufferLimits: effectiveRunBufferLimits(options3.bufferLimits),
+        sequence: 0,
+        programmaticToolCalls: resumeUsage?.programmaticToolCalls ?? 0,
+        finalizationUsed: resumeUsage?.finalizationUsed ?? false,
+        policyReservations: yield* exports_Semaphore.make(1)
+      };
+      if (resumeUsage !== undefined) {
+        const bounds = effectiveRunBounds(agent2.definition.policy, options3);
+        if (context3.finalizationUsed) {
+          context3.exhaustedDimension = resumeUsage.committedTurns > bounds.maxTurns ? "turns" : resumeUsage.toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls ? "tool-calls" : "tokens";
+        }
+        if (agent2.definition.policy.onExhaustion === "fail" && resumeUsage.toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls) {
           return failRunEventStream(AgentPolicyError.make({
-            limit: "tokens",
-            message: `Agent exceeded its ${seededBudget} token budget`
+            limit: "tool-calls",
+            message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
           }));
         }
-        context3.tokenExhausted = true;
-        context3.exhaustedDimension ??= "tokens";
-      }
-    }
-    if (options3.input?.start !== undefined) {
-      yield* options3.input.start();
-    }
-    const started = exports_Stream.fromEffect(exports_Effect.gen(function* () {
-      yield* exports_Metric.update(runCounter, 1);
-      yield* exports_Effect.logDebug("agent run started").pipe(exports_Effect.annotateLogs({
-        agentId: context3.agentId,
-        runId: context3.runId
-      }));
-      return yield* eventBase(context3).pipe(exports_Effect.map((base2) => RunStarted.make(base2)));
-    }).pipe(exports_Effect.withLogSpan("AgentRuntime.run")));
-    const execution = exports_Stream.unwrap(exports_Effect.gen(function* () {
-      const decodedInput = yield* decodeInput(agent2, input);
-      const instructions = yield* evaluateInstructions(agent2.definition.instructions, decodedInput);
-      const encodedInput = yield* encodeInput(agent2, decodedInput);
-      context3.input = encodedInput;
-      if (retained !== undefined)
-        yield* retained.stageInput(encodedInput);
-      const inputPrompt = yield* renderInputPrompt(agent2.definition.inputPrompt, decodedInput, encodedInput);
-      const priorHistoryLength = context3.history.content.length;
-      const prompt = yield* makeInitialPrompt(instructions, inputPrompt, context3.history);
-      if (options3.context === undefined) {
-        context3.compaction.protectedStart = priorHistoryLength;
-        context3.compaction.protectedEnd = prompt.content.length;
-      }
-      yield* advanceHistory(context3, prompt, options3);
-      if (resumed !== undefined) {
-        return makeResumeTurn(agent2, context3, prompt, resumed.batch, resumed.usage.toolCalls, options3);
-      }
-      const steering = yield* drainInputs(context3, options3);
-      const initialPrompt = yield* appendInputs(context3, prompt, steering, options3);
-      return makeTurn(agent2, context3, initialPrompt, (resumeUsage?.committedTurns ?? 0) + 1, resumeUsage?.toolCalls ?? 0, options3);
-    }));
-    const durationLimit = durationLimitError(agent2.definition.policy);
-    const deadline = enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
-    const engineToolServices = exports_Context.make(AgentSpawner, makeAgentSpawner({
-      agentId: context3.agentId,
-      conversationId: context3.conversationId,
-      runId: context3.runId
-    }, options3.parentLink?.depth ?? 0, history)).pipe(exports_Context.add(RunEventSink, closedRunEventSink), exports_Context.add(DurableStep, closedDurableStep), exports_Context.add(SubagentDurability, closedSubagentDurability), exports_Context.add(ToolBroker, closedToolBroker));
-    return started.pipe(exports_Stream.concat(deadline), exports_Stream.catch((error2) => {
-      const terminal = exports_Stream.fromEffect(exports_Effect.gen(function* () {
-        if (error2 instanceof AgentApprovalPending || error2 instanceof AgentChildPending) {
-          return RunSuspended.make({
-            ...yield* terminalEventBase(context3),
-            reason: error2.message
-          });
+        const failureLimit = agent2.definition.policy.repeatedFailureLimit;
+        if (failureLimit > 0 && context3.consecutiveToolFailures >= failureLimit) {
+          return failRunEventStream(AgentPolicyError.make({
+            limit: "repeated-failures",
+            message: `Agent reached its ${failureLimit} consecutive Tool Call failure limit`
+          }));
         }
-        return RunFailed.make({
-          ...yield* terminalEventBase(context3),
-          errorTag: errorTag(error2),
-          message: errorMessage(error2)
-        });
-      }));
-      return terminal.pipe(exports_Stream.concat(exports_Stream.fail(error2)));
-    }), exports_Stream.withSpan("AgentRuntime.run", {
-      attributes: {
-        agentId: context3.agentId,
-        runId: context3.runId
+        const seededCostBudget = agent2.definition.policy.costBudgetMicrousd;
+        if (seededCostBudget !== undefined && context3.costMicrousd > seededCostBudget) {
+          return failRunEventStream(AgentPolicyError.make({
+            limit: "cost",
+            message: `Agent exceeded its ${seededCostBudget} microdollar cost budget`
+          }));
+        }
+        const seededBudget = agent2.definition.policy.tokenBudget;
+        if (seededBudget !== undefined && context3.inputTokens + context3.outputTokens > seededBudget) {
+          if (agent2.definition.policy.onExhaustion === "fail") {
+            return failRunEventStream(AgentPolicyError.make({
+              limit: "tokens",
+              message: `Agent exceeded its ${seededBudget} token budget`
+            }));
+          }
+          context3.tokenExhausted = true;
+          context3.exhaustedDimension ??= "tokens";
+        }
       }
-    }), exports_Stream.provide(engineToolServices));
+      if (options3.input?.start !== undefined) {
+        yield* options3.input.start();
+      }
+      const started = exports_Stream.fromEffect(exports_Effect.gen(function* () {
+        yield* exports_Metric.update(runCounter, 1);
+        yield* exports_Effect.logDebug("agent run started").pipe(exports_Effect.annotateLogs({
+          agentId: context3.agentId,
+          runId: context3.runId
+        }));
+        return yield* eventBase(context3).pipe(exports_Effect.map((base2) => RunStarted.make(base2)));
+      }).pipe(exports_Effect.withLogSpan("AgentRuntime.run")));
+      const execution = exports_Stream.unwrap(exports_Effect.gen(function* () {
+        const decodedInput = yield* decodeInput(agent2, input);
+        const instructions = yield* evaluateInstructions(agent2.definition.instructions, decodedInput);
+        const encodedInput = yield* encodeInput(agent2, decodedInput);
+        context3.input = encodedInput;
+        if (retained !== undefined)
+          yield* retained.stageInput(encodedInput);
+        const inputPrompt = yield* renderInputPrompt(agent2.definition.inputPrompt, decodedInput, encodedInput);
+        const priorHistoryLength = context3.history.content.length;
+        const prompt = yield* makeInitialPrompt(instructions, inputPrompt, context3.history);
+        if (options3.context === undefined) {
+          context3.compaction.protectedStart = priorHistoryLength;
+          context3.compaction.protectedEnd = prompt.content.length;
+        }
+        yield* advanceHistory(context3, prompt, options3);
+        if (resumed !== undefined) {
+          return makeResumeTurn(agent2, context3, prompt, resumed.batch, resumed.usage.toolCalls, options3);
+        }
+        const steering = yield* drainInputs(context3, options3);
+        const initialPrompt = yield* appendInputs(context3, prompt, steering, options3);
+        return makeTurn(agent2, context3, initialPrompt, (resumeUsage?.committedTurns ?? 0) + 1, resumeUsage?.toolCalls ?? 0, options3);
+      }));
+      const durationLimit = durationLimitError(agent2.definition.policy);
+      const deadline = enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
+      const engineToolServices = exports_Context.make(AgentSpawner, makeAgentSpawner({
+        agentId: context3.agentId,
+        conversationId: context3.conversationId,
+        runId: context3.runId
+      }, options3.parentLink?.depth ?? 0, history)).pipe(exports_Context.add(RunEventSink, closedRunEventSink), exports_Context.add(DurableStep, closedDurableStep), exports_Context.add(SubagentDurability, closedSubagentDurability), exports_Context.add(ToolBroker, closedToolBroker));
+      return started.pipe(exports_Stream.concat(deadline), exports_Stream.catch((error2) => {
+        const terminal = exports_Stream.fromEffect(exports_Effect.gen(function* () {
+          if (error2 instanceof AgentApprovalPending || error2 instanceof AgentChildPending) {
+            return RunSuspended.make({
+              ...yield* terminalEventBase(context3),
+              reason: error2.message
+            });
+          }
+          return RunFailed.make({
+            ...yield* terminalEventBase(context3),
+            errorTag: errorTag(error2),
+            message: errorMessage(error2)
+          });
+        }));
+        return terminal.pipe(exports_Stream.concat(exports_Stream.fail(error2)));
+      }), exports_Stream.withSpan("AgentRuntime.run", {
+        attributes: {
+          agentId: context3.agentId,
+          runId: context3.runId
+        }
+      }), exports_Stream.provide(engineToolServices));
+    }));
+    const finalized = options3.input?.end === undefined ? interpreted : interpreted.pipe(exports_Stream.ensuring(options3.input.end()));
+    const modeled = model === undefined ? finalized : finalized.pipe(exports_Stream.provide(model, { local: true }));
+    const events2 = modeled.pipe(exports_Stream.provide(ToolSpanTelemetry.layer));
+    if (retained === undefined && onCompleted === undefined)
+      return events2;
+    let completed;
+    return events2.pipe(exports_Stream.filter((event) => {
+      if (event._tag !== "RunCompleted")
+        return true;
+      completed = event;
+      return false;
+    }), exports_Stream.scoped, exports_Stream.concat(exports_Stream.unwrap(exports_Effect.gen(function* () {
+      const terminal = completed;
+      if (terminal === undefined) {
+        return yield* ModelProtocolError.make({
+          message: "Agent stream ended without RunCompleted"
+        });
+      }
+      return exports_Stream.fromEffect(exports_Effect.gen(function* () {
+        if (onCompleted !== undefined)
+          yield* onCompleted(terminal);
+        if (retained !== undefined)
+          yield* retained.commit(terminal);
+        return terminal;
+      })).pipe(exports_Stream.catch((error2) => exports_Stream.make(RunFailed.make({
+        eventVersion: terminal.eventVersion,
+        conversationId: terminal.conversationId,
+        runId: terminal.runId,
+        agentId: terminal.agentId,
+        sequence: terminal.sequence,
+        timestamp: terminal.timestamp,
+        errorTag: errorTag(error2),
+        message: errorMessage(error2)
+      })).pipe(exports_Stream.concat(exports_Stream.fail(error2)))));
+    }))));
   }));
-  const finalized = options3.input?.end === undefined ? interpreted : interpreted.pipe(exports_Stream.ensuring(options3.input.end()));
-  const events2 = finalized.pipe(exports_Stream.provide(agent2.model, { local: true }), exports_Stream.provide(ToolSpanTelemetry.layer));
-  if (retained === undefined && onCompleted === undefined)
-    return events2;
-  let completed;
-  return events2.pipe(exports_Stream.filter((event) => {
-    if (event._tag !== "RunCompleted")
-      return true;
-    completed = event;
-    return false;
-  }), exports_Stream.scoped, exports_Stream.concat(exports_Stream.unwrap(exports_Effect.gen(function* () {
-    const terminal = completed;
-    if (terminal === undefined) {
-      return yield* ModelProtocolError.make({
-        message: "Agent stream ended without RunCompleted"
-      });
-    }
-    return exports_Stream.fromEffect(exports_Effect.gen(function* () {
-      if (onCompleted !== undefined)
-        yield* onCompleted(terminal);
-      if (retained !== undefined)
-        yield* retained.commit(terminal);
-      return terminal;
-    })).pipe(exports_Stream.catch((error2) => exports_Stream.make(RunFailed.make({
-      eventVersion: terminal.eventVersion,
-      conversationId: terminal.conversationId,
-      runId: terminal.runId,
-      agentId: terminal.agentId,
-      sequence: terminal.sequence,
-      timestamp: terminal.timestamp,
-      errorTag: errorTag(error2),
-      message: errorMessage(error2)
-    })).pipe(exports_Stream.concat(exports_Stream.fail(error2)))));
-  }))));
-}));
-var stream3 = makeStream();
+}
 var reduceRunEvents = (agent2, events2) => exports_Effect.gen(function* () {
   let result4;
   yield* exports_Stream.runDrain(events2((completed) => exports_Effect.gen(function* () {
@@ -40071,10 +40075,10 @@ var reduceRunEvents = (agent2, events2) => exports_Effect.gen(function* () {
   }
   return result4;
 });
-var run4 = exports_Effect.fn("AgentRuntime.run")(function* (agent2, input, options3 = {}) {
-  return yield* reduceRunEvents(agent2, (onCompleted) => makeStream(onCompleted)(agent2, input, options3));
+var runProgram = exports_Effect.fn("AgentRuntime.run")(function* (agent2, events2) {
+  return yield* reduceRunEvents(agent2, events2);
 });
-var start = exports_Effect.fn("AgentRuntime.start")(function* (agent2, input, options3 = {}) {
+var startProgram = exports_Effect.fn("AgentRuntime.start")(function* (agent2, events2, options3) {
   yield* exports_Scope.Scope;
   const bufferLimits = Object.freeze(effectiveRunBufferLimits(options3.bufferLimits));
   const executionOptionDescriptors = {
@@ -40094,7 +40098,7 @@ var start = exports_Effect.fn("AgentRuntime.start")(function* (agent2, input, op
     replay: observationCapacity
   });
   yield* exports_Effect.addFinalizer(() => exports_PubSub.shutdown(pubsub));
-  const execution = reduceRunEvents(agent2, (onCompleted) => makeStream(onCompleted)(agent2, input, executionOptions).pipe(exports_Stream.tap((event) => exports_Effect.suspend(() => {
+  const execution = reduceRunEvents(agent2, (onCompleted) => events2(executionOptions, onCompleted).pipe(exports_Stream.tap((event) => exports_Effect.suspend(() => {
     captured.push(event);
     return exports_PubSub.publish(pubsub, [event]);
   })))).pipe(exports_Effect.ensuring(exports_PubSub.publish(pubsub, exports_Exit.void)));
@@ -40105,6 +40109,18 @@ var start = exports_Effect.fn("AgentRuntime.start")(function* (agent2, input, op
     observe: exports_Stream.fromPubSubTake(pubsub)
   };
 });
+var streamUnknown = (agent2, input, options3) => streamWithCompletion(agent2, input, options3);
+var stream3 = (agent2, input, options3) => streamUnknown(agent2, input, options3);
+function runUnknown(agent2, input, options3 = {}) {
+  const program = "definition" in agent2 ? agent2 : { definition: agent2 };
+  return runProgram(program, (onCompleted) => streamWithCompletion(agent2, input, options3, onCompleted));
+}
+var run4 = (agent2, input, options3) => runUnknown(agent2, input, options3);
+function startUnknown(agent2, input, options3 = {}) {
+  const program = "definition" in agent2 ? agent2 : { definition: agent2 };
+  return startProgram(program, (executionOptions, onCompleted) => streamWithCompletion(agent2, input, executionOptions, onCompleted), options3);
+}
+var start = (agent2, input, options3) => startUnknown(agent2, input, options3);
 var closedRunEventSink = {
   emit: (payload) => exports_Effect.fail(RunEventSinkClosedError.make({
     message: `Subagent event ${payload._tag} was emitted outside an active Tool batch`
@@ -40596,7 +40612,7 @@ var spawnWithParent = (parent, depth, history) => exports_Effect.fn("AgentSpawne
     parentToolCallId: delegation.parentToolCallId,
     depth: childDepth
   });
-  const child = yield* start(binding, input, {
+  const child = yield* startUnknown(binding, input, {
     ...options3,
     conversationId,
     runId,
@@ -40622,8 +40638,11 @@ var AgentRuntime = {
   encodeRunDisposition,
   projectCompletionOutput,
   run: run4,
+  runUnknown,
   start,
-  stream: stream3
+  startUnknown,
+  stream: stream3,
+  streamUnknown
 };
 
 // packages/sandbox/src/sandbox.ts
@@ -44157,7 +44176,7 @@ var implementationInstructions = (mission) => [
   `Work order: ${JSON.stringify(mission.order)}`
 ].join(`
 `);
-var PullRequestImplementer = Agent.define("pr-work-order-implementer", {
+var PullRequestImplementer = Agent.make("pr-work-order-implementer", {
   input: WorkOrderMission,
   output: WorkOrderReport,
   instructions: implementationInstructions,

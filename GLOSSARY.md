@@ -7,16 +7,16 @@ Use these terms consistently in code, telemetry, and user documentation.
 **Agent Definition**  
 An immutable, schema-defined description of an agent: identity, input and output schemas,
 instructions, optional model-visible input projection, toolkit, and execution policy. It contains no mutable conversation state, owns no
-live resources, and is not executable until paired with a Model.
+live resources. Execution requires native model services supplied through Effect Layers.
 
 **Agent Binding**
 
-An immutable pairing of one Agent Definition with one Effect AI Model. The Binding makes model
-selection explicit without hiding the Model Layer's requirements and owns no acquired provider
-resources.
+An immutable pairing of one Agent Definition with a Layer providing the native Language Model,
+provider name, and model name. It fixes model selection for durable registration or Subagent
+construction without hiding Layer requirements or acquiring provider resources.
 
 **Agent Runtime**  
-The Effect module that interprets an Agent Binding. The ephemeral runtime executes immediately;
+The Effect module that interprets an Agent Definition or Binding. The ephemeral runtime executes immediately;
 the durable runtime admits a Submission and coordinates Attempts until Settlement.
 
 **Run**  

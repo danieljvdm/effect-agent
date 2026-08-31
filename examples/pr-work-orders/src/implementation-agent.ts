@@ -192,7 +192,7 @@ const implementationInstructions = (mission: WorkOrderMission): string =>
     `Work order: ${JSON.stringify(mission.order)}`,
   ].join("\n");
 
-export const PullRequestImplementer = Agent.define("pr-work-order-implementer", {
+export const PullRequestImplementer = Agent.make("pr-work-order-implementer", {
   input: WorkOrderMission,
   output: WorkOrderReport,
   instructions: implementationInstructions,

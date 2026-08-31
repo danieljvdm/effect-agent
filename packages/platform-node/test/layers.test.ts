@@ -160,7 +160,7 @@ const makeScriptedModel = Effect.fn("PlatformNodeTest.makeScriptedModel")(functi
   );
 });
 
-const plannerDefinition = Agent.define("platform-node-planner", {
+const plannerDefinition = Agent.make("platform-node-planner", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: ({ question }) => `Answer ${question} as JSON.`,
@@ -289,7 +289,7 @@ describe("NodeDurableRuntime", () => {
               : finalParts('{"answer":"fallback"}'),
           );
           const agent = Agent.withModel(
-            Agent.define("node-observer", {
+            Agent.make("node-observer", {
               input: Schema.Struct({ question: Schema.String }),
               output: Schema.Struct({ answer: Schema.String }),
               instructions: "Try the Tool, then answer.",
@@ -414,7 +414,7 @@ describe("NodeDurableRuntime", () => {
           { type: "finish", reason: "tool-calls", usage },
         ]);
         const agent = Agent.withModel(
-          Agent.define("node-run-services", {
+          Agent.make("node-run-services", {
             input: Schema.String,
             output: Schema.String,
             instructions: "Book it.",
@@ -554,7 +554,7 @@ describe("NodeDurableRuntime", () => {
             : finalParts('{"answer":"done"}');
         });
         const agent = Agent.withModel(
-          Agent.define("node-input-projection", {
+          Agent.make("node-input-projection", {
             input: inputSchema,
             output: Schema.Struct({ answer: Schema.String }),
             instructions: "Answer the public question.",
@@ -658,7 +658,7 @@ describe("NodeDurableRuntime", () => {
             return finalParts('"done"');
           });
           const agent = Agent.withModel(
-            Agent.define(`node-projection-${kind}-${mode}`, {
+            Agent.make(`node-projection-${kind}-${mode}`, {
               input: Schema.Struct({ question: Schema.String, hostOnly: Schema.String }),
               output: Schema.String,
               instructions: "Answer the public question.",
