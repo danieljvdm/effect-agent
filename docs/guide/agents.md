@@ -1,13 +1,12 @@
 ---
 title: Agent definitions
-description: Immutable agent programs executed with native Effect AI model Layers.
+description: Define agents with schemas, tools, instructions, and run limits.
 ---
 
 # Agent definitions
 
-An Agent Definition is immutable program data. It contains Schemas, instructions, a native Effect
-AI Toolkit, and finite policy. It does not contain a provider client, database connection, mutable
-Conversation, or acquired resource.
+An agent definition contains schemas, instructions, a native Effect AI toolkit, and a finite
+policy. The application supplies model services and other dependencies when it runs the agent.
 
 ```ts
 const definition = Agent.make("support-triage", {
@@ -21,46 +20,21 @@ const definition = Agent.make("support-triage", {
 const run = AgentRuntime.run(definition, input).pipe(Effect.provide(ClaudeModel));
 ```
 
-The Definition stays reusable. The application supplies its model with `Effect.provide`.
+Definitions contain no provider client, database connection, mutable conversation, or acquired
+resource. Reuse one definition across many runs.
 
-## Definition contract
+## Build a definition {#definition-contract}
 
-```ts
-interface RunDispositionDeclaration<Output, DispositionSchema> {
-  readonly schema: DispositionSchema;
-  readonly fromOutput: (output: Output) => unknown;
-}
+`Agent.make` requires an ID, input and output schemas, instructions, a toolkit, and an
+`AgentPolicy`. It also accepts `inputPrompt`, `completion`, `runDisposition`, a description, and metadata.
 
-interface Definition<
-  InputSchema,
-  OutputSchema,
-  Instructions,
-  Toolkit,
-  RunDispositionValue = undefined,
-  InputPrompt = undefined,
-> {
-  readonly id: AgentId;
-  readonly input: InputSchema;
-  readonly output: OutputSchema;
-  readonly instructions: Instructions;
-  readonly inputPrompt?: InputPrompt;
-  readonly toolkit: Toolkit;
-  readonly policy: AgentPolicy;
-  readonly runDisposition?: RunDispositionValue;
-  readonly description?: string;
-  readonly metadata?: Readonly<Record<string, string>>;
-}
-```
-
-Instructions may be static prompt input or an input-dependent value that returns prompt input or an
-`Effect`. Effectful instructions can require domain services and fail with domain errors; both are
-inferred into the Run.
+Instructions may be static prompt input or a function of decoded input. That function may return
+an `Effect`. Its errors and service requirements become part of the run type.
 
 ## Choose model-visible input
 
-By default, the runtime appends the entire Schema-encoded input as a JSON user message after the
-instructions. Set `inputPrompt` to choose what the model receives. The function receives decoded
-input and returns native Effect AI `Prompt.RawInput`, directly or through an `Effect`.
+The runtime normally sends the complete schema-encoded input as a JSON user message. Use
+`inputPrompt` to send a smaller or differently shaped value.
 
 ```ts
 const definition = Agent.make("support-triage", {
@@ -74,42 +48,33 @@ const definition = Agent.make("support-triage", {
 });
 ```
 
-Strings become user messages. Native Prompts and message arrays preserve their roles, parts, and
-provider options, including multimodal content. Return an empty Prompt or message array to omit the
-input message entirely. Projection errors and required services join the Agent's inferred `E` and
-`R`, including when it is bound, spawned, or registered with a durable worker.
+`inputPrompt` receives decoded input and returns native Effect AI `Prompt.RawInput`, directly or
+through an `Effect`. Strings become user messages. Prompts and message arrays keep their roles,
+parts, provider options, and multimodal content. Return an empty Prompt or message array to omit
+the input message. Its errors and service requirements join the run's `E` and `R`.
 
-The runtime decodes input, evaluates instructions, encodes the canonical input, and evaluates
-`inputPrompt` before preparing model context. It appends history, instructions, then projected
-input. Each Turn applies the context transform before compaction, then adds the output contract
-and Run status to the outgoing request. Compaction and its summary calls receive the projected
-content. See [Context management](/guide/context-management).
+The runtime builds model context in this order: history, instructions, projected input, context
+transform, compaction, output contract, and run status. See
+[Context management](/guide/context-management).
 
-Durable admission retains the complete encoded input in the Submission Ledger and
-`UserInputRecorded`. Action-time Tool authorization receives that canonical input. The projection
-does not redact storage or change authorization. Instructions also receive decoded input, so they
-must avoid copying host-only values into their own messages.
+Projection changes only model-visible input. Durable admission still stores the complete encoded
+input, and tool authorization receives it. Keep secrets out of instructions and apply separate
+disclosure rules to history, tool results, steering, and host context transforms.
 
-Preparation runs again on each durable Attempt. Once a Turn commits, recovery restores its
-recorded projected messages, including the leading messages of a pending Tool batch. A newly
-evaluated projection does not replace that committed history. Queued Submissions joined into an
-active Run use the same input projection; recovery re-evaluates joins that have not yet committed
-model-visible messages. Projection Effects must tolerate re-evaluation and must not assume
-exactly-once external execution.
+Durable attempts may evaluate the projection again. Committed turns keep their recorded projected
+messages. Projection effects must tolerate another evaluation and must not assume exactly-once
+external execution.
 
-An expected projection failure prevents the next model request and fails the Run. Defects remain
-defects, interruption runs Effect finalizers, and the Run deadline also bounds projection. No
-failure path falls back to exposing the full input. Canonical admitted input remains available to
-the authorized host after failure or interruption. Other model-visible content, such as Tool
-results, explicit steering, prior history, and host context transforms, still needs its own
-disclosure policy.
+A projection failure stops the run before the next model request. The runtime never falls back to
+the full input. Projection services, errors, interruption, and deadlines follow normal Effect
+semantics.
+
+<a id="deliberate-absences"></a>
 
 ## Provide native model services
 
-`AgentRuntime.run`, `stream`, and `start` accept a Definition. They require the native
-`LanguageModel.LanguageModel`, `Model.ProviderName`, and `Model.ModelName` services, plus
-instruction, Tool, Schema, and runtime dependencies. Upstream model Layers provide all three
-model services. Use `Stream.provide` for a stream.
+`run`, `stream`, and `start` require `LanguageModel.LanguageModel`, `Model.ProviderName`, and
+`Model.ModelName`. Upstream model layers provide all three.
 
 ```ts
 const program = AgentRuntime.run(definition, input).pipe(
@@ -123,16 +88,12 @@ const captured = Effect.gen(function* () {
 });
 ```
 
-Ordinary `Layer.mergeAll` and `Layer.provide` composition works without rebuilding a Model.
-Capturing requirements moves provider dependencies to the enclosing Effect; it does not remove
-them from the application contract. When using `start`, keep the model Layer around the Effect
-that starts and awaits the detached Run so its resources outlive the child.
+Use `Stream.provide` with `stream`. Keep the model layer around both `start` and the detached
+run's lifetime.
 
-`Agent.withModel(definition, modelLayer)` remains useful when durable registration or delegation
-must fix a model for a particular Agent. It accepts a Layer providing all three native model
-services, including a captured Model Layer. Bindings remain accepted by the execution operations
-and keep their Layer requirements visible. Binding model Layers must have no construction errors;
-fallible application setup belongs in the enclosing Layer or Effect.
+Use `Agent.withModel` when durable registration or subagent construction must fix a model for one
+agent. Its layer must provide all three model services and have no construction error. Put
+fallible setup in the enclosing layer or Effect.
 
 ```ts
 type BeforeModel = Agent.DefinitionRequirements<typeof definition>;
@@ -140,31 +101,67 @@ type ExecutionRequirements = Agent.Requirements<typeof definition>;
 type Failure = Agent.Failure<typeof definition>;
 ```
 
-The repository protects these projections with compile-time tests.
-
-When selecting between Definitions or Bindings, the returned `E` and `R` include every possible
-branch's failures and services. Provide the handlers and Schema services for every branch, or
-narrow the selected Agent before executing it.
+Selecting between several definitions or bindings produces the union of their errors and
+requirements. Provide every branch or narrow the selection before execution.
 
 ## Typed and external inputs
 
-The primary operations accept `Agent.EncodedInput<typeof definition>`, the input Schema's
-`Encoded` representation. Required fields and field types are checked at the call site. Runtime
-decoding still validates refinements and transforms the input before instructions execute.
-Instructions and `inputPrompt` receive `Agent.Input<typeof definition>`, the decoded `Type`.
+The main operations accept `Agent.EncodedInput<typeof definition>`. The runtime decodes that value
+before instructions run. For `Schema.NumberFromString`, callers pass a string and instructions
+receive a number.
 
-For example, a field declared as `Schema.NumberFromString` accepts a string such as `"2"` at
-`run`, while instructions receive the number `2`. To submit an already decoded value, first use
-`Schema.encodeEffect(definition.input)` and provide its encoding services.
+Encode a decoded value with `Schema.encodeEffect(definition.input)`. Use `runUnknown`,
+`streamUnknown`, or `startUnknown` for untrusted external data. Invalid input fails with
+`AgentInputError` before instructions or model execution.
 
-Use `runUnknown`, `streamUnknown`, or `startUnknown` for external data typed as `unknown`.
-They apply the same decoder and fail with `AgentInputError` before instructions or model
-execution when input is invalid. Durable Submission payloads enter through this explicit boundary.
+## Complete through a tool
+
+Set `completion` when a successful tool result should become the agent's output without another
+model turn. The projector receives decoded tool parameters and result:
+
+```ts twoslash
+import { Agent, AgentPolicy } from "@effect-agent/core";
+import { Effect, Schema } from "effect";
+import { Tool, Toolkit } from "effect/unstable/ai";
+
+const Answer = Schema.Struct({ answer: Schema.String });
+const Complete = Tool.make("complete", { parameters: Answer, success: Schema.Void });
+const Tools = Toolkit.make(Complete);
+
+export const Definition = Agent.make("answer-question", {
+  input: Schema.Struct({ question: Schema.String }),
+  output: Answer,
+  instructions: "Answer the question using the complete tool.",
+  toolkit: Tools,
+  policy: AgentPolicy.make({
+    maxTurns: 3,
+    maxToolCalls: 3,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+  completion: {
+    tool: "complete",
+    required: true,
+    project: ({ parameters }) => parameters,
+  },
+});
+
+export const ToolsLive = Tools.toLayer({ complete: () => Effect.void });
+```
+
+Provide `ToolsLive` with the model and history services when running this definition.
+The output schema validates the projected value. With `required: true`, each turn must call a
+tool and completion must use the named tool. Without it, valid final assistant JSON may also
+complete the run. [Exhaustion policy](../concepts/budgets#exhaustion-final-answer-or-failure)
+controls the last available turn.
+
+`completion` decides how a run finishes. `runDisposition` labels its successful output for
+durable readers.
 
 ## Declare application completion explicitly
 
-Use an optional run-disposition boundary when a record reader needs an application-owned durable
-classification beyond the framework's `completed | failed | aborted` settlement outcome.
+Use `runDisposition` when durable readers need an application-defined classification in addition
+to the framework settlement outcome.
 
 ```ts
 const RunDisposition = Schema.Literal("application-complete");
@@ -182,21 +179,19 @@ const definition = Agent.make("support-triage", {
 });
 ```
 
-The selector sees decoded output and may return `undefined`. Its candidate is untrusted until the
-Schema validates and encodes it; invalid selection fails with `AgentRunDispositionError`, which
-joins `Agent.Failure` only for Definitions that declare this boundary. An ordinary completed
-durable Run persists the encoded value on `SubmissionSettled.runDisposition`, where readers decode
-it with the same application Schema. Budget exhaustion, failure, abort, and incomplete recovery
-never receive one. A selector exception remains available as the typed error's diagnostic `cause`;
-only a fixed, non-sensitive message enters the Run event stream. Do not parse summary prose or
-infer finality from successful Tool Calls.
+The selector receives decoded output and may return `undefined`. The schema validates and encodes
+any returned value. Invalid output fails with `AgentRunDispositionError`.
+
+Only an ordinary completed durable run stores the encoded disposition on
+`SubmissionSettled.runDisposition`. Budget exhaustion, failure, abort, and incomplete recovery
+store none. Parse it with the same application schema. Do not infer completion from prose or tool
+success.
 
 ## Stable identity
 
-The string passed to `Agent.make` is decoded as a branded `AgentId`. It becomes part of
-definition digests and durable identity.
-
-Renaming it creates new identity; pre-1.0 there is no stored-data migration promise.
+The string passed to `Agent.make` becomes a branded `AgentId` and contributes to durable identity
+and definition digests. Renaming it creates a new identity. Before 1.0, stored data has no
+migration promise.
 
 ## Policy is part of the program
 
@@ -213,18 +208,11 @@ AgentPolicy.make({
 });
 ```
 
-Turns, Tool Calls, duration, and concurrency are positive finite bounds. Token and cost budgets are
-optional because not every Model reports enough usage data to enforce them honestly.
+Turns, tool calls, duration, and concurrency need positive finite bounds. Token and cost budgets
+are optional because some models do not report enough usage data.
 
-`onExhaustion` selects how Turn, Tool Call, and token exhaustion resolve. The default
-`"final-answer"` soft-lands the Run with one constrained final answer and the honest
-`finishReason: "budget-exhausted"`. Every bound, the exhaustion resolutions, and sizing guidance
-are covered in [Budgets & bounded autonomy](/concepts/budgets); bounded Tool results, the
-run-status message, `contextTokenLimit`, and compaction in
-[Context management](/guide/context-management).
-
-## Deliberate absences
-
-Definitions do not use module directives, global provider registries, or mutable
-Session instances. Dynamic Models, Tools, and context belong at explicit Turn boundaries or in
-application Effects before execution or durable registration.
+The default `onExhaustion: "final-answer"` allows one constrained final answer for turn, tool call,
+or token exhaustion. The result uses `finishReason: "budget-exhausted"`. See
+[Budgets & bounded autonomy](/concepts/budgets) for all exhaustion rules and
+[Context management](/guide/context-management) for tool result bounds, run status, context limits,
+and compaction.

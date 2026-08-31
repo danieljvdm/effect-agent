@@ -2,7 +2,7 @@
 layout: home
 title: Effect Agent
 titleTemplate: false
-description: A TypeScript agent framework built on Effect and Effect AI.
+description: An agent harness toolkit for TypeScript, built on Effect and Effect AI.
 sidebar: false
 aside: false
 pageClass: ea-index
@@ -11,7 +11,7 @@ pageClass: ea-index
 <div class="ea-home">
   <header class="ea-home__intro">
     <h1>Effect Agent</h1>
-    <p>A TypeScript agent framework built on Effect and Effect AI.</p>
+    <p>An agent harness toolkit for TypeScript, built on Effect and Effect AI.</p>
     <div class="ea-home__actions">
       <a href="/guide/getting-started">Get started →</a>
       <a href="/guide/introduction">Introduction →</a>
@@ -34,8 +34,8 @@ pageClass: ea-index
 
   <nav class="ea-home__guides" aria-label="Guides">
     <a href="/guide/agents">Agent definitions →</a>
-    <a href="/guide/run-agents">Running and streaming →</a>
-    <a href="/concepts/durability">Persistence and recovery →</a>
+    <a href="/guide/run-agents">Run &amp; stream →</a>
+    <a href="/concepts/durability">Durable execution →</a>
     <a href="/guide/testing">Testing →</a>
   </nav>
 </div>

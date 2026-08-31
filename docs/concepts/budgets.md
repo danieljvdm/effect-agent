@@ -1,23 +1,20 @@
 ---
 title: Budgets & bounded autonomy
-description: Stop Policy limits, exhaustion behavior, per-Run allowances, usage budgets, and delegation reservations.
+description: Set run limits and choose what happens when they are reached.
 ---
 
 # Budgets & bounded autonomy
 
-Every Agent runs under finite, explicit bounds. Unlimited execution is an expert opt-in. When a
-Run reaches a limit after ten useful Tool Calls, throwing away its work is often the wrong result.
-The budget model therefore separates the limit from what happens next.
+Every agent has finite turn, tool call, and duration bounds. Policy also decides whether an
+exhausted run returns one constrained final answer or fails.
 
-- **The bound.** Countable work such as Turns and Tool Calls never starts if it would exceed a
-  limit. For measured usage such as tokens, cost, and wall-clock time, the Run stops at the first
-  Turn boundary after the overage. Bounds are not negotiable.
-- **The resolution.** Policy decides whether the Run gets a constrained final answer or fails.
+Normal work stops at a turn or tool call limit. Final-answer policy may allow one constrained
+grace turn. Token and cost usage are checked at turn boundaries, so measured usage may cross the
+threshold. `maxDuration` is a deadline and can interrupt in-flight work.
 
 ## The stop policy
 
-`AgentPolicy` declares each Agent's bounds. The Definition fixes them at authoring time, and the
-engine reads them at every Turn boundary.
+The agent definition fixes its `AgentPolicy`:
 
 ```ts
 AgentPolicy.make({
@@ -33,77 +30,56 @@ AgentPolicy.make({
 });
 ```
 
-| Bound                     | What it limits                                       | On exhaustion                    |
-| ------------------------- | ---------------------------------------------------- | -------------------------------- |
-| `maxTurns`                | model requests per Run                               | `onExhaustion` resolves          |
-| `maxToolCalls`            | declared Tool Calls per Run (programmatic included)  | `onExhaustion` resolves          |
-| `maxDuration`             | logical-Run wall clock, including durable suspension | always fails typed               |
-| `tokenBudget`             | input + output tokens per Run                        | `onExhaustion` resolves          |
-| `completionReserveTokens` | capacity withheld from research for delivery         | enters finalization before spend |
-| `costBudgetMicrousd`      | estimated cost per Run (needs a cost estimator)      | always fails typed               |
-| `repeatedFailureLimit`    | consecutive terminal Tool failures                   | always fails typed               |
-| `toolConcurrency`         | parallel Tool Handlers per batch                     | concurrency gate                 |
+| Bound                     | What it limits                                 | Result at the limit              |
+| ------------------------- | ---------------------------------------------- | -------------------------------- |
+| `maxTurns`                | model requests per run                         | follows `onExhaustion`           |
+| `maxToolCalls`            | declared and programmatic tool calls           | follows `onExhaustion`           |
+| `maxDuration`             | logical run time, including durable suspension | typed failure                    |
+| `tokenBudget`             | cumulative input and output tokens             | follows `onExhaustion` once      |
+| `completionReserveTokens` | capacity held for finalization                 | ends research before reserve use |
+| `costBudgetMicrousd`      | estimated run cost                             | typed failure                    |
+| `repeatedFailureLimit`    | consecutive terminal tool failures             | typed failure                    |
+| `toolConcurrency`         | parallel tool handlers per batch               | limits concurrency               |
 
-A typed exhaustion failure is `AgentPolicyError` with a `limit` literal naming the exhausted limit.
-In the DN and DC assemblies a Run failed this way settles with that literal preserved as the
-canonical settlement's `policyLimit`. Consumers read the typed dimension instead
-of parsing the failure message.
+`AgentPolicyError.limit` names a failed bound. DN and DC persist the same value in
+`SubmissionSettled.policyLimit`.
 
 ## Exhaustion: final answer or failure
 
-`onExhaustion` selects the resolution for Turn and Tool Call limits. It
-also applies once to the token budget.
+`onExhaustion: "final-answer"` is the default for turns, tool calls, and tokens.
 
-**`"final-answer"` (the default).** The Run gets one constrained opportunity to deliver:
+1. An over-budget tool batch executes no handlers. Each call becomes a synthetic failed result
+   that asks the model to answer from existing evidence. DN and DC do not durably declare the
+   rejected batch.
+2. Later model requests forbid tools through `toolChoice: "none"`. If the definition owns a
+   completion tool, only its singleton call remains allowed.
+3. Turn exhaustion permits one grace turn. A second grace turn is impossible.
+4. Completion records `finishReason: "budget-exhausted"` and an `exhausted` value of `tokens`,
+   `tool-calls`, or `turns`.
+5. Any disallowed tool call fails with `ModelProtocolError` before execution.
 
-1. An over-budget declared Tool batch **never executes**. Every call settles as a synthetic
-   failed result telling the model the budget is exhausted and to answer from what it already
-   has. No handler runs; in the DN and DC assemblies the batch is never durably declared.
-2. Every subsequent model request forbids tool use (Effect AI `toolChoice: "none"`) unless the
-   Definition owns a completion Tool, in which case only that Tool remains available.
-   Required completion uses `toolChoice: { tool: name }`, preserving the declared toolkit while
-   selecting exactly one Tool. The engine still rejects other or mixed Tool Calls before execution.
-3. Turn exhaustion admits exactly **one grace Turn** past `maxTurns`, under the same constraint.
-   A second grace is structurally impossible.
-4. The Run settles _completed_ with `finishReason: "budget-exhausted"`, never a plain
-   `"model-stop"`. Budget exhaustion must remain distinguishable from ordinary success. In the
-   DN and DC assemblies, the canonical `SubmissionSettled` record carries the same marker plus the
-   typed `exhausted` dimension (`tokens`, `tool-calls`, or `turns`), so a rebuilt projection
-   distinguishes a truncated answer from an ordinary one and names the exhausted limit without
-   the live event stream or message parsing.
-5. A model that declares a Tool Call under the constraint fails the Run typed
-   with `ModelProtocolError`, except for the singleton Definition-owned completion
-   Tool. That Tool delivers and settles immediately without another summary turn.
+Synthetic rejections do not count toward `repeatedFailureLimit` because no handler ran.
 
-Synthetic rejections are exempt from `repeatedFailureLimit` folding: no handler ran, so a
-rejected four-call batch cannot trip a limit of three.
+`onExhaustion: "fail"` rejects work past the bound. The final permitted turn may still finish
+through the definition's singleton completion tool. Use this mode when a partial answer is invalid.
 
-**`"fail"`.** Fail mode rejects work beyond a bound before any declared application Handler
-starts. The final permitted Turn may settle through a singleton Definition-owned completion Tool,
-which needs no continuation. Choose fail mode for pipelines that must never accept a truncated
-answer or start a delivery side effect after a policy breach.
+Duration, cost, and repeated tool failure always fail. Token exhaustion gets at most one
+constrained final answer.
 
-Duration, cost, and repeated-failure limits always fail the Run. Token exhaustion allows only one
-constrained final answer, so it cannot loop or spend without a bound.
+## Per-run allowances
 
-## Per-Run allowances
-
-A caller can tighten the countable bounds per Run. It cannot widen them.
+A caller may tighten turn and tool call limits for one run:
 
 ```ts
 AgentRuntime.run(agent, input, { toolCallAllowance: 8, turnAllowance: 4 });
 ```
 
-The effective limit is `min(policy bound, max(1, floor(allowance)))`, and the `onExhaustion`
-resolution uses the effective limits. The runtime ignores non-finite allowances, leaving the
-Definition policy in force; a `NaN` must not poison comparisons and erase the bound. Allowances are
-the mechanism behind delegation budget extensions below. The Definition's policy remains the
-ceiling.
+The effective limit is `min(policy bound, max(1, floor(allowance)))`. The runtime ignores
+non-finite allowances. A run allowance never raises the definition's ceiling.
 
 ## Hierarchical usage budgets
 
-The Stop Policy is per-Agent. Some limits span Agents, such as a tenant's monthly spend or a
-Conversation's token pool. `@effect-agent/capabilities` provides this ordered budget hierarchy:
+`@effect-agent/capabilities` can apply shared budgets in this order:
 `global → tenant → agent → conversation → run`.
 
 ```ts
@@ -122,78 +98,56 @@ Effect.gen(function* () {
 });
 ```
 
-Every consumption is atomic across the full ancestor chain. A rejected increment commits nothing
-at any level and fails typed as `BudgetExceeded`, naming the scope and exceeded limit. Wired
-into a Run through the `budget` hook, these are hard limits. The engine guards the model
-stream and every Tool batch, and a hook failure is fatal at the Turn boundary. This layer accounts
-_after the fact_; it is deliberately not a reservation service.
+Consumption is atomic across the ancestor chain. A rejected increment changes no node and fails
+as `BudgetExceeded` with the scope and bound. The run budget hook checks the model stream and tool
+batches. It accounts for observed usage after the fact; it does not reserve a provider's maximum
+charge before I/O.
 
 ## Delegation budgets
 
-A delegated child answers to three ceilings at once:
+A delegated child has three ceilings:
 
 ```text
-model-granted allowance ≤ delegation reservation slice ≤ child Definition policy
+model allowance ≤ delegation reservation ≤ child definition policy
 ```
 
-- **`SubagentPolicy`.** The Delegation Definition declares parent-side limits for total child
-  invocations, concurrency, and the per-invocation slice of turns, tool calls, duration, tokens,
-  cost, and result bytes.
-- **Reservations.** The parent allocates all reserved dimensions before a child starts and
-  releases them exactly once after it settles. A child that exceeds its slice is recorded and
-  charged rather than clipped. The overrun reduces headroom for future reservations.
-- **The child's Stop Policy.** The engine enforces it inside the child Run. This includes the
-  child's final-answer behavior, so a scout that exhausts its slice returns a partial report
-  instead of failing.
+`SubagentPolicy` limits child count, concurrency, turns, tool calls, duration, tokens, cost, and
+result bytes. The parent reserves the slice before starting the child and releases it once after
+settlement. An overrun remains charged and reduces later headroom. The child's stop policy still
+controls its run and final-answer behavior.
 
-### Containment and the extension flow
+### Request a larger child budget {#containment-and-the-extension-flow}
 
-Two delegation options control this behavior:
+`failureMode: "return"` converts expected child failures into model-visible result data. Engine
+suspension and durability failures stay in the error channel.
 
-**`failureMode: "return"`.** This converts each expected child failure, including the declared
-failure and the framework failure family, into model-visible result data. One failed scout does
-not fail the parent. The engine-owned suspension signal and durability error always stay in the
-error channel, so durable children still suspend correctly.
+`toolCallAllowance: { default, fromParameters }` grants one child invocation a tool call allowance
+under its reservation and definition ceilings **for ephemeral children only**. To extend work:
 
-**`toolCallAllowance: { default, fromParameters }`.** Each child runs with a
-per-invocation allowance below its Definition ceiling. The orchestrator may grant more in a new
-invocation.
+1. the child reaches its allowance and returns a partial result with `budgetExhausted`;
+2. the parent starts a new delegation with a larger author-owned parameter;
+3. the runtime clamps the new allowance, and the child continues from forwarded findings.
 
-1. The scout runs at the default allowance and exhausts it. Its soft landing returns a partial;
-   `projectResult` receives the `budgetExhausted` marker for the result Schema.
-2. The orchestrator observes the truncated partial and re-invokes the delegation with a raised
-   allowance through an author-owned parameter field. The runtime clamps it to the reservation
-   slice and rejects invalid values.
-3. The new child continues from the forwarded findings. A budget extension always creates a new
-   delegation. It never adds to a reservation in flight or reuses the child Conversation.
-
-The granted allowance reaches ephemeral children; in the DN and DC assemblies a child lane owns
-no per-Run options channel yet, so a durable child runs at its Definition policy (the exhausted
-marker still travels durably via the child Settlement).
+An extension creates a new child conversation. It cannot enlarge a live reservation. Durable
+children ignore `toolCallAllowance` and run at their definition policy. Their settlement still
+carries the exhaustion marker. Set durable limits on the child definition before registration.
 
 ## Programmatic calls and Code Mode
 
-Code Mode's generated programs consume the same Run budgets mid-pass: every inner Tool
-call checks and reserves against `maxToolCalls` before its handler runs, exhaustion becomes that
-_call's_ outcome rather than a Run failure, and the Turn boundary re-enforces the combined
-declared-plus-programmatic count.
+Code Mode checks and reserves `maxToolCalls` before each inner handler. Exhaustion becomes that
+call's outcome. The turn boundary then enforces the combined declared and programmatic count.
 
 ## Sizing guidance
 
-- **Research-shaped agents bind on turns first.** At a grep-then-read cadence each observation is
-  one Tool Call and each batch one Turn, so `maxTurns` usually binds before `maxToolCalls`; raise
-  them together, and let the soft landing convert the residual tail into a partial cited answer
-  instead of provisioning for the worst case.
-- **Distinguish token limits from spending admission.** Cached input and output have different
-  prices, and observed usage can cross a token threshold before the runtime stops. A strict dollar
-  ceiling requires the host to reserve each request's maximum charge before provider I/O, including
-  finalization and possible cache misses. A token quota alone cannot enforce that ceiling.
-- **Delegate instead of raising.** If independent work needs 100 Tool Calls, five scouts with 20
-  calls each may fit better. Give each invocation its own allowance and grant extensions only
-  when the partial result justifies them.
+- Raise `maxTurns` with `maxToolCalls` for research agents. Repeated read cycles often use one of
+  each.
+- A token quota cannot guarantee a dollar ceiling. Strict spending admission must reserve the
+  maximum request charge before provider I/O, including finalization and cache misses.
+- Split independent work into bounded child runs. Grant a larger follow-up only when the partial
+  result warrants it.
 
-## Where the rules live
+## Related guides {#where-the-rules-live}
 
-- [Agent definitions guide](/guide/agents) explains policy declarations.
+- [Agent definitions guide](/guide/agents) covers policy declarations.
 - [Run and stream guide](/guide/run-agents) covers finish reasons and Run options.
-- [Persistence and durability](/concepts/durability#attached-subagents) covers child recovery and joins.
+- [Persistence & durability](/concepts/durability#attached-subagents) covers child recovery.

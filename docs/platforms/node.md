@@ -1,71 +1,54 @@
 ---
 title: Node.js
-description: Run durable agents in a Node.js process with SQLite storage.
+description: Run durable agents on Node.js with SQLite.
 ---
 
 # Node.js
 
-`@effect-agent/platform-node` runs durable agents in a Node.js process. It stores the
-Conversation Log and Submission Ledger in one SQLite database and runs a bounded pool of workers.
+`@effect-agent/platform-node` stores conversation history and pending work in SQLite.
+A bounded worker pool executes registered agents and recovers work after a restart.
 
 ## Install
 
 ```sh
-npm install --save-exact @effect-agent/platform-node@beta @effect-agent/session@beta @effect/platform-node@4.0.0-rc.111 effect@4.0.0-rc.111
+bun add @effect-agent/platform-node@beta
 ```
 
-Keep framework packages on the same release, including the packages used to define your Agent.
-See [installation and compatibility](../guide/getting-started#installation-and-compatibility)
-for the alpha version policy and provider dependencies.
+For the examples below, also install `effect@4.0.0-rc.111`, `@effect-agent/session@beta`, and
+`@effect/platform-node@4.0.0-rc.111`.
+Keep framework packages at one release and use compatible [Effect and provider packages](../guide/getting-started#installation-and-compatibility).
 
 ## Configure the host
 
-`NodeDurableHost.layerStack` opens the database, checks storage compatibility, and runs recovery
-before accepting new submissions. Pass the worker Bindings your application has registered:
+Use a persistent database path with one live host per SQLite file. Give each replacement host
+incarnation a distinct `producerId`.
+`workerConcurrency` limits worker loops and defaults to one.
+`NodeDurableHost.layerStack` checks storage and runs recovery before accepting work.
 
-```ts twoslash
-import { NodeDurableHost } from "@effect-agent/platform-node";
-import type { ResolvedBinding } from "@effect-agent/session";
+Create the `ResolvedBinding` values with `compileRegistrations` from `@effect-agent/session`.
+Supply Crypto, provider clients, and tool handlers while compiling. Keep those Layers alive
+in the host's application Scope.
 
-export const hostLayer = (bindings: ReadonlyArray<ResolvedBinding>) =>
-  NodeDurableHost.layerStack({
-    filename: "./agents.sqlite",
-    deploymentId: "travel-planner",
-    producerId: "worker-1",
-    workerConcurrency: 4,
-    bindings,
-  });
-```
+Registrations include JSON descriptions and versions for the agent, model, and toolkit.
+Version tool implementations and other behavior JSON cannot represent.
+Submission digests must match the registered definitions. Keep matching bindings available
+until their work settles; an empty registration cannot execute work.
 
-Use a persistent path for `filename` and a distinct `producerId` for each host sharing that
-database. `workerConcurrency` bounds simultaneous worker loops; it defaults to one.
-
-Use `compileRegistrations` from `@effect-agent/session` to turn Agent Bindings and version
-declarations into `ResolvedBinding` values. Provide Crypto, the Agent's provider client, and
-Tool-handler Layers while compiling them. The registration captures those services for later execution.
-Keep those Layers in the same application Scope as the host.
-
-Each registration's `definitions` contains application-owned JSON descriptions of the Agent,
-Model, and Toolkit. Include version information for
-behavior that JSON cannot represent, such as Tool implementations. Use the same digests when
-submitting work and keep the matching Bindings available while work is outstanding. An empty
-registration cannot execute submissions.
-
-The submitter computes those digests with `digestDefinitions` over the same declarations.
-`DurableWorkerBinding.make(agent, digests)` remains available when the digests are already computed.
+Use `digestDefinitions` to compute submission digests.
+`DurableWorkerBinding.make(agent, digests)` accepts precomputed digests.
 
 ## Run the workers
 
-Constructing the host does not start its worker loops. Run `host.runResolvedWorkers` in the
-Scope that owns your application:
-
 ```ts twoslash
-import { NodeDurableHost } from "@effect-agent/platform-node";
+import { NodeDurableHost, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
 import type { ResolvedBinding } from "@effect-agent/session";
 import { NodeRuntime } from "@effect/platform-node";
 import { Effect } from "effect";
 
-export const startWorkers = (bindings: ReadonlyArray<ResolvedBinding>) =>
+export const startWorkers = (
+  bindings: ReadonlyArray<ResolvedBinding>,
+  services: Pick<NodeDurableRuntimeOptions, "runContext" | "toolAuthorization"> = {},
+) =>
   Effect.gen(function* () {
     const host = yield* NodeDurableHost;
     yield* host.runResolvedWorkers;
@@ -77,6 +60,7 @@ export const startWorkers = (bindings: ReadonlyArray<ResolvedBinding>) =>
         producerId: "worker-1",
         workerConcurrency: 4,
         bindings,
+        ...services,
       }),
     ),
     Effect.scoped,
@@ -84,32 +68,47 @@ export const startWorkers = (bindings: ReadonlyArray<ResolvedBinding>) =>
   );
 ```
 
-Call `startWorkers` with the registered Bindings at your process entry point. For an application
-that also serves requests, share one host Layer between the server and worker effects.
-`NodeDurableRuntime.layer` exposes the lower-level runtime assembly when you need to compose
-the lifecycle yourself.
+Call `startWorkers(bindings)` at the process entry point. Creating the host alone does not
+start workers. If the process also serves requests, share one host Layer between both effects.
+Use `NodeDurableRuntime.layer` for custom lifecycle composition.
+
+## Configure runtime services
+
+Pass service layers through `NodeDurableHost.layerStack` or `NodeDurableRuntime.layer`:
+
+| Option              | Service                 | Default                                                     |
+| ------------------- | ----------------------- | ----------------------------------------------------------- |
+| `runContext`        | `RunContextPreparation` | No prompt transform; use the available or default compactor |
+| `toolAuthorization` | `RunToolAuthorization`  | Allow all tool calls                                        |
+
+The `startWorkers` example accepts these options as its second argument. Use
+`{ runContext: RunContextLive }` for [prompt preparation or compaction](../guide/context-management),
+or `{ toolAuthorization: SearchOnlyLive }` for a [tool policy](../guide/tools#authorize-tool-calls).
+Pass both properties when configuring both services.
+
+These extension layers must have no construction errors and no unresolved dependencies except
+`Crypto.Crypto`, which the host supplies. Provide application dependencies before passing the
+layers to the host; handle fallible setup in the enclosing application.
+
+The runtime captures services when the host layer is acquired. Keep their resources alive for
+its Scope. Providing replacements around a later worker call does not change the captured services.
+`toolFailureObserver` configures [recovered tool failure reporting](../guide/run-agents#observe-recovered-tool-failures).
 
 ## Submit and follow work
 
-From an Effect with access to `NodeDurableHost`:
+1. Authenticate the caller and call `host.submit(agent, input, options)`.
+   Supply the conversation ID, principal, idempotency key, and definition digests.
+2. Return the receipt after admission.
+3. Await completion with `host.awaitSettlement(receipt)`, or stream records with `host.observe(receipt)`.
 
-1. Call `host.submit(agent, input, options)`. Options include a Conversation ID, principal,
-   idempotency key, and the registered definition digests.
-2. Return the Receipt to the caller. It acknowledges durable admission, not completion.
-3. Use `host.awaitSettlement(receipt)` for the terminal outcome, or `host.observe(receipt)`
-   to stream canonical records.
-
-Keep the idempotency key when retrying the same request. Reusing it with different input fails
-with an admission conflict. Authenticate callers before granting access to the host service.
+Reuse the idempotency key when retrying the same request. Different input under that key fails
+with an admission conflict.
 
 ## Shutdown and recovery
 
-Closing the host's Scope closes admission, releases tracked ownership, and closes SQLite.
-After a forced termination, replacement workers reclaim work after its ownership lease expires.
-Unknown external Tool outcomes require reconciliation or an authorized resolution; recovery
-does not blindly execute those calls again.
+Closing the host's Scope stops admission, releases ownership, and closes SQLite.
+After a crash, replacement workers reclaim work when its lease expires.
+Unconfirmed external tool outcomes require reconciliation or authorized resolution before replay.
 
-`host.startupRecovery` reports what startup repaired, deferred, or left waiting for resolution.
-Use `host.explain`, `host.verify`, and `host.scanObligations` to inspect outstanding work.
-The [operations guide](../guide/operations) covers recovery, approvals, scheduled input,
-subscriptions, and backups.
+Inspect `host.startupRecovery`, `host.explain`, `host.verify`, and `host.scanObligations`
+for recovery status. See [operations](../guide/operations) for approvals, schedules, and backups.

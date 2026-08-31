@@ -1,67 +1,115 @@
 ---
 title: Cloudflare
-description: Run durable agents on Cloudflare Workers with SQLite-backed Durable Objects.
+description: Run durable agents on Cloudflare Workers and Durable Objects.
 ---
 
 # Cloudflare
 
-`@effect-agent/platform-cloudflare` runs each Conversation in a SQLite-backed Durable Object.
-The Object owns its history and pending work. RPC calls and alarms drive execution and recovery.
+`@effect-agent/platform-cloudflare` stores each conversation and its pending work in a
+SQLite-backed Durable Object. RPC calls and alarms drive execution and recovery.
 
 ## Install
 
 ```sh
-npm install --save-exact @effect-agent/platform-cloudflare@beta @effect-agent/session@beta @effect/platform-browser@4.0.0-rc.111 effect@4.0.0-rc.111 effect-cf@0.37.0
+bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Add your model provider package and credentials separately. Keep framework packages on the same
-release; see [installation and compatibility](../guide/getting-started#installation-and-compatibility).
-The durable host does not require Puppeteer.
+Also install `effect@4.0.0-rc.111`, `effect-cf@^0.37.0`, `@effect-agent/core@beta`,
+`@effect-agent/session@beta`, `@effect/ai-openai@4.0.0-rc.111`, and
+`@effect/platform-browser@4.0.0-rc.111` for the examples below.
+Keep framework packages at one release and add your [model provider](../guide/getting-started#installation-and-compatibility).
 
-## Create the Conversation Object
+## Create the conversation object
 
-`ConversationObject.make` creates the class you export from your Worker. This helper accepts
-your application's composed runtime Layer:
+Compose agent registrations and application services as a layer, then pass it to
+`ConversationObject.make`. This example expects `OPENAI_API_KEY` and a `CONVERSATIONS` Durable
+Object namespace in the generated `Cloudflare.Env`.
 
-```ts twoslash
-// @types: @cloudflare/workers-types
+```ts
+import { Agent, AgentPolicy } from "@effect-agent/core";
 import { ConversationObject } from "@effect-agent/platform-cloudflare";
+import { DefinitionDigestInput } from "@effect-agent/session";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { Effect, Layer, Redacted, Schema } from "effect";
+import { Toolkit } from "effect/unstable/ai";
+import { FetchHttpClient } from "effect/unstable/http";
+import { WorkerEnvironment } from "effect-cf";
 
-export const createConversationObject = (
-  application: Parameters<typeof ConversationObject.make>[0],
-) =>
-  ConversationObject.make(application, {
-    namespaceBinding: "CONVERSATIONS",
-    deploymentId: "travel-planner",
-    producerPrefix: "travel-worker",
-    maxQueueDepthPerLane: 64,
-  });
+const TravelPlanner = Agent.make("travel-planner", {
+  input: Schema.Struct({ destination: Schema.String, days: Schema.Number }),
+  output: Schema.Struct({ itinerary: Schema.Array(Schema.String) }),
+  instructions: "Create a practical travel itinerary.",
+  toolkit: Toolkit.make(),
+  policy: AgentPolicy.make({
+    maxTurns: 3,
+    maxToolCalls: 1,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+});
+
+const modelName = "gpt-4.1-mini";
+
+export const travelDefinitions = DefinitionDigestInput.make({
+  agent: { id: TravelPlanner.id, revision: 1 },
+  model: { provider: "openai", name: modelName },
+  tools: [],
+});
+
+const OpenAiLive = Layer.unwrap(
+  Effect.map(WorkerEnvironment, (env) =>
+    OpenAiClient.layer({ apiKey: Redacted.make(env.OPENAI_API_KEY) }).pipe(
+      Layer.provide(FetchHttpClient.layer),
+    ),
+  ),
+);
+
+const RuntimeLive = ConversationObject.layer([
+  {
+    agent: Agent.withModel(TravelPlanner, OpenAiLanguageModel.model(modelName)),
+    definitions: travelDefinitions,
+  },
+]).pipe(Layer.provide(OpenAiLive));
+
+export class TravelConversation extends ConversationObject.make(RuntimeLive, {
+  namespaceBinding: "CONVERSATIONS",
+  deploymentId: "travel-planner",
+  producerPrefix: "travel-worker",
+}) {}
 ```
 
-Build the application with `ConversationObject.layer(registrations)`, then provide its model
-clients and Tool handlers through `Layer.provide`. Each registration pairs an Agent Binding
-with Agent, Model, and Tool version declarations. The runtime hashes those declarations and
-captures the required services during Layer construction. Initialization failures remain typed;
-missing application services must be supplied before passing the Layer to the class factory.
-See [Run durably on Cloudflare](../guide/run-agents#run-durably-on-cloudflare) for a complete
-Agent registration and provider Layer.
+Each registration pairs a model-bound agent with explicit agent, model, and tool versions. The
+submitter passes `digestDefinitions(travelDefinitions)` through
+`DurableSubmitOptions.definitions`. Bump the agent revision when instructions, schemas, or policy
+change. Version tool implementations and model configuration when they change.
 
-Call this helper with that Layer and export the returned class as `TravelConversation` from
-the Worker entry point. Application Layers can yield `effect-cf`'s `WorkerEnvironment` and
-`DurableObjectState.DurableObjectState`, along with `ConversationObjectIdentity` and Crypto.
-Use `Layer.unwrap` when the registrations depend on configuration or other services.
+Application layers can use `WorkerEnvironment`, `DurableObjectState`,
+`ConversationObjectIdentity`, and Crypto. Use `Layer.unwrap` for configuration-dependent registrations.
+The application is acquired once per Object instance and rebuilt after eviction. Keep initialization
+local and bounded. Eviction does not guarantee finalizers; acquire resources needing timely cleanup
+inside scoped operations or `options.eventLayer`. Each event runs a bounded recovery pass;
+no worker loop is needed.
 
-The application is acquired once per Object incarnation. Keep initialization local and bounded.
-Cloudflare eviction does not guarantee finalizers, so acquire resources needing timely release
-in scoped operations or `options.eventLayer`. Use the same definition digests for registration
-and submission, and retain matching registrations for outstanding work across deployments.
+Register the exported class as a SQLite Durable Object under `CONVERSATIONS`.
+`ConversationObject.layer([])` registers no agents and refuses every agent identity.
 
-The class factory handles initialization, RPC, and alarms. Each event runs a bounded recovery
-and processing pass. There is no process-wide worker loop to start.
+## Configure runtime services
+
+Provide custom services to `ConversationObject.layer(registrations)` before passing the resulting
+layer to `ConversationObject.make`. For example, add `Layer.provide(RunContextLive)` to
+`RuntimeLive` above to install [prompt preparation or compaction](../guide/context-management).
+Provide a [tool authorization layer](../guide/tools#authorize-tool-calls) in the same place when needed.
+
+The host supplies passthrough preparation and `RunToolAuthorization.allowAll` by default.
+Your application layers override those defaults. Preparation can supply a prompt `hook`, a
+`compactor`, or both; otherwise the runtime uses an available `ContextCompactor` or its default.
+Close custom layers' dependencies with application services or the host services listed above.
+They are captured when the Object acquires the runtime, not on each worker call.
+
+Use `options.eventLayer` for per-event observability and resources. Use
+`options.toolFailureObserver` for [recovered tool failures](../guide/run-agents#observe-recovered-tool-failures).
 
 ## Configure the binding
-
-Declare the exported class and its SQLite storage in your Wrangler configuration:
 
 ```jsonc
 {
@@ -77,14 +125,11 @@ Declare the exported class and its SQLite storage in your Wrangler configuration
 }
 ```
 
-`CONVERSATIONS` must match `namespaceBinding`, and `TravelConversation` must match the exported
-class. Cloudflare's [class configuration guide](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)
-also covers existing Workers that use the older `migrations` array.
+Match `CONVERSATIONS` to `namespaceBinding` and `TravelConversation` to the exported class.
+See Cloudflare's [class configuration guide](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)
+for Workers using the older `migrations` array.
 
 ## Connect from your Worker
-
-`CloudflareConversationClient` wraps the Object RPC calls in Effects. Build its Layer from
-the Worker's environment and a Crypto implementation:
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
@@ -102,42 +147,22 @@ export const conversationClientLayer = (env: unknown) =>
   );
 ```
 
-Inside your authenticated request handler, use `client.submit(agent, input, options)` with a
-Conversation ID, principal, idempotency key, and definition digests. Return the Receipt after
-admission. The client routes that Conversation to its named Object.
+In an authenticated handler, call `client.submit(agent, input, options)` with the conversation ID,
+principal, idempotency key, and definition digests. Return its receipt after admission.
 
-Use `client.awaitSettlement(receipt)` for the terminal outcome. For incremental updates, read
-a page with `client.readPage`, wait with `client.awaitProgress`, then read after the last
-sequence you received. Keep a progress wait in a Scope so interruption cancels its remote wait.
-Mount these Effects behind your application's HTTP or RPC API; the package does not create routes.
+Use `client.awaitSettlement(receipt)` for completion.
+For updates, call `readPage`, then `awaitProgress`, then read after the last received sequence.
+Scope progress waits so interruption cancels them remotely.
+Expose these Effects through your application's HTTP or RPC API.
 
 ## Recovery and limits
 
-Pending work is stored before acknowledgement. Alarms allow maintenance to continue after
-an Object is evicted, without another user request. The host owns the Object's
-[single alarm](https://developers.cloudflare.com/durable-objects/api/alarms/); do not replace
-its alarm handler or independently schedule alarms on the same Object.
+Alarms recover pending work after eviction without another user request.
+The host owns the Object's [single alarm](https://developers.cloudflare.com/durable-objects/api/alarms/);
+do not replace its handler or schedule unrelated alarms on that Object.
 
-`maxQueueDepthPerLane`, `maxInputBytes`, and `maxDatabaseBytes` bound admission. A refusal returns
-`AdmissionLimitExceeded` before accepting new work. These limits do not replace authentication
-or authorization. The default operation policy relies on possession of the service; keep Object
-RPC access private and supply `operationAuthorizer` for application-specific access rules.
+`maxQueueDepthPerLane`, `maxInputBytes`, and `maxDatabaseBytes` refuse excess work with
+`AdmissionLimitExceeded` before admission. Keep Object RPC private and supply
+`operationAuthorizer` for application access rules. The default policy trusts service possession.
 
-After an interrupted Tool call, recovery may need an authorized Unknown Outcome resolution.
-See [durability](../concepts/durability) and [operations](../guide/operations) for that workflow.
-
-## Browser and Code Mode adapters
-
-The package also supplies Code Mode execution and optional Browser Run adapters:
-
-| Import                                                   | Use                                                        |
-| -------------------------------------------------------- | ---------------------------------------------------------- |
-| `@effect-agent/platform-cloudflare`                      | Durable host and Code Mode executor                        |
-| `@effect-agent/platform-cloudflare/browser-quick-action` | Page capture through a browser binding                     |
-| `@effect-agent/platform-cloudflare/browser-rest-capture` | Page capture through Cloudflare's REST API                 |
-| `@effect-agent/platform-cloudflare/browser-rest-crawl`   | Bounded same-host Markdown crawl                           |
-| `@effect-agent/platform-cloudflare/interactive-browser`  | Scoped navigation, reading, clicks, fills, and screenshots |
-
-The interactive adapter requires `@cloudflare/puppeteer` and a browser binding. Browser handles
-last for one scoped pass and do not survive Object eviction. See the
-[package reference](../reference/packages#effect-agent-platform-cloudflare) for adapter requirements.
+Unconfirmed tool outcomes need authorized resolution. See [operations](../guide/operations).

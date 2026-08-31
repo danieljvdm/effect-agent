@@ -1,41 +1,37 @@
 ---
 title: Platforms
-description: Run Effect Agent on Node.js or Cloudflare Workers.
+description: Choose a durable host for Node.js or Cloudflare.
 ---
 
 # Platforms
 
-Effect Agent runs on Node.js and Cloudflare Workers. The platform packages add storage,
-work scheduling, and recovery to your Agent definitions.
+Run durable agents on Node.js or Cloudflare Workers. Both hosts record accepted work,
+track worker ownership, and recover after restarts.
 
-|                  | [Node.js](./node)                                              | [Cloudflare](./cloudflare)                |
-| ---------------- | -------------------------------------------------------------- | ----------------------------------------- |
-| Package          | `@effect-agent/platform-node`                                  | `@effect-agent/platform-cloudflare`       |
-| Execution        | A worker process you operate                                   | A Durable Object per Conversation         |
-| Storage          | A SQLite file                                                  | Each Durable Object's SQLite database     |
-| Work scheduling  | A bounded worker pool with wake notifications and ledger scans | RPC calls and Durable Object alarms       |
-| Restart recovery | When the host starts and workers reclaim work                  | When an Object receives an event or alarm |
+|            | [Node.js](./node)                             | [Cloudflare](./cloudflare)          |
+| ---------- | --------------------------------------------- | ----------------------------------- |
+| Package    | `@effect-agent/platform-node`                 | `@effect-agent/platform-cloudflare` |
+| Execution  | Worker process you operate                    | Durable Object per conversation     |
+| Storage    | Persistent SQLite file                        | Each Object's SQLite database       |
+| Scheduling | Worker pool, wake notifications, ledger scans | RPC calls and alarms                |
+| Recovery   | Host startup and worker claims                | Object events and alarms            |
+
+Choose Node.js when you operate a process and persistent disk.
+Choose Cloudflare when your application uses Workers and Durable Objects.
 
 ## Choose what you need
 
-For a request that can end with its process, use [`AgentRuntime.run`](../guide/run-agents).
-Supply the provider and Tool Layers plus `ConversationHistory.layerTransient`.
-You do not need a platform package for that.
+Use a durable host when accepted work must survive a restart.
+See [durability](../concepts/durability) for recovery rules and unconfirmed tool outcomes.
 
-To keep completed conversation history between requests, provide
+For work that can end with its process, use [`AgentRuntime.run`](../guide/run-agents)
+with provider and tool Layers plus `ConversationHistory.layerTransient`.
+
+To retain completed history without recovering unfinished work, provide
 [`PersistentHistory.layer`](../guide/conversations#retain-completed-runs) with a storage adapter.
-That retains successful Runs; it does not recover unfinished work.
-
-Use a platform host when accepted work must survive a process restart or Object eviction.
-It records a Receipt before acknowledging submission, tracks ownership of each attempt, and
-records the final Settlement. The [durability guide](../concepts/durability) explains recovery,
-including Tool calls whose external outcome cannot be confirmed.
 
 ## What your application supplies
 
-Both hosts need registered Agent Bindings with provider clients and Tool handlers. Your
-application also owns credentials, request authentication, and permission to submit or operate
-on a Conversation. Neither package installs an HTTP API or a chat UI.
-
-Start with [Node.js](./node) if you already operate a Node process and persistent disk.
-Use [Cloudflare](./cloudflare) when your application runs on Workers and Durable Objects.
+Register agent bindings and supply provider clients, tool handlers, and credentials.
+Authenticate callers and authorize access to each conversation.
+Expose the host through your application's API or UI.

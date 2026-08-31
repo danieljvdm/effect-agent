@@ -1,147 +1,112 @@
 ---
-title: Persistence and durability
-description: Why replayable history and accepted-work recovery are separate product capabilities.
+title: Persistence & durability
+description: Keep history and recover accepted work after a crash.
 ---
 
-# Persistence and durability
+<a id="persistence-and-durability"></a>
 
-Persistence answers "can I rebuild what was recorded?" Durability answers "after I acknowledge
-work, who owes the terminal outcome?" Durability requires a separate work ledger and recovery
-protocol.
+# Persistence & durability
 
-## Four deployment classes
+Effect Agent supports persistent history and durable execution as separate capabilities.
+Persistence rebuilds recorded state. Durable execution accepts work, survives lost attempts, and
+owes one terminal settlement for every acknowledged submission.
+
+## Execution modes {#four-deployment-classes}
 
 | Class | Meaning                                                  |
 | ----- | -------------------------------------------------------- |
-| `E`   | ephemeral execution; no process-loss recovery            |
-| `P`   | Conversation history survives restart; clients may retry |
-| `DN`  | durable admission and recovery on Node/SQLite            |
-| `DC`  | the equivalent contract on Cloudflare Durable Objects    |
+| `E`   | ephemeral execution with no process-loss recovery        |
+| `P`   | conversation history survives restart; clients may retry |
+| `DN`  | durable admission and recovery on Node and SQLite        |
+| `DC`  | the same contract on Cloudflare Durable Objects          |
 
-All four classes are implemented. No package or example uses "durable" without naming the
-deployment class and tested adapter.
+Choose a deployment class and adapter with the recovery guarantees your application needs.
+See the [Node.js](../platforms/node) and [Cloudflare](../platforms/cloudflare) guides for setup.
 
-For host setup, see the [Node.js](../platforms/node) and [Cloudflare](../platforms/cloudflare) guides.
+## Rebuild from the log {#canonical-history}
 
-## Canonical history
+The conversation log is an append-only sequence of versioned facts. It is authoritative for
+applied input and terminal outcomes. Projections, checkpoints, indexes, and UI views can be rebuilt.
 
-The Conversation Log is an append-only sequence of versioned facts. It is authoritative for
-applied input and terminal outcomes. Projections, checkpoints, search indexes, and UI views are
-rebuildable.
+Replay rebuilds state from records. It never executes a tool or repeats an external effect.
 
-Replay reads records to rebuild state. It never executes a Tool or repeats an external effect.
+## Track unfinished work {#operational-obligation}
 
-## Operational obligation
-
-The Submission Ledger separately owns admission, FIFO readiness, Attempt ownership, abort
-intent, recovery classification, and the obligation to settle accepted work.
-
-Keeping the two structures separate makes both contracts explicit:
+The submission ledger owns admission, FIFO readiness, attempt ownership, abort intent, recovery,
+and the obligation to settle accepted work.
 
 ```text
-Conversation Log              Submission Ledger
+conversation log              submission ledger
 what happened                 what is still owed
-append-only                   operational, mutable + audited
+append-only                   operational, mutable, audited
 replay authority              claim and scheduling authority
-canonical Settlement          outstanding Settlement obligation
+canonical settlement          outstanding settlement obligation
 ```
 
 ## Exactly-once recording
 
-The contract promises one accepted Settlement record, not one physical execution of every
-external operation. Model inference and external APIs can repeat across crash windows.
+The runtime records one accepted settlement. It does not promise one physical execution of every
+external operation. Model calls and external APIs may repeat across crash windows.
 
-An ordinary Tool may finish externally just before its worker disappears. If storage cannot prove
-what happened, recovery must expose `UnknownToolOutcome` rather than rerun the operation or invent
-a failure.
+If an ordinary tool may have finished before its worker disappeared, recovery records an
+`UnknownToolOutcome`. It cannot safely infer failure or replay the call.
 
-Durable Steps narrow that ambiguity by exactly-once-recording a named result while allowing
-at-least-once execution. Applications still need external idempotency, reconciliation, or
-compensation.
+Durable Steps record one result for each deterministic Step name. Their external execution is at
+least once and may repeat. Applications still need idempotency, reconciliation, or compensation.
 
-## One authoring model
+## Reuse the same agent definition {#one-authoring-model}
 
-Durability never changes how an Agent is written, because the interfaces are constrained from the
-start:
-
-- Definitions are immutable and digestible;
-- Tool Call IDs are stable across scheduling and records;
-- Tool batches commit deterministically;
-- safe-seam input has one semantic rule;
-- stores implement fenced, idempotent canonical append;
-- provider SDK objects never become recovery truth.
+Use the same agent definition for ephemeral runs and durable registration. Durable hosts also
+need storage, versioned registrations, and a recovery driver. See the platform setup guides above.
 
 ## Admission and recovery
 
-Return a Receipt only after ledger admission, Conversation materialization, and readiness are
-durable. Reusing an admission key with the same input returns the same Receipt; a different input
-conflicts. Queue order comes from admission sequence, not wall-clock arrival. Every producer write
-checks its ownership token and epoch atomically, rejecting stale Attempts.
+The runtime returns a Receipt after durable ledger admission, conversation materialization, and
+readiness. Reusing an admission key with the same input returns the same Receipt. Different input
+conflicts. Admission sequence sets queue order.
 
-Recovery validates a strongly consistent canonical prefix before repairing ledger state. It
-classifies the last committed boundary instead of replaying the Run:
+Each producer write checks its ownership token and epoch. A stale attempt cannot append after a
+replacement takes ownership. Recovery validates a strongly consistent canonical prefix, then
+classifies the last committed boundary:
 
-| Last committed boundary                          | Recovery                                                                             |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| Admission without readiness                      | Finish materialization and readiness.                                                |
-| Input appended without its ledger marker         | Repair the marker without applying input twice.                                      |
-| `RunStarted`                                     | Preserve its original deadline; reject a replacement duration allowance.             |
-| Incomplete model response                        | Retry inference if permitted; duplicate provider charges are possible.               |
-| Complete Tool declaration without preparation    | Reauthorize and resume that batch without another model call.                        |
-| Ordinary Tool prepared without a result          | Reconcile or expose `UnknownToolOutcome`; never infer that invocation did not start. |
-| Canonical Tool result or Durable Step result     | Reuse the recorded result.                                                           |
-| Reserved Settlement                              | Append that exact outcome, then finalize the ledger idempotently.                    |
-| Canonical Settlement without ledger finalization | Finalize from history; do not choose another outcome.                                |
+| Last committed boundary                          | Recovery                                                        |
+| ------------------------------------------------ | --------------------------------------------------------------- |
+| admission without readiness                      | finish materialization and readiness                            |
+| input appended without its ledger marker         | repair the marker without applying input twice                  |
+| `RunStarted`                                     | preserve the original deadline                                  |
+| incomplete model response                        | retry inference when policy allows; provider charges may repeat |
+| complete tool declaration without preparation    | reauthorize and resume the batch without another model call     |
+| ordinary tool prepared without a result          | reconcile or record `UnknownToolOutcome`                        |
+| canonical tool or Durable Step result            | reuse the recorded result                                       |
+| reserved settlement                              | append that outcome, then finalize the ledger idempotently      |
+| canonical settlement without ledger finalization | finalize from history                                           |
 
-Joined input follows the same rule: a claimed input without a canonical append returns to ready;
-an appended input reattaches to its host Run and settles with it. Approval decisions must be
-canonical before execution resumes. Unknown work releases execution permits but remains an
-accepted obligation requiring an authorized resolution path. Abort does not roll back external
-effects or rewrite a winning Settlement. See [Operations](../guide/operations).
+Joined input follows the same rule. Claimed input without a canonical append returns to ready.
+Appended input rejoins its host run and settles with it. Approval must be canonical before work
+resumes. Unknown work releases execution permits while keeping its accepted obligation open.
+Abort preserves evidence and cannot roll back external effects or replace a settlement that won.
+See [Operations](../guide/operations).
 
 ## Attached subagents
 
-`Subagent.define` annotates its Tool with the core-owned `DelegationTool` marker. Preparation
-persists `executionKind`, and recovery checks it against the resolved Tool before re-entry.
-The `delegate_` name prefix is only an authoring convention. An ordinary `delegate_export`
-without a recorded outcome follows ordinary reconciliation and Unknown Outcome handling.
-A prepared delegation interrupted before `SubagentRequested` can resume idempotent establishment.
-Missing classification grants no delegation replay authority; conflicting evidence fails closed.
+Use [`Subagent.define`](../guide/tools#delegate-to-an-agent) to expose a child agent as a tool.
+A durable child owns a separate conversation and attempt. While waiting for it, the parent releases
+its worker permit.
 
-Run limits survive replacement Attempts. Canonical responses account for Turns and declared
-Tool Calls, including a pending batch; fully settled batches account for the trailing failure
-streak in declaration order. Replaying a pending batch folds its outcomes once. Synthetic budget
-rejections neither advance nor reset that streak. Provider-executed outcomes remain in canonical
-assistant content and resume alongside application outcomes in their original declaration order.
-Programmatic Tool Calls and the single grace
-finalization reserve their allowance canonically before execution. A crash after reservation
-can consume allowance without execution; it cannot restore allowance. Token, cost, and duration
-accounting retain their existing contracts. `RunStarted.policyAccountingVersion` identifies this
-accounting contract; incompatible private-development histories must be reset, not migrated.
-Custom coordinators must supply `resumeUsage` when resuming a declared batch. The seed includes
-the pending Turn and its declared calls, while its failure streak excludes that batch. Missing
-seeds, a different Turn count, too few declared calls, or a failure streak exceeding the prior
-declared calls fail with `ModelProtocolError` before execution.
+Recovery preserves child identity and checks the registered tool's delegation classification.
+Missing or conflicting classification fails closed. If admission cannot confirm whether a child
+was accepted, the parent keeps waiting; it never starts a replacement child.
 
-A durable child owns a distinct Conversation and Attempt. Under the parent's fence, reserve its
-budget, append `SubagentRequested` with the intended identity and exact binding/input digests,
-then admit using a stable parent-Run/Tool-Call idempotency key. Commit child lineage before
-readiness. Only after its Receipt exists may the parent append `SubagentStarted` and enter
-`waitingForChild`, releasing its worker permit.
+Joining verifies the child's settlement, lineage, and definition digests, decodes and bounds the
+projected result, and commits it atomically with the parent tool result. Child transcripts remain
+private unless the projection exposes them.
 
-Resolve lost admission replies against the authoritative admission owner. `indeterminate` means
-wait, never create a replacement child. Missing exact binding or projection digests fail closed;
-current code cannot silently substitute for the recorded binding.
+Budget release happens once. A crash may hold a reservation until repair, but cannot make it
+available twice. Run accounting survives replacement attempts, including pending turns,
+programmatic calls, failure streaks, usage, cost, and the original deadline. A reservation made
+before a crash may consume allowance even when the corresponding work never executes.
 
-Join by verifying the child's canonical Settlement, lineage, and digests, then Schema-decode and
-bound its projected result. Append `SubagentJoined` and the parent Tool result atomically before
-idempotently releasing the reservation. A crash can leave budget unavailable until repair, never
-available twice. Child transcripts stay private unless explicitly projected.
-
-Parent abort uses `request-abort-and-join`: persist abort intent for each child and join its actual
-terminal outcome before settling the parent. Unknown child effects remain resolution obligations.
-After the parent's deadline expires, recovery may finish existing child abort/join/accounting
-work, but cannot start a new child, invoke application projectors, run Tools, or continue the model.
-
-The [recovery classifier](https://github.com/danieljvdm/effect-agent/blob/main/packages/session/src/recovery.ts),
-coordinator failpoints, and [adapter certification](../guide/certify-adapters) exercise these boundaries.
+Parent abort records intent for each child and joins the child's terminal outcome before settling
+the parent. Unknown child effects remain operator obligations. After the parent deadline, recovery
+may finish child abort, join, and accounting work. It cannot start a child, call application
+projectors, run tools, or continue the model.

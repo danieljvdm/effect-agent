@@ -14,7 +14,7 @@ The working product thesis is:
 
 | Item         | Current state                                                             |
 | ------------ | ------------------------------------------------------------------------- |
-| Distribution | Public alpha, published to npm on the opt-in `beta` dist-tag              |
+| Distribution | Public beta, published to npm on the `beta` dist-tag                      |
 | Effect       | `effect` and OpenAI/Anthropic provider packages at exact `4.0.0-rc.111`   |
 | Packages     | `effect-agent` umbrella and optional `@effect-agent/*` packages           |
 | Workspace    | Vite+ monorepo with packages in `packages/*` and examples in `examples/*` |
@@ -38,7 +38,7 @@ against Cloudflare's hosted service. The sandbox also exposes bounded page captu
 and scoped same-host Markdown crawl ports; Cloudflare supplies native-binding and REST adapters.
 Live-model and live-provider suites remain opt-in.
 
-"Alpha" describes product maturity; npm versions use `X.Y.Z-beta.N` and the `beta` dist-tag.
+Releases use `X.Y.Z-beta.N` versions on npm's `beta` channel.
 APIs and stored data may change incompatibly before 1.0. There is no compatibility window or
 stored-data migration promise; incompatible data must fail clearly and may need a reset.
 Keep framework packages at one exact release and choose Effect/provider versions that satisfy
@@ -121,7 +121,7 @@ package creation, hooks, and CI.
 
 ## Product boundaries
 
-The alpha includes bounded execution, persistent history, durable accepted work, scheduled input,
+The beta includes bounded execution, persistent history, durable accepted work, scheduled input,
 and event subscriptions. It does not provide hosted execution, a turnkey chat UI, a visual builder,
 runtime Skills, separate persistent agent memory/state, SessionStore metadata, or generic dynamic
 Turn Plans. Nested Subagent delegation, handoff, detachment, and a marketplace remain unsupported.

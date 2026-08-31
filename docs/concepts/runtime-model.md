@@ -1,91 +1,82 @@
 ---
 title: The runtime model
-description: Runs, Turns, Tool batches, safe seams, and one interpreter across maturity levels.
+description: How runs alternate between model responses, tool batches, queued input, and policy checks.
 ---
 
 # The runtime model
 
-The runtime is an explicit transition machine. Effects interpret decisions, but they do not hide
-the transition rules.
+Each run repeats one model and tool loop until it produces valid output or stops under policy.
 
-## Domain units
+## Terms {#domain-units}
 
 | Unit             | Meaning                                                            |
 | ---------------- | ------------------------------------------------------------------ |
 | Agent Definition | immutable program, Schemas, Toolkit, instructions, policy          |
-| Agent Binding    | one Definition paired with one explicit Effect AI Model            |
+| Agent Binding    | one Definition paired with one Effect AI Model                     |
 | Run              | one logical request against a Conversation                         |
 | Turn             | one model response, optionally followed by one complete Tool batch |
 | Attempt          | one durable ownership period advancing a Submission                |
-| Conversation     | ordered canonical or ephemeral history shared across Runs          |
+| Conversation     | ordered history shared across Runs                                 |
 
-An ephemeral Run has one process Attempt implicitly. A durable Run may span several Attempts
-without changing the semantic Turn loop.
+An ephemeral run has one process attempt. A durable run may span several attempts while keeping
+the same turn semantics.
 
-## One interpreter
+<a id="one-interpreter"></a>
+
+## One agent loop
 
 ```text
 decode input
   ↓
 evaluate instructions and prepare context
   ↓
-stream one Effect AI response
-  ↓
-reduce and validate the complete response
-  ├─ final → decode structured output → complete
+stream and validate one Effect AI response
+  ├─ final → decode output → complete
   └─ tools
        ↓
-     preflight the complete Tool batch
+     preflight the complete tool batch
        ↓
      execute under finite permits
        ↓
      commit results in declaration order
        ↓
-     drain steering → evaluate policy → next Turn
+     drain steering → evaluate policy → next turn
 ```
 
-`run`, `stream`, and `start` expose this one implementation. The durable assemblies insert
-canonical commit seams around the same transitions; they do not create another agent loop.
+`run`, `stream`, and `start` expose this loop. Durable hosts add canonical commits and
+recovery at the same transitions.
 
-## Complete before consequential
+<a id="complete-before-consequential"></a>
 
-The engine will not execute a Tool until the assistant response and all Tool arguments are
-complete. A length-truncated response cannot start a handler. The next Model request sees either a
-complete Tool batch or none.
+## Validate before running tools
 
-This makes the runtime deterministic at the exact boundary where external behavior begins.
+The engine waits for the full assistant response and all tool arguments before starting a
+handler. A truncated response starts no tool. The next model request sees a complete tool batch or
+no batch.
 
-## Safe-seam input
+<a id="safe-seam-input"></a>
 
-New input can arrive while a Model or Tool batch is active, but it cannot mutate that work.
+## When queued input is applied
 
-- steering waits until the completed response and complete Tool batch;
-- follow-up waits until the Run would otherwise stop;
-- the initial drain policy consumes one queued item;
-- durable joining uses the same seam with recoverable `joining` and `joined` states.
+Input may arrive while a model or tool batch is active. Delivery waits for the current work to
+finish:
 
-The semantic rule stays identical even when the storage mechanism changes.
+- steering follows the complete response and tool batch;
+- follow-up arrives only when the run would stop;
+- the initial drain consumes one queued item.
 
-## Events observe; commands act
+<a id="events-observe-commands-act"></a>
 
-`RunEvent` is a stable, typed observation API. Subscribers may render, trace, meter, or project
-events. They do not participate in state transitions through arbitrary callbacks.
+## Events and commands
 
-Steering, approval, follow-up, durable abort, and operator recovery are explicit command/service
-interfaces. Observation cannot secretly become control flow.
+`RunEvent` subscribers may render, trace, meter, or build projections. Steering, approval,
+follow-up, abort, and recovery use command or service interfaces.
 
-The opt-in `RunToolFailureObserver` covers failures that become Tool results or broker outcomes,
-so they may never reach the application's ordinary Run failure boundary. It is a trusted local
-observation interface, not callback middleware: its closed `Effect<void>` returns no decision,
-has no typed failure channel, and cannot change a Tool result. Observer and reporter defects are
-isolated. Delivery runs inline under the existing Tool permit, so it consumes time and remains
-externally interruptible. The observer must not reenter the engine. Its live Causes never enter
-events, canonical records, or automatic telemetry; see [Tool failure observation](../guide/run-agents#observe-recovered-tool-failures).
+To report failures that the model recovers from, install a
+[tool failure observer](../guide/run-agents#observe-recovered-tool-failures).
 
-## Bounded concurrency
+## Limit concurrency {#bounded-concurrency}
 
-Each complete Tool batch runs through finite `Semaphore` permits. Live progress may follow actual
-completion order; committed results always retain model declaration order. Outer Agent, tenant, or
-platform bounds may make concurrency stricter.
-
-Attached Subagents reuse that scheduler instead of inventing a second fan-out system.
+Each tool batch runs through a finite `Semaphore`. Progress may follow completion order. Canonical
+results keep declaration order. Outer agent, tenant, or platform limits may lower concurrency.
+Attached Subagents use the same scheduler.

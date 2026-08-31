@@ -1,234 +1,137 @@
 ---
-title: Run and stream
-description: Interpret an Agent Definition as a result, semantic event stream, or scoped detached Run.
+title: Run & stream
+description: Run an agent, stream its events, or observe it through a scoped handle.
 ---
 
-# Run and stream
+# Run & stream
 
-The runtime exposes one semantic loop through three views. Choose based on how the caller needs to
-observe work. The choice does not change execution behavior.
+The runtime exposes one agent loop through `run`, `stream`, and `start`. All three decode input
+before instructions execute and require native model services. Use `runUnknown`, `streamUnknown`,
+or `startUnknown` for external values typed as `unknown`. See
+[Agent definitions](./agents#typed-and-external-inputs).
 
-Each view accepts a Definition and requires native model services supplied with `Effect.provide`
-or `Stream.provide`. Explicit Bindings remain supported for durable and Subagent composition.
-Inputs use the Schema's encoded representation. External data typed as `unknown` enters through
-`runUnknown`, `streamUnknown`, or `startUnknown`; all views decode before instructions execute.
-See [Agent definitions](./agents#typed-and-external-inputs) for transforming Schemas.
-
-All three entry points require a provided `ConversationHistory` service. Choose
-`ConversationHistory.layerTransient` for execution without retained history, or provide
-`PersistentHistory.layer` with a store as shown in [Conversations](./conversations).
-History commits finish before successful results or `RunCompleted` events become visible.
-The examples below assume the application provides that Layer and the Agent's other services.
+Every entry point also requires `ConversationHistory`. Use
+`ConversationHistory.layerTransient` when you do not need retained history. Use
+`PersistentHistory.layer` with a store to [retain completed runs](./conversations#retain-completed-runs).
+History commits before a successful result or `RunCompleted` event becomes visible.
 
 ## Await one result
 
 ```ts
-const result = yield * AgentRuntime.run(agent, input);
+const program = Effect.gen(function* () {
+  const result = yield* AgentRuntime.run(agent, input);
+  return result;
+});
 ```
 
-`run` completes execution and closes run-owned resources before returning the decoded terminal
-result. A self-contained Run needs no caller `Effect.scoped`. Requirements contributed by your
-instructions, input projection, hooks, or output decoder remain visible, including `Scope` when
-those operations require it.
+`run` closes run-owned resources before returning decoded output. A self-contained run needs no
+caller `Effect.scoped`.
 
-```ts
-interface AgentResult<Output> {
-  readonly output: Output;
-  readonly runDisposition?: Json;
-  readonly conversationId: ConversationId;
-  readonly runId: RunId;
-  readonly turns: number;
-  readonly finishReason: "completed" | "model-stop" | "budget-exhausted";
-}
-```
+The result contains `output`, `conversationId`, `runId`, `turns`, and `finishReason`.
+Budget-limited results also include `exhausted`, naming `"turns"`, `"tool-calls"`, or `"tokens"`.
 
-`runDisposition` is present only when the Definition declares a disposition Schema, its selector
-returns a value, and the Run completes ordinarily. It is the Schema-encoded JSON value; durable
-callers receive the same value from `DurableAgentRuntime.awaitSettlement` and canonical
-`SubmissionSettled` record readers, then decode it with the application Schema. The exported
-`AgentResultSchema` enforces the same boundary and rejects a `runDisposition` paired with
-`finishReason: "budget-exhausted"`.
+`runDisposition` appears only after ordinary completion when the definition declares one and its
+selector returns a value. It contains schema-encoded JSON. Decode durable settlement values with
+the same application schema.
 
-Under the default `onExhaustion: "final-answer"` policy, a Run that exhausts its Turn, Tool Call,
-or token budget settles with one constrained final-answer Turn and reports it honestly as
-`finishReason: "budget-exhausted"` (its `turns` count may exceed `maxTurns` by that one grace
-Turn). Duration and cost exhaustion, pending approval, interruption, and failed output decoding
-are never successful finish reasons. With `onExhaustion: "fail"`, Turn, Tool Call, and token
-exhaustion fail typed before any declared application Handler starts.
+With the default `onExhaustion: "final-answer"`, turn, tool call, or token exhaustion allows one
+constrained final turn. The result reports `finishReason: "budget-exhausted"`, and `turns` may
+exceed `maxTurns` by one. Duration or cost exhaustion, pending approval, interruption, and output
+decoding failure remain failures. Set `onExhaustion: "fail"` to fail before the final turn.
 
 ## Observe semantic events
 
 ```ts
 const events = AgentRuntime.stream(agent, input);
 
-yield *
-  events.pipe(
-    Stream.tap((event) => Effect.log(event._tag)),
-    Stream.runDrain,
-  );
+const program = events.pipe(
+  Stream.tap((event) => Effect.log(event._tag)),
+  Stream.runDrain,
+);
 ```
 
-Events include Run and Turn lifecycle, text and reasoning deltas, Tool declaration/progress/result,
-approval requests, and exactly one complete terminal classification. Provider SDK chunks do not
-enter the stable event union.
+Events cover run and turn lifecycle, text and reasoning deltas, tool activity, approval requests,
+and one terminal classification. Provider SDK chunks do not enter this stable union.
 
-Local streams use bounded backpressure. Consumption owns the stream's resources; completion,
-failure, and interruption close them. Interrupting the sole ephemeral consumer interrupts the Run.
+The stream uses bounded backpressure. Completion, failure, and interruption close its resources.
+Interrupting the only ephemeral consumer interrupts the run.
 
 ## Start and re-observe locally
 
 ```ts
-const detached = yield * AgentRuntime.start(agent, input);
-
-const result = yield * detached.await;
-const completeTrace = yield * detached.events;
-const live = detached.observe;
+const program = Effect.gen(function* () {
+  const detached = yield* AgentRuntime.start(agent, input);
+  const result = yield* detached.await;
+  const completeTrace = yield* detached.events;
+  return { result, completeTrace };
+}).pipe(Effect.scoped);
 ```
 
-`start` requires a caller Scope that owns ongoing execution and the event source. `observe` is a
-live multicast subscription. Each subscription replays the events already emitted, follows the
-Run as it progresses, and ends once the Run settles. `events`
-is the complete replay, available after settlement. Execution resources close before `await`
-returns, while replay remains available within the owner's lifetime. Closing the owner interrupts
-ongoing execution and shuts down the event source; waiting observers terminate and new
-subscriptions are interrupted. Each observer consumption owns its subscription and any downstream
-work after delivery. "Detached" means observers cannot backpressure completion; it does not create
-a daemon fiber or survive process loss.
+`start` requires a caller Scope. `observe` replays prior events, follows new events, and ends when
+the run settles. `events` returns the complete replay after settlement. Execution resources close
+before `await` returns, while replay remains available until the owner closes.
+
+Observers cannot backpressure execution. Closing the owner interrupts active work and observers.
+The handle remains process-local and never creates a daemon fiber.
 
 ## Run durably on Cloudflare
 
-Compose Agent registrations and application services as a Layer, then pass that Layer to
-`ConversationObject.make`. The factory uses `effect-cf`'s `DurableObject.make` and supplies
-native services, configuration, identity, and Crypto before the application graph acquires.
-This example assumes your generated `Cloudflare.Env` includes the `OPENAI_API_KEY` secret and
-the `CONVERSATIONS` Durable Object namespace:
+Use a [Cloudflare conversation object](../platforms/cloudflare#create-the-conversation-object)
+to accept work that survives eviction. For a process with SQLite, use the
+[Node host](../platforms/node).
 
-```ts
-import { Agent, AgentPolicy } from "@effect-agent/core";
-import { ConversationObject } from "@effect-agent/platform-cloudflare";
-import { DefinitionDigestInput } from "@effect-agent/session";
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { Effect, Layer, Redacted, Schema } from "effect";
-import { Toolkit } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
-import { WorkerEnvironment } from "effect-cf";
+## Assemble a custom durable runtime
 
-const TravelPlanner = Agent.make("travel-planner", {
-  input: Schema.Struct({ destination: Schema.String, days: Schema.Number }),
-  output: Schema.Struct({ itinerary: Schema.Array(Schema.String) }),
-  instructions: "Create a practical travel itinerary.",
-  toolkit: Toolkit.make(),
-  policy: AgentPolicy.make({
-    maxTurns: 3,
-    maxToolCalls: 1,
-    maxDuration: "30 seconds",
-    toolConcurrency: 1,
-  }),
-});
+Platform hosts assemble storage and runtime services for you. When building your own host,
+`DurableAgentRuntime.layer` supplies default prompt preparation and tool authorization.
+Use `layerWithContext` to supply your own service layers. It requires **both**
+`RunContextPreparation` and `RunToolAuthorization`.
 
-const modelName = "gpt-4.1-mini";
+Here are the defaults written out; replace either layer with your application's implementation:
 
-// Share these version declarations with the submitter.
-export const travelDefinitions = DefinitionDigestInput.make({
-  agent: { id: TravelPlanner.id, revision: 1 },
-  model: { provider: "openai", name: modelName },
-  tools: [],
-});
+```ts twoslash
+import { RunContextPreparationPassthrough, RunToolAuthorization } from "@effect-agent/engine";
+import { DurableAgentRuntime } from "@effect-agent/session";
+import { Layer } from "effect";
 
-const OpenAiLive = Layer.unwrap(
-  Effect.map(WorkerEnvironment, (env) =>
-    OpenAiClient.layer({ apiKey: Redacted.make(env.OPENAI_API_KEY) }).pipe(
-      Layer.provide(FetchHttpClient.layer),
-    ),
-  ),
+export const RuntimeLive = DurableAgentRuntime.layerWithContext.pipe(
+  Layer.provide(RunContextPreparationPassthrough),
+  Layer.provide(RunToolAuthorization.allowAll),
 );
-
-const RuntimeLive = ConversationObject.layer([
-  {
-    agent: Agent.withModel(TravelPlanner, OpenAiLanguageModel.model(modelName)),
-    definitions: travelDefinitions,
-  },
-]).pipe(Layer.provide(OpenAiLive));
-
-export class TravelConversation extends ConversationObject.make(RuntimeLive, {
-  namespaceBinding: "CONVERSATIONS",
-  deploymentId: "travel-planner",
-  producerPrefix: "travel-worker",
-}) {}
 ```
 
-Each registration pairs one model-bound Agent with its version declarations. The platform hashes
-those declarations, captures the Agent's required services, and matches queued Submissions by
-Agent ID and exact digests. It does not hash JavaScript implementation code. Bump the Agent
-revision when instructions, input/output Schemas, or policy change, and version Tool implementations
-and model configuration when those change. The submitter supplies the same result of
-`digestDefinitions(travelDefinitions)` through `DurableSubmitOptions.definitions`.
+This layer still requires `SubmissionLedger`, `ConversationStore`, `WakeScheduler`,
+`DurableRuntimeFailpoint`, `DurableRuntimeConfig`, `ToolReconciler`, and `Crypto.Crypto`.
+Provide those before acquiring the runtime.
 
-`Layer.provide(AppLive)` supplies shared clients and Tool handlers for the runtime's lifetime.
-Application Layers can yield `effect-cf`'s `WorkerEnvironment` and
-`DurableObjectState.DurableObjectState`, plus `ConversationObjectIdentity` and Crypto. Their
-initialization failures remain in `E`; missing application services remain in `R` and are rejected
-at the class factory. `ConversationObject.layer([])` explicitly registers no Agents and refuses
-every claimed Agent identity.
+The runtime captures its services at acquisition. Supplying a different layer around a later
+worker call does not replace them. Acquire service dependencies in their layers and keep them
+alive for the runtime's Scope. Durable service hooks must have no unresolved dependencies.
+Preparation failures use `RunContextPreparationError`; authorization returns an allowed or denied
+decision. Configure [prompt preparation](./context-management#prompt-preparation-order)
+and [tool authorization](./tools#authorize-tool-calls) in their respective services.
 
-Use ordinary `Layer.unwrap` when registration values themselves need effectful setup:
+## Understand turn boundaries {#turn-boundaries}
 
-```ts
-const RuntimeLive = Layer.unwrap(
-  Effect.gen(function* () {
-    const settings = yield* ApplicationSettings;
-    return ConversationObject.layer(makeRegistrations(settings));
-  }),
-).pipe(Layer.provide(ApplicationSettingsLive));
-```
-
-Provide `RunContextPreparation` and `RunToolAuthorization` through Layers to customize prompt
-preparation and Tool authorization. The bootstrap supplies pass-through preparation and
-`RunToolAuthorization.allowAll` as defaults. `options.eventLayer` accepts an effect-cf event Layer
-with access to the runtime's exposed services. Use `Layer.provideMerge` when an application service
-must also be available to the event Layer.
-
-The application graph acquires once per Object incarnation, inside the local constructor gate,
-and rebuilds after eviction. Construction failures remain failures. The platform owns SQLite,
-alarms, and recovery. Keep acquisition local and bounded. Cloudflare eviction does not guarantee
-finalizers; acquire resources needing timely release in scoped operations or `eventLayer`.
-
-Register `TravelConversation` as a SQLite Durable Object under `CONVERSATIONS` in your Worker
-configuration. `ConversationObject.Options` describes native construction;
-`ConversationObject.Class` and `ConversationObject.Instance` describe the exported class and its
-instances. Custom Effect hosts provide `ConversationObject.layerConfig(options)` around the
-complete application Layer, then supply the native context and namespace Layers.
-
-BEHAVIOR CHANGE: replace `makeConversationObjectClass` with `ConversationObject.make`, passing
-a composed runtime Layer. Replace the `bindings`, `runContext`, and `toolAuthorization` callback
-options with typed registration values and ordinary Layer composition. Pass observability as
-`options.eventLayer`. The class factory supplies runtime configuration, so
-`ConversationObject.layer` takes only the registration array.
-
-## Turn boundaries
-
-Each Turn follows one visible sequence:
+Each turn follows this sequence:
 
 ```text
 prepare context
   → stream and reduce one model response
-  → decode the complete Tool batch
-  → execute bounded Tool handlers
+  → decode the complete tool batch
+  → execute bounded tool handlers
   → commit results in declaration order
   → drain steering
   → evaluate stop policy
   → drain follow-up only if otherwise complete
 ```
 
-`run` and `stream` share this implementation. Golden tests compare the materialized result with a
-reduction of the Stream trace.
+`run` and `stream` use the same loop.
 
-## Operational hooks
+## Add per-run hooks {#operational-hooks}
 
-`RunOptions` carries per-Run values and advanced capability hooks. For retained history, use
-`ConversationHistory` as shown in [Conversations](./conversations). The following interactive
-integration uses `ConversationHistory.layerTransient`; `history` supplies an explicit initial
-Prompt and `onHistory` receives incremental updates, including from Runs that later fail:
+`RunOptions` accepts per-run capability hooks. This process-local example uses transient history.
+`history` provides an initial Prompt, and `onHistory` receives incremental updates.
 
 ```ts
 const options: RunOptions<AppError, AppRequirements> = {
@@ -243,36 +146,19 @@ const options: RunOptions<AppError, AppRequirements> = {
 };
 ```
 
-Hook failures join the Run's error channel. Hook requirements join `R`. Capability packages adapt
-richer domain contracts to this narrow engine boundary rather than creating a second runtime.
-`onHistory` runs inline before successful completion and resource cleanup. Its earlier writes are
-not rolled back on failure or interruption. A retaining history Layer rejects these competing
-history and input-queue hooks before model or Tool execution.
+Hook errors join the run error channel, and their services join `R`. `onHistory` runs inline.
+Writes completed before a later failure or interruption remain caller-owned. Persistent history
+rejects competing history and input queue hooks before model or tool execution.
 
-Ephemeral callers can reuse independent host preparation and authorization services through these
-hooks. Yielding them keeps both requirements visible in the caller's `R`:
+Pass [prompt preparation](./context-management#prompt-preparation-order) as `context` and
+[tool authorization](./tools#authorize-tool-calls) as `toolAuthorization` when needed.
+Ephemeral runs read these options; providing the durable service layers alone does not install
+per-run hooks.
 
-```ts
-const run = Effect.gen(function* () {
-  const preparation = yield* RunContextPreparation;
-  const authorization = yield* RunToolAuthorization;
-  return yield* AgentRuntime.run(agent, input, {
-    context: preparation.hook,
-    toolAuthorization: authorization,
-  });
-}).pipe(Effect.provide(Layer.mergeAll(preparationLayer, authorizationLayer)));
-```
+## Observe recovered tool failures
 
-Ephemeral compactor selection still uses `ContextCompactor` directly. Per-run hooks can retain
-their own typed errors and requirements. Supplying neither hook preserves the default prompt and
-requires no additional Tool authorization. Durable hosts capture the two services at runtime
-construction, as described in [Context management](/guide/context-management#composing-preparation-and-tool-authorization).
-
-## Observe recovered Tool failures
-
-A Tool may fail while the model recovers and the Run completes. Install
-`toolFailureObserverLayer` from `@effect-agent/engine` to observe those failures locally. There is
-no `RunOptions` member. Providing the Layer does not change inferred errors or requirements.
+A tool may fail and the model may still complete the run. Install `toolFailureObserverLayer` from
+`@effect-agent/engine` to report such failures.
 
 ```ts
 import { toolFailureObserverLayer } from "@effect-agent/engine";
@@ -283,48 +169,27 @@ const failureReporting = toolFailureObserverLayer({
     observation.cause === undefined ? Effect.void : ErrorReporter.report(observation.cause),
 });
 
-yield * AgentRuntime.run(agent, input).pipe(Effect.provide(failureReporting));
+const program = AgentRuntime.run(agent, input).pipe(Effect.provide(failureReporting));
 ```
 
-This example explicitly forwards Cause-bearing observations to the application's configured
-`ErrorReporter`. The engine does not do that automatically. Applications choose what to capture
-and how to redact it. Capture any reporting dependencies before installing the closed observer.
+The engine does not forward observations to `ErrorReporter` by itself. Choose what to record and
+redact. The observer runs inline at most once per in-memory Attempt. Replacement Attempts may
+repeat an observation. Nothing here is serialized into conversation history.
 
-`ModelToolFailure` describes a direct declared failure. `ProgrammaticToolFailure` includes a raw
-parent ID and sequence index for a started Handler. `ProgrammaticPreflightFailure` has no inner
-ID or index because no Handler started. Declared failures expose their tag only. Handler errors
-retain the live Cause but no message; infrastructure and protocol messages have a 4096-byte UTF-8
-bound. Propagating direct errors are left to the ordinary Run failure boundary.
+Observer defects cannot change the tool result, though a slow observer holds a tool permit. Avoid
+calling the broker, running another agent, or interrupting the observer itself. Durable hosts
+accept the same observer through their platform options.
 
-Delivery is inline and at most once per in-memory attempt. Observer/reporter defects cannot
-change the Tool result, but a slow observer occupies a Tool permit and external interruption can
-stop delivery. Do not call the broker, emit Run events, run another Agent, or self-interrupt from
-the observer. These values are never serialized or persisted. Replacement Attempts may repeat
-IDs and observations, and replay-injected settled calls are not observed.
+## Scope run resources {#interruption-is-ownership}
 
-Durable hosts pass the same closed value as `NodeDurableRuntimeOptions.toolFailureObserver` or
-`ConversationObject.Options.toolFailureObserver`. The coordinator captures it when its Layer
-is built and uses that choice for each Attempt, independently of the worker caller's context.
-Omitting the platform option disables observation even if an observer surrounds Layer construction.
-Direct errors that propagate to the Run, interruption, waiting, provider-executed results, and
-synthetic budget rejections are excluded. Programmatic defects propagate through the outer call;
-opening a broker pass without invoking a Tool creates no inner-call observation.
+A run Scope owns its model stream, tool fibers, and run-local resources. Closing it interrupts
+children and runs finalizers. Services from an enclosing application layer remain available to
+other runs until the application Scope closes.
 
-## Interruption is ownership
+Wrap several runs with one `Effect.provide(AppLive)` to reuse shared services. Keep caller scoping
+for `start`, explicit resource acquisition, and any operation that requires `Scope`.
 
-A Run Scope owns its Model stream, Tool fibers, and resources acquired for that Run, such as
-run-local input queues, MCP clients, or sandbox processes. Closing it interrupts children and
-runs their finalizers. Shared model, provider, and client services supplied by an enclosing
-application Layer remain owned by the application Scope and can serve multiple Runs.
-
-`Effect.provide(AppLive)` owns the supplied Layer's lifetime around the Effect it wraps. Provide
-shared services around a program containing several Runs to reuse them. Keep caller scoping for
-`start`, explicit resource acquisition, and operations that contribute their own `Scope` requirement.
-
-Successful history retention waits for run-local cleanup, then result validation where applicable,
-then history commit, before publishing `RunCompleted`. It does not close application-owned
-services at each commit.
-
-This is distinct from durable abort. Interrupting a local waiter for accepted durable work
-detaches that waiter; aborting the Submission requires an explicit persisted command
-([Persistence & durability](../concepts/durability)).
+History retention waits for run-local cleanup, result validation, and commit before publishing
+`RunCompleted`. Interrupting a waiter for durable accepted work only detaches that waiter. Abort a
+durable Submission with an explicit persisted command. See
+[Persistence & durability](../concepts/durability).

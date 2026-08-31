@@ -1,18 +1,17 @@
 ---
 title: Conversations
-description: Ephemeral interaction and persistent canonical history without a durability overclaim.
+description: Keep conversation history across agent runs.
 ---
 
 # Conversations
 
-A Conversation is the ordered history shared across Runs. It is not a mutable Agent object and it
-is not the same thing as a process Session, Submission, or model request.
+A conversation is ordered history shared across runs. It is separate from an agent definition,
+process session, submission, or model request.
 
-## Retain completed Runs
+## Retain completed runs
 
-Use `ConversationHistory` for retaining successful Runs through `AgentRuntime.run`, `start`,
-or `stream`. Provide `PersistentHistory.layer` with a memory or SQLite `ConversationStore`
-Layer to choose storage. The same Agent can serve many Conversation IDs.
+Provide `PersistentHistory.layer` with a memory or SQLite `ConversationStore` layer. The same agent
+can serve many conversation IDs.
 
 ```ts
 import { AgentRuntime, ConversationHistory } from "@effect-agent/engine";
@@ -27,7 +26,6 @@ const SqliteHistoryLive = PersistentHistory.layer.pipe(
   Layer.provide(sqliteStore({ filename: "./history.sqlite" })),
 );
 
-// Choose MemoryHistoryLive for process-local retention, or SqliteHistoryLive for restart survival.
 const HistoryLive = MemoryHistoryLive;
 
 const program = Effect.gen(function* () {
@@ -39,173 +37,104 @@ const program = Effect.gen(function* () {
 }).pipe(Effect.provide(HistoryLive));
 ```
 
-Supply `IdGenerator` and the Agent's other services at the application boundary. Provide the
-history Layer around the whole program, including the lifetime of any `start` handle.
-Completed `run` calls need no extra caller Scope. The supplied history Layer owns its connection
-for the enclosing program; `start` and caller-supplied scoped operations still require scoping.
+Provide the history layer around the complete program, including any `start` handle. Also provide
+`IdGenerator` and the agent's other services at the application boundary.
+
 The [runnable SQLite example](https://github.com/danieljvdm/effect-agent/blob/main/examples/providers/src/history.ts)
-supplies those Layers and runs without provider credentials:
+stores history across two processes:
 
 ```sh
 vp run -F @effect-agent/example-providers history --database /tmp/effect-agent-history.sqlite seed
 vp run -F @effect-agent/example-providers history --database /tmp/effect-agent-history.sqlite show
 ```
 
-The commands run in separate processes. `show` loads the two-input history without an Agent or
-model. Repeating `seed` appends two more Runs. A memory ConversationStore retains the same
-canonical history only for its Layer's lifetime.
+Each successful execution appends its input and native messages as one atomic batch. The runtime
+first closes run-owned resources, validates the result, and commits history. Only then does it
+publish `RunCompleted`. Services from an enclosing application layer stay open for that layer's
+lifetime.
 
-Each execution loads the current history, stages its encoded input and native messages, and
-appends one atomic batch after success. Before committing, the engine finishes run-owned work
-and closes resources acquired for that Run. Shared model, provider, and client services supplied
-by an enclosing application Layer remain owned by that application's Scope and may outlive
-multiple Runs. For example, an application-owned provider client can serve two Runs and remain
-alive through both history commits; its finalizer runs when the application Scope closes.
+Retained history includes evaluated instructions, assistant messages, reasoning, provider options,
+and settled tool results. Context preparation and compaction change the current model view while
+the source history stays intact.
 
-The ordering is run-local cleanup, result validation for `run` and `start.await`, history commit,
-then observable `RunCompleted`, including through `start.observe` and `stream`. Model provisioning
-must preserve this ownership distinction. Callers do not allocate producer epochs, batch IDs,
-or digests.
+A failure, defect, timeout, or interruption before commit retains none of the current run. A
+storage error after commit can leave the whole run recorded, so inspect history before retrying.
+The runtime never retries execution or resumes an interrupted run.
 
-Retained history includes assistant messages, reasoning, provider options, evaluated instructions,
-and settled Tool results. Context preparation and compaction change the model's current view;
-the full source history remains retained. The engine supplies its already encoded input and
-terminal output, so persistence does not repeat the Agent's Schema transformations.
-`UserInputRecorded.submissionId` is absent for these Runs.
+Each encoded input, output, and native Prompt suffix has a 1 MiB limit. Exports have a 65,536
+record limit. If the next run would cross that limit, execution fails before model or tool calls.
+Start a new conversation to continue.
 
-A failure, defect, timeout, or interruption before commit retains none of that Run. Existing
-history remains available. A storage failure after commit can still leave the entire Run
-recorded. Inspect history before retrying; model and Tool effects may already have happened.
-No history implementation retries execution or resumes an interrupted Run.
+### Choose one history owner {#history-policy-and-append-ownership}
 
-The encoded input, output, and native Prompt suffix must each fit the existing 1 MiB canonical
-value bound. Exports contain at most 65,536 canonical records. If the next Run's three records
-would exceed that limit, execution fails before model or Tool calls. Start a new Conversation
-to continue; the existing history remains loadable.
+Use `ConversationHistory.layerTransient` when you do not want successful-run retention.
+`PersistentHistory.layer` rejects explicit `history`, `onHistory`, `input`, `durability`,
+`subagent`, `resume`, and `resumeUsage` options before model or tool execution.
 
-### History policy and append ownership
+Persistent writers compare the loaded tail before appending. Concurrent callers may both execute,
+but the stale writer fails with `ConversationHistoryError` and reason `"conflict"`. Serialize
+calls when duplicate external work is unacceptable. Provide IDs that remain unique across
+restarts.
 
-`ConversationHistory` remains explicit in the runtime's Effect or Stream requirements.
-Use `ConversationHistory.layerTransient` for execution without successful-run retention, including
-the advanced integrations below. `PersistentHistory.layer` rejects `history`, `onHistory`, `input`,
-`durability`, `subagent`, `resume`, and `resumeUsage` options with reason `"incompatible"` before
-model or Tool execution. An empty explicit Prompt still conflicts with the retained prefix.
-Spawned children inherit their parent Run's history service and receive fresh Conversation IDs.
+Other reasons include `"fenced"`, `"incompatible"`, `"not-found"`, `"limit"`, `"encoding"`, and
+`"storage"`. The adapter error remains available as the diagnostic cause.
 
-Persistent writers use epoch zero and compare the loaded tail sequence and digest at append.
-Concurrent callers may both execute a model or Tool; a stale writer fails with
-`ConversationHistoryError` whose `reason` is `"conflict"`. Serialize application calls when
-concurrent external execution is unacceptable, and provide IDs that remain unique across restarts.
+Use separate conversation IDs for retained interaction and durable admission. Persistent history
+survives restart, but it does not provide receipts, attempt ownership, recovery, or settlement.
+Authorize tenant and conversation access before execution.
 
-A newer producer epoch fails with reason `"fenced"`. Histories belonging to durable accepted work
-fail with reason `"incompatible"`. Other history failures distinguish `"not-found"`, `"limit"`,
-`"encoding"`, and `"storage"`; the original adapter failure remains the diagnostic cause.
-Agent and hook failures keep their existing typed channels.
+## Use process-local history hooks {#advanced-history-integrations}
 
-Use separate Conversation IDs for retained interaction and durable admission. The durable runtime
-owns its journal and supplies transient history policy internally. It continues to provide the
-accepted-work and recovery contract described by `@effect-agent/session/durability`.
+These integrations require `ConversationHistory.layerTransient` and keep different commit rules:
 
-Applications enforce tenant and Conversation access before execution, following the host's
-[storage and addressing policy](./operations#storage-and-addressing). Engine Tool authorization
-and tracing still apply. The history adapter adds no transcript content to telemetry.
+| Integration                | Behavior                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------- |
+| `RunOptions.history`       | Supplies an initial Prompt. The runtime does not save it.                                   |
+| `RunOptions.onHistory`     | Receives incremental Prompt updates inline. Earlier writes remain after a later failure.    |
+| `toRunConversationOptions` | Loads and updates a bounded `EphemeralConversations` snapshot. Partial runs remain visible. |
+| Durable runtime hooks      | Rebuild context from the journal and commit each turn for recovery.                         |
 
-## Advanced history integrations
-
-These hooks have different owners and commit boundaries. They require
-`ConversationHistory.layerTransient` and do not add successful-run retention.
-
-| Integration                | Ownership and failure semantics                                                                                                                                                                                                                                                  |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RunOptions.history`       | Explicit initial Prompt data. The engine preserves the prefix and adds evaluated instructions and rendered input. It does not save the supplied Prompt.                                                                                                                          |
-| `RunOptions.onHistory`     | Inline incremental updates of the full official Prompt, starting before the first model call. Callback failures stop the Run through its typed hook error channel; defects and interruption propagate. Earlier callback writes remain caller-owned and are not rolled back.      |
-| `toRunConversationOptions` | Loads an `EphemeralConversations` snapshot and records each incremental suffix immediately. Earlier updates remain visible if the Run later fails. Snapshot lookup can fail with `ConversationNotFound`; updates can fail with not-found, encoding, limit, or divergence errors. |
-| Durable runtime hooks      | Reconstruct the initial Prompt and track live updates for the coordinator. The journal owns canonical per-Turn commits, recovery, and settlement, including failed or interrupted work.                                                                                          |
-
-Use explicit initial Prompt data when the caller supplies the context, as in the chat demo's
-schema-decoded browser history. It is request data, not a second server retention policy.
-
-The interactive demo uses `toRunConversationOptions` with bounded `EphemeralConversations` and
-command queues. Its snapshots can include partial Runs. Replacing it with successful-run retention
-would change what remains visible after failure or interruption. Its advanced composition is:
+Use explicit history when the caller supplies context as request data. For interactive local
+history with steering and follow-up queues:
 
 ```ts
-const runOptions = yield * toRunConversationOptions(conversations, conversationId, runId);
-const result =
-  yield *
-  AgentRuntime.run(agent, input, {
+const program = Effect.gen(function* () {
+  const runOptions = yield* toRunConversationOptions(conversations, conversationId, runId);
+  return yield* AgentRuntime.run(agent, input, {
     ...runOptions,
     input: toRunInputHook(commands),
   }).pipe(Effect.provide(ConversationHistory.layerTransient));
+});
 ```
 
-Each snapshot update atomically appends its suffix. Rewriting the stored prefix or submitting a
-stale divergent snapshot fails with `ConversationHistoryDiverged`; a limit failure records none
-of that update. Prior updates remain. Custom `onHistory` callbacks own their own write guarantees;
-the engine cannot roll those writes back or promise durability.
+Snapshot updates append only their new suffix. A stale or rewritten prefix fails with
+`ConversationHistoryDiverged`. A limit error records none of that update, while earlier updates
+remain. Custom `onHistory` callbacks own their write guarantees.
 
-Steering is drained after a complete response and Tool batch, before the next model request.
-Follow-up is drained only when the Agent would otherwise stop. Neither mutates in-flight work.
-Use `ConversationHistory` with a memory store when only successful Runs should be retained locally.
+Steering enters after a complete model response and tool batch. Follow-up enters only when the
+agent would otherwise stop. Neither changes work already in progress.
 
-## Canonical history
+## Read canonical history {#canonical-history}
 
-`@effect-agent/session` defines versioned record and batch Schemas plus a pure Conversation reducer.
-The Conversation Log is append-only. Projections and checkpoints are disposable derivatives.
-
-The current canonical union records facts such as:
-
-- Conversation creation and user input;
-- completed model output;
-- settled Tool Calls;
-- compaction creation;
-- Run failure and completion;
-- repair annotations.
+`@effect-agent/session` defines versioned record schemas and a pure reducer. The conversation log
+is append-only. It records user input, completed model output, settled tool calls, compaction, run
+completion or failure, and repairs. Partial tool argument deltas and live queue state are absent.
 
 Immediate history appends `UserInputRecorded`, `ModelCompleted`, and `RunCompleted` together.
-The optional `ModelCompleted.messages` field carries the successful Run's exact native Prompt
-suffix. Durable execution continues to use its per-Turn response and Tool records.
+Durable execution records each turn and tool result separately for recovery.
 
-Partial Tool-argument deltas and live queue state are not canonical facts.
+<a id="store-contract"></a>
 
-## Store contract
+## Choose storage {#storage-layers}
 
-```ts
-class ConversationStore extends Context.Service<ConversationStore, {
-  readonly materialize: (request: ConversationMaterialization) => Effect<void, ...>
-  readonly append: (request: FencedAppendRequest) => Effect<AppendResult, ...>
-  readonly read: (request: ConversationRead) => Stream<CanonicalRecordEnvelope, ...>
-  readonly observe: (request: ConversationObservation) => Stream<CanonicalRecordEnvelope, ...>
-  readonly export: (request: ConversationExportRequest) => Effect<ConversationExport, ...>
-  readonly inspectTail: (request: ConversationTailRequest) => Effect<ConversationTail, ...>
-  readonly checkpoints?: ConversationCheckpoints
-}>() {}
-```
-
-Appends are atomic, digest-bound, idempotent by batch ID, conflict-checked against the expected
-tail, and fenced by producer epoch. Reads decode persisted values through Schema.
-
-Checkpoint storage is optional. An adapter that supplies `store.checkpoints` exposes `save` and
-`load` methods with `SaveCheckpointRequest` and `LoadCheckpointRequest`. The existing memory,
-SQLite, and Cloudflare adapters retain this capability for explicit projection consumers such as
-the Travel Planner fixture. Neither retained-history execution nor durable recovery uses it.
-Administrative verification reports `checkpoint-binding` as skipped when support is absent,
-passed when a supporting adapter has no checkpoint, and failed when the adapter rejects a stored
-checkpoint. The optional checkpoint conformance suite is separate from the base store suite.
-
-## Storage layers
-
-These adapters implement the same base contract:
-
-| Package                            | Use                                                       |
-| ---------------------------------- | --------------------------------------------------------- |
-| `@effect-agent/storage-memory`     | deterministic tests and local development                 |
-| `@effect-agent/storage-sqlite`     | restart-surviving Conversation history                    |
-| `@effect-agent/storage-cloudflare` | Durable Object SQLite history and routed store operations |
+| Package                            | Use                                                 |
+| ---------------------------------- | --------------------------------------------------- |
+| `@effect-agent/storage-memory`     | Tests and process-local development                 |
+| `@effect-agent/storage-sqlite`     | History that survives a Node process restart        |
+| `@effect-agent/storage-cloudflare` | Durable Object SQLite history and routed operations |
 
 The SQLite adapter supports only the current pre-1.0 schema. Incompatible data fails clearly and
-may be reset; migrations are not yet promised.
+may require a reset. See [Persistence & durability](../concepts/durability) before claiming that
+active execution survives process loss.
 
-Persistence is not durability: a persistent Conversation survives restart, but an active Run does
-not, unless it was admitted through the durable runtime. Receipts, Attempt ownership, recovery,
-and Settlement are covered in [Persistence & durability](../concepts/durability).
+For a custom adapter, follow the [store contract and certification guide](./certify-adapters#store-contract).

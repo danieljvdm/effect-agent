@@ -9,7 +9,7 @@ import tokyoNightLight from "./theme/tokyo-night-light.json";
 export default defineConfig({
   lang: "en-US",
   title: "Effect Agent",
-  description: "A TypeScript agent framework built on Effect and Effect AI.",
+  description: "An agent harness toolkit for TypeScript, built on Effect and Effect AI.",
   cleanUrls: true,
   lastUpdated: true,
   // Contributor artifacts stay in the repository but out of the published site.
@@ -23,7 +23,7 @@ export default defineConfig({
       "meta",
       {
         property: "og:description",
-        content: "A TypeScript agent framework built on Effect and Effect AI.",
+        content: "An agent harness toolkit for TypeScript, built on Effect and Effect AI.",
       },
     ],
   ],
@@ -72,15 +72,15 @@ export default defineConfig({
       {
         text: "Start",
         items: [
-          { text: "What is Effect Agent?", link: "/guide/introduction" },
           { text: "Getting started", link: "/guide/getting-started" },
+          { text: "What is Effect Agent?", link: "/guide/introduction" },
         ],
       },
       {
         text: "Build agents",
         items: [
           { text: "Agent definitions", link: "/guide/agents" },
-          { text: "Tools & Layers", link: "/guide/tools" },
+          { text: "Tools & layers", link: "/guide/tools" },
           { text: "Run & stream", link: "/guide/run-agents" },
           { text: "Conversations", link: "/guide/conversations" },
           { text: "Context management", link: "/guide/context-management" },
@@ -105,7 +105,7 @@ export default defineConfig({
       {
         text: "Architecture",
         items: [
-          { text: "Effect-native by construction", link: "/concepts/effect-native" },
+          { text: "Built on Effect", link: "/concepts/effect-native" },
           { text: "The runtime model", link: "/concepts/runtime-model" },
           { text: "Budgets & bounded autonomy", link: "/concepts/budgets" },
           { text: "Persistence & durability", link: "/concepts/durability" },
