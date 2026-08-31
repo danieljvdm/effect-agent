@@ -150,8 +150,9 @@ A deterministically named sub-operation within one Durable Tool Call. Its result
 exactly-once-recorded but its external side effect is at-least-once-executed.
 
 **Skill**  
-A versioned package of instructions and bounded resources that can be activated for future Turns.
-A Skill is data, not ambient executable code.
+A deferred runtime concept for a versioned package of instructions and bounded resources that
+could be activated for future Turns. No runtime Skill API is implemented. Contributor skills in
+`.agents/skills` are repository tooling and are unrelated to Agent execution.
 
 **Subagent**  
 An Agent Definition invoked by another agent through a declared delegation capability. A durable

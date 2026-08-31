@@ -14,14 +14,14 @@ The working product thesis is:
 
 | Item         | Current state                                                             |
 | ------------ | ------------------------------------------------------------------------- |
-| Distribution | Private internal project                                                  |
-| Effect       | Effect v4, pinned exactly during pre-1.0 development                      |
-| Packages     | `@effect-agent/*`                                                         |
+| Distribution | Public alpha, published to npm on the opt-in `beta` dist-tag              |
+| Effect       | `effect` and OpenAI/Anthropic provider packages at exact `4.0.0-rc.111`   |
+| Packages     | `effect-agent` umbrella and optional `@effect-agent/*` packages           |
 | Workspace    | Vite+ monorepo with packages in `packages/*` and examples in `examples/*` |
 | Platforms    | Node.js with SQLite and Cloudflare Workers with Durable Objects           |
 
-The planned build through Phase 7 is implemented. Tests cover the ephemeral interpreter, durable
-Node runtime (`DN`), Cloudflare runtime (`DC`), Tool uncertainty, joined input, attached Subagents,
+Tests cover the ephemeral interpreter, durable Node runtime (`DN`), Cloudflare runtime (`DC`),
+Tool uncertainty, joined input, attached Subagents,
 adapter certification, formal models, failpoints, and soak behavior.
 
 `DN` and `DC` use the same coordinator. They provide durable admission, fenced Attempts, one
@@ -36,7 +36,13 @@ Completion is an engineering claim, not a stability claim. Cloudflare durability
 from workerd/Miniflare; an opt-in temporary deployment proves the Browser Run Worker binding
 against Cloudflare's hosted service. The sandbox also exposes bounded page capture, PNG screenshot,
 and scoped same-host Markdown crawl ports; Cloudflare supplies native-binding and REST adapters.
-Live-model and live-provider suites remain opt-in, and open-source preparation remains pending.
+Live-model and live-provider suites remain opt-in.
+
+"Alpha" describes product maturity; npm versions use `X.Y.Z-beta.N` and the `beta` dist-tag.
+APIs and stored data may change incompatibly before 1.0. There is no compatibility window or
+stored-data migration promise; incompatible data must fail clearly and may need a reset.
+Keep framework packages at one exact release and Effect/provider dependencies at that release's
+exact pins. See [installation and compatibility](docs/guide/getting-started.md#installation-and-compatibility).
 
 Normative words such as **MUST**, **SHOULD**, and **MAY** are used in their usual RFC sense.
 
@@ -48,6 +54,19 @@ The documentation site lives in [`docs/`](docs/index.md); run it locally with
 1. [Domain glossary](GLOSSARY.md)
 2. [Repository toolchain](docs/TOOLCHAIN.md)
 3. [Instructions for implementation agents](AGENTS.md)
+
+## Install
+
+The platform-neutral umbrella includes core, engine, and capabilities:
+
+```sh
+npm install --save-exact effect-agent@beta effect@4.0.0-rc.111 @effect/ai-openai@4.0.0-rc.111
+```
+
+Provider Layers, credentials, and Tool handlers come from the application. Persistent history,
+durable hosts, storage, and sandbox adapters are separate installs. See the
+[package map](docs/reference/packages.md#capability-inventory) for implemented APIs, bundled
+adapters, host requirements, and unsupported capabilities.
 
 ## Architecture decisions
 
@@ -90,23 +109,26 @@ repository owner.
 ## Repository commands
 
 ```sh
-bun install
-bun run sync:agent-skills
-bun run docs:dev
-bun run ready
+vp install
+vp run docs:dev
+vp run ready
 ```
 
-`bun run ready` runs the repository checks, package tests, and library builds. See the
-[toolchain guide](docs/TOOLCHAIN.md) for version synchronization, the Effect source checkout,
+`vp run ready` runs static checks, tests, package builds, and the documentation build with link
+validation. Vite+ is the command authority; Bun is its package manager. See the
+[toolchain guide](docs/TOOLCHAIN.md) for version synchronization, installed Effect source,
 package creation, hooks, and CI.
 
 ## Product boundaries
 
-The first release is the bounded Effect-native runtime described by the roadmap. Hosted execution,
-channels, a chat UI, a visual builder, an embedded coding sandbox, Subagent extensions beyond the
-implemented attached S1/S2 slices (nested delegation, handoff, detachment), and a marketplace
-remain outside that first release. Later packages may add them after the core loop is
-deterministic, typed, testable, and resource-safe.
+The alpha includes bounded execution, persistent history, durable accepted work, scheduled input,
+and event subscriptions. It does not provide hosted execution, a turnkey chat UI, a visual builder,
+runtime Skills, separate persistent agent memory/state, SessionStore metadata, or generic dynamic
+Turn Plans. Nested Subagent delegation, handoff, detachment, and a marketplace remain unsupported.
+MCP exposes a validated connector port whose transport the application implements. The local
+sandbox runs trusted code without isolation. See the
+[capability inventory](docs/reference/packages.md#capability-inventory) and
+[host isolation responsibilities](docs/guide/operations.md#authorization-and-isolation).
 
 Likewise, conversation persistence is not the same as durable execution. The framework may only
 claim durable execution after it can demonstrate:

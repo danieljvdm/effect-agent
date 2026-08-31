@@ -131,10 +131,15 @@ Tool Calls, interruption, semantic events, steering, follow-up, approval, budget
 [context management](./context-management), MCP, and a local sandbox adapter. If the process
 disappears, active work disappears with it.
 
-**Persistent Conversations.** Canonical Conversation records survive restart through memory or
-SQLite adapters. History can be replayed, projected, exported, checkpointed, and observed from an
-opaque offset. Persistence does not mean the runtime has accepted an obligation to finish active
-work.
+**Persistent Conversations.** `ConversationHistory` is the history policy required by all
+`AgentRuntime` entry points. `PersistentHistory.layer` from `@effect-agent/session/history` retains
+successful Runs through a supplied `ConversationStore`; `ConversationHistory.layerTransient`
+selects execution without retained history. Load retained history through the service's `load` method.
+SQLite and Cloudflare storage survive restart; the memory adapter is process-local. History can
+be replayed, projected, exported, and observed. Checkpoint storage is optional and unused by
+execution or recovery. An interrupted Run has no completion obligation. See
+[Conversations](./conversations#retain-completed-runs) for the two-input SQLite example and
+concurrent-writer limits.
 
 **Durable accepted work.** The durable runtime first commits a Submission obligation, then
 returns a Receipt. Attempts may be replaced after a crash, but exactly one terminal Settlement is
@@ -142,6 +147,28 @@ eventually recorded. Unresolved external Tool effects stop at an explicit Unknow
 of replaying, and the same contract runs on Node/SQLite and on Cloudflare Durable Objects. No
 level claims exactly-once external side effects. See
 [Persistence & durability](../concepts/durability).
+
+## Capabilities and host responsibilities
+
+The [capability inventory](../reference/packages#capability-inventory) distinguishes public APIs,
+bundled defaults and adapters, and application-owned implementations. Installing the umbrella
+does not install a provider or a durable host. Applications supply Model Layers and credentials,
+Tool handlers, authorization, storage, and any external transports they use.
+
+Time-based [Scheduling](./operations#scheduled-input) and durable
+[event subscriptions](./operations#event-subscriptions) deliver new input through ordinary
+admission after the registering Run has ended. Neither keeps a Run alive or promises one Run per
+delivery. Their owner scoping does not establish tenant isolation for Conversation storage; hosts
+must enforce the [addressing and access boundary](./operations#authorization-and-isolation).
+
+MCP provides `McpConnector` and `connectMcp` for scoped connection and bounded discovery validation.
+The application implements the transport and supplies remote Tool handlers. There is no bundled
+stdio or HTTP MCP client adapter.
+
+Runtime Skills, a separate persistent agent memory/state service, SessionStore metadata, and
+generic dynamic Turn Plans are unsupported. Conversation history and compaction summaries are
+implemented, but neither supplies those missing APIs. [Context management](./context-management)
+explains automatic interpreter compaction and the separate, explicitly applied artifact utilities.
 
 ## What the framework optimizes for
 
@@ -155,8 +182,12 @@ adopting a second application runtime. It is especially opinionated about:
 - refusing to label ambiguous external effects "exactly once."
 
 It is not a hosted control plane, visual builder, turnkey chat product, generic workflow engine,
-or secure remote code sandbox. The project is pre-1.0: packages are private, Effect v4 is pinned
-to a beta release, and there is no compatibility window yet.
+or a general secure remote code sandbox. The public alpha is distributed as npm prereleases on
+the `beta` dist-tag, with versions shaped as `X.Y.Z-beta.N`. "Alpha" describes maturity, not an
+additional npm channel. This source tree pins Effect and the OpenAI/Anthropic provider packages to
+`4.0.0-rc.111`. APIs and stored data may break before 1.0; no compatibility window or migrations are
+promised. Incompatible data fails clearly and may need a reset. Follow the
+[installation and compatibility guidance](./getting-started#installation-and-compatibility).
 
 ## Next steps
 

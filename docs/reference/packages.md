@@ -1,13 +1,60 @@
 ---
 title: Package map
-description: Current private workspace packages and their boundaries.
+description: Public alpha packages, implemented capabilities, adapters, and host responsibilities.
 ---
 
 # Package map
 
-Fourteen framework packages publish to npm on the opt-in `beta` dist-tag. Provider wrapper
-packages are deliberately absent: provider integration remains upstream Effect AI Models and
-Layers.
+Fourteen framework packages publish to npm on the opt-in `beta` dist-tag. The product is a public
+alpha; package versions use `X.Y.Z-beta.N`. Keep all framework packages at one exact release.
+This source tree pins Effect and the OpenAI/Anthropic providers to `4.0.0-rc.111`. APIs and stored
+data may change incompatibly before 1.0, with no compatibility window or migration promise.
+See [installation and compatibility](../guide/getting-started#installation-and-compatibility).
+Provider integration remains upstream Effect AI Models and Layers.
+
+## Capability inventory
+
+An exported port is an integration contract; its implementation may still belong to the host.
+Optional Layers must be composed explicitly. The following entries link to their guides or APIs.
+
+| Capability and public API                                                                                                        | Bundled behavior or adapters                                                                                      | Host requirements and limits                                                                                                                                                                                                                         |
+| -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Agent execution](../guide/run-agents), `AgentRuntime.run`, `.stream`, `.start`                                                  | Bounded interpreter, finite policy, deterministic Tool-result order, scoped resources                             | Supply Model, Tool-handler, and history policy Layers. Ephemeral work ends with its Scope; it has no restart recovery.                                                                                                                               |
+| [Process-local Conversations](../guide/conversations#advanced-history-integrations), `EphemeralConversations`, `RunCommandQueue` | Bounded incremental history, steering and follow-up queues, engine adapters                                       | Wire the Conversation/input hooks with `ConversationHistory.layerTransient`. Partial Runs remain visible; history and commands disappear with the process.                                                                                           |
+| [Persistent history](../guide/conversations#retain-completed-runs), `ConversationHistory`, `PersistentHistory.layer`             | Successful-Run retention through the normal runtime; SQLite and Cloudflare stores; nonpersistent memory reference | Supply a store and unique identities. Concurrent Runs can both execute, but conflicting commits fail. No accepted-work recovery; checkpoints are optional.                                                                                           |
+| [Durable execution](../concepts/durability), `DurableAgentRuntime`                                                               | Node/SQLite and Cloudflare Durable Object assemblies, fenced Attempts, Settlements, conservative Tool recovery    | Operate workers and storage; register exact Agent Bindings; authorize admission and operations. Unknown ordinary Tool outcomes need explicit resolution.                                                                                             |
+| [Context management](../guide/context-management#compaction), `ContextCompactor`                                                 | Default pruning and metered summarization at the interpreter seam; replaceable Layer                              | Configure context limits and optional strategy/Model. Durable compaction must map to complete prior-Run records. Explicit artifact utilities are separate, as described below.                                                                       |
+| [Approval and budgets](../guide/run-agents#operational-hooks), `toRunApprovalHook`, `toRunBudgetHook`                            | Approval Schemas, deny-all resolver, memory audit, structural redactor, hierarchical usage accounting             | Supply resolver, audit/redaction policy, budget hooks, and cost estimates. Local audit/budget services are not a persistent tenant billing system.                                                                                                   |
+| [MCP](https://github.com/danieljvdm/effect-agent/blob/main/packages/capabilities/src/mcp.ts), `McpConnector`, `connectMcp`       | Scoped timeout and validation of discovery identity, counts, bytes, Toolkit names, and schema digests             | Implement transport, credentials, connection cleanup, and native Toolkit handlers. No bundled stdio/HTTP client transport. Remote execution is uncertain.                                                                                            |
+| [Subagents](../concepts/durability#attached-subagents), `Subagent.define`, `SubagentRuntime.layer`                               | Bounded ephemeral children and durable attached child protocol                                                    | Supply targets, Bindings, grants, projections, and action policy. Nested delegation, handoff, and detachment are unsupported.                                                                                                                        |
+| [Scheduled input](../guide/operations#scheduled-input), `Scheduling`                                                             | One-shot, interval, and cron delivery; memory reference, SQLite, and Cloudflare adapters/drivers                  | Supply owner policy, `ScheduleAuthorizer`, registered inputs/Bindings, and a running driver. Delivery uses ordinary admission, not a sleeping Run.                                                                                                   |
+| [Event subscriptions](../guide/operations#event-subscriptions), `Subscriptions`, `SubscriptionIntake`                            | Partitioned once/continuous delivery, restricted Tools, storage/drivers, GitHub workflow-attempt source           | Supply source/preparation bindings, authorizer, authenticated intake, and recovery. Records consume lifetime quota; no automatic pruning or generic historical replay. Implemented in [#223](https://github.com/danieljvdm/effect-agent/issues/223). |
+| [Sandbox and Code Mode](../guide/tools), `Sandbox`, `CodeExecutor`, `CodeMode.make`                                              | Trusted local process adapter; Cloudflare Code Mode adapter over the broker                                       | Supply execution policy and host Tool authority. Local processes are unisolated; generated programs require an isolated executor. No durable execution claim for a Code Mode pass.                                                                   |
+| [Web and browser ports](#effect-agent-platform-cloudflare), `PageCapture`, `PageScreenshot`, `PageCrawl`, `InteractiveBrowser`   | Cloudflare capture, REST crawl, and interactive browser adapters; `WebCapture` Tool helpers                       | Supply browser bindings or credentials and network policy. Browser handles are ephemeral; exact-host checks do not isolate hostile networks.                                                                                                         |
+
+### Compaction and unsupported capabilities
+
+Automatic compaction uses the engine's `ContextCompactor` decision stream. The capabilities package
+also exports `prepareModelContext`, `CompactionArtifact`, `RetainedFact`, `digestCompactionSource`,
+and `applyCompaction` for application-managed views. These explicit utilities validate an artifact
+against a source snapshot. They do not run automatically, store artifacts, or provide a second
+interpreter compactor. See [explicit compaction artifacts](../guide/context-management#explicit-compaction-artifacts).
+
+The following APIs are absent or deferred:
+
+- Runtime Skills have no registration, activation, loading, or resource API. `.agents/skills` is
+  contributor tooling, not a runtime capability.
+- Separate persistent agent memory/state has no framework service or store. Applications own such
+  domain state. Conversation history and source-bound retained compaction facts do not provide it.
+- SessionStore metadata has no public `SessionStore` API. A Session is an interaction handle in
+  the glossary; `ConversationStore` retains canonical history, not arbitrary session metadata.
+- Generic dynamic Turn Plans have no public API. Existing prompt-preparation hooks, Tool
+  authorization, and scheduling overrides are narrower contracts, not per-Turn replanning of
+  Models, Toolkits, policy, and resources.
+
+Scheduling and subscription tenant scopes apply to those registrations. They do not add tenant
+fields to Conversation records or establish general storage isolation. Hosts must enforce
+[database/namespace separation, addressing, and authorization](../guide/operations#authorization-and-isolation).
 
 ## Packages
 
@@ -16,7 +63,8 @@ Layers.
 Re-exports schema-first authoring from core, the bounded interpreter from engine, and operational
 capabilities as one platform-neutral root package,
 mirroring how `effect` fronts the `@effect/*` satellites. Platform adapters stay scoped, and the
-umbrella is version-fixed to its three constituents.
+umbrella shares the fixed release version of all framework packages. Session/history, storage,
+platform hosts, sandbox adapters, and testing are separate packages.
 
 ### `@effect-agent/core`
 
@@ -42,7 +90,7 @@ persisted or automatically exported. See [Tool failure observation](../guide/run
 ### `@effect-agent/capabilities`
 
 Adapts richer optional services to the engine: process-local Conversations, command queues,
-approval and audit, budgets, context/compaction, scheduling, MCP, structural redaction, web
+approval and audit, budgets, context/compaction, Tool-batch scheduling overrides, MCP, structural redaction, web
 capture through `WebCapture.make` and `WebCapture.makeExtract` over the `PageCapture` port, and
 Subagent authoring through `Subagent.define`, `SubagentPolicy`, `SubagentGrant`, and
 `SubagentRuntime.layer`. Capture Tools have uncertain execution class; extraction handler Layers
@@ -88,7 +136,12 @@ host-supplied `AgentBindingResolver` port for exact-digest Binding resolution.
 Adapter certification reports, port runners, and the TestClock-dependent conformance case arrays
 are available only from `@effect-agent/session/testing`; the package root has no transitive
 test-runtime dependency. Mutable coordinator failpoint controls and their test Layer also live
-in `@effect-agent/session/testing`; scheduling APIs remain on the production root.
+in `@effect-agent/session/testing`. Durable `Scheduling`, `Subscriptions`, event sources, and
+preparation bindings are on the production root; the GitHub source uses `@effect-agent/session/github`.
+
+`@effect-agent/session/history` exports `PersistentHistory`, `ConversationHistory`, and the history contracts;
+`@effect-agent/session/durability` exports the coordinator and accepted-work contracts. These
+focused entry points do not change the distinction between retained history and durable execution.
 
 ### `@effect-agent/storage-memory`
 
@@ -103,7 +156,8 @@ observation, typed compatibility/corruption/conflict/contention errors, and befo
 failpoints on every durable mutation.
 
 `@effect-agent/storage-sqlite/testing` exposes `SqliteStorageFailpointTestControl.layer` for tests.
-The production root exports `CurrentSqliteStorageVersion`; the migration loader is internal.
+The production root exports `CurrentSqliteStorageVersion`; schema initialization is internal.
+Only the current stored version is supported, with no upgrade migration promise.
 
 ### `@effect-agent/platform-node`
 
@@ -131,7 +185,8 @@ construction values.
 
 `@effect-agent/storage-cloudflare/testing` exposes `DoStorageFailpointTestControl.layer` and
 `evictionFailpointHandler` for adapter tests. The production root retains
-`CurrentDoStorageVersion`; the migration loader is internal.
+`CurrentDoStorageVersion`; schema initialization is internal. Incompatible stored versions fail
+clearly, with no upgrade migration promise.
 
 ### `@effect-agent/platform-cloudflare`
 
