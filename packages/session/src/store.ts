@@ -1,5 +1,6 @@
 import { ConversationId } from "@effect-agent/core";
-import { Context, Effect, Option, Schema, Stream } from "effect";
+import type { Effect, Option, Stream } from "effect";
+import { Context, Schema } from "effect";
 
 import {
   BatchId,
@@ -76,6 +77,9 @@ export class ConversationTail extends Schema.Class<ConversationTail>(
   producerEpoch: ProducerEpoch,
 }) {}
 
+/** Maximum canonical records represented by one Conversation export. */
+export const MAX_CONVERSATION_EXPORT_RECORDS = 65_536;
+
 export class ConversationExport extends Schema.Class<ConversationExport>(
   "@effect-agent/session/ConversationExport",
 )({
@@ -83,7 +87,9 @@ export class ConversationExport extends Schema.Class<ConversationExport>(
   conversationId: ConversationId,
   tailSequence: CanonicalSequence,
   tailDigest: Digest,
-  records: Schema.Array(CanonicalRecordEnvelope).check(Schema.isMaxLength(65_536)),
+  records: Schema.Array(CanonicalRecordEnvelope).check(
+    Schema.isMaxLength(MAX_CONVERSATION_EXPORT_RECORDS),
+  ),
 }) {}
 
 export class ConversationCheckpoint extends Schema.Class<ConversationCheckpoint>(
@@ -159,8 +165,26 @@ export type ConversationStoreFailure =
   | ConversationStoreError
   | ConversationNotMaterialized
   | AppendConflict
-  | FenceRejected
-  | CheckpointRejected;
+  | FenceRejected;
+
+/**
+ * Optional, disposable projection storage. Neither history execution nor durable recovery
+ * requires it. Adapters that offer it must bind every checkpoint to a canonical batch tail.
+ */
+export interface ConversationCheckpoints {
+  readonly save: (
+    request: SaveCheckpointRequest,
+  ) => Effect.Effect<
+    void,
+    ConversationStoreError | ConversationNotMaterialized | CheckpointRejected
+  >;
+  readonly load: (
+    request: LoadCheckpointRequest,
+  ) => Effect.Effect<
+    Option.Option<ConversationCheckpoint>,
+    ConversationStoreError | ConversationNotMaterialized | CheckpointRejected
+  >;
+}
 
 export class ConversationStore extends Context.Service<
   ConversationStore,
@@ -192,17 +216,7 @@ export class ConversationStore extends Context.Service<
     readonly inspectTail: (
       request: ConversationTailRequest,
     ) => Effect.Effect<ConversationTail, ConversationStoreError | ConversationNotMaterialized>;
-    readonly saveCheckpoint: (
-      request: SaveCheckpointRequest,
-    ) => Effect.Effect<
-      void,
-      ConversationStoreError | ConversationNotMaterialized | CheckpointRejected
-    >;
-    readonly loadCheckpoint: (
-      request: LoadCheckpointRequest,
-    ) => Effect.Effect<
-      Option.Option<ConversationCheckpoint>,
-      ConversationStoreError | ConversationNotMaterialized | CheckpointRejected
-    >;
+    /** Absent when this adapter does not support disposable checkpoints. */
+    readonly checkpoints?: ConversationCheckpoints | undefined;
   }
 >()("@effect-agent/session/ConversationStore") {}

@@ -29,6 +29,7 @@ import {
 import {
   AgentChildPending,
   AgentRuntime,
+  ConversationHistory,
   CurrentToolFailureObserver,
   getToolExecutionClass,
   RunContextPreparation,
@@ -613,14 +614,18 @@ export const DurableApprovalResolver: Context.Reference<RunApprovalHook<never, n
 
 /**
  * Services a durable worker needs beyond the runtime's own Layer: the Agent Binding's inferred
- * requirements minus `IdGenerator`, which the coordinator provides itself so Run/Turn identity is
- * deterministic per Submission across Attempts.
+ * requirements minus its supplied identity and history services. The coordinator provides
+ * deterministic Run/Turn identity and transient history policy because its journal owns all
+ * durable reads and commits across Attempts.
  */
 export type DurableWorkerRequirements<
   AgentValue extends Agent.Any,
   InstructionRequirements = never,
 > =
-  | Exclude<AgentRuntimeRequirements<AgentValue, never, InstructionRequirements>, IdGenerator>
+  | Exclude<
+      AgentRuntimeRequirements<AgentValue, never, InstructionRequirements>,
+      IdGenerator | ConversationHistory
+    >
   | AgentCompletionProjectionRequirements<AgentValue>;
 
 export interface DurableRuntimeConfigOptions {
@@ -3427,6 +3432,7 @@ const make = Effect.gen(function* () {
         if (
           payload._tag === "UserInputRecorded" &&
           payload.runId === runId &&
+          payload.submissionId !== undefined &&
           payload.submissionId !== submissionId
         ) {
           joinedInputEnvelopes.set(payload.submissionId, envelope);
@@ -3873,6 +3879,8 @@ const make = Effect.gen(function* () {
         nextTurnId: Ref.modify(turnCounter, (turn) => [turnIdForRun(runId, turn + 1), turn + 1]),
       };
 
+      // Track live Prompt boundaries only. The journal owns durable per-Turn commits and recovery;
+      // successful-run ConversationHistory retention cannot replace those incremental commits.
       const onHistory = (history: Prompt.Prompt): Effect.Effect<void> =>
         Ref.update(stateRef, (state) =>
           state.baseLen === undefined
@@ -5298,6 +5306,7 @@ const make = Effect.gen(function* () {
 
       const consume = Stream.runForEach(
         AgentRuntime.stream(agent, submission.inputPayload, options).pipe(
+          Stream.provide(ConversationHistory.layerTransient),
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
           Stream.provideService(ContextCompactor, compactor),
         ),
@@ -7315,7 +7324,7 @@ const make = Effect.gen(function* () {
         payload._tag === "SubmissionSettled" ||
         payload._tag === "AbortRequested"
       ) {
-        named.add(payload.submissionId);
+        if (payload.submissionId !== undefined) named.add(payload.submissionId);
       }
     }
     for (const submissionId of named) {
@@ -7329,20 +7338,23 @@ const make = Effect.gen(function* () {
     // integrity finding rather than an operation failure.
     const checkpointLoad:
       | { readonly _tag: "loaded"; readonly checkpoint: ConversationCheckpoint | undefined }
-      | { readonly _tag: "rejected"; readonly reason: string } = yield* store
-      .loadCheckpoint(LoadCheckpointRequest.make({ conversationId }))
-      .pipe(
-        Effect.map((checkpoint) => ({
-          _tag: "loaded" as const,
-          checkpoint: Option.getOrUndefined(checkpoint),
-        })),
-        Effect.catchTag("CheckpointRejected", (rejected) =>
-          Effect.succeed({ _tag: "rejected" as const, reason: rejected.reason }),
-        ),
-      );
+      | { readonly _tag: "rejected"; readonly reason: string }
+      | { readonly _tag: "unsupported" } =
+      store.checkpoints === undefined
+        ? { _tag: "unsupported" }
+        : yield* store.checkpoints.load(LoadCheckpointRequest.make({ conversationId })).pipe(
+            Effect.map((checkpoint) => ({
+              _tag: "loaded" as const,
+              checkpoint: Option.getOrUndefined(checkpoint),
+            })),
+            Effect.catchTag("CheckpointRejected", (rejected) =>
+              Effect.succeed({ _tag: "rejected" as const, reason: rejected.reason }),
+            ),
+          );
     const report = yield* verifyConversationInvariants({
       export: exported,
       submissions: [...rows.values()],
+      checkpointsSupported: checkpointLoad._tag !== "unsupported",
       ...(checkpointLoad._tag === "loaded" && checkpointLoad.checkpoint !== undefined
         ? { checkpoint: checkpointLoad.checkpoint }
         : {}),

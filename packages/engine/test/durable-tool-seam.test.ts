@@ -31,6 +31,7 @@ import {
 import { TestClock } from "effect/testing";
 import { Prompt, LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
+import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentRuntime,
   RunContextPreparation,
@@ -166,7 +167,9 @@ const policy = (overrides?: Partial<Parameters<typeof AgentPolicy.make>[0]>) =>
     ...overrides,
   });
 
-layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
+const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+
+layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
   for (const outcome of ["allowed", "denied", "preparation-failed"] as const) {
     it.effect(`composes independent host services through ephemeral hooks: ${outcome}`, () => {
       const seen: Array<string> = [];

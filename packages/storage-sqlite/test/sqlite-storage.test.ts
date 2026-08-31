@@ -20,7 +20,10 @@ import {
   type AppendResult,
   type CanonicalRecordPayload,
 } from "@effect-agent/session";
-import { conversationStoreConformanceCases } from "@effect-agent/session/testing";
+import {
+  conversationStoreConformanceCases,
+  conversationCheckpointConformanceCases,
+} from "@effect-agent/session/testing";
 import { SqliteStorageFailpointTestControl } from "@effect-agent/storage-sqlite/testing";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
@@ -43,8 +46,8 @@ import {
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
-import type { SqliteStorageFailpoint } from "../src/index.ts";
 import {
+  type SqliteStorageFailpoint,
   conversationStoreLayer,
   layer,
   observationOffsetAt,
@@ -83,9 +86,7 @@ const secondConversationId = Schema.decodeSync(ConversationMaterialization.field
   "conversation-sqlite-2",
 );
 const runId = Schema.decodeSync(RunCompleted.fields.runId)("run-sqlite-1");
-const submissionId = Schema.decodeSync(UserInputRecorded.fields.submissionId)(
-  "submission-sqlite-1",
-);
+const submissionId = Schema.decodeSync(SubmissionId)("submission-sqlite-1");
 
 const id = <A>(schema: Schema.Codec<A, string>, value: string): A =>
   Schema.decodeSync(schema)(value);
@@ -201,7 +202,10 @@ const withTemporaryDatabase = <A, E>(
 
 describe("SqliteConversationStore", () => {
   describe("shared ConversationStore conformance", () => {
-    for (const conformanceCase of conversationStoreConformanceCases) {
+    for (const conformanceCase of [
+      ...conversationStoreConformanceCases,
+      ...conversationCheckpointConformanceCases,
+    ]) {
       it.effect(conformanceCase.name, () =>
         withTemporaryDatabase((filename) => withStorage(filename, conformanceCase.run)),
       );
@@ -307,7 +311,7 @@ describe("SqliteConversationStore", () => {
                 state: { destination: "Kyoto" },
                 createdAt: at(2),
               });
-              yield* store.saveCheckpoint(SaveCheckpointRequest.make({ checkpoint }));
+              yield* store.checkpoints!.save(SaveCheckpointRequest.make({ checkpoint }));
               return appended;
             }),
           );
@@ -319,7 +323,7 @@ describe("SqliteConversationStore", () => {
               const exported = yield* store.export(
                 ConversationExportRequest.make({ conversationId }),
               );
-              const checkpoint = yield* store.loadCheckpoint(
+              const checkpoint = yield* store.checkpoints!.load(
                 LoadCheckpointRequest.make({ conversationId }),
               );
 
@@ -916,7 +920,7 @@ describe("SqliteConversationStore", () => {
         });
         const save = Effect.gen(function* () {
           const store = yield* ConversationStore;
-          yield* store.saveCheckpoint(SaveCheckpointRequest.make({ checkpoint }));
+          yield* store.checkpoints!.save(SaveCheckpointRequest.make({ checkpoint }));
         });
 
         yield* select("save-checkpoint:before");
@@ -927,7 +931,9 @@ describe("SqliteConversationStore", () => {
             yield* withFailpoints(
               Effect.gen(function* () {
                 const store = yield* ConversationStore;
-                return yield* store.loadCheckpoint(LoadCheckpointRequest.make({ conversationId }));
+                return yield* store.checkpoints!.load(
+                  LoadCheckpointRequest.make({ conversationId }),
+                );
               }),
             ),
           ),
@@ -941,7 +947,9 @@ describe("SqliteConversationStore", () => {
             yield* withFailpoints(
               Effect.gen(function* () {
                 const store = yield* ConversationStore;
-                return yield* store.loadCheckpoint(LoadCheckpointRequest.make({ conversationId }));
+                return yield* store.checkpoints!.load(
+                  LoadCheckpointRequest.make({ conversationId }),
+                );
               }),
             ),
           ),
@@ -951,3 +959,4 @@ describe("SqliteConversationStore", () => {
     ),
   );
 });
+import { SubmissionId } from "@effect-agent/core";

@@ -65,7 +65,7 @@ const writePersistentTravelPlanner = Effect.gen(function* () {
     prefix,
     initial.tailDigest,
   );
-  yield* store.saveCheckpoint(
+  yield* store.checkpoints!.save(
     SaveCheckpointRequest.make({
       checkpoint: makePhase3TravelPlannerCheckpoint(prefixProjection),
     }),
@@ -89,7 +89,7 @@ const inspectPersistentTravelPlanner = Effect.gen(function* () {
       conversationId: phase3TravelPlannerConversationId,
     }),
   );
-  const checkpoint = yield* store.loadCheckpoint(
+  const checkpoint = yield* store.checkpoints!.load(
     LoadCheckpointRequest.make({
       conversationId: phase3TravelPlannerConversationId,
     }),

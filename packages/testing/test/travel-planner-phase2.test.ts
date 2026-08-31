@@ -14,7 +14,7 @@ import {
   ConversationId,
   RunId,
 } from "@effect-agent/core";
-import { AgentRuntime } from "@effect-agent/engine";
+import { ConversationHistory, AgentRuntime } from "@effect-agent/engine";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
 import {
   ActivityCatalogLayer,
@@ -84,6 +84,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
           },
         ];
         const layer = Layer.mergeAll(
+          ConversationHistory.layerTransient,
           controlled.layer,
           FlightCatalogLayer,
           LodgingCatalogLayer,
@@ -266,6 +267,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
         }),
       );
       const runtimeLayer = Layer.mergeAll(
+        ConversationHistory.layerTransient,
         TravelPlannerPhase2ToolkitLayer,
         FlightCatalogLayer,
         LodgingCatalogLayer,

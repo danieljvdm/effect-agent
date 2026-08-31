@@ -18,6 +18,7 @@ import {
 } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
+import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentRuntime,
   ToolBroker,
@@ -170,7 +171,9 @@ const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
     return result;
   });
 
-layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
+const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+
+layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
   it.effect("serializes cumulative reservations across concurrent outer handlers", () =>
     Effect.gen(function* () {
       const Orchestrate = Tool.make("orchestrate", {

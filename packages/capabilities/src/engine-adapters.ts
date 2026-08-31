@@ -213,9 +213,15 @@ export type ConversationAdapterError =
   | ConversationHistoryDiverged;
 
 /**
- * Bind one process-local Conversation to the engine's exact history seams.
- * The initial Prompt and every onHistory update retain all native Effect AI
- * parts and provider options without a role/text projection.
+ * Advanced incremental integration for a process-local EphemeralConversations owner. Supply
+ * ConversationHistory.layerTransient; a retaining history adapter rejects these competing hooks.
+ * The snapshot is explicit initial Prompt data. Each inline onHistory call immediately records
+ * its append-only suffix, including updates from Runs that later fail or are interrupted. Writes
+ * already made remain in the snapshot. Callback errors stop the Run as ConversationAdapterError;
+ * snapshot lookup can fail with ConversationNotFound before execution.
+ * Native Effect AI parts and provider options are preserved without a role/text projection.
+ * For retaining only successful Runs, provide ConversationHistory through PersistentHistory.layer
+ * with a memory or SQLite store instead. This adapter does not provide durable recovery.
  */
 export const toRunConversationOptions = Effect.fn("toRunConversationOptions")(function* (
   conversations: EphemeralConversations["Service"],

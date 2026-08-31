@@ -36155,6 +36155,33 @@ var boundedValueFootprint = (root, maxBytes, knownSafePrototypes = new Set, maxD
   }
 };
 
+// packages/engine/src/conversation-history.ts
+class ConversationHistoryError extends exports_Schema.TaggedError()("ConversationHistoryError", {
+  conversationId: ConversationId,
+  reason: exports_Schema.Literals([
+    "not-found",
+    "conflict",
+    "fenced",
+    "incompatible",
+    "limit",
+    "encoding",
+    "storage"
+  ]),
+  message: exports_Schema.String,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class ConversationHistory extends exports_Context.Service()("@effect-agent/engine/ConversationHistory") {
+  static layerTransient = exports_Layer.succeed(ConversationHistory, {
+    open: () => exports_Effect.succeed(undefined),
+    load: (conversationId) => exports_Effect.fail(ConversationHistoryError.make({
+      conversationId,
+      reason: "not-found",
+      message: "Transient execution does not retain Conversation history"
+    }))
+  });
+}
 // packages/engine/src/output-contract-internal.ts
 var contractDirective = (definition) => definition.completion === undefined ? "Final output contract: when the task is complete, the final assistant message must be only " + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + "before or after the JSON." : `Final output contract: when the task is complete without calling the "${definition.completion.tool}" completion Tool, the final assistant message must be only ` + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + `before or after the JSON. When calling the "${definition.completion.tool}" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool's parameter schema instead. The engine projects the successful completion Tool result into the Agent output.`;
 var requiredCompletionDirective = (tool) => `Final output contract: complete only by calling the required completion Tool ${JSON.stringify(tool)} ` + "as the sole Tool Call in its batch. Do not emit an ordinary final assistant text answer. " + "The Tool's canonical parameters and successful result are projected and validated as the Agent output.";
@@ -39634,7 +39661,25 @@ var enforceDurationDeadline = (execution, durationDeadlineMillis, durationLimit)
   return execution.pipe(exports_Stream.interruptWhen(exports_Effect.sleep(remaining2).pipe(exports_Effect.andThen(exports_Effect.fail(durationLimit)))));
 }));
 var guardBudgetStream = (stream3, budget) => budget === undefined ? stream3 : exports_Stream.transformPull(stream3, (pull) => exports_Effect.succeed(budget.guard(pull)));
-var stream3 = (agent2, input, options3 = {}) => {
+var makeStream = (onCompleted) => (agent2, input, runOptions = {}) => exports_Stream.unwrap(exports_Effect.gen(function* () {
+  const history = yield* ConversationHistory;
+  const ids = yield* IdGenerator2;
+  const conversationId = runOptions.conversationId ?? (yield* ids.nextConversationId);
+  const runId = runOptions.runId ?? (yield* ids.nextRunId);
+  const retained = yield* history.open({ conversationId, runId });
+  if (retained !== undefined && (runOptions.history !== undefined || runOptions.onHistory !== undefined || runOptions.input !== undefined || runOptions.durability !== undefined || runOptions.subagent !== undefined || runOptions.resume !== undefined || runOptions.resumeUsage !== undefined)) {
+    return yield* ConversationHistoryError.make({
+      conversationId,
+      reason: "incompatible",
+      message: "Provided history cannot share ownership with explicit history, input queues, or durable recovery hooks"
+    });
+  }
+  const options3 = {
+    ...runOptions,
+    conversationId,
+    runId,
+    ...retained === undefined ? {} : { history: retained.prompt, onHistory: retained.stageHistory }
+  };
   const interpreted = exports_Stream.unwrap(exports_Effect.gen(function* () {
     const resumed = options3.resume === undefined ? undefined : {
       batch: options3.resume,
@@ -39651,9 +39696,6 @@ var stream3 = (agent2, input, options3 = {}) => {
     const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
     const durationDeadlineMillis = options3.durationDeadline === undefined ? attemptDeadlineMillis : Math.min(attemptDeadlineMillis, exports_DateTime.toEpochMillis(options3.durationDeadline));
     const startedAtMillis = options3.runStartedAt === undefined ? attemptStartedAtMillis : exports_DateTime.toEpochMillis(options3.runStartedAt);
-    const ids = yield* IdGenerator2;
-    const conversationId = options3.conversationId === undefined ? yield* ids.nextConversationId : options3.conversationId;
-    const runId = options3.runId === undefined ? yield* ids.nextRunId : options3.runId;
     const compactor = yield* exports_Effect.serviceOption(ContextCompactor).pipe(exports_Effect.flatMap(exports_Option.match({
       onSome: exports_Effect.succeed,
       onNone: () => exports_Effect.provide(ContextCompactor, ContextCompactor.layer)
@@ -39742,6 +39784,8 @@ var stream3 = (agent2, input, options3 = {}) => {
       const instructions = yield* evaluateInstructions(agent2.definition.instructions, decodedInput);
       const encodedInput = yield* encodeInput(agent2, decodedInput);
       context3.input = encodedInput;
+      if (retained !== undefined)
+        yield* retained.stageInput(encodedInput);
       const inputPrompt = yield* renderInputPrompt(agent2.definition.inputPrompt, decodedInput, encodedInput);
       const priorHistoryLength = context3.history.content.length;
       const prompt = yield* makeInitialPrompt(instructions, inputPrompt, context3.history);
@@ -39763,7 +39807,7 @@ var stream3 = (agent2, input, options3 = {}) => {
       agentId: context3.agentId,
       conversationId: context3.conversationId,
       runId: context3.runId
-    }, options3.parentLink?.depth ?? 0)).pipe(exports_Context.add(RunEventSink, closedRunEventSink), exports_Context.add(DurableStep, closedDurableStep), exports_Context.add(SubagentDurability, closedSubagentDurability), exports_Context.add(ToolBroker, closedToolBroker));
+    }, options3.parentLink?.depth ?? 0, history)).pipe(exports_Context.add(RunEventSink, closedRunEventSink), exports_Context.add(DurableStep, closedDurableStep), exports_Context.add(SubagentDurability, closedSubagentDurability), exports_Context.add(ToolBroker, closedToolBroker));
     return started.pipe(exports_Stream.concat(deadline), exports_Stream.catch((error2) => {
       const terminal = exports_Stream.fromEffect(exports_Effect.gen(function* () {
         if (error2 instanceof AgentApprovalPending || error2 instanceof AgentChildPending) {
@@ -39787,39 +39831,72 @@ var stream3 = (agent2, input, options3 = {}) => {
     }), exports_Stream.provide(engineToolServices));
   }));
   const finalized = options3.input?.end === undefined ? interpreted : interpreted.pipe(exports_Stream.ensuring(options3.input.end()));
-  return finalized.pipe(exports_Stream.provide(agent2.model, { local: true }), exports_Stream.provide(ToolSpanTelemetry.layer));
-};
+  const events2 = finalized.pipe(exports_Stream.provide(agent2.model, { local: true }), exports_Stream.provide(ToolSpanTelemetry.layer));
+  if (retained === undefined && onCompleted === undefined)
+    return events2;
+  let completed;
+  return events2.pipe(exports_Stream.filter((event) => {
+    if (event._tag !== "RunCompleted")
+      return true;
+    completed = event;
+    return false;
+  }), exports_Stream.scoped, exports_Stream.concat(exports_Stream.unwrap(exports_Effect.gen(function* () {
+    const terminal = completed;
+    if (terminal === undefined) {
+      return yield* ModelProtocolError.make({
+        message: "Agent stream ended without RunCompleted"
+      });
+    }
+    return exports_Stream.fromEffect(exports_Effect.gen(function* () {
+      if (onCompleted !== undefined)
+        yield* onCompleted(terminal);
+      if (retained !== undefined)
+        yield* retained.commit(terminal);
+      return terminal;
+    })).pipe(exports_Stream.catch((error2) => exports_Stream.make(RunFailed.make({
+      eventVersion: terminal.eventVersion,
+      conversationId: terminal.conversationId,
+      runId: terminal.runId,
+      agentId: terminal.agentId,
+      sequence: terminal.sequence,
+      timestamp: terminal.timestamp,
+      errorTag: errorTag(error2),
+      message: errorMessage(error2)
+    })).pipe(exports_Stream.concat(exports_Stream.fail(error2)))));
+  }))));
+}));
+var stream3 = makeStream();
 var reduceRunEvents = (agent2, events2) => exports_Effect.gen(function* () {
-  const reduction = yield* exports_Stream.runFold(events2, () => ({}), (state, event) => event._tag === "RunCompleted" ? { completed: event } : state);
-  if (reduction.completed === undefined) {
-    return yield* ModelProtocolError.make({
-      message: "Agent stream ended without RunCompleted"
-    });
-  }
-  const completed = reduction.completed;
-  const candidateOutput = completed.output;
-  const output = yield* exports_Schema.decodeUnknownEffect(agent2.definition.output)(candidateOutput).pipe(exports_Effect.mapError((cause) => AgentOutputError.make({
-    message: cause.message
+  let result4;
+  yield* exports_Stream.runDrain(events2((completed) => exports_Effect.gen(function* () {
+    const candidateOutput = completed.output;
+    const output = yield* exports_Schema.decodeUnknownEffect(agent2.definition.output)(candidateOutput).pipe(exports_Effect.mapError((cause) => AgentOutputError.make({
+      message: cause.message
+    })));
+    const declaration = agent2.definition.runDisposition;
+    const runDisposition = completed.runDisposition === undefined ? undefined : completed.finishReason === "budget-exhausted" ? yield* ModelProtocolError.make({
+      message: "A budget-exhausted RunCompleted event cannot declare a run disposition"
+    }) : declaration === undefined ? yield* ModelProtocolError.make({
+      message: "RunCompleted declared a run disposition without a definition-owned Schema"
+    }) : yield* decodeRunDisposition(agent2, completed.runDisposition);
+    result4 = {
+      output,
+      conversationId: completed.conversationId,
+      runId: completed.runId,
+      turns: completed.turns,
+      finishReason: completed.finishReason,
+      ...completed.exhausted !== undefined ? { exhausted: completed.exhausted } : {},
+      ...runDisposition === undefined ? {} : { runDisposition: completed.runDisposition }
+    };
   })));
-  const declaration = agent2.definition.runDisposition;
-  const runDisposition = completed.runDisposition === undefined ? undefined : completed.finishReason === "budget-exhausted" ? yield* ModelProtocolError.make({
-    message: "A budget-exhausted RunCompleted event cannot declare a run disposition"
-  }) : declaration === undefined ? yield* ModelProtocolError.make({
-    message: "RunCompleted declared a run disposition without a definition-owned Schema"
-  }) : yield* decodeRunDisposition(agent2, completed.runDisposition);
-  return {
-    output,
-    conversationId: completed.conversationId,
-    runId: completed.runId,
-    turns: completed.turns,
-    finishReason: completed.finishReason,
-    ...completed.exhausted !== undefined ? { exhausted: completed.exhausted } : {},
-    ...runDisposition === undefined ? {} : { runDisposition: completed.runDisposition }
-  };
+  if (result4 === undefined) {
+    return yield* ModelProtocolError.make({ message: "Agent stream ended without RunCompleted" });
+  }
+  return result4;
 });
 var run4 = exports_Effect.fn("AgentRuntime.run")(function* (agent2, input, options3 = {}) {
   yield* exports_Scope.Scope;
-  return yield* reduceRunEvents(agent2, stream3(agent2, input, options3));
+  return yield* reduceRunEvents(agent2, (onCompleted) => makeStream(onCompleted)(agent2, input, options3));
 });
 var start = exports_Effect.fn("AgentRuntime.start")(function* (agent2, input, options3 = {}) {
   yield* exports_Scope.Scope;
@@ -39841,7 +39918,7 @@ var start = exports_Effect.fn("AgentRuntime.start")(function* (agent2, input, op
     replay: observationCapacity
   });
   yield* exports_Effect.addFinalizer(() => exports_PubSub.shutdown(pubsub));
-  const execution = reduceRunEvents(agent2, stream3(agent2, input, executionOptions).pipe(exports_Stream.tap((event) => exports_Effect.suspend(() => {
+  const execution = reduceRunEvents(agent2, (onCompleted) => makeStream(onCompleted)(agent2, input, executionOptions).pipe(exports_Stream.tap((event) => exports_Effect.suspend(() => {
     captured.push(event);
     return exports_PubSub.publish(pubsub, [event]);
   })))).pipe(exports_Effect.ensuring(exports_PubSub.publish(pubsub, exports_Exit.void)));
@@ -40330,7 +40407,7 @@ var waitingFromCause = (cause) => {
   const squashed = exports_Cause.squash(cause);
   return squashed instanceof ToolCallWaiting ? squashed : undefined;
 };
-var spawnWithParent = (parent, depth) => exports_Effect.fn("AgentSpawner.spawn")(function* (binding, input, delegation, options3) {
+var spawnWithParent = (parent, depth, history) => exports_Effect.fn("AgentSpawner.spawn")(function* (binding, input, delegation, options3) {
   const ids = yield* IdGenerator2;
   const conversationId = yield* ids.nextConversationId;
   const runId = yield* ids.nextRunId;
@@ -40348,7 +40425,7 @@ var spawnWithParent = (parent, depth) => exports_Effect.fn("AgentSpawner.spawn")
     conversationId,
     runId,
     parentLink
-  });
+  }).pipe(exports_Effect.provideService(ConversationHistory, history));
   return {
     ...child,
     conversationId,
@@ -40359,10 +40436,10 @@ var spawnWithParent = (parent, depth) => exports_Effect.fn("AgentSpawner.spawn")
 
 class AgentSpawner extends exports_Context.Service()("@effect-agent/engine/AgentSpawner") {
 }
-var makeAgentSpawner = (parent, depth) => ({
+var makeAgentSpawner = (parent, depth, history) => ({
   depth,
   parent,
-  spawn: spawnWithParent(parent, depth)
+  spawn: spawnWithParent(parent, depth, history)
 });
 var AgentRuntime = {
   decodeFinalOutput,
@@ -44196,6 +44273,7 @@ var makeReviewer = (options3) => {
     });
   }, exports_Effect.provide([
     IdGenerator2.layer,
+    ConversationHistory.layerTransient,
     reviewToolkitLayer,
     reviewCompletion.toLayer({ submit_review: () => exports_Effect.succeed(null) })
   ]), exports_Effect.scoped);

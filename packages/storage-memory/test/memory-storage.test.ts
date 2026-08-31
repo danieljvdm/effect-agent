@@ -26,7 +26,10 @@ import {
   UserInputRecorded,
   type CanonicalRecordPayload,
 } from "@effect-agent/session";
-import { conversationStoreConformanceCases } from "@effect-agent/session/testing";
+import {
+  conversationStoreConformanceCases,
+  conversationCheckpointConformanceCases,
+} from "@effect-agent/session/testing";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, describe, it } from "@effect/vitest";
 import {
@@ -124,6 +127,21 @@ const append = (
 describe("MemoryConversationStore", () => {
   describe("shared ConversationStore conformance", () => {
     for (const conformanceCase of conversationStoreConformanceCases) {
+      it.effect(conformanceCase.name, () =>
+        conformanceCase.run.pipe(
+          Effect.updateService(ConversationStore, (store) => ({
+            materialize: store.materialize,
+            append: store.append,
+            read: store.read,
+            observe: store.observe,
+            export: store.export,
+            inspectTail: store.inspectTail,
+          })),
+          Effect.provide(testLayer),
+        ),
+      );
+    }
+    for (const conformanceCase of conversationCheckpointConformanceCases) {
       it.effect(conformanceCase.name, () => conformanceCase.run.pipe(Effect.provide(testLayer)));
     }
   });
@@ -273,7 +291,7 @@ describe("MemoryConversationStore", () => {
             createdAt: "1970-01-01T00:00:00.001Z",
           },
         };
-        const saveBoundary: unknown = store.saveCheckpoint;
+        const saveBoundary: unknown = store.checkpoints!.save;
         if (typeof saveBoundary !== "function") {
           return yield* Effect.die(new Error("Expected a saveCheckpoint function"));
         }
@@ -290,7 +308,7 @@ describe("MemoryConversationStore", () => {
         });
         expect(
           Option.isNone(
-            yield* store.loadCheckpoint(LoadCheckpointRequest.make({ conversationId })),
+            yield* store.checkpoints!.load(LoadCheckpointRequest.make({ conversationId })),
           ),
         ).toBe(true);
       }),
@@ -464,7 +482,7 @@ describe("MemoryConversationStore", () => {
         const atCheckpoint = replayConversation(conversationId, firstRecords, first.tailDigest);
         const checkpointState = yield* Schema.encodeEffect(ConversationProjection)(atCheckpoint);
         const rejectedCheckpoint = yield* store
-          .saveCheckpoint(
+          .checkpoints!.save(
             SaveCheckpointRequest.make({
               checkpoint: ConversationCheckpoint.make({
                 schemaVersion: 1,
@@ -488,11 +506,11 @@ describe("MemoryConversationStore", () => {
         });
         expect(
           Option.isNone(
-            yield* store.loadCheckpoint(LoadCheckpointRequest.make({ conversationId })),
+            yield* store.checkpoints!.load(LoadCheckpointRequest.make({ conversationId })),
           ),
         ).toBe(true);
 
-        yield* store.saveCheckpoint(
+        yield* store.checkpoints!.save(
           SaveCheckpointRequest.make({
             checkpoint: ConversationCheckpoint.make({
               schemaVersion: 1,
@@ -515,7 +533,9 @@ describe("MemoryConversationStore", () => {
         );
         const second = yield* append(store, batch("checkpoint-2", [completed]), first);
         const exported = yield* store.export(ConversationExportRequest.make({ conversationId }));
-        const loaded = yield* store.loadCheckpoint(LoadCheckpointRequest.make({ conversationId }));
+        const loaded = yield* store.checkpoints!.load(
+          LoadCheckpointRequest.make({ conversationId }),
+        );
         expect(Option.isSome(loaded)).toBe(true);
         if (Option.isNone(loaded)) return;
         const decodedCheckpoint = yield* Schema.decodeUnknownEffect(ConversationProjection)(

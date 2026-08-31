@@ -23,4 +23,5 @@ export * from "./subscription-input.ts";
 export * from "./subscriptions.ts";
 export * from "./subscription-tools.ts";
 export * from "./store.ts";
+export * from "./persistent-history.ts";
 export * from "./wake.ts";

@@ -646,7 +646,7 @@ const verifyLane = Effect.fn("Certification.verifyLane")(function* (
       payload._tag === "SubmissionSettled" ||
       payload._tag === "AbortRequested"
     ) {
-      named.add(payload.submissionId);
+      if (payload.submissionId !== undefined) named.add(payload.submissionId);
     }
   }
   for (const submissionId of named) {
@@ -656,14 +656,16 @@ const verifyLane = Effect.fn("Certification.verifyLane")(function* (
       rows.set(submissionId, found.value);
     }
   }
-  const checkpoint = yield* store.loadCheckpoint(
-    LoadCheckpointRequest.make({ conversationId: lane }),
-  );
+  const checkpoint =
+    store.checkpoints === undefined
+      ? Option.none()
+      : yield* store.checkpoints.load(LoadCheckpointRequest.make({ conversationId: lane }));
   return yield* verifyConversationInvariants({
     export: exported,
     submissions: [...rows.values()],
     batchProducers,
     checkpoint: Option.getOrUndefined(checkpoint),
+    checkpointsSupported: store.checkpoints !== undefined,
     requireAllSettled: true,
   });
 });

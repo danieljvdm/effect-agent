@@ -11,6 +11,7 @@ import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Exit, Layer, Logger, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
+import { ConversationHistory } from "../src/conversation-history.ts";
 import { AgentRuntime } from "../src/index.ts";
 import { insertOutputContract, outputSchemaContract } from "../src/output-contract-internal.ts";
 
@@ -146,7 +147,9 @@ const policy = AgentPolicy.make({
   toolConcurrency: 1,
 });
 
-layer(identifiers)("RUN-028 model-visible output contract", (it) => {
+const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+
+layer(testLayer)("RUN-028 model-visible output contract", (it) => {
   it.effect(
     "carries the contract on every Turn's request adjacent to the last system block and never in official history",
     () => {

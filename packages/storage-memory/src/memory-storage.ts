@@ -1,4 +1,5 @@
 import { ConversationId } from "@effect-agent/core";
+import type { ConversationCheckpoint, ProducerEpoch, RecordId } from "@effect-agent/session";
 import {
   AppendConflict,
   AppendResult,
@@ -6,13 +7,13 @@ import {
   CanonicalSequence,
   CheckpointRejected,
   ConversationExportRequest,
-  ConversationCheckpoint,
   ConversationExport,
   ConversationMaterialization,
   ConversationNotMaterialized,
   ConversationObservation,
   ConversationRead,
   ConversationStore,
+  type ConversationCheckpoints,
   ConversationStoreError,
   ConversationTail,
   ConversationTailRequest,
@@ -22,8 +23,6 @@ import {
   FencedAppendRequest,
   LoadCheckpointRequest,
   ObservationOffset,
-  ProducerEpoch,
-  RecordId,
   SaveCheckpointRequest,
   type BatchId,
   type Digest,
@@ -490,7 +489,7 @@ const makeConversationStore = Effect.gen(function* () {
     }),
   );
 
-  const saveCheckpoint: ConversationStore["Service"]["saveCheckpoint"] = Effect.fn(
+  const saveCheckpoint: ConversationCheckpoints["save"] = Effect.fn(
     "MemoryConversationStore.saveCheckpoint",
   )((unvalidated) =>
     Effect.gen(function* () {
@@ -562,7 +561,7 @@ const makeConversationStore = Effect.gen(function* () {
     }),
   );
 
-  const loadCheckpoint: ConversationStore["Service"]["loadCheckpoint"] = Effect.fn(
+  const loadCheckpoint: ConversationCheckpoints["load"] = Effect.fn(
     "MemoryConversationStore.loadCheckpoint",
   )((unvalidated) =>
     Effect.gen(function* () {
@@ -600,8 +599,7 @@ const makeConversationStore = Effect.gen(function* () {
     observe,
     export: exportConversation,
     inspectTail,
-    saveCheckpoint,
-    loadCheckpoint,
+    checkpoints: { save: saveCheckpoint, load: loadCheckpoint },
   });
 });
 

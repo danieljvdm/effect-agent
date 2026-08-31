@@ -15,6 +15,7 @@ import {
 import {
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
+  type ConversationHistory,
   AgentSpawner,
   type AgentSpawnerParent,
   type RunBudgetHook,
@@ -308,8 +309,8 @@ export type SubagentReturnModeFailure = Schema.Union<
  * The native Effect AI Tool created by `Subagent.define` (SUB-001, SUB-003).
  * Its per-call dependencies are exactly the engine-provided `AgentSpawner`,
  * `RunEventSink`, and `SubagentDurability` plus `IdGenerator`; every child
- * requirement is a construction requirement of `SubagentRuntime.layer`
- * instead. The engine excludes its own per-batch services from the runtime's
+ * requirement except the inherited Conversation history policy is a construction requirement
+ * of `SubagentRuntime.layer`. The engine excludes its own per-batch services from the runtime's
  * public requirements, so the visible per-call surface stays `IdGenerator`.
  */
 export type SubagentTool<
@@ -821,7 +822,8 @@ export type SubagentChildRunFailure<
  * Binding's full runtime requirements (Model Layer requirements, child Tool
  * handlers and their services, Schema services), both projection
  * requirements, and the parent-owned reservation service. Nothing here leaks
- * into the per-call Tool handler requirements.
+ * into the per-call Tool handler requirements. ConversationHistory belongs to the parent Run's
+ * AgentSpawner and is inherited at invocation rather than captured when this Layer is built.
  */
 export type SubagentLayerRequirements<
   TargetInput extends Schema.Top,
@@ -839,22 +841,25 @@ export type SubagentLayerRequirements<
   InputPromptValue extends InputPromptSource<TargetInput["Type"], unknown, unknown> | undefined =
     undefined,
 > =
-  | AgentRuntimeRequirements<
-      RuntimeBinding<
-        TargetInput,
-        TargetOutput,
-        TargetInstructions,
-        TargetTools,
-        Provider,
-        ModelProvides,
-        ModelRequires,
-        InstructionError,
-        InstructionRequirements,
-        undefined,
-        InputPromptValue
+  | Exclude<
+      AgentRuntimeRequirements<
+        RuntimeBinding<
+          TargetInput,
+          TargetOutput,
+          TargetInstructions,
+          TargetTools,
+          Provider,
+          ModelProvides,
+          ModelRequires,
+          InstructionError,
+          InstructionRequirements,
+          undefined,
+          InputPromptValue
+        >,
+        HookRequirements,
+        InstructionRequirements
       >,
-      HookRequirements,
-      InstructionRequirements
+      ConversationHistory
     >
   | TargetInput["EncodingServices"]
   | PrepareRequirements

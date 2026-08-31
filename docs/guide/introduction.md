@@ -20,7 +20,7 @@ Effect program.
 ```ts [calculator-agent.ts]
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Agent, AgentPolicy, IdGenerator } from "@effect-agent/core";
-import { AgentRuntime } from "@effect-agent/engine";
+import { AgentRuntime, ConversationHistory } from "@effect-agent/engine";
 import { Config, Effect, Layer, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -63,7 +63,12 @@ const OpenAiLive = OpenAiClient.layerConfig({
   apiKey: Config.redacted("OPENAI_API_KEY"),
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
-const AppLive = Layer.mergeAll(CalculatorLive, IdGenerator.layer, OpenAiLive);
+const AppLive = Layer.mergeAll(
+  CalculatorLive,
+  IdGenerator.layer,
+  ConversationHistory.layerTransient,
+  OpenAiLive,
+);
 
 // 5. The Agent is still an Effect until the application entrypoint runs it.
 const program = AgentRuntime.run(CalculatorAgent, {

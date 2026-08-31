@@ -14,6 +14,7 @@ import {
   ConversationObservation,
   ConversationRead,
   ConversationStore,
+  type ConversationCheckpoints,
   ConversationStoreError,
   ConversationTail,
   ConversationTailRequest,
@@ -681,7 +682,7 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
     });
   });
 
-  const saveCheckpoint: ConversationStore["Service"]["saveCheckpoint"] = Effect.fn(
+  const saveCheckpoint: ConversationCheckpoints["save"] = Effect.fn(
     "SqliteConversationStore.saveCheckpoint",
   )(function* (request: SaveCheckpointRequest) {
     const validated = yield* Schema.decodeUnknownEffect(Schema.toType(SaveCheckpointRequest))(
@@ -726,7 +727,7 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
     yield* hitFailpoint("save-checkpoint:after");
   });
 
-  const loadCheckpoint: ConversationStore["Service"]["loadCheckpoint"] = Effect.fn(
+  const loadCheckpoint: ConversationCheckpoints["load"] = Effect.fn(
     "SqliteConversationStore.loadCheckpoint",
   )(function* (request: LoadCheckpointRequest) {
     const validated = yield* Schema.decodeUnknownEffect(Schema.toType(LoadCheckpointRequest))(
@@ -765,11 +766,10 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
     append,
     export: exportConversation,
     inspectTail,
-    loadCheckpoint,
     materialize,
     observe,
     read,
-    saveCheckpoint,
+    checkpoints: { save: saveCheckpoint, load: loadCheckpoint },
   });
 
   return Context.make(ConversationStore, conversationStore);

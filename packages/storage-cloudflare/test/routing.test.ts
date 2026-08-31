@@ -133,6 +133,7 @@ const withRoutedPorts = <A, E>(
   objectName: string,
   state: TransportControl,
   build: Effect.Effect<A, E, SubmissionLedger | ConversationStore | Crypto.Crypto>,
+  includeCheckpoints = true,
 ): Promise<A> =>
   runInDurableObject(conversationStub(objectName), (_instance, doState) =>
     Effect.runPromise(
@@ -145,6 +146,18 @@ const withRoutedPorts = <A, E>(
               ),
             ),
             routedConversationStoreLayer({ localConversationId: conversation(objectName) }).pipe(
+              Layer.updateService(ConversationStore, (store) =>
+                includeCheckpoints
+                  ? store
+                  : {
+                      materialize: store.materialize,
+                      append: store.append,
+                      read: store.read,
+                      observe: store.observe,
+                      export: store.export,
+                      inspectTail: store.inspectTail,
+                    },
+              ),
               Layer.provide(
                 Layer.mergeAll(
                   storeLayer({ storage: doState.storage, observationPollInterval: 1 }),
@@ -177,6 +190,28 @@ const claimedLocalLane = Effect.fn("RoutingTest.claimedLocalLane")(function* (
 });
 
 describe("cross-DO port routing", () => {
+  it("preserves absent checkpoint support while routing base store operations", () => {
+    const state = control();
+    return withRoutedPorts(
+      "wp2-no-checkpoints",
+      state,
+      Effect.gen(function* () {
+        const store = yield* ConversationStore;
+        expect(store.checkpoints).toBeUndefined();
+        const missing = yield* store
+          .export(
+            ConversationExportRequest.make({
+              conversationId: conversation("wp2-no-checkpoints-foreign"),
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(missing._tag).toBe("ConversationNotMaterialized");
+        expect(state.calls).toBe(1);
+      }),
+      false,
+    );
+  });
+
   it("maps hostile transport causes without escaping the typed error channel", () => {
     const hostile = new Proxy(
       {},
@@ -801,7 +836,9 @@ describe("cross-DO port routing", () => {
         }
 
         const checkpointFailure = yield* store
-          .loadCheckpoint(LoadCheckpointRequest.make({ conversationId: conversation(foreignConv) }))
+          .checkpoints!.load(
+            LoadCheckpointRequest.make({ conversationId: conversation(foreignConv) }),
+          )
           .pipe(Effect.flip);
         expect(checkpointFailure).toBeInstanceOf(ConversationStoreError);
         if (isConversationStoreError(checkpointFailure)) {

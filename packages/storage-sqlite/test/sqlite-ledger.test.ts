@@ -221,7 +221,7 @@ const inputRecord = (recordId: string, input: string): CanonicalRecord =>
     createdAt: at(1),
     deploymentId: TEST_DEPLOYMENT,
     payload: UserInputRecorded.make({
-      submissionId: id(UserInputRecorded.fields.submissionId, "submission-epoch-append"),
+      submissionId: id(SubmissionId, "submission-epoch-append"),
       kind: "user",
       input,
     }),
@@ -2116,3 +2116,4 @@ describe("SqliteSubmissionLedger", () => {
     ),
   );
 });
+import { SubmissionId } from "@effect-agent/core";

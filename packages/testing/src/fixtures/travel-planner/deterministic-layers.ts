@@ -1,4 +1,5 @@
 import { ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import { ConversationHistory } from "@effect-agent/engine";
 import { Context, Deferred, Effect, Layer, Option, Ref, Schema } from "effect";
 
 import {
@@ -422,6 +423,7 @@ export const DeterministicIdGeneratorLayer = Layer.effect(
   }),
 );
 export const TravelPlannerRuntimeLayer = Layer.mergeAll(
+  ConversationHistory.layerTransient,
   TravelPlannerToolkitLayer,
   FlightCatalogLayer,
   LodgingCatalogLayer,

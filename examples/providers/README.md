@@ -15,3 +15,18 @@ Effect AI client Layer, configured with its own redacted `OPENAI_API_KEY` or
 remains class `E`: process loss has no recovery promise.
 
 No provider wrapper, registry, or ambient model selection is introduced here.
+
+## Persistent history
+
+The offline history example runs two inputs against one SQLite Conversation, then reconstructs
+the Prompt in a new process. It requires Node, which supplies `node:sqlite`, and no credentials.
+
+```sh
+vp run -F @effect-agent/example-providers history --database /tmp/effect-agent-history.sqlite seed
+vp run -F @effect-agent/example-providers history --database /tmp/effect-agent-history.sqlite show
+```
+
+`seed` appends two complete Runs each time it executes. `show` loads their canonical history
+without constructing a model. The functions in [`src/history.ts`](src/history.ts) demonstrate
+`AgentRuntime.run` with `PersistentHistory.layer` and `ConversationHistory.load`; an application can replace the scripted Model with
+an upstream provider Model. An interrupted Run has no completion or recovery promise.

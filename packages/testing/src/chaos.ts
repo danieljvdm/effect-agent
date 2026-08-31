@@ -902,7 +902,7 @@ const submissionIdsNamedBy = (
       payload._tag === "SubmissionSettled" ||
       payload._tag === "AbortRequested"
     ) {
-      named.add(payload.submissionId);
+      if (payload.submissionId !== undefined) named.add(payload.submissionId);
     }
   }
   return named;

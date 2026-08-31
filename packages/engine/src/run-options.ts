@@ -714,11 +714,12 @@ export interface RunBufferLimits {
 }
 
 /**
- * Optional Phase 2 seams. Hook failures and requirements stay visible in the
- * returned Stream / Effect through the generic parameters.
+ * Per-Run values and advanced integration hooks. Use ConversationHistory for successful-run
+ * retention. Hook failures and requirements stay visible in the returned Stream / Effect
+ * through the generic parameters.
  */
 export interface RunOptions<HookError = never, HookRequirements = never> {
-  /** Reuse an existing ephemeral Conversation identity instead of allocating one. */
+  /** Reuse a Conversation identity, including retained history, instead of allocating one. */
   readonly conversationId?: ConversationId | undefined;
   /**
    * Preallocated Run identity used instead of `IdGenerator` when supplied.
@@ -735,9 +736,10 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    */
   readonly parentLink?: SubagentParentLink | undefined;
   /**
-   * Official prior history. The engine preserves it as the exact initial
-   * prefix, then appends this Run's evaluated instructions and decoded input.
-   * Context preparation never mutates this source.
+   * Explicit initial Prompt data, not a retention policy. With ConversationHistory.layerTransient,
+   * the engine preserves this exact prefix, then appends this Run's evaluated instructions and
+   * rendered input. Context preparation never mutates this source. Retaining ConversationHistory
+   * adapters load their own prefix and reject this option, even when the Prompt is empty.
    */
   readonly history?: Prompt.Prompt | undefined;
   readonly commandDrainPolicy?: CommandDrainPolicy | undefined;
@@ -822,7 +824,15 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   readonly scheduling?: RunSchedulingHook | undefined;
   /** Optional tightening-only overrides for the engine's finite in-memory buffer ceilings. */
   readonly bufferLimits?: RunBufferLimits | undefined;
-  /** Internal/public observation seam invoked whenever official history advances. */
+  /**
+   * Advanced incremental history integration, used with ConversationHistory.layerTransient.
+   * Invoked inline with the full Prompt whenever official history advances, including initial
+   * instructions/input before the first model call. It can write before the Run succeeds or its
+   * resources close. Failure stops execution through HookError; defects and interruption propagate.
+   * Earlier callback writes are caller-owned and are not rolled back if this or a later step fails.
+   * Use ConversationHistory for successful-run retention. Retaining adapters reject this hook;
+   * the durable coordinator uses it for live Prompt state while its journal owns durable commits.
+   */
   readonly onHistory?:
     | ((history: Prompt.Prompt) => Effect.Effect<void, HookError, HookRequirements>)
     | undefined;

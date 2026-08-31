@@ -44,6 +44,7 @@ export class ConversationStoreConformanceViolation extends Schema.TaggedError<Co
 
 export type ConversationStoreConformanceFailure =
   | ConversationStoreFailure
+  | CheckpointRejected
   | ConversationStoreConformanceViolation;
 
 /**
@@ -454,6 +455,31 @@ const checkpointBoundaries = conformanceCase(
     Effect.gen(function* () {
       const conversationId = decodeConversationId("conformance-checkpoints");
       const store = yield* ConversationStore;
+      const checkpoints = store.checkpoints;
+      if (checkpoints === undefined) {
+        return yield* ConversationStoreConformanceViolation.make({
+          caseName: "enforces checkpoint save and load boundary rules",
+          message: "The optional checkpoint suite requires checkpoint support",
+        });
+      }
+      const missing = [
+        yield* expectFailure(
+          "saving a checkpoint for an unmaterialized Conversation",
+          checkpoints.save(
+            SaveCheckpointRequest.make({
+              checkpoint: checkpointAt(conversationId, ZERO_SEQUENCE, EMPTY_TAIL_DIGEST),
+            }),
+          ),
+        ),
+        yield* expectFailure(
+          "loading a checkpoint for an unmaterialized Conversation",
+          checkpoints.load(LoadCheckpointRequest.make({ conversationId })),
+        ),
+      ];
+      yield* ensure(
+        missing.every(isConversationNotMaterialized),
+        "Checkpoints require a materialized Conversation",
+      );
       yield* materialize(conversationId, EPOCH_ONE);
       const first = yield* append(
         conversationId,
@@ -462,7 +488,7 @@ const checkpointBoundaries = conformanceCase(
 
       const aheadOfTail = yield* expectFailure(
         "a checkpoint claiming a sequence beyond the committed tail",
-        store.saveCheckpoint(
+        checkpoints.save(
           SaveCheckpointRequest.make({
             checkpoint: checkpointAt(
               conversationId,
@@ -479,7 +505,7 @@ const checkpointBoundaries = conformanceCase(
 
       const digestMismatch = yield* expectFailure(
         "a checkpoint whose digest does not match the canonical chain",
-        store.saveCheckpoint(
+        checkpoints.save(
           SaveCheckpointRequest.make({
             checkpoint: checkpointAt(conversationId, first.lastSequence, EMPTY_TAIL_DIGEST),
           }),
@@ -490,15 +516,15 @@ const checkpointBoundaries = conformanceCase(
         "A checkpoint with a mismatched digest must be rejected with reason digest-mismatch",
       );
       yield* ensure(
-        Option.isNone(yield* store.loadCheckpoint(LoadCheckpointRequest.make({ conversationId }))),
+        Option.isNone(yield* checkpoints.load(LoadCheckpointRequest.make({ conversationId }))),
         "Rejected checkpoints must not become loadable",
       );
 
       const valid = checkpointAt(conversationId, first.lastSequence, first.tailDigest);
-      yield* store.saveCheckpoint(SaveCheckpointRequest.make({ checkpoint: valid }));
-      yield* store.saveCheckpoint(SaveCheckpointRequest.make({ checkpoint: valid }));
+      yield* checkpoints.save(SaveCheckpointRequest.make({ checkpoint: valid }));
+      yield* checkpoints.save(SaveCheckpointRequest.make({ checkpoint: valid }));
 
-      const loaded = yield* store.loadCheckpoint(LoadCheckpointRequest.make({ conversationId }));
+      const loaded = yield* checkpoints.load(LoadCheckpointRequest.make({ conversationId }));
       yield* ensure(
         Option.isSome(loaded) &&
           loaded.value.throughSequence === first.lastSequence &&
@@ -506,7 +532,7 @@ const checkpointBoundaries = conformanceCase(
         "A valid checkpoint must load bound to its canonical sequence and digest",
       );
 
-      const beforeCheckpoint = yield* store.loadCheckpoint(
+      const beforeCheckpoint = yield* checkpoints.load(
         LoadCheckpointRequest.make({ conversationId, atOrBeforeSequence: ZERO_SEQUENCE }),
       );
       yield* ensure(
@@ -519,9 +545,7 @@ const checkpointBoundaries = conformanceCase(
         batch("checkpoint-batch-2", [record("checkpoint-record-2", "Nara")]),
         first,
       );
-      const afterAppend = yield* store.loadCheckpoint(
-        LoadCheckpointRequest.make({ conversationId }),
-      );
+      const afterAppend = yield* checkpoints.load(LoadCheckpointRequest.make({ conversationId }));
       yield* ensure(
         Option.isSome(afterAppend) && afterAppend.value.throughSequence === first.lastSequence,
         "An older checkpoint must remain loadable after later appends",
@@ -617,18 +641,6 @@ const notMaterializedOperations = conformanceCase(
           "inspecting the tail of an unmaterialized Conversation",
           store.inspectTail(ConversationTailRequest.make({ conversationId })),
         ),
-        yield* expectFailure(
-          "saving a checkpoint for an unmaterialized Conversation",
-          store.saveCheckpoint(
-            SaveCheckpointRequest.make({
-              checkpoint: checkpointAt(conversationId, ZERO_SEQUENCE, EMPTY_TAIL_DIGEST),
-            }),
-          ),
-        ),
-        yield* expectFailure(
-          "loading a checkpoint for an unmaterialized Conversation",
-          store.loadCheckpoint(LoadCheckpointRequest.make({ conversationId })),
-        ),
       ];
       yield* Effect.forEach(
         failures,
@@ -652,7 +664,10 @@ export const conversationStoreConformanceCases: ReadonlyArray<ConversationStoreC
   tailConflict,
   producerFencing,
   offsetResumability,
-  checkpointBoundaries,
   tailInspection,
   notMaterializedOperations,
 ];
+
+/** Additional contract cases only for adapters advertising `ConversationStore.checkpoints`. */
+export const conversationCheckpointConformanceCases: ReadonlyArray<ConversationStoreConformanceCase> =
+  [checkpointBoundaries];

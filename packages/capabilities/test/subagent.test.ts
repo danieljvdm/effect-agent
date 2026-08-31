@@ -12,6 +12,7 @@ import {
   TurnId,
 } from "@effect-agent/core";
 import {
+  ConversationHistory,
   type RunEventSink,
   type SubagentDurability,
   type SubagentDurabilityError,
@@ -104,7 +105,11 @@ const identifiers = Layer.effect(IdGenerator)(
   }),
 );
 
-const TestServices = Layer.mergeAll(identifiers, SubagentReservationsMemoryLive);
+const TestServices = Layer.mergeAll(
+  identifiers,
+  SubagentReservationsMemoryLive,
+  ConversationHistory.layerTransient,
+);
 
 const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncoded> => [
   { type: "text-start", id: "answer" },

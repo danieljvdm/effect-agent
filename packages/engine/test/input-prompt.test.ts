@@ -16,6 +16,7 @@ import {
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/unstable/ai";
 
+import { ConversationHistory } from "../src/conversation-history.ts";
 import { AgentRuntime, ContextCompactor, type CompactionDecision } from "../src/index.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -63,7 +64,9 @@ class InputPromptFailure extends Schema.TaggedError<InputPromptFailure>()(
   {},
 ) {}
 
-layer(identifiers)("Agent input prompts", (it) => {
+const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+
+layer(testLayer)("Agent input prompts", (it) => {
   it.effect("projects decoded native content before context preparation and summary requests", () =>
     Effect.gen(function* () {
       const order: Array<string> = [];

@@ -8,7 +8,10 @@ import {
   FencedAppendRequest,
   UserInputRecorded,
 } from "@effect-agent/session";
-import { conversationStoreConformanceCases } from "@effect-agent/session/testing";
+import {
+  conversationStoreConformanceCases,
+  conversationCheckpointConformanceCases,
+} from "@effect-agent/session/testing";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { Crypto } from "effect";
@@ -68,7 +71,7 @@ const inputRecord = (recordId: string, input: string): CanonicalRecord =>
     createdAt: at(1),
     deploymentId: TEST_DEPLOYMENT,
     payload: UserInputRecorded.make({
-      submissionId: id(UserInputRecorded.fields.submissionId, "submission-do-store"),
+      submissionId: id(SubmissionId, "submission-do-store"),
       kind: "user",
       input,
     }),
@@ -89,7 +92,10 @@ describe("DoConversationStore", () => {
   // executed in-workerd against a real SQLite-backed Durable Object's storage. One Durable
   // Object per case: the 0.21.x pool shares storage across tests within a run.
   describe("shared ConversationStore conformance", () => {
-    for (const conformanceCase of conversationStoreConformanceCases) {
+    for (const conformanceCase of [
+      ...conversationStoreConformanceCases,
+      ...conversationCheckpointConformanceCases,
+    ]) {
       it(conformanceCase.name, () => {
         const spanNames: Array<string> = [];
         const tracer = Tracer.make({
@@ -233,3 +239,4 @@ describe("DoConversationStore", () => {
       ),
     ));
 });
+import { SubmissionId } from "@effect-agent/core";

@@ -1,6 +1,7 @@
 import { CodeMode } from "@effect-agent/capabilities";
 import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import {
+  ConversationHistory,
   AgentRuntime,
   ToolExecutionClass,
   toolFailureObserverLayer,
@@ -167,7 +168,9 @@ const runScenario = (options: { readonly code: string; readonly maxToolCalls: nu
 // The suite opts out of the injected test services because the in-process
 // executor's wall-clock deadline runs on the live Clock (see the substitute
 // suite for the rationale).
-layer(identifiers, { excludeTestServices: true })("Code Mode end to end", (it) => {
+const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+
+layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => {
   it.effect(
     "RUN-036 CAP-016 observes the inner Cause while CodeModeFailure recovers to a completed durable Run",
     () => {

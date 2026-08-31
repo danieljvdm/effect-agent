@@ -1,13 +1,20 @@
-import { Agent, AgentPolicy, type ConversationId } from "@effect-agent/core";
+import { Agent, AgentPolicy, type ConversationId, type IdGenerator } from "@effect-agent/core";
+import {
+  type ConversationHistory,
+  AgentRuntime,
+  type AgentRuntimeFailure,
+} from "@effect-agent/engine";
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Effect, Schema } from "effect";
+import { type Stream, Context, Effect, Schema, type Scope } from "effect";
 import { Toolkit, type LanguageModel, type Model } from "effect/unstable/ai";
 
+import { PersistentHistory } from "../src/history.ts";
 import {
   type DurableAgentRuntime,
   DurableWorkerBinding,
   type DefinitionDigests,
   type DurableWorkerRequirements,
+  type ConversationStore,
 } from "../src/index.ts";
 
 type Equal<Left, Right> =
@@ -62,6 +69,22 @@ const proveWorkerRequirements = (
   const worker = runtime.runWorker(agent);
   const registered = DurableWorkerBinding.make(agent, digests);
   const transparent = DurableWorkerBinding.makeDigestTransparent(agent);
+  const execution = AgentRuntime.run(
+    agent,
+    { question: "hello", hostOnly: "private" },
+    { conversationId },
+  );
+  const retained = execution.pipe(Effect.provide(PersistentHistory.layer), Effect.scoped);
+  const events = AgentRuntime.stream(
+    agent,
+    { question: "hello", hostOnly: "private" },
+    { conversationId },
+  );
+  const detached = AgentRuntime.start(
+    agent,
+    { question: "hello", hostOnly: "private" },
+    { conversationId },
+  );
 
   type Expected = InputProjection | InstructionContext;
   type ProcessProof = Assert<Equal<Effect.Services<typeof process>, Expected>>;
@@ -72,6 +95,28 @@ const proveWorkerRequirements = (
   type FailureProof = Assert<
     Equal<Extract<Agent.Failure<typeof agent>, InputProjectionFailure>, InputProjectionFailure>
   >;
+  type RunRequirementsProof = Assert<
+    Equal<
+      Effect.Services<typeof execution>,
+      Expected | ConversationHistory | IdGenerator | Scope.Scope
+    >
+  >;
+  type StreamRequirementsProof = Assert<
+    Equal<Stream.Services<typeof events>, Expected | ConversationHistory | IdGenerator>
+  >;
+  type StartRequirementsProof = Assert<
+    Equal<
+      Effect.Services<typeof detached>,
+      Expected | ConversationHistory | IdGenerator | Scope.Scope
+    >
+  >;
+  type HistoryRequirementsProof = Assert<
+    Equal<Effect.Services<typeof retained>, Expected | ConversationStore | IdGenerator>
+  >;
+  type HistoryFailureProof = Assert<
+    Equal<Effect.Error<typeof retained>, AgentRuntimeFailure<typeof agent>>
+  >;
+  type HistoryOutputProof = Assert<Equal<Effect.Success<typeof retained>["output"], string>>;
   const proofs: readonly [
     ProcessProof,
     WorkerProof,
@@ -79,7 +124,13 @@ const proveWorkerRequirements = (
     TransparentProof,
     PublicProof,
     FailureProof,
-  ] = [true, true, true, true, true, true];
+    RunRequirementsProof,
+    StreamRequirementsProof,
+    StartRequirementsProof,
+    HistoryRequirementsProof,
+    HistoryFailureProof,
+    HistoryOutputProof,
+  ] = [true, true, true, true, true, true, true, true, true, true, true, true];
   return proofs;
 };
 

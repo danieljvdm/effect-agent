@@ -41,6 +41,8 @@ import type { ConversationCheckpoint, ConversationExport } from "./store.ts";
  *   `digest-chain` and `checkpoint-binding` checks report `skipped` with the honest reason;
  *   adapter-level `verifyOnOpen` remains the storage-side full audit.
  * - `checkpoint` — the stored checkpoint to bind against the recomputed chain, when one exists.
+ * - `checkpointsSupported` — whether the caller inspected a supporting adapter. Without this
+ *   evidence or a supplied checkpoint, checkpoint verification is skipped.
  * - `requireAllSettled` — convergence mode (certification Tier 2, chaos, soak): additionally
  *   require every known Submission to be settled.
  */
@@ -49,6 +51,8 @@ export interface ConversationInvariantInput {
   readonly submissions: ReadonlyArray<SubmissionSnapshot>;
   readonly batchProducers?: ReadonlyMap<BatchId, ProducerId> | undefined;
   readonly checkpoint?: ConversationCheckpoint | undefined;
+  /** Set only after checking the adapter's optional checkpoint capability. */
+  readonly checkpointsSupported?: boolean | undefined;
   readonly requireAllSettled?: boolean | undefined;
 }
 
@@ -345,7 +349,9 @@ export const verifyConversationInvariants = Effect.fn("Session.verifyConversatio
     }
 
     // 8. checkpoint-binding
-    if (input.checkpoint === undefined) {
+    if (input.checkpoint === undefined && input.checkpointsSupported !== true) {
+      checks.push(check("checkpoint-binding", "skipped", "checkpoint support was not supplied"));
+    } else if (input.checkpoint === undefined) {
       checks.push(check("checkpoint-binding", "passed", "no stored checkpoint"));
     } else if (input.checkpoint.throughSequence > exported.tailSequence) {
       checks.push(

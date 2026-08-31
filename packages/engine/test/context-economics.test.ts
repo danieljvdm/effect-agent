@@ -25,6 +25,7 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
+import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentRuntime,
   formatRunStatus,
@@ -173,7 +174,9 @@ const postMessageToolkit = Toolkit.make(PostMessageTool);
 
 const answerOutput = Schema.Struct({ answer: Schema.String });
 
-layer(identifiers)("context economics — bounding, tracking, status, exhaustion", (it) => {
+const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+
+layer(testLayer)("context economics — bounding, tracking, status, exhaustion", (it) => {
   // ---------------------------------------------------------------- RUN-022
 
   it.effect(

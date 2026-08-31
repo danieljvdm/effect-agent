@@ -456,6 +456,27 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       const digestCheck = checkByName(report, "digest-chain");
       expect(digestCheck.status).toBe("skipped");
       expect(digestCheck.detail).toContain("producer identity");
+
+      const store = yield* ConversationStore;
+      const withoutCheckpoints = ConversationStore.of({
+        materialize: store.materialize,
+        append: store.append,
+        read: store.read,
+        observe: store.observe,
+        export: store.export,
+        inspectTail: store.inspectTail,
+      });
+      const unsupported = yield* Effect.flatMap(DurableAgentRuntime, (runtime) =>
+        runtime.verify(decodeConversationId(conversation)),
+      ).pipe(
+        Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+        Effect.provideService(ConversationStore, withoutCheckpoints),
+      );
+      expect(unsupported.ok).toBe(true);
+      expect(checkByName(unsupported, "checkpoint-binding")).toMatchObject({
+        status: "skipped",
+        detail: "checkpoint support was not supplied",
+      });
     }),
   );
 
