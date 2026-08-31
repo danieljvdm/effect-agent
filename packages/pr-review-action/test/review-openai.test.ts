@@ -873,6 +873,73 @@ describe("review provider boundary", () => {
       }),
   );
 
+  it.effect.each(["http", "stream-eof", "malformed-count"] as const)(
+    "preserves an unmetered review after %s while leaving pre-dispatch failures typed",
+    (failure) =>
+      Effect.gen(function* () {
+        let sends = 0;
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.sync(() => {
+              if (url.pathname.endsWith("/input_tokens"))
+                return json(httpRequest, {
+                  object: "response.input_tokens",
+                  input_tokens: failure === "malformed-count" ? -1 : 70_000,
+                });
+              sends += 1;
+              return failure === "http"
+                ? json(httpRequest, { error: { message: "private-provider-fixture" } }, 500)
+                : HttpClientResponse.fromWeb(
+                    httpRequest,
+                    new globalThis.Response("", {
+                      headers: { "content-type": "text/event-stream" },
+                    }),
+                  );
+            }),
+          ),
+        );
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "unmetered-review",
+        });
+        const exit = yield* makeReviewer({ model, costControl: provider.costControl })
+          .review(request)
+          .pipe(
+            Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+            Effect.provideService(ReviewRepository, repository),
+            Effect.exit,
+          );
+        const dispatched = failure !== "malformed-count";
+        expect(sends).toBe(dispatched ? 1 : 0);
+        expect(Exit.isSuccess(exit)).toBe(dispatched);
+        if (Exit.isSuccess(exit)) {
+          expect(exit.value).toMatchObject({
+            incomplete: true,
+            turns: 1,
+            report: { findings: [] },
+            usage: { estimatedCostMicrousd: 0, reservedCostMicrousd: 990_000 },
+          });
+          expect(
+            reviewPublicationFailure({
+              blockingFindings: 0,
+              unreviewedPaths: 0,
+              unresolvedChangeRequests: 0,
+              incomplete: exit.value.incomplete,
+            }),
+          ).toMatchObject({ _tag: "ReviewAttemptIncomplete" });
+        } else {
+          expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
+            _tag: "AiError",
+          });
+          expect(yield* provider.costControl.snapshot).toMatchObject({
+            modelCalls: 0,
+            usage: { reservedCostMicrousd: 0 },
+          });
+        }
+      }),
+  );
+
   it.effect.each(["http", "missing-usage", "malformed-count", "stream-eof"])(
     "fails closed on %s without refunding capped requests with unknown charges",
     (failure) =>
@@ -912,6 +979,7 @@ describe("review provider boundary", () => {
         }
         const snapshot = yield* provider.costControl.snapshot;
         expect(snapshot.stopped).toBe(false);
+        expect(snapshot.modelCalls).toBe(failure === "malformed-count" ? 0 : 1);
         expect(snapshot.usage.estimatedCostMicrousd).toBe(0);
         expect(snapshot.usage.reservedCostMicrousd).toBe(
           failure === "malformed-count" ? 0 : 999_980,

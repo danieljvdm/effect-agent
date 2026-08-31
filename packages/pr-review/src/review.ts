@@ -107,6 +107,7 @@ export class ReviewCostSnapshot extends Schema.Class<ReviewCostSnapshot>(
   "@effect-agent/pr-review/ReviewCostSnapshot",
 )({
   stopped: Schema.Boolean,
+  /** Admitted provider attempts, including failed or still-unmetered requests. */
   modelCalls: Schema.Natural,
   usage: ReviewUsage,
 }) {}
