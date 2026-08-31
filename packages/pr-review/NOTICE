@@ -1,5 +1,4 @@
-This package includes adaptations of the review instructions and numbered diff
-hunk presentation from PR-Agent:
+This package includes adaptations of the review instructions from PR-Agent:
 
 https://github.com/The-PR-Agent/pr-agent
 Pinned source: 9e6d6a5b40f9ce90bcc085466ba7a42c0837c37a

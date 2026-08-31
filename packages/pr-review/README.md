@@ -1,10 +1,16 @@
 # @effect-agent/pr-review
 
 A small, provider-neutral review agent. One bounded model run receives every admitted patch as
-numbered new and old hunks, reads immutable base or head source when needed, records established
+a literal unified diff, reads immutable base or head source when needed, records established
 findings with `record_finding`, and returns findings through a required native completion Tool.
 There is no voting, candidate cache, private hypothesis
 handoff, or repository code execution.
+
+The native Agent `inputPrompt` projects each complete patch once, with literal newlines. It keeps
+file headers, hunk ranges, additions, deletions, context, and mode or rename metadata. It does not
+duplicate context into separate old/new views or JSON-escape the source for the model. The canonical
+`ReviewRequest` and finding validation retain the original patches. This reduces repeated input
+overhead without excluding changes; it does not guarantee a complete review within a spending cap.
 
 The reviewer traces changed entry points and boundaries through downstream consumers, guards,
 finite resources, transformations, effects, completion, and unchanged callees. A finding must have
@@ -61,5 +67,5 @@ access and does not cache review answers.
 `ReviewSource.fromText(request, text)` applies the shared line and character
 bounds after the host authorizes and reads a file.
 
-The numbered hunk presentation and portions of the review instructions are adapted from
+Portions of the review instructions are adapted from
 [PR-Agent](https://github.com/The-PR-Agent/pr-agent). See `NOTICE` for its MIT license attribution.

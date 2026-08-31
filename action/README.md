@@ -23,8 +23,11 @@ Automatic waves use the configured limit, defaulting to two; zero disables autom
 Only trusted bot-authored terminal markers count. Failed attempts count but cannot become diff
 baselines. An owner, member, or collaborator can request `@effect-agent review` for incremental
 review or `@effect-agent review full` for the whole admitted diff. Manual waves do not consume the
-automatic allowance. Missing baselines or incomplete comparisons stop incremental review instead
-of silently expanding scope. The workflow runs trusted default-branch code, serializes attempts,
+automatic allowance. If a rebase changes the merge base, automatic mode reviews the full diff
+from the current merge base in the same attempt, under the same spending ceiling. It labels the
+result as a full review; this fallback does not reset the automatic allowance. Explicit incremental
+requests still stop when their baseline is missing or its merge base changed. Incomplete repository
+comparisons fail in every mode. The workflow runs trusted default-branch code, serializes attempts,
 and refuses stale findings. If a push makes an attempt stale before publication, the Action logs
 the inspected and current commits and posts only an incomplete notice bound to the inspected commit.
 The stale attempt counts toward the automatic allowance, but cannot mark the new commit as already
@@ -68,6 +71,13 @@ invoice audit or an OpenAI account spending limit. Usage estimates remain separa
 reservations. Each review's logs and footer show model calls, ordinary input, cache reads, cache
 writes, output, cache-hit ratio, and estimated cost. Raw provider failure causes, credentials, and
 repository source are excluded from the Action's diagnostics.
+
+Each admitted patch reaches the model once as literal unified diff text. The native Agent input
+projection keeps all supplied changes while avoiding JSON-escaped source and duplicated old/new
+context. A large remaining input can still prevent another call before the observed spend reaches
+$1, because admission must cover a cache miss. Refusal logs report the counted input, remaining
+balance, and minimum possible request reservation. Cached input also still counts toward the
+reviewer's cumulative token limit.
 
 The Action uses explicit-only caching with a 30-minute TTL and a stable head-based routing key.
 It marks reusable instructions, the diff, and completed tool batches before the ephemeral run-status
