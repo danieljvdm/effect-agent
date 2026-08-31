@@ -15,10 +15,11 @@ Rebuild the committed bundle with `vp run action:build`.
 
 One bounded review run assesses every admitted patch before using immutable base and head source
 to resolve specific questions about plausible defects. Straightforward changes can finish from
-the diff; source tools are not an exhaustive repository audit. The host validates paths and RIGHT-side anchors and publishes against the inspected
-head. A stopped run preserves findings recorded before research ended. Preparation failures
-publish a failure marker. Blocking findings request changes and fail the Action after publication; other outcomes
-remain comments and cannot clear an older change request.
+the diff; source tools are not an exhaustive repository audit. The host validates paths and
+RIGHT-side anchors and publishes against the inspected head. A stopped run preserves findings
+recorded before research ended. Preparation failures publish a failure marker. Blocking findings
+request changes and fail the Action after publication; other outcomes remain comments and cannot
+clear an older change request.
 
 Automatic waves use the configured limit, defaulting to two; zero disables automatic reviews.
 Only trusted bot-authored terminal markers count. Failed attempts count but cannot become diff
@@ -39,10 +40,12 @@ diagnostics or model output.
 
 The reviewer sees its actual spending balance before each request. It can explicitly report
 unfinished coverage while preserving established findings. If turn, tool, or cost limits stop
-research, the Action publishes established findings with an incomplete-coverage
-warning and fails the check, including when no defects were found. Such an attempt cannot become
+research, the Action publishes established findings with an incomplete-coverage warning and fails
+the check, including when no defects were found. Such an attempt cannot become
 an incremental baseline or clear an earlier change request. This preserves useful findings without
 claiming the full change was reviewed.
+The model's `incomplete` flag describes unfinished assessment of supplied patches. The Action
+separately discloses unavailable paths, even when assessment of the supplied patches completes.
 
 ## Spending and prompt caching
 

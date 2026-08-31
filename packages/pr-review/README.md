@@ -20,8 +20,12 @@ expose an unchanged downstream failure remain eligible. Incremental findings mus
 exact delta; unrelated old bugs and target-only changes stay out of scope, while explicit reverts
 remain reviewable.
 Changes to collection membership, cardinality, or representation warrant checking affected
-consumer limits and encoding at supported bounds. Novelty compares base and head with the same
-supported operation input, including when a previously failing helper becomes newly reachable.
+consumer limits with a supported boundary input, including transformations and aggregation.
+New or moved resource acquisition warrants checking an early-failure sequence and its cleanup.
+Owned untrusted-input and model-output Schema boundaries must safely handle every admitted value,
+including adversarial values at the field and collection bounds.
+Novelty compares base and head with the same supported operation input, including when a
+previously failing helper becomes newly reachable.
 
 The result contains model findings with host-validated paths and line anchors, exact duplicate
 removal, aggregate usage, and optional host-priced cost. Unknown changed paths fail closed and

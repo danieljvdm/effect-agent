@@ -33,7 +33,7 @@ const ignore = [
   ".claude/skills/**",
 ];
 const root = "examples/pr-review-eval";
-const directory = `${root}/results/efficient-261/candidate-2`;
+const directory = `${root}/results/efficient-261/candidate-3`;
 
 // Temporary fixed acceptance runner. Historical revisions are only GitHub blob data.
 // The final integration PR removes this one-shot execution machinery after archiving its outputs.
@@ -152,13 +152,39 @@ export const acceptance259 = Effect.gen(function* () {
   });
   const boundVariant = {
     ...variant,
-    review: (request: ReviewRequest) => {
+    review: Effect.fn("Acceptance.review")(function* (request: ReviewRequest) {
       const item = prepared.find(
         (candidate) => candidate.evalCase.request.headRevision === request.headRevision,
       );
-      if (item === undefined) return variant.review(request);
-      return variant.review(request).pipe(Effect.provideService(ReviewRepository, item.repository));
-    },
+      const repository = item?.repository ?? (yield* ReviewRepository);
+      const caseId = suite.cases.find((candidate) => candidate.request === request)?.id;
+      const observed = ReviewRepository.of({
+        readFile: Effect.fn("Acceptance.readFile")(function* (input) {
+          const result = yield* repository.readFile(input).pipe(
+            Effect.tapError((error) =>
+              Effect.logInfo("Acceptance source unavailable", {
+                caseId,
+                ...input,
+                tag: error._tag,
+              }),
+            ),
+          );
+          yield* Effect.logInfo("Acceptance source read", {
+            caseId,
+            ...input,
+            totalLines: result.totalLines,
+            returnedCharacters: result.content.length,
+          });
+          return result;
+        }),
+        findFiles: Effect.fn("Acceptance.findFiles")(function* (input) {
+          const result = yield* repository.findFiles(input);
+          yield* Effect.logInfo("Acceptance file search", { caseId, ...input, ...result });
+          return result;
+        }),
+      });
+      return yield* variant.review(request).pipe(Effect.provideService(ReviewRepository, observed));
+    }),
   };
   yield* writeObservations(
     `${directory}/observations.jsonl`,
