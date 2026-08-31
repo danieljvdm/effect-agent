@@ -256,64 +256,6 @@ body::before {
   text-transform: uppercase;
 }
 
-.contract-panel {
-  overflow: hidden;
-  border: 1px solid #3a3c35;
-  border-radius: 6px;
-  background: #171814;
-  box-shadow: 0 22px 50px rgba(13, 14, 12, 0.22);
-  color: #f2f0e8;
-}
-
-.contract-panel__signature {
-  border-bottom: 1px solid #3a3c35;
-  padding: 1.5rem;
-  font-family: var(--vp-font-family-mono);
-  font-size: clamp(1.25rem, 3vw, 1.85rem);
-  letter-spacing: -0.04em;
-}
-
-.contract-panel__angle {
-  color: #777b6f;
-}
-.contract-panel__type {
-  color: #c6f36a;
-}
-.contract-panel__error {
-  color: #f18879;
-}
-.contract-panel__requirements {
-  color: #9eb2ff;
-}
-
-.contract-panel__legend {
-  margin: 0;
-  padding: 0;
-}
-
-.contract-panel__legend > div {
-  display: grid;
-  grid-template-columns: 2.2rem 1fr;
-  align-items: baseline;
-  border-bottom: 1px solid #2d2f2a;
-  padding: 0.8rem 1.2rem;
-}
-
-.contract-panel__legend > div:last-child {
-  border-bottom: 0;
-}
-
-.contract-panel__legend dt {
-  color: #c6f36a;
-  font-family: var(--vp-font-family-mono);
-}
-
-.contract-panel__legend dd {
-  margin: 0;
-  color: #b8bbb0;
-  font-size: 0.85rem;
-}
-
 .ea-index .VPHome {
   margin-bottom: 0;
   padding-bottom: 0;

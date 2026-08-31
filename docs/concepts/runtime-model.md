@@ -69,24 +69,16 @@ Tool handlers run under a finite `Semaphore`. Progress can arrive in completion 
 results keep the model's declaration order. The next model request sees the complete batch.
 Agent, tenant, and platform limits may further reduce concurrency.
 
-### Delegate to subagents {#subagents}
+## Subagents {#subagents}
 
-[`Subagent.define`](../guide/tools#delegate-to-an-agent) exposes a child agent as a tool in the
-parent's toolkit. The child runs its own model/tool loop in a separate conversation. `prepareInput`
-selects what the child receives; `projectResult` selects what returns as the parent's tool result.
-The child's raw transcript stays private unless that projection exposes it.
+Delegation starts a child run in a fresh conversation through a tool in the parent's toolkit. The
+child repeats the same model/tool loop under its own policy and a reserved allowance. Its projected
+result returns to the parent as the delegation tool result; its raw transcript stays private.
 
-The parent reserves a bounded allowance before starting a child. Child policy and delegation policy
-limit turns, tool calls, tokens, cost, duration, concurrency, and result size. Child work uses the
-tool scheduler, and the parent joins the child outcome before settling that tool call.
-
-Ephemeral children share the parent's Scope. Durable children have their own attempts and stable
-parent linkage; a waiting parent releases its worker permit. Recovery rejoins the established child
-and releases its budget reservation once. It does not start a replacement child when admission is
-uncertain. Nested delegation, handoff, and detached children are currently unsupported.
-
-See [delegation budgets](./budgets#delegation-budgets) and
-[durable child recovery](./durability#attached-subagents).
+The parent joins the child outcome before settling that tool call. Durable recovery preserves the
+child's identity, allowance, and committed usage across attempts. See the
+[Subagents guide](../guide/subagents) for setup, input and result projections, budgets, authority,
+and child lifecycle.
 
 <a id="safe-seam-input"></a>
 <a id="when-queued-input-is-applied"></a>

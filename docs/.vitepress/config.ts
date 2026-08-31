@@ -84,9 +84,14 @@ export default defineConfig({
           { text: "Run & stream", link: "/guide/run-agents" },
           { text: "Conversations", link: "/guide/conversations" },
           { text: "Context management", link: "/guide/context-management" },
-          { text: "Deterministic testing", link: "/guide/testing" },
-          { text: "Code Mode", link: "/guide/code-mode" },
+        ],
+      },
+      {
+        text: "Extensions",
+        items: [
+          { text: "Subagents", link: "/guide/subagents" },
           { text: "Sandbox execution", link: "/guide/sandbox" },
+          { text: "Code Mode", link: "/guide/code-mode" },
           { text: "Browser tools", link: "/guide/browser" },
         ],
       },
@@ -99,8 +104,9 @@ export default defineConfig({
         ],
       },
       {
-        text: "Operate",
+        text: "Test & operate",
         items: [
+          { text: "Deterministic testing", link: "/guide/testing" },
           { text: "Operations", link: "/guide/operations" },
           { text: "Certify storage adapters", link: "/guide/certify-adapters" },
         ],

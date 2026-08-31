@@ -4,8 +4,6 @@ import TwoslashFloatingVue from "@shikijs/vitepress-twoslash/client";
 import type { Theme } from "vitepress";
 import DefaultTheme from "vitepress/theme-without-fonts";
 
-import ContractPanel from "./components/ContractPanel.vue";
-
 import "@shikijs/vitepress-twoslash/style.css";
 import "./custom.css";
 
@@ -21,6 +19,5 @@ export default {
         },
       },
     });
-    app.component("ContractPanel", ContractPanel);
   },
 } satisfies Theme;

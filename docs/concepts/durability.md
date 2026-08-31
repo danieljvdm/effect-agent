@@ -89,7 +89,7 @@ See [Operations](../guide/operations).
 
 ## Attached subagents
 
-Use [`Subagent.define`](../guide/tools#delegate-to-an-agent) to expose a child agent as a tool.
+Use [`Subagent.define`](../guide/subagents#define-a-delegation) to expose a child agent as a tool.
 A durable child owns a separate conversation and attempt. While waiting for it, the parent releases
 its worker permit.
 

@@ -21,7 +21,7 @@ Before 1.0, APIs and stored data may change without a migration path.
 | Recover work after a crash             | [Durability](../concepts/durability)                     | Registered agents, workers, storage, authorization |
 | Prune or summarize context             | [Context management](../guide/context-management)        | Context limits and compaction policy               |
 | Require approval or limit spending     | [Run hooks](../guide/run-agents#operational-hooks)       | Approval policy, budget hooks, cost estimates      |
-| Delegate to another agent              | [Subagents](../guide/tools#delegate-to-an-agent)         | Targets, bindings, permissions, budgets            |
+| Delegate to another agent              | [Subagents](../guide/subagents)                          | Targets, bindings, permissions, budgets            |
 | Schedule new input                     | [Scheduling](../guide/operations#scheduled-input)        | Owner policy, registered inputs, driver            |
 | React to external events               | [Subscriptions](../guide/operations#event-subscriptions) | Authenticated source, preparation, authorization   |
 | Run generated JavaScript               | [Code Mode](../guide/code-mode)                          | Read-only tools and an isolated executor           |

@@ -6,7 +6,7 @@ import { Effect, Schema } from "effect";
 import { AppLive } from "./setup";
 import { TravelTools } from "./tools";
 
-const TravelPlanner = Agent.make("travel-planner", {
+export const TravelPlanner = Agent.make("travel-planner", {
   input: Schema.Struct({ city: Schema.String, days: Schema.Int.check(Schema.isGreaterThan(0)) }),
   output: Schema.Struct({ itinerary: Schema.Array(Schema.String) }),
   instructions: ({ city, days }) =>

@@ -124,35 +124,9 @@ call automatically. See [Persistence & durability](../concepts/durability).
 
 ## Delegate to an agent
 
-Use `Subagent.define` from `@effect-agent/capabilities` to expose a child agent as a tool:
-
-1. Supply the child definition as `target`, schemas for delegation parameters, success and failure,
-   and a finite `SubagentPolicy`.
-2. Use `prepareInput` to select what the child receives and `projectResult` to select what returns
-   to the parent. Both return Effects with the declared failure type. The child transcript stays
-   private unless the result projection exposes it.
-3. Add the returned `delegation.tool` to the parent's toolkit. Provide
-   `SubagentRuntime.layer(delegation, childBinding, { mapChildFailure })` with an explicit
-   `Agent.withModel` binding. Map every expected child failure to the declared failure schema.
-
-See the [Travel Planner delegation example](https://github.com/danieljvdm/effect-agent/blob/main/packages/testing/src/fixtures/travel-planner/subagents.ts)
-for a complete definition, projections, handlers, and parent agent.
-
-The default `failureMode: "error"` fails the parent tool batch on an expected child failure.
-Use `"return"` to let the parent model receive and act on that failure. Suspension and durability
-failures remain in the error channel. Surface `projectResult`'s `budgetExhausted` flag when the
-parent needs to distinguish partial output. See [delegation budgets](../concepts/budgets#delegation-budgets).
-
-The default grant permits the target's declared tools at depth one. A grant that excludes a target
-tool is rejected; it does not remove that tool from the child. Define a narrower child toolkit
-when needed. Nested delegation, handoff, and detached children are unsupported.
-`needsApproval` approves establishing this child only. It never authorizes the child's actions,
-siblings, or retries. Apply [current tool and resource policy](./operations#tools-delegation-and-external-resources)
-to each action.
-
-Ephemeral children share the parent's Scope. Durable children require fixed child definition
-digests in the handler layer's `durable` option and matching host registrations. They run in
-separate conversations and survive lost attempts. See [child recovery and abort](../concepts/durability#attached-subagents).
+`Subagent.define` exposes a child agent as a tool with explicit input and result projections.
+The [Subagents guide](./subagents) covers definition, model binding, budgets, authority, failure
+handling, and durable child recovery.
 
 ## Browse web pages
 
