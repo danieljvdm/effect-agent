@@ -31,6 +31,19 @@ measuring completed work. `costBudgetMicrousd` measures spend through an estimat
 cache-split usage. `contextTokenLimit` bounds one call's context. Set it from the model's context
 window, and the engine compacts before the next request exceeds it.
 
+## Prompt preparation order
+
+At Run preparation, the runtime evaluates instructions and the Definition's optional
+[`inputPrompt`](/guide/agents#choose-model-visible-input) from decoded input. It appends the
+instructions and projected input to history. Definitions without `inputPrompt` retain the JSON
+user message containing the full encoded input.
+
+Before each Turn, `RunOptions.context.prepare` transforms that source, then compaction operates
+on the prepared prompt. The output contract and derived Run status are added for the outgoing
+request. A compaction summary call uses the prepared model-visible content; it does not read the
+canonical Agent input. Durable recovery restores committed projected messages before applying the
+host's context transform. Tool authorization separately receives the canonical admitted input.
+
 ## Tool results are bounded at the source
 
 Every application Tool result, including MCP results, passes through `toolResultBounds` exactly once

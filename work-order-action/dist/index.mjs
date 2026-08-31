@@ -38679,12 +38679,26 @@ var evaluateInstructions = exports_Effect.fn("AgentRuntime.evaluateInstructions"
 var encodeInput = exports_Effect.fn("AgentRuntime.encodeInput")((agent2, input) => exports_Schema.encodeEffect(agent2.definition.input)(input).pipe(exports_Effect.mapError((cause) => AgentInputError.make({
   message: `Unable to encode Agent input: ${cause.message}`
 }))));
-var makeInitialPrompt = exports_Effect.fn("AgentRuntime.makeInitialPrompt")((instructions, input, history) => exports_Effect.try({
+var renderInputPromptEffect = exports_Effect.fn("AgentRuntime.renderInputPrompt")((inputPrompt, decodedInput, encodedInput) => inputPrompt === undefined ? exports_Effect.try({
   try: () => {
-    const encodedInput = JSON.stringify(input);
-    if (encodedInput === undefined) {
+    const encoded = JSON.stringify(encodedInput);
+    if (encoded === undefined) {
       throw new Error("Agent input cannot be represented as JSON");
     }
+    return encoded;
+  },
+  catch: (cause) => AgentInputError.make({
+    message: `Unable to materialize Agent input: ${errorMessage(cause)}`
+  })
+}) : exports_Effect.suspend(() => {
+  const result4 = inputPrompt(decodedInput);
+  return exports_Effect.isEffect(result4) ? result4 : exports_Effect.succeed(result4);
+}));
+function renderInputPrompt(inputPrompt, decodedInput, encodedInput) {
+  return renderInputPromptEffect(inputPrompt, decodedInput, encodedInput);
+}
+var makeInitialPrompt = exports_Effect.fn("AgentRuntime.makeInitialPrompt")((instructions, inputPrompt, history) => exports_Effect.try({
+  try: () => {
     const instructionPrompt = typeof instructions === "string" ? exports_Prompt.fromMessages([
       exports_Prompt.makeMessage("system", {
         content: instructions
@@ -38693,9 +38707,7 @@ var makeInitialPrompt = exports_Effect.fn("AgentRuntime.makeInitialPrompt")((ins
     return exports_Prompt.fromMessages([
       ...history.content,
       ...instructionPrompt.content,
-      exports_Prompt.makeMessage("user", {
-        content: [exports_Prompt.makePart("text", { text: encodedInput })]
-      })
+      ...exports_Prompt.make(inputPrompt).content
     ]);
   },
   catch: (cause) => AgentInputError.make({
@@ -39903,8 +39915,9 @@ var stream3 = (agent2, input, options3 = {}) => {
       const instructions = yield* evaluateInstructions(agent2.definition.instructions, decodedInput);
       const encodedInput = yield* encodeInput(agent2, decodedInput);
       context3.input = encodedInput;
+      const inputPrompt = yield* renderInputPrompt(agent2.definition.inputPrompt, decodedInput, encodedInput);
       const priorHistoryLength = context3.history.content.length;
-      const prompt = yield* makeInitialPrompt(instructions, encodedInput, context3.history);
+      const prompt = yield* makeInitialPrompt(instructions, inputPrompt, context3.history);
       if (options3.context === undefined) {
         context3.compaction.protectedStart = priorHistoryLength;
         context3.compaction.protectedEnd = prompt.content.length;

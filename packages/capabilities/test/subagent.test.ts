@@ -304,6 +304,63 @@ const expectSettledOnce = (view: SubagentReservationView | undefined): void => {
 };
 
 layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
+  it.effect("captures the child input projector's service without exposing host input", () =>
+    Effect.gen(function* () {
+      const promptRef = yield* Ref.make<unknown>(undefined);
+      const target = Agent.define("projected-child", {
+        input: Schema.Struct({ question: Schema.String, hostOnly: Schema.String }),
+        output: ChildOutput,
+        instructions: "Answer as JSON.",
+        inputPrompt: ({ question }) =>
+          Effect.flatMap(ChildInputRenderer, ({ render }) => render(question)),
+        toolkit: Toolkit.empty,
+        policy: childPolicy,
+      });
+      const delegation = Subagent.define("delegate_projected", {
+        description: "Answer a public question.",
+        target,
+        parameters: ResearchParams,
+        success: ResearchFindings,
+        failure: ResearchDelegationFailed,
+        prepareInput: ({ topic }) =>
+          Effect.succeed({ question: topic, hostOnly: "CHILD-HOST-ONLY-SENTINEL" }),
+        projectResult: (output) => Effect.succeed({ summary: output.answer }),
+        policy: researchPolicy,
+      });
+      const child = Agent.withModel(
+        target,
+        answeringModel("projected-child-model", '{"answer":"child-answer"}', promptRef),
+      );
+      const parent = Agent.withModel(
+        Agent.define("projecting-parent", {
+          input: Schema.String,
+          output: Schema.Struct({ report: Schema.String }),
+          instructions: "Delegate the question.",
+          toolkit: Toolkit.make(delegation.tool),
+          policy: parentPolicy,
+        }),
+        delegatingModel(
+          "projecting-parent-model",
+          delegation.tool.name,
+          [{ id: "projected-call", params: { topic: "public question" } }],
+          '{"report":"done"}',
+        ),
+      );
+      const childLayer = SubagentRuntime.layer(delegation, child, { mapChildFailure }).pipe(
+        Layer.provide(
+          Layer.succeed(ChildInputRenderer, {
+            render: (question) => Effect.succeed(`Rendered: ${question}`),
+          }),
+        ),
+      );
+      const result = yield* AgentRuntime.run(parent, "start").pipe(Effect.provide(childLayer));
+      expect(result.output).toEqual({ report: "done" });
+      const prompt = JSON.stringify(yield* Ref.get(promptRef));
+      expect(prompt).toContain("Rendered: public question");
+      expect(prompt).not.toContain("CHILD-HOST-ONLY-SENTINEL");
+    }),
+  );
+
   it.effect("joins one attached child through explicit projections", () =>
     Effect.gen(function* () {
       const promptRef = yield* Ref.make<unknown>(undefined);
@@ -1965,6 +2022,13 @@ class ProjectStamper extends Context.Service<ProjectStamper, { readonly stamp: s
   "@effect-agent/capabilities/test/ProjectStamper",
 ) {}
 
+class ChildInputRenderer extends Context.Service<
+  ChildInputRenderer,
+  { readonly render: (question: string) => Effect.Effect<string, ChildInputFailure> }
+>()("@effect-agent/capabilities/test/ChildInputRenderer") {}
+
+class ChildInputFailure extends Schema.TaggedError<ChildInputFailure>()("ChildInputFailure", {}) {}
+
 class SearchFailure extends Schema.TaggedError<SearchFailure>()("SearchFailure", {
   message: Schema.String,
 }) {}
@@ -1981,6 +2045,8 @@ const typedChildDefinition = Agent.define("typed-child", {
   input: ChildInput,
   output: ChildOutput,
   instructions: "Search, then answer as JSON.",
+  inputPrompt: ({ question }) =>
+    Effect.flatMap(ChildInputRenderer, ({ render }) => render(question)),
   toolkit: typedChildTools,
   policy: childPolicy,
 });
@@ -2086,6 +2152,12 @@ type HandlerHidesReservationsProof = Assert<
 type LayerModelProof = Assert<
   Equal<Extract<TypedLayerRequirements, ChildModelConfig>, ChildModelConfig>
 >;
+type LayerInputPromptProof = Assert<
+  Equal<Extract<TypedLayerRequirements, ChildInputRenderer>, ChildInputRenderer>
+>;
+type HandlerHidesInputPromptProof = Assert<
+  Equal<Extract<TypedHandlerServices, ChildInputRenderer>, never>
+>;
 type LayerChildToolServiceProof = Assert<
   Equal<Extract<TypedLayerRequirements, ChildCatalog>, ChildCatalog>
 >;
@@ -2148,7 +2220,13 @@ type TypedChildFailure = SubagentChildRunFailure<
   Toolkit.Tools<typeof typedChildTools>,
   "scripted",
   never,
-  never
+  never,
+  never,
+  never,
+  typeof typedChildDefinition.inputPrompt
+>;
+type MappingDomainInputPromptFailureProof = Assert<
+  Equal<Extract<TypedChildFailure, ChildInputFailure>, ChildInputFailure>
 >;
 type MappingDomainToolFailureProof = Assert<
   Equal<Extract<TypedChildFailure, SearchFailure>, SearchFailure>
@@ -2178,6 +2256,9 @@ describe("Subagent type proofs", () => {
     const handlerHidesModelProof: HandlerHidesModelProof = true;
     const handlerHidesReservationsProof: HandlerHidesReservationsProof = true;
     const layerModelProof: LayerModelProof = true;
+    const layerInputPromptProof: LayerInputPromptProof = true;
+    const handlerHidesInputPromptProof: HandlerHidesInputPromptProof = true;
+    const mappingDomainInputPromptFailureProof: MappingDomainInputPromptFailureProof = true;
     const layerChildToolServiceProof: LayerChildToolServiceProof = true;
     const layerChildHandlersProof: LayerChildHandlersProof = true;
     const layerPrepareProof: LayerPrepareProof = true;
@@ -2205,6 +2286,9 @@ describe("Subagent type proofs", () => {
       handlerHidesModelProof,
       handlerHidesReservationsProof,
       layerModelProof,
+      layerInputPromptProof,
+      handlerHidesInputPromptProof,
+      mappingDomainInputPromptFailureProof,
       layerChildToolServiceProof,
       layerChildHandlersProof,
       layerPrepareProof,

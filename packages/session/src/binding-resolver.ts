@@ -1,11 +1,17 @@
-import { AgentId, ConversationId, type RunDispositionDeclaration } from "@effect-agent/core";
+import type { ConversationId } from "@effect-agent/core";
+import {
+  AgentId,
+  type InputPromptSource,
+  type RunDispositionDeclaration,
+} from "@effect-agent/core";
 import type { RuntimeBinding } from "@effect-agent/engine";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import type { Option } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import type { Tool } from "effect/unstable/ai";
 
 import type { DurableWorkerFailure, DurableWorkerRequirements } from "./durable-runtime.ts";
 import type { Claim, LedgerError, Settlement } from "./ledger.ts";
-import { DefinitionDigests } from "./records.ts";
+import type { DefinitionDigests } from "./records.ts";
 
 /**
  * No Agent Binding is registered for the requested stable identity. Recovery
@@ -90,6 +96,7 @@ export type ResolvedAttemptDriver = <
   RunDispositionValue extends
     | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
     | undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -101,7 +108,8 @@ export type ResolvedAttemptDriver = <
     ModelRequires,
     InstructionError,
     InstructionRequirements,
-    RunDispositionValue
+    RunDispositionValue,
+    InputPromptValue
   >,
   conversationId: ConversationId,
   claim: Claim,
@@ -119,7 +127,8 @@ export type ResolvedAttemptDriver = <
       ModelRequires,
       InstructionError,
       InstructionRequirements,
-      RunDispositionValue
+      RunDispositionValue,
+      InputPromptValue
     >,
     InstructionRequirements
   >
@@ -159,6 +168,8 @@ const capture = <
   RunDispositionValue extends
     | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
     | undefined = undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+    undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -170,7 +181,8 @@ const capture = <
     ModelRequires,
     InstructionError,
     InstructionRequirements,
-    RunDispositionValue
+    RunDispositionValue,
+    InputPromptValue
   >,
   digests: DefinitionDigests | undefined,
 ): Effect.Effect<
@@ -225,6 +237,8 @@ export const DurableWorkerBinding = {
     RunDispositionValue extends
       | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
       | undefined = undefined,
+    InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+      undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -236,7 +250,8 @@ export const DurableWorkerBinding = {
       ModelRequires,
       InstructionError,
       InstructionRequirements,
-      RunDispositionValue
+      RunDispositionValue,
+      InputPromptValue
     >,
     digests: DefinitionDigests,
   ): Effect.Effect<
@@ -257,6 +272,8 @@ export const DurableWorkerBinding = {
     RunDispositionValue extends
       | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
       | undefined = undefined,
+    InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+      undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -268,7 +285,8 @@ export const DurableWorkerBinding = {
       ModelRequires,
       InstructionError,
       InstructionRequirements,
-      RunDispositionValue
+      RunDispositionValue,
+      InputPromptValue
     >,
   ): Effect.Effect<
     ResolvedBinding,

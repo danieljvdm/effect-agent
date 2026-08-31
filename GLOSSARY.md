@@ -6,7 +6,7 @@ Use these terms consistently in code, telemetry, and user documentation.
 
 **Agent Definition**  
 An immutable, schema-defined description of an agent: identity, input and output schemas,
-instructions, toolkit, and execution policy. It contains no mutable conversation state, owns no
+instructions, optional model-visible input projection, toolkit, and execution policy. It contains no mutable conversation state, owns no
 live resources, and is not executable until paired with a Model.
 
 **Agent Binding**
