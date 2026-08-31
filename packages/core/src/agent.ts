@@ -224,22 +224,33 @@ export namespace Agent {
     DefinitionOf<AgentValue>["toolkit"]
   >;
 
-  /** Union of the tools available to a runnable binding. */
-  export type ToolUnion<AgentValue extends Any> = Tools<AgentValue>[keyof Tools<AgentValue>];
+  type ToolMapValues<ToolMap extends Record<string, Tool.Any>> = ToolMap extends unknown
+    ? ToolMap[keyof ToolMap]
+    : never;
+
+  /** All possible tools, including keys present in only one definition or binding branch. */
+  export type ToolUnion<AgentValue extends AnyDefinition | Any> = ToolMapValues<Tools<AgentValue>>;
 
   /** Instruction, tool-handler, and Schema services required before a Model is bound. */
   export type DefinitionRequirements<DefinitionValue extends AnyDefinition> =
-    | EffectServices<InstructionEffect<DefinitionValue["instructions"], Input<DefinitionValue>>>
-    | EffectServices<InputPromptEffect<DefinitionValue["inputPrompt"], Input<DefinitionValue>>>
-    | Tool.HandlersFor<Tools<DefinitionValue>>
-    | Tool.HandlerServices<Tools<DefinitionValue>[keyof Tools<DefinitionValue>]>
-    | Tool.SuccessSchema<Tools<DefinitionValue>[keyof Tools<DefinitionValue>]>["DecodingServices"]
-    | DefinitionValue["input"]["DecodingServices"]
-    | DefinitionValue["input"]["EncodingServices"]
-    | DefinitionValue["output"]["DecodingServices"]
-    | DefinitionValue["output"]["EncodingServices"]
-    | RunDispositionSchemaOf<DefinitionValue>["DecodingServices"]
-    | RunDispositionSchemaOf<DefinitionValue>["EncodingServices"];
+    DefinitionValue extends unknown
+      ?
+          | EffectServices<
+              InstructionEffect<DefinitionValue["instructions"], Input<DefinitionValue>>
+            >
+          | EffectServices<
+              InputPromptEffect<DefinitionValue["inputPrompt"], Input<DefinitionValue>>
+            >
+          | Tool.HandlersFor<Tools<DefinitionValue>>
+          | Tool.HandlerServices<ToolUnion<DefinitionValue>>
+          | Tool.SuccessSchema<ToolUnion<DefinitionValue>>["DecodingServices"]
+          | DefinitionValue["input"]["DecodingServices"]
+          | DefinitionValue["input"]["EncodingServices"]
+          | DefinitionValue["output"]["DecodingServices"]
+          | DefinitionValue["output"]["EncodingServices"]
+          | RunDispositionSchemaOf<DefinitionValue>["DecodingServices"]
+          | RunDispositionSchemaOf<DefinitionValue>["EncodingServices"]
+      : never;
 
   /** Definition services plus native model services, or a binding's model Layer requirements. */
   export type Requirements<AgentValue extends AnyDefinition | Any> =
@@ -248,11 +259,17 @@ export namespace Agent {
         ? ModelRequirements<ModelValue>
         : ModelServices);
 
-  /** Failures inferred from instructions, tools, Effect AI, and input/output decoding. */
+  // Distribute after unwrapping bindings too: withModel may itself contain a definition union.
+  type DefinitionFailure<DefinitionValue extends AnyDefinition> = DefinitionValue extends unknown
+    ?
+        | EffectError<InstructionEffect<DefinitionValue["instructions"], Input<DefinitionValue>>>
+        | EffectError<InputPromptEffect<DefinitionValue["inputPrompt"], Input<DefinitionValue>>>
+        | Tool.HandlerError<ToolUnion<DefinitionValue>>
+    : never;
+
+  /** Failures from every possible definition, preserving each branch's instruction input type. */
   export type Failure<AgentValue extends AnyDefinition | Any> =
-    | EffectError<InstructionEffect<DefinitionOf<AgentValue>["instructions"], Input<AgentValue>>>
-    | EffectError<InputPromptEffect<DefinitionOf<AgentValue>["inputPrompt"], Input<AgentValue>>>
-    | Tool.HandlerError<Tools<AgentValue>[keyof Tools<AgentValue>]>
+    | DefinitionFailure<DefinitionOf<AgentValue>>
     | AiError.AiError
     | AgentInputError
     | AgentOutputError

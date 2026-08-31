@@ -143,6 +143,10 @@ type Failure = Agent.Failure<typeof definition>;
 
 The repository protects these projections with compile-time tests.
 
+When selecting between Definitions or Bindings, the returned `E` and `R` include every possible
+branch's failures and services. Provide the handlers and Schema services for every branch, or
+narrow the selected Agent before executing it.
+
 ## Typed and external inputs
 
 The primary operations accept `Agent.EncodedInput<typeof definition>`, the input Schema's

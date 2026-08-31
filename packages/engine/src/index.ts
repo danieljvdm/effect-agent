@@ -379,10 +379,8 @@ export type AgentCompletionProjectionRequirements<
 > =
   | Agent.OutputSchema<AgentValue>["DecodingServices"]
   | Agent.OutputSchema<AgentValue>["EncodingServices"]
-  | Tool.ParametersSchema<
-      Agent.Tools<AgentValue>[keyof Agent.Tools<AgentValue>]
-    >["DecodingServices"]
-  | Tool.SuccessSchema<Agent.Tools<AgentValue>[keyof Agent.Tools<AgentValue>]>["DecodingServices"];
+  | Tool.ParametersSchema<Agent.ToolUnion<AgentValue>>["DecodingServices"]
+  | Tool.SuccessSchema<Agent.ToolUnion<AgentValue>>["DecodingServices"];
 
 /**
  * Inferred agent services plus the runtime's identity and Conversation history authorities.
