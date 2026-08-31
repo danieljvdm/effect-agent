@@ -115,7 +115,6 @@ model services. Use `Stream.provide` for a stream.
 const program = AgentRuntime.run(definition, input).pipe(
   Effect.provide(ClaudeModel),
   Effect.provide(AppLive),
-  Effect.scoped,
 );
 
 const captured = Effect.gen(function* () {

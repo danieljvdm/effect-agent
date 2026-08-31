@@ -113,20 +113,11 @@ import {
   type ToolSpanTelemetryService,
 } from "./tool-telemetry-internal.ts";
 
-/**
- * Structural shape of an Agent Binding accepted by the interpreter and by
- * `AgentSpawner.spawn`: a model-agnostic Definition paired with an explicit
- * native model Layer whose requirements stay visible. The Layer must provide
- * LanguageModel, ProviderName, and ModelName, including after requirement capture.
- */
-export type RuntimeBinding<
+type RuntimeProgram<
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
   Instructions,
   Tools extends Record<string, Tool.Any>,
-  _Provider,
-  ModelProvides,
-  ModelRequires,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
   RunDispositionValue extends
@@ -150,19 +141,20 @@ export type RuntimeBinding<
     >;
     readonly inputPrompt?: InputPromptValue | undefined;
   };
-  readonly model: Layer.Layer<
-    LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName | ModelProvides,
-    never,
-    ModelRequires
-  >;
 };
 
-type RuntimeProgram<
+/**
+ * Structural shape of an Agent Binding accepted by the interpreter and by
+ * `AgentSpawner.spawn`: a model-agnostic Definition paired with an explicit
+ * native model Layer whose requirements stay visible. The Layer must provide
+ * LanguageModel, ProviderName, and ModelName, including after requirement capture.
+ */
+export type RuntimeBinding<
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
   Instructions,
   Tools extends Record<string, Tool.Any>,
-  Provider,
+  _Provider,
   ModelProvides,
   ModelRequires,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
@@ -172,22 +164,22 @@ type RuntimeProgram<
     | undefined = undefined,
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
     undefined,
-> = Omit<
-  RuntimeBinding<
-    InputSchema,
-    OutputSchema,
-    Instructions,
-    Tools,
-    Provider,
-    ModelProvides,
-    ModelRequires,
-    InstructionError,
-    InstructionRequirements,
-    RunDispositionValue,
-    InputPromptValue
-  >,
-  "model"
->;
+> = RuntimeProgram<
+  InputSchema,
+  OutputSchema,
+  Instructions,
+  Tools,
+  InstructionError,
+  InstructionRequirements,
+  RunDispositionValue,
+  InputPromptValue
+> & {
+  readonly model: Layer.Layer<
+    LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName | ModelProvides,
+    never,
+    ModelRequires
+  >;
+};
 
 type InstructionResultOf<Instructions, Input> = Instructions extends (input: Input) => infer Result
   ? Result
@@ -3968,9 +3960,6 @@ const makeTurn = <
   OutputSchema extends Schema.Top,
   Instructions,
   Tools extends Record<string, Tool.Any>,
-  Provider,
-  ModelProvides,
-  ModelRequires,
   HookError,
   HookRequirements,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
@@ -3986,9 +3975,6 @@ const makeTurn = <
     OutputSchema,
     Instructions,
     Tools,
-    Provider,
-    ModelProvides,
-    ModelRequires,
     InstructionError,
     InstructionRequirements,
     RunDispositionValue,
@@ -4916,9 +4902,6 @@ const toolBatchContinuation = <
   OutputSchema extends Schema.Top,
   Instructions,
   Tools extends Record<string, Tool.Any>,
-  Provider,
-  ModelProvides,
-  ModelRequires,
   HookError,
   HookRequirements,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
@@ -4934,9 +4917,6 @@ const toolBatchContinuation = <
     OutputSchema,
     Instructions,
     Tools,
-    Provider,
-    ModelProvides,
-    ModelRequires,
     InstructionError,
     InstructionRequirements,
     RunDispositionValue,
@@ -5072,9 +5052,6 @@ const makeResumeTurn = <
   OutputSchema extends Schema.Top,
   Instructions,
   Tools extends Record<string, Tool.Any>,
-  Provider,
-  ModelProvides,
-  ModelRequires,
   HookError,
   HookRequirements,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
@@ -5090,9 +5067,6 @@ const makeResumeTurn = <
     OutputSchema,
     Instructions,
     Tools,
-    Provider,
-    ModelProvides,
-    ModelRequires,
     InstructionError,
     InstructionRequirements,
     RunDispositionValue,
@@ -5445,463 +5419,476 @@ const guardBudgetStream = <A, E, R, HookError, HookRequirements>(
     ? stream
     : Stream.transformPull(stream, (pull) => Effect.succeed(budget.guard(pull)));
 
-/** The result consumer validates output before a retained Run can commit or emit completion. */
-const makeStream =
-  <CompletionError = never, CompletionRequirements = never>(
-    onCompleted?: (
-      completed: RunCompleted,
-    ) => Effect.Effect<void, CompletionError, CompletionRequirements>,
-  ) =>
-  <
-    InputSchema extends Schema.Top,
-    OutputSchema extends Schema.Top,
+/** Decode input and interpret the Run, validating terminal output before committing history. */
+function streamWithCompletion<
+  A extends ExecutableAgent,
+  H = never,
+  R = never,
+  CompletionError = never,
+  CompletionRequirements = never,
+>(
+  agent: A,
+  input: unknown,
+  options: RunOptions<H, R> | undefined,
+  onCompleted?: (
+    completed: RunCompleted,
+  ) => Effect.Effect<void, CompletionError, CompletionRequirements>,
+): Stream.Stream<
+  RunEvent,
+  AgentRuntimeFailure<A, H> | CompletionError,
+  AgentRuntimeRequirements<A, R> | CompletionRequirements
+>;
+function streamWithCompletion<
+  InputSchema extends Schema.Top,
+  OutputSchema extends Schema.Top,
+  Instructions,
+  Tools extends Record<string, Tool.Any>,
+  Provider,
+  ModelProvides,
+  ModelRequires,
+  CompletionError = never,
+  CompletionRequirements = never,
+  HookError = never,
+  HookRequirements = never,
+  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
+  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined = undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+    undefined,
+>(
+  agentValue:
+    | RuntimeBinding<
+        InputSchema,
+        OutputSchema,
+        Instructions,
+        Tools,
+        Provider,
+        ModelProvides,
+        ModelRequires,
+        InstructionError,
+        InstructionRequirements,
+        RunDispositionValue,
+        InputPromptValue
+      >
+    | RuntimeBinding<
+        InputSchema,
+        OutputSchema,
+        Instructions,
+        Tools,
+        Provider,
+        ModelProvides,
+        ModelRequires,
+        InstructionError,
+        InstructionRequirements,
+        RunDispositionValue,
+        InputPromptValue
+      >["definition"],
+  input: unknown,
+  runOptions: RunOptions<HookError, HookRequirements> = {},
+  onCompleted?: (
+    completed: RunCompleted,
+  ) => Effect.Effect<void, CompletionError, CompletionRequirements>,
+) {
+  const agent: RuntimeProgram<
+    InputSchema,
+    OutputSchema,
     Instructions,
-    Tools extends Record<string, Tool.Any>,
-    Provider,
-    ModelProvides,
-    ModelRequires,
-    HookError = never,
-    HookRequirements = never,
-    InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
-    InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
-    RunDispositionValue extends
-      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
-      | undefined = undefined,
-    InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
-      undefined,
-  >(
-    agent: RuntimeProgram<
-      InputSchema,
-      OutputSchema,
-      Instructions,
-      Tools,
-      Provider,
-      ModelProvides,
-      ModelRequires,
-      InstructionError,
-      InstructionRequirements,
-      RunDispositionValue,
-      InputPromptValue
-    > & {
-      readonly model?: Layer.Layer<
-        LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName | ModelProvides,
-        never,
-        ModelRequires
-      >;
-    },
-    input: unknown,
-    runOptions: RunOptions<HookError, HookRequirements> = {},
-  ): Stream.Stream<
-    RunEvent,
-    AgentRuntimeFailure<typeof agent, HookError, InstructionError> | CompletionError,
-    | AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
-    | CompletionRequirements
-    | ModelRequires
-  > =>
-    Stream.unwrap(
-      Effect.gen(function* (): Effect.fn.Return<
-        Stream.Stream<
-          RunEvent,
-          AgentRuntimeFailure<typeof agent, HookError, InstructionError> | CompletionError,
-          | AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
-          | CompletionRequirements
-          | ModelRequires
-        >,
-        ConversationHistoryError,
-        ConversationHistory | IdGenerator
-      > {
-        const history = yield* ConversationHistory;
-        const ids = yield* IdGenerator;
-        const conversationId = runOptions.conversationId ?? (yield* ids.nextConversationId);
-        const runId = runOptions.runId ?? (yield* ids.nextRunId);
-        const retained = yield* history.open({ conversationId, runId });
-        const interpreter: RuntimeProgram<
-          InputSchema,
-          OutputSchema,
-          Instructions,
-          Tools,
-          Provider,
-          ModelProvides,
-          ModelRequires,
-          InstructionError,
-          InstructionRequirements,
-          RunDispositionValue,
-          InputPromptValue
-        > = agent;
-        if (
-          retained !== undefined &&
-          (runOptions.history !== undefined ||
-            runOptions.onHistory !== undefined ||
-            runOptions.input !== undefined ||
-            runOptions.durability !== undefined ||
-            runOptions.subagent !== undefined ||
-            runOptions.resume !== undefined ||
-            runOptions.resumeUsage !== undefined)
-        ) {
-          return yield* ConversationHistoryError.make({
-            conversationId,
-            reason: "incompatible",
-            message:
-              "Provided history cannot share ownership with explicit history, input queues, or durable recovery hooks",
-          });
-        }
-        const options: RunOptions<HookError | ConversationHistoryError, HookRequirements> = {
-          ...runOptions,
+    Tools,
+    InstructionError,
+    InstructionRequirements,
+    RunDispositionValue,
+    InputPromptValue
+  > = { definition: "definition" in agentValue ? agentValue.definition : agentValue };
+  const model = "definition" in agentValue ? agentValue.model : undefined;
+  return Stream.unwrap(
+    Effect.gen(function* (): Effect.fn.Return<
+      Stream.Stream<
+        RunEvent,
+        AgentRuntimeFailure<typeof agent, HookError, InstructionError> | CompletionError,
+        | AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
+        | CompletionRequirements
+        | ModelRequires
+      >,
+      ConversationHistoryError,
+      ConversationHistory | IdGenerator
+    > {
+      const history = yield* ConversationHistory;
+      const ids = yield* IdGenerator;
+      const conversationId = runOptions.conversationId ?? (yield* ids.nextConversationId);
+      const runId = runOptions.runId ?? (yield* ids.nextRunId);
+      const retained = yield* history.open({ conversationId, runId });
+      if (
+        retained !== undefined &&
+        (runOptions.history !== undefined ||
+          runOptions.onHistory !== undefined ||
+          runOptions.input !== undefined ||
+          runOptions.durability !== undefined ||
+          runOptions.subagent !== undefined ||
+          runOptions.resume !== undefined ||
+          runOptions.resumeUsage !== undefined)
+      ) {
+        return yield* ConversationHistoryError.make({
           conversationId,
-          runId,
-          ...(retained === undefined
-            ? {}
-            : { history: retained.prompt, onHistory: retained.stageHistory }),
-        };
-        const interpreted = Stream.unwrap(
-          Effect.gen(function* () {
-            const resumed =
-              options.resume === undefined
-                ? undefined
-                : {
-                    batch: options.resume,
-                    usage: yield* decodeResumeUsage(options.resumeUsage),
-                  };
-            const resumeUsage =
-              resumed?.usage ??
-              (options.resumeUsage === undefined
-                ? undefined
-                : yield* decodeResumeUsage(options.resumeUsage));
-            if (
-              resumed !== undefined &&
-              (resumed.usage.committedTurns !== resumed.batch.turn ||
-                resumed.usage.toolCalls < resumed.batch.calls.length ||
-                resumed.usage.consecutiveToolFailures >
-                  resumed.usage.toolCalls - resumed.batch.calls.length)
-            ) {
-              return yield* ModelProtocolError.make({
-                message:
-                  "Run resume accounting conflicts with the pending Turn and declared Tool Calls",
-              });
-            }
-            const attemptStartedAtMillis = yield* Clock.currentTimeMillis;
-            const maxDurationMillis = Duration.toMillis(agent.definition.policy.maxDuration);
-            const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
-            // RUN-030: a durable coordinator supplies the logical Run deadline from
-            // canonical Run-start evidence. Taking the earlier deadline keeps this
-            // public option tightening-only for every other caller.
-            const durationDeadlineMillis =
-              options.durationDeadline === undefined
-                ? attemptDeadlineMillis
-                : Math.min(attemptDeadlineMillis, DateTime.toEpochMillis(options.durationDeadline));
-            // Elapsed status tracks the logical Run's actual start. A shorter
-            // deadline tightens execution without inventing time that never passed.
-            const startedAtMillis =
-              options.runStartedAt === undefined
-                ? attemptStartedAtMillis
-                : DateTime.toEpochMillis(options.runStartedAt);
-            const compactor = yield* Effect.serviceOption(ContextCompactor).pipe(
-              Effect.flatMap(
-                Option.match({
-                  onSome: Effect.succeed,
-                  onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
-                }),
-              ),
-            );
-            const context: RunContext = {
-              agentId: agent.definition.id,
-              conversationId,
-              runId,
-              toolFailureObserver: yield* CurrentToolFailureObserver,
-              input: undefined,
-              pendingFollowUps: [],
-              startedAtMillis,
-              durationDeadlineMillis,
-              history: options.history ?? Prompt.empty,
-              // RUN-019: a resumed Attempt re-seeds cumulative usage from the
-              // canonical response records so token budgets and the compaction
-              // trigger keep accounting across ownership changes.
-              modelCalls: resumeUsage?.modelCalls ?? 0,
-              consecutiveToolFailures: resumeUsage?.consecutiveToolFailures ?? 0,
-              inputTokens: resumeUsage?.inputTokens ?? 0,
-              outputTokens: resumeUsage?.outputTokens ?? 0,
-              lastInputTokens: resumeUsage?.lastInputTokens ?? 0,
-              lastOutputTokens: resumeUsage?.lastOutputTokens ?? 0,
-              costMicrousd: resumeUsage?.costMicrousd ?? 0,
-              lastCostMicrousd: 0,
-              warnedLimits: new Set(),
-              finalizing: false,
-              tokenExhausted: false,
-              exhaustedDimension: undefined,
-              compaction: initialCompactionState(),
-              compactionTurn: { turn: 0, summaryCalls: 0, applied: new Set() },
-              compactor,
-              bufferLimits: effectiveRunBufferLimits(options.bufferLimits),
-              sequence: 0,
-              programmaticToolCalls: resumeUsage?.programmaticToolCalls ?? 0,
-              finalizationUsed: resumeUsage?.finalizationUsed ?? false,
-              policyReservations: yield* Semaphore.make(1),
-            };
-            // Restored totals can already breach the token budget (runtime spec §9):
-            // the resumed Attempt must never issue an unconstrained external call.
-            // "fail" rejects before any model call or resumed handler runs.
-            if (resumeUsage !== undefined) {
-              const bounds = effectiveRunBounds(agent.definition.policy, options);
-              if (context.finalizationUsed) {
-                context.exhaustedDimension =
-                  resumeUsage.committedTurns > bounds.maxTurns
-                    ? "turns"
-                    : resumeUsage.toolCalls + context.programmaticToolCalls > bounds.maxToolCalls
-                      ? "tool-calls"
-                      : "tokens";
-              }
-              if (
-                agent.definition.policy.onExhaustion === "fail" &&
-                resumeUsage.toolCalls + context.programmaticToolCalls > bounds.maxToolCalls
-              ) {
-                return failRunEventStream(
-                  AgentPolicyError.make({
-                    limit: "tool-calls",
-                    message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`,
-                  }),
-                );
-              }
-              const failureLimit = agent.definition.policy.repeatedFailureLimit;
-              if (failureLimit > 0 && context.consecutiveToolFailures >= failureLimit) {
-                return failRunEventStream(
-                  AgentPolicyError.make({
-                    limit: "repeated-failures",
-                    message: `Agent reached its ${failureLimit} consecutive Tool Call failure limit`,
-                  }),
-                );
-              }
-              // Cost is an unconditional hard rail with no grace call in either
-              // exhaustion mode (runtime spec §3): a resume whose seeded spend
-              // already breaches the budget rejects before input, resumed
-              // handlers, or any external model execution.
-              const seededCostBudget = agent.definition.policy.costBudgetMicrousd;
-              if (seededCostBudget !== undefined && context.costMicrousd > seededCostBudget) {
-                return failRunEventStream(
-                  AgentPolicyError.make({
-                    limit: "cost",
-                    message: `Agent exceeded its ${seededCostBudget} microdollar cost budget`,
-                  }),
-                );
-              }
-              const seededBudget = agent.definition.policy.tokenBudget;
-              if (
-                seededBudget !== undefined &&
-                context.inputTokens + context.outputTokens > seededBudget
-              ) {
-                if (agent.definition.policy.onExhaustion === "fail") {
-                  return failRunEventStream(
-                    AgentPolicyError.make({
-                      limit: "tokens",
-                      message: `Agent exceeded its ${seededBudget} token budget`,
-                    }),
-                  );
-                }
-                context.tokenExhausted = true;
-                context.exhaustedDimension ??= "tokens";
-              }
-            }
-            if (options.input?.start !== undefined) {
-              yield* options.input.start();
-            }
-
-            const started = Stream.fromEffect(
-              Effect.gen(function* () {
-                yield* Metric.update(runCounter, 1);
-                yield* Effect.logDebug("agent run started").pipe(
-                  Effect.annotateLogs({
-                    agentId: context.agentId,
-                    runId: context.runId,
-                  }),
-                );
-                return yield* eventBase(context).pipe(Effect.map((base) => RunStarted.make(base)));
-              }).pipe(Effect.withLogSpan("AgentRuntime.run")),
-            );
-
-            const execution = Stream.unwrap(
-              Effect.gen(function* () {
-                const decodedInput = yield* decodeInput(agent, input);
-                const instructions = yield* evaluateInstructions<
-                  InputSchema["Type"],
-                  InstructionError,
-                  InstructionRequirements
-                >(agent.definition.instructions, decodedInput);
-                const encodedInput = yield* encodeInput(agent, decodedInput);
-                context.input = encodedInput;
-                if (retained !== undefined) yield* retained.stageInput(encodedInput);
-                const inputPrompt = yield* renderInputPrompt(
-                  agent.definition.inputPrompt,
-                  decodedInput,
-                  encodedInput,
-                );
-                const priorHistoryLength = context.history.content.length;
-                const prompt = yield* makeInitialPrompt(instructions, inputPrompt, context.history);
-                // RUN-022: the instruction/input block is protected from compaction
-                // by source index. A hook-prepared prompt (durable resume) replaces
-                // the source, so index protection is unavailable there and the view
-                // falls back to protecting system-role messages.
-                if (options.context === undefined) {
-                  context.compaction.protectedStart = priorHistoryLength;
-                  context.compaction.protectedEnd = prompt.content.length;
-                }
-                yield* advanceHistory(context, prompt, options);
-                if (resumed !== undefined) {
-                  // A declared-batch resume re-enters mid-Turn: steering seams
-                  // reopen only after the resumed batch settles, so the initial
-                  // drain is skipped and the continuation drains at the safe seam.
-                  return makeResumeTurn(
-                    interpreter,
-                    context,
-                    prompt,
-                    resumed.batch,
-                    resumed.usage.toolCalls,
-                    options,
-                  );
-                }
-                const steering = yield* drainInputs(context, options);
-                const initialPrompt = yield* appendInputs(context, prompt, steering, options);
-                return makeTurn(
-                  interpreter,
-                  context,
-                  initialPrompt,
-                  (resumeUsage?.committedTurns ?? 0) + 1,
-                  resumeUsage?.toolCalls ?? 0,
-                  options,
-                );
-              }),
-            );
-
-            const durationLimit = durationLimitError(agent.definition.policy);
-            const deadline = enforceDurationDeadline(
-              execution,
-              durationDeadlineMillis,
-              durationLimit,
-            );
-
-            // Engine-provided Tool services for this Run: a real `AgentSpawner`
-            // bound to the Run's immutable identity and delegation depth, plus the
-            // fail-closed `RunEventSink` and `DurableStep` defaults that each Tool
-            // batch shadows with per-batch / per-call live services. Providing them
-            // here is what removes these services from the runtime's public
-            // requirements.
-            const engineToolServices = Context.make(
-              AgentSpawner,
-              makeAgentSpawner(
-                {
-                  agentId: context.agentId,
-                  conversationId: context.conversationId,
-                  runId: context.runId,
-                },
-                options.parentLink?.depth ?? 0,
-                history,
-              ),
-            ).pipe(
-              Context.add(RunEventSink, closedRunEventSink),
-              Context.add(DurableStep, closedDurableStep),
-              Context.add(SubagentDurability, closedSubagentDurability),
-              Context.add(ToolBroker, closedToolBroker),
-            );
-
-            return started.pipe(
-              Stream.concat(deadline),
-              Stream.catch((error) => {
-                const terminal = Stream.fromEffect(
-                  Effect.gen(function* () {
-                    if (
-                      error instanceof AgentApprovalPending ||
-                      error instanceof AgentChildPending
-                    ) {
-                      return RunSuspended.make({
-                        ...(yield* terminalEventBase(context)),
-                        reason: error.message,
-                      });
-                    }
-                    return RunFailed.make({
-                      ...(yield* terminalEventBase(context)),
-                      errorTag: errorTag(error),
-                      message: errorMessage(error),
-                    });
-                  }),
-                );
-                return terminal.pipe(Stream.concat(Stream.fail(error)));
-              }),
-              Stream.withSpan("AgentRuntime.run", {
-                attributes: {
-                  agentId: context.agentId,
-                  runId: context.runId,
-                },
-              }),
-              Stream.provide(engineToolServices),
-            );
-          }),
-        );
-
-        const finalized =
-          options.input?.end === undefined
-            ? interpreted
-            : interpreted.pipe(Stream.ensuring(options.input.end()));
-        const modeled: Stream.Stream<
-          RunEvent,
-          AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
-          | AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
-          | ToolSpanTelemetry
-          | ModelRequires
-        > = agent.model === undefined
-          ? finalized
-          : finalized.pipe(Stream.provide(agent.model, { local: true }));
-        const events = modeled.pipe(
-          // The engine composition boundary owns span-lifecycle isolation while preserving the host's
-          // ambient Tracer/Logger configuration. Individual Tool executions consume this capability.
-          Stream.provide(ToolSpanTelemetry.layer),
-        );
-        if (retained === undefined && onCompleted === undefined) return events;
-        let completed: RunCompleted | undefined;
-        return events.pipe(
-          Stream.filter((event) => {
-            if (event._tag !== "RunCompleted") return true;
-            completed = event;
-            return false;
-          }),
-          // Finish run-owned work and close its acquired resources before result validation,
-          // history commit, and observable completion. Services supplied by an enclosing
-          // application Layer keep that application's Scope, even when the model consumes them.
-          Stream.scoped,
-          Stream.concat(
-            Stream.unwrap(
-              Effect.gen(function* () {
-                const terminal = completed;
-                if (terminal === undefined) {
-                  return yield* ModelProtocolError.make({
-                    message: "Agent stream ended without RunCompleted",
-                  });
-                }
-                return Stream.fromEffect(
-                  Effect.gen(function* () {
-                    if (onCompleted !== undefined) yield* onCompleted(terminal);
-                    if (retained !== undefined) yield* retained.commit(terminal);
-                    return terminal;
-                  }),
-                ).pipe(
-                  Stream.catch((error) =>
-                    Stream.make(
-                      RunFailed.make({
-                        eventVersion: terminal.eventVersion,
-                        conversationId: terminal.conversationId,
-                        runId: terminal.runId,
-                        agentId: terminal.agentId,
-                        sequence: terminal.sequence,
-                        timestamp: terminal.timestamp,
-                        errorTag: errorTag(error),
-                        message: errorMessage(error),
-                      }),
-                    ).pipe(Stream.concat(Stream.fail(error))),
-                  ),
-                );
+          reason: "incompatible",
+          message:
+            "Provided history cannot share ownership with explicit history, input queues, or durable recovery hooks",
+        });
+      }
+      const options: RunOptions<HookError | ConversationHistoryError, HookRequirements> = {
+        ...runOptions,
+        conversationId,
+        runId,
+        ...(retained === undefined
+          ? {}
+          : { history: retained.prompt, onHistory: retained.stageHistory }),
+      };
+      const interpreted = Stream.unwrap(
+        Effect.gen(function* () {
+          const resumed =
+            options.resume === undefined
+              ? undefined
+              : {
+                  batch: options.resume,
+                  usage: yield* decodeResumeUsage(options.resumeUsage),
+                };
+          const resumeUsage =
+            resumed?.usage ??
+            (options.resumeUsage === undefined
+              ? undefined
+              : yield* decodeResumeUsage(options.resumeUsage));
+          if (
+            resumed !== undefined &&
+            (resumed.usage.committedTurns !== resumed.batch.turn ||
+              resumed.usage.toolCalls < resumed.batch.calls.length ||
+              resumed.usage.consecutiveToolFailures >
+                resumed.usage.toolCalls - resumed.batch.calls.length)
+          ) {
+            return yield* ModelProtocolError.make({
+              message:
+                "Run resume accounting conflicts with the pending Turn and declared Tool Calls",
+            });
+          }
+          const attemptStartedAtMillis = yield* Clock.currentTimeMillis;
+          const maxDurationMillis = Duration.toMillis(agent.definition.policy.maxDuration);
+          const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
+          // RUN-030: a durable coordinator supplies the logical Run deadline from
+          // canonical Run-start evidence. Taking the earlier deadline keeps this
+          // public option tightening-only for every other caller.
+          const durationDeadlineMillis =
+            options.durationDeadline === undefined
+              ? attemptDeadlineMillis
+              : Math.min(attemptDeadlineMillis, DateTime.toEpochMillis(options.durationDeadline));
+          // Elapsed status tracks the logical Run's actual start. A shorter
+          // deadline tightens execution without inventing time that never passed.
+          const startedAtMillis =
+            options.runStartedAt === undefined
+              ? attemptStartedAtMillis
+              : DateTime.toEpochMillis(options.runStartedAt);
+          const compactor = yield* Effect.serviceOption(ContextCompactor).pipe(
+            Effect.flatMap(
+              Option.match({
+                onSome: Effect.succeed,
+                onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
               }),
             ),
+          );
+          const context: RunContext = {
+            agentId: agent.definition.id,
+            conversationId,
+            runId,
+            toolFailureObserver: yield* CurrentToolFailureObserver,
+            input: undefined,
+            pendingFollowUps: [],
+            startedAtMillis,
+            durationDeadlineMillis,
+            history: options.history ?? Prompt.empty,
+            // RUN-019: a resumed Attempt re-seeds cumulative usage from the
+            // canonical response records so token budgets and the compaction
+            // trigger keep accounting across ownership changes.
+            modelCalls: resumeUsage?.modelCalls ?? 0,
+            consecutiveToolFailures: resumeUsage?.consecutiveToolFailures ?? 0,
+            inputTokens: resumeUsage?.inputTokens ?? 0,
+            outputTokens: resumeUsage?.outputTokens ?? 0,
+            lastInputTokens: resumeUsage?.lastInputTokens ?? 0,
+            lastOutputTokens: resumeUsage?.lastOutputTokens ?? 0,
+            costMicrousd: resumeUsage?.costMicrousd ?? 0,
+            lastCostMicrousd: 0,
+            warnedLimits: new Set(),
+            finalizing: false,
+            tokenExhausted: false,
+            exhaustedDimension: undefined,
+            compaction: initialCompactionState(),
+            compactionTurn: { turn: 0, summaryCalls: 0, applied: new Set() },
+            compactor,
+            bufferLimits: effectiveRunBufferLimits(options.bufferLimits),
+            sequence: 0,
+            programmaticToolCalls: resumeUsage?.programmaticToolCalls ?? 0,
+            finalizationUsed: resumeUsage?.finalizationUsed ?? false,
+            policyReservations: yield* Semaphore.make(1),
+          };
+          // Restored totals can already breach the token budget (runtime spec §9):
+          // the resumed Attempt must never issue an unconstrained external call.
+          // "fail" rejects before any model call or resumed handler runs.
+          if (resumeUsage !== undefined) {
+            const bounds = effectiveRunBounds(agent.definition.policy, options);
+            if (context.finalizationUsed) {
+              context.exhaustedDimension =
+                resumeUsage.committedTurns > bounds.maxTurns
+                  ? "turns"
+                  : resumeUsage.toolCalls + context.programmaticToolCalls > bounds.maxToolCalls
+                    ? "tool-calls"
+                    : "tokens";
+            }
+            if (
+              agent.definition.policy.onExhaustion === "fail" &&
+              resumeUsage.toolCalls + context.programmaticToolCalls > bounds.maxToolCalls
+            ) {
+              return failRunEventStream(
+                AgentPolicyError.make({
+                  limit: "tool-calls",
+                  message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`,
+                }),
+              );
+            }
+            const failureLimit = agent.definition.policy.repeatedFailureLimit;
+            if (failureLimit > 0 && context.consecutiveToolFailures >= failureLimit) {
+              return failRunEventStream(
+                AgentPolicyError.make({
+                  limit: "repeated-failures",
+                  message: `Agent reached its ${failureLimit} consecutive Tool Call failure limit`,
+                }),
+              );
+            }
+            // Cost is an unconditional hard rail with no grace call in either
+            // exhaustion mode (runtime spec §3): a resume whose seeded spend
+            // already breaches the budget rejects before input, resumed
+            // handlers, or any external model execution.
+            const seededCostBudget = agent.definition.policy.costBudgetMicrousd;
+            if (seededCostBudget !== undefined && context.costMicrousd > seededCostBudget) {
+              return failRunEventStream(
+                AgentPolicyError.make({
+                  limit: "cost",
+                  message: `Agent exceeded its ${seededCostBudget} microdollar cost budget`,
+                }),
+              );
+            }
+            const seededBudget = agent.definition.policy.tokenBudget;
+            if (
+              seededBudget !== undefined &&
+              context.inputTokens + context.outputTokens > seededBudget
+            ) {
+              if (agent.definition.policy.onExhaustion === "fail") {
+                return failRunEventStream(
+                  AgentPolicyError.make({
+                    limit: "tokens",
+                    message: `Agent exceeded its ${seededBudget} token budget`,
+                  }),
+                );
+              }
+              context.tokenExhausted = true;
+              context.exhaustedDimension ??= "tokens";
+            }
+          }
+          if (options.input?.start !== undefined) {
+            yield* options.input.start();
+          }
+
+          const started = Stream.fromEffect(
+            Effect.gen(function* () {
+              yield* Metric.update(runCounter, 1);
+              yield* Effect.logDebug("agent run started").pipe(
+                Effect.annotateLogs({
+                  agentId: context.agentId,
+                  runId: context.runId,
+                }),
+              );
+              return yield* eventBase(context).pipe(Effect.map((base) => RunStarted.make(base)));
+            }).pipe(Effect.withLogSpan("AgentRuntime.run")),
+          );
+
+          const execution = Stream.unwrap(
+            Effect.gen(function* () {
+              const decodedInput = yield* decodeInput(agent, input);
+              const instructions = yield* evaluateInstructions<
+                InputSchema["Type"],
+                InstructionError,
+                InstructionRequirements
+              >(agent.definition.instructions, decodedInput);
+              const encodedInput = yield* encodeInput(agent, decodedInput);
+              context.input = encodedInput;
+              if (retained !== undefined) yield* retained.stageInput(encodedInput);
+              const inputPrompt = yield* renderInputPrompt(
+                agent.definition.inputPrompt,
+                decodedInput,
+                encodedInput,
+              );
+              const priorHistoryLength = context.history.content.length;
+              const prompt = yield* makeInitialPrompt(instructions, inputPrompt, context.history);
+              // RUN-022: the instruction/input block is protected from compaction
+              // by source index. A hook-prepared prompt (durable resume) replaces
+              // the source, so index protection is unavailable there and the view
+              // falls back to protecting system-role messages.
+              if (options.context === undefined) {
+                context.compaction.protectedStart = priorHistoryLength;
+                context.compaction.protectedEnd = prompt.content.length;
+              }
+              yield* advanceHistory(context, prompt, options);
+              if (resumed !== undefined) {
+                // A declared-batch resume re-enters mid-Turn: steering seams
+                // reopen only after the resumed batch settles, so the initial
+                // drain is skipped and the continuation drains at the safe seam.
+                return makeResumeTurn(
+                  agent,
+                  context,
+                  prompt,
+                  resumed.batch,
+                  resumed.usage.toolCalls,
+                  options,
+                );
+              }
+              const steering = yield* drainInputs(context, options);
+              const initialPrompt = yield* appendInputs(context, prompt, steering, options);
+              return makeTurn(
+                agent,
+                context,
+                initialPrompt,
+                (resumeUsage?.committedTurns ?? 0) + 1,
+                resumeUsage?.toolCalls ?? 0,
+                options,
+              );
+            }),
+          );
+
+          const durationLimit = durationLimitError(agent.definition.policy);
+          const deadline = enforceDurationDeadline(
+            execution,
+            durationDeadlineMillis,
+            durationLimit,
+          );
+
+          // Engine-provided Tool services for this Run: a real `AgentSpawner`
+          // bound to the Run's immutable identity and delegation depth, plus the
+          // fail-closed `RunEventSink` and `DurableStep` defaults that each Tool
+          // batch shadows with per-batch / per-call live services. Providing them
+          // here is what removes these services from the runtime's public
+          // requirements.
+          const engineToolServices = Context.make(
+            AgentSpawner,
+            makeAgentSpawner(
+              {
+                agentId: context.agentId,
+                conversationId: context.conversationId,
+                runId: context.runId,
+              },
+              options.parentLink?.depth ?? 0,
+              history,
+            ),
+          ).pipe(
+            Context.add(RunEventSink, closedRunEventSink),
+            Context.add(DurableStep, closedDurableStep),
+            Context.add(SubagentDurability, closedSubagentDurability),
+            Context.add(ToolBroker, closedToolBroker),
+          );
+
+          return started.pipe(
+            Stream.concat(deadline),
+            Stream.catch((error) => {
+              const terminal = Stream.fromEffect(
+                Effect.gen(function* () {
+                  if (error instanceof AgentApprovalPending || error instanceof AgentChildPending) {
+                    return RunSuspended.make({
+                      ...(yield* terminalEventBase(context)),
+                      reason: error.message,
+                    });
+                  }
+                  return RunFailed.make({
+                    ...(yield* terminalEventBase(context)),
+                    errorTag: errorTag(error),
+                    message: errorMessage(error),
+                  });
+                }),
+              );
+              return terminal.pipe(Stream.concat(Stream.fail(error)));
+            }),
+            Stream.withSpan("AgentRuntime.run", {
+              attributes: {
+                agentId: context.agentId,
+                runId: context.runId,
+              },
+            }),
+            Stream.provide(engineToolServices),
+          );
+        }),
+      );
+
+      const finalized =
+        options.input?.end === undefined
+          ? interpreted
+          : interpreted.pipe(Stream.ensuring(options.input.end()));
+      const modeled: Stream.Stream<
+        RunEvent,
+        AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
+        | AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
+        | ToolSpanTelemetry
+        | ModelRequires
+      > = model === undefined ? finalized : finalized.pipe(Stream.provide(model, { local: true }));
+      const events = modeled.pipe(
+        // The engine composition boundary owns span-lifecycle isolation while preserving the host's
+        // ambient Tracer/Logger configuration. Individual Tool executions consume this capability.
+        Stream.provide(ToolSpanTelemetry.layer),
+      );
+      if (retained === undefined && onCompleted === undefined) return events;
+      let completed: RunCompleted | undefined;
+      return events.pipe(
+        Stream.filter((event) => {
+          if (event._tag !== "RunCompleted") return true;
+          completed = event;
+          return false;
+        }),
+        // Finish run-owned work and close its acquired resources before result validation,
+        // history commit, and observable completion. Services supplied by an enclosing
+        // application Layer keep that application's Scope, even when the model consumes them.
+        Stream.scoped,
+        Stream.concat(
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const terminal = completed;
+              if (terminal === undefined) {
+                return yield* ModelProtocolError.make({
+                  message: "Agent stream ended without RunCompleted",
+                });
+              }
+              return Stream.fromEffect(
+                Effect.gen(function* () {
+                  if (onCompleted !== undefined) yield* onCompleted(terminal);
+                  if (retained !== undefined) yield* retained.commit(terminal);
+                  return terminal;
+                }),
+              ).pipe(
+                Stream.catch((error) =>
+                  Stream.make(
+                    RunFailed.make({
+                      eventVersion: terminal.eventVersion,
+                      conversationId: terminal.conversationId,
+                      runId: terminal.runId,
+                      agentId: terminal.agentId,
+                      sequence: terminal.sequence,
+                      timestamp: terminal.timestamp,
+                      errorTag: errorTag(error),
+                      message: errorMessage(error),
+                    }),
+                  ).pipe(Stream.concat(Stream.fail(error))),
+                ),
+              );
+            }),
           ),
-        );
-      }),
-    );
+        ),
+      );
+    }),
+  );
+}
 
 type CompletionValidator<A extends Agent.Any> = (
   completed: RunCompleted,
@@ -6077,88 +6064,6 @@ type ExecutableAgent =
         unknown
       >;
     };
-
-/** Decode external input before instructions or model execution. */
-function streamWithCompletion<
-  A extends ExecutableAgent,
-  H = never,
-  R = never,
-  CE = never,
-  CR = never,
->(
-  agent: A,
-  input: unknown,
-  options: RunOptions<H, R> | undefined,
-  onCompleted?: (completed: RunCompleted) => Effect.Effect<void, CE, CR>,
-): Stream.Stream<RunEvent, AgentRuntimeFailure<A, H> | CE, AgentRuntimeRequirements<A, R> | CR>;
-function streamWithCompletion<
-  InputSchema extends Schema.Top,
-  OutputSchema extends Schema.Top,
-  Instructions,
-  Tools extends Record<string, Tool.Any>,
-  Provider,
-  ModelProvides,
-  ModelRequires,
-  CE = never,
-  CR = never,
-  HookError = never,
-  HookRequirements = never,
-  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
-  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
-  RunDispositionValue extends
-    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
-    | undefined = undefined,
-  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
-    undefined,
->(
-  agent:
-    | RuntimeBinding<
-        InputSchema,
-        OutputSchema,
-        Instructions,
-        Tools,
-        Provider,
-        ModelProvides,
-        ModelRequires,
-        InstructionError,
-        InstructionRequirements,
-        RunDispositionValue,
-        InputPromptValue
-      >
-    | RuntimeBinding<
-        InputSchema,
-        OutputSchema,
-        Instructions,
-        Tools,
-        Provider,
-        ModelProvides,
-        ModelRequires,
-        InstructionError,
-        InstructionRequirements,
-        RunDispositionValue,
-        InputPromptValue
-      >["definition"],
-  input: unknown,
-  options: RunOptions<HookError, HookRequirements> = {},
-  onCompleted?: (completed: RunCompleted) => Effect.Effect<void, CE, CR>,
-) {
-  const program = "definition" in agent ? agent : { definition: agent };
-  return makeStream(onCompleted)<
-    InputSchema,
-    OutputSchema,
-    Instructions,
-    Tools,
-    Provider,
-    ModelProvides,
-    ModelRequires,
-    HookError,
-    HookRequirements,
-    InstructionError,
-    InstructionRequirements,
-    RunDispositionValue,
-    InputPromptValue
-  >(program, input, options);
-}
 
 /** Decode external input before instructions or model execution. */
 const streamUnknown = <A extends ExecutableAgent, H = never, R = never>(

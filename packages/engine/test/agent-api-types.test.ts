@@ -87,10 +87,10 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
     | Tool.HandlersFor<typeof toolkit.tools>;
   type NativeServices = LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName;
   expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
-    DefinitionServices | NativeServices | IdGenerator | Scope.Scope
+    DefinitionServices | NativeServices | IdGenerator
   >();
   expectTypeOf<Effect.Services<typeof provided>>().toEqualTypeOf<
-    DefinitionServices | ProviderClient | IdGenerator | Scope.Scope
+    DefinitionServices | ProviderClient | IdGenerator
   >();
   expectTypeOf<Effect.Success<typeof run>>().toEqualTypeOf<
     AgentResult<{ readonly answer: string }>
@@ -105,7 +105,9 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
     DefinitionServices | NativeServices | IdGenerator
   >();
   const start = AgentRuntime.start(planner, input);
-  expectTypeOf<Effect.Services<typeof start>>().toEqualTypeOf<Effect.Services<typeof run>>();
+  expectTypeOf<Effect.Services<typeof start>>().toEqualTypeOf<
+    Effect.Services<typeof run> | Scope.Scope
+  >();
   expectTypeOf<Effect.Error<typeof start>>().toEqualTypeOf<never>();
 
   const captured = Effect.gen(function* () {
@@ -119,7 +121,7 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
     Effect.provide(Layer.mergeAll(model, IdGenerator.layer)),
   );
   expectTypeOf<Effect.Services<typeof composed>>().toEqualTypeOf<
-    DefinitionServices | ProviderClient | Scope.Scope
+    DefinitionServices | ProviderClient
   >();
 
   // These Effects are never executed. Their signatures must reject incomplete composition.
@@ -229,7 +231,7 @@ it("preserves disjoint tool schemas and callbacks with different input types", (
   const binding = Agent.withModel(select(true), model);
   const execution = AgentRuntime.run(binding, { topic: "Lisbon" });
   expectTypeOf<Effect.Services<typeof execution>>().toEqualTypeOf<
-    ExpectedServices | ProviderClient | ConversationHistory | IdGenerator | Scope.Scope
+    ExpectedServices | ProviderClient | ConversationHistory | IdGenerator
   >();
   expectTypeOf<
     Extract<Effect.Error<typeof execution>, InstructionError | ToolError | TopicFailure>
@@ -275,8 +277,8 @@ it("retains every branch's tool requirements and failures across execution views
   const streamUnknown = AgentRuntime.streamUnknown(selected, input);
   const start = AgentRuntime.start(selected, input);
   const startUnknown = AgentRuntime.startUnknown(selected, input);
-  expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<RuntimeServices | Scope.Scope>();
-  expectTypeOf<Effect.Services<typeof runUnknown>>().toEqualTypeOf<RuntimeServices | Scope.Scope>();
+  expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<RuntimeServices>();
+  expectTypeOf<Effect.Services<typeof runUnknown>>().toEqualTypeOf<RuntimeServices>();
   expectTypeOf<Stream.Services<typeof stream>>().toEqualTypeOf<RuntimeServices>();
   expectTypeOf<Stream.Services<typeof streamUnknown>>().toEqualTypeOf<RuntimeServices>();
   expectTypeOf<Effect.Services<typeof start>>().toEqualTypeOf<RuntimeServices | Scope.Scope>();
@@ -308,9 +310,9 @@ it("retains every branch's tool requirements and failures across execution views
   const boundRun = AgentRuntime.run(binding, input);
   const selectedRun = AgentRuntime.run(bindSelected, input);
   expectTypeOf<Effect.Services<typeof boundRun>>().toEqualTypeOf<
-    BoundServices | ConversationHistory | IdGenerator | Scope.Scope
+    BoundServices | ConversationHistory | IdGenerator
   >();
   expectTypeOf<Effect.Services<typeof selectedRun>>().toEqualTypeOf<
-    BoundServices | ConversationHistory | IdGenerator | Scope.Scope
+    BoundServices | ConversationHistory | IdGenerator
   >();
 });
