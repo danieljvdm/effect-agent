@@ -29,7 +29,8 @@ import {
   type RetryCommand,
   type Settlement,
 } from "@effect-agent/session";
-import { Context, Effect, Layer, Ref, Schema, Stream } from "effect";
+import type { Stream } from "effect";
+import { Context, type Crypto, Effect, Layer, Ref, Schema } from "effect";
 
 import {
   NodeDurableRuntime,
@@ -207,11 +208,25 @@ export class NodeDurableHost extends Context.Service<
   > => Layer.effect(NodeDurableHost)(makeHost(bindings));
 
   /** The complete DN host: `NodeDurableRuntime.layer(options)` plus the host lifecycle gates. */
-  static layerStack(
-    options: NodeDurableRuntimeOptions & { readonly bindings?: ReadonlyArray<ResolvedBinding> },
+  static layerStack<
+    ContextError = never,
+    ContextRequirements = never,
+    AuthorizationError = never,
+    AuthorizationRequirements = never,
+  >(
+    options: NodeDurableRuntimeOptions<
+      ContextError,
+      ContextRequirements,
+      AuthorizationError,
+      AuthorizationRequirements
+    > & { readonly bindings?: ReadonlyArray<ResolvedBinding> },
   ): Layer.Layer<
     NodeDurableHost | NodeDurableRuntimeServices,
-    DurableWorkerFailure | NodeDurableRuntimeInitializationError
+    | DurableWorkerFailure
+    | NodeDurableRuntimeInitializationError
+    | ContextError
+    | AuthorizationError,
+    Exclude<ContextRequirements | AuthorizationRequirements, Crypto.Crypto>
   > {
     const { bindings = [], ...runtimeOptions } = options;
     return NodeDurableHost.layer(bindings).pipe(

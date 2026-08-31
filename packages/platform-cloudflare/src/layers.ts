@@ -353,7 +353,7 @@ export const layerFromBindings = (
         routedConversationStoreLayer({ localConversationId: conversationId }),
       ).pipe(Layer.provide(localPorts), Layer.provide(conversationPortTransportLayer));
       const base = Layer.mergeAll(DurableAlarmService.layer, ProgressWaitRegistry.layer);
-      const runtimeStack = DurableAgentRuntime.layerWithContext.pipe(
+      const runtimeStack = DurableAgentRuntime.layerWithServices.pipe(
         Layer.provideMerge(routedPorts),
         Layer.provideMerge(cloudflareWakeSchedulerLayer),
         Layer.provideMerge(base),

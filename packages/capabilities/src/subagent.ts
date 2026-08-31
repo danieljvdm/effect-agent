@@ -424,9 +424,8 @@ export interface SubagentDefineOptions<
    * per-invocation reservation slice). `fromParameters` lets the orchestrator
    * model grant a larger allowance through an author-owned parameter field —
    * the budget-extension flow is a fresh re-delegation with a raised
-   * allowance, never a mid-flight top-up. Ephemeral delegation only: a
-   * durable child keeps running at its Definition policy (its lane owns no
-   * per-run options channel; the reservation stays accounting-only per §7).
+   * allowance, never a mid-flight top-up. Durable establishment records the
+   * effective allowance before child admission and restores it on every Attempt.
    */
   readonly toolCallAllowance?:
     | {
@@ -1227,6 +1226,23 @@ const layer = <
   const decodeChildOutput = Schema.decodeUnknownEffect(delegation.target.output);
   const encodeDeclaredFailure = Schema.encodeEffect(delegation.failure);
   const childToolNames = Object.keys(delegation.target.toolkit.tools);
+  const childToolCallAllowance = (parameters: Parameters["Type"]): number | undefined => {
+    const option = delegation.toolCallAllowance;
+    if (option === undefined) return undefined;
+    const extracted = option.fromParameters?.(parameters);
+    // A non-finite parameter falls back to the author default, then the reservation.
+    const requested =
+      extracted !== undefined && Number.isFinite(extracted)
+        ? extracted
+        : Number.isFinite(option.default)
+          ? option.default
+          : delegation.policy.maxToolCalls;
+    return Math.min(
+      Math.max(1, Math.floor(requested)),
+      delegation.policy.maxToolCalls,
+      delegation.target.policy.maxToolCalls,
+    );
+  };
   // Construction-fixed durable declaration (S2): the exact digest strings the
   // establishment request carries on every Attempt, including batch resume.
   const durableDeclaration: SubagentDurableOptions | undefined =
@@ -1424,27 +1440,7 @@ const layer = <
               ),
             ),
       };
-      // Per-invocation allowance (SUB-034): tightening-only, clamped to the
-      // delegation's own per-invocation reservation slice; the child's
-      // Definition policy stays the engine-side ceiling (RUN-021).
-      const allowanceOption = delegation.toolCallAllowance;
-      // Fail closed on non-finite values (SUB-034): a model-derived NaN falls
-      // back to the author default, and a non-finite default falls back to
-      // the delegation's own reservation slice — a CONFIGURED allowance never
-      // silently widens to the child Definition policy.
-      const extracted = allowanceOption?.fromParameters?.(parameters);
-      const requestedAllowance =
-        allowanceOption === undefined
-          ? undefined
-          : extracted !== undefined && Number.isFinite(extracted)
-            ? extracted
-            : Number.isFinite(allowanceOption.default)
-              ? allowanceOption.default
-              : delegation.policy.maxToolCalls;
-      const toolCallAllowance =
-        requestedAllowance === undefined
-          ? undefined
-          : Math.min(Math.max(1, Math.floor(requestedAllowance)), delegation.policy.maxToolCalls);
+      const toolCallAllowance = childToolCallAllowance(parameters);
       const childOptions: SpawnRunOptions<never, HookRequirements> = {
         ...seededChild,
         budget,
@@ -1679,6 +1675,7 @@ const layer = <
           encodedChildInput: encodedInput,
           encodedGrant,
           encodedAllocation,
+          toolCallAllowance: childToolCallAllowance(parameters),
         }),
       );
 

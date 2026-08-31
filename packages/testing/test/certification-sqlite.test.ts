@@ -1,4 +1,5 @@
 import {
+  CertificationCaseResult,
   CertificationReport,
   conversationStoreConformanceCases,
   submissionLedgerConformanceCases,
@@ -83,6 +84,78 @@ const certified = Effect.gen(function* () {
 
 describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () => {
   it.effect(
+    "distinguishes executed-check success from complete real-loss certification",
+    () =>
+      Effect.gen(function* () {
+        const rows = [
+          {
+            name: "missing",
+            crashLever: undefined,
+            ok: true,
+            full: false,
+            status: "not-exercised",
+          },
+          {
+            name: "empty",
+            crashLever: Effect.succeed([]),
+            ok: true,
+            full: false,
+            status: "not-exercised",
+          },
+          {
+            name: "passed",
+            crashLever: Effect.succeed([
+              CertificationCaseResult.make({
+                suite: "real-loss",
+                name: "supplied lever result",
+                status: "passed",
+              }),
+            ]),
+            ok: true,
+            full: true,
+            status: "exercised",
+          },
+          {
+            name: "failed",
+            crashLever: Effect.succeed([
+              CertificationCaseResult.make({
+                suite: "real-loss",
+                name: "supplied lever result",
+                status: "failed",
+              }),
+            ]),
+            ok: false,
+            full: false,
+            status: "exercised",
+          },
+        ];
+        for (const row of rows) {
+          const report = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const fs = yield* FileSystem.FileSystem;
+              const directory = yield* fs.makeTempDirectoryScoped({
+                prefix: "certification-verdict-",
+              });
+              const adapters = combinedAdapters(`${directory}/test.sqlite`);
+              return yield* certifyDurableAdapters({
+                adapter: { name: row.name },
+                submissionLedger: adapters,
+                conversationStore: adapters,
+                crashLever: row.crashLever,
+              });
+            }),
+          );
+          expect({
+            ok: report.ok,
+            full: report.fullyCertified,
+            status: report.tier3.status,
+          }).toEqual({ ok: row.ok, full: row.full, status: row.status });
+        }
+      }).pipe(Effect.provide([NodeFileSystem.layer, NodeCrypto.layer])),
+    300_000,
+  );
+
+  it.effect(
     "TIER1: all SubmissionLedger and ConversationStore contract cases pass",
     () =>
       Effect.gen(function* () {
@@ -123,7 +196,8 @@ describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () 
         const report = yield* certified;
         const encoded = yield* Schema.encodeEffect(CertificationReport)(report);
         const decoded = yield* Schema.decodeUnknownEffect(CertificationReport)(encoded);
-        expect(decoded.format).toBe("effect-agent/certification@1");
+        expect(decoded.format).toBe("effect-agent/certification@2");
+        expect(decoded.fullyCertified).toBe(false);
         expect(decoded.adapter.name).toBe("@effect-agent/storage-sqlite");
         expect(decoded.adapter.durability).toBe("durable-node");
         expect(decoded.ok).toBe(true);

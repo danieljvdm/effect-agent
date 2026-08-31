@@ -875,9 +875,12 @@ export const resolveTierThree = Effect.fn("Certification.resolveTierThree")(func
   if (options.crashLever !== undefined) {
     const cases = yield* options.crashLever;
     return CertificationTierThreeReport.make({
-      status: "exercised",
+      status: cases.length === 0 ? "not-exercised" : "exercised",
       evidence: options.tierThreeEvidence ?? [],
       cases,
+      ...(cases.length === 0
+        ? { detail: "the supplied crash lever executed no real-loss cases" }
+        : {}),
     });
   }
   if (options.tierThreeEvidence !== undefined && options.tierThreeEvidence.length > 0) {
@@ -978,7 +981,7 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
       tier3.cases.every((result) => result.status === "passed");
 
     return CertificationReport.make({
-      format: "effect-agent/certification@1",
+      format: "effect-agent/certification@2",
       adapter: CertifiedAdapterIdentity.make({
         name: options.adapter.name,
         ...(options.adapter.version === undefined ? {} : { version: options.adapter.version }),
@@ -989,6 +992,12 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
       tier2,
       tier3,
       ok,
+      fullyCertified:
+        ok &&
+        capabilities.durability !== "non-durable" &&
+        tier3.status === "exercised" &&
+        tier3.cases.length > 0 &&
+        tier3.cases.every((result) => result.suite === "real-loss"),
     });
   });
 

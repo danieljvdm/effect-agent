@@ -2492,6 +2492,9 @@ const make = Effect.gen(function* () {
         childDefinitionDigests: request.targetDigests,
         childInputDigest: request.childInputDigest,
         grantDigest: request.grantDigest,
+        ...(request.toolCallAllowance === undefined
+          ? {}
+          : { toolCallAllowance: request.toolCallAllowance }),
       }),
     );
     const tail = yield* store.inspectTail(
@@ -2761,9 +2764,10 @@ const make = Effect.gen(function* () {
     if (
       !definitionDigestsEqual(lineage.childDefinitionDigests, request.targetDigests) ||
       lineage.childInputDigest !== request.childInputDigest ||
-      lineage.grantDigest !== request.grantDigest
+      lineage.grantDigest !== request.grantDigest ||
+      lineage.toolCallAllowance !== request.toolCallAllowance
     ) {
-      return mismatch("The child lineage digests do not match the canonical request");
+      return mismatch("The child lineage digests or allowance do not match the canonical request");
     }
     const settlementEnvelope = childRecords.find(
       (envelope) => envelope.record.recordId === submissionSettlementRecordId(childSubmissionId),
@@ -3368,6 +3372,21 @@ const make = Effect.gen(function* () {
       const submissionId = submission.submissionId;
       const runId = runIdForSubmission(submissionId);
       const journal = yield* projectRunJournal(records, runId);
+      const childLineage = records.find(
+        ({ record }) => record.recordId === subagentLineageRecordId(submission.conversationId),
+      )?.record.payload;
+      if (
+        submission.parentLinkage !== undefined &&
+        (childLineage?._tag !== "SubagentLineageRecorded" ||
+          childLineage.parentSubmissionId !== submission.parentLinkage.parentSubmissionId ||
+          childLineage.parentLink.parentToolCallId !== submission.parentLinkage.parentToolCallId ||
+          !definitionDigestsEqual(childLineage.childDefinitionDigests, submission.agentDigests) ||
+          childLineage.childInputDigest !== submission.inputDigest)
+      ) {
+        return yield* RunJournalError.make({
+          message: "The child Run has no matching canonical lineage and execution bounds",
+        });
+      }
       const pending = yield* pendingToolBatchFor(records, runId);
       const resumeProjection =
         pending === undefined
@@ -4664,6 +4683,15 @@ const make = Effect.gen(function* () {
                   "The delegation grant or allocation does not satisfy the canonical persistence bounds",
                 );
               }
+              if (
+                request.toolCallAllowance !== undefined &&
+                !Schema.is(SubagentRequested.fields.toolCallAllowance)(request.toolCallAllowance)
+              ) {
+                return denied(
+                  "SubagentAllowanceInvalid",
+                  "The child Tool Call allowance must be a positive integer",
+                );
+              }
               const childInputDigest = yield* withCrypto(digestJson(childInput.value));
               const grantDigest = yield* withCrypto(digestJson(grant.value));
               const allocationDigest = yield* withCrypto(digestJson(allocation.value));
@@ -4703,6 +4731,9 @@ const make = Effect.gen(function* () {
                 childConversationId: childConversationIdFor(submissionId, toolCallId),
                 childPrincipal: submission.principal,
                 childIdempotencyKey: childIdempotencyKeyFor(runId, toolCallId),
+                ...(request.toolCallAllowance === undefined
+                  ? {}
+                  : { toolCallAllowance: request.toolCallAllowance }),
               });
               const requestRecordId = subagentRequestedRecordId(runId, toolCallId);
               if (!knownIds.has(requestRecordId)) {
@@ -4979,6 +5010,10 @@ const make = Effect.gen(function* () {
         subagent,
         runStartedAt: runTiming.startedAt,
         durationDeadline: runTiming.deadline,
+        ...(submission.parentLinkage !== undefined &&
+        childLineage?._tag === "SubagentLineageRecorded"
+          ? { toolCallAllowance: childLineage.toolCallAllowance }
+          : {}),
         ...(pending === undefined
           ? {}
           : {
@@ -7849,7 +7884,7 @@ export class DurableAgentRuntime extends Context.Service<
   }
 >()("@effect-agent/session/DurableAgentRuntime") {
   /** Generic assembly whose independent context and Tool authority requirements remain in `R`. */
-  static readonly layerWithContext: Layer.Layer<
+  static readonly layerWithServices: Layer.Layer<
     DurableAgentRuntime,
     never,
     | SubmissionLedger
@@ -7874,7 +7909,7 @@ export class DurableAgentRuntime extends Context.Service<
     | DurableRuntimeConfig
     | ToolReconciler
     | Crypto.Crypto
-  > = DurableAgentRuntime.layerWithContext.pipe(
+  > = DurableAgentRuntime.layerWithServices.pipe(
     Layer.provide([RunContextPreparationPassthrough, RunToolAuthorization.allowAll]),
   );
 }

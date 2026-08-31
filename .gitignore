@@ -8,6 +8,7 @@ dist
 .worktrees
 coverage
 .vite
+.playwright-cli/
 docs/.vitepress/cache
 docs/.vitepress/dist
 *.tsbuildinfo

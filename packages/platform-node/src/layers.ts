@@ -99,7 +99,12 @@ export class NodeDurableRuntimeConfig extends Context.Service<
  * to the documented production values; everything is schema-decoded into
  * `NodeDurableRuntimeConfigValue` before any resource opens (deployment §5 gate 1).
  */
-export interface NodeDurableRuntimeOptions {
+export interface NodeDurableRuntimeOptions<
+  ContextError = never,
+  ContextRequirements = never,
+  AuthorizationError = never,
+  AuthorizationRequirements = never,
+> {
   readonly filename: string;
   readonly deploymentId: string;
   readonly producerId: string;
@@ -137,15 +142,24 @@ export interface NodeDurableRuntimeOptions {
    */
   readonly toolReconciler?: Layer.Layer<ToolReconciler> | undefined;
   /** Host prompt preparation/compaction, acquired once with the runtime; default pass-through. */
-  readonly runContext?: Layer.Layer<RunContextPreparation, never, Crypto.Crypto> | undefined;
+  readonly runContext?:
+    | Layer.Layer<RunContextPreparation, ContextError, ContextRequirements | Crypto.Crypto>
+    | undefined;
   /**
    * Independent action-time Tool authority, acquired once with the runtime; default allow-all.
-   * Both extension Layers must close application dependencies; the platform supplies Crypto.
+   * Construction errors and application dependencies remain in the assembled Layer's E and R.
+   * The platform supplies Crypto to both extension Layers.
    */
-  readonly toolAuthorization?: Layer.Layer<RunToolAuthorization, never, Crypto.Crypto> | undefined;
+  readonly toolAuthorization?:
+    | Layer.Layer<
+        RunToolAuthorization,
+        AuthorizationError,
+        AuthorizationRequirements | Crypto.Crypto
+      >
+    | undefined;
 }
 
-/** Every construction failure of the assembled Node durable runtime stack. */
+/** Built-in construction failures. `layer` also preserves supplied service Layers' errors. */
 export type NodeDurableRuntimeInitializationError =
   | NodePlatformConfigError
   | SqliteStorageInitializationError;
@@ -163,7 +177,7 @@ export type NodeDurableRuntimeServices =
 const decodeConfigValue = Schema.decodeUnknownEffect(NodeDurableRuntimeConfigValue);
 
 const configFromOptions = (
-  options: NodeDurableRuntimeOptions,
+  options: Omit<NodeDurableRuntimeOptions, "runContext" | "toolAuthorization">,
 ): Effect.Effect<NodeDurableRuntimeConfigValue, NodePlatformConfigError> =>
   decodeConfigValue({
     filename: options.filename,
@@ -352,16 +366,40 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
  */
 export class NodeDurableRuntime {
   /** Validated configuration Layer; fails typed when the supplied options are out of bounds. */
-  static configLayer(
-    options: NodeDurableRuntimeOptions,
+  static configLayer<
+    ContextError = never,
+    ContextRequirements = never,
+    AuthorizationError = never,
+    AuthorizationRequirements = never,
+  >(
+    options: NodeDurableRuntimeOptions<
+      ContextError,
+      ContextRequirements,
+      AuthorizationError,
+      AuthorizationRequirements
+    >,
   ): Layer.Layer<NodeDurableRuntimeConfig, NodePlatformConfigError> {
     return Layer.effect(NodeDurableRuntimeConfig)(configFromOptions(options));
   }
 
   /** The full DN runtime stack over one SQLite file. */
-  static layer(
-    options: NodeDurableRuntimeOptions,
-  ): Layer.Layer<NodeDurableRuntimeServices, NodeDurableRuntimeInitializationError> {
+  static layer<
+    ContextError = never,
+    ContextRequirements = never,
+    AuthorizationError = never,
+    AuthorizationRequirements = never,
+  >(
+    options: NodeDurableRuntimeOptions<
+      ContextError,
+      ContextRequirements,
+      AuthorizationError,
+      AuthorizationRequirements
+    >,
+  ): Layer.Layer<
+    NodeDurableRuntimeServices,
+    NodeDurableRuntimeInitializationError | ContextError | AuthorizationError,
+    Exclude<ContextRequirements | AuthorizationRequirements, Crypto.Crypto>
+  > {
     return Layer.unwrap(
       Effect.map(configFromOptions(options), (config) => {
         const nodeConfigLayer = Layer.succeed(NodeDurableRuntimeConfig)(config);
@@ -390,7 +428,7 @@ export class NodeDurableRuntime {
             Layer.provideMerge(ownershipDrainLayer.pipe(Layer.provide(submissionLedgerLayer))),
           ),
         );
-        return DurableAgentRuntime.layerWithContext.pipe(
+        return DurableAgentRuntime.layerWithServices.pipe(
           Layer.provideMerge(
             Layer.mergeAll(ports, durableRuntimeConfigLayer(options.estimateCostMicrousd)),
           ),
@@ -400,12 +438,16 @@ export class NodeDurableRuntime {
               runtimeFailpointLayer,
               reconcilerLayer,
               observerLayer,
-              options.runContext ?? RunContextPreparationPassthrough,
-              options.toolAuthorization ?? RunToolAuthorization.allowAll,
             ),
           ),
           Layer.provideMerge(infrastructure),
           Layer.provideMerge(nodeConfigLayer),
+          Layer.provide(
+            Layer.mergeAll(
+              options.runContext ?? RunContextPreparationPassthrough,
+              options.toolAuthorization ?? RunToolAuthorization.allowAll,
+            ).pipe(Layer.provide(NodeCrypto.layer)),
+          ),
         );
       }),
     );

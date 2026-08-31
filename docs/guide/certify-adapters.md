@@ -54,12 +54,24 @@ tier 1 result, each tier 2 cell, and tier 3 evidence. `ok` is true only when eve
 passes. Statuses such as `not-triggered`, `recorded-evidence`, `not-exercised`, and
 `not-applicable` describe scope. They count as neither a pass nor a failure.
 
-`ok: true` can accompany tier 3 `not-exercised`. Inspect `tier3.status` and its evidence
-before claiming process-loss recovery; `ok` alone only reports the health of executed checks.
+Use `fullyCertified` when a gate requires complete durable-adapter certification in this run.
+It requires `ok: true`, a durable adapter, and at least one passing real-loss case from `crashLever`.
+All lever cases must belong to the `real-loss` suite. An empty lever reports `not-exercised`.
+
+| Tier 3 status                              | `ok` when executed checks pass | `fullyCertified` |
+| ------------------------------------------ | ------------------------------ | ---------------- |
+| `exercised` with passing real-loss cases   | `true`                         | `true`           |
+| `recorded-evidence`                        | `true`                         | `false`          |
+| `not-exercised`                            | `true`                         | `false`          |
+| `not-applicable` for a non-durable adapter | `true`                         | `false`          |
+
+Any failed executed check makes both fields `false`. Recorded citations are external evidence;
+the runner does not execute or verify those suites. Non-durable adapters can pass conformance
+without earning durable certification. Reports use the `effect-agent/certification@2` format.
 
 ## Interpret tier 2 results {#what-tier-2-asserts-exactly}
 
-Tier 2 runs 168 cells across six scenarios and 28 failpoint locations. Each cell uses fresh
+Tier 2 arms every coordinator failpoint across six scenarios. Each cell uses fresh
 conversation state, injects one failpoint, and drives recovery through public operations. The
 runner resolves unknown outcomes as `SafeToRetry` and approvals as `approved` only when
 `explainConversation` authorizes that action.

@@ -84,7 +84,7 @@ to accept work that survives eviction. For a process with SQLite, use the
 
 Platform hosts assemble storage and runtime services for you. When building your own host,
 `DurableAgentRuntime.layer` supplies default prompt preparation and tool authorization.
-Use `layerWithContext` to supply your own service layers. It requires **both**
+Use `layerWithServices` to supply your own service layers. It requires both
 `RunContextPreparation` and `RunToolAuthorization`.
 
 Here are the defaults written out; replace either layer with your application's implementation:
@@ -94,7 +94,7 @@ import { RunContextPreparationPassthrough, RunToolAuthorization } from "@effect-
 import { DurableAgentRuntime } from "@effect-agent/session";
 import { Layer } from "effect";
 
-export const RuntimeLive = DurableAgentRuntime.layerWithContext.pipe(
+export const RuntimeLive = DurableAgentRuntime.layerWithServices.pipe(
   Layer.provide(RunContextPreparationPassthrough),
   Layer.provide(RunToolAuthorization.allowAll),
 );

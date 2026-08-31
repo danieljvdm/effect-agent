@@ -40,15 +40,12 @@ Use `digestDefinitions` to compute submission digests.
 ## Run the workers
 
 ```ts twoslash
-import { NodeDurableHost, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
+import { NodeDurableHost } from "@effect-agent/platform-node";
 import type { ResolvedBinding } from "@effect-agent/session";
 import { NodeRuntime } from "@effect/platform-node";
 import { Effect } from "effect";
 
-export const startWorkers = (
-  bindings: ReadonlyArray<ResolvedBinding>,
-  services: Pick<NodeDurableRuntimeOptions, "runContext" | "toolAuthorization"> = {},
-) =>
+export const startWorkers = (bindings: ReadonlyArray<ResolvedBinding>) =>
   Effect.gen(function* () {
     const host = yield* NodeDurableHost;
     yield* host.runResolvedWorkers;
@@ -60,7 +57,6 @@ export const startWorkers = (
         producerId: "worker-1",
         workerConcurrency: 4,
         bindings,
-        ...services,
       }),
     ),
     Effect.scoped,
@@ -81,14 +77,19 @@ Pass service layers through `NodeDurableHost.layerStack` or `NodeDurableRuntime.
 | `runContext`        | `RunContextPreparation` | No prompt transform; use the available or default compactor |
 | `toolAuthorization` | `RunToolAuthorization`  | Allow all tool calls                                        |
 
-The `startWorkers` example accepts these options as its second argument. Use
+Add these options to the host assembly above. Use
 `{ runContext: RunContextLive }` for [prompt preparation or compaction](../guide/context-management),
 or `{ toolAuthorization: SearchOnlyLive }` for a [tool policy](../guide/tools#authorize-tool-calls).
 Pass both properties when configuring both services.
 
-These extension layers must have no construction errors and no unresolved dependencies except
-`Crypto.Crypto`, which the host supplies. Provide application dependencies before passing the
-layers to the host; handle fallible setup in the enclosing application.
+The assembled layer retains each extension's construction errors and application dependencies
+in its error and requirement types. The host supplies `Crypto.Crypto`. Provide the remaining
+dependencies through ordinary `Layer.provide` composition before running the application.
+Context preparation and authorization can each be configured independently.
+
+Let `layer` or `layerStack` infer the types from your options. When annotating reusable options,
+`NodeDurableRuntimeOptions<ContextError, ContextRequirements, AuthorizationError, AuthorizationRequirements>`
+preserves the two layers' construction contracts.
 
 The runtime captures services when the host layer is acquired. Keep their resources alive for
 its Scope. Providing replacements around a later worker call does not change the captured services.

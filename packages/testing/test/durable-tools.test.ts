@@ -370,7 +370,7 @@ const baseLayer = Layer.mergeAll(
   configLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
-const testLayer = DurableAgentRuntime.layerWithContext.pipe(Layer.provideMerge(baseLayer));
+const testLayer = DurableAgentRuntime.layerWithServices.pipe(Layer.provideMerge(baseLayer));
 
 const readLog = (conversationId: string) =>
   Effect.gen(function* () {
@@ -614,7 +614,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         ).toHaveLength(2);
       }).pipe(
         Effect.provide(
-          DurableAgentRuntime.layerWithContext.pipe(
+          DurableAgentRuntime.layerWithServices.pipe(
             Layer.provideMerge(baseLayer),
             Layer.provide(observerLayer),
           ),
@@ -1094,7 +1094,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         yield* authorization.reset;
       }).pipe(
         Effect.provide(
-          Layer.fresh(DurableAgentRuntime.layerWithContext).pipe(
+          Layer.fresh(DurableAgentRuntime.layerWithServices).pipe(
             Layer.provide(
               Layer.succeed(RunContextPreparation, {
                 hook: {
@@ -1826,7 +1826,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         ? true
         : false = true;
       const customLayerNeedsContext: RunContextPreparation extends LayerIn<
-        typeof DurableAgentRuntime.layerWithContext
+        typeof DurableAgentRuntime.layerWithServices
       >
         ? true
         : false = true;
@@ -1836,7 +1836,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         ? false
         : true = true;
       const customLayerNeedsAuthorization: RunToolAuthorization extends LayerIn<
-        typeof DurableAgentRuntime.layerWithContext
+        typeof DurableAgentRuntime.layerWithServices
       >
         ? true
         : false = true;

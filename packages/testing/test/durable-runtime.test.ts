@@ -3407,7 +3407,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         expect(promptTexts(replay)).not.toContain("FIRST");
       }).pipe(
         Effect.provide(
-          Layer.fresh(DurableAgentRuntime.layerWithContext).pipe(
+          Layer.fresh(DurableAgentRuntime.layerWithServices).pipe(
             Layer.provide(
               Layer.succeed(RunContextPreparation, {
                 compactor: ContextCompactor.of({
@@ -3489,7 +3489,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           return yield* custom.processConversation(agent, receipt.conversationId);
         }).pipe(
           Effect.provide(
-            Layer.fresh(DurableAgentRuntime.layerWithContext).pipe(
+            Layer.fresh(DurableAgentRuntime.layerWithServices).pipe(
               Layer.provide(
                 Layer.succeed(RunContextPreparation, {
                   compactor: ContextCompactor.of({

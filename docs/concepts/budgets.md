@@ -105,10 +105,10 @@ charge before I/O.
 
 ## Delegation budgets
 
-A delegated child has three ceilings:
+A requested child tool call allowance is bounded independently by the reservation and definition:
 
 ```text
-model allowance ≤ delegation reservation ≤ child definition policy
+effective allowance = min(normalized request, reserved tool calls, definition maxToolCalls)
 ```
 
 `SubagentPolicy` limits child count, concurrency, turns, tool calls, duration, tokens, cost, and
@@ -122,15 +122,18 @@ controls its run and final-answer behavior.
 suspension and durability failures stay in the error channel.
 
 `toolCallAllowance: { default, fromParameters }` grants one child invocation a tool call allowance
-under its reservation and definition ceilings **for ephemeral children only**. To extend work:
+under its reservation and definition ceilings. This applies to ephemeral and durable children.
+To extend work:
 
 1. the child reaches its allowance and returns a partial result with `budgetExhausted`;
 2. the parent starts a new delegation with a larger author-owned parameter;
 3. the runtime clamps the new allowance, and the child continues from forwarded findings.
 
 An extension creates a new child conversation. It cannot enlarge a live reservation. Durable
-children ignore `toolCallAllowance` and run at their definition policy. Their settlement still
-carries the exhaustion marker. Set durable limits on the child definition before registration.
+establishment records the effective allowance before the child becomes runnable. Each replacement
+attempt restores that allowance and the committed tool-call usage, including after approval
+suspension or ownership loss. Recovery never grants a fresh budget. The child's settlement carries
+the exhaustion marker for the parent's result projection.
 
 ## Programmatic calls and Code Mode
 
