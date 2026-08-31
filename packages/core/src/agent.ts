@@ -16,6 +16,11 @@ export type InstructionSource<Input, E = never, R = never> =
   | Prompt.RawInput
   | ((input: Input) => InstructionResult<E, R>);
 
+/** Definition-owned projection from decoded Agent input to model-visible prompt content. */
+export type InputPromptSource<Input, E = never, R = never> = (
+  input: Input,
+) => InstructionResult<E, R>;
+
 /** Accepts native Effect AI Models while excluding framework-specific model wrappers. */
 export type NativeModel<ModelValue> =
   ModelValue extends Model.Model<infer _Provider, infer _Provides, infer _Requires>
@@ -63,6 +68,7 @@ export interface Definition<
   Instructions,
   ToolkitValue extends Toolkit.Any,
   RunDispositionValue = undefined,
+  InputPromptValue = undefined,
 > {
   /** Stable agent identity; changing it creates a distinct definition identity. */
   readonly id: AgentId;
@@ -72,6 +78,8 @@ export interface Definition<
   readonly output: OutputSchema;
   /** Instructions evaluated once while preparing each run. */
   readonly instructions: Instructions;
+  /** Optional projection from decoded input to model-visible native Effect AI prompt content. */
+  readonly inputPrompt?: InputPromptValue | undefined;
   /** Native Effect AI toolkit whose failures and requirements remain visible. */
   readonly toolkit: ToolkitValue;
   /** Finite execution bounds enforced by the runtime. */
@@ -92,10 +100,13 @@ export interface DefinitionOptions<
   RunDispositionValue extends
     | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
     | undefined = undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+    undefined,
 > {
   readonly input: InputSchema;
   readonly output: OutputSchema;
   readonly instructions: Instructions;
+  readonly inputPrompt?: InputPromptValue | undefined;
   readonly toolkit: ToolkitValue;
   readonly policy: AgentPolicy;
   readonly completion?: CompletionToolFor<ToolkitValue, OutputSchema["Type"]> | undefined;
@@ -109,7 +120,8 @@ type AnyDefinitionShape = Definition<
   Schema.Top,
   unknown,
   Toolkit.Any,
-  RunDispositionDeclaration<never, Schema.Top> | undefined
+  RunDispositionDeclaration<never, Schema.Top> | undefined,
+  unknown
 >;
 
 /** Immutable pairing of an agent definition with the explicit Effect AI Model used to run it. */
@@ -121,6 +133,10 @@ export interface Binding<DefinitionValue extends AnyDefinitionShape, ModelValue>
 type InstructionEffect<Instructions, Input> = Instructions extends (input: Input) => infer Result
   ? Result
   : Instructions;
+
+type InputPromptEffect<InputPrompt, Input> = InputPrompt extends (input: Input) => infer Result
+  ? Result
+  : never;
 
 type EffectError<Value> =
   Value extends Effect.Effect<infer _Success, infer Error, infer _Services> ? Error : never;
@@ -205,6 +221,7 @@ export namespace Agent {
   /** Instruction, tool-handler, and Schema services required before a Model is bound. */
   export type DefinitionRequirements<DefinitionValue extends AnyDefinition> =
     | EffectServices<InstructionEffect<DefinitionValue["instructions"], Input<DefinitionValue>>>
+    | EffectServices<InputPromptEffect<DefinitionValue["inputPrompt"], Input<DefinitionValue>>>
     | Tool.HandlersFor<Tools<DefinitionValue>>
     | Tool.HandlerServices<Tools<DefinitionValue>[keyof Tools<DefinitionValue>]>
     | Tool.SuccessSchema<Tools<DefinitionValue>[keyof Tools<DefinitionValue>]>["DecodingServices"]
@@ -223,6 +240,7 @@ export namespace Agent {
   /** Failures inferred from instructions, tools, Effect AI, and input/output decoding. */
   export type Failure<AgentValue extends AnyDefinition | Any> =
     | EffectError<InstructionEffect<DefinitionOf<AgentValue>["instructions"], Input<AgentValue>>>
+    | EffectError<InputPromptEffect<DefinitionOf<AgentValue>["inputPrompt"], Input<AgentValue>>>
     | Tool.HandlerError<Tools<AgentValue>[keyof Tools<AgentValue>]>
     | AiError.AiError
     | AgentInputError
@@ -230,6 +248,34 @@ export namespace Agent {
     | RunDispositionFailure<AgentValue>;
 
   /** Validate an agent ID and return a shallowly frozen, model-agnostic definition. */
+  export function define<
+    InputSchema extends Schema.Top,
+    OutputSchema extends Schema.Top,
+    Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
+    ToolkitValue extends Toolkit.Any,
+    DispositionSchema extends Schema.Top,
+    InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined,
+  >(
+    id: string,
+    options: DefinitionOptions<
+      InputSchema,
+      OutputSchema,
+      Instructions,
+      ToolkitValue,
+      RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>,
+      InputPromptValue
+    > & {
+      readonly runDisposition: RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>;
+      readonly inputPrompt: InputPromptValue;
+    },
+  ): Definition<
+    InputSchema,
+    OutputSchema,
+    Instructions,
+    ToolkitValue,
+    RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>,
+    InputPromptValue
+  >;
   export function define<
     InputSchema extends Schema.Top,
     OutputSchema extends Schema.Top,
@@ -246,6 +292,7 @@ export namespace Agent {
       RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>
     > & {
       readonly runDisposition: RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>;
+      readonly inputPrompt?: undefined;
     },
   ): Definition<
     InputSchema,
@@ -259,9 +306,32 @@ export namespace Agent {
     OutputSchema extends Schema.Top,
     Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
     ToolkitValue extends Toolkit.Any,
+    InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined,
   >(
     id: string,
-    options: DefinitionOptions<InputSchema, OutputSchema, Instructions, ToolkitValue>,
+    options: DefinitionOptions<
+      InputSchema,
+      OutputSchema,
+      Instructions,
+      ToolkitValue,
+      undefined,
+      InputPromptValue
+    > & {
+      readonly inputPrompt: InputPromptValue;
+      readonly runDisposition?: undefined;
+    },
+  ): Definition<InputSchema, OutputSchema, Instructions, ToolkitValue, undefined, InputPromptValue>;
+  export function define<
+    InputSchema extends Schema.Top,
+    OutputSchema extends Schema.Top,
+    Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
+    ToolkitValue extends Toolkit.Any,
+  >(
+    id: string,
+    options: DefinitionOptions<InputSchema, OutputSchema, Instructions, ToolkitValue> & {
+      readonly inputPrompt?: undefined;
+      readonly runDisposition?: undefined;
+    },
   ): Definition<InputSchema, OutputSchema, Instructions, ToolkitValue>;
   export function define(
     id: string,
@@ -269,6 +339,7 @@ export namespace Agent {
       readonly input: Schema.Top;
       readonly output: Schema.Top;
       readonly instructions: unknown;
+      readonly inputPrompt?: unknown;
       readonly toolkit: Toolkit.Any;
       readonly policy: AgentPolicy;
       readonly completion?: CompletionToolDeclaration | undefined;

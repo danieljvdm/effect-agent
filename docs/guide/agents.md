@@ -38,11 +38,13 @@ interface Definition<
   Instructions,
   Toolkit,
   RunDispositionValue = undefined,
+  InputPrompt = undefined,
 > {
   readonly id: AgentId;
   readonly input: InputSchema;
   readonly output: OutputSchema;
   readonly instructions: Instructions;
+  readonly inputPrompt?: InputPrompt;
   readonly toolkit: Toolkit;
   readonly policy: AgentPolicy;
   readonly runDisposition?: RunDispositionValue;
@@ -54,6 +56,54 @@ interface Definition<
 Instructions may be static prompt input or an input-dependent value that returns prompt input or an
 `Effect`. Effectful instructions can require domain services and fail with domain errors; both are
 inferred into the Run.
+
+## Choose model-visible input
+
+By default, the runtime appends the entire Schema-encoded input as a JSON user message after the
+instructions. Set `inputPrompt` to choose what the model receives. The function receives decoded
+input and returns native Effect AI `Prompt.RawInput`, directly or through an `Effect`.
+
+```ts
+const definition = Agent.define("support-triage", {
+  input: Schema.Struct({ question: Schema.String, authorizationToken: Schema.String }),
+  output: Resolution,
+  instructions: "Answer the customer's question.",
+  inputPrompt: ({ question }) =>
+    Effect.succeed(Prompt.make([{ role: "user", content: [{ type: "text", text: question }] }])),
+  toolkit: SupportToolkit,
+  policy,
+});
+```
+
+Strings become user messages. Native Prompts and message arrays preserve their roles, parts, and
+provider options, including multimodal content. Return an empty Prompt or message array to omit the
+input message entirely. Projection errors and required services join the Agent's inferred `E` and
+`R`, including when it is bound, spawned, or registered with a durable worker.
+
+The runtime decodes input, evaluates instructions, encodes the canonical input, and evaluates
+`inputPrompt` before preparing model context. It appends history, instructions, then projected
+input. Each Turn applies the context transform before compaction, then adds the output contract
+and Run status to the outgoing request. Compaction and its summary calls receive the projected
+content. See [Context management](/guide/context-management).
+
+Durable admission retains the complete encoded input in the Submission Ledger and
+`UserInputRecorded`. Action-time Tool authorization receives that canonical input. The projection
+does not redact storage or change authorization. Instructions also receive decoded input, so they
+must avoid copying host-only values into their own messages.
+
+Preparation runs again on each durable Attempt. Once a Turn commits, recovery restores its
+recorded projected messages, including the leading messages of a pending Tool batch. A newly
+evaluated projection does not replace that committed history. Queued Submissions joined into an
+active Run use the same input projection; recovery re-evaluates joins that have not yet committed
+model-visible messages. Projection Effects must tolerate re-evaluation and must not assume
+exactly-once external execution.
+
+An expected projection failure prevents the next model request and fails the Run. Defects remain
+defects, interruption runs Effect finalizers, and the Run deadline also bounds projection. No
+failure path falls back to exposing the full input. Canonical admitted input remains available to
+the authorized host after failure or interruption. Other model-visible content, such as Tool
+results, explicit steering, prior history, and host context transforms, still needs its own
+disclosure policy.
 
 ## Bindings expose Model requirements
 
@@ -133,6 +183,6 @@ run-status message, `contextTokenLimit`, and compaction in
 
 ## Deliberate absences
 
-Definitions do not use render hooks, module directives, global provider registries, or mutable
+Definitions do not use module directives, global provider registries, or mutable
 Session instances. Dynamic Models, Tools, and context belong at explicit Turn boundaries or in
 application Effects before the Binding is created.
