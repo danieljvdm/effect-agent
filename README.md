@@ -60,8 +60,11 @@ The documentation site lives in [`docs/`](docs/index.md); run it locally with
 The platform-neutral umbrella includes core, engine, and capabilities:
 
 ```sh
-npm install --save-exact effect-agent@beta effect@4.0.0-rc.111 @effect/ai-openai@4.0.0-rc.111
+npm install --save-exact effect-agent@beta
 ```
+
+Requires `effect@^4.0.0-rc.111` and an Effect AI provider, such as
+`@effect/ai-openai@4.0.0-rc.111`. See [installation and compatibility](docs/guide/getting-started.md#installation-and-compatibility).
 
 Provider Layers, credentials, and Tool handlers come from the application. Persistent history,
 durable hosts, storage, and sandbox adapters are separate installs. See the

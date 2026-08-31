@@ -26,13 +26,14 @@ Tool broker to an application-owned Tool handler. The handler decides what the p
 
 ## Build an analyst
 
-In your application, install the packages used below:
+In your application, install Code Mode and the Cloudflare executor:
 
 ```sh
-bun add @effect-agent/core@beta @effect-agent/engine@beta @effect-agent/capabilities@beta \
-  @effect-agent/platform-cloudflare@beta effect@4.0.0-rc.111 @effect/ai-openai@4.0.0-rc.111 effect-cf@^0.37.0
+bun add @effect-agent/capabilities@beta @effect-agent/platform-cloudflare@beta
 ```
 
+Requires `effect@^4.0.0-rc.111` and `effect-cf@^0.37.0`. For the example below, also install
+`@effect-agent/core@beta`, `@effect-agent/engine@beta`, and `@effect/ai-openai@4.0.0-rc.111`.
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 
 This smaller example uses fixed invoice rows so the complete Tool and handler are visible.

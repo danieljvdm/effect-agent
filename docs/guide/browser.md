@@ -23,8 +23,13 @@ of same-host pages. Use an interactive pass only when navigation or page actions
 Browser output is untrusted input. Validate model-selected URLs against your host policy and keep
 credentials, handles, Live View URLs, and handoff identities out of model Tools and durable records.
 
-In a consumer project, install `@effect-agent/sandbox@beta`,
-`@effect-agent/platform-cloudflare@beta`, and `effect@4.0.0-rc.111`.
+In your application, install the browser adapters:
+
+```sh
+bun add @effect-agent/platform-cloudflare@beta
+```
+
+Requires `effect@^4.0.0-rc.111`. For the examples below, also install `@effect-agent/sandbox@beta`.
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 The REST examples need no Puppeteer dependency.
 

@@ -33,12 +33,15 @@ browser session lifetime.
 
 ## Install a local process runner
 
-In a consumer project, install the platform-neutral contract, the Node adapter, and Effect's Node
-runtime:
+In your application, install the local adapter:
 
 ```sh
-bun add @effect-agent/sandbox@beta @effect-agent/sandbox-local@beta effect@4.0.0-rc.111 @effect/platform-node@4.0.0-rc.111
+bun add @effect-agent/sandbox-local@beta
 ```
+
+Requires `effect@^4.0.0-rc.111`. For the example below, also install
+`@effect-agent/sandbox@beta` and `@effect/platform-node@4.0.0-rc.111`.
+Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 
 `@effect-agent/sandbox-local` runs a child process on the current machine. It is useful for local
 development and trusted automation. Every event identifies it as `unisolated`.
