@@ -998,6 +998,7 @@ describe("review provider boundary", () => {
         }
         const exit = yield* Fiber.await(pending);
         expect(Exit.isSuccess(exit)).toBe(mode === "recover");
+        expect(Exit.hasInterrupts(exit)).toBe(mode === "interrupt");
         expect(counts).toBe(mode === "interrupt" ? 1 : 2);
         expect(finalized).toBe(mode === "exhaust" ? 2 : 1);
         expect(sends).toBe(mode === "recover" ? 1 : 0);
