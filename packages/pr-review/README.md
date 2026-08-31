@@ -12,12 +12,16 @@ duplicate context into separate old/new views or JSON-escape the source for the 
 `ReviewRequest` and finding validation retain the original patches. This reduces repeated input
 overhead without excluding changes; it does not guarantee a complete review within a spending cap.
 
-The reviewer traces changed entry points and boundaries through downstream consumers, guards,
-finite resources, transformations, effects, completion, and unchanged callees. A finding must have
-a supported trigger, concrete terminal failure, causative changed edge, reachable impact, and a
-cause-level repair checked against both a legitimate boundary input and excluded scope. Incremental
-findings must be introduced, exposed, or materially affected by the exact delta; unrelated old bugs
-and target-only changes remain out of scope, while explicit reverts remain reviewable.
+The reviewer assesses every supplied patch first. Source reads resolve concrete questions about
+plausible defects, such as a missing caller, guard, contract, or limit. It reuses supplied evidence
+and finishes when those questions are resolved; straightforward changes can finish without source
+tools. Findings explain a supported trigger, concrete impact, and needed correction. Changes that
+expose an unchanged downstream failure remain eligible. Incremental findings must arise from the
+exact delta; unrelated old bugs and target-only changes stay out of scope, while explicit reverts
+remain reviewable.
+Changes to collection membership, cardinality, or representation warrant checking affected
+consumer limits and encoding at supported bounds. Novelty compares base and head with the same
+supported operation input, including when a previously failing helper becomes newly reachable.
 
 The result contains model findings with host-validated paths and line anchors, exact duplicate
 removal, aggregate usage, and optional host-priced cost. Unknown changed paths fail closed and
@@ -43,7 +47,9 @@ An optional `costControl` reports the host's pre-request spending admission and 
 Supplying it replaces the cumulative token quota and completion reserve with that admission.
 Cached reads still contribute to usage diagnostics, but cannot force early token finalization.
 The 8-turn, 64-tool-call, 5-minute, and 128,000-token context bounds remain in force. A cost
-estimator alone does not disable the token quota.
+estimator alone does not disable the token quota. Capped hosts own model-visible spending feedback
+at their provider boundary; the generic turn/tool status is disabled for these runs. The Action
+counts its outgoing spending status before admission and keeps it outside the reusable cache prefix.
 When the host stops research for cost, the reviewer returns `exhausted: "cost"` and delivers
 recorded findings without requiring another paid call. Hosts must reserve the full possible charge
 before sending each request; the port itself does not enforce a cap. The
@@ -53,6 +59,11 @@ unknown, separately from the observed usage estimate.
 
 Recorded findings also survive a later expected execution or verification failure. Such a result
 has `incomplete: true`; hosts must not treat an empty or partial result as clearing the change.
+The model can also set `incomplete: true` in `submit_review` when it cannot finish assessing the
+supplied patches. That declaration preserves findings and becomes `ReviewOutcome.incomplete`
+even when no engine limit or provider failure occurred. Host-tracked `unreviewedPaths` remain
+disclosed separately and do not by themselves mark the admitted patches unfinished. An empty
+complete result is not proof that the repository is defect-free.
 With `costControl`, an accounted provider attempt also returns an incomplete outcome after an
 expected failure, even without findings, so hosts can publish its usage and outstanding charges.
 Otherwise failures without recorded findings remain typed. Defects and interruption still
