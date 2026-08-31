@@ -1,6 +1,6 @@
 # Repository toolchain
 
-Status: **Accepted for private development**
+Status: **Public alpha, distributed on npm's beta channel**
 
 This repository is a Vite+ monorepo derived from
 [`danieljvdm/vp-effect-cf-template`](https://github.com/danieljvdm/vp-effect-cf-template).
@@ -26,10 +26,13 @@ The root `package.json` is the only version source for shared dependencies.
 | Vite+                             |              `0.2.6` | Formatting, linting, tests, library builds, staged checks, and task orchestration |
 | Vitest                            |             `4.1.10` | Vite+ test runtime, pinned through an override so integrations share one instance |
 | Effect                            |       `4.0.0-rc.111` | Runtime, Schema, services, and Effect AI                                          |
+| `@effect/ai-openai`               |       `4.0.0-rc.111` | Upstream OpenAI provider used by examples and the review Action                   |
+| `@effect/ai-anthropic`            |       `4.0.0-rc.111` | Upstream Anthropic provider used by examples                                      |
 | `@effect/platform-node`           |       `4.0.0-rc.111` | Node services used by repository scripts                                          |
 | `@effect/platform-browser`        |       `4.0.0-rc.111` | `BrowserCrypto` for the workerd runtime (Cloudflare packages)                     |
 | `@effect/sql-d1`                  |       `4.0.0-rc.111` | Required D1 peer of the Cloudflare runtime boundary                               |
 | `@effect/sql-sqlite-do`           |       `4.0.0-rc.111` | Durable Object SQLite `SqlClient` and Migrator (Cloudflare packages)              |
+| `@effect/sql-sqlite-node`         |       `4.0.0-rc.111` | Node SQLite storage adapter                                                       |
 | `@effect/vitest`                  |       `4.0.0-rc.111` | Effect-aware test execution and scoped Layer composition                          |
 | `effect-cf`                       |             `0.37.0` | Effect-native Cloudflare runtime boundary used by `platform-cloudflare`           |
 | `@cloudflare/vitest-pool-workers` |             `0.21.3` | In-workerd Vitest pool for the Cloudflare package suites (vendors wrangler)       |
@@ -46,6 +49,12 @@ The root `package.json` is the only version source for shared dependencies.
 
 Workspace packages refer to shared versions with `catalog:`. They must not introduce a second
 Effect version. The Bun lockfile is committed and CI installs it with `--frozen-lockfile`.
+
+These are exact compatibility pins, not ranges covering other Effect prereleases. Public
+consumers keep all framework packages at one exact release and use that release's Effect/provider
+versions. The public alpha permits breaking API and stored-schema changes before 1.0. There is no
+compatibility window or migration tooling promise; incompatible data fails clearly and disposable
+development data may be reset. See [installation and compatibility](guide/getting-started.md#installation-and-compatibility).
 
 The root catalog selects one exact `effect-cf` version for reproducible workspace installs.
 `@effect-agent/platform-cloudflare` publishes `effect-cf` as the compatible `^0.37.0` host peer
@@ -123,6 +132,11 @@ them, and they add no deployment or durability claim.
 
 Run commands from the repository root:
 
+Vite+ is the command authority and is distinct from Vite. Use `vp help` and
+`vp <command> --help` to inspect commands. Bun remains the package manager and script runtime
+behind these tasks. Do not invoke `bun run`, `npm run`, `pnpm run`, `yarn run`, or the underlying
+compiler, test, lint, or formatting binaries directly.
+
 | Command                                    | Meaning                                                                        |
 | ------------------------------------------ | ------------------------------------------------------------------------------ |
 | `vp install`                               | Install dependencies and run repository setup                                  |
@@ -135,6 +149,11 @@ Run commands from the repository root:
 | `vp run -F @effect-agent/example-demo dev` | Run the chat-first demo and Phase 2 simulator on port 4173                     |
 | `vp run ready`                             | Run check, test, and build; this is the local and CI handoff gate              |
 | `vp fmt`                                   | Apply repository formatting                                                    |
+
+Use `vp check` for static checks, `vp fmt --check` for formatting, `vp lint` for linting, and
+`vp test` for the root test runner. `vp run test` dispatches all workspace suites, including the
+Cloudflare pool tasks. `vp run ready` is the required handoff gate. If command or runtime setup
+fails, run `vp env doctor` and include its output when asking for help.
 
 Vite+ owns shared configuration in `vite.config.ts`. Package commands remain in their manifests
 or Vite task configs so Vite+ can discover and cache them from the workspace dependency graph.
@@ -160,24 +179,27 @@ and `vp run --no-cache test` to execute every suite again.
 
 ## Releasing to npm
 
-Versioning uses changesets (`bun run changeset`, `bun run changeset:version`);
-publishing uses `bun run release:publish`, NOT `changeset publish`. In a
+Versioning uses changesets (`vp run changeset`, `vp run changeset:version`);
+publishing uses `vp run release:publish`, not `changeset publish`. In a
 non-pnpm repository changesets shells out to `npm publish`, which ships
 `workspace:*` and `catalog:` protocol ranges verbatim; `bun publish` resolves
 both at publish time. The release script also swaps each manifest's
-source-first export map (a private-development convention, see below) for the
+source-first export map used in the workspace for the
 built `dist` entries during the publish, restores it afterwards, and skips
 versions already on the registry during manual publication. CI pack mode still
 builds those tarballs so the isolated publisher can compare their integrity and
 safely resume a partial release.
 
-Releases currently ship on the **beta channel**: the repository is in
+The public alpha ships on the **beta channel**. "Alpha" describes product maturity; it does not
+select a different npm tag. The repository is in
 changesets pre mode (`.changeset/pre.json`, tag `beta`), so `changeset
 version` produces `X.Y.Z-beta.N` versions, and the release script publishes
-any prerelease under the matching npm dist-tag (never `latest`). Consumers
-install with `bun add @effect-agent/core@beta` (or an exact version).
-Leaving the channel for a stable release is `bun x changeset pre exit`
-followed by the normal sequence.
+any prerelease under the matching npm dist-tag, never `latest`. Consumers install the
+platform-neutral `effect-agent@beta` umbrella or individual scoped packages, with optional
+adapters installed separately, as described in the [getting-started guide](guide/getting-started.md).
+Leaving prerelease mode for a future stable release requires an explicit release decision and
+`vp run changeset pre exit` before the normal sequence. Alpha documentation changes do not change
+tags or publish a release.
 
 All public framework workspaces form one Changesets `fixed` group. Any package changeset advances
 all fourteen packages to one shared version, including packages with no behavioral change in that
@@ -256,12 +278,12 @@ the OIDC exchange.
 The manual fallback from an authenticated npm session (`bunx npm login`, an
 owner of the `@effect-agent` scope):
 
-1. `bun run changeset` describes the change. One exists for `0.0.1-beta.0`;
-2. `bun run changeset:version && bun install` cuts versions and changelogs;
-3. `bun run ready`;
-4. `bun run release:publish -- --dry-run`, then without `--dry-run`
+1. `vp run changeset` describes the consumer-visible change;
+2. `vp run changeset:version` cuts versions and changelogs, then `vp install` updates the lockfile;
+3. `vp run ready`;
+4. `vp run release:publish --dry-run`, then without `--dry-run`
    (append `--otp <code>` when npm 2FA asks);
-5. `bun x changeset tag && git push --follow-tags`.
+5. `vp run changeset tag`, then `git push --follow-tags`.
 
 All fourteen packages publish under the MIT license (owner decision
 2026-08-14). The Cloudflare pair
@@ -274,7 +296,8 @@ zero-config defaults.
 
 ## Script runners
 
-Repository scripts run under **Bun** with `bun scripts/<name>.ts`. There is no
+Run repository scripts through `vp run <task>`. Their package-script entrypoints use **Bun**
+with `bun scripts/<name>.ts`. There is no
 `tsx` in this repository. The one exception is anything that imports
 `@effect-agent/storage-sqlite`: Bun does not implement `node:sqlite`, so
 `admin:durable` runs under `node --experimental-transform-types` (plain
@@ -285,15 +308,15 @@ transform-mode workers).
 
 ## Post-install setup
 
-`bun install` runs `vp config --no-agent --hooks-dir .vite-hooks` (the root `prepare` script),
+`vp install` runs `vp config --no-agent --hooks-dir .vite-hooks` through the root `prepare` script,
 which materializes the repository's `.vite-hooks` Git hook dispatcher. It does not touch the
 compiler patch; that remains a separate, explicit step.
 
-`bun run patch:tsgo` (`scripts/patch-effect-tsgo.ts`) applies the Effect TypeScript-Go compiler
+`vp run patch:tsgo` (`scripts/patch-effect-tsgo.ts`) applies the Effect TypeScript-Go compiler
 patch standalone, verifying the installed `@effect/tsgo` and `typescript` versions are the exact
 pinned pair before patching.
 
-CI installs with lifecycle scripts suppressed and then runs `bun run patch:tsgo` explicitly in
+CI installs with lifecycle scripts suppressed and then runs the `patch:tsgo` task explicitly in
 every job that checks, tests, or builds TypeScript. This preserves the compiler-patch invariant
 without any source checkout. Contributor tooling reads the installed Effect source from
 `node_modules/effect` when it needs to verify current Effect v4 or Effect AI behavior.
@@ -306,9 +329,9 @@ it once a fixed tsgo lands.
 To upgrade Effect:
 
 1. update every Effect-family catalog entry in root `package.json` as one change;
-2. run `bun install`;
-3. run `bun run ready`;
-4. run the Effect AI semantic/provider suite once it exists;
+2. run `vp install`;
+3. run `vp run ready`, including the provider example's compilation;
+4. run any relevant opt-in live-provider checks with host credentials, as described by their examples;
 5. commit the catalog and lockfile together.
 
 ## Contributor agent skills
@@ -321,8 +344,8 @@ updates with `bunx @danieljvdm/dev-kit@latest skills status`; fast-forward an un
 overwriting it. Add a new skill from the approved catalog with `skills add <name>`. Use the
 `dev-kit` skill before changing these outputs.
 
-These are contributor instructions. They are not the runtime Skill abstraction described in the
-capabilities API and must not be imported by a framework package.
+These are contributor instructions and must not be imported by a framework package. No runtime
+Skill API is currently implemented.
 
 ## Adding a package
 
@@ -341,11 +364,12 @@ the pull request that introduces it:
 6. declare only inward workspace dependencies;
 7. provide `check`, `test`, and `build` scripts when the package has those behaviors;
 8. update existing guides and API comments affected by the change;
-9. run `bun run ready`.
+9. run `vp run ready`.
 
-Package export maps point to source during private development. Distribution builds are produced
-with `vp pack`; final `dist` export maps, publication files, versioning, provenance, and release
-automation are deferred until open-source preparation.
+Workspace export maps point to source. `vp run build` dispatches package builds through `vp pack`.
+The release script installs `dist` export maps while packing or publishing and restores the
+workspace manifests afterwards. Public files, Changesets versioning, provenance, and release
+automation are already configured as described above.
 
 ## CI and hooks
 

@@ -104,7 +104,8 @@ Use separate Conversation IDs for retained interaction and durable admission. Th
 owns its journal and supplies transient history policy internally. It continues to provide the
 accepted-work and recovery contract described by `@effect-agent/session/durability`.
 
-Applications enforce tenant and Conversation access before execution. Engine Tool authorization
+Applications enforce tenant and Conversation access before execution, following the host's
+[storage and addressing policy](./operations#storage-and-addressing). Engine Tool authorization
 and tracing still apply. The history adapter adds no transcript content to telemetry.
 
 ## Advanced history integrations

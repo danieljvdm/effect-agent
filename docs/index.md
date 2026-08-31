@@ -114,7 +114,7 @@ const result = AgentRuntime.run(Triage, { repo: "acme/api", issueNumber: 123 }).
   </section>
 
   <footer class="ea-home__footer">
-    <strong>Pre-1.0. Tests cover every documented API and runtime contract.</strong>
+    <strong>Public alpha. Install from the beta channel; APIs and stored data may change.</strong>
     <a class="ea-button" href="/guide/getting-started">Build an agent →</a>
   </footer>
 </main>

@@ -6,12 +6,64 @@ description: Define, bind, and run a bounded Effect-native Agent.
 # Getting started
 
 An Effect Agent has five pieces: input and output Schemas, instructions, an Effect AI Toolkit, a
-finite policy, and an explicit Model Binding. This page builds one from scratch. The packages
-publish to npm on the opt-in `beta` dist-tag:
+finite policy, and an explicit Model Binding. This page builds one from scratch.
+
+## Installation and compatibility
+
+The public alpha publishes npm prereleases on the opt-in `beta` dist-tag. "Alpha" describes
+product maturity; install it through `beta`, with package versions shaped as `X.Y.Z-beta.N`.
+
+For the platform-neutral umbrella and the OpenAI provider used below:
 
 ```sh
-npm install @effect-agent/core@beta @effect-agent/engine@beta effect
+npm install --save-exact effect-agent@beta effect@4.0.0-rc.111 @effect/ai-openai@4.0.0-rc.111
 ```
+
+`effect-agent` re-exports core, engine, and capabilities. The examples on this page use their
+scoped imports so the owning package is visible. To use those imports directly, declare the
+packages you import:
+
+```sh
+npm install --save-exact @effect-agent/core@beta @effect-agent/engine@beta effect@4.0.0-rc.111 @effect/ai-openai@4.0.0-rc.111
+```
+
+Choose optional packages for the capabilities your application needs:
+
+| Need                             | Install separately                                                                                        |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Anthropic instead of OpenAI      | `@effect/ai-anthropic@4.0.0-rc.111`                                                                       |
+| Persistent history with SQLite   | `@effect-agent/session@beta` and `@effect-agent/storage-sqlite@beta`                                      |
+| Node durable accepted work       | `@effect-agent/platform-node@beta`, plus any scoped packages imported directly                            |
+| Cloudflare durable accepted work | `@effect-agent/platform-cloudflare@beta` and its `effect-cf` host peer, tested at `0.37.0`                |
+| Cloudflare interactive browser   | `@effect-agent/platform-cloudflare@beta` and its optional `@cloudflare/puppeteer` peer, tested at `1.1.0` |
+| Trusted local sandbox            | `@effect-agent/sandbox-local@beta`                                                                        |
+| Deterministic test Model         | `@effect-agent/testing@beta`                                                                              |
+
+Use the same exact release for all `effect-agent` and `@effect-agent/*` packages. The commands
+above resolve `beta` and save exact versions; retain the lockfile. This source tree supports
+`effect`, `@effect/ai-openai`, and `@effect/ai-anthropic` at exactly `4.0.0-rc.111`, not Effect v3
+or an arbitrary v4 prerelease. Effect platform, SQL, Atom, and test packages share that pin;
+the contributor compiler plugin `@effect/tsgo` has its own version.
+The `beta` tag moves, so check the selected release's manifests before upgrading and align your
+Effect/provider versions with that release. See the
+[provider example](https://github.com/danieljvdm/effect-agent/tree/main/examples/providers)
+for direct upstream Model bindings.
+
+Before 1.0, APIs and stored schemas may change incompatibly. No compatibility window or stored-data
+migration path is promised. Adapters reject incompatible versions; disposable development data may
+be reset. Retaining Conversation history is separate from
+[durable accepted work](../concepts/durability).
+
+The umbrella does not acquire provider clients, install Tool handlers, or run a host. Supply those
+Layers and credentials in the application. Storage and transport authority also belongs to the
+host; read [Authorization and isolation](./operations#authorization-and-isolation) before exposing
+Conversation operations to external callers. The [package map](../reference/packages) lists the
+available adapters and their limits.
+
+These npm commands are consumer installation examples. Contributors to this repository use
+`vp install` and `vp run <task>`; the
+[toolchain guide](https://github.com/danieljvdm/effect-agent/blob/main/docs/TOOLCHAIN.md)
+defines the Vite+ commands.
 
 ## 1. Model the boundary
 

@@ -27,14 +27,15 @@ and `ConversationStore` ports only, so they behave identically on `DN` and `DC`:
 - `scanObligations(thresholds)` returns the obligation report described below.
 
 On `DN`, `NodeDurableHost` re-exposes all five, and
-`bun run admin:durable -- <explain|verify|retry|wake|obligations> --database <file>` is the CLI.
+`vp run admin:durable <explain|verify|retry|wake|obligations> --database <file>` is the CLI.
 On `DC`, the Conversation Object exposes Schema-encoded entry points (`explainEncoded`,
 `verifyEncoded`, `retryEncoded`, `obligationsEncoded`, `wake`); deployments reach them through
 their own Worker. Every operation, including `observe`, `awaitSettlement`, `abort`,
 `resolveUnknown`, and `resolveApproval`,
-consults the `OperationAuthorizer` fail-closed: the default Layer preserves service-possession
-behavior, and a host-supplied authorizer turns denials into the typed `OperationDenied` before
-any read or write.
+consults `OperationAuthorizer`. Its default permits trusted service holders; it does not
+authenticate callers or enforce tenant policy. An installed authorizer's denials become typed
+`OperationDenied` failures before the operation reads or writes. See
+[Authorization and isolation](#authorization-and-isolation) before exposing these operations.
 
 ## Obligation monitoring
 
@@ -223,11 +224,72 @@ is a manual runbook, not an executed claim:
 
 ## Authorization and isolation
 
-Hosts authenticate external callers before admission and preserve tenant scope in storage,
-authorization, and telemetry. A Layer supplies a capability; it does not authorize its use.
-Recheck policy at action time, including after durable suspension, and audit administrative
-mutations with their author and reason. Approval is bound to the exact action and expires; parent
-approval never authorizes a child's later actions.
+The supported boundary is a host-controlled storage domain and trusted runtime services behind
+authenticated ingress. The framework does not provide general tenant authentication or row-level
+tenant isolation. A Receipt, Conversation ID, Submission ID, principal string, or audit author
+identifies something; none proves that a caller may access it.
+
+### Storage and addressing
+
+[`ScheduleOwner`](https://github.com/danieljvdm/effect-agent/blob/main/packages/session/src/schedule.ts)
+contains `tenantId` and `ownerId`. Subscription owners and source partitions are also
+tenant-qualified. Those scopes govern their own registrations, management, and delivery state.
+They do not qualify ordinary Conversation operations:
+[`AdmissionRequest`](https://github.com/danieljvdm/effect-agent/blob/main/packages/session/src/ledger.ts)
+and [`CanonicalRecordEnvelope`](https://github.com/danieljvdm/effect-agent/blob/main/packages/session/src/records.ts)
+have no tenant field. Admission keys are scoped by Conversation, principal, and idempotency key;
+a different principal does not create a separate Conversation log.
+
+For tenant isolation, the host must choose and enforce database or namespace separation:
+
+- On Node, bind each tenant's runtime to its own SQLite database/storage domain. One process owns
+  each database. Sharing a database across tenants requires additional application isolation for
+  every read, mutation, scan, worker, and administration path; the adapters do not supply it.
+- On Cloudflare, select the permitted Durable Object namespace and derive a tenant-qualified
+  Conversation address in trusted Worker code. Separate namespaces can provide a stronger host
+  boundary. `CloudflareConversationClient` routes with `namespace.idFromName(conversationId)`;
+  it does not infer a tenant or authorize an arbitrary name supplied by a caller. A private Object
+  database isolates that Object's storage, not access through a Worker holding its namespace.
+
+Keep the tenant-to-storage/address mapping stable across restarts, and apply it to admission,
+history, child Conversations, schedule/subscription destinations, and administration. Check the
+relationship between a Submission and its owning Conversation; a guessed or copied ID must not
+select another tenant's runtime. Scope logs, exports, backups, and operator access to that same
+boundary. Owner-scoped scheduling alone is insufficient.
+
+### Authorize each operation
+
+| Operation                                                  | Host responsibility                                                                                                                                                    | Framework boundary                                                                                                                                                                                   |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Admission, including retries and prepared deliveries       | Authenticate ingress, derive the principal from trusted identity, authorize the Agent and destination, and select the permitted storage domain before calling `submit` | Schema validation, admission idempotency, and durability do not grant access. `OperationAuthorizer` is not an admission hook.                                                                        |
+| Reads, exports, observation, progress and Settlement waits | Authorize the Conversation/Submission and filter the accessible storage domain before returning any records or status                                                  | Durable observation/wait paths consult the operation authorizer. Direct `ConversationStore` reads/exports and `PersistentHistory.layer` use the supplied store's authority and add no access policy. |
+| Abort and approval/Unknown Outcome resolution              | Authenticate the decision maker, verify target ownership and action permission, and supply trusted author/reason audit fields                                          | The runtime consults the operation authorizer before reading or mutating the target. Audit fields alone do not authorize the command.                                                                |
+| Explain, verify, retry, wake and obligation scans          | Restrict administration to authorized operators in the selected storage domain; scans can expose multiple Conversations                                                | The operation authorizer covers these commands, but the default allows them. A scan is not automatically filtered by tenant.                                                                         |
+
+[`OperationAuthorizer`](https://github.com/danieljvdm/effect-agent/blob/main/packages/session/src/operation-authorizer.ts)
+defaults to `possessionOperationAuthorizer`, which allows every request. This is suitable only
+inside a trusted host boundary. Install a real policy through `operationAuthorizerLayer` when
+constructing the durable runtime; denials propagate as `OperationDenied` before protected I/O.
+The runtime captures the authorizer during Layer acquisition. Adding an override around a later
+method call does not replace that captured policy.
+
+The framework does not parse tokens or verify a `Principal` string. Some operation requests have
+no principal, and observation/wait wire APIs do not carry authenticated caller identity. Authorize
+in the host before invoking them and provide any identity needed by the installed policy through
+trusted host context. Do not expose raw storage, ledger, runtime, or Durable Object RPC services
+to untrusted callers. An authorizer cannot reconstruct identity that ingress never authenticated.
+
+An observation or Settlement wait authorizes once for its lifetime. To enforce later revocation,
+interrupt it and begin a new authorized operation. Use host credentials and policy for scheduled
+or subscription recovery; a retained principal is evidence of identity, not continuing permission.
+
+### Tools, delegation, and external resources
+
+Operation authorization is separate from Tool authorization. Default durable assemblies use
+`RunToolAuthorization.allowAll`; install a host Tool policy through the
+[independent authorization Layer](./context-management#composing-preparation-and-tool-authorization).
+Recheck action policy after durable suspension. Approval is bound to the exact action and expires;
+parent approval never authorizes a child's later actions.
 
 Delegation grants are immutable ceilings. Each child action must satisfy current policy, its
 grant, target requirements, and normalized resource scope. The model supplies decoded task
@@ -284,6 +346,11 @@ and [Cloudflare](https://github.com/danieljvdm/effect-agent/blob/main/packages/p
 examples for host setup and typed registration.
 
 ## Event subscriptions
+
+The bounded subscription implementation tracked by
+[#223](https://github.com/danieljvdm/effect-agent/issues/223) is available. It includes trusted
+application events and the GitHub workflow-attempt source below; it is not a general event bus or
+provider catalog.
 
 `Subscriptions` is the event-driven sibling of `Scheduling`. A subscription can outlive its Run.
 `SubscriptionIntake` first retains a normalized event and its unfinished routing work, then returns

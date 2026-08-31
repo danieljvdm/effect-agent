@@ -5,7 +5,9 @@ to each request, pays for the larger prompt on every later call, and may exceed 
 model's context window before it answers. Context management bounds the prompt, reports remaining
 capacity, and gives the model one constrained chance to answer when a limit is exhausted.
 
-Everything on this page is policy-driven and on by default. The knobs live on `AgentPolicy`:
+The interpreter supplies bounded Tool results, Run status, and a default compaction strategy.
+Set context and cumulative budget limits for your Model and workload; they are not inferred from
+the provider. The knobs live on `AgentPolicy`:
 
 ```ts
 AgentPolicy.make({
@@ -156,6 +158,10 @@ typed with `ContextOverflowError` instead of an opaque provider error.
 umbrella package. Install it with a Layer to replace the strategy and token estimator without
 changing the Run loop. `ContextCompactor.layer` supplies the bounded default. Existing Runs that
 do not install a compactor select that same default at the Run boundary.
+
+The examples below assume the application also provides a
+[Conversation history policy](./conversations#history-policy-and-append-ownership), as required by
+all `AgentRuntime` entry points.
 
 To keep the default strategy but use another upstream Effect AI Model:
 
@@ -314,6 +320,24 @@ above. `contextCompactorRunContextLayer` installs `RunContextPreparation.compact
 a per-Turn prompt hook. Digest-bound `CompactionArtifact`, `digestCompactionSource`, and
 `applyCompaction` remain explicit data utilities; the interpreter does not invoke a second
 artifact compaction path. General prompt transformations still use `RunContextPreparation.hook`.
+
+### Explicit compaction artifacts
+
+The capabilities package also exposes an application-managed data path:
+`prepareModelContext` derives a bounded text view of a `ConversationSnapshot`, and
+`applyCompaction` validates a `CompactionArtifact` against that exact snapshot before replacing
+covered view messages with its summary. `digestCompactionSource` binds the artifact to its source
+range. The application creates the artifact, chooses when to apply it, and owns any storage.
+
+`RetainedFact` values preserve bounded facts and their source sequences inside the artifact.
+`applyCompaction` retains those values as artifact metadata; it does not insert each fact into the
+prompt or write to an independent memory store. The application decides how to use them.
+
+This is separate from the automatic `ContextCompactor` decision path above. The interpreter does
+not call `applyCompaction` or automatically persist these artifacts. Durable assemblies record
+native decisions as `CompactionCreated`; `PersistentHistory.layer` retains successful Run source
+history without persisting compaction decisions. Neither summaries, retained facts, nor canonical
+history provide a separate persistent agent memory/state API.
 
 ## Observing usage
 
