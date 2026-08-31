@@ -255,7 +255,7 @@ const CoordinatorOutput = Schema.Struct({ report: Schema.String });
 const ResearcherInput = Schema.Struct({ question: Schema.String });
 const ResearcherOutput = Schema.Struct({ answer: Schema.String });
 
-export const researcherDefinition = Agent.define("cf-s2-researcher", {
+export const researcherDefinition = Agent.make("cf-s2-researcher", {
   input: ResearcherInput,
   output: ResearcherOutput,
   instructions: ({ question }) => `Answer ${question} as JSON.`,
@@ -290,7 +290,7 @@ const researchDelegation = Subagent.define("delegate_research", {
   }),
 });
 
-export const coordinatorDefinition = Agent.define("cf-s2-coordinator", {
+export const coordinatorDefinition = Agent.make("cf-s2-coordinator", {
   input: CoordinatorInput,
   output: CoordinatorOutput,
   instructions: ({ mission, ref }) => `Delegate the research for ${mission}. [ref:${ref}]`,
@@ -309,7 +309,7 @@ const SiblingLookup = Tool.make("lookup", {
   success: Schema.Struct({ value: Schema.String }),
 });
 
-export const siblingCoordinatorDefinition = Agent.define("cf-s2-sibling-coordinator", {
+export const siblingCoordinatorDefinition = Agent.make("cf-s2-sibling-coordinator", {
   input: CoordinatorInput,
   output: CoordinatorOutput,
   instructions: ({ mission, ref }) =>

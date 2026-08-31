@@ -60,7 +60,7 @@ import {
   OutputTokenUsage,
   type TurnId,
 } from "@effect-agent/core";
-import type { Take } from "effect";
+import type { Layer, Take } from "effect";
 import {
   Cause,
   Clock,
@@ -116,14 +116,15 @@ import {
 /**
  * Structural shape of an Agent Binding accepted by the interpreter and by
  * `AgentSpawner.spawn`: a model-agnostic Definition paired with an explicit
- * Effect AI Model whose requirements stay visible.
+ * native model Layer whose requirements stay visible. The Layer must provide
+ * LanguageModel, ProviderName, and ModelName, including after requirement capture.
  */
 export type RuntimeBinding<
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
   Instructions,
   Tools extends Record<string, Tool.Any>,
-  Provider,
+  _Provider,
   ModelProvides,
   ModelRequires,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
@@ -149,8 +150,44 @@ export type RuntimeBinding<
     >;
     readonly inputPrompt?: InputPromptValue | undefined;
   };
-  readonly model: Model.Model<Provider, LanguageModel.LanguageModel | ModelProvides, ModelRequires>;
+  readonly model: Layer.Layer<
+    LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName | ModelProvides,
+    never,
+    ModelRequires
+  >;
 };
+
+type RuntimeProgram<
+  InputSchema extends Schema.Top,
+  OutputSchema extends Schema.Top,
+  Instructions,
+  Tools extends Record<string, Tool.Any>,
+  Provider,
+  ModelProvides,
+  ModelRequires,
+  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
+  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined = undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+    undefined,
+> = Omit<
+  RuntimeBinding<
+    InputSchema,
+    OutputSchema,
+    Instructions,
+    Tools,
+    Provider,
+    ModelProvides,
+    ModelRequires,
+    InstructionError,
+    InstructionRequirements,
+    RunDispositionValue,
+    InputPromptValue
+  >,
+  "model"
+>;
 
 type InstructionResultOf<Instructions, Input> = Instructions extends (input: Input) => infer Result
   ? Result
@@ -302,7 +339,7 @@ export type AgentResult<Output> = ReturnType<
 
 /** Expected agent, policy, and model-protocol failures exposed by the runtime. */
 export type AgentRuntimeFailure<
-  AgentValue extends Agent.Any,
+  AgentValue extends Agent.AnyDefinition | Agent.Any,
   HookError = never,
   InstructionError = never,
 > =
@@ -337,11 +374,15 @@ export type EngineProvidedToolServices =
   | ToolSpanTelemetry;
 
 /** Schema services needed to reconstruct a completion Tool's canonical Agent output. */
-export type AgentCompletionProjectionRequirements<AgentValue extends Agent.Any> =
-  | AgentValue["definition"]["output"]["DecodingServices"]
-  | AgentValue["definition"]["output"]["EncodingServices"]
-  | Tool.ParametersSchema<Agent.ToolUnion<AgentValue>>["DecodingServices"]
-  | Tool.SuccessSchema<Agent.ToolUnion<AgentValue>>["DecodingServices"];
+export type AgentCompletionProjectionRequirements<
+  AgentValue extends Agent.AnyDefinition | Agent.Any,
+> =
+  | Agent.OutputSchema<AgentValue>["DecodingServices"]
+  | Agent.OutputSchema<AgentValue>["EncodingServices"]
+  | Tool.ParametersSchema<
+      Agent.Tools<AgentValue>[keyof Agent.Tools<AgentValue>]
+    >["DecodingServices"]
+  | Tool.SuccessSchema<Agent.Tools<AgentValue>[keyof Agent.Tools<AgentValue>]>["DecodingServices"];
 
 /**
  * Inferred agent services plus the runtime's identity and Conversation history authorities.
@@ -352,13 +393,13 @@ export type AgentCompletionProjectionRequirements<AgentValue extends Agent.Any> 
  * canonical completion Tool parameters/results outside the handler boundary.
  */
 export type AgentRuntimeRequirements<
-  AgentValue extends Agent.Any,
+  AgentValue extends Agent.AnyDefinition | Agent.Any,
   HookRequirements = never,
   InstructionRequirements = never,
 > =
   | Exclude<Agent.Requirements<AgentValue>, EngineProvidedToolServices>
   | AgentCompletionProjectionRequirements<AgentValue>
-  | AgentValue["definition"]["output"]["DecodingServices"]
+  | Agent.OutputSchema<AgentValue>["DecodingServices"]
   | IdGenerator
   | ConversationHistory
   | HookRequirements
@@ -366,7 +407,7 @@ export type AgentRuntimeRequirements<
 
 /**
  * Interpreter-internal requirements before the Run boundary in `stream`
- * provides the engine-owned Tool services and the bound Model.
+ * provides the engine-owned Tool services. Native model services remain ambient.
  */
 type InterpreterRequirements<
   AgentValue extends Agent.Any,
@@ -3716,7 +3757,7 @@ const decodeFinalOutput = Effect.fn("AgentRuntime.decodeFinalOutput")(function* 
 ): Effect.fn.Return<
   { readonly encoded: Schema.Json; readonly decoded: Agent.Output<AgentValue> },
   AgentOutputError,
-  AgentValue["definition"]["output"]["DecodingServices"]
+  Agent.OutputSchema<AgentValue>["DecodingServices"]
 > {
   const eventJson = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
     text,
@@ -3942,7 +3983,7 @@ const makeTurn = <
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
     undefined,
 >(
-  agent: RuntimeBinding<
+  agent: RuntimeProgram<
     InputSchema,
     OutputSchema,
     Instructions,
@@ -4890,7 +4931,7 @@ const toolBatchContinuation = <
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
     undefined,
 >(
-  agent: RuntimeBinding<
+  agent: RuntimeProgram<
     InputSchema,
     OutputSchema,
     Instructions,
@@ -5046,7 +5087,7 @@ const makeResumeTurn = <
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
     undefined,
 >(
-  agent: RuntimeBinding<
+  agent: RuntimeProgram<
     InputSchema,
     OutputSchema,
     Instructions,
@@ -5431,7 +5472,7 @@ const makeStream =
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
   >(
-    agent: RuntimeBinding<
+    agent: RuntimeProgram<
       InputSchema,
       OutputSchema,
       Instructions,
@@ -5443,7 +5484,13 @@ const makeStream =
       InstructionRequirements,
       RunDispositionValue,
       InputPromptValue
-    >,
+    > & {
+      readonly model?: Layer.Layer<
+        LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName | ModelProvides,
+        never,
+        ModelRequires
+      >;
+    },
     input: unknown,
     runOptions: RunOptions<HookError, HookRequirements> = {},
   ): Stream.Stream<
@@ -5451,6 +5498,7 @@ const makeStream =
     AgentRuntimeFailure<typeof agent, HookError, InstructionError> | CompletionError,
     | AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
     | CompletionRequirements
+    | ModelRequires
   > =>
     Stream.unwrap(
       Effect.gen(function* (): Effect.fn.Return<
@@ -5459,6 +5507,7 @@ const makeStream =
           AgentRuntimeFailure<typeof agent, HookError, InstructionError> | CompletionError,
           | AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
           | CompletionRequirements
+          | ModelRequires
         >,
         ConversationHistoryError,
         ConversationHistory | IdGenerator
@@ -5468,6 +5517,19 @@ const makeStream =
         const conversationId = runOptions.conversationId ?? (yield* ids.nextConversationId);
         const runId = runOptions.runId ?? (yield* ids.nextRunId);
         const retained = yield* history.open({ conversationId, runId });
+        const interpreter: RuntimeProgram<
+          InputSchema,
+          OutputSchema,
+          Instructions,
+          Tools,
+          Provider,
+          ModelProvides,
+          ModelRequires,
+          InstructionError,
+          InstructionRequirements,
+          RunDispositionValue,
+          InputPromptValue
+        > = agent;
         if (
           retained !== undefined &&
           (runOptions.history !== undefined ||
@@ -5689,7 +5751,7 @@ const makeStream =
                   // reopen only after the resumed batch settles, so the initial
                   // drain is skipped and the continuation drains at the safe seam.
                   return makeResumeTurn(
-                    agent,
+                    interpreter,
                     context,
                     prompt,
                     resumed.batch,
@@ -5700,7 +5762,7 @@ const makeStream =
                 const steering = yield* drainInputs(context, options);
                 const initialPrompt = yield* appendInputs(context, prompt, steering, options);
                 return makeTurn(
-                  agent,
+                  interpreter,
                   context,
                   initialPrompt,
                   (resumeUsage?.committedTurns ?? 0) + 1,
@@ -5779,8 +5841,16 @@ const makeStream =
           options.input?.end === undefined
             ? interpreted
             : interpreted.pipe(Stream.ensuring(options.input.end()));
-        const events = finalized.pipe(
-          Stream.provide(agent.model, { local: true }),
+        const modeled: Stream.Stream<
+          RunEvent,
+          AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
+          | AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
+          | ToolSpanTelemetry
+          | ModelRequires
+        > = agent.model === undefined
+          ? finalized
+          : finalized.pipe(Stream.provide(agent.model, { local: true }));
+        const events = modeled.pipe(
           // The engine composition boundary owns span-lifecycle isolation while preserving the host's
           // ambient Tracer/Logger configuration. Individual Tool executions consume this capability.
           Stream.provide(ToolSpanTelemetry.layer),
@@ -5835,8 +5905,13 @@ const makeStream =
       }),
     );
 
-/** Interpret a binding with the explicitly provided history policy. */
-const stream = makeStream();
+type CompletionValidator<A extends Agent.Any> = (
+  completed: RunCompleted,
+) => Effect.Effect<
+  void,
+  ModelProtocolError | AgentOutputError | Agent.RunDispositionFailure<A>,
+  Agent.OutputSchema<A>["DecodingServices"] | Agent.RunDispositionSchema<A>["DecodingServices"]
+>;
 
 /** Validate the terminal result before the stream commits history and publishes completion. */
 const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
@@ -5855,7 +5930,7 @@ const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
   AgentResult<Agent.Output<AgentValue>>,
   Error | ModelProtocolError | AgentOutputError | Agent.RunDispositionFailure<AgentValue>,
   | Requirements
-  | AgentValue["definition"]["output"]["DecodingServices"]
+  | Agent.OutputSchema<AgentValue>["DecodingServices"]
   | Agent.RunDispositionSchema<AgentValue>["DecodingServices"]
 > =>
   Effect.gen(function* () {
@@ -5911,47 +5986,11 @@ const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
  * Caller-contributed requirements, including Scope, remain visible; services supplied by
  * application Layers retain their application's lifetime.
  */
-const run = Effect.fn("AgentRuntime.run")(function* <
-  InputSchema extends Schema.Top,
-  OutputSchema extends Schema.Top,
-  Instructions,
-  Tools extends Record<string, Tool.Any>,
-  Provider,
-  ModelProvides,
-  ModelRequires,
-  HookError = never,
-  HookRequirements = never,
-  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
-  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
-  RunDispositionValue extends
-    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
-    | undefined = undefined,
-  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
-    undefined,
->(
-  agent: RuntimeBinding<
-    InputSchema,
-    OutputSchema,
-    Instructions,
-    Tools,
-    Provider,
-    ModelProvides,
-    ModelRequires,
-    InstructionError,
-    InstructionRequirements,
-    RunDispositionValue,
-    InputPromptValue
-  >,
-  input: unknown,
-  options: RunOptions<HookError, HookRequirements> = {},
-): Effect.fn.Return<
-  AgentResult<Agent.Output<typeof agent>>,
-  AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
-  AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
-> {
-  return yield* reduceRunEvents(agent, (onCompleted) =>
-    makeStream(onCompleted)(agent, input, options),
-  );
+const runProgram = Effect.fn("AgentRuntime.run")(function* <A extends Agent.Any, E, R>(
+  agent: A,
+  events: (onCompleted: CompletionValidator<A>) => Stream.Stream<RunEvent, E, R>,
+) {
+  return yield* reduceRunEvents(agent, events);
 });
 
 /**
@@ -5972,47 +6011,14 @@ export interface DetachedRun<Output, Error> {
   readonly observe: Stream.Stream<RunEvent>;
 }
 
-const start = Effect.fn("AgentRuntime.start")(function* <
-  InputSchema extends Schema.Top,
-  OutputSchema extends Schema.Top,
-  Instructions,
-  Tools extends Record<string, Tool.Any>,
-  Provider,
-  ModelProvides,
-  ModelRequires,
-  HookError = never,
-  HookRequirements = never,
-  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
-  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
-  RunDispositionValue extends
-    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
-    | undefined = undefined,
-  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
-    undefined,
->(
-  agent: RuntimeBinding<
-    InputSchema,
-    OutputSchema,
-    Instructions,
-    Tools,
-    Provider,
-    ModelProvides,
-    ModelRequires,
-    InstructionError,
-    InstructionRequirements,
-    RunDispositionValue,
-    InputPromptValue
-  >,
-  input: unknown,
-  options: RunOptions<HookError, HookRequirements> = {},
-): Effect.fn.Return<
-  DetachedRun<
-    Agent.Output<typeof agent>,
-    AgentRuntimeFailure<typeof agent, HookError, InstructionError>
-  >,
-  never,
-  AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements> | Scope.Scope
-> {
+const startProgram = Effect.fn("AgentRuntime.start")(function* <A extends Agent.Any, E, R, H, HR>(
+  agent: A,
+  events: (
+    options: RunOptions<H, HR>,
+    onCompleted: CompletionValidator<A>,
+  ) => Stream.Stream<RunEvent, E, R>,
+  options: RunOptions<H, HR>,
+) {
   yield* Scope.Scope;
   const bufferLimits = Object.freeze(effectiveRunBufferLimits(options.bufferLimits));
   const executionOptionDescriptors: PropertyDescriptorMap = {
@@ -6024,7 +6030,7 @@ const start = Effect.fn("AgentRuntime.start")(function* <
       writable: false,
     },
   };
-  const executionOptions: RunOptions<HookError, HookRequirements> = Object.create(
+  const executionOptions: RunOptions<H, HR> = Object.create(
     Object.getPrototypeOf(options),
     executionOptionDescriptors,
   );
@@ -6042,7 +6048,7 @@ const start = Effect.fn("AgentRuntime.start")(function* <
   });
   yield* Effect.addFinalizer(() => PubSub.shutdown(pubsub));
   const execution = reduceRunEvents(agent, (onCompleted) =>
-    makeStream(onCompleted)(agent, input, executionOptions).pipe(
+    events(executionOptions, onCompleted).pipe(
       Stream.tap((event) =>
         Effect.suspend(() => {
           captured.push(event);
@@ -6058,6 +6064,186 @@ const start = Effect.fn("AgentRuntime.start")(function* <
     observe: Stream.fromPubSubTake(pubsub),
   };
 });
+
+/** Executable definitions or explicit per-agent model Layers for registration and delegation. */
+type ExecutableDefinition = Agent.AnyDefinition & {
+  readonly instructions: InstructionSource<never, unknown, unknown>;
+};
+type ExecutableAgent =
+  | ExecutableDefinition
+  | {
+      readonly definition: ExecutableDefinition;
+      readonly model: Layer.Layer<
+        LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName,
+        never,
+        unknown
+      >;
+    };
+
+/** Decode external input before instructions or model execution. */
+function streamWithCompletion<
+  A extends ExecutableAgent,
+  H = never,
+  R = never,
+  CE = never,
+  CR = never,
+>(
+  agent: A,
+  input: unknown,
+  options: RunOptions<H, R> | undefined,
+  onCompleted?: (completed: RunCompleted) => Effect.Effect<void, CE, CR>,
+): Stream.Stream<RunEvent, AgentRuntimeFailure<A, H> | CE, AgentRuntimeRequirements<A, R> | CR>;
+function streamWithCompletion<
+  InputSchema extends Schema.Top,
+  OutputSchema extends Schema.Top,
+  Instructions,
+  Tools extends Record<string, Tool.Any>,
+  Provider,
+  ModelProvides,
+  ModelRequires,
+  CE = never,
+  CR = never,
+  HookError = never,
+  HookRequirements = never,
+  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
+  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined = undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+    undefined,
+>(
+  agent:
+    | RuntimeBinding<
+        InputSchema,
+        OutputSchema,
+        Instructions,
+        Tools,
+        Provider,
+        ModelProvides,
+        ModelRequires,
+        InstructionError,
+        InstructionRequirements,
+        RunDispositionValue,
+        InputPromptValue
+      >
+    | RuntimeBinding<
+        InputSchema,
+        OutputSchema,
+        Instructions,
+        Tools,
+        Provider,
+        ModelProvides,
+        ModelRequires,
+        InstructionError,
+        InstructionRequirements,
+        RunDispositionValue,
+        InputPromptValue
+      >["definition"],
+  input: unknown,
+  options: RunOptions<HookError, HookRequirements> = {},
+  onCompleted?: (completed: RunCompleted) => Effect.Effect<void, CE, CR>,
+) {
+  const program = "definition" in agent ? agent : { definition: agent };
+  return makeStream(onCompleted)<
+    InputSchema,
+    OutputSchema,
+    Instructions,
+    Tools,
+    Provider,
+    ModelProvides,
+    ModelRequires,
+    HookError,
+    HookRequirements,
+    InstructionError,
+    InstructionRequirements,
+    RunDispositionValue,
+    InputPromptValue
+  >(program, input, options);
+}
+
+/** Decode external input before instructions or model execution. */
+const streamUnknown = <A extends ExecutableAgent, H = never, R = never>(
+  agent: A,
+  input: unknown,
+  options?: RunOptions<H, R>,
+): Stream.Stream<RunEvent, AgentRuntimeFailure<A, H>, AgentRuntimeRequirements<A, R>> =>
+  streamWithCompletion(agent, input, options);
+
+/** Accept schema-encoded input, retaining runtime validation. Use streamUnknown for external data. */
+const stream = <A extends ExecutableAgent, H = never, R = never>(
+  agent: A,
+  input: NoInfer<Agent.EncodedInput<A>>,
+  options?: RunOptions<H, R>,
+): Stream.Stream<RunEvent, AgentRuntimeFailure<A, H>, AgentRuntimeRequirements<A, R>> =>
+  streamUnknown(agent, input, options);
+
+/** Decode external input before instructions or model execution. */
+function runUnknown<A extends ExecutableAgent, H = never, R = never>(
+  agent: A,
+  input: unknown,
+  options?: RunOptions<H, R>,
+): Effect.Effect<
+  AgentResult<Agent.Output<A>>,
+  AgentRuntimeFailure<A, H>,
+  AgentRuntimeRequirements<A, R>
+>;
+function runUnknown<H = never, R = never>(
+  agent: ExecutableAgent,
+  input: unknown,
+  options: RunOptions<H, R> = {},
+) {
+  const program = "definition" in agent ? agent : { definition: agent };
+  return runProgram(program, (onCompleted) =>
+    streamWithCompletion(agent, input, options, onCompleted),
+  );
+}
+
+/** Accept schema-encoded input, retaining runtime validation. Use runUnknown for external data. */
+const run = <A extends ExecutableAgent, H = never, R = never>(
+  agent: A,
+  input: NoInfer<Agent.EncodedInput<A>>,
+  options?: RunOptions<H, R>,
+): Effect.Effect<
+  AgentResult<Agent.Output<A>>,
+  AgentRuntimeFailure<A, H>,
+  AgentRuntimeRequirements<A, R>
+> => runUnknown(agent, input, options);
+
+/** Decode external input before instructions or model execution. */
+function startUnknown<A extends ExecutableAgent, H = never, R = never>(
+  agent: A,
+  input: unknown,
+  options?: RunOptions<H, R>,
+): Effect.Effect<
+  DetachedRun<Agent.Output<A>, AgentRuntimeFailure<A, H>>,
+  never,
+  AgentRuntimeRequirements<A, R> | Scope.Scope
+>;
+function startUnknown<H = never, R = never>(
+  agent: ExecutableAgent,
+  input: unknown,
+  options: RunOptions<H, R> = {},
+) {
+  const program = "definition" in agent ? agent : { definition: agent };
+  return startProgram(
+    program,
+    (executionOptions, onCompleted) =>
+      streamWithCompletion(agent, input, executionOptions, onCompleted),
+    options,
+  );
+}
+
+/** Accept schema-encoded input, retaining runtime validation. Use startUnknown for external data. */
+const start = <A extends ExecutableAgent, H = never, R = never>(
+  agent: A,
+  input: NoInfer<Agent.EncodedInput<A>>,
+  options?: RunOptions<H, R>,
+): Effect.Effect<
+  DetachedRun<Agent.Output<A>, AgentRuntimeFailure<A, H>>,
+  never,
+  AgentRuntimeRequirements<A, R> | Scope.Scope
+> => startUnknown(agent, input, options);
 
 /**
  * Immutable parent Run identity carried by the locally provided
@@ -7152,7 +7338,7 @@ const spawnWithParent = (
       parentToolCallId: delegation.parentToolCallId,
       depth: childDepth,
     });
-    const child = yield* start(binding, input, {
+    const child = yield* startUnknown(binding, input, {
       ...options,
       conversationId,
       runId,
@@ -7341,7 +7527,8 @@ export const withTerminalDefectEvent = <E, R>(
  * Ephemeral Agent interpreter whose `run` operation reduces the same semantic
  * event stream exposed by `stream`.
  *
- * The bound Model is provided locally; all remaining requirements stay visible
+ * Definitions consume native model services from the caller's Context. Explicit bindings
+ * provide their model Layer locally; all remaining requirements stay visible
  * in the returned Effect or Stream. The interpreter owns no shared service or
  * Layer state. The two output helpers are the canonical revalidation seams for
  * durable session adapters; they apply the same Schemas and projector as live
@@ -7353,6 +7540,9 @@ export const AgentRuntime = {
   encodeRunDisposition,
   projectCompletionOutput,
   run,
+  runUnknown,
   start,
+  startUnknown,
   stream,
+  streamUnknown,
 } as const;

@@ -63,7 +63,7 @@ pageClass: ea-index
   <section class="ea-section ea-home__code">
 
 ```ts
-const Definition = Agent.define("triage", {
+const Triage = Agent.make("triage", {
   input: Schema.Struct({ repo: Schema.String, issueNumber: Schema.Int }),
   output: Schema.Struct({
     severity: Schema.Literals(["low", "medium", "high", "critical"]),
@@ -74,9 +74,8 @@ const Definition = Agent.define("triage", {
   policy: AgentPolicy.make({ maxTurns: 12, maxToolCalls: 20, maxDuration: "10 minutes" }),
 });
 
-const Triage = Agent.withModel(Definition, AnthropicLanguageModel.model("claude-sonnet-5"));
-
 const result = AgentRuntime.run(Triage, { repo: "acme/api", issueNumber: 123 }).pipe(
+  Effect.provide(AnthropicLanguageModel.model("claude-sonnet-5")),
   Effect.provide(AppLive),
   Effect.scoped,
 ); // Effect<AgentResult<Output>, AgentFailure | DomainFailure, Requirements>
@@ -89,7 +88,7 @@ const result = AgentRuntime.run(Triage, { repo: "acme/api", issueNumber: 123 }).
       <a class="ea-path" href="/guide/agents">
         <span class="ea-path__index">BUILD</span>
         <h3>Define an Agent</h3>
-        <p>Schema input and output, native Effect AI Tools, a bounded policy, one explicit Model binding.</p>
+        <p>Schema input and output, native Effect AI Tools, a bounded policy, and model Layers.</p>
         <span class="ea-path__arrow">Agent definitions →</span>
       </a>
       <a class="ea-path" href="/guide/run-agents">

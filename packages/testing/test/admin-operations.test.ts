@@ -136,7 +136,7 @@ const Book = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
 });
 const bookTools = Toolkit.make(Book);
-const bookDefinition = Agent.define("admin-ops-book", {
+const bookDefinition = Agent.make("admin-ops-book", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Book it.",
@@ -154,7 +154,7 @@ const BookApproval = Tool.make("book", {
   needsApproval: true,
 });
 const approvalTools = Toolkit.make(BookApproval);
-const approvalDefinition = Agent.define("admin-ops-approval", {
+const approvalDefinition = Agent.make("admin-ops-approval", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Book after approval.",
@@ -166,7 +166,7 @@ const approvalToolLayer = approvalTools.toLayer({
 });
 
 /** Tool-free agent for happy-path lanes. */
-const plainDefinition = Agent.define("admin-ops-plain", {
+const plainDefinition = Agent.make("admin-ops-plain", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Answer.",

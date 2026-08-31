@@ -195,7 +195,7 @@ export const GeneralChatInstructions = [
   'Return only a JSON object shaped exactly as {"answer":"..."} with no surrounding Markdown fence.',
 ].join("\n");
 
-export const FixtureChatDefinition = Agent.define("general-chat-fixture", {
+export const FixtureChatDefinition = Agent.make("general-chat-fixture", {
   input: ChatInput,
   output: ChatOutput,
   instructions: GeneralChatInstructions,

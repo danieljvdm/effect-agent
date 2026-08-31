@@ -1,6 +1,6 @@
 ---
 title: Agent definitions
-description: Immutable, model-agnostic agent programs with explicit Effect AI Model Bindings.
+description: Immutable agent programs executed with native Effect AI model Layers.
 ---
 
 # Agent definitions
@@ -10,7 +10,7 @@ AI Toolkit, and finite policy. It does not contain a provider client, database c
 Conversation, or acquired resource.
 
 ```ts
-const definition = Agent.define("support-triage", {
+const definition = Agent.make("support-triage", {
   input: SupportRequest,
   output: Resolution,
   instructions,
@@ -18,11 +18,10 @@ const definition = Agent.define("support-triage", {
   policy,
 });
 
-const agent = Agent.withModel(definition, ClaudeModel);
+const run = AgentRuntime.run(definition, input).pipe(Effect.provide(ClaudeModel));
 ```
 
-Only the Binding is runnable. That distinction keeps a Definition inspectable and reusable while
-making Model selection explicit.
+The Definition stays reusable. The application supplies its model with `Effect.provide`.
 
 ## Definition contract
 
@@ -64,7 +63,7 @@ instructions. Set `inputPrompt` to choose what the model receives. The function 
 input and returns native Effect AI `Prompt.RawInput`, directly or through an `Effect`.
 
 ```ts
-const definition = Agent.define("support-triage", {
+const definition = Agent.make("support-triage", {
   input: Schema.Struct({ question: Schema.String, authorizationToken: Schema.String }),
   output: Resolution,
   instructions: "Answer the customer's question.",
@@ -105,19 +104,59 @@ the authorized host after failure or interruption. Other model-visible content, 
 results, explicit steering, prior history, and host context transforms, still needs its own
 disclosure policy.
 
-## Bindings expose Model requirements
+## Provide native model services
 
-`Agent.withModel` accepts an upstream Effect AI `Model`. A Binding does not eagerly acquire the
-Model or hide its Layer requirements.
+`AgentRuntime.run`, `stream`, and `start` accept a Definition. They require the native
+`LanguageModel.LanguageModel`, `Model.ProviderName`, and `Model.ModelName` services, plus
+instruction, Tool, Schema, and runtime dependencies. Upstream model Layers provide all three
+model services. Use `Stream.provide` for a stream.
+
+```ts
+const program = AgentRuntime.run(definition, input).pipe(
+  Effect.provide(ClaudeModel),
+  Effect.provide(AppLive),
+  Effect.scoped,
+);
+
+const captured = Effect.gen(function* () {
+  const modelLayer = yield* ClaudeModel.captureRequirements;
+  return yield* AgentRuntime.run(definition, input).pipe(Effect.provide(modelLayer));
+});
+```
+
+Ordinary `Layer.mergeAll` and `Layer.provide` composition works without rebuilding a Model.
+Capturing requirements moves provider dependencies to the enclosing Effect; it does not remove
+them from the application contract. When using `start`, keep the model Layer around the Effect
+that starts and awaits the detached Run so its resources outlive the child.
+
+`Agent.withModel(definition, modelLayer)` remains useful when durable registration or delegation
+must fix a model for a particular Agent. It accepts a Layer providing all three native model
+services, including a captured Model Layer. Bindings remain accepted by the execution operations
+and keep their Layer requirements visible. Binding model Layers must have no construction errors;
+fallible application setup belongs in the enclosing Layer or Effect.
 
 ```ts
 type BeforeModel = Agent.DefinitionRequirements<typeof definition>;
-type AfterModel = Agent.Requirements<typeof agent>;
-type Failure = Agent.Failure<typeof agent>;
+type ExecutionRequirements = Agent.Requirements<typeof definition>;
+type Failure = Agent.Failure<typeof definition>;
 ```
 
-The repository protects these projections with compile-time tests. An unbound Definition is
-rejected by `AgentRuntime`.
+The repository protects these projections with compile-time tests.
+
+## Typed and external inputs
+
+The primary operations accept `Agent.EncodedInput<typeof definition>`, the input Schema's
+`Encoded` representation. Required fields and field types are checked at the call site. Runtime
+decoding still validates refinements and transforms the input before instructions execute.
+Instructions and `inputPrompt` receive `Agent.Input<typeof definition>`, the decoded `Type`.
+
+For example, a field declared as `Schema.NumberFromString` accepts a string such as `"2"` at
+`run`, while instructions receive the number `2`. To submit an already decoded value, first use
+`Schema.encodeEffect(definition.input)` and provide its encoding services.
+
+Use `runUnknown`, `streamUnknown`, or `startUnknown` for external data typed as `unknown`.
+They apply the same decoder and fail with `AgentInputError` before instructions or model
+execution when input is invalid. Durable Submission payloads enter through this explicit boundary.
 
 ## Declare application completion explicitly
 
@@ -127,7 +166,7 @@ classification beyond the framework's `completed | failed | aborted` settlement 
 ```ts
 const RunDisposition = Schema.Literal("application-complete");
 
-const definition = Agent.define("support-triage", {
+const definition = Agent.make("support-triage", {
   input: SupportRequest,
   output: Resolution,
   instructions,
@@ -151,7 +190,7 @@ infer finality from successful Tool Calls.
 
 ## Stable identity
 
-The string passed to `Agent.define` is decoded as a branded `AgentId`. It becomes part of
+The string passed to `Agent.make` is decoded as a branded `AgentId`. It becomes part of
 definition digests and durable identity.
 
 Renaming it creates new identity; pre-1.0 there is no stored-data migration promise.
@@ -185,4 +224,4 @@ run-status message, `contextTokenLimit`, and compaction in
 
 Definitions do not use module directives, global provider registries, or mutable
 Session instances. Dynamic Models, Tools, and context belong at explicit Turn boundaries or in
-application Effects before the Binding is created.
+application Effects before execution or durable registration.

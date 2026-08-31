@@ -108,34 +108,33 @@ const readWebpage = WebCapture.make("read_webpage", {
   maxResponseBytes: 32 * 1024,
 });
 
-const BrowserResearcher = Agent.withModel(
-  Agent.define("live-pricing-researcher", {
-    input: Schema.Struct({
-      url: Schema.NonEmptyString,
-      firstPlan: Schema.NonEmptyString,
-      secondPlan: Schema.NonEmptyString,
-    }),
-    output: PricingComparison,
-    instructions:
-      "You must call read_webpage exactly once with the input URL and action markdown. " +
-      "Use the returned public pricing page to identify the two requested plans. " +
-      "Return the company, exactly those two plan names, their actual monthly USD price per " +
-      "user, and their stated billing terms. Name the cheaper plan, calculate its monthly " +
-      "savings per user, and explain the recommendation without inventing prices. " +
-      "Keep the recommendation to one sentence under 240 characters.",
-    toolkit: Toolkit.make(readWebpage.tool),
-    policy: AgentPolicy.make({
-      maxTurns: 3,
-      maxToolCalls: 1,
-      maxDuration: "90 seconds",
-      toolConcurrency: 1,
-    }),
+const BrowserResearcher = Agent.make("live-pricing-researcher", {
+  input: Schema.Struct({
+    url: Schema.NonEmptyString,
+    firstPlan: Schema.NonEmptyString,
+    secondPlan: Schema.NonEmptyString,
   }),
-  OpenAiLanguageModel.model(OPENAI_MODEL, {
-    reasoning: { effort: REASONING_EFFORT },
-    service_tier: SERVICE_TIER,
+  output: PricingComparison,
+  instructions:
+    "You must call read_webpage exactly once with the input URL and action markdown. " +
+    "Use the returned public pricing page to identify the two requested plans. " +
+    "Return the company, exactly those two plan names, their actual monthly USD price per " +
+    "user, and their stated billing terms. Name the cheaper plan, calculate its monthly " +
+    "savings per user, and explain the recommendation without inventing prices. " +
+    "Keep the recommendation to one sentence under 240 characters.",
+  toolkit: Toolkit.make(readWebpage.tool),
+  policy: AgentPolicy.make({
+    maxTurns: 3,
+    maxToolCalls: 1,
+    maxDuration: "90 seconds",
+    toolConcurrency: 1,
   }),
-);
+});
+
+const ResearchModel = OpenAiLanguageModel.model(OPENAI_MODEL, {
+  reasoning: { effort: REASONING_EFFORT },
+  service_tier: SERVICE_TIER,
+});
 
 const OpenAiClientLayer = OpenAiClient.layerConfig({
   apiKey: Config.redacted(PHASE7_LIVE_CREDENTIAL_ENV),
@@ -167,7 +166,11 @@ describe.skipIf(!liveEnabled)("Browser Run live smoke (opt-in)", () => {
             url: PRICING_URL,
             firstPlan: FIRST_PLAN,
             secondPlan: SECOND_PLAN,
-          }).pipe(Stream.runCollect, Effect.provide(browserHandlers));
+          }).pipe(
+            Stream.provide(ResearchModel),
+            Stream.runCollect,
+            Effect.provide(browserHandlers),
+          );
 
           const toolResults = events.filter((event) => event._tag === "ToolCallSucceeded");
 

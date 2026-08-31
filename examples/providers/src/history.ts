@@ -11,7 +11,7 @@ const sqliteHistory = (filename: string) =>
   PersistentHistory.layer.pipe(Layer.provide(sqliteStore({ filename })));
 
 const conversationId = Schema.decodeSync(ConversationId)("persistent-history-example");
-const definition = Agent.define("history-example", {
+const definition = Agent.make("history-example", {
   input: Schema.String,
   output: Schema.String,
   instructions: "Answer using the conversation history.",

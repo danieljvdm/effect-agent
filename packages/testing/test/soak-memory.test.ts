@@ -71,7 +71,7 @@ const soakModel = Model.make(
   ),
 );
 
-const soakDefinition = Agent.define("soak-memory", {
+const soakDefinition = Agent.make("soak-memory", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Answer as JSON.",

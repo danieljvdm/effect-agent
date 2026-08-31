@@ -388,7 +388,7 @@ const runCapture = (
       urls: ["docs.example.com", "*.effect.website"],
       ...(options?.actions === undefined ? {} : { actions: options.actions }),
     });
-    const agent = Agent.define("web-capture-host", {
+    const agent = Agent.make("web-capture-host", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Use read_webpage.",
@@ -418,7 +418,7 @@ const runExtract = (
       schema: PricingSchema,
       prompt: "Extract every plan",
     });
-    const agent = Agent.define("web-extract-host", {
+    const agent = Agent.make("web-extract-host", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Use extract_pricing.",
@@ -447,7 +447,7 @@ const runScrape = (
       urls: ["docs.example.com"],
       maxResponseBytes: 64 * 1024,
     });
-    const agent = Agent.define("web-scrape-host", {
+    const agent = Agent.make("web-scrape-host", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Use scrape_webpage.",
@@ -703,7 +703,7 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
         urls: ["docs.example.com"],
         schema: ServicePricingSchema,
       });
-      const agent = Agent.define("web-service-extract-host", {
+      const agent = Agent.make("web-service-extract-host", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Use extract_normalized_pricing.",

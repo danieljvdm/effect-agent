@@ -44,7 +44,7 @@ export const OpenAiWebSearch = Tool.providerDefined({
 export const OpenAiChatToolkit = Toolkit.merge(CalculatorToolkit, Toolkit.make(OpenAiWebSearch));
 
 /** General chat definition with optional, description-driven live tools. */
-export const OpenAiChatDefinition = Agent.define("general-chat-openai", {
+export const OpenAiChatDefinition = Agent.make("general-chat-openai", {
   input: ChatInput,
   output: ChatOutput,
   instructions: GeneralChatInstructions,
@@ -79,7 +79,7 @@ export const OpenAiChatAgent = Agent.withModel(
  * for deterministic tests. A real provider needs room for Tool schemas,
  * results, and one queued update while retaining the same P2 safety bounds.
  */
-export const OpenAiTravelPlannerDefinition = Agent.define("travel-planner-phase-2-live-demo", {
+export const OpenAiTravelPlannerDefinition = Agent.make("travel-planner-phase-2-live-demo", {
   input: TripRequest,
   output: TravelPlan,
   instructions: (input) =>
@@ -140,7 +140,7 @@ const realTravelInstructions = (input: TripRequest): string =>
  * genuine research takes several searches and search results are token-heavy;
  * every bound remains finite and run-level budgets still apply.
  */
-export const OpenAiRealTravelPlannerDefinition = Agent.define("travel-planner-live-research", {
+export const OpenAiRealTravelPlannerDefinition = Agent.make("travel-planner-live-research", {
   input: TripRequest,
   output: TravelPlan,
   instructions: realTravelInstructions,

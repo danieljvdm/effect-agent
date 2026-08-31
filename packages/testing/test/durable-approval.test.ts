@@ -137,7 +137,7 @@ const BookApproval = Tool.make("book", {
   needsApproval: true,
 });
 const approvalTools = Toolkit.make(BookApproval);
-const approvalDefinition = Agent.define("durable-approval-book", {
+const approvalDefinition = Agent.make("durable-approval-book", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Book after approval.",

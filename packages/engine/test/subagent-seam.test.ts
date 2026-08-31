@@ -107,7 +107,7 @@ const delegatingModel = (name: string, params: unknown, answerText: string) =>
     ),
   );
 
-const simpleDefinition = Agent.define("seam-simple", {
+const simpleDefinition = Agent.make("seam-simple", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Answer as JSON.",
@@ -129,7 +129,7 @@ const EmittingDelegate = Tool.make("delegate", {
   success: Schema.Struct({ value: Schema.String }),
 }).addDependency(RunEventSink);
 const emittingTools = Toolkit.make(EmittingDelegate);
-const emittingDefinition = Agent.define("seam-emitting-parent", {
+const emittingDefinition = Agent.make("seam-emitting-parent", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Delegate, then answer as JSON.",
@@ -150,7 +150,7 @@ const SpawningDelegate = Tool.make("delegate", {
   .addDependency(AgentSpawner)
   .addDependency(IdGenerator);
 const spawningTools = Toolkit.make(SpawningDelegate);
-const spawningDefinition = Agent.define("seam-spawning-parent", {
+const spawningDefinition = Agent.make("seam-spawning-parent", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Delegate, then answer as JSON.",
@@ -358,7 +358,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
           success: Schema.Struct({ acknowledged: Schema.Boolean }),
         }).addDependency(AgentSpawner);
         const childTools = Toolkit.make(Probe);
-        const childDefinition = Agent.define("seam-child", {
+        const childDefinition = Agent.make("seam-child", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Probe, then answer as JSON.",
@@ -496,7 +496,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
             }),
           ),
       });
-      const childDefinition = Agent.define("seam-blocking-child", {
+      const childDefinition = Agent.make("seam-blocking-child", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Block forever.",

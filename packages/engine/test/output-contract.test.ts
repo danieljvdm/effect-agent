@@ -195,7 +195,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
           }),
         ),
       );
-      const definition = Agent.define("contract-two-turn", {
+      const definition = Agent.make("contract-two-turn", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Search before answering.",
@@ -258,7 +258,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
     "TEST-016 a live-shaped model conforms because the engine communicated the Schema it had never seen",
     () => {
       const captured: Array<Prompt.Prompt> = [];
-      const definition = Agent.define("contract-live-shaped", {
+      const definition = Agent.make("contract-live-shaped", {
         input: Schema.Struct({ question: Schema.String }),
         // Deliberately no JSON-shape prose in the instructions: conformance
         // may come only from the engine-communicated contract.
@@ -288,7 +288,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
       const tools = Toolkit.make(DeliverReply);
       const captured: Array<Prompt.Prompt> = [];
       const histories: Array<Prompt.Prompt> = [];
-      const definition = Agent.define("contract-completion-tool", {
+      const definition = Agent.make("contract-completion-tool", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String, itemCount: Schema.Int }),
         instructions: "Answer the question.",
@@ -332,7 +332,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
       const captured: Array<Prompt.Prompt> = [];
       // A trailing rest element cannot be represented as JSON Schema by the
       // pinned Effect derivation, so no contract can be rendered.
-      const definition = Agent.define("contract-unrenderable", {
+      const definition = Agent.make("contract-unrenderable", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.TupleWithRest(Schema.Tuple([Schema.String]), [Schema.Int, Schema.String]),
         instructions: "Answer the question.",
@@ -364,7 +364,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
     () => {
       const captured: Array<Prompt.Prompt> = [];
       const observedContracts: Array<string | undefined> = [];
-      const definition = Agent.define("contract-context-visibility", {
+      const definition = Agent.make("contract-context-visibility", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Answer the question.",
@@ -449,7 +449,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
           }),
         ),
       );
-      const definition = Agent.define("contract-unrenderable-two-turn", {
+      const definition = Agent.make("contract-unrenderable-two-turn", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.TupleWithRest(Schema.Tuple([Schema.String]), [Schema.Int, Schema.String]),
         instructions: "Search before answering.",
@@ -497,7 +497,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
   );
 
   it.effect("renders deterministically from the definition alone", () => {
-    const definition = Agent.define("contract-deterministic", {
+    const definition = Agent.make("contract-deterministic", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Answer.",
@@ -524,7 +524,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
       parameters: Schema.Struct({ answer: Schema.String }),
       success: Schema.Void,
     });
-    const definition = Agent.define("required-completion-contract", {
+    const definition = Agent.make("required-completion-contract", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Complete through the Tool.",

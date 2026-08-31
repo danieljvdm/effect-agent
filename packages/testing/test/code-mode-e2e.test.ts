@@ -71,7 +71,7 @@ const runScenario = (options: { readonly code: string; readonly maxToolCalls: nu
       description: "Execute JavaScript that may query the warehouse",
       tools: { warehouse: { query: QueryWarehouse } },
     });
-    const agent = Agent.define("code-mode-e2e", {
+    const agent = Agent.make("code-mode-e2e", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Answer with run_javascript.",
@@ -197,7 +197,7 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
         description: "Search the workspace",
         tools: { workspace: { declared: Declared, lookup: Lookup } },
       });
-      const definition = Agent.define("code-mode-observer-regression", {
+      const definition = Agent.make("code-mode-observer-regression", {
         input: Schema.String,
         output: Schema.String,
         instructions: "Search, then answer.",
@@ -427,7 +427,7 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
           description: "Execute JavaScript over the read-only warehouse",
           tools: { warehouse: { query: warehouseQueryTool } },
         });
-        const agent = Agent.define("code-mode-c3", {
+        const agent = Agent.make("code-mode-c3", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Answer with run_javascript.",

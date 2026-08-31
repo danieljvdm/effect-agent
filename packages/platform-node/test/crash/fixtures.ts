@@ -300,7 +300,7 @@ export const makeScriptedModel = (
   script: (call: number) => ReadonlyArray<Response.StreamPartEncoded>,
 ) => makeScriptedStreamModel((call) => Stream.fromIterable(script(call)));
 
-export const plannerDefinition = Agent.define("crash-planner", {
+export const plannerDefinition = Agent.make("crash-planner", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: ({ question }) => `Answer ${question} as JSON.`,
@@ -322,7 +322,7 @@ const Search = Tool.make("search", {
 }).annotate(ToolExecutionClass, "readonly");
 export const searchTools = Toolkit.make(Search);
 
-export const searchDefinition = Agent.define("crash-search", {
+export const searchDefinition = Agent.make("crash-search", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Search before answering.",
@@ -352,7 +352,7 @@ const BookUncertain = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
 });
 export const bookTools = Toolkit.make(BookUncertain);
-export const bookDefinition = Agent.define("crash-book", {
+export const bookDefinition = Agent.make("crash-book", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Book it.",
@@ -366,7 +366,7 @@ const BookIdempotent = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
 }).annotate(ToolExecutionClass, "idempotent");
 export const bookIdempotentTools = Toolkit.make(BookIdempotent);
-export const bookIdempotentDefinition = Agent.define("crash-book-idempotent", {
+export const bookIdempotentDefinition = Agent.make("crash-book-idempotent", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Book it idempotently.",
@@ -381,7 +381,7 @@ const BookApproval = Tool.make("book", {
   needsApproval: true,
 });
 export const approvalTools = Toolkit.make(BookApproval);
-export const approvalDefinition = Agent.define("crash-book-approval", {
+export const approvalDefinition = Agent.make("crash-book-approval", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Book after approval.",
@@ -397,7 +397,7 @@ const Itinerary = Tool.make("itinerary", {
   dependencies: [DurableStep],
 });
 export const itineraryTools = Toolkit.make(Itinerary);
-export const itineraryDefinition = Agent.define("crash-itinerary", {
+export const itineraryDefinition = Agent.make("crash-itinerary", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Reserve the itinerary.",
@@ -533,7 +533,7 @@ const awaitFilePoll = (path: string): Effect.Effect<void> =>
     }
   });
 
-export const researcherDefinition = Agent.define("crash-researcher", {
+export const researcherDefinition = Agent.make("crash-researcher", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Research the question and answer as JSON.",
@@ -589,7 +589,7 @@ export const makeCrashDelegation = (projectionGate?: ProjectionGate) =>
   });
 
 export const makeCrashCoordinator = (delegation: ReturnType<typeof makeCrashDelegation>) =>
-  Agent.define("crash-coordinator", {
+  Agent.make("crash-coordinator", {
     input: Schema.Struct({ mission: Schema.String }),
     output: Schema.Struct({ report: Schema.String }),
     instructions: "Delegate the research, then report as JSON.",

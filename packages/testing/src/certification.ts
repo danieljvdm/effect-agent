@@ -283,7 +283,7 @@ const QuestionInput = Schema.Struct({ question: Schema.String });
 const AnswerOutput = Schema.Struct({ answer: Schema.String });
 
 /** plain / join: no tools — the pure Turn/submission/join seams. */
-const plainDefinition = Agent.define("certify-plain", {
+const plainDefinition = Agent.make("certify-plain", {
   input: QuestionInput,
   output: AnswerOutput,
   instructions: "Answer as JSON.",
@@ -297,7 +297,7 @@ const Book = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
 });
 const bookToolkit = Toolkit.make(Book);
-const uncertainDefinition = Agent.define("certify-uncertain", {
+const uncertainDefinition = Agent.make("certify-uncertain", {
   input: QuestionInput,
   output: AnswerOutput,
   instructions: "Book it.",
@@ -313,7 +313,7 @@ const Itinerary = Tool.make("itinerary", {
   dependencies: [DurableStep],
 });
 const itineraryToolkit = Toolkit.make(Itinerary);
-const stepsDefinition = Agent.define("certify-steps", {
+const stepsDefinition = Agent.make("certify-steps", {
   input: QuestionInput,
   output: AnswerOutput,
   instructions: "Reserve the itinerary.",
@@ -328,7 +328,7 @@ const BookApproval = Tool.make("book", {
   needsApproval: true,
 });
 const approvalToolkit = Toolkit.make(BookApproval);
-const approvalDefinition = Agent.define("certify-approval", {
+const approvalDefinition = Agent.make("certify-approval", {
   input: QuestionInput,
   output: AnswerOutput,
   instructions: "Book after approval.",
@@ -337,7 +337,7 @@ const approvalDefinition = Agent.define("certify-approval", {
 });
 
 /** delegation: durable attached child plus an ordinary uncertain sibling in ONE batch. */
-const childDefinition = Agent.define("certify-child", {
+const childDefinition = Agent.make("certify-child", {
   input: QuestionInput,
   output: AnswerOutput,
   instructions: "Answer as JSON.",
@@ -377,7 +377,7 @@ const Lookup = Tool.make("lookup", {
   success: Schema.Struct({ value: Schema.String }),
 });
 
-const coordinatorDefinition = Agent.define("certify-coordinator", {
+const coordinatorDefinition = Agent.make("certify-coordinator", {
   input: Schema.Struct({ mission: Schema.String }),
   output: Schema.Struct({ report: Schema.String }),
   instructions: "Delegate and look up, then answer as JSON.",

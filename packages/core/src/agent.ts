@@ -1,6 +1,6 @@
-import type { Effect, Schema } from "effect";
+import type { Effect, Layer, Schema } from "effect";
 import { Schema as S } from "effect";
-import type { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
+import type { AiError, LanguageModel, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 
 import type { AgentInputError, AgentOutputError, AgentRunDispositionError } from "./errors.ts";
 import { AgentId } from "./identifiers.ts";
@@ -21,10 +21,15 @@ export type InputPromptSource<Input, E = never, R = never> = (
   input: Input,
 ) => InstructionResult<E, R>;
 
-/** Accepts native Effect AI Models while excluding framework-specific model wrappers. */
+/** Native services needed to execute and identify model calls. */
+export type ModelServices = LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName;
+
+/** Accepts Layers providing the native model and both identity services. */
 export type NativeModel<ModelValue> =
-  ModelValue extends Model.Model<infer _Provider, infer _Provides, infer _Requires>
-    ? ModelValue
+  ModelValue extends Layer.Layer<infer Provides, never, infer _Requires>
+    ? ModelServices extends Provides
+      ? ModelValue
+      : never
     : never;
 
 /** Definition-owned boundary for selecting and validating an application run disposition. */
@@ -124,7 +129,7 @@ type AnyDefinitionShape = Definition<
   unknown
 >;
 
-/** Immutable pairing of an agent definition with the explicit Effect AI Model used to run it. */
+/** Immutable pairing of an agent definition with its native model Layer. */
 export interface Binding<DefinitionValue extends AnyDefinitionShape, ModelValue> {
   readonly definition: DefinitionValue;
   readonly model: NativeModel<ModelValue>;
@@ -144,18 +149,18 @@ type EffectError<Value> =
 type EffectServices<Value> =
   Value extends Effect.Effect<infer _Success, infer _Error, infer Services> ? Services : never;
 
-type ModelServices<Value> =
-  Value extends Model.Model<infer _Provider, infer _Provides, infer Services> ? Services : never;
+type ModelRequirements<Value> =
+  Value extends Layer.Layer<infer _Provides, infer _Error, infer Services> ? Services : never;
 
 /** Constructors and type projections for definitions and runnable model bindings. */
 export namespace Agent {
   /** Type-erased definition used at generic framework boundaries. */
   export type AnyDefinition = AnyDefinitionShape;
 
-  /** Read-only, safely erased runnable binding used at inspection and projection boundaries. */
+  /** Read-only interpreter program or binding used at inspection and projection boundaries. */
   export interface Any {
     readonly definition: AnyDefinition;
-    readonly model: unknown;
+    readonly model?: unknown;
   }
 
   type DefinitionOf<AgentValue extends AnyDefinition | Any> = AgentValue extends {
@@ -178,6 +183,10 @@ export namespace Agent {
   /** Decoded input type of a definition or binding. */
   export type Input<AgentValue extends AnyDefinition | Any> =
     DefinitionOf<AgentValue>["input"]["Type"];
+
+  /** Encoded input accepted by the primary execution operations. */
+  export type EncodedInput<AgentValue extends AnyDefinition | Any> =
+    DefinitionOf<AgentValue>["input"]["Encoded"];
 
   /** Decoded output type of a definition or binding. */
   export type Output<AgentValue extends AnyDefinition | Any> =
@@ -232,10 +241,12 @@ export namespace Agent {
     | RunDispositionSchemaOf<DefinitionValue>["DecodingServices"]
     | RunDispositionSchemaOf<DefinitionValue>["EncodingServices"];
 
-  /** All services required by a runnable binding, including its Model Layer requirements. */
-  export type Requirements<AgentValue extends Any> =
-    | DefinitionRequirements<AgentValue["definition"]>
-    | ModelServices<AgentValue["model"]>;
+  /** Definition services plus native model services, or a binding's model Layer requirements. */
+  export type Requirements<AgentValue extends AnyDefinition | Any> =
+    | DefinitionRequirements<DefinitionOf<AgentValue>>
+    | (AgentValue extends { readonly model: infer ModelValue }
+        ? ModelRequirements<ModelValue>
+        : ModelServices);
 
   /** Failures inferred from instructions, tools, Effect AI, and input/output decoding. */
   export type Failure<AgentValue extends AnyDefinition | Any> =
@@ -248,7 +259,7 @@ export namespace Agent {
     | RunDispositionFailure<AgentValue>;
 
   /** Validate an agent ID and return a shallowly frozen, model-agnostic definition. */
-  export function define<
+  export function make<
     InputSchema extends Schema.Top,
     OutputSchema extends Schema.Top,
     Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
@@ -276,7 +287,7 @@ export namespace Agent {
     RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>,
     InputPromptValue
   >;
-  export function define<
+  export function make<
     InputSchema extends Schema.Top,
     OutputSchema extends Schema.Top,
     Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
@@ -301,7 +312,7 @@ export namespace Agent {
     ToolkitValue,
     RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>
   >;
-  export function define<
+  export function make<
     InputSchema extends Schema.Top,
     OutputSchema extends Schema.Top,
     Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
@@ -321,7 +332,7 @@ export namespace Agent {
       readonly runDisposition?: undefined;
     },
   ): Definition<InputSchema, OutputSchema, Instructions, ToolkitValue, undefined, InputPromptValue>;
-  export function define<
+  export function make<
     InputSchema extends Schema.Top,
     OutputSchema extends Schema.Top,
     Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
@@ -333,7 +344,7 @@ export namespace Agent {
       readonly runDisposition?: undefined;
     },
   ): Definition<InputSchema, OutputSchema, Instructions, ToolkitValue>;
-  export function define(
+  export function make(
     id: string,
     options: {
       readonly input: Schema.Top;
@@ -361,7 +372,7 @@ export namespace Agent {
     });
   }
 
-  /** Bind a definition to a Model without acquiring or hiding the Model Layer's requirements. */
+  /** Fix a model Layer for registration or delegation without acquiring or hiding its requirements. */
   export const withModel = <DefinitionValue extends AnyDefinition, ModelValue>(
     definition: DefinitionValue,
     model: NativeModel<ModelValue>,

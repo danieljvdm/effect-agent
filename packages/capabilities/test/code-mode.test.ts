@@ -232,7 +232,7 @@ const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number 
       tools: { warehouse: { query: Query } },
       ...(options?.maxEgressBytes === undefined ? {} : { maxEgressBytes: options.maxEgressBytes }),
     });
-    const agent = Agent.define("code-mode-host", {
+    const agent = Agent.make("code-mode-host", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Use run_javascript.",

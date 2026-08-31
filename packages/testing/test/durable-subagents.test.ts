@@ -151,7 +151,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
 const ChildInput = Schema.Struct({ question: Schema.String });
 const ChildOutput = Schema.Struct({ answer: Schema.String });
 
-const childDefinition = Agent.define("research-child", {
+const childDefinition = Agent.make("research-child", {
   input: ChildInput,
   output: ChildOutput,
   instructions: "Answer as JSON.",
@@ -192,7 +192,7 @@ const Lookup = Tool.make("lookup", {
   success: Schema.Struct({ value: Schema.String }),
 });
 
-const coordinatorDefinition = Agent.define("travel-coordinator", {
+const coordinatorDefinition = Agent.make("travel-coordinator", {
   input: Schema.Struct({ mission: Schema.String }),
   output: Schema.Struct({ report: Schema.String }),
   instructions: "Delegate, then answer as JSON.",
@@ -205,7 +205,7 @@ const coordinatorDefinition = Agent.define("travel-coordinator", {
   }),
 });
 
-const mixedCoordinatorDefinition = Agent.define("travel-coordinator-mixed", {
+const mixedCoordinatorDefinition = Agent.make("travel-coordinator-mixed", {
   input: Schema.Struct({ mission: Schema.String }),
   output: Schema.Struct({ report: Schema.String }),
   instructions: "Delegate and look up, then answer as JSON.",
@@ -240,7 +240,7 @@ const containedResearchDelegation = Subagent.define("delegate_research_contained
   }),
 });
 
-const containedCoordinatorDefinition = Agent.define("travel-coordinator-contained", {
+const containedCoordinatorDefinition = Agent.make("travel-coordinator-contained", {
   input: Schema.Struct({ mission: Schema.String }),
   output: Schema.Struct({ report: Schema.String }),
   instructions: "Delegate, then answer as JSON.",
@@ -384,7 +384,7 @@ const makeSiblingHarnessWith = (pendingSibling = false, retryableSibling = true)
       pendingSibling && retryableSibling
         ? Lookup.annotate(ToolExecutionClass, "idempotent")
         : Lookup;
-    const definition = Agent.define(mixedCoordinatorDefinition.id, {
+    const definition = Agent.make(mixedCoordinatorDefinition.id, {
       input: mixedCoordinatorDefinition.input,
       output: mixedCoordinatorDefinition.output,
       instructions: mixedCoordinatorDefinition.instructions,
@@ -1221,7 +1221,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         success: Schema.Struct({ summary: Schema.String }),
       });
       const toolkit = Toolkit.make(replacement);
-      const definition = Agent.define(coordinatorDefinition.id, {
+      const definition = Agent.make(coordinatorDefinition.id, {
         input: coordinatorDefinition.input,
         output: coordinatorDefinition.output,
         instructions: "Research.",

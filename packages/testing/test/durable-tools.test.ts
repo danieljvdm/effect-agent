@@ -155,7 +155,7 @@ const Book = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
 });
 const bookTools = Toolkit.make(Book);
-const bookDefinition = Agent.define("durable-book", {
+const bookDefinition = Agent.make("durable-book", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Book it.",
@@ -169,7 +169,7 @@ const BookIdempotent = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
 }).annotate(ToolExecutionClass, "idempotent");
 const bookIdempotentTools = Toolkit.make(BookIdempotent);
-const bookIdempotentDefinition = Agent.define("durable-book-idempotent", {
+const bookIdempotentDefinition = Agent.make("durable-book-idempotent", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Book it idempotently.",
@@ -183,7 +183,7 @@ const Search = Tool.make("search", {
   success: Schema.Struct({ available: Schema.Boolean }),
 }).annotate(ToolExecutionClass, "readonly");
 const searchTools = Toolkit.make(Search);
-const searchDefinition = Agent.define("durable-tools-search", {
+const searchDefinition = Agent.make("durable-tools-search", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Search before answering.",
@@ -196,7 +196,7 @@ const searchToolLayer = searchTools.toLayer({
 
 /** Mixed batch: one readonly + one uncertain application call in a single Turn. */
 const mixedTools = Toolkit.make(Search, Book);
-const mixedDefinition = Agent.define("durable-tools-mixed", {
+const mixedDefinition = Agent.make("durable-tools-mixed", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Search, then book.",
@@ -212,7 +212,7 @@ const Itinerary = Tool.make("itinerary", {
   dependencies: [DurableStep],
 });
 const itineraryTools = Toolkit.make(Itinerary);
-const itineraryDefinition = Agent.define("durable-itinerary", {
+const itineraryDefinition = Agent.make("durable-itinerary", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Reserve the itinerary.",
@@ -440,7 +440,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         success: Schema.String,
       });
       const toolkit = Toolkit.make(tool);
-      const definition = Agent.define("ordinary-export", {
+      const definition = Agent.make("ordinary-export", {
         input: Schema.String,
         output: Schema.String,
         instructions: "Export.",
@@ -512,7 +512,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         failureMode: "return",
       });
       const tools = Toolkit.make(Failed);
-      const definition = Agent.define("durable-observed-failure", {
+      const definition = Agent.make("durable-observed-failure", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Use the lookup, then answer.",
@@ -638,7 +638,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         n === 0 ? toolTurn(toolCall("failed", "failed", {})) : finalParts('{"answer":"fallback"}'),
       );
       const agent = Agent.withModel(
-        Agent.define("observer-absent", {
+        Agent.make("observer-absent", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Try the lookup.",
@@ -969,7 +969,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             encode: SchemaGetter.transform((value) => `admitted:${value}`),
           }),
         );
-        const definition = Agent.define("durable-book-idempotent-canonical-authority", {
+        const definition = Agent.make("durable-book-idempotent-canonical-authority", {
           input: Schema.Struct({ question: Schema.String, wake: nonIdempotentWake }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Book it idempotently.",

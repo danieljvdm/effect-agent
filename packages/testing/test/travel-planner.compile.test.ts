@@ -53,7 +53,7 @@ type Assert<Value extends true> = Value;
 
 const model = Model.make("scripted", "travel-planner-type-proof", ScriptedModel.layer([]));
 const agent = Agent.withModel(TravelPlanner, model);
-const program = AgentRuntime.run(agent, phase1Trip);
+const program = AgentRuntime.run(TravelPlanner, phase1Trip).pipe(Effect.provide(model));
 const events = AgentRuntime.stream(agent, phase1Trip);
 const started = AgentRuntime.start(agent, phase1Trip);
 
@@ -75,7 +75,7 @@ const Complete = Tool.make("complete", {
   success: ContextualCompletionResult,
 });
 const completionToolkit = Toolkit.make(Complete);
-const completionDefinition = Agent.define("completion-requirements-proof", {
+const completionDefinition = Agent.make("completion-requirements-proof", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Complete through the Tool.",
@@ -155,12 +155,12 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
         toolConcurrency: 1,
       }),
     };
-    const plain = Agent.withModel(Agent.define("scope-free", config), model);
+    const plain = Agent.withModel(Agent.make("scope-free", config), model);
     const selfContained = AgentRuntime.run(plain, "question").pipe(
       Effect.provide(Layer.merge(IdGenerator.layer, ConversationHistory.layerTransient)),
     );
     const instructionAgent = Agent.withModel(
-      Agent.define("scoped-instructions", {
+      Agent.make("scoped-instructions", {
         ...config,
         instructions: (_input: string) => scopedText,
       }),
@@ -168,7 +168,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
     );
     const instructionRun = AgentRuntime.run(instructionAgent, "question");
     const projectionAgent = Agent.withModel(
-      Agent.define("scoped-input-projection", { ...config, inputPrompt: () => scopedText }),
+      Agent.make("scoped-input-projection", { ...config, inputPrompt: () => scopedText }),
       model,
     );
     const projectionRun = AgentRuntime.run(projectionAgent, "question");
@@ -184,7 +184,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
       }),
     );
     const outputAgent = Agent.withModel(
-      Agent.define("scoped-terminal-decoder", { ...config, output: scopedOutput }),
+      Agent.make("scoped-terminal-decoder", { ...config, output: scopedOutput }),
       model,
     );
     const outputRun = AgentRuntime.run(outputAgent, "question");

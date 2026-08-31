@@ -176,7 +176,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
     return { model, prompts };
   });
 
-const plannerDefinition = Agent.define("durable-planner", {
+const plannerDefinition = Agent.make("durable-planner", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: ({ question }) => `Answer ${question} as JSON.`,
@@ -190,7 +190,7 @@ const plannerDefinition = Agent.define("durable-planner", {
 });
 
 const RunDisposition = Schema.Literal("application-complete");
-const dispositionDefinition = Agent.define("durable-run-disposition", {
+const dispositionDefinition = Agent.make("durable-run-disposition", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({
     answer: Schema.String,
@@ -217,7 +217,7 @@ const Search = Tool.make("search", {
   success: Schema.Struct({ available: Schema.Boolean }),
 }).annotate(ToolExecutionClass, "readonly");
 const searchTools = Toolkit.make(Search);
-const searchDefinition = Agent.define("durable-search", {
+const searchDefinition = Agent.make("durable-search", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Search before answering.",
@@ -239,7 +239,7 @@ const BookProgress = Tool.make("book_progress", {
   needsApproval: true,
 });
 const progressApprovalTools = Toolkit.make(BookProgress);
-const progressApprovalDefinition = Agent.define("durable-progress-approval", {
+const progressApprovalDefinition = Agent.make("durable-progress-approval", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Book only after approval.",
@@ -1302,7 +1302,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           success: Schema.Struct({ messageId: Schema.String }),
         });
         const tools = Toolkit.make(PostMessage);
-        const definition = Agent.define("durable-terminal-delivery", {
+        const definition = Agent.make("durable-terminal-delivery", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ messageId: Schema.String, delivered: Schema.Boolean }),
           instructions: "Deliver through post_message.",
@@ -1387,7 +1387,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           success: Schema.Struct({ messageId: Schema.String }),
         });
         const tools = Toolkit.make(PostMessage);
-        const definition = Agent.define("durable-over-token-delivery", {
+        const definition = Agent.make("durable-over-token-delivery", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ messageId: Schema.String, delivered: Schema.Boolean }),
           instructions: "Deliver through post_message.",
@@ -1520,7 +1520,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           success: Schema.Struct({ available: Schema.Boolean }),
         });
         const probeTools = Toolkit.make(Probe);
-        const definition = Agent.define("durable-soft-landing", {
+        const definition = Agent.make("durable-soft-landing", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({
             answer: Schema.String,
@@ -1694,7 +1694,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             success: Schema.Struct({ available: Schema.Boolean }),
           });
           const probeTools = Toolkit.make(Probe);
-          const definition = Agent.define("durable-soft-landing-recovery", {
+          const definition = Agent.make("durable-soft-landing-recovery", {
             input: Schema.Struct({ question: Schema.String }),
             output: Schema.Struct({
               answer: Schema.String,
@@ -2701,7 +2701,7 @@ layer(corruptedCompletionTestLayer)("RUN-032 recovered completion validation", (
         success: Schema.Struct({ messageId: Schema.String }),
       });
       const tools = Toolkit.make(PostMessage);
-      const definition = Agent.define("hostile-terminal-delivery", {
+      const definition = Agent.make("hostile-terminal-delivery", {
         input: Schema.Struct({ question: Schema.String }),
         output: DeliveryCompletionOutput,
         instructions: "Deliver through post_message.",
@@ -2773,7 +2773,7 @@ layer(injectedProviderCallTestLayer)("RUN-032 recovered completion singleton val
         success: Schema.Struct({ messageId: Schema.String }),
       });
       const tools = Toolkit.make(PostMessage);
-      const definition = Agent.define("hostile-mixed-terminal-delivery", {
+      const definition = Agent.make("hostile-mixed-terminal-delivery", {
         input: Schema.Struct({ question: Schema.String }),
         output: DeliveryCompletionOutput,
         instructions: "Deliver through post_message.",
@@ -2889,7 +2889,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             failureMode: "return",
           });
           const toolkit = Toolkit.make(hosted, probe);
-          const definition = Agent.define("mixed-resume-policy", {
+          const definition = Agent.make("mixed-resume-policy", {
             input: Schema.String,
             output: Schema.String,
             instructions: "Probe.",
@@ -3010,7 +3010,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             .addDependency(ToolBroker)
             .annotate(ToolExecutionClass, "idempotent"),
         );
-        const definition = Agent.define("reservation-recovery", {
+        const definition = Agent.make("reservation-recovery", {
           input: Schema.String,
           output: Schema.String,
           instructions: "Query.",
@@ -3089,7 +3089,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       yield* clearFailpoint;
-      const definition = Agent.define("grace-recovery", {
+      const definition = Agent.make("grace-recovery", {
         input: searchDefinition.input,
         output: searchDefinition.output,
         instructions: "Search.",
@@ -3138,7 +3138,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           failureMode: "return",
         });
         const toolkit = Toolkit.make(tool);
-        const definition = Agent.define(`resume-${limit}`, {
+        const definition = Agent.make(`resume-${limit}`, {
           input: Schema.String,
           output: Schema.String,
           instructions: "Keep probing.",
@@ -3266,7 +3266,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         // Submission 2: a compacting agent whose estimated context exceeds the limit
         // at Turn 1, forcing summarize; the summarizer response is model call 0 of
         // each Attempt, the final answer the call after it.
-        const compactingDefinition = Agent.define("durable-compactor", {
+        const compactingDefinition = Agent.make("durable-compactor", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Answer from what is known.",
@@ -3353,7 +3353,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           yield* runtime.submit(original, { question: key }, submitOptions(conversation, key));
           yield* runtime.processConversation(original, decodeConversationId(conversation));
         }
-        const definition = Agent.define("custom-coverage", {
+        const definition = Agent.make("custom-coverage", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Answer from retained history.",
@@ -3455,7 +3455,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           );
           expect(settled[0]?.outcome).toBe("completed");
         }
-        const definition = Agent.define("persistence-compactor", {
+        const definition = Agent.make("persistence-compactor", {
           input: Schema.String,
           output: Schema.String,
           instructions: "Answer from retained history.",
@@ -3599,7 +3599,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           submitOptions(conversation, "initial"),
         );
         yield* runtime.processConversation(initial, decodeConversationId(conversation));
-        const definition = Agent.define("invalid-summary", {
+        const definition = Agent.make("invalid-summary", {
           input: Schema.String,
           output: Schema.String,
           instructions: "Answer.",
@@ -3658,7 +3658,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           success: Schema.String,
         });
         const probeTools = Toolkit.make(Probe);
-        const probeDefinition = Agent.define("durable-probe", {
+        const probeDefinition = Agent.make("durable-probe", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Probe twice, then answer.",
@@ -3701,7 +3701,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           .pipe(Effect.provide(probeLayer));
         expect(priorSettled[0]?.outcome).toBe("completed");
 
-        const compactingDefinition = Agent.define("durable-cut-compactor", {
+        const compactingDefinition = Agent.make("durable-cut-compactor", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Answer from what is known.",
@@ -3779,7 +3779,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         .pipe(Effect.provide(searchToolLayer));
       expect(firstSettled[0]?.outcome).toBe("completed");
 
-      const compactingDefinition = Agent.define("durable-usage-compactor", {
+      const compactingDefinition = Agent.make("durable-usage-compactor", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Answer from what is known.",
@@ -3832,7 +3832,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const conversation = "conversation-reseed";
-      const reseedDefinition = Agent.define("durable-reseed", {
+      const reseedDefinition = Agent.make("durable-reseed", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Search before answering.",
@@ -4003,7 +4003,7 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
         const start = before.find(({ record }) => record.payload._tag === "RunStarted");
         yield* TestClock.adjust(Duration.seconds(31));
         const wider = Agent.withModel(
-          Agent.define(searchDefinition.id, {
+          Agent.make(searchDefinition.id, {
             input: searchDefinition.input,
             output: searchDefinition.output,
             instructions: searchDefinition.instructions,
@@ -4096,7 +4096,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
   it.effect('RUN-011: a Turn-exhausted soft landing settles with exhausted: "turns"', () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
-      const definition = Agent.define("durable-turns-landing", {
+      const definition = Agent.make("durable-turns-landing", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Search before answering.",
@@ -4129,7 +4129,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
   it.effect('RUN-011: a token-exhausted soft landing settles with exhausted: "tokens"', () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
-      const definition = Agent.define("durable-tokens-landing", {
+      const definition = Agent.make("durable-tokens-landing", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Answer immediately.",
@@ -4167,7 +4167,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
   it.effect("RUN-011: a fail-mode token breach settles failed with the typed policyLimit", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
-      const definition = Agent.define("durable-tokens-rail", {
+      const definition = Agent.make("durable-tokens-rail", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Answer immediately.",
@@ -4203,7 +4203,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
   it.effect("RUN-011: a hard cost rail settles failed with the typed policyLimit", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
-      const definition = Agent.define("durable-cost-rail", {
+      const definition = Agent.make("durable-cost-rail", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Answer immediately.",
@@ -4236,7 +4236,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
   it.effect("RUN-011: a duration-exhausted Run settles failed with the typed policyLimit", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
-      const definition = Agent.define("durable-duration-rail", {
+      const definition = Agent.make("durable-duration-rail", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Answer immediately.",
@@ -4296,7 +4296,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
           },
         ];
         for (const scenario of scenarios) {
-          const definition = Agent.define("durable-policy-recovery", {
+          const definition = Agent.make("durable-policy-recovery", {
             input: Schema.Struct({ question: Schema.String }),
             output: Schema.Struct({ answer: Schema.String }),
             instructions: "Answer immediately.",
@@ -4344,7 +4344,7 @@ layer(pricedTestLayer)("RUN-035 durable cost accounting", (it) => {
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
-        const definition = Agent.define("durable-priced-usage", {
+        const definition = Agent.make("durable-priced-usage", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Answer immediately.",

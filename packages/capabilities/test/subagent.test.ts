@@ -193,7 +193,7 @@ const childPolicy = AgentPolicy.make({
   toolConcurrency: 1,
 });
 
-const childDefinition = Agent.define("research-child", {
+const childDefinition = Agent.make("research-child", {
   input: ChildInput,
   output: ChildOutput,
   instructions: "Answer as JSON.",
@@ -238,7 +238,7 @@ const parentPolicy = AgentPolicy.make({
   toolConcurrency: 2,
 });
 
-const coordinatorDefinition = Agent.define("coordinator", {
+const coordinatorDefinition = Agent.make("coordinator", {
   input: Schema.Struct({ mission: Schema.String }),
   output: Schema.Struct({ report: Schema.String }),
   instructions: "Delegate, then answer as JSON.",
@@ -312,7 +312,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
   it.effect("captures the child input projector's service without exposing host input", () =>
     Effect.gen(function* () {
       const promptRef = yield* Ref.make<unknown>(undefined);
-      const target = Agent.define("projected-child", {
+      const target = Agent.make("projected-child", {
         input: Schema.Struct({ question: Schema.String, hostOnly: Schema.String }),
         output: ChildOutput,
         instructions: "Answer as JSON.",
@@ -337,7 +337,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         answeringModel("projected-child-model", '{"answer":"child-answer"}', promptRef),
       );
       const parent = Agent.withModel(
-        Agent.define("projecting-parent", {
+        Agent.make("projecting-parent", {
           input: Schema.String,
           output: Schema.Struct({ report: Schema.String }),
           instructions: "Delegate the question.",
@@ -486,7 +486,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         childDefinition,
         answeringModel("grandchild", '{"answer":"leaf"}'),
       );
-      const midDefinition = Agent.define("midlevel", {
+      const midDefinition = Agent.make("midlevel", {
         input: ChildInput,
         output: ChildOutput,
         instructions: "Delegate research, then answer as JSON.",
@@ -542,7 +542,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           }).pipe(Effect.provide(midDelegationLayer), Effect.scoped),
       });
 
-      const outerDefinition = Agent.define("outer", {
+      const outerDefinition = Agent.make("outer", {
         input: Schema.Struct({}),
         output: Schema.Struct({ ok: Schema.Boolean }),
         instructions: "Spawn, then answer as JSON.",
@@ -596,7 +596,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           maxDuration: "10 seconds",
         }),
       });
-      const soloParentDefinition = Agent.define("coordinator-solo", {
+      const soloParentDefinition = Agent.make("coordinator-solo", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
         instructions: "Delegate twice, then answer as JSON.",
@@ -661,7 +661,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           maxDuration: "10 seconds",
         }),
       });
-      const parallelParentDefinition = Agent.define("coordinator-parallel", {
+      const parallelParentDefinition = Agent.make("coordinator-parallel", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
         instructions: "Delegate twice, then answer as JSON.",
@@ -800,7 +800,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         success: Schema.String,
       });
       const boomTools = Toolkit.make(Boom);
-      const boomChildDefinition = Agent.define("boom-child", {
+      const boomChildDefinition = Agent.make("boom-child", {
         input: ChildInput,
         output: ChildOutput,
         instructions: "Boom.",
@@ -817,7 +817,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         projectResult: (output) => Effect.succeed({ summary: output.answer }),
         policy: researchPolicy,
       });
-      const boomParentDefinition = Agent.define("coordinator-boom", {
+      const boomParentDefinition = Agent.make("coordinator-boom", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
         instructions: "Delegate, then answer as JSON.",
@@ -886,7 +886,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           maxDuration: "5 seconds",
         }),
       });
-      const slowParentDefinition = Agent.define("coordinator-slow", {
+      const slowParentDefinition = Agent.make("coordinator-slow", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
         instructions: "Delegate, then answer as JSON.",
@@ -957,7 +957,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         projectResult: (output) => Effect.succeed({ summary: `oversized:${output.answer}` }),
         policy: researchPolicy,
       });
-      const boundedParentDefinition = Agent.define("coordinator-bounded", {
+      const boundedParentDefinition = Agent.make("coordinator-bounded", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
         instructions: "Delegate, then answer as JSON.",
@@ -1009,7 +1009,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         success: Schema.String,
       });
       const probeTools = Toolkit.make(Probe);
-      const probeChildDefinition = Agent.define("probe-child", {
+      const probeChildDefinition = Agent.make("probe-child", {
         input: ChildInput,
         output: ChildOutput,
         instructions: "Probe.",
@@ -1027,7 +1027,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         policy: researchPolicy,
         grant: SubagentGrant.make({ allowedToolNames: [], maxDepth: 1 }),
       });
-      const restrictedParentDefinition = Agent.define("coordinator-restricted", {
+      const restrictedParentDefinition = Agent.make("coordinator-restricted", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
         instructions: "Delegate, then answer as JSON.",
@@ -1125,7 +1125,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         // maxTurns 1 with a Tool-declaring first response breaches the Turn
         // limit; the default onExhaustion "final-answer" grants one tool-less
         // grace call that answers with the partial output (RUN-025).
-        const exhaustedChildDefinition = Agent.define("exhausted-child", {
+        const exhaustedChildDefinition = Agent.make("exhausted-child", {
           input: ChildInput,
           output: ChildOutput,
           instructions: "Probe, then answer as JSON.",
@@ -1187,7 +1187,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
             ),
           policy: researchPolicy,
         });
-        const partialParentDefinition = Agent.define("coordinator-partial", {
+        const partialParentDefinition = Agent.make("coordinator-partial", {
           input: Schema.Struct({ mission: Schema.String }),
           output: Schema.Struct({ report: Schema.String }),
           instructions: "Delegate, then answer as JSON.",
@@ -1270,7 +1270,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const probeToolLayer = probeTools.toLayer({
         probe_docs: () => Effect.succeed("probed"),
       });
-      const failingChildDefinition = Agent.define("fail-fast-child", {
+      const failingChildDefinition = Agent.make("fail-fast-child", {
         input: ChildInput,
         output: ChildOutput,
         instructions: "Probe, then answer as JSON.",
@@ -1293,7 +1293,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         projectResult: (output) => Effect.succeed({ summary: `finding:${output.answer}` }),
         policy: researchPolicy,
       });
-      const failFastParentDefinition = Agent.define("coordinator-fail-fast", {
+      const failFastParentDefinition = Agent.make("coordinator-fail-fast", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
         instructions: "Delegate, then answer as JSON.",
@@ -1815,7 +1815,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         success: Schema.String,
       });
       const probeTools = Toolkit.make(Probe);
-      const probeChildDefinition = Agent.define("probe-durable-child", {
+      const probeChildDefinition = Agent.make("probe-durable-child", {
         input: ChildInput,
         output: ChildOutput,
         instructions: "Probe.",
@@ -1833,7 +1833,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         policy: researchPolicy,
         grant: SubagentGrant.make({ allowedToolNames: [], maxDepth: 1 }),
       });
-      const revokedParentDefinition = Agent.define("coordinator-revoked-durable", {
+      const revokedParentDefinition = Agent.make("coordinator-revoked-durable", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
         instructions: "Delegate, then answer as JSON.",
@@ -1952,7 +1952,7 @@ describe("Subagent.define", () => {
   });
 
   it("rejects a target whose Toolkit already contains a delegation Tool", () => {
-    const nestedDefinition = Agent.define("nested-target", {
+    const nestedDefinition = Agent.make("nested-target", {
       input: ChildInput,
       output: ChildOutput,
       instructions: "Nested.",
@@ -2046,7 +2046,7 @@ const SearchDocs = Tool.make("search_docs", {
 });
 const typedChildTools = Toolkit.make(SearchDocs);
 
-const typedChildDefinition = Agent.define("typed-child", {
+const typedChildDefinition = Agent.make("typed-child", {
   input: ChildInput,
   output: ChildOutput,
   instructions: "Search, then answer as JSON.",
@@ -2096,7 +2096,7 @@ const typedLayer = SubagentRuntime.layer(typedDelegation, typedBinding, {
   mapChildFailure: (failure) => ResearchDelegationFailed.make({ childErrorTag: failure._tag }),
 });
 
-const typedParentDefinition = Agent.define("typed-parent", {
+const typedParentDefinition = Agent.make("typed-parent", {
   input: Schema.Struct({ mission: Schema.String }),
   output: Schema.Struct({ report: Schema.String }),
   instructions: "Delegate, then answer as JSON.",
@@ -2333,7 +2333,7 @@ const containedDelegation = Subagent.define("delegate_contained", {
   policy: researchPolicy,
 });
 
-const containedCoordinator = Agent.define("contained-coordinator", {
+const containedCoordinator = Agent.make("contained-coordinator", {
   input: Schema.Struct({ mission: Schema.String }),
   output: Schema.Struct({ report: Schema.String }),
   instructions: "Delegate, then answer as JSON.",
@@ -2424,7 +2424,7 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
           maxDuration: "10 seconds",
         }),
       });
-      const tightCoordinator = Agent.define("contained-tight-coordinator", {
+      const tightCoordinator = Agent.make("contained-tight-coordinator", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
         instructions: "Delegate twice, then answer as JSON.",
@@ -2610,7 +2610,7 @@ const ProbeDoc = Tool.make("probe_doc", {
 });
 const probeToolkit = Toolkit.make(ProbeDoc);
 
-const probingChildDefinition = Agent.define("probing-child", {
+const probingChildDefinition = Agent.make("probing-child", {
   input: ChildInput,
   output: ChildOutput,
   instructions: "Probe, then answer as JSON.",
@@ -2699,7 +2699,7 @@ const allowanceDelegation = Subagent.define("delegate_allowance", {
   },
 });
 
-const allowanceCoordinator = Agent.define("allowance-coordinator", {
+const allowanceCoordinator = Agent.make("allowance-coordinator", {
   input: Schema.Struct({ mission: Schema.String }),
   output: Schema.Struct({ report: Schema.String }),
   instructions: "Delegate, then answer as JSON.",
@@ -2890,7 +2890,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
           policy: allowancePolicy,
           toolCallAllowance: { default: Number.NaN },
         });
-        const brokenCoordinator = Agent.define("allowance-broken-coordinator", {
+        const brokenCoordinator = Agent.make("allowance-broken-coordinator", {
           input: Schema.Struct({ mission: Schema.String }),
           output: Schema.Struct({ report: Schema.String }),
           instructions: "Delegate, then answer as JSON.",

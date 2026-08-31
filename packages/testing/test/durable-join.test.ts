@@ -85,7 +85,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
   });
 
 /** No-tool Q&A agent: the join seams under test are pure Turn seams. */
-const joinDefinition = Agent.define("durable-join", {
+const joinDefinition = Agent.make("durable-join", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Answer every question as JSON.",
