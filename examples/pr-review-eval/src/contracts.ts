@@ -78,7 +78,7 @@ export class EvalRepositorySnapshot extends Schema.Class<EvalRepositorySnapshot>
   digest: EvalInputDigest,
 }) {}
 
-export const EvalCaseKind = Schema.Literals(["known-defects", "clean-control"]);
+export const EvalCaseKind = Schema.Literals(["known-defects", "clean-control", "unadjudicated"]);
 export type EvalCaseKind = typeof EvalCaseKind.Type;
 
 const EvalCaseFields = Schema.Struct({
@@ -102,9 +102,9 @@ const EvalCaseFields = Schema.Struct({
       return (
         new Set(defectIds).size === defectIds.length &&
         new Set(repositoryKeys).size === repositoryKeys.length &&
-        (evalCase.kind === "clean-control"
-          ? evalCase.expectedDefects.length === 0
-          : evalCase.expectedDefects.length > 0) &&
+        (evalCase.kind === "known-defects"
+          ? evalCase.expectedDefects.length > 0
+          : evalCase.expectedDefects.length === 0) &&
         evalCase.expectedDefects.every((defect) =>
           defect.evidence.every((evidence) => admittedPaths.has(evidence.path)),
         )
@@ -149,6 +149,7 @@ export class EvalVariantConfiguration extends Schema.Class<EvalVariantConfigurat
   maxOutputTokens: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100_000 })),
   strictJsonSchema: Schema.Literal(true),
   store: Schema.Literal(false),
+  costLimitMicrousd: Schema.optionalKey(Schema.Natural),
   guidanceDigest: Schema.optionalKey(EvalInputDigest),
 }) {}
 
