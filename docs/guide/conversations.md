@@ -71,7 +71,10 @@ can still leave the entire Run recorded. Inspect the history before retrying; mo
 effects may already have happened. The helper never retries them automatically.
 
 Each Run's encoded input, output, and native Prompt suffix must each fit the existing 1 MiB
-canonical value bound. Exceeding a bound fails typed and appends no partial Run. `run` returns an
+canonical value bound. Exceeding a bound fails typed and appends no partial Run. History exports
+contain at most 65,536 canonical records. If the next Run's three records would exceed that limit,
+`run` fails with `PersistentConversationError` before model or Tool execution. Start a new
+Conversation to continue; `load` still reads the retained history. `run` returns an
 Effect with the Agent's errors and services preserved, plus history, journal, and store failures. `load`
 returns the reconstructed Effect AI Prompt; observation remains a Stream on the store.
 

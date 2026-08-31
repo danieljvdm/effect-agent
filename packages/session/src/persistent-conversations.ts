@@ -27,6 +27,7 @@ import {
   ConversationMaterialization,
   ConversationStore,
   FencedAppendRequest,
+  MAX_CONVERSATION_EXPORT_RECORDS,
 } from "./store.ts";
 
 /** Retained history cannot be encoded, exceeds its bounds, or belongs to durable accepted work. */
@@ -84,6 +85,7 @@ const load = Effect.fn("PersistentConversations.load")(function* (conversationId
  * Run immediately and retain the entire successful Run in one canonical batch. A failure,
  * defect, timeout, or interruption before append retains none of this Run. Nothing admits a
  * Submission, resumes an interrupted Run, or retries model/Tool execution.
+ * Before execution, reject a Run whose three records would exceed the export limit.
  *
  * History producers share epoch zero and use the loaded tail as a compare-and-append token.
  * Concurrent Runs may both execute external effects; only one may append against that tail.
@@ -148,6 +150,11 @@ const run = Effect.fn("PersistentConversations.run")(function* <
     ConversationMaterialization.make({ conversationId, producerEpoch: HISTORY_EPOCH }),
   );
   const base = yield* store.export(ConversationExportRequest.make({ conversationId }));
+  if (base.records.length + 3 > MAX_CONVERSATION_EXPORT_RECORDS) {
+    return yield* error(
+      `This Run would exceed the history limit of ${MAX_CONVERSATION_EXPORT_RECORDS} records; use a new Conversation`,
+    );
+  }
   if (
     base.records.some(
       ({ record }) =>

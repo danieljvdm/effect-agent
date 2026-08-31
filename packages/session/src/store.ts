@@ -77,6 +77,9 @@ export class ConversationTail extends Schema.Class<ConversationTail>(
   producerEpoch: ProducerEpoch,
 }) {}
 
+/** Maximum canonical records represented by one Conversation export. */
+export const MAX_CONVERSATION_EXPORT_RECORDS = 65_536;
+
 export class ConversationExport extends Schema.Class<ConversationExport>(
   "@effect-agent/session/ConversationExport",
 )({
@@ -84,7 +87,9 @@ export class ConversationExport extends Schema.Class<ConversationExport>(
   conversationId: ConversationId,
   tailSequence: CanonicalSequence,
   tailDigest: Digest,
-  records: Schema.Array(CanonicalRecordEnvelope).check(Schema.isMaxLength(65_536)),
+  records: Schema.Array(CanonicalRecordEnvelope).check(
+    Schema.isMaxLength(MAX_CONVERSATION_EXPORT_RECORDS),
+  ),
 }) {}
 
 export class ConversationCheckpoint extends Schema.Class<ConversationCheckpoint>(

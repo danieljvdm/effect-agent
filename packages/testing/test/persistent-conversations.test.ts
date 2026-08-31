@@ -1,9 +1,19 @@
 import { Agent, AgentPolicy, ConversationId, IdGenerator } from "@effect-agent/core";
 import {
+  BatchId,
+  CanonicalBatch,
+  CanonicalSequence,
   ConversationExportRequest,
   ConversationMaterialization,
   ConversationStore,
+  DeploymentId,
+  EMPTY_TAIL_DIGEST,
+  FencedAppendRequest,
   ProducerEpoch,
+  ProducerId,
+  RecordEnvelope,
+  RecordId,
+  RepairAnnotated,
   replayConversation,
 } from "@effect-agent/session";
 import { PersistentConversations } from "@effect-agent/session/history";
@@ -13,7 +23,9 @@ import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  Array,
   Cause,
+  DateTime,
   Deferred,
   Effect,
   Exit,
@@ -275,6 +287,86 @@ describe("persistent conversations", () => {
           expect(new Set(restored.log.records.map((entry) => entry.batchId)).size).toBe(2);
         }),
       ),
+  );
+
+  it.effect(
+    "keeps the last fitting Run loadable and refuses overflow before external effects",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* ConversationStore;
+        const producerEpoch = Schema.decodeSync(ProducerEpoch)(0);
+        yield* store.materialize(
+          ConversationMaterialization.make({ conversationId, producerEpoch }),
+        );
+        const createdAt = yield* DateTime.now;
+        let tailSequence = Schema.decodeSync(CanonicalSequence)(0);
+        let tailDigest = EMPTY_TAIL_DIGEST;
+        // Seed through the store's public append contract without thousands of model calls.
+        for (let start = 0; start < 65_532; start += 256) {
+          const records = Array.makeBy(Math.min(256, 65_532 - start), (offset) =>
+            RecordEnvelope.make({
+              recordId: Schema.decodeSync(RecordId)(`seed:${start + offset}`),
+              family: "conversation",
+              schemaVersion: 1,
+              createdAt,
+              deploymentId: Schema.decodeSync(DeploymentId)("history-limit-test"),
+              payload: RepairAnnotated.make({ reason: "history seed", details: {} }),
+            }),
+          );
+          const batch = yield* CanonicalBatch.makeEffect({
+            batchId: Schema.decodeSync(BatchId)(`seed:${start}`),
+            producerId: Schema.decodeSync(ProducerId)("history-limit-test"),
+            records,
+          });
+          const appended = yield* store.append(
+            FencedAppendRequest.make({
+              conversationId,
+              producerEpoch,
+              batch,
+              expectedTailSequence: tailSequence,
+              expectedTailDigest: tailDigest,
+            }),
+          );
+          tailSequence = appended.lastSequence;
+          tailDigest = appended.tailDigest;
+        }
+        const modelCalls = yield* Ref.make(0);
+        const toolCalls = yield* Ref.make(0);
+        const binding = agent(
+          [lookup, answer("retained")].map((turn) => ({
+            ...turn,
+            onStreamStart: Ref.update(modelCalls, (n) => n + 1),
+          })),
+        );
+        const run = (input: string) =>
+          PersistentConversations.run(binding, input, options).pipe(
+            Effect.provide(
+              toolkit.toLayer({
+                lookup: () => Ref.update(toolCalls, (n) => n + 1).pipe(Effect.as("Kyoto")),
+              }),
+            ),
+          );
+        expect((yield* run("last fitting Run")).output).toBe("retained");
+        const before = yield* exported;
+        const prompt = yield* PersistentConversations.load(conversationId);
+        expect(before.records).toHaveLength(65_535);
+        expect(prompt.content.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "assistant",
+          "tool",
+          "assistant",
+        ]);
+        expect(yield* run("overflow").pipe(Effect.flip)).toMatchObject({
+          _tag: "PersistentConversationError",
+          message: expect.stringContaining("65536"),
+        });
+        expect(yield* Ref.get(modelCalls)).toBe(2);
+        expect(yield* Ref.get(toolCalls)).toBe(1);
+        expect(yield* exported).toEqual(before);
+        expect(yield* PersistentConversations.load(conversationId)).toEqual(prompt);
+      }).pipe(Effect.provide(memory)),
+    30_000,
   );
 
   it.effect(
