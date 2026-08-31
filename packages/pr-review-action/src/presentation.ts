@@ -33,14 +33,16 @@ const severityCounts = (report: ReviewReport) => ({
   nit: report.findings.filter((finding) => finding.severity === "nit").length,
 });
 
-const renderFindingTally = (report: ReviewReport): string => {
-  const counts = severityCounts(report);
+const renderFindingTally = (input: ReviewPresentationInput): string => {
+  const counts = severityCounts(input.report);
   const parts = [
     ...(counts.blocking > 0 ? [`🛑 ${String(counts.blocking)} blocking`] : []),
     ...(counts.important > 0 ? [`⚠️ ${String(counts.important)} important`] : []),
     ...(counts.nit > 0 ? [`💅 ${String(counts.nit)} nit`] : []),
   ];
-  return parts.length === 0 ? "✅ None" : parts.join(" · ");
+  if (parts.length > 0) return parts.join(" · ");
+  if (!input.complete || input.exhausted !== undefined) return "None recorded · incomplete";
+  return input.unresolvedChangeRequests > 0 ? "None recorded" : "✅ None";
 };
 
 const renderVerdict = (
@@ -160,7 +162,7 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
     [
       "| Scope | Files | New findings |",
       "| :-- | :-- | :-- |",
-      `| **${input.scope === "full" ? "Full diff" : "Incremental"}** | ${renderCoverage(input)} | ${renderFindingTally(input.report)} |`,
+      `| **${input.scope === "full" ? "Full diff" : "Incremental"}** | ${renderCoverage(input)} | ${renderFindingTally(input)} |`,
     ].join("\n"),
   ];
   const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);

@@ -122,6 +122,7 @@ const sse = (
   call: number,
   calls: ReadonlyArray<{ readonly name: string; readonly parameters: Schema.Json }>,
   usage: unknown,
+  finish: "completed" | "incomplete" = "completed",
 ) => {
   const reasoning = {
     type: "reasoning",
@@ -152,8 +153,12 @@ const sse = (
       { type: "response.output_item.done", output_index: index + 1, item },
     ]),
     {
-      type: "response.completed",
-      response: { ...response(usage), output: [reasoning, ...output] },
+      type: `response.${finish}`,
+      response: {
+        ...response(usage),
+        output: [reasoning, ...output],
+        ...(finish === "incomplete" ? { incomplete_details: { reason: "max_output_tokens" } } : {}),
+      },
     },
   ];
   return HttpClientResponse.fromWeb(
@@ -189,6 +194,63 @@ const payload: OpenAiSchema.CreateResponse = {
 };
 
 describe("review provider boundary", () => {
+  it.effect("continues research with the remaining allowance after PR #252's usage", () =>
+    Effect.gen(function* () {
+      const sent: Array<WireRequest> = [];
+      // Production counts and usage for the first two calls; the third is scripted continuation.
+      const usage = [
+        rawUsage(39_532, 430, 0, 39_351),
+        rawUsage(51_735, 1_647, 39_338, 12_163),
+        rawUsage(60_000, 1_000, 51_500, 8_000),
+      ];
+      const native = yield* makeNative(
+        HttpClient.make((httpRequest, url) =>
+          Effect.sync(() => {
+            const current = usage[sent.length];
+            if (current === undefined) throw new Error("Unexpected additional model request");
+            if (url.pathname.endsWith("/input_tokens"))
+              return json(httpRequest, {
+                object: "response.input_tokens",
+                input_tokens: current.input_tokens,
+              });
+            sent.push(decodeWire(httpRequest));
+            return sse(
+              httpRequest,
+              sent.length,
+              sent.length === 1 ? [read] : sent.length === 2 ? [record, read] : [submit],
+              current,
+            );
+          }),
+        ),
+      );
+      const provider = yield* makeReviewOpenAi({
+        client: native,
+        model: "gpt-5.6-sol",
+        cacheKey: "affordable-research",
+      });
+      const result = yield* makeReviewer({ model, costControl: provider.costControl })
+        .review(request)
+        .pipe(
+          Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+          Effect.provideService(ReviewRepository, repository),
+        );
+
+      expect(sent).toHaveLength(3);
+      expect(sent.map((wire) => wire.max_output_tokens)).toEqual([32_000, 26_762, 19_174]);
+      for (const wire of sent) {
+        expect(wire.model).toBe("gpt-5.6-sol");
+        expect(wire.reasoning).toEqual({ effort: "xhigh" });
+        expect(wire.tools).toEqual(sent[0]?.tools);
+        expect(wire.tool_choice).toEqual(sent[0]?.tool_choice);
+      }
+      expect(result.exhausted).toBeUndefined();
+      expect(result.incomplete).toBeUndefined();
+      expect(result.report.findings.map((item) => item.title)).toEqual([finding.title]);
+      expect(result.usage.estimatedCostMicrousd).toBe(399_106);
+      expect(result.usage.reservedCostMicrousd).toBe(0);
+    }),
+  );
+
   it.effect.each([false, true])(
     "publishes a head-bound incomplete cost stop, with blocking finding=%s",
     (hasFinding) =>
@@ -494,9 +556,9 @@ describe("review provider boundary", () => {
       }),
   );
 
-  it.effect.each([true, false])(
-    "prices the only final request and enforces completion-only delivery: %s",
-    (validCompletion) =>
+  it.effect.each(["submit", "research", "truncated"] as const)(
+    "admits capped research and final responses without overspending: %s",
+    (completion) =>
       Effect.gen(function* () {
         const sent: Array<WireRequest> = [];
         const native = yield* makeNative(
@@ -512,11 +574,12 @@ describe("review provider boundary", () => {
               return sse(
                 httpRequest,
                 sent.length,
-                sent.length === 1 ? [record, read] : validCompletion ? [submit] : [read],
+                sent.length === 1 ? [record, read] : completion === "research" ? [read] : [submit],
                 rawUsage(
                   sent.length === 1 ? 70_000 : 72_000,
                   sent.length === 1 ? 1_000 : (wire.max_output_tokens ?? 0),
                 ),
+                sent.length === 2 && completion === "truncated" ? "incomplete" : "completed",
               );
             }),
           ),
@@ -542,15 +605,20 @@ describe("review provider boundary", () => {
           );
         expect(sent).toHaveLength(2);
         expect(sent[1]?.max_output_tokens).toBe(13_499);
-        expect(sent[1]?.tool_choice).toEqual({
-          type: "allowed_tools",
-          mode: "required",
-          tools: [{ type: "function", name: "submit_review" }],
-        });
+        expect(sent[1]?.tool_choice).toEqual(sent[0]?.tool_choice);
         expect(sent[1]?.tools).toEqual(sent[0]?.tools);
-        expect(result.exhausted).toBe("cost");
+        expect(result.exhausted).toBe(completion === "submit" ? undefined : "cost");
+        const failure = reviewPublicationFailure({
+          blockingFindings: 0,
+          unreviewedPaths: 0,
+          unresolvedChangeRequests: 0,
+          exhausted: result.exhausted,
+          incomplete: result.incomplete,
+        });
+        if (completion === "submit") expect(failure).toBeUndefined();
+        else expect(failure).toMatchObject({ _tag: "ReviewAttemptIncomplete" });
         expect(result.report.findings).toHaveLength(1);
-        expect(reads).toBe(1);
+        expect(reads).toBe(completion === "research" ? 2 : 1);
         expect(result.usage.estimatedCostMicrousd).toBe(999_980);
         expect(result.usage.estimatedCostMicrousd).toBeLessThan(1_000_000);
         yield* provider.client.createResponse(payload).pipe(Effect.flip);
@@ -602,7 +670,7 @@ describe("review provider boundary", () => {
   );
 
   it.effect.each(["http", "missing-usage", "malformed-count", "stream-eof"])(
-    "fails closed on %s without refunding unknown charges",
+    "fails closed on %s without refunding capped requests with unknown charges",
     (failure) =>
       Effect.gen(function* () {
         let sends = 0;
@@ -612,9 +680,10 @@ describe("review provider boundary", () => {
               if (url.pathname.endsWith("/input_tokens"))
                 return json(httpRequest, {
                   object: "response.input_tokens",
-                  input_tokens: failure === "malformed-count" ? -1 : 70_000,
+                  input_tokens: failure === "malformed-count" ? -1 : 100_000,
                 });
               sends += 1;
+              expect(decodeWire(httpRequest).max_output_tokens).toBe(24_999);
               if (failure === "http")
                 return json(httpRequest, { error: { message: "private-source-fixture" } }, 500);
               if (failure === "stream-eof")
@@ -641,7 +710,7 @@ describe("review provider boundary", () => {
         expect(snapshot.stopped).toBe(false);
         expect(snapshot.usage.estimatedCostMicrousd).toBe(0);
         expect(snapshot.usage.reservedCostMicrousd).toBe(
-          failure === "malformed-count" ? 0 : 990_000,
+          failure === "malformed-count" ? 0 : 999_980,
         );
         yield* provider.client.createResponse(payload).pipe(Effect.flip);
         expect(sends).toBe(failure === "malformed-count" ? 0 : 1);

@@ -148,17 +148,14 @@ export const withReviewPromptCache = (payload: Payload, key: string) => ({
                 : item.content.length === 1 && item.content[0]?.type === "input_text"
                   ? item.content[0].text
                   : "";
-            if (
-              item.role === "user" &&
-              (text.startsWith("<run-status>") || text.startsWith("<review-cost-status>"))
-            ) {
+            if (item.role === "user" && text.startsWith("<run-status>")) {
               return item;
             }
             return { ...item, content: cacheContent(item.content) };
           }
           if (item.type === "function_call_output") {
             // One boundary per committed batch keeps earlier useful boundaries
-            // inside the provider's 50-breakpoint lookup window on wide batches.
+            // inside the provider's breakpoint lookup window on wide batches.
             return {
               ...item,
               output: cacheContent(item.output, items[index + 1]?.type !== "function_call_output"),
@@ -180,7 +177,7 @@ interface Reservation {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly microusd: number;
-  readonly finalizing: boolean;
+  readonly outputLimitedByCost: boolean;
 }
 
 interface Spending {
@@ -260,71 +257,45 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     }
     const before = yield* Ref.get(state);
     if (before.closed) return yield* refuse("Review spending admission has already stopped.");
-    let payload: Payload = withReviewPromptCache(
+    const payload: Payload = withReviewPromptCache(
       { ...original, truncation: "disabled" },
       options.cacheKey,
     );
-    let inputTokens = yield* count(payload).pipe(
+    const inputTokens = yield* count(payload).pipe(
       Effect.catch(() => refuse("Unable to count the review input before paid inference.")),
     );
     if (inputTokens > MAX_INPUT_TOKENS) {
       return yield* refuse("The counted review input exceeds the 128,000-token price boundary.");
     }
     const balance = REVIEW_COST_LIMIT_MICROUSD - before.cost - reservedCost(before);
-    let outputTokens = original.max_output_tokens ?? MAX_OUTPUT_TOKENS;
-    let finalizing = false;
-    if (Math.ceil((inputTokens * pricing.write + outputTokens * pricing.output) / 100) > balance) {
+    const requestedOutputTokens = original.max_output_tokens ?? MAX_OUTPUT_TOKENS;
+    const outputTokens = Math.min(
+      requestedOutputTokens,
+      Math.floor((balance * 100 - inputTokens * pricing.write) / pricing.output),
+    );
+    if (outputTokens < 16) {
       yield* Ref.update(state, (current) => ({ ...current, stopped: true }));
-      if (
-        !original.tools?.some((tool) => tool.type === "function" && tool.name === "submit_review")
-      ) {
-        return yield* refuse("The next model request cannot fit below the review's $1 ceiling.");
-      }
-      finalizing = true;
-      payload = {
-        ...payload,
-        tool_choice: {
-          type: "allowed_tools",
-          mode: "required",
-          tools: [{ type: "function", name: "submit_review" }],
-        },
-        input: [
-          ...(typeof payload.input === "string"
-            ? [{ role: "user" as const, content: payload.input }]
-            : (payload.input ?? [])),
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "<review-cost-status>Research has stopped to keep this review below $1. Call submit_review alone with established findings. Coverage will be reported incomplete.</review-cost-status>",
-              },
-            ],
-          },
-        ],
-      };
-      // Tool choice and delivery instructions can change the counted context.
-      inputTokens = yield* count(payload).pipe(
-        Effect.catch(() => refuse("Unable to count the final review request before inference.")),
-      );
-      outputTokens = Math.min(
-        outputTokens,
-        Math.floor((balance * 100 - inputTokens * pricing.write) / pricing.output),
-      );
-      if (inputTokens > MAX_INPUT_TOKENS || outputTokens < 16) {
-        return yield* refuse(
-          "No paid completion fits; deliver recorded findings without inference.",
-        );
-      }
-      payload = { ...payload, max_output_tokens: outputTokens };
+      yield* Effect.logInfo("Review spending limit reached before dispatch", {
+        modelCalls: before.modelCalls,
+        inputTokens,
+        remainingCostMicrousd: balance,
+        minimumRequestCostMicrousd: Math.ceil(
+          (inputTokens * pricing.write + 16 * pricing.output) / 100,
+        ),
+        costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
+      });
+      return yield* refuse("No paid request fits; deliver recorded findings without inference.");
     }
+    // A smaller output allowance still permits research. Only a refused request or a
+    // response truncated by this cost limit stops the review; tool choice stays native.
+    const outputLimitedByCost = outputTokens < requestedOutputTokens;
     const microusd = Math.ceil((inputTokens * pricing.write + outputTokens * pricing.output) / 100);
     const reservation: Reservation = {
       id: before.modelCalls + 1,
       inputTokens,
       outputTokens,
       microusd,
-      finalizing,
+      outputLimitedByCost,
     };
     const current = yield* Ref.get(state);
     if (
@@ -335,23 +306,23 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     }
     yield* Ref.update(state, (current) => ({
       ...current,
-      closed: current.closed || finalizing,
       modelCalls: reservation.id,
       pending: new Map([...current.pending, [reservation.id, reservation]]),
     }));
     yield* Effect.logInfo("Review request admitted", {
       modelCall: reservation.id,
       inputTokens,
+      requestedMaxOutputTokens: requestedOutputTokens,
       maxOutputTokens: outputTokens,
+      outputLimitedByCost,
       reservedCostMicrousd: microusd,
       remainingCostMicrousd: balance - microusd,
       costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
-      finalizing,
       cacheMode: "explicit",
       serviceTier: "default",
       pricingVersion: PRICING_VERSION,
     });
-    return { payload, reservation };
+    return { payload: { ...payload, max_output_tokens: outputTokens }, reservation };
   }, admissions.withPermit);
 
   const settle = Effect.fn("ReviewOpenAi.settle")(function* (
@@ -386,6 +357,9 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
         usage.output_tokens * pricing.output) /
         100,
     );
+    const outputLimitReached =
+      reservation.outputLimitedByCost &&
+      response.incomplete_details?.reason === "max_output_tokens";
     const updated = yield* Ref.modify(state, (current) => {
       if (!current.pending.has(reservation.id)) return [false, current] as const;
       const pending = new Map(current.pending);
@@ -395,6 +369,8 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
         {
           ...current,
           pending,
+          stopped: current.stopped || outputLimitReached,
+          closed: current.closed || outputLimitReached,
           input: current.input + usage.input_tokens,
           read: current.read + read,
           write: current.write + write,
@@ -412,18 +388,13 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       cachedInputTokens: read,
       cacheWriteInputTokens: write,
       outputTokens: usage.output_tokens,
+      outputLimitReached,
       cacheHitRatio: usage.input_tokens === 0 ? 0 : read / usage.input_tokens,
       estimatedCostMicrousd: cost,
       cumulativeCostMicrousd: totals.cost,
       reservedCostMicrousd: reservedCost(totals),
       remainingCostMicrousd: REVIEW_COST_LIMIT_MICROUSD - totals.cost - reservedCost(totals),
     });
-    if (reservation.finalizing) {
-      const calls = response.output.filter((item) => item.type === "function_call");
-      if (calls.length !== 1 || calls[0]?.name !== "submit_review") {
-        return yield* refuse("A cost-constrained completion may only submit the review.");
-      }
-    }
   });
 
   const costControl: ReviewCostControl = {
