@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1200" />
+    <title>Effect Agent social card artwork</title>
+    <style>
+      @import url("../../../node_modules/@fontsource-variable/ibm-plex-sans/index.css");
+      @import url("../../../node_modules/@fontsource/ibm-plex-mono/400.css");
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      main {
+        position: relative;
+        width: 1200px;
+        height: 630px;
+        overflow: hidden;
+        background: #315be8;
+        color: #f8f9fb;
+        font-family: "IBM Plex Sans Variable", sans-serif;
+      }
+
+      h1 {
+        position: absolute;
+        top: 131px;
+        left: 72px;
+        margin: 0;
+        font-size: 98px;
+        font-weight: 570;
+        letter-spacing: -5px;
+        line-height: 1.1;
+      }
+
+      .description {
+        position: absolute;
+        top: 267px;
+        left: 78px;
+        margin: 0;
+        font-size: 38px;
+        line-height: 1.3;
+        letter-spacing: -0.8px;
+      }
+
+      .mark {
+        position: absolute;
+        top: 151px;
+        right: 78px;
+        width: 252px;
+        height: 252px;
+      }
+
+      footer {
+        position: absolute;
+        right: 78px;
+        bottom: 62px;
+        left: 78px;
+        display: flex;
+        justify-content: space-between;
+        border-top: 1px solid #8ba3f2;
+        padding-top: 26px;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 20px;
+        letter-spacing: -0.5px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Effect Agent</h1>
+      <p class="description">An agent harness toolkit<br />for TypeScript.</p>
+      <img class="mark" src="../../public/mark.svg" alt="" />
+      <footer>
+        <span>Built on Effect and Effect AI.</span>
+        <span>effect-agent.com</span>
+      </footer>
+    </main>
+  </body>
+</html>

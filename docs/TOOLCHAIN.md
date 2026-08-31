@@ -125,6 +125,22 @@ TypeScript 7. Keep compiler validation enabled. Do not suppress errors with `noE
 Keep `yield*` inside a generator, such as `Effect.gen(function* () { ... })`.
 Outside a generator, the formatter parses `*` as multiplication and inserts spaces.
 
+## Link previews
+
+The docs config adds Open Graph and Twitter metadata to the built HTML. Each page uses its
+resolved title and description, a canonical URL on `https://effect-agent.com`, and the shared
+`docs/public/social-card.png`. Preview crawlers do not need JavaScript.
+
+Edit `docs/.vitepress/assets/social-card.html` to change the artwork. Serve the repository root
+locally, open that file in a browser, wait for `document.fonts.ready`, and capture its `main`
+element at 1200 × 630 CSS pixels with device scale 1. Save the PNG to
+`docs/public/social-card.png`. The source uses the installed IBM Plex fonts and `docs/public/mark.svg`;
+it is not published. The 32 × 32 favicon and 180 × 180 Apple touch icon are PNG renders of that mark.
+
+Run `vp run docs:build` and inspect the generated HTML for the homepage, a guide, and a directory
+index such as `platforms/index.html`. Image URLs must be absolute, and canonical URLs must match
+the site's clean routes. Existing messages may retain a cached preview after a deployment.
+
 ## Releasing to npm
 
 All fourteen public packages share one Changesets fixed group and publish to `beta`
