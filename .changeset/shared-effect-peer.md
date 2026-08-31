@@ -15,4 +15,4 @@
 "effect-agent": patch
 ---
 
-Declare `effect` as a required peer across all public packages so they share the application's runtime. Keep `effect` in application dependencies at the release's exact supported version.
+Declare `effect` as a required `^4.0.0-rc.111` peer across all public packages so they share the application's runtime and accept compatible upgrades. Keep `effect` in application dependencies at a version satisfying the framework's and providers' peer ranges.

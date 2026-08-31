@@ -1985,7 +1985,7 @@ Exercise the generated release verifier.
   );
 
   it.effect(
-    "pins Effect peers, test helpers, and the single Vite+ Vitest runtime through the root catalog",
+    "declares Effect peers and pins development dependencies through the root catalog",
     () =>
       Effect.gen(function* () {
         const rootManifest = yield* readManifest(`${repositoryRoot}/package.json`);
@@ -2009,7 +2009,7 @@ Exercise the generated release verifier.
           const manifest = yield* readManifest(
             `${repositoryRoot}/packages/${packageName}/package.json`,
           );
-          expect(manifest.peerDependencies?.effect).toBe("catalog:");
+          expect(manifest.peerDependencies?.effect).toBe("^4.0.0-rc.111");
           expect(manifest.devDependencies?.effect).toBe("catalog:");
           expect(manifest.dependencies?.effect).toBeUndefined();
           expect(manifest.optionalDependencies?.effect).toBeUndefined();

@@ -41,8 +41,8 @@ Live-model and live-provider suites remain opt-in.
 "Alpha" describes product maturity; npm versions use `X.Y.Z-beta.N` and the `beta` dist-tag.
 APIs and stored data may change incompatibly before 1.0. There is no compatibility window or
 stored-data migration promise; incompatible data must fail clearly and may need a reset.
-Keep framework packages at one exact release and Effect/provider dependencies at that release's
-exact pins. See [installation and compatibility](docs/guide/getting-started.md#installation-and-compatibility).
+Keep framework packages at one exact release and choose Effect/provider versions that satisfy
+their peer ranges. See [installation and compatibility](docs/guide/getting-started.md#installation-and-compatibility).
 
 Normative words such as **MUST**, **SHOULD**, and **MAY** are used in their usual RFC sense.
 

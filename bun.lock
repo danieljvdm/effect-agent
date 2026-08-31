@@ -227,7 +227,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
     "packages/core": {
@@ -239,7 +239,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
     "packages/effect-agent": {
@@ -256,7 +256,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
     "packages/engine": {
@@ -272,7 +272,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
     "packages/platform-cloudflare": {
@@ -306,7 +306,7 @@
       },
       "peerDependencies": {
         "@cloudflare/puppeteer": "^1.1.0",
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
         "effect-cf": "^0.37.0",
       },
       "optionalPeers": [
@@ -332,7 +332,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
     "packages/pr-review": {
@@ -348,7 +348,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
     "packages/pr-review-action": {
@@ -377,7 +377,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
     "packages/sandbox-local": {
@@ -395,7 +395,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
     "packages/session": {
@@ -413,7 +413,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
     "packages/storage-cloudflare": {
@@ -435,7 +435,7 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
     "packages/storage-memory": {
@@ -453,7 +453,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
     "packages/storage-sqlite": {
@@ -471,7 +471,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
     "packages/testing": {
@@ -496,7 +496,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "catalog:",
+        "effect": "^4.0.0-rc.111",
       },
     },
   },

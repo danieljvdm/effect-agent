@@ -50,16 +50,18 @@ The root `package.json` is the only version source for shared dependencies.
 Workspace packages refer to shared versions with `catalog:`. They must not introduce a second
 Effect version. The Bun lockfile is committed and CI installs it with `--frozen-lockfile`.
 
-Every public package declares `effect` in both `peerDependencies` and `devDependencies` using
-`catalog:`. The published peer requires the root catalog's exact version; the development
-dependency supplies it for local builds and tests. Private applications and examples declare
+Every public package declares `effect` as a required `^4.0.0-rc.111` peer, following upstream
+Effect packages. Its `devDependencies` entry uses `catalog:` to supply the exact development
+version for local builds and tests. Raise the peer minimum when code needs newer Effect APIs;
+updating the development pin alone does not require raising it. Private applications and examples declare
 `effect` as a regular dependency. Platform and SQL implementations remain regular dependencies
 of the adapters that acquire them; their public service contracts come from `effect`. Internal
 framework dependencies remain `workspace:*`, which publishes as the exact framework release.
 
-These are exact compatibility pins, not ranges covering other Effect prereleases. Public
-consumers keep all framework packages at one exact release and use that release's Effect/provider
-versions. The public alpha permits breaking API and stored-schema changes before 1.0. There is no
+The catalog contains exact development pins; published Effect peers accept compatible versions
+within their caret ranges. Public consumers keep all framework packages at one exact release and
+select Effect/provider versions that satisfy their peer requirements. The public alpha permits
+breaking framework API and stored-schema changes before 1.0. There is no
 compatibility window or migration tooling promise; incompatible data fails clearly and disposable
 development data may be reset. See [installation and compatibility](guide/getting-started.md#installation-and-compatibility).
 

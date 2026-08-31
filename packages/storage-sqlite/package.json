@@ -37,6 +37,6 @@
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "effect": "catalog:"
+    "effect": "^4.0.0-rc.111"
   }
 }
