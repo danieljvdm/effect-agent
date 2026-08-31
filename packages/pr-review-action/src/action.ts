@@ -601,20 +601,26 @@ export const reviewActionProgram = Effect.gen(function* () {
     return;
   }
 
+  let scope = selection.scope;
   const attemptExit = yield* Effect.gen(function* () {
     const fullFiles = yield* github.listFiles;
     const currentMergeBase = yield* github.getMergeBase(pull.baseRevision, pull.headRevision);
-    const reviewBase =
-      selection.scope === "incremental" && selection.baseRevision !== undefined
+    let reviewBase =
+      scope === "incremental" && selection.baseRevision !== undefined
         ? selection.baseRevision
         : currentMergeBase;
-    if (selection.scope === "incremental") {
+    if (scope === "incremental") {
       const priorMergeBase = yield* github.getMergeBase(pull.baseRevision, reviewBase);
       if (priorMergeBase !== currentMergeBase) {
-        return yield* IncrementalScopeUnavailable.make({
-          priorMergeBase,
-          currentMergeBase,
-        });
+        if (!selection.automatic) {
+          return yield* IncrementalScopeUnavailable.make({
+            priorMergeBase,
+            currentMergeBase,
+          });
+        }
+        scope = "full";
+        reviewBase = currentMergeBase;
+        yield* Effect.logInfo("Reviewing the full diff after the merge base changed");
       }
     }
     const comparison = yield* github.compareTrees(reviewBase, pull.headRevision);
@@ -652,7 +658,7 @@ export const reviewActionProgram = Effect.gen(function* () {
         reservedCostMicrousd: 0,
         report: ReviewReport.make({
           summary:
-            selection.scope === "incremental" &&
+            scope === "incremental" &&
             surface.ignoredPaths.length === 0 &&
             surface.unreviewedPaths.length === 0
               ? "No pull-request files changed since the last completed review."
@@ -688,7 +694,7 @@ export const reviewActionProgram = Effect.gen(function* () {
           description: pull.description.slice(0, 20_000),
           baseRevision: reviewBase,
           headRevision: pull.headRevision,
-          scope: selection.scope,
+          scope,
           changes: surface.changes,
           unreviewedPaths: surface.unreviewedPaths
             .filter((path) => path.length <= 512)
@@ -811,7 +817,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     presentation.renderReview({
       report,
       automaticReviewsRemaining: selection.automaticReviewsRemaining,
-      scope: selection.scope,
+      scope,
       reviewedFiles: surface.changes.length,
       unreviewedFiles: surface.unreviewedPaths.length,
       ignoredFiles: surface.ignoredPaths.length,
@@ -853,7 +859,12 @@ export const reviewActionProgram = Effect.gen(function* () {
   );
   yield* writeOutputs([
     ["skipped", "false"],
-    ["reason", selection.reason],
+    [
+      "reason",
+      scope === selection.scope
+        ? selection.reason
+        : "automatic full review after merge-base change",
+    ],
     ["input-tokens", inputTokens],
     ["uncached-input-tokens", uncachedInputTokens],
     ["cached-input-tokens", cachedInputTokens],

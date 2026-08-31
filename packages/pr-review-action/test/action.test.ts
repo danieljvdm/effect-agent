@@ -549,7 +549,7 @@ describe("Incremental review scope", () => {
       }),
   );
 
-  it.effect("fails closed before repository hydration when the incremental merge base moved", () =>
+  it.effect("keeps explicit incremental review strict when the merge base moved", () =>
     Effect.gen(function* () {
       const targetHead = "target-head";
       const reviewedHead = "reviewed-head";
@@ -611,7 +611,9 @@ describe("Incremental review scope", () => {
         }
         return Effect.die(`unexpected request ${request.method} ${url.href}`);
       });
-      const exit = yield* runReviewAction(client).pipe(Effect.exit);
+      const exit = yield* runReviewAction(client, { PR_REVIEW_MODE: "incremental" }).pipe(
+        Effect.exit,
+      );
 
       expect(Exit.isFailure(exit)).toBe(true);
       if (!Exit.isFailure(exit)) return;
@@ -628,96 +630,124 @@ describe("Incremental review scope", () => {
         {
           commit_id: currentHead,
           event: "COMMENT",
-          body: expect.stringContaining(reviewMarker(true, false)),
+          body: expect.stringContaining(reviewMarker(false, false)),
           comments: [],
         },
       ]);
     }),
   );
 
-  it.effect("allows a manual full review to recover after incremental merge-base movement", () =>
-    Effect.gen(function* () {
-      const targetHead = "target-head";
-      const reviewedHead = "reviewed-head";
-      const currentHead = "current-head";
-      const currentMergeBase = "current-merge-base";
-      const requests = yield* Ref.make<ReadonlyArray<string>>([]);
-      const publishedWires = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
-      const client = HttpClient.make((request, url) => {
-        if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
-          return recordJsonResponse(
-            requests,
-            request,
-            url,
-            pullRequestWire("Review the rebased pull request in full", targetHead, currentHead),
-          );
-        }
-        if (request.method === "GET" && url.pathname.endsWith("/pulls/12/reviews")) {
-          return recordJsonResponse(requests, request, url, [
-            reviewHistoryWire(1, reviewMarker(false), reviewedHead, "2026-08-25T00:00:00Z"),
-            reviewHistoryWire(2, reviewMarker(true, false), currentHead, "2026-08-26T00:00:00Z"),
-          ]);
-        }
-        if (request.method === "GET" && url.pathname.endsWith("/pulls/12/files")) {
-          return recordJsonResponse(requests, request, url, []);
-        }
-        if (
-          request.method === "GET" &&
-          url.pathname.endsWith(`/compare/${targetHead}...${currentHead}`)
-        ) {
-          return recordJsonResponse(requests, request, url, {
-            merge_base_commit: { sha: currentMergeBase },
-          });
-        }
-        if (request.method === "GET" && url.pathname.endsWith(`/git/commits/${currentMergeBase}`)) {
-          return recordJsonResponse(requests, request, url, {
-            sha: currentMergeBase,
-            tree: { sha: "base-tree" },
-          });
-        }
-        if (request.method === "GET" && url.pathname.endsWith(`/git/commits/${currentHead}`)) {
-          return recordJsonResponse(requests, request, url, {
-            sha: currentHead,
-            tree: { sha: "head-tree" },
-          });
-        }
-        if (
-          request.method === "GET" &&
-          (url.pathname.endsWith("/git/trees/base-tree") ||
-            url.pathname.endsWith("/git/trees/head-tree"))
-        ) {
-          const sha = url.pathname.endsWith("base-tree") ? "base-tree" : "head-tree";
-          return recordJsonResponse(requests, request, url, { sha, tree: [], truncated: false });
-        }
-        if (request.method === "POST" && url.pathname.endsWith("/pulls/12/reviews")) {
-          const wire = decodePublishedReview(request);
-          return Ref.update(publishedWires, (current) => [...current, wire]).pipe(
-            Effect.andThen(
-              recordJsonResponse(requests, request, url, {
-                html_url: "https://github.test/reve-ai/example/pull/12#review",
-              }),
-            ),
-          );
-        }
-        return Effect.die(`unexpected request ${request.method} ${url.href}`);
-      });
-      const exit = yield* runReviewAction(client, { PR_REVIEW_MODE: "full" }).pipe(Effect.exit);
+  it.effect.each(["auto", "full"] as const)(
+    "establishes a full baseline after merge-base movement in %s mode",
+    (mode) =>
+      Effect.gen(function* () {
+        const targetHead = "target-head";
+        const reviewedHead = "reviewed-head";
+        const currentHead = "current-head";
+        const currentMergeBase = "current-merge-base";
+        const requests = yield* Ref.make<ReadonlyArray<string>>([]);
+        const publishedWires = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
+        const client = HttpClient.make((request, url) => {
+          if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
+            return recordJsonResponse(
+              requests,
+              request,
+              url,
+              pullRequestWire("Review the rebased pull request in full", targetHead, currentHead),
+            );
+          }
+          if (request.method === "GET" && url.pathname.endsWith("/pulls/12/reviews")) {
+            return recordJsonResponse(requests, request, url, [
+              reviewHistoryWire(1, reviewMarker(true), reviewedHead, "2026-08-25T00:00:00Z"),
+              ...(mode === "full"
+                ? [
+                    reviewHistoryWire(
+                      2,
+                      reviewMarker(true, false),
+                      currentHead,
+                      "2026-08-26T00:00:00Z",
+                    ),
+                  ]
+                : []),
+            ]);
+          }
+          if (request.method === "GET" && url.pathname.endsWith("/pulls/12/files")) {
+            return recordJsonResponse(requests, request, url, []);
+          }
+          if (
+            request.method === "GET" &&
+            url.pathname.endsWith(`/compare/${targetHead}...${currentHead}`)
+          ) {
+            return recordJsonResponse(requests, request, url, {
+              merge_base_commit: { sha: currentMergeBase },
+            });
+          }
+          if (
+            request.method === "GET" &&
+            url.pathname.endsWith(`/compare/${targetHead}...${reviewedHead}`)
+          ) {
+            return recordJsonResponse(requests, request, url, {
+              merge_base_commit: { sha: "prior-merge-base" },
+            });
+          }
+          if (
+            request.method === "GET" &&
+            url.pathname.endsWith(`/git/commits/${currentMergeBase}`)
+          ) {
+            return recordJsonResponse(requests, request, url, {
+              sha: currentMergeBase,
+              tree: { sha: "base-tree" },
+            });
+          }
+          if (request.method === "GET" && url.pathname.endsWith(`/git/commits/${currentHead}`)) {
+            return recordJsonResponse(requests, request, url, {
+              sha: currentHead,
+              tree: { sha: "head-tree" },
+            });
+          }
+          if (
+            request.method === "GET" &&
+            (url.pathname.endsWith("/git/trees/base-tree") ||
+              url.pathname.endsWith("/git/trees/head-tree"))
+          ) {
+            const sha = url.pathname.endsWith("base-tree") ? "base-tree" : "head-tree";
+            return recordJsonResponse(requests, request, url, { sha, tree: [], truncated: false });
+          }
+          if (request.method === "POST" && url.pathname.endsWith("/pulls/12/reviews")) {
+            const wire = decodePublishedReview(request);
+            return Ref.update(publishedWires, (current) => [...current, wire]).pipe(
+              Effect.andThen(
+                recordJsonResponse(requests, request, url, {
+                  html_url: "https://github.test/reve-ai/example/pull/12#review",
+                }),
+              ),
+            );
+          }
+          return Effect.die(`unexpected request ${request.method} ${url.href}`);
+        });
+        const exit = yield* runReviewAction(client, { PR_REVIEW_MODE: mode }).pipe(Effect.exit);
 
-      expect(Exit.isSuccess(exit)).toBe(true);
-      const observed = yield* Ref.get(requests);
-      expect(observed.filter((value) => value.includes("/compare/"))).toEqual([
-        `GET /repos/reve-ai/example/compare/${targetHead}...${currentHead}`,
-      ]);
-      expect(observed.some((value) => value.includes(reviewedHead))).toBe(false);
-      expect(yield* Ref.get(publishedWires)).toEqual([
-        {
-          commit_id: currentHead,
-          event: "COMMENT",
-          body: expect.stringContaining(reviewMarker(false, true)),
-          comments: [],
-        },
-      ]);
-    }),
+        expect(Exit.isSuccess(exit)).toBe(true);
+        const observed = yield* Ref.get(requests);
+        expect(observed.filter((value) => value.includes("/compare/"))).toEqual([
+          `GET /repos/reve-ai/example/compare/${targetHead}...${currentHead}`,
+          ...(mode === "auto"
+            ? [`GET /repos/reve-ai/example/compare/${targetHead}...${reviewedHead}`]
+            : []),
+        ]);
+        expect(observed.some((value) => value.includes(`/git/commits/${reviewedHead}`))).toBe(
+          false,
+        );
+        expect(yield* Ref.get(publishedWires)).toEqual([
+          {
+            commit_id: currentHead,
+            event: "COMMENT",
+            body: expect.stringContaining(reviewMarker(mode === "auto", true)),
+            comments: [],
+          },
+        ]);
+        expect((yield* Ref.get(publishedWires))[0]?.body).toContain("**Full diff**");
+      }),
   );
 
   it.effect("PRR-007 keeps a manual review incremental after a force-push", () =>

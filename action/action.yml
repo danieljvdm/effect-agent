@@ -19,7 +19,7 @@ inputs:
     required: false
     default: "github-actions[bot]"
   mode:
-    description: 'Scope policy: "auto", "incremental", or "full". Incremental review fails closed after target merge-base movement; use full to establish a new baseline.'
+    description: 'Scope policy: "auto", "incremental", or "full". Auto falls back to the full diff after merge-base movement. Explicit incremental review stops and requires full to establish a new baseline.'
     required: false
     default: "auto"
   command:

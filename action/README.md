@@ -23,8 +23,11 @@ Automatic waves use the configured limit, defaulting to two; zero disables autom
 Only trusted bot-authored terminal markers count. Failed attempts count but cannot become diff
 baselines. An owner, member, or collaborator can request `@effect-agent review` for incremental
 review or `@effect-agent review full` for the whole admitted diff. Manual waves do not consume the
-automatic allowance. Missing baselines or incomplete comparisons stop incremental review instead
-of silently expanding scope. The workflow runs trusted default-branch code, serializes attempts,
+automatic allowance. If a rebase changes the merge base, automatic mode reviews the full diff
+from the current merge base in the same attempt, under the same spending ceiling. It labels the
+result as a full review; this fallback does not reset the automatic allowance. Explicit incremental
+requests still stop when their baseline is missing or its merge base changed. Incomplete repository
+comparisons fail in every mode. The workflow runs trusted default-branch code, serializes attempts,
 and refuses stale findings. If a push makes an attempt stale before publication, the Action logs
 the inspected and current commits and posts only an incomplete notice bound to the inspected commit.
 The stale attempt counts toward the automatic allowance, but cannot mark the new commit as already

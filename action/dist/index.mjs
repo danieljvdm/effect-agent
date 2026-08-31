@@ -50167,17 +50167,23 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     }
     return;
   }
+  let scope3 = selection.scope;
   const attemptExit = yield* exports_Effect.gen(function* () {
     const fullFiles = yield* github.listFiles;
     const currentMergeBase = yield* github.getMergeBase(pull.baseRevision, pull.headRevision);
-    const reviewBase = selection.scope === "incremental" && selection.baseRevision !== undefined ? selection.baseRevision : currentMergeBase;
-    if (selection.scope === "incremental") {
+    let reviewBase = scope3 === "incremental" && selection.baseRevision !== undefined ? selection.baseRevision : currentMergeBase;
+    if (scope3 === "incremental") {
       const priorMergeBase = yield* github.getMergeBase(pull.baseRevision, reviewBase);
       if (priorMergeBase !== currentMergeBase) {
-        return yield* IncrementalScopeUnavailable.make({
-          priorMergeBase,
-          currentMergeBase
-        });
+        if (!selection.automatic) {
+          return yield* IncrementalScopeUnavailable.make({
+            priorMergeBase,
+            currentMergeBase
+          });
+        }
+        scope3 = "full";
+        reviewBase = currentMergeBase;
+        yield* exports_Effect.logInfo("Reviewing the full diff after the merge base changed");
       }
     }
     const comparison = yield* github.compareTrees(reviewBase, pull.headRevision);
@@ -50210,7 +50216,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
         estimatedCostMicrousd: undefined,
         reservedCostMicrousd: 0,
         report: ReviewReport.make({
-          summary: selection.scope === "incremental" && surface2.ignoredPaths.length === 0 && surface2.unreviewedPaths.length === 0 ? "No pull-request files changed since the last completed review." : surface2.ignoredPaths.length > 0 && surface2.unreviewedPaths.length === 0 ? "No changed files matched the configured review scope." : "No textual patch fit within the review input bound.",
+          summary: scope3 === "incremental" && surface2.ignoredPaths.length === 0 && surface2.unreviewedPaths.length === 0 ? "No pull-request files changed since the last completed review." : surface2.ignoredPaths.length > 0 && surface2.unreviewedPaths.length === 0 ? "No changed files matched the configured review scope." : "No textual patch fit within the review input bound.",
           findings: []
         })
       };
@@ -50237,7 +50243,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
       description: pull.description.slice(0, 20000),
       baseRevision: reviewBase,
       headRevision: pull.headRevision,
-      scope: selection.scope,
+      scope: scope3,
       changes: surface2.changes,
       unreviewedPaths: surface2.unreviewedPaths.filter((path) => path.length <= 512).slice(0, 300)
     })).pipe(exports_Effect.provideService(ReviewRepository, reviewRepository), exports_Effect.provideService(exports_OpenAiClient.OpenAiClient, provider.client), exports_Effect.onExit(() => provider.costControl.snapshot.pipe(exports_Effect.flatMap((snapshot3) => exports_Effect.logInfo("Review accounting totals", {
@@ -50328,7 +50334,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   const body = withReviewMarker(presentation.renderReview({
     report: report2,
     automaticReviewsRemaining: selection.automaticReviewsRemaining,
-    scope: selection.scope,
+    scope: scope3,
     reviewedFiles: surface.changes.length,
     unreviewedFiles: surface.unreviewedPaths.length,
     ignoredFiles: surface.ignoredPaths.length,
@@ -50360,7 +50366,10 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   }), { publish: github.publishAttemptMarker, automatic: selection.automatic });
   yield* writeOutputs([
     ["skipped", "false"],
-    ["reason", selection.reason],
+    [
+      "reason",
+      scope3 === selection.scope ? selection.reason : "automatic full review after merge-base change"
+    ],
     ["input-tokens", inputTokens],
     ["uncached-input-tokens", uncachedInputTokens],
     ["cached-input-tokens", cachedInputTokens],

@@ -251,10 +251,12 @@ describe("review provider boundary", () => {
     }),
   );
 
-  it.effect.each([false, true])(
-    "publishes a head-bound incomplete cost stop, with blocking finding=%s",
-    (hasFinding) =>
+  it.effect.each(["complete", "cost-empty", "cost-finding"] as const)(
+    "recovers an automatic review after a rebase with outcome %s under the same cap",
+    (outcome) =>
       Effect.gen(function* () {
+        const complete = outcome === "complete";
+        const hasFinding = outcome === "cost-finding";
         const published: Array<{
           readonly commit_id: string;
           readonly event: string;
@@ -272,11 +274,17 @@ describe("review provider boundary", () => {
               return json(httpRequest, { object: "response.input_tokens", input_tokens: 70_000 });
             if (url.pathname === "/v1/responses") {
               modelCalls += 1;
+              const input = Schema.decodeUnknownSync(
+                Schema.Struct({ content: Schema.Array(Schema.Struct({ text: Schema.String })) }),
+              )(decodeWire(httpRequest).input.find((item) => item.role === "user"));
+              const text = input.content.map((part) => part.text).join("\n");
+              expect(text).toContain('"baseRevision":"base"');
+              expect(text).toContain('"scope":"full"');
               return sse(
                 httpRequest,
                 modelCalls,
-                hasFinding ? [record, read] : [read],
-                rawUsage(70_000, 32_000),
+                complete ? [submit] : hasFinding ? [record, read] : [read],
+                rawUsage(70_000, complete ? 100 : 32_000),
               );
             }
             if (httpRequest.method === "GET" && url.pathname.endsWith("/pulls/12"))
@@ -290,7 +298,16 @@ describe("review provider boundary", () => {
                 head: { sha: "head" },
               });
             if (httpRequest.method === "GET" && url.pathname.endsWith("/pulls/12/reviews"))
-              return json(httpRequest, []);
+              return json(httpRequest, [
+                {
+                  id: 1,
+                  body: reviewMarker(true),
+                  commit_id: "reviewed-head",
+                  submitted_at: "2026-08-25T00:00:00Z",
+                  state: "COMMENTED",
+                  user: { login: "github-actions[bot]", type: "Bot" },
+                },
+              ]);
             if (url.pathname.endsWith("/pulls/12/files"))
               return json(httpRequest, [
                 {
@@ -302,9 +319,18 @@ describe("review provider boundary", () => {
                 },
               ]);
             if (url.pathname.includes("/compare/"))
-              return json(httpRequest, { merge_base_commit: { sha: "base" } });
+              return json(httpRequest, {
+                merge_base_commit: {
+                  sha: url.pathname.endsWith("...reviewed-head") ? "old-base" : "base",
+                },
+              });
             if (url.pathname.includes("/git/commits/")) {
-              const revision = url.pathname.endsWith("/base") ? "base" : "head";
+              const revision = url.pathname.endsWith("/base")
+                ? "base"
+                : url.pathname.endsWith("/head")
+                  ? "head"
+                  : undefined;
+              if (revision === undefined) throw new Error("Unexpected review revision");
               return json(httpRequest, { sha: revision, tree: { sha: `${revision}-tree` } });
             }
             if (url.pathname.includes("/git/trees/")) {
@@ -371,11 +397,12 @@ describe("review provider boundary", () => {
           Effect.provide(NodeServices.layer),
           Effect.exit,
         );
-        expect(Exit.isFailure(exit)).toBe(true);
-        if (Exit.isSuccess(exit)) throw new Error("An incomplete review must fail its Action");
-        expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
-          _tag: hasFinding ? "BlockingFindings" : "ReviewAttemptIncomplete",
-        });
+        expect(Exit.isSuccess(exit)).toBe(complete);
+        if (Exit.isFailure(exit)) {
+          expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
+            _tag: hasFinding ? "BlockingFindings" : "ReviewAttemptIncomplete",
+          });
+        }
         expect(modelCalls).toBe(1);
         expect(published).toHaveLength(1);
         expect(published[0]).toMatchObject({
@@ -383,11 +410,14 @@ describe("review provider boundary", () => {
           event: hasFinding ? "REQUEST_CHANGES" : "COMMENT",
         });
         expect(published[0]?.comments).toHaveLength(hasFinding ? 1 : 0);
-        expect(published[0]?.body).toContain(reviewMarker(true, false));
-        expect(published[0]?.body).not.toContain(reviewMarker(true, true));
-        expect(published[0]?.body).not.toContain("**No actionable findings.**");
+        expect(published[0]?.body).toContain(reviewMarker(true, complete));
+        expect(published[0]?.body).toContain("**Full diff**");
+        expect(published[0]?.body).toContain("Automatic reviews are paused");
+        if (!complete) {
+          expect(published[0]?.body).not.toContain("**No actionable findings.**");
+          expect(published[0]?.body).toContain("1 supplied");
+        }
         expect(published[0]?.body).toContain("$0.999999 spending ceiling");
-        expect(published[0]?.body).toContain("1 supplied");
       }),
   );
 
