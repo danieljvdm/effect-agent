@@ -39,7 +39,7 @@ import type {
   TravelPlannerToolkit,
 } from "@effect-agent/testing/fixtures/travel-planner";
 import { phase1Trip, TravelPlanner } from "@effect-agent/testing/fixtures/travel-planner";
-import { Context, Effect, Schema, SchemaGetter, Scope, type Stream } from "effect";
+import { Context, Effect, Layer, Schema, SchemaGetter, Scope, type Stream } from "effect";
 import { type AiError, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -157,8 +157,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
     };
     const plain = Agent.withModel(Agent.define("scope-free", config), model);
     const selfContained = AgentRuntime.run(plain, "question").pipe(
-      Effect.provide(IdGenerator.layer),
-      Effect.provide(ConversationHistory.layerTransient),
+      Effect.provide(Layer.merge(IdGenerator.layer, ConversationHistory.layerTransient)),
     );
     const instructionAgent = Agent.withModel(
       Agent.define("scoped-instructions", {
