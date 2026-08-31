@@ -1,5 +1,7 @@
 # Browser Run deployed Worker proof
 
+See the [browser guide](../../docs/guide/browser.md) for adapter selection and application setup.
+
 This example declares `@cloudflare/puppeteer` directly because it imports
 `@effect-agent/platform-cloudflare/interactive-browser`. Durable-host and REST-only consumers
 do not need that optional peer dependency.

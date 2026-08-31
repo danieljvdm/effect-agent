@@ -111,7 +111,7 @@ Omitting the hook allows calls without this additional host check. Durable hosts
 protected resources. Authenticate callers and authorize runtime operations as described in
 [operations](./operations#authorization-and-isolation).
 
-This hook does not authorize provider-executed calls or Code Mode's inner programmatic calls.
+This hook does not authorize provider-executed calls or [Code Mode](./code-mode)'s inner programmatic calls.
 The Code Mode broker restricts inner calls to its allowlisted toolkit; enforce resource access
 inside those handlers.
 
@@ -156,62 +156,22 @@ separate conversations and survive lost attempts. See [child recovery and abort]
 
 ## Browse web pages
 
-Use the sandbox `PageCapture`, `PageScreenshot`, and `PageCrawl` services for capture and crawl tasks.
-`WebCapture.make` and `WebCapture.makeExtract` from `@effect-agent/capabilities` expose `PageCapture`
-as tools. Install the [Cloudflare browser adapter](../reference/packages#effect-agent-platform-cloudflare)
-for the service you need; REST capture and crawl also run on Node.
+Use `WebCapture.make`, `WebCapture.makeScrape`, or `WebCapture.makeExtract` to expose authorized page
+capture as Effect AI Tools. The [browser guide](./browser) shows how to supply capture and crawl
+adapters, take screenshots, and open scoped interactive passes, including Live View and handoff.
 
 ### Capture and crawl
 
-REST adapters require account credentials and `HttpClient`. REST crawl bounds same-host Markdown
-collection and polling, and cleans up its job within Scope. Quick Actions use a browser binding;
-structured extraction also requires explicit Workers AI authorization and accounting.
-
-Quick Actions require compatibility date `2026-03-24` or later.
-Use remote mode for local `wrangler dev`; Quick Actions have no local implementation.
+Choose a Worker binding or a Node-safe REST adapter in [capture and crawl](./browser#capture-and-crawl).
+Structured extraction requires explicit Workers AI authorization and accounting.
 
 ### Interact with a browser
 
-An interactive browser handle owns one scoped browser pass. It supports navigation, bounded
-reads, clicks, fills, screenshots, scrolling, and early closure. Handles cannot be persisted or
-transferred.
+The [interactive browser walkthrough](./browser#interact-with-a-browser) covers Layer setup,
+network policies, bounded actions, and session cleanup.
 
-| Network policy | Boundary                                                                      |
-| -------------- | ----------------------------------------------------------------------------- |
-| `ExactHosts`   | HTTPS page-request host checks, not private-network isolation                 |
-| `PublicWeb`    | Requires connection-time public-network enforcement                           |
-| `Unrestricted` | Allows credential-free HTTP/HTTPS without host or private-network containment |
+## Execute code
 
-Cloudflare rejects `PublicWeb` before acquisition with `InteractiveBrowserUnsupportedError`.
-Use host isolation for untrusted pages and viewers.
-
-The interactive adapter needs `BrowserRunInteractiveBinding` and
-`BrowserRunSessionLifecycle.layer({ accountId, apiToken })`, backed by `HttpClient`
-and a Browser Rendering Write token. Browser sessions last for one scoped pass.
-
-`browserRunInteractiveLayer` supplies browser actions. `browserRunInteractiveHostLayer` adds
-viewport resizing, Live View, handoff, and cleanup by session identity.
-The host must authorize viewer access, resizing, and handoff.
-
-Click and fill require exactly one matching element. `isBrowserRunUndispatchedActionError`
-identifies selector failures before dispatch; callers can correct those selectors.
-Other action failures invalidate the handle. Never automatically retry a mutation whose outcome
-is unknown. Interruption cannot reliably cancel an action already sent to Puppeteer.
-
-`readText().text` contains JSON with page text, selector counts, and at most 64 controls.
-Control diagnostics omit field values and HTML. Results, including PNG screenshots, obey the
-pass byte limit. Logs omit URLs, selectors, labels, field values, credentials, and provider errors.
-
-Set the initial `viewport` on `BrowserRunInteractiveBinding.layer` or call
-`session.resizeViewport`. Width and height accept integers in `1..2048`;
-`deviceScaleFactor` accepts `1..2`, defaults to `1`, and must satisfy
-`max(width, height) * deviceScaleFactor <= 2048`. Mobile, touch, and orientation options are
-unsupported. Resizing consumes no agent action but remains subject to the pass deadline and lock.
-
-Session closure waits up to ten seconds to confirm whole-browser termination or exact-session absence.
-A pending close or transport/authentication failure is not proof of cleanup.
-`BrowserRunCleanupError` reports a sanitized reason. Correct authorization or configuration
-failures before retrying.
-
-See the [interactive browser API comments](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/src/interactive-browser.ts)
-for action timing and lifecycle details. Browser passes do not provide durable execution or reconnection.
+[Code Mode](./code-mode) lets an agent write bounded JavaScript that calls an allowlisted set of
+read-only Tools through an isolated executor. [Sandbox execution](./sandbox) covers structured
+process requests and the trusted local adapter.

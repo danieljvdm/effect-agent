@@ -5,7 +5,7 @@ under the **Simulator** tab. Both surfaces use TanStack Start, Effect Atom, Effe
 HTTP/NDJSON, and the public framework packages.
 
 ```sh
-bun --filter @effect-agent/example-demo dev
+vp run -F @effect-agent/example-demo dev
 ```
 
 ## Chat

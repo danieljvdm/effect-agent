@@ -19,6 +19,9 @@ Effect AI provides models, tools, and provider integrations. Effect Agent uses t
 - [Context management](./context-management) to prune and summarize long conversations.
 - [Subagents](../concepts/durability#attached-subagents) for delegation with explicit permissions and budgets.
 - [Conversation history](./conversations) across runs.
+- [Code Mode](./code-mode) for generated JavaScript that queries application data through read-only tools.
+- [Sandbox execution](./sandbox) and [browser tools](./browser) for process output, rendered pages,
+  crawling, and scoped browser interaction.
 
 ## It runs in Effect
 

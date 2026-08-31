@@ -49,7 +49,7 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | `examples/repo-ops`                 | Repository evidence auditor                           |
 | `examples/browser-run-worker-proof` | Opt-in hosted Browser Run verification; owns Wrangler |
 | `examples/pr-review-eval`           | Opt-in live review evaluation                         |
-| `examples/code-mode-cloudflare`     | Cloudflare Code Mode tests                            |
+| `examples/code-mode-cloudflare`     | Generated JavaScript over a SQLite DO warehouse       |
 | `action/`                           | Distributed PR-review Action and bundle               |
 | `work-order-action/`                | Distributed work-order Action and bundle              |
 

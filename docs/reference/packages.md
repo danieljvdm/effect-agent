@@ -14,17 +14,19 @@ Before 1.0, APIs and stored data may change without a migration path.
 
 ## Find a capability {#capability-inventory}
 
-| Need                               | Guide                                                                          | Your application supplies                          |
-| ---------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------- |
-| Run or stream an agent             | [Execution](../guide/run-agents)                                               | Model, tool handlers, history policy               |
-| Retain completed conversations     | [History](../guide/conversations#retain-completed-runs)                        | Store and conversation IDs                         |
-| Recover work after a crash         | [Durability](../concepts/durability)                                           | Registered agents, workers, storage, authorization |
-| Prune or summarize context         | [Context management](../guide/context-management)                              | Context limits and compaction policy               |
-| Require approval or limit spending | [Run hooks](../guide/run-agents#operational-hooks)                             | Approval policy, budget hooks, cost estimates      |
-| Delegate to another agent          | [Subagents](../guide/tools#delegate-to-an-agent)                               | Targets, bindings, permissions, budgets            |
-| Schedule new input                 | [Scheduling](../guide/operations#scheduled-input)                              | Owner policy, registered inputs, driver            |
-| React to external events           | [Subscriptions](../guide/operations#event-subscriptions)                       | Authenticated source, preparation, authorization   |
-| Execute code or browse             | [Tools](../guide/tools), [browser adapters](#effect-agent-platform-cloudflare) | Execution permissions, credentials, isolation      |
+| Need                                   | Guide                                                    | Your application supplies                          |
+| -------------------------------------- | -------------------------------------------------------- | -------------------------------------------------- |
+| Run or stream an agent                 | [Execution](../guide/run-agents)                         | Model, tool handlers, history policy               |
+| Retain completed conversations         | [History](../guide/conversations#retain-completed-runs)  | Store and conversation IDs                         |
+| Recover work after a crash             | [Durability](../concepts/durability)                     | Registered agents, workers, storage, authorization |
+| Prune or summarize context             | [Context management](../guide/context-management)        | Context limits and compaction policy               |
+| Require approval or limit spending     | [Run hooks](../guide/run-agents#operational-hooks)       | Approval policy, budget hooks, cost estimates      |
+| Delegate to another agent              | [Subagents](../guide/tools#delegate-to-an-agent)         | Targets, bindings, permissions, budgets            |
+| Schedule new input                     | [Scheduling](../guide/operations#scheduled-input)        | Owner policy, registered inputs, driver            |
+| React to external events               | [Subscriptions](../guide/operations#event-subscriptions) | Authenticated source, preparation, authorization   |
+| Run generated JavaScript               | [Code Mode](../guide/code-mode)                          | Read-only tools and an isolated executor           |
+| Run trusted local commands             | [Sandbox execution](../guide/sandbox)                    | Executable, environment, output and time limits    |
+| Capture, crawl, or interact with pages | [Browser tools](../guide/browser)                        | Browser binding or credentials, target policy      |
 
 ### Limits and unsupported features {#compaction-and-unsupported-capabilities}
 
@@ -68,8 +70,10 @@ recovered tool failures locally. Observations are not stored or exported automat
 ### `@effect-agent/capabilities`
 
 Adds conversation queues, approval, audit, budgets, context utilities, scheduling overrides,
-MCP, redaction, and subagents to the engine. `WebCapture.make` and `WebCapture.makeExtract`
-expose a supplied `PageCapture` service as tools. Capture calls have uncertain external outcomes;
+MCP, redaction, and subagents to the engine. [`CodeMode.make`](../guide/code-mode) exposes generated
+JavaScript execution over an explicit read-only Tool allowlist. `WebCapture.make`,
+`WebCapture.makeScrape`, and `WebCapture.makeExtract` expose a supplied `PageCapture` service as tools.
+Capture calls have uncertain external outcomes;
 extraction retains its schema's service requirements.
 
 ### `@effect-agent/sandbox`
@@ -77,12 +81,15 @@ extraction retains its schema's service requirements.
 Defines `Sandbox`, `CodeExecutor`, `PageCapture`, `PageScreenshot`, `PageCrawl`, and
 `InteractiveBrowser` contracts without a platform dependency.
 
-See [browser tools](../guide/tools#browse-web-pages) for network policies and handle lifetimes.
+See [sandbox execution](../guide/sandbox) to choose a contract and consume process events, or
+[browser tools](../guide/browser) for page adapters, network policies, and handle lifetimes.
 
 ### `@effect-agent/sandbox-local`
 
 Runs trusted code in local child processes. It reports `unisolated` and rejects policies
 requiring isolation it cannot enforce.
+
+Follow the [local process walkthrough](../guide/sandbox#run-a-trusted-local-process).
 
 ### `@effect-agent/session`
 
@@ -126,6 +133,8 @@ Failpoints and eviction helpers are in `@effect-agent/storage-cloudflare/testing
 
 Assembles the durable host, RPC client, alarms, and Code Mode executor.
 See the [Cloudflare guide](../platforms/cloudflare) for bindings, service lifetimes, and admission limits.
+The [Code Mode guide](../guide/code-mode#run-generated-code-on-cloudflare) covers the independent
+Dynamic Worker executor and Worker Loader binding.
 `ConversationObject.Options.toolFailureObserver` installs a local tool-failure observer.
 
 Browser adapters use separate imports:
@@ -139,7 +148,7 @@ Browser adapters use separate imports:
 
 Durable hosts and the other browser adapters do not need Puppeteer.
 
-See [browser setup and limits](../guide/tools#browse-web-pages) for credentials, network policies,
+See [browser setup and limits](../guide/browser) for credentials, network policies,
 action failures, and cleanup.
 
 ### `@effect-agent/pr-review`
@@ -163,6 +172,8 @@ adds GitHub admission, source retrieval, provider setup, and report publication 
 ## Examples {#leaf-examples}
 
 - [Provider examples](https://github.com/danieljvdm/effect-agent/tree/main/examples/providers): OpenAI, Anthropic, and retained history.
-- [Browser demo](https://github.com/danieljvdm/effect-agent/tree/main/examples/demo): an interactive application using the framework.
+- [Chat demo](https://github.com/danieljvdm/effect-agent/tree/main/examples/demo): steering, follow-ups, approval cards, and budget limits, with a credential-free scripted profile.
+- [Code Mode warehouse](https://github.com/danieljvdm/effect-agent/tree/main/examples/code-mode-cloudflare): generated JavaScript querying a SQLite Durable Object through brokered read-only tools. Start with the [Code Mode guide](../guide/code-mode).
+- [Hosted browser proof](https://github.com/danieljvdm/effect-agent/tree/main/examples/browser-run-worker-proof): an opt-in temporary Worker deployment exercising capture, screenshots, interactive actions, Live View, and handoff. See [browser setup](../guide/browser).
 
 For repository layout and contribution rules, see the [toolchain guide](https://github.com/danieljvdm/effect-agent/blob/main/docs/TOOLCHAIN.md).

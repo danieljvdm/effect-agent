@@ -1,9 +1,11 @@
 # Code Mode over a SQLite Durable Object warehouse
 
 A runnable Cloudflare Worker that answers natural-language questions about
-invoice data by running **Code Mode** (D-035,
-[ADR-0017](../../docs/adr/0017-code-mode-executor-and-broker.md)) on **Cloudflare
-Dynamic Workers**, over a **SQLite-backed Durable Object** warehouse.
+invoice data by running Code Mode on Cloudflare Dynamic Workers, over a
+SQLite-backed Durable Object warehouse.
+
+The [Code Mode guide](../../docs/guide/code-mode.md) explains Tool definitions, handler Layers,
+executor setup, and limits.
 
 ## What it demonstrates
 
@@ -52,8 +54,7 @@ On the offline scripted profile `program` is a fixed demonstration program and
 
 ### Read-only enforcement on Durable Object SQLite
 
-The plan (§8.4) prescribes database authority as the read-only boundary. On
-Durable Object SQLite the `PRAGMA query_only` lock is blocked by the storage
+On Durable Object SQLite the `PRAGMA query_only` lock is blocked by the storage
 authorizer (`SQLITE_AUTH`), so this demo enforces read-only in application
 code. A denylist of write keywords is bypassable. For example, a `WITH … DELETE`
 common-table expression does not _start_ with a write keyword. The scan therefore uses an
@@ -72,27 +73,32 @@ stronger _database-authority_ path (`PRAGMA query_only = ON` →
 
 ## Run the tests (no credentials)
 
+From the repository root:
+
 ```sh
-bun run --filter @effect-agent/example-code-mode-cloudflare test
+vp run -F @effect-agent/example-code-mode-cloudflare test
 ```
 
 The test bundles the Worker and boots it in a real workerd runtime
 (programmatic Miniflare) with a Worker Loader binding and the SQLite Durable
 Object, then asserts that a generated program queried the real DO and computed
-the answer, and that a write is denied by the read-only database authority. The
+the answer, and that a write is denied by the application's SQL allowlist. The
 default profile is a deterministic scripted model, so no API key is needed.
 
 ## Deploy to Cloudflare
 
+Run these commands from the repository root. Wrangler's explicit config path targets this example
+when adding secrets.
+
 ```sh
 # Optional: run the live OpenAI profile instead of the scripted one.
-bunx wrangler secret put OPENAI_API_KEY
+vp dlx wrangler secret put OPENAI_API_KEY --config examples/code-mode-cloudflare/wrangler.jsonc
 # When OPENAI_API_KEY is set, also set a shared secret so the paid /ask
 # endpoint cannot be driven anonymously (callers must then send
 # `Authorization: Bearer <token>`):
-bunx wrangler secret put DEMO_AUTH_TOKEN
+vp dlx wrangler secret put DEMO_AUTH_TOKEN --config examples/code-mode-cloudflare/wrangler.jsonc
 
-bun run --filter @effect-agent/example-code-mode-cloudflare deploy
+vp run -F @effect-agent/example-code-mode-cloudflare deploy
 curl -X POST https://<your-worker>/ask \
   -H 'content-type: application/json' \
   -H 'authorization: Bearer <your DEMO_AUTH_TOKEN>' \
@@ -110,6 +116,6 @@ through. The executor passes a request-owned RPC capability directly to each
 loaded program, so the application needs no callback entrypoint or self service
 binding.
 
-Worker Loader is currently a Cloudflare beta; this example makes no hosted-
-platform, cost, or durability claim beyond deployment class E. Without
-`OPENAI_API_KEY` the Worker runs the deterministic scripted profile.
+See Cloudflare's [Dynamic Workers guide](https://developers.cloudflare.com/dynamic-workers/getting-started/)
+for Worker Loader setup. This example runs in deployment class E and makes no durable-execution
+claim. Without `OPENAI_API_KEY` the Worker runs the deterministic scripted profile.

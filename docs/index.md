@@ -37,5 +37,8 @@ pageClass: ea-index
     <a href="/guide/run-agents">Run &amp; stream →</a>
     <a href="/concepts/durability">Durable execution →</a>
     <a href="/guide/testing">Testing →</a>
+    <a href="/guide/code-mode">Code Mode →</a>
+    <a href="/guide/sandbox">Sandbox execution →</a>
+    <a href="/guide/browser">Browser tools →</a>
   </nav>
 </div>

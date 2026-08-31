@@ -85,6 +85,9 @@ export default defineConfig({
           { text: "Conversations", link: "/guide/conversations" },
           { text: "Context management", link: "/guide/context-management" },
           { text: "Deterministic testing", link: "/guide/testing" },
+          { text: "Code Mode", link: "/guide/code-mode" },
+          { text: "Sandbox execution", link: "/guide/sandbox" },
+          { text: "Browser tools", link: "/guide/browser" },
         ],
       },
       {

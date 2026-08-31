@@ -166,3 +166,13 @@ do not replace its handler or schedule unrelated alarms on that Object.
 `operationAuthorizer` for application access rules. The default policy trusts service possession.
 
 Unconfirmed tool outcomes need authorized resolution. See [operations](../guide/operations).
+
+## Code execution and browsers
+
+Use the [Code Mode guide](../guide/code-mode) to run generated JavaScript in a Dynamic Worker with
+allowlisted host tools. The warehouse example queries a SQLite Durable Object through that broker;
+its agent runs ephemerally and uses the Object for data only.
+
+The [browser guide](../guide/browser) covers Quick Actions, screenshots, REST capture and crawl,
+and interactive passes with Live View and handoff. Browser adapters use separate package imports
+and can be used without a durable conversation host. REST capture and crawl also work on Node.
