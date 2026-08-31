@@ -4270,18 +4270,19 @@ const makeTurn = <
                       : insertOutputContract(outgoing, outputContractMessage),
                   toolkit: agent.definition.toolkit,
                   disableToolCallResolution: true,
+                  // Exact required Tool selection preserves the toolkit. A oneOf
+                  // subset can drop other schemas and break the cached prefix.
                   ...(terminalToolChoiceOnly
                     ? agent.definition.completion === undefined
                       ? { toolChoice: "none" as const }
-                      : {
-                          toolChoice: {
-                            mode:
-                              agent.definition.completion.required === true
-                                ? ("required" as const)
-                                : ("auto" as const),
-                            oneOf: [agent.definition.completion.tool],
-                          },
-                        }
+                      : agent.definition.completion.required === true
+                        ? { toolChoice: { tool: agent.definition.completion.tool } }
+                        : {
+                            toolChoice: {
+                              mode: "auto" as const,
+                              oneOf: [agent.definition.completion.tool],
+                            },
+                          }
                     : agent.definition.completion?.required === true
                       ? { toolChoice: "required" as const }
                       : {}),

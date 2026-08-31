@@ -1304,7 +1304,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       );
       expect(failureFrom(exit)).toMatchObject({ _tag: "AgentPolicyError", limit: "turns" });
       expect(requests).toHaveLength(2);
-      expect(requests[1]?.toolChoice).toEqual({ mode: "required", oneOf: ["finish"] });
+      expect(requests[1]?.toolChoice).toEqual({ tool: "finish" });
       expect(yield* Ref.get(deliveryStarts)).toBe(1);
     }),
   );
@@ -1353,8 +1353,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
 
       expect(requests).toHaveLength(1);
       expect(requests[0]?.toolChoice).toEqual({
-        mode: "required",
-        oneOf: ["post_message"],
+        tool: "post_message",
       });
       expect(yield* Ref.get(searchStarts)).toBe(0);
       expect(yield* Ref.get(deliveryStarts)).toBe(1);
@@ -1415,8 +1414,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         limit: "turns",
       });
       expect(researchRequests[0]?.toolChoice).toEqual({
-        mode: "required",
-        oneOf: ["post_message"],
+        tool: "post_message",
       });
       expect(yield* Ref.get(searchStarts)).toBe(0);
       expect(yield* Ref.get(deliveryStarts)).toBe(1);
@@ -1743,10 +1741,9 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         }).pipe(Effect.provide(toolLayer));
 
         expect(requests).toHaveLength(1);
-        expect(requests[0]?.toolChoice).toEqual({
-          mode: required ? "required" : "auto",
-          oneOf: ["post_message"],
-        });
+        expect(requests[0]?.toolChoice).toEqual(
+          required ? { tool: "post_message" } : { mode: "auto", oneOf: ["post_message"] },
+        );
         expect(result).toMatchObject({
           output: { message: "reserved", messageId: "message-reserved" },
           finishReason: "budget-exhausted",
@@ -2840,7 +2837,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         expect(result.finishReason).toBe(singleTurn ? "model-stop" : "budget-exhausted");
         expect(result.exhausted).toBe(singleTurn ? undefined : "tokens");
         expect(requests.map((request) => request.toolChoice)).toEqual(
-          required ? ["required", { mode: "required", oneOf: ["post_message"] }] : ["auto"],
+          required ? ["required", { tool: "post_message" }] : ["auto"],
         );
         expect(deliveries).toEqual(required ? ["delivered"] : []);
       }),

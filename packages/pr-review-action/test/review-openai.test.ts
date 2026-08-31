@@ -251,12 +251,148 @@ describe("review provider boundary", () => {
     }),
   );
 
-  it.effect.each(["complete", "cost-empty", "cost-finding"] as const)(
+  it.effect.each(["hit", "miss"] as const)(
+    "continues after PR #258's cached usage while reserving a full cache %s",
+    (cache) =>
+      Effect.gen(function* () {
+        const sent: Array<WireRequest> = [];
+        // The first six usage reports and batch sizes are from the live review.
+        // The remaining research and completion are scripted, not measured improvement.
+        const usage = [
+          rawUsage(10_100, 320, 0, 9_919),
+          rawUsage(22_327, 1_349, 9_919, 12_225),
+          rawUsage(33_358, 586, 22_144, 11_031),
+          rawUsage(45_650, 485, 33_175, 12_292),
+          rawUsage(57_077, 539, 45_467, 11_427),
+          rawUsage(71_236, 394, 56_894, 14_159),
+          cache === "hit" ? rawUsage(80_000, 800, 71_053, 8_764) : rawUsage(80_000, 800),
+          rawUsage(81_000, 200, 79_817, 1_000),
+        ];
+        const researchBatches = [8, 9, 10, 10, 10, 10];
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.sync(() => {
+              const current = usage[sent.length];
+              if (current === undefined) throw new Error("Unexpected additional model request");
+              if (url.pathname.endsWith("/input_tokens"))
+                return json(httpRequest, {
+                  object: "response.input_tokens",
+                  input_tokens: current.input_tokens,
+                });
+              const batchSize = researchBatches[sent.length];
+              sent.push(decodeWire(httpRequest));
+              return sse(
+                httpRequest,
+                sent.length,
+                batchSize !== undefined
+                  ? Array.from({ length: batchSize }, () => read)
+                  : sent.length === 7
+                    ? [record, read]
+                    : [submit],
+                current,
+              );
+            }),
+          ),
+        );
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "cached-research",
+        });
+        const result = yield* makeReviewer({ model, costControl: provider.costControl })
+          .review(request)
+          .pipe(
+            Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+            Effect.provideService(ReviewRepository, repository),
+          );
+
+        expect(sent).toHaveLength(cache === "hit" ? 8 : 7);
+        expect(sent[6]?.max_output_tokens).toBe(4_992);
+        for (const wire of sent) {
+          expect(wire.tools).toEqual(sent[0]?.tools);
+          expect(wire.tool_choice).toBe("required");
+          expect(wire.model).toBe("gpt-5.6-sol");
+          expect(wire.reasoning).toEqual({ effort: "xhigh" });
+        }
+        expect(result.report.findings.map((item) => item.title)).toEqual([finding.title]);
+        expect(result.exhausted).toBe(cache === "hit" ? undefined : "cost");
+        expect(result.incomplete).toBe(cache === "hit" ? undefined : true);
+        expect(result.usage.estimatedCostMicrousd).toBe(cache === "hit" ? 630_783 : 916_150);
+        expect(result.usage.reservedCostMicrousd).toBe(0);
+        if (cache === "miss")
+          expect(result.report.summary).toContain("remaining change has not been verified");
+      }),
+  );
+
+  it.effect("preserves cached tool schemas through the required completion turn", () =>
+    Effect.gen(function* () {
+      const sent: Array<WireRequest> = [];
+      const native = yield* makeNative(
+        HttpClient.make((httpRequest, url) =>
+          Effect.sync(() => {
+            const input = 20_000 + sent.length * 1_000;
+            if (url.pathname.endsWith("/input_tokens"))
+              return json(httpRequest, { object: "response.input_tokens", input_tokens: input });
+            sent.push(decodeWire(httpRequest));
+            return sse(
+              httpRequest,
+              sent.length,
+              sent.length === 9 ? [submit] : sent.length === 1 ? [record, read] : [read],
+              rawUsage(input, 100, sent.length === 1 ? 0 : input - 1_000),
+            );
+          }),
+        ),
+      );
+      const provider = yield* makeReviewOpenAi({
+        client: native,
+        model: "gpt-5.6-sol",
+        cacheKey: "completion-prefix",
+      });
+      const result = yield* makeReviewer({ model, costControl: provider.costControl })
+        .review(request)
+        .pipe(
+          Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+          Effect.provideService(ReviewRepository, repository),
+        );
+
+      expect(sent).toHaveLength(9);
+      const research = sent[7];
+      const completion = sent[8];
+      if (research === undefined || completion === undefined)
+        throw new Error("Missing research or completion request");
+      expect(completion.tools).toEqual(research.tools);
+      expect(completion.tool_choice).toEqual({ type: "function", name: "submit_review" });
+      expect(research.tool_choice).toBe("required");
+      expect(completion.input.slice(0, research.input.length - 1)).toEqual(
+        research.input.slice(0, -1),
+      );
+      expect(result.exhausted).toBe("turns");
+      expect(result.report.findings.map((item) => item.title)).toEqual([finding.title]);
+      expect(result.usage.estimatedCostMicrousd).toBeLessThan(REVIEW_COST_LIMIT_MICROUSD);
+    }),
+  );
+
+  it.effect.each([
+    "complete",
+    "cost-empty",
+    "cost-finding",
+    "protocol-empty",
+    "protocol-finding",
+  ] as const)(
     "recovers an automatic review after a rebase with outcome %s under the same cap",
     (outcome) =>
       Effect.gen(function* () {
         const complete = outcome === "complete";
-        const hasFinding = outcome === "cost-finding";
+        const protocolFailure = outcome.startsWith("protocol");
+        const hasFinding = outcome.endsWith("finding");
+        const logs: Array<unknown> = [];
+        // Accounted usage from PR #257, with a scripted invalid final response.
+        const protocolUsage = [
+          rawUsage(52_260, 542, 0, 52_079),
+          rawUsage(73_026, 1_476, 52_079, 20_764),
+          rawUsage(93_225, 770, 72_843, 20_199),
+          rawUsage(68_587, 166, 0, 68_391),
+        ];
         const published: Array<{
           readonly commit_id: string;
           readonly event: string;
@@ -271,7 +407,10 @@ describe("review provider boundary", () => {
         const client = HttpClient.make((httpRequest, url) =>
           Effect.sync(() => {
             if (url.pathname === "/v1/responses/input_tokens")
-              return json(httpRequest, { object: "response.input_tokens", input_tokens: 70_000 });
+              return json(httpRequest, {
+                object: "response.input_tokens",
+                input_tokens: protocolFailure ? protocolUsage[modelCalls]?.input_tokens : 70_000,
+              });
             if (url.pathname === "/v1/responses") {
               modelCalls += 1;
               const input = Schema.decodeUnknownSync(
@@ -283,8 +422,16 @@ describe("review provider boundary", () => {
               return sse(
                 httpRequest,
                 modelCalls,
-                complete ? [submit] : hasFinding ? [record, read] : [read],
-                rawUsage(70_000, complete ? 100 : 32_000),
+                protocolFailure && modelCalls === 4
+                  ? []
+                  : complete
+                    ? [submit]
+                    : hasFinding && modelCalls === 1
+                      ? [record, read]
+                      : [read],
+                protocolFailure
+                  ? protocolUsage[modelCalls - 1]
+                  : rawUsage(70_000, complete ? 100 : 32_000),
               );
             }
             if (httpRequest.method === "GET" && url.pathname.endsWith("/pulls/12"))
@@ -394,7 +541,14 @@ describe("review provider boundary", () => {
             }),
           ),
           Effect.provideService(HttpClient.HttpClient, client),
-          Effect.provide(NodeServices.layer),
+          Effect.provide([
+            NodeServices.layer,
+            Logger.layer([
+              Logger.make<unknown, void>(({ message }) => {
+                logs.push(message);
+              }),
+            ]),
+          ]),
           Effect.exit,
         );
         expect(Exit.isSuccess(exit)).toBe(complete);
@@ -403,7 +557,7 @@ describe("review provider boundary", () => {
             _tag: hasFinding ? "BlockingFindings" : "ReviewAttemptIncomplete",
           });
         }
-        expect(modelCalls).toBe(1);
+        expect(modelCalls).toBe(protocolFailure ? 4 : 1);
         expect(published).toHaveLength(1);
         expect(published[0]).toMatchObject({
           commit_id: "head",
@@ -418,6 +572,20 @@ describe("review provider boundary", () => {
           expect(published[0]?.body).toContain("1 supplied");
         }
         expect(published[0]?.body).toContain("$0.999999 spending ceiling");
+        if (protocolFailure) {
+          expect(published[0]?.body).toContain("model protocol error");
+          expect(published[0]?.body).toContain("4 model calls");
+          expect(published[0]?.body).toContain("287,098 input");
+          expect(published[0]?.body).toContain("$0.9192");
+          expect(published[0]?.body).not.toContain("✅");
+          expect(logs).toContainEqual([
+            "Review model usage",
+            expect.objectContaining({ modelCall: 4, functionCalls: 0, completionCalls: 0 }),
+          ]);
+          expect(JSON.stringify(logs)).not.toContain("openai-fixture");
+          expect(JSON.stringify(logs)).not.toContain("github-fixture");
+          expect(JSON.stringify(logs)).not.toContain("export const value");
+        }
       }),
   );
 

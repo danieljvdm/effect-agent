@@ -115,6 +115,9 @@ export class ReviewCostSnapshot extends Schema.Class<ReviewCostSnapshot>(
  * A host must reserve the full possible charge before provider I/O. If admission
  * stops, the reviewer delivers recorded findings without another model request.
  * This port reports that decision; it does not enforce a spending limit itself.
+ * Supplying it replaces the cumulative token quota with the host's admission;
+ * per-context, turn, tool, and duration limits still apply. Accounted attempts
+ * return incomplete outcomes on expected failure, even without findings.
  */
 export interface ReviewCostControl {
   readonly snapshot: Effect.Effect<ReviewCostSnapshot>;
@@ -221,19 +224,22 @@ const reviewRecording = Toolkit.make(
     .annotate(Tool.Readonly, true),
 );
 
-const reviewPolicy = AgentPolicy.make({
-  maxTurns: 8,
-  maxToolCalls: 64,
-  maxDuration: "5 minutes",
-  toolConcurrency: 4,
-  repeatedFailureLimit: 0,
-  contextTokenLimit: 128_000,
-  tokenBudget: 416_000,
-  // Reserve a full 128k context and a 32k completion response.
-  completionReserveTokens: 160_000,
-  onExhaustion: "final-answer",
-  runStatus: "appended",
-});
+const reviewPolicy = (costAdmitted: boolean) =>
+  AgentPolicy.make({
+    maxTurns: 8,
+    maxToolCalls: 64,
+    maxDuration: "5 minutes",
+    toolConcurrency: 4,
+    repeatedFailureLimit: 0,
+    contextTokenLimit: 128_000,
+    // A raw cumulative quota counts cached reads at full weight. Hosts with
+    // spending admission already reserve every call, including final delivery.
+    ...(costAdmitted
+      ? { completionReserveTokens: 0 }
+      : { tokenBudget: 416_000, completionReserveTokens: 160_000 }),
+    onExhaustion: "final-answer",
+    runStatus: "appended",
+  });
 
 const instructions = (guidance?: string) =>
   `${REVIEW_INSTRUCTIONS}${guidance === undefined || guidance.trim().length === 0 ? "" : `\n\nRepository guidance:\n${guidance.trim()}`}`;
@@ -342,7 +348,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         required: true,
         project: ({ parameters }) => parameters,
       },
-      policy: reviewPolicy,
+      policy: reviewPolicy(options.costControl !== undefined),
       description: "Review every admitted change and report concrete defects.",
       metadata: { deploymentClass: "E", surface: "read-only" },
     }),
@@ -403,7 +409,9 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       const saved = yield* Ref.get(recorded);
       const cost =
         options.costControl === undefined ? undefined : yield* options.costControl.snapshot;
-      if (Result.isFailure(result) && cost?.stopped !== true && saved.length === 0) {
+      const preserveAttempt =
+        cost?.stopped === true || (cost?.modelCalls ?? 0) > 0 || saved.length > 0;
+      if (Result.isFailure(result) && !preserveAttempt) {
         return yield* result.failure;
       }
       const submitted = Result.isSuccess(result)
@@ -411,7 +419,14 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         : Result.succeed(
             ReviewReport.make({ summary: "Research stopped before completion.", findings: [] }),
           );
-      if (Result.isFailure(submitted) && saved.length === 0) return yield* submitted.failure;
+      if (Result.isFailure(submitted) && !preserveAttempt) return yield* submitted.failure;
+      const failure = Result.isFailure(result)
+        ? result.failure
+        : Result.isFailure(submitted)
+          ? submitted.failure
+          : undefined;
+      if (failure !== undefined)
+        yield* Effect.logWarning("Review stopped before completion", { failureType: failure._tag });
       const combined = [...saved];
       if (Result.isSuccess(submitted)) {
         for (const finding of submitted.success.findings) {
@@ -433,7 +448,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
           exhausted !== undefined
             ? `Review stopped at the ${exhausted} budget. These findings cover the investigation completed before finalization; the remaining change has not been verified.`
             : incomplete
-              ? "The investigation did not complete. Recorded findings are preserved; the remaining change has not been verified."
+              ? `${failure?._tag === "ModelProtocolError" ? "The review stopped after a model protocol error." : "The investigation did not complete."} Recorded findings are preserved; the remaining change has not been verified.`
               : reviewSummary(request, combined),
       });
       // Diagnostics deliberately contain counts only, never source or model-authored prose.

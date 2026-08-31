@@ -61,6 +61,8 @@ also applies once to the token budget.
    has. No handler runs; in the DN and DC assemblies the batch is never durably declared.
 2. Every subsequent model request forbids tool use (Effect AI `toolChoice: "none"`) unless the
    Definition owns a completion Tool, in which case only that Tool remains available.
+   Required completion uses `toolChoice: { tool: name }`, preserving the declared toolkit while
+   selecting exactly one Tool. The engine still rejects other or mixed Tool Calls before execution.
 3. Turn exhaustion admits exactly **one grace Turn** past `maxTurns`, under the same constraint.
    A second grace is structurally impossible.
 4. The Run settles _completed_ with `finishReason: "budget-exhausted"`, never a plain
@@ -182,8 +184,10 @@ declared-plus-programmatic count.
   one Tool Call and each batch one Turn, so `maxTurns` usually binds before `maxToolCalls`; raise
   them together, and let the soft landing convert the residual tail into a partial cited answer
   instead of provisioning for the worst case.
-- **Treat the token budget as the spend ceiling.** The runtime permits one constrained final answer.
-  Set `tokenBudget` high enough to cover that call, but keep it finite.
+- **Distinguish token limits from spending admission.** Cached input and output have different
+  prices, and observed usage can cross a token threshold before the runtime stops. A strict dollar
+  ceiling requires the host to reserve each request's maximum charge before provider I/O, including
+  finalization and possible cache misses. A token quota alone cannot enforce that ceiling.
 - **Delegate instead of raising.** If independent work needs 100 Tool Calls, five scouts with 20
   calls each may fit better. Give each invocation its own allowance and grant extensions only
   when the partial result justifies them.

@@ -36,8 +36,8 @@ budget failures include the exhausted limit and observed usage.
 Failure comments on an unchanged head also report budget exhaustion without exposing provider
 diagnostics or model output.
 
-The reviewer sees its remaining research budget and reserved completion capacity. If token,
-turn, tool, or cost limits stop research, the Action publishes established findings with an incomplete-coverage
+The reviewer sees its remaining turns and tool calls. If turn, tool, or cost limits stop
+research, the Action publishes established findings with an incomplete-coverage
 warning and fails the check, including when no defects were found. Such an attempt cannot become
 an incremental baseline or clear an earlier change request. This preserves useful findings without
 claiming the full change was reviewed.
@@ -68,22 +68,28 @@ labeled `None recorded · incomplete`, never given a green check or counted as a
 
 This is a client admission guarantee under the pinned pricing and token-count contracts, not an
 invoice audit or an OpenAI account spending limit. Usage estimates remain separate from outstanding
-reservations. Each review's logs and footer show model calls, ordinary input, cache reads, cache
-writes, output, cache-hit ratio, and estimated cost. Raw provider failure causes, credentials, and
-repository source are excluded from the Action's diagnostics.
+reservations. Expected model or validation failures after a provider attempt retain an incomplete
+report with those diagnostics even when no finding was recorded. Each review's logs and footer
+show model calls, ordinary input, cache reads, cache writes, output, cache-hit ratio, and estimated
+cost. Raw provider failure causes, credentials, and
+repository source are excluded from the Action's diagnostics. Logs also count supplied tool
+definitions, returned function calls, and completion calls to diagnose protocol failures.
 
 Each admitted patch reaches the model once as literal unified diff text. The native Agent input
 projection keeps all supplied changes while avoiding JSON-escaped source and duplicated old/new
 context. A large remaining input can still prevent another call before the observed spend reaches
 $1, because admission must cover a cache miss. Refusal logs report the counted input, remaining
-balance, and minimum possible request reservation. Cached input also still counts toward the
-reviewer's cumulative token limit.
+balance, and minimum possible request reservation. The Action's spending admission replaces the
+reviewer's cumulative token quota, so reusing cached context does not force early finalization.
+The 8 research turns, 64 tool calls, 5 minutes, and 128,000-token context bounds still apply.
 
 The Action uses explicit-only caching with a 30-minute TTL and a stable head-based routing key.
 It marks reusable instructions, the diff, and completed tool batches before the ephemeral run-status
 message, retaining earlier boundaries as history grows. Cache fields are added only at the native
 Effect OpenAI client boundary; canonical history and provider encoding remain unchanged. This works
 with the pinned Effect `4.0.0-rc.111` client, which serializes the additional request fields unchanged.
+Required finalization selects `submit_review` through the native exact-tool choice, preserving
+the research tool definitions and their order in the encoded request.
 Compaction can change prefixes, and routing and cache availability still affect hits. See
 [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
 
