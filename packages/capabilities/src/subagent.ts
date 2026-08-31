@@ -6,6 +6,7 @@ import {
   DelegationTool,
   delegationToolPrefix,
   IdGenerator,
+  type InputPromptSource,
   isDelegationToolName,
   RunId,
   SubmissionId,
@@ -377,7 +378,9 @@ export interface SubagentDefineOptions<
     TargetInput,
     TargetOutput,
     TargetInstructions,
-    Toolkit.Toolkit<TargetTools>
+    Toolkit.Toolkit<TargetTools>,
+    undefined,
+    unknown
   >;
   /** Schema for the model-decoded delegation parameters. */
   readonly parameters: Parameters;
@@ -793,6 +796,8 @@ export type SubagentChildRunFailure<
   ModelRequires,
   InstructionError = InstructionErrorOf<TargetInstructions, TargetInput["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<TargetInstructions, TargetInput["Type"]>,
+  InputPromptValue extends InputPromptSource<TargetInput["Type"], unknown, unknown> | undefined =
+    undefined,
 > = AgentRuntimeFailure<
   RuntimeBinding<
     TargetInput,
@@ -803,7 +808,9 @@ export type SubagentChildRunFailure<
     ModelProvides,
     ModelRequires,
     InstructionError,
-    InstructionRequirements
+    InstructionRequirements,
+    undefined,
+    InputPromptValue
   >,
   never,
   InstructionError
@@ -829,6 +836,8 @@ export type SubagentLayerRequirements<
   HookRequirements = never,
   InstructionError = InstructionErrorOf<TargetInstructions, TargetInput["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<TargetInstructions, TargetInput["Type"]>,
+  InputPromptValue extends InputPromptSource<TargetInput["Type"], unknown, unknown> | undefined =
+    undefined,
 > =
   | AgentRuntimeRequirements<
       RuntimeBinding<
@@ -840,7 +849,9 @@ export type SubagentLayerRequirements<
         ModelProvides,
         ModelRequires,
         InstructionError,
-        InstructionRequirements
+        InstructionRequirements,
+        undefined,
+        InputPromptValue
       >,
       HookRequirements,
       InstructionRequirements
@@ -1127,6 +1138,8 @@ const layer = <
   Mode extends SubagentFailureMode = "error",
   InstructionError = InstructionErrorOf<TargetInstructions, TargetInput["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<TargetInstructions, TargetInput["Type"]>,
+  InputPromptValue extends InputPromptSource<TargetInput["Type"], unknown, unknown> | undefined =
+    undefined,
 >(
   delegation: SubagentDelegation<
     Name,
@@ -1150,7 +1163,9 @@ const layer = <
     ModelProvides,
     ModelRequires,
     InstructionError,
-    InstructionRequirements
+    InstructionRequirements,
+    undefined,
+    InputPromptValue
   >,
   options: SubagentRuntimeOptions<
     Failure,
@@ -1163,7 +1178,8 @@ const layer = <
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      InputPromptValue
     >,
     HookRequirements
   >,
@@ -1182,7 +1198,8 @@ const layer = <
     ProjectRequirements,
     HookRequirements,
     InstructionError,
-    InstructionRequirements
+    InstructionRequirements,
+    InputPromptValue
   >
 > => {
   const caps = options.parentCaps ?? delegationCapsFromPolicy(delegation.policy);
@@ -1265,7 +1282,8 @@ const layer = <
           ProjectRequirements,
           HookRequirements,
           InstructionError,
-          InstructionRequirements
+          InstructionRequirements,
+          InputPromptValue
         >
       >();
 
@@ -1440,7 +1458,9 @@ const layer = <
         never,
         HookRequirements,
         InstructionError,
-        InstructionRequirements
+        InstructionRequirements,
+        undefined,
+        InputPromptValue
       >(
         childBinding,
         encodedInput,

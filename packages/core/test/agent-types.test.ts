@@ -38,6 +38,14 @@ class InstructionFailure extends Schema.TaggedError<InstructionFailure>()("Instr
   message: Schema.String,
 }) {}
 
+class InputPromptContext extends Context.Service<InputPromptContext, { readonly prefix: string }>()(
+  "@effect-agent/core/test/InputPromptContext",
+) {}
+
+class InputPromptFailure extends Schema.TaggedError<InputPromptFailure>()("InputPromptFailure", {
+  message: Schema.String,
+}) {}
+
 class AvailabilityFailure extends Schema.TaggedError<AvailabilityFailure>()("AvailabilityFailure", {
   message: Schema.String,
 }) {}
@@ -93,6 +101,29 @@ const definition = Agent.define("type-proof", {
   }),
 });
 const agent = Agent.withModel(definition, model);
+
+const inputPromptDefinition = Agent.define("input-prompt-type-proof", {
+  input: Schema.Struct({ destination: Schema.String }),
+  output: Schema.Struct({ summary: Schema.String }),
+  instructions: "Answer as JSON.",
+  inputPrompt: ({ destination }) =>
+    destination === ""
+      ? []
+      : Effect.gen(function* () {
+          const context = yield* InputPromptContext;
+          if (context.prefix === "") {
+            return yield* InputPromptFailure.make({ message: "prefix is required" });
+          }
+          return `${context.prefix}${destination}`;
+        }),
+  toolkit: Toolkit.empty,
+  policy: AgentPolicy.make({
+    maxTurns: 1,
+    maxToolCalls: 1,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+});
 
 const RunDisposition = Schema.Literal("application-complete");
 const dispositionDefinition = Agent.define("disposition-type-proof", {
@@ -157,6 +188,15 @@ type DefinitionRequirementsProof = Assert<
   Equal<Agent.DefinitionRequirements<typeof definition>, ExpectedDefinitionRequirements>
 >;
 type FailureProof = Assert<Equal<Agent.Failure<typeof agent>, ExpectedFailure>>;
+type InputPromptRequirementsProof = Assert<
+  Equal<Agent.DefinitionRequirements<typeof inputPromptDefinition>, InputPromptContext>
+>;
+type InputPromptFailureProof = Assert<
+  Equal<
+    Extract<Agent.Failure<typeof inputPromptDefinition>, InputPromptFailure>,
+    InputPromptFailure
+  >
+>;
 type DefinitionIsNotRunnableProof = Assert<
   Equal<typeof definition extends Agent.Any ? true : false, false>
 >;
@@ -205,6 +245,8 @@ describe("Agent type inference", () => {
     const requirementsProof: RequirementsProof = true;
     const definitionRequirementsProof: DefinitionRequirementsProof = true;
     const failureProof: FailureProof = true;
+    const inputPromptRequirementsProof: InputPromptRequirementsProof = true;
+    const inputPromptFailureProof: InputPromptFailureProof = true;
     const definitionIsNotRunnableProof: DefinitionIsNotRunnableProof = true;
     const bindingRetainsNativeModelProof: BindingRetainsNativeModelProof = true;
     const inputProjectionProof: InputProjectionProof = true;
@@ -230,6 +272,8 @@ describe("Agent type inference", () => {
     expect(requirementsProof).toBe(true);
     expect(definitionRequirementsProof).toBe(true);
     expect(failureProof).toBe(true);
+    expect(inputPromptRequirementsProof).toBe(true);
+    expect(inputPromptFailureProof).toBe(true);
     expect(definitionIsNotRunnableProof).toBe(true);
     expect(bindingRetainsNativeModelProof).toBe(true);
     expect(inputProjectionProof).toBe(true);

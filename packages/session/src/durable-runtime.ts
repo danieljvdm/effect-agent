@@ -23,6 +23,7 @@ import {
   type RunEvent,
   type RunId,
   type RunDispositionDeclaration,
+  type InputPromptSource,
   type TurnId,
 } from "@effect-agent/core";
 import {
@@ -35,6 +36,7 @@ import {
   ContextCompactor,
   CompactionError,
   RunContextPreparationPassthrough,
+  renderInputPrompt,
   type RunContextPreparationError,
   type AgentRuntimeRequirements,
   type AgentCompletionProjectionRequirements,
@@ -770,18 +772,6 @@ const nowUtc: Effect.Effect<DateTime.Utc> = Effect.map(Clock.currentTimeMillis, 
 
 const decodePrompt = Schema.decodeUnknownEffect(Prompt.Prompt);
 const decodePersisted = Schema.decodeUnknownEffect(PersistedJson);
-const encodePersistedJsonString = Schema.encodeEffect(Schema.fromJsonString(PersistedJson));
-
-const encodeRunInput = (input: PersistedJson): Effect.Effect<string, RunJournalError> =>
-  encodePersistedJsonString(input).pipe(
-    Effect.mapError((cause) =>
-      RunJournalError.make({
-        message: "Canonical joined input failed to encode as JSON text",
-        cause,
-      }),
-    ),
-  );
-
 /** One application Tool Call declared inside a canonical `ModelResponseRecorded`'s messages. */
 interface DeclaredApplicationCall {
   readonly id: string;
@@ -3347,6 +3337,8 @@ const make = Effect.gen(function* () {
     RunDispositionValue extends
       | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
       | undefined = undefined,
+    InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+      undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -3358,7 +3350,8 @@ const make = Effect.gen(function* () {
       ModelRequires,
       InstructionError,
       InstructionRequirements,
-      RunDispositionValue
+      RunDispositionValue,
+      InputPromptValue
     >,
     ctx: AttemptAppendContext,
     submission: SubmissionSnapshot,
@@ -4446,124 +4439,154 @@ const make = Effect.gen(function* () {
        * so the next Turn's response commit makes it model-visible canonically — exactly the
        * prompt-coverage rule recovery relies on.
        */
-      const input: RunInputHook<CoordinatorHalt, never> = {
+      const renderJoinedInput = (encodedInput: PersistedJson) =>
+        Effect.gen(function* () {
+          const inputPrompt = agent.definition.inputPrompt;
+          if (inputPrompt === undefined) {
+            return yield* renderInputPrompt(undefined, encodedInput, encodedInput);
+          }
+          const decodedInput = yield* Schema.decodeUnknownEffect(agent.definition.input)(
+            encodedInput,
+          ).pipe(
+            Effect.mapError((cause) =>
+              AgentInputError.make({
+                message: cause.message,
+              }),
+            ),
+          );
+          return yield* renderInputPrompt(inputPrompt, decodedInput, encodedInput);
+        });
+
+      const input: RunInputHook<
+        CoordinatorHalt | Agent.Failure<typeof agent>,
+        Agent.DefinitionRequirements<(typeof agent)["definition"]>
+      > = {
         drain: (policy) =>
-          recordHalt(
-            Effect.gen(function* () {
-              const limit = policy === "one" ? 1 : MAX_JOIN_DRAIN;
-              const commands: Array<RunInputCommand> = [];
-              if (joinBacklog === undefined) {
-                const hostSnapshot = yield* ledger.loadRecoverySnapshot(
-                  RecoverySnapshotRequest.make({ submissionId }),
-                );
-                joinBacklog = hostSnapshot.joins;
-              }
-              for (const join of joinBacklog) {
-                if (commands.length >= limit) break;
-                const joinId = join.submissionId;
-                if (deliveredJoinInputs.has(joinId)) continue;
-                if (join.state !== "joining" && join.state !== "joined") continue;
-                const existing = joinedInputEnvelopes.get(joinId);
-                if (existing === undefined) continue;
-                if (join.state === "joining") {
-                  // Canonical input without its joined marker (crash between the append and
-                  // `markJoined`): repair the marker from history before reattaching.
-                  const ownershipToken = yield* Ref.get(tokenRef);
-                  yield* ledger.markJoined(
-                    MarkJoinedRequest.make({
-                      submissionId: joinId,
-                      ownershipToken,
-                      recordId: existing.record.recordId,
-                      sequence: existing.sequence,
-                    }),
+          Effect.gen(function* () {
+            const joinedInputs = yield* recordHalt(
+              Effect.gen(function* () {
+                const limit = policy === "one" ? 1 : MAX_JOIN_DRAIN;
+                const joinedInputs: Array<PersistedJson> = [];
+                if (joinBacklog === undefined) {
+                  const hostSnapshot = yield* ledger.loadRecoverySnapshot(
+                    RecoverySnapshotRequest.make({ submissionId }),
                   );
+                  joinBacklog = hostSnapshot.joins;
                 }
-                deliveredJoinInputs.add(joinId);
-                if (
-                  lastHostResponseSequence !== undefined &&
-                  lastHostResponseSequence > existing.sequence
-                ) {
-                  continue;
-                }
-                const payload = existing.record.payload;
-                if (payload._tag !== "UserInputRecorded") continue;
-                commands.push({ kind: "steering", input: yield* encodeRunInput(payload.input) });
-              }
-              if (commands.length < limit) {
-                const ownershipToken = yield* Ref.get(tokenRef);
-                const claims = yield* ledger.claimJoining(
-                  ClaimJoiningRequest.make({
-                    conversationId: submission.conversationId,
-                    hostSubmissionId: submissionId,
-                    ownershipToken,
-                    maxCount: limit - commands.length,
-                  }),
-                );
-                if (claims.length > 0) {
-                  yield* hit("join:after-claim");
-                }
-                for (const claim of claims) {
-                  const claimSnapshot = yield* ledger.loadRecoverySnapshot(
-                    RecoverySnapshotRequest.make({ submissionId: claim.submissionId }),
-                  );
-                  if (claimSnapshot.abortIntent !== undefined) {
-                    // Aborted before the host consumed the input: honor the intent by
-                    // returning the claim to ready (revert-then-abort, plan §2.5); it settles
-                    // aborted once it heads the lane.
-                    yield* ledger.revertJoining(
-                      RevertJoiningRequest.make({ submissionId: claim.submissionId }),
+                for (const join of joinBacklog) {
+                  if (joinedInputs.length >= limit) break;
+                  const joinId = join.submissionId;
+                  if (deliveredJoinInputs.has(joinId)) continue;
+                  if (join.state !== "joining" && join.state !== "joined") continue;
+                  const existing = joinedInputEnvelopes.get(joinId);
+                  if (existing === undefined) continue;
+                  if (join.state === "joining") {
+                    // Canonical input without its joined marker (crash between the append and
+                    // `markJoined`): repair the marker from history before reattaching.
+                    const ownershipToken = yield* Ref.get(tokenRef);
+                    yield* ledger.markJoined(
+                      MarkJoinedRequest.make({
+                        submissionId: joinId,
+                        ownershipToken,
+                        recordId: existing.record.recordId,
+                        sequence: existing.sequence,
+                      }),
                     );
+                  }
+                  deliveredJoinInputs.add(joinId);
+                  if (
+                    lastHostResponseSequence !== undefined &&
+                    lastHostResponseSequence > existing.sequence
+                  ) {
                     continue;
                   }
-                  const recordId = submissionInputRecordId(claim.submissionId);
-                  let sequence: CanonicalSequence;
-                  const existing = joinedInputEnvelopes.get(claim.submissionId);
-                  if (existing !== undefined) {
-                    // Defensive reattach: the exact record is already canonical, so only the
-                    // marker and the delivery remain (DUR-016 — never a duplicate append).
-                    sequence = existing.sequence;
-                  } else {
-                    const envelope = yield* makeEnvelope(
-                      recordId,
-                      UserInputRecorded.make({
-                        submissionId: claim.submissionId,
-                        kind: "steering",
-                        runId,
-                        input: claim.inputPayload,
-                      }),
-                    );
-                    const result = yield* appendBatch(
-                      ctx,
-                      CanonicalBatch.make({
-                        batchId: submissionInputBatchId(claim.submissionId),
-                        producerId: config.producerId,
-                        records: [envelope],
-                      }),
-                    );
-                    sequence = result.firstSequence;
-                    knownIds.add(recordId);
-                    yield* hit("join:after-canonical-append");
-                  }
-                  // Re-read the token: the concurrent lease renewal may rotate it mid-batch.
-                  const markToken = yield* Ref.get(tokenRef);
-                  yield* ledger.markJoined(
-                    MarkJoinedRequest.make({
-                      submissionId: claim.submissionId,
-                      ownershipToken: markToken,
-                      recordId,
-                      sequence,
+                  const payload = existing.record.payload;
+                  if (payload._tag !== "UserInputRecorded") continue;
+                  joinedInputs.push(payload.input);
+                }
+                if (joinedInputs.length < limit) {
+                  const ownershipToken = yield* Ref.get(tokenRef);
+                  const claims = yield* ledger.claimJoining(
+                    ClaimJoiningRequest.make({
+                      conversationId: submission.conversationId,
+                      hostSubmissionId: submissionId,
+                      ownershipToken,
+                      maxCount: limit - joinedInputs.length,
                     }),
                   );
-                  deliveredJoinInputs.add(claim.submissionId);
-                  commands.push({
-                    kind: "steering",
-                    input: yield* encodeRunInput(claim.inputPayload),
-                  });
+                  if (claims.length > 0) {
+                    yield* hit("join:after-claim");
+                  }
+                  for (const claim of claims) {
+                    const claimSnapshot = yield* ledger.loadRecoverySnapshot(
+                      RecoverySnapshotRequest.make({ submissionId: claim.submissionId }),
+                    );
+                    if (claimSnapshot.abortIntent !== undefined) {
+                      // Aborted before the host consumed the input: honor the intent by
+                      // returning the claim to ready (revert-then-abort, plan §2.5); it settles
+                      // aborted once it heads the lane.
+                      yield* ledger.revertJoining(
+                        RevertJoiningRequest.make({ submissionId: claim.submissionId }),
+                      );
+                      continue;
+                    }
+                    const recordId = submissionInputRecordId(claim.submissionId);
+                    let sequence: CanonicalSequence;
+                    const existing = joinedInputEnvelopes.get(claim.submissionId);
+                    if (existing !== undefined) {
+                      // Defensive reattach: the exact record is already canonical, so only the
+                      // marker and the delivery remain (DUR-016 — never a duplicate append).
+                      sequence = existing.sequence;
+                    } else {
+                      const envelope = yield* makeEnvelope(
+                        recordId,
+                        UserInputRecorded.make({
+                          submissionId: claim.submissionId,
+                          kind: "steering",
+                          runId,
+                          input: claim.inputPayload,
+                        }),
+                      );
+                      const result = yield* appendBatch(
+                        ctx,
+                        CanonicalBatch.make({
+                          batchId: submissionInputBatchId(claim.submissionId),
+                          producerId: config.producerId,
+                          records: [envelope],
+                        }),
+                      );
+                      sequence = result.firstSequence;
+                      knownIds.add(recordId);
+                      yield* hit("join:after-canonical-append");
+                    }
+                    // Re-read the token: the concurrent lease renewal may rotate it mid-batch.
+                    const markToken = yield* Ref.get(tokenRef);
+                    yield* ledger.markJoined(
+                      MarkJoinedRequest.make({
+                        submissionId: claim.submissionId,
+                        ownershipToken: markToken,
+                        recordId,
+                        sequence,
+                      }),
+                    );
+                    deliveredJoinInputs.add(claim.submissionId);
+                    joinedInputs.push(claim.inputPayload);
+                  }
                 }
-              }
-              return commands;
-            }),
-          ),
+                return joinedInputs;
+              }),
+            );
+            return yield* Effect.forEach(joinedInputs, (joinedInput) =>
+              renderJoinedInput(joinedInput).pipe(
+                Effect.map(
+                  (input): RunInputCommand => ({
+                    kind: "steering",
+                    input,
+                  }),
+                ),
+              ),
+            );
+          }),
       };
 
       /**
@@ -4933,8 +4956,11 @@ const make = Effect.gen(function* () {
       };
 
       const options: RunOptions<
-        CoordinatorHalt | CompactionError | RunContextPreparationError,
-        never
+        | CoordinatorHalt
+        | CompactionError
+        | RunContextPreparationError
+        | Agent.Failure<typeof agent>,
+        Agent.DefinitionRequirements<(typeof agent)["definition"]>
       > = {
         conversationId: submission.conversationId,
         runId,
@@ -5435,6 +5461,8 @@ const make = Effect.gen(function* () {
     RunDispositionValue extends
       | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
       | undefined = undefined,
+    InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+      undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -5446,7 +5474,8 @@ const make = Effect.gen(function* () {
       ModelRequires,
       InstructionError,
       InstructionRequirements,
-      RunDispositionValue
+      RunDispositionValue,
+      InputPromptValue
     >,
     conversationId: ConversationId,
     claim: Claim,
@@ -5889,6 +5918,8 @@ const make = Effect.gen(function* () {
     RunDispositionValue extends
       | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
       | undefined = undefined,
+    InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+      undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -5900,7 +5931,8 @@ const make = Effect.gen(function* () {
       ModelRequires,
       InstructionError,
       InstructionRequirements,
-      RunDispositionValue
+      RunDispositionValue,
+      InputPromptValue
     >,
     conversationId: ConversationId,
   ) =>
@@ -7519,6 +7551,8 @@ const make = Effect.gen(function* () {
     RunDispositionValue extends
       | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
       | undefined = undefined,
+    InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+      undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -7530,7 +7564,8 @@ const make = Effect.gen(function* () {
       ModelRequires,
       InstructionError,
       InstructionRequirements,
-      RunDispositionValue
+      RunDispositionValue,
+      InputPromptValue
     >,
   ) =>
     Effect.gen(function* () {
@@ -7737,6 +7772,9 @@ export class DurableAgentRuntime extends Context.Service<
       RunDispositionValue extends
         | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
         | undefined = undefined,
+      InputPromptValue extends
+        | InputPromptSource<InputSchema["Type"], unknown, unknown>
+        | undefined = undefined,
     >(
       agent: RuntimeBinding<
         InputSchema,
@@ -7748,7 +7786,8 @@ export class DurableAgentRuntime extends Context.Service<
         ModelRequires,
         InstructionError,
         InstructionRequirements,
-        RunDispositionValue
+        RunDispositionValue,
+        InputPromptValue
       >,
       conversationId: ConversationId,
     ) => Effect.Effect<
@@ -7765,7 +7804,8 @@ export class DurableAgentRuntime extends Context.Service<
           ModelRequires,
           InstructionError,
           InstructionRequirements,
-          RunDispositionValue
+          RunDispositionValue,
+          InputPromptValue
         >,
         InstructionRequirements
       >
@@ -7790,6 +7830,9 @@ export class DurableAgentRuntime extends Context.Service<
       RunDispositionValue extends
         | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
         | undefined = undefined,
+      InputPromptValue extends
+        | InputPromptSource<InputSchema["Type"], unknown, unknown>
+        | undefined = undefined,
     >(
       agent: RuntimeBinding<
         InputSchema,
@@ -7801,7 +7844,8 @@ export class DurableAgentRuntime extends Context.Service<
         ModelRequires,
         InstructionError,
         InstructionRequirements,
-        RunDispositionValue
+        RunDispositionValue,
+        InputPromptValue
       >,
     ) => Effect.Effect<
       void,
@@ -7817,7 +7861,8 @@ export class DurableAgentRuntime extends Context.Service<
           ModelRequires,
           InstructionError,
           InstructionRequirements,
-          RunDispositionValue
+          RunDispositionValue,
+          InputPromptValue
         >,
         InstructionRequirements
       >

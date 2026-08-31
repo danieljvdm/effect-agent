@@ -42,6 +42,7 @@ import type { PlatformError } from "effect";
 import {
   Cause,
   Context,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -55,7 +56,7 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import {
@@ -138,7 +139,7 @@ const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncoded> => 
 ];
 
 const makeScriptedModel = Effect.fn("PlatformNodeTest.makeScriptedModel")(function* (
-  script: (call: number) => ReadonlyArray<Response.StreamPartEncoded>,
+  script: (call: number, prompt: Prompt.Prompt) => ReadonlyArray<Response.StreamPartEncoded>,
 ) {
   const calls = yield* Ref.make(0);
   return Model.make(
@@ -148,10 +149,10 @@ const makeScriptedModel = Effect.fn("PlatformNodeTest.makeScriptedModel")(functi
       LanguageModel.LanguageModel,
       LanguageModel.make({
         generateText: () => Effect.succeed([]),
-        streamText: () =>
+        streamText: ({ prompt }) =>
           Stream.unwrap(
             Ref.getAndUpdate(calls, (call) => call + 1).pipe(
-              Effect.map((call) => Stream.fromIterable(script(call))),
+              Effect.map((call) => Stream.fromIterable(script(call, prompt))),
             ),
           ),
       }),
@@ -520,6 +521,218 @@ describe("NodeDurableRuntime", () => {
         }
       }),
     ),
+  );
+
+  it.effect("keeps projected root and joined inputs private across Node host recovery", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const sentinel = "HOST-ONLY-INPUT-SENTINEL";
+        const requests: Array<Prompt.Prompt> = [];
+        const authorizedInputs: Array<unknown> = [];
+        const projectedInputs: Array<string> = [];
+        const inputSchema = Schema.Struct({ question: Schema.String, hostOnly: Schema.String });
+        const tools = Toolkit.make(
+          Tool.make("lookup", {
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+          }).annotate(ToolExecutionClass, "readonly"),
+        );
+        const model = yield* makeScriptedModel((call, prompt) => {
+          requests.push(prompt);
+          expect(JSON.stringify(prompt)).not.toContain(sentinel);
+          return call === 0
+            ? [
+                {
+                  type: "tool-call",
+                  id: "lookup-projected-input",
+                  name: "lookup",
+                  params: {},
+                  providerExecuted: false,
+                },
+                { type: "finish", reason: "tool-calls", usage },
+              ]
+            : finalParts('{"answer":"done"}');
+        });
+        const agent = Agent.withModel(
+          Agent.define("node-input-projection", {
+            input: inputSchema,
+            output: Schema.Struct({ answer: Schema.String }),
+            instructions: "Answer the public question.",
+            inputPrompt: (input) =>
+              Effect.sync(() => {
+                expect(input.hostOnly).toBe(sentinel);
+                projectedInputs.push(input.question);
+                return Prompt.make([
+                  { role: "user", content: [{ type: "text", text: input.question }] },
+                ]);
+              }),
+            toolkit: tools,
+            policy: plannerDefinition.policy,
+          }),
+          model,
+        );
+        const conversationId = decodeConversationId("node-input-projection");
+        const rootInput = { question: "public root question", hostOnly: sentinel };
+        const joinedInput = { question: "public joined question", hostOnly: sentinel };
+        const handlers = tools.toLayer({ lookup: () => Effect.succeed("public result") });
+        const toolAuthorization = Layer.succeed(RunToolAuthorization, {
+          authorize: ({ input }) =>
+            Effect.sync(() => {
+              authorizedInputs.push(input);
+              return { _tag: "allowed" as const };
+            }),
+        });
+        for (const incarnation of [1, 2, 3]) {
+          yield* withHost(
+            runtimeOptions(filename, {
+              toolAuthorization,
+              runtimeFailpoint: (location) =>
+                (incarnation === 1 && location === "join:after-canonical-append") ||
+                (incarnation === 2 && location === "turn:after-response-append")
+                  ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
+                  : Effect.void,
+            }),
+            Effect.gen(function* () {
+              const runtime = yield* DurableAgentRuntime;
+              if (incarnation === 1) {
+                yield* runtime.submit(agent, rootInput, submitOptions(conversationId, "root"));
+                yield* runtime.submit(agent, joinedInput, submitOptions(conversationId, "joined"));
+              }
+              const result = yield* Effect.exit(runtime.processConversation(agent, conversationId));
+              if (incarnation < 3) {
+                expect(failureOf(result)).toHaveProperty("_tag", "DurableRuntimeFailpointError");
+              } else {
+                expect(Exit.isSuccess(result)).toBe(true);
+                const store = yield* ConversationStore;
+                const records = yield* Stream.runCollect(
+                  store.read(ConversationRead.make({ conversationId, limit: 1_024 })),
+                );
+                const inputs = records.flatMap(({ record }) =>
+                  record.payload._tag === "UserInputRecorded" ? [record.payload.input] : [],
+                );
+                expect(inputs).toEqual([rootInput, joinedInput]);
+                const responses = records.filter(
+                  ({ record }) => record.payload._tag === "ModelResponseRecorded",
+                );
+                expect(responses).toHaveLength(2);
+                expect(JSON.stringify(responses)).not.toContain(sentinel);
+                const settlements = records.flatMap(({ record }) =>
+                  record.payload._tag === "SubmissionSettled" ? [record.payload.outcome] : [],
+                );
+                expect(settlements).toEqual(["completed", "completed"]);
+              }
+            }).pipe(Effect.provide(handlers)),
+          );
+        }
+        expect(requests).toHaveLength(2);
+        for (const request of requests) {
+          expect(JSON.stringify(request)).toContain(rootInput.question);
+          expect(JSON.stringify(request)).toContain(joinedInput.question);
+        }
+        expect(authorizedInputs).toEqual([rootInput]);
+        expect(projectedInputs).toContain(joinedInput.question);
+      }),
+    ),
+  );
+
+  it.effect.each([
+    { mode: "failure", kind: "root" },
+    { mode: "interruption", kind: "root" },
+    { mode: "failure", kind: "joined" },
+    { mode: "interruption", kind: "joined" },
+  ] as const)(
+    "retains canonical input without model calls after $kind projection $mode",
+    ({ mode, kind }) =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          class ProjectionFailure extends Schema.TaggedError<ProjectionFailure>()(
+            "ProjectionFailure",
+            {},
+          ) {}
+          const started = yield* Deferred.make<void>();
+          const finalized = yield* Ref.make(false);
+          const requests: Array<Prompt.Prompt> = [];
+          const input = { question: "public question", hostOnly: "HOST-ONLY-FAILURE-SENTINEL" };
+          const model = yield* makeScriptedModel((_call, prompt) => {
+            requests.push(prompt);
+            return finalParts('"done"');
+          });
+          const agent = Agent.withModel(
+            Agent.define(`node-projection-${kind}-${mode}`, {
+              input: Schema.Struct({ question: Schema.String, hostOnly: Schema.String }),
+              output: Schema.String,
+              instructions: "Answer the public question.",
+              inputPrompt: ({ question }) =>
+                kind === "joined" && question === input.question
+                  ? Effect.succeed(question)
+                  : Effect.gen(function* () {
+                      yield* Deferred.succeed(started, undefined);
+                      return yield* mode === "failure"
+                        ? Effect.fail(new ProjectionFailure())
+                        : Effect.never;
+                    }).pipe(Effect.ensuring(Ref.set(finalized, true))),
+              toolkit: Toolkit.empty,
+              policy: plannerDefinition.policy,
+            }),
+            model,
+          );
+          const conversationId = decodeConversationId(`node-projection-${kind}-${mode}`);
+          const joinedInput = { ...input, question: "public joined question" };
+          yield* withHost(
+            runtimeOptions(filename),
+            Effect.gen(function* () {
+              const runtime = yield* DurableAgentRuntime;
+              const receipt = yield* runtime.submit(
+                agent,
+                input,
+                submitOptions(conversationId, mode),
+              );
+              if (kind === "joined") {
+                yield* runtime.submit(agent, joinedInput, submitOptions(conversationId, "joined"));
+              }
+              if (mode === "failure") {
+                const settlements = yield* runtime.processConversation(agent, conversationId);
+                expect(settlements).toMatchObject([
+                  { outcome: "failed", failure: { errorTag: "ProjectionFailure" } },
+                ]);
+              } else {
+                const worker = yield* runtime
+                  .processConversation(agent, conversationId)
+                  .pipe(Effect.forkChild);
+                yield* Deferred.await(started);
+                yield* Fiber.interrupt(worker);
+                expect(Exit.hasInterrupts(yield* Fiber.await(worker))).toBe(true);
+              }
+              expect(yield* Ref.get(finalized)).toBe(true);
+              const ledger = yield* SubmissionLedger;
+              const stored = yield* ledger.lookup(
+                SubmissionLookupById.make({ submissionId: receipt.submissionId }),
+              );
+              expect(Option.isSome(stored)).toBe(true);
+              if (Option.isSome(stored)) expect(stored.value.inputPayload).toEqual(input);
+              const store = yield* ConversationStore;
+              const records = yield* Stream.runCollect(
+                store.read(ConversationRead.make({ conversationId, limit: 1_024 })),
+              );
+              expect(
+                records.flatMap(({ record }) =>
+                  record.payload._tag === "UserInputRecorded" ? [record.payload.input] : [],
+                ),
+              ).toEqual(kind === "joined" ? [input, joinedInput] : [input]);
+              const settled = records.flatMap(({ record }) =>
+                record.payload._tag === "SubmissionSettled" ? [record.payload.outcome] : [],
+              );
+              expect(settled).toEqual(
+                mode === "failure" ? (kind === "joined" ? ["failed", "failed"] : ["failed"]) : [],
+              );
+              expect(
+                records.some(({ record }) => record.payload._tag === "ModelResponseRecorded"),
+              ).toBe(false);
+            }),
+          );
+          expect(requests).toEqual([]);
+        }),
+      ),
   );
 
   it.effect("startup reconciliation settles an orphaned reserved settlement before admission", () =>

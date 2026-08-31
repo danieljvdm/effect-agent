@@ -23,6 +23,7 @@ import {
   DelegationTool,
   type DelegationId,
   IdGenerator,
+  type InputPromptSource,
   InputTokenUsage,
   type InstructionSource,
   type RunDispositionDeclaration,
@@ -127,19 +128,23 @@ export type RuntimeBinding<
   RunDispositionValue extends
     | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
     | undefined = undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+    undefined,
 > = {
   readonly definition: Definition<
     InputSchema,
     OutputSchema,
     Instructions,
     Toolkit.Toolkit<Tools>,
-    RunDispositionValue
+    RunDispositionValue,
+    InputPromptValue
   > & {
     readonly instructions: InstructionSource<
       InputSchema["Type"],
       NoInfer<InstructionError>,
       NoInfer<InstructionRequirements>
     >;
+    readonly inputPrompt?: InputPromptValue | undefined;
   };
   readonly model: Model.Model<Provider, LanguageModel.LanguageModel | ModelProvides, ModelRequires>;
 };
@@ -165,6 +170,22 @@ type InstructionRequirementsOf<Instructions, Input> =
   >
     ? Requirements
     : never;
+
+type InputPromptErrorOf<InputPromptValue, Input> = InputPromptValue extends (
+  input: Input,
+) => infer Result
+  ? Result extends Effect.Effect<infer _Success, infer Error, infer _Requirements>
+    ? Error
+    : never
+  : never;
+
+type InputPromptRequirementsOf<InputPromptValue, Input> = InputPromptValue extends (
+  input: Input,
+) => infer Result
+  ? Result extends Effect.Effect<infer _Success, infer _Error, infer Requirements>
+    ? Requirements
+    : never
+  : never;
 
 import {
   buildCompactedView,
@@ -3176,18 +3197,61 @@ const encodeInput = Effect.fn("AgentRuntime.encodeInput")(
     ),
 );
 
+const renderInputPromptEffect = Effect.fn("AgentRuntime.renderInputPrompt")(
+  <Input, Error, Services>(
+    inputPrompt: InputPromptSource<Input, Error, Services> | undefined,
+    decodedInput: Input,
+    encodedInput: unknown,
+  ): Effect.Effect<Prompt.RawInput, Error | AgentInputError, Services> =>
+    inputPrompt === undefined
+      ? Effect.try({
+          try: () => {
+            const encoded = JSON.stringify(encodedInput);
+            if (encoded === undefined) {
+              throw new Error("Agent input cannot be represented as JSON");
+            }
+            return encoded;
+          },
+          catch: (cause) =>
+            AgentInputError.make({
+              message: `Unable to materialize Agent input: ${errorMessage(cause)}`,
+            }),
+        })
+      : Effect.suspend(() => {
+          const result = inputPrompt(decodedInput);
+          return Effect.isEffect(result) ? result : Effect.succeed(result);
+        }),
+);
+
+/** Render decoded Agent input for model visibility, preserving the legacy JSON default. */
+export function renderInputPrompt<
+  Input,
+  InputPromptValue extends InputPromptSource<NoInfer<Input>, unknown, unknown> | undefined,
+>(
+  inputPrompt: InputPromptValue,
+  decodedInput: Input,
+  encodedInput: unknown,
+): Effect.Effect<
+  Prompt.RawInput,
+  AgentInputError | InputPromptErrorOf<InputPromptValue, Input>,
+  InputPromptRequirementsOf<InputPromptValue, Input>
+>;
+export function renderInputPrompt<Input>(
+  inputPrompt: InputPromptSource<Input, unknown, unknown> | undefined,
+  decodedInput: Input,
+  encodedInput: unknown,
+): Effect.Effect<Prompt.RawInput, unknown, unknown> {
+  return renderInputPromptEffect(inputPrompt, decodedInput, encodedInput);
+}
+
 const makeInitialPrompt = Effect.fn("AgentRuntime.makeInitialPrompt")(
   (
     instructions: Prompt.RawInput,
-    input: unknown,
+    inputPrompt: Prompt.RawInput,
     history: Prompt.Prompt,
   ): Effect.Effect<Prompt.Prompt, AgentInputError> =>
     Effect.try({
       try: () => {
-        const encodedInput = JSON.stringify(input);
-        if (encodedInput === undefined) {
-          throw new Error("Agent input cannot be represented as JSON");
-        }
         const instructionPrompt =
           typeof instructions === "string"
             ? Prompt.fromMessages([
@@ -3199,9 +3263,7 @@ const makeInitialPrompt = Effect.fn("AgentRuntime.makeInitialPrompt")(
         return Prompt.fromMessages([
           ...history.content,
           ...instructionPrompt.content,
-          Prompt.makeMessage("user", {
-            content: [Prompt.makePart("text", { text: encodedInput })],
-          }),
+          ...Prompt.make(inputPrompt).content,
         ]);
       },
       catch: (cause) =>
@@ -3867,6 +3929,8 @@ const makeTurn = <
   RunDispositionValue extends
     | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
     | undefined = undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+    undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -3878,7 +3942,8 @@ const makeTurn = <
     ModelRequires,
     InstructionError,
     InstructionRequirements,
-    RunDispositionValue
+    RunDispositionValue,
+    InputPromptValue
   >,
   context: RunContext,
   prompt: Prompt.Prompt,
@@ -4812,6 +4877,8 @@ const toolBatchContinuation = <
   RunDispositionValue extends
     | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
     | undefined = undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+    undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -4823,7 +4890,8 @@ const toolBatchContinuation = <
     ModelRequires,
     InstructionError,
     InstructionRequirements,
-    RunDispositionValue
+    RunDispositionValue,
+    InputPromptValue
   >,
   context: RunContext,
   trace: TurnTrace,
@@ -4965,6 +5033,8 @@ const makeResumeTurn = <
   RunDispositionValue extends
     | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
     | undefined = undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+    undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -4976,7 +5046,8 @@ const makeResumeTurn = <
     ModelRequires,
     InstructionError,
     InstructionRequirements,
-    RunDispositionValue
+    RunDispositionValue,
+    InputPromptValue
   >,
   context: RunContext,
   prompt: Prompt.Prompt,
@@ -5341,6 +5412,8 @@ const stream = <
   RunDispositionValue extends
     | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
     | undefined = undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+    undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -5352,7 +5425,8 @@ const stream = <
     ModelRequires,
     InstructionError,
     InstructionRequirements,
-    RunDispositionValue
+    RunDispositionValue,
+    InputPromptValue
   >,
   input: unknown,
   options: RunOptions<HookError, HookRequirements> = {},
@@ -5540,8 +5614,13 @@ const stream = <
           >(agent.definition.instructions, decodedInput);
           const encodedInput = yield* encodeInput(agent, decodedInput);
           context.input = encodedInput;
+          const inputPrompt = yield* renderInputPrompt(
+            agent.definition.inputPrompt,
+            decodedInput,
+            encodedInput,
+          );
           const priorHistoryLength = context.history.content.length;
-          const prompt = yield* makeInitialPrompt(instructions, encodedInput, context.history);
+          const prompt = yield* makeInitialPrompt(instructions, inputPrompt, context.history);
           // RUN-022: the instruction/input block is protected from compaction
           // by source index. A hook-prepared prompt (durable resume) replaces
           // the source, so index protection is unavailable there and the view
@@ -5722,6 +5801,8 @@ const run = Effect.fn("AgentRuntime.run")(function* <
   RunDispositionValue extends
     | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
     | undefined = undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+    undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -5733,7 +5814,8 @@ const run = Effect.fn("AgentRuntime.run")(function* <
     ModelRequires,
     InstructionError,
     InstructionRequirements,
-    RunDispositionValue
+    RunDispositionValue,
+    InputPromptValue
   >,
   input: unknown,
   options: RunOptions<HookError, HookRequirements> = {},
@@ -5779,6 +5861,8 @@ const start = Effect.fn("AgentRuntime.start")(function* <
   RunDispositionValue extends
     | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
     | undefined = undefined,
+  InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+    undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -5790,7 +5874,8 @@ const start = Effect.fn("AgentRuntime.start")(function* <
     ModelRequires,
     InstructionError,
     InstructionRequirements,
-    RunDispositionValue
+    RunDispositionValue,
+    InputPromptValue
   >,
   input: unknown,
   options: RunOptions<HookError, HookRequirements> = {},
@@ -6890,6 +6975,11 @@ const spawnWithParent = (parent: AgentSpawnerParent, depth: number) =>
     HookRequirements = never,
     InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
     InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+    RunDispositionValue extends
+      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+      | undefined = undefined,
+    InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+      undefined,
   >(
     binding: RuntimeBinding<
       InputSchema,
@@ -6900,7 +6990,9 @@ const spawnWithParent = (parent: AgentSpawnerParent, depth: number) =>
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      RunDispositionValue,
+      InputPromptValue
     >,
     input: unknown,
     delegation: SpawnDelegation,
@@ -6950,7 +7042,81 @@ const spawnWithParent = (parent: AgentSpawnerParent, depth: number) =>
 export interface AgentSpawnerService {
   readonly depth: number;
   readonly parent: AgentSpawnerParent;
-  readonly spawn: ReturnType<typeof spawnWithParent>;
+  readonly spawn: <
+    InputSchema extends Schema.Top,
+    OutputSchema extends Schema.Top,
+    Instructions,
+    Tools extends Record<string, Tool.Any>,
+    Provider,
+    ModelProvides,
+    ModelRequires,
+    HookError = never,
+    HookRequirements = never,
+    InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
+    InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+    RunDispositionValue extends
+      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+      | undefined = undefined,
+    InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
+      undefined,
+  >(
+    binding: RuntimeBinding<
+      InputSchema,
+      OutputSchema,
+      Instructions,
+      Tools,
+      Provider,
+      ModelProvides,
+      ModelRequires,
+      InstructionError,
+      InstructionRequirements,
+      RunDispositionValue,
+      InputPromptValue
+    >,
+    input: unknown,
+    delegation: SpawnDelegation,
+    options?: SpawnRunOptions<HookError, HookRequirements>,
+  ) => Effect.Effect<
+    SpawnedChildRun<
+      OutputSchema["Type"],
+      AgentRuntimeFailure<
+        RuntimeBinding<
+          InputSchema,
+          OutputSchema,
+          Instructions,
+          Tools,
+          Provider,
+          ModelProvides,
+          ModelRequires,
+          InstructionError,
+          InstructionRequirements,
+          RunDispositionValue,
+          InputPromptValue
+        >,
+        HookError,
+        InstructionError
+      >
+    >,
+    never,
+    | Scope.Scope
+    | AgentRuntimeRequirements<
+        RuntimeBinding<
+          InputSchema,
+          OutputSchema,
+          Instructions,
+          Tools,
+          Provider,
+          ModelProvides,
+          ModelRequires,
+          InstructionError,
+          InstructionRequirements,
+          RunDispositionValue,
+          InputPromptValue
+        >,
+        HookRequirements,
+        InstructionRequirements
+      >
+  >;
 }
 
 /**
