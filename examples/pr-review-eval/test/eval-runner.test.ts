@@ -9,7 +9,7 @@ import {
 import { ScriptedModel } from "@effect-agent/testing";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import {
   Deferred,
   Effect,
@@ -279,6 +279,11 @@ describe("PR-review model eval", () => {
         id: Schema.decodeSync(EvalVariantId)("candidate-guidance-v1"),
         guidance: "  Keep the public error channel typed.  ",
       });
+      type Review = ReturnType<typeof variant.review>;
+      expectTypeOf<Effect.Error<Review>>().toEqualTypeOf<EvalReviewerFailure>();
+      expectTypeOf<Effect.Services<Review>>().toEqualTypeOf<
+        OpenAiClient.OpenAiClient | ReviewRepository
+      >();
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
       expect(variant.configuration.reviewerProfile).toBe("source-review-v4-capped");
       expect(variant.configuration.costLimitMicrousd).toBe(999_999);

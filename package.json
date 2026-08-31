@@ -19,7 +19,6 @@
     "ci:version": "bun x changeset version && bun install",
     "reset:development-storage": "bun scripts/reset-development-storage.ts",
     "formal:check": "bun scripts/formal-check.ts",
-    "pr-review-acceptance-259": "bun examples/pr-review-eval/src/acceptance-259-main.ts",
     "verify:package-purity": "bun scripts/verify-package-purity.ts",
     "admin:durable": "node --experimental-transform-types scripts/durable-admin.ts",
     "docs:dev": "vitepress dev docs",

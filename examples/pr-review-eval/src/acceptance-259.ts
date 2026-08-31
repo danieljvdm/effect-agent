@@ -44,6 +44,8 @@ export const acceptance259 = Effect.gen(function* () {
     ChildProcess.make("git", ["rev-parse", "HEAD"]),
   )).trim();
   const live = (yield* Config.string("EFFECT_AGENT_LIVE").pipe(Config.withDefault(""))) === "1";
+  const hosted = (yield* Config.string("CI").pipe(Config.withDefault(""))) === "true";
+  if (hosted && !live) return yield* Effect.die("Hosted acceptance requires EFFECT_AGENT_LIVE=1");
   const metadata = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Metadata))(
     yield* fs.readFileString(`${root}/fixtures/acceptance-259-metadata.json`),
   );
