@@ -10,8 +10,8 @@ import {
   RunToolAuthorization,
   toolFailureObserverLayer,
 } from "@effect-agent/engine";
-import type { AgentBindingResolver } from "@effect-agent/session";
 import {
+  AgentBindingResolver,
   DurableAgentRuntime,
   DurableRuntimeConfig,
   DurableRuntimeFailpoint,
@@ -21,6 +21,7 @@ import {
   type ConversationStore,
   type DurableRuntimeFailpointHandler,
   type OperationAuthorizerService,
+  type ResolvedBinding,
   type SubmissionLedger,
   type WakeScheduler,
 } from "@effect-agent/session";
@@ -40,7 +41,7 @@ import {
 } from "@effect-agent/storage-cloudflare";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import type { Crypto } from "effect";
+import type { Crypto, Scope } from "effect";
 import { Context, Duration, Effect, Layer, Schema } from "effect";
 
 import {
@@ -275,7 +276,7 @@ const resolveRunContext = (
 
 /**
  * The DC Layer assembly (deployment §12: a Layer-assembly library, not an app entrypoint;
- * plan §1.4). `layer(bindings, options)` decodes the configuration, derives this Object's Conversation
+ * plan §1.4). `layer(registrations, options)` decodes the configuration, derives this Object's Conversation
  * and producer identities, opens the Object's private SQLite database through
  * `@effect/sql-sqlite-do` for BOTH the Conversation Log and the Submission Ledger (so claims
  * fence the same producer epochs — ADR-0011 D7 transposed), wraps the local port facets with
@@ -286,20 +287,21 @@ const resolveRunContext = (
  * Storage compatibility is verified during construction: an incompatible database fails the
  * Layer typed (`DoStorageCompatibilityError`) before anything is mutated (DEPLOY-008).
  *
- * The bindings Layer supplies `AgentBindingResolver` once per incarnation. It can yield
- * `ConversationObjectIdentity` and platform Crypto; other requirements and construction
- * failures remain visible in the returned Layer. Empty registrations must be explicit through
- * `AgentBindingResolver.layer([])` and fail closed at claim time.
+ * The registration Effect returns the `DurableWorkerBinding.make` results this Object can
+ * execute. The platform acquires it once per incarnation in the Layer's Scope and builds the
+ * exact-digest resolver internally. It can yield `ConversationObjectIdentity` and platform
+ * Crypto; other requirements and initialization failures remain visible in the returned Layer.
+ * Empty registrations must be explicit through `Effect.succeed([])` and fail closed at claim time.
  */
 export const layer = <E, R>(
-  bindings: Layer.Layer<AgentBindingResolver, E, R>,
+  registrations: Effect.Effect<ReadonlyArray<ResolvedBinding>, E, R>,
   options: CloudflareDurableRuntimeOptions,
 ): Layer.Layer<
   CloudflareDurableRuntimeServices,
   CloudflareDurableRuntimeInitializationError | E,
   | DurableObjectContext
   | ConversationObjectNamespace
-  | Exclude<R, ConversationObjectIdentity | Crypto.Crypto>
+  | Exclude<Exclude<R, Scope.Scope>, ConversationObjectIdentity | Crypto.Crypto>
 > => {
   return Layer.unwrap(
     Effect.gen(function* () {
@@ -413,6 +415,10 @@ export const layer = <E, R>(
         maintenanceFailpointLayer,
         ProgressWaitRegistry.layer,
       );
+      const bindingResolverLayer = Layer.effect(
+        AgentBindingResolver,
+        Effect.map(registrations, AgentBindingResolver.fromBindings),
+      ).pipe(Layer.provide(Layer.merge(identityLayer, BrowserCrypto.layer)));
 
       const runtimeStack = DurableAgentRuntime.layerWithContext.pipe(
         Layer.provideMerge(routedPorts),
@@ -430,9 +436,7 @@ export const layer = <E, R>(
           ),
         ),
         Layer.provideMerge(base),
-        Layer.provideMerge(
-          bindings.pipe(Layer.provide(Layer.merge(identityLayer, BrowserCrypto.layer))),
-        ),
+        Layer.provideMerge(bindingResolverLayer),
       );
 
       return Layer.mergeAll(

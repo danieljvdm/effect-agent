@@ -1,5 +1,4 @@
 import {
-  AgentBindingResolver,
   ScheduleAuthorizer,
   ScheduleFailpoint,
   ScheduleFailpointError,
@@ -54,10 +53,7 @@ const conversationOptions: ConversationObject.Options = {
 const SubmissionIdRow = Schema.Struct({ submission_id: Schema.String });
 
 export class SchedulingRestartConversation extends ConversationObject.make(
-  Layer.effect(
-    AgentBindingResolver,
-    Effect.map(makeTestBindings, AgentBindingResolver.fromBindings),
-  ),
+  makeTestBindings,
   conversationOptions,
 ) {
   async submissionIds(): Promise<ReadonlyArray<string>> {

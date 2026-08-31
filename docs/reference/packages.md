@@ -205,11 +205,11 @@ and the typed admission-limits gate before `submit`), and the Worker-side
 `CloudflareConversationClient`, whose `awaitProgress` RPC retries Object resets with a fresh stub
 and sends explicit scoped cancellation on interruption. The client Layer requires `Crypto.Crypto`
 so its composition root owns collision-resistant cancellation identity generation instead of the
-client reading ambient time or randomness. The Conversation Object factory accepts an
-`AgentBindingResolver` Layer whose dependencies can include effect-cf's `WorkerEnvironment` and
-`DurableObjectState`, plus platform Crypto and `ConversationObjectIdentity`. It acquires that
-Layer once per incarnation after identity derivation. The lower-level
-`ConversationObject.layer(bindings, options)` retains additional application requirements
+client reading ambient time or randomness. The Conversation Object factory accepts an Effect
+returning Agent registrations whose dependencies can include effect-cf's `WorkerEnvironment` and
+`DurableObjectState`, plus platform Crypto, `ConversationObjectIdentity`, and Scope. It acquires
+that Effect once per incarnation after identity derivation and builds the exact-digest resolver
+internally. The lower-level `ConversationObject.layer(registrations, options)` retains additional application requirements
 and initialization errors in its type. See [Cloudflare execution](../guide/run-agents#run-durably-on-cloudflare).
 `BrowserQuickActionBrowserBinding.layer` lifts a host-resolved Wrangler `browser`
 binding into an explicit Effect service. `browserQuickActionCaptureLayer` visibly requires that

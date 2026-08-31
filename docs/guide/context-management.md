@@ -289,10 +289,11 @@ provide this service as well as context preparation.
 
 Cloudflare Conversation Objects can install a host compactor without putting it in global state.
 Build your `ContextCompactor` as a Layer, close its model/configuration dependencies from the Worker
-environment, and adapt it through `contextCompactorRunContextLayer`:
+environment, and adapt it through `contextCompactorRunContextLayer`. Pass the
+[Agent registration Effect](./run-agents#run-durably-on-cloudflare) as the first argument:
 
 ```ts
-export class Conversations extends ConversationObject.make(bindingsLayer, {
+export class Conversations extends ConversationObject.make(registrations, {
   namespaceBinding: "CONVERSATIONS",
   deploymentId: "production",
   producerPrefix: "conversation",

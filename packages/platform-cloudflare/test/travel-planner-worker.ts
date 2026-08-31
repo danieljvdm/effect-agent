@@ -1,11 +1,9 @@
-import { AgentBindingResolver } from "@effect-agent/session";
 import {
   makePhase6TravelPlannerBindings,
   phase6SupplierReconcilerLayer,
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
 } from "@effect-agent/testing/fixtures/travel-planner";
-import { Effect, Layer } from "effect";
 
 import { ConversationObject } from "../src/index.ts";
 import { runtimeEvictionFailpoint, storageEvictionFailpoint } from "./fixtures.ts";
@@ -44,24 +42,22 @@ const baseOptions: ConversationObject.Options = {
   runtimeFailpoint: runtimeEvictionFailpoint,
 };
 
-const bindingsLayer = Layer.effect(
-  AgentBindingResolver,
-  Effect.map(makePhase6TravelPlannerBindings, AgentBindingResolver.fromBindings),
-);
-
 /** The Travel Planner DC suite's Conversation Object. */
 export class TravelPlannerConversationObject extends ConversationObject.make(
-  bindingsLayer,
+  makePhase6TravelPlannerBindings,
   baseOptions,
 ) {}
 
 /** Tight quotas for the Travel Planner admission-limits rows (refusal before any row). */
-export class TravelPlannerLimitedObject extends ConversationObject.make(bindingsLayer, {
-  ...baseOptions,
-  namespaceBinding: "LIMITED",
-  maxQueueDepthPerLane: 2,
-  maxInputBytes: 512,
-}) {}
+export class TravelPlannerLimitedObject extends ConversationObject.make(
+  makePhase6TravelPlannerBindings,
+  {
+    ...baseOptions,
+    namespaceBinding: "LIMITED",
+    maxQueueDepthPerLane: 2,
+    maxInputBytes: 512,
+  },
+) {}
 
 export default {
   fetch(): Response {

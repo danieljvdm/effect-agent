@@ -1,4 +1,3 @@
-import { AgentBindingResolver } from "@effect-agent/session";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Context, Crypto, Effect, Exit, Layer, Schema } from "effect";
 import { DurableObjectState, WorkerEnvironment } from "effect-cf";
@@ -25,7 +24,7 @@ const options = { deploymentId: "binding-layer", producerPrefix: "binding-layer"
 const dynamicStub = (conversation: string) =>
   env.DYNAMIC_BINDINGS.get(env.DYNAMIC_BINDINGS.idFromName(conversation));
 
-describe("Cloudflare Binding Layers", () => {
+describe("Cloudflare Agent registrations", () => {
   it("acquires once with each incarnation's yielded host services and identities", async () => {
     const firstConversation = `binding-source-first-${crypto.randomUUID()}`;
     const secondConversation = `binding-source-second-${crypto.randomUUID()}`;
@@ -74,18 +73,16 @@ describe("Cloudflare Binding Layers", () => {
   });
 
   it("retains application requirements and initialization failures in the Layer types", () => {
-    const bindings = Layer.effect(
-      AgentBindingResolver,
-      Effect.gen(function* () {
-        const config = yield* ApplicationConfig;
-        yield* WorkerEnvironment;
-        yield* DurableObjectState.DurableObjectState;
-        yield* ConversationObjectIdentity;
-        yield* Crypto.Crypto;
-        if (!config.enabled) return yield* BindingSetupError.make({});
-        return AgentBindingResolver.fromBindings([]);
-      }),
-    );
+    const bindings = Effect.gen(function* () {
+      const config = yield* ApplicationConfig;
+      yield* WorkerEnvironment;
+      yield* DurableObjectState.DurableObjectState;
+      yield* ConversationObjectIdentity;
+      yield* Crypto.Crypto;
+      yield* Effect.scope;
+      if (!config.enabled) return yield* BindingSetupError.make({});
+      return [];
+    });
     const runtime = ConversationObject.layer(bindings, options);
     expectTypeOf<Layer.Error<typeof runtime>>().toEqualTypeOf<
       BindingSetupError | ConversationObject.InitializationError
@@ -102,39 +99,79 @@ describe("Cloudflare Binding Layers", () => {
     type FactoryBindings = Parameters<typeof ConversationObject.make>[0];
     expectTypeOf<typeof bindings>().not.toExtend<FactoryBindings>();
     const provided = bindings.pipe(
-      Layer.provide(Layer.succeed(ApplicationConfig, { enabled: true })),
+      Effect.provide(Layer.succeed(ApplicationConfig, { enabled: true })),
     );
-    expectTypeOf<Layer.Error<typeof provided>>().toEqualTypeOf<BindingSetupError>();
+    expectTypeOf<Effect.Error<typeof provided>>().toEqualTypeOf<BindingSetupError>();
     ConversationObject.make(provided, objectOptions);
-    expectTypeOf<typeof Layer.empty>().not.toExtend<FactoryBindings>();
+    expectTypeOf<typeof Effect.void>().not.toExtend<FactoryBindings>();
   });
 
-  it("preserves a failed binding acquisition and releases its scoped resources", () =>
-    runInDurableObject(stubFor("binding-layer-failed-acquisition"), (_instance, state) =>
+  it("keeps application resources alive until the runtime Scope closes", () =>
+    runInDurableObject(stubFor("registration-scope"), (_instance, state) =>
       Effect.runPromise(
         Effect.gen(function* () {
           const lifecycle: Array<string> = [];
-          const failure = BindingSetupError.make({});
-          const bindings = Layer.effect(
-            AgentBindingResolver,
-            Effect.gen(function* () {
-              yield* Effect.acquireRelease(
-                Effect.sync(() => lifecycle.push("acquired")),
-                () => Effect.sync(() => lifecycle.push("released")),
-              );
-              return yield* failure;
-            }),
+          const application = Layer.effect(
+            ApplicationConfig,
+            Effect.acquireRelease(
+              Effect.sync(() => {
+                lifecycle.push("acquired");
+                return { enabled: true };
+              }),
+              () => Effect.sync(() => lifecycle.push("released")),
+            ),
           );
-          const runtime = ConversationObject.layer(bindings, options).pipe(
+          const registrations = Effect.gen(function* () {
+            const services = yield* Layer.build(application);
+            const config = yield* ApplicationConfig.pipe(Effect.provide(services));
+            expect(config.enabled).toBe(true);
+            return [];
+          });
+          const runtime = ConversationObject.layer(registrations, options).pipe(
             Layer.provide([
               DurableObjectContext.layer(state, env),
               ConversationObjectNamespace.layer(env.CONVERSATIONS),
             ]),
           );
-          const exit = yield* Layer.build(runtime).pipe(Effect.scoped, Effect.exit);
-          expect(exit).toEqual(Exit.fail(failure));
+          yield* Effect.gen(function* () {
+            yield* Layer.build(runtime);
+            expect(lifecycle).toEqual(["acquired"]);
+          }).pipe(Effect.scoped);
           expect(lifecycle).toEqual(["acquired", "released"]);
         }),
       ),
     ));
+
+  it.each(["failure", "defect", "interruption"] as const)(
+    "preserves registration %s and releases acquired resources",
+    (kind) =>
+      runInDurableObject(stubFor(`registration-${kind}`), (_instance, state) =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            const lifecycle: Array<string> = [];
+            const failure = BindingSetupError.make({});
+            const bindings = Effect.gen(function* () {
+              yield* Effect.acquireRelease(
+                Effect.sync(() => lifecycle.push("acquired")),
+                () => Effect.sync(() => lifecycle.push("released")),
+              );
+              if (kind === "failure") return yield* failure;
+              if (kind === "defect") return yield* Effect.die("registration defect");
+              return yield* Effect.interrupt;
+            });
+            const runtime = ConversationObject.layer(bindings, options).pipe(
+              Layer.provide([
+                DurableObjectContext.layer(state, env),
+                ConversationObjectNamespace.layer(env.CONVERSATIONS),
+              ]),
+            );
+            const exit = yield* Layer.build(runtime).pipe(Effect.scoped, Effect.exit);
+            if (kind === "failure") expect(exit).toEqual(Exit.fail(failure));
+            else if (kind === "defect") expect(exit).toEqual(Exit.die("registration defect"));
+            else expect(Exit.hasInterrupts(exit)).toBe(true);
+            expect(lifecycle).toEqual(["acquired", "released"]);
+          }),
+        ),
+      ),
+  );
 });

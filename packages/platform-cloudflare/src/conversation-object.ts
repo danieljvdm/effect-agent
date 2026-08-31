@@ -28,15 +28,15 @@ import {
   SubmissionLedger,
   SubmissionLookupByKey,
   WakeScheduler,
-  type AgentBindingResolver,
   type DurableSubmitAgent,
+  type ResolvedBinding,
 } from "@effect-agent/session";
 import {
   decodePortRequest,
   encodePortResponse,
   type PortRequest,
 } from "@effect-agent/storage-cloudflare";
-import { Effect, Layer, Option, Schema, Stream, type Crypto } from "effect";
+import { Effect, Layer, Option, Schema, Stream, type Crypto, type Scope } from "effect";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectState as EffectCfDurableObjectState,
@@ -103,7 +103,7 @@ export {
 } from "./layers.ts";
 
 /**
- * `ConversationObject.make(bindings, options, observability?)` — the Conversation Durable Object
+ * `ConversationObject.make(registrations, options, observability?)` — the Conversation Durable Object
  * (plan §1.4,
  * D-P6-1): a factory returning a class that applications export from their Worker entry.
  * One SQLite-backed Object per Conversation is the serialized owner (durability §6); the
@@ -749,23 +749,27 @@ export interface Class<EventServices = never> {
  * event, so a host can install Tracer/Logger/Metric services and `OtlpExporter.Flusher` without
  * Effect Agent owning exporter lifecycle machinery.
  *
- * Supply an `AgentBindingResolver` Layer. It can yield effect-cf's `WorkerEnvironment` and
- * `DurableObjectState`, the platform context/namespace, `ConversationObjectIdentity`, and
- * Crypto. Provide application dependencies through ordinary Layer composition. Acquisition
- * runs once per incarnation inside the constructor gate, so keep it local and bounded.
+ * Supply an Effect returning `DurableWorkerBinding.make` registrations. It can yield effect-cf's
+ * `WorkerEnvironment` and `DurableObjectState`, the platform context/namespace,
+ * `ConversationObjectIdentity`, Crypto, and Scope. Provide application dependencies with
+ * `Effect.provide`; build resource-owning application Layers with `Layer.build` in the supplied
+ * Scope and provide their Context so captured services outlive registration. Acquisition runs once
+ * per incarnation inside the constructor gate, so keep it local and bounded. The platform builds
+ * the exact-digest resolver from the returned registrations.
  * Cloudflare eviction does not guarantee finalizers; acquire resources needing cleanup inside
  * scoped operations rather than the cached Layer.
  */
-export const make = <BindingLayerError, EventLayerError = never, EventServices = never>(
-  bindings: Layer.Layer<
-    AgentBindingResolver,
-    BindingLayerError,
+export const make = <RegistrationError, EventLayerError = never, EventServices = never>(
+  registrations: Effect.Effect<
+    ReadonlyArray<ResolvedBinding>,
+    RegistrationError,
     | EffectCfDurableObjectState.DurableObjectState
     | WorkerEnvironment
     | DurableObjectContext
     | ConversationObjectNamespace
     | ConversationObjectIdentity
     | Crypto.Crypto
+    | Scope.Scope
   >,
   options: Options,
   observability?: Layer.Layer<
@@ -779,9 +783,9 @@ export const make = <BindingLayerError, EventLayerError = never, EventServices =
 ): Class<EventServices> => {
   const application: Layer.Layer<
     RuntimeServices,
-    CloudflareDurableRuntimeInitializationError | CloudflareBindingError | BindingLayerError,
+    CloudflareDurableRuntimeInitializationError | CloudflareBindingError | RegistrationError,
     EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
-  > = runtimeLayer(bindings, options).pipe(
+  > = runtimeLayer(registrations, options).pipe(
     Layer.provideMerge(effectCfPlatformLayer(options.namespaceBinding, options.rpcTracing)),
   );
 
@@ -790,7 +794,7 @@ export const make = <BindingLayerError, EventLayerError = never, EventServices =
   // before migration, compatibility checks, or alarm inspection touch Object storage.
   const runtime: Layer.Layer<
     RuntimeServices,
-    ConversationObjectInitializationError | BindingLayerError,
+    ConversationObjectInitializationError | RegistrationError,
     EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
   > = Layer.effectContext(
     Effect.gen(function* () {
@@ -825,7 +829,7 @@ export const make = <BindingLayerError, EventLayerError = never, EventServices =
 
   const EffectCfConversationObject = EffectCfDurableObject.make<
     RuntimeServices,
-    ConversationObjectInitializationError | BindingLayerError,
+    ConversationObjectInitializationError | RegistrationError,
     EventServices,
     EventLayerError,
     typeof rpc

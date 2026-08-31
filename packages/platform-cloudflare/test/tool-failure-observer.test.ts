@@ -1,6 +1,6 @@
 import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
 import { toolFailureObserverLayer, type ToolFailureObservation } from "@effect-agent/engine";
-import { AgentBindingResolver, DurableAgentRuntime } from "@effect-agent/session";
+import { DurableAgentRuntime } from "@effect-agent/session";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
@@ -31,7 +31,7 @@ it.each([false, true])(
       });
       const tools = Toolkit.make(Failed);
       const usage = { inputTokens: {}, outputTokens: {} };
-      const runtimeLayer = ConversationObject.layer(AgentBindingResolver.layer([]), {
+      const runtimeLayer = ConversationObject.layer(Effect.succeed([]), {
         deploymentId: "observer-test",
         producerPrefix: "observer-test",
         toolFailureObserver: configured
