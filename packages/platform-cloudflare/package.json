@@ -34,8 +34,7 @@
     "@effect-agent/session": "workspace:*",
     "@effect-agent/storage-cloudflare": "workspace:*",
     "@effect/platform-browser": "catalog:",
-    "@effect/sql-sqlite-do": "catalog:",
-    "effect": "catalog:"
+    "@effect/sql-sqlite-do": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/puppeteer": "catalog:",
@@ -46,6 +45,7 @@
     "@effect/platform-node": "catalog:",
     "@effect/sql-d1": "catalog:",
     "@effect/vitest": "catalog:",
+    "effect": "catalog:",
     "effect-cf": "catalog:",
     "esbuild": "catalog:",
     "miniflare": "catalog:",
@@ -55,6 +55,7 @@
   },
   "peerDependencies": {
     "@cloudflare/puppeteer": "^1.1.0",
+    "effect": "^4.0.0-rc.111",
     "effect-cf": "^0.37.0"
   },
   "peerDependenciesMeta": {
