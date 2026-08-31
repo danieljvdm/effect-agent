@@ -499,6 +499,8 @@ export interface RunSubagentEstablishRequest {
   readonly encodedGrant: unknown;
   /** The per-invocation budget allocation in encoded form (opaque to the engine and to storage adapters). */
   readonly encodedAllocation: unknown;
+  /** Tightening-only child Tool Call bound, clamped to the reservation and Definition by the caller. */
+  readonly toolCallAllowance?: number | undefined;
 }
 
 /** Durable identity of one established attached child, in core vocabulary. */

@@ -111,7 +111,7 @@ export class CertificationTierThreeReport extends Schema.Class<CertificationTier
   "@effect-agent/session/CertificationTierThreeReport",
 )({
   status: CertificationTierThreeStatus,
-  /** Repository-relative citations of the real-loss suites that discharge this tier. */
+  /** Cited real-loss suites. The runner does not execute or verify these references. */
   evidence: Schema.Array(BoundedCertificationDetail),
   /** Rows executed by a supplied crash lever in THIS run (`suite: "real-loss"`). */
   cases: Schema.Array(CertificationCaseResult),
@@ -123,19 +123,22 @@ export class CertificationTierThreeReport extends Schema.Class<CertificationTier
  * suites verbatim; Tier 2 = the coordinator failpoint convergence sweep; Tier 3 = the real
  * loss lever record. `ok` is true exactly when every EXECUTED check passed — honest scope
  * statements (`not-triggered`, `recorded-evidence`, `not-exercised`, `not-applicable`) never
- * count as failures and never count as silent coverage. The committed JSON is evidence; the
- * semantic assertions live in the runner tests (testing.md §12).
+ * count as failures and never count as silent coverage. `fullyCertified` additionally requires
+ * a durable adapter and passing real-loss cases executed in this run. Citations alone do not
+ * certify recovery. A non-durable adapter can pass conformance but is never fully certified.
+ * The semantic assertions live in the runner tests.
  */
 export class CertificationReport extends Schema.Class<CertificationReport>(
   "@effect-agent/session/CertificationReport",
 )({
-  format: Schema.Literal("effect-agent/certification@1"),
+  format: Schema.Literal("effect-agent/certification@2"),
   adapter: CertifiedAdapterIdentity,
   generatedAt: Schema.DateTimeUtcFromString,
   tier1: Schema.Array(CertificationCaseResult),
   tier2: Schema.Array(CertificationSweepResult),
   tier3: CertificationTierThreeReport,
   ok: Schema.Boolean,
+  fullyCertified: Schema.Boolean,
 }) {}
 
 /** Bounded operator-readable rendering of one failure Cause for a certification detail. */

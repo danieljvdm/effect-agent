@@ -2966,13 +2966,16 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
         const invocations = yield* Ref.make(0);
         const child = durableChildIdentity("allowance-durable");
         const subagent = scriptedDurableHook({
-          establish: () => ({
-            _tag: "settled",
-            ...child,
-            outcome: "completed",
-            encodedResult: { answer: "durable partial" },
-            finishReason: "budget-exhausted",
-          }),
+          establish: (request) => {
+            expect(request.toolCallAllowance).toBe(1);
+            return {
+              _tag: "settled",
+              ...child,
+              outcome: "completed",
+              encodedResult: { answer: "durable partial" },
+              finishReason: "budget-exhausted",
+            };
+          },
         });
         const parent = Agent.withModel(
           allowanceCoordinator,

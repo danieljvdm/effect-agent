@@ -654,6 +654,8 @@ export class SubagentRequested extends Schema.TaggedClass<SubagentRequested>(
   childConversationId: ConversationId,
   childPrincipal: BoundedName,
   childIdempotencyKey: BoundedName,
+  /** Effective invocation bound, already clamped to the delegation and child Definition. */
+  toolCallAllowance: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
 }) {}
 
 /**
@@ -710,6 +712,8 @@ export class SubagentLineageRecorded extends Schema.TaggedClass<SubagentLineageR
   childDefinitionDigests: DefinitionDigests,
   childInputDigest: Digest,
   grantDigest: Digest,
+  /** Copied from the canonical request before readiness; restored for every child Attempt. */
+  toolCallAllowance: SubagentRequested.fields.toolCallAllowance,
 }) {}
 
 /**

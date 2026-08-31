@@ -96,7 +96,8 @@ describe("TEST-004 STORE-010 adapter certification — storage-memory reference 
         const report = yield* certified;
         const encoded = yield* Schema.encodeEffect(CertificationReport)(report);
         const decoded = yield* Schema.decodeUnknownEffect(CertificationReport)(encoded);
-        expect(decoded.format).toBe("effect-agent/certification@1");
+        expect(decoded.format).toBe("effect-agent/certification@2");
+        expect(decoded.fullyCertified).toBe(false);
         expect(decoded.adapter.name).toBe("@effect-agent/storage-memory");
         expect(decoded.adapter.durability).toBe("non-durable");
         expect(decoded.ok).toBe(true);

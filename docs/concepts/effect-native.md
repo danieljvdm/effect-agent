@@ -1,98 +1,135 @@
 ---
-title: Effect-native by construction
-description: The dependency, failure, schema, and resource rules that define the framework.
+title: Built on Effect
+description: Use Effect schemas, typed errors, service layers, and scoped resources.
 ---
 
-# Effect-native by construction
+<a id="effect-native-by-construction"></a>
 
-Effect Agent is not an agent framework wrapped in Effect. Its public contract is designed so an
-Effect application does not surrender the properties it already relies on.
+# Built on Effect
 
-<ContractPanel
-  success="what the Agent produced"
-  failure="what was expected to go wrong"
-  requirements="what must be provided"
-/>
+Effect Agent keeps the contracts an Effect application relies on.
+These excerpts use the [travel planner from the homepage](/).
 
-## Effects are the public boundary
+<a id="the-architectural-test"></a>
 
-Public asynchronous operations return `Effect` or `Stream`, never a naked `Promise`. Tool handlers,
-instruction sources, approval decisions, store operations, and platform capabilities follow the
-same rule.
+## Return Effects and Streams {#effects-are-the-public-boundary}
 
-That makes composition ordinary:
+Public asynchronous operations return `Effect` or `Stream`. This includes tool handlers,
+instructions, approval decisions, stores, and platform capabilities.
 
-```ts
-AgentRuntime.run(agent, input).pipe(
-  Effect.retry(modelRetryPolicy),
+```ts twoslash
+import { AgentRuntime } from "@effect-agent/engine";
+import { Effect, Stream } from "effect";
+import { TravelPlanner } from "./planner";
+const input = { city: "Lisbon", days: 2 };
+// ---cut---
+const itinerary = AgentRuntime.run(TravelPlanner, input).pipe(
+  Effect.map((result) => result.output.itinerary),
   Effect.timeout("2 minutes"),
-  Effect.provide(AppLive),
+);
+
+const eventNames = AgentRuntime.stream(TravelPlanner, input).pipe(
+  Stream.map((event) => event._tag),
 );
 ```
 
-The runtime still owns the policy decision about which operations are safe to retry. Effect's
-operator is mechanism, not permission to repeat an uncertain external side effect.
+Retrying an entire run can repeat external effects. Durable recovery follows recorded tool
+outcomes and never automatically replays an uncertain ordinary tool.
 
-## Schema is canonical
+## Define data with Schema {#schema-is-canonical}
 
-Effect Schema defines:
+Effect Schema defines agent input and output, tool parameters and results, commands, events,
+persisted records, and transport values. Provider JSON Schema and wire codecs derive from these
+definitions. Applications need no parallel schema tree.
 
-- Agent input and structured output;
-- Tool parameters, success, and declared failure;
-- commands and semantic events;
-- persisted record envelopes and batches;
-- transport values at every host boundary.
+```ts twoslash
+import { Schema } from "effect";
+// ---cut---
+const TripRequest = Schema.Struct({
+  city: Schema.String,
+  days: Schema.Int.check(Schema.isGreaterThan(0)),
+});
 
-Provider-facing JSON Schema and wire codecs are derived. Applications do not maintain parallel
-Zod, Valibot, or provider schema trees.
+type TripRequest = typeof TripRequest.Type;
 
-## Layers preserve architecture
-
-Definitions contain behavior and requirements, not live infrastructure. Toolkits, Models, stores,
-sandboxes, clocks, IDs, authorization, and platform services arrive through Layers.
-
-```text
-application Definitions + Effect AI Models
-                    ↓
-          @effect-agent/core
-                    ↓
-          @effect-agent/engine
-              ↙           ↘
-     capabilities       session ports
-                            ↓
-                    storage adapters
+const decodeRequest = Schema.decodeUnknownEffect(TripRequest);
+const request = decodeRequest({ city: "Lisbon", days: 2 });
 ```
 
-Dependencies point inward. Node, SQLite, Cloudflare, provider SDK, and transport types cannot enter
-core domain records.
+Use `TripRequest` as the agent's `input` schema. The same definition supplies the TypeScript
+type and rejects invalid values at runtime.
 
-## Scope is ownership
+## Provide services through Layers {#layers-preserve-architecture}
 
-One ephemeral Run owns one parent Scope. Model streams, Tool fibers, queues, MCP clients, sandbox
-processes, event publication, and attached Subagent children belong beneath it.
+Definitions describe behavior and requirements. Layers provide models, toolkits, stores,
+sandboxes, clocks, identifiers, authorization, and platform services.
 
-`run` finishes run-owned cleanup before returning and adds no caller `Scope` requirement.
-`stream` closes its resources when consumption completes, fails, or is interrupted. `start`
-requires a caller Scope for ongoing execution and replay. Requirements from caller-supplied
-operations remain visible, including any genuine `Scope` requirement. Shared clients supplied
-by application Layers close at the application's composition boundary and may serve several Runs.
+```ts twoslash
+import { AgentRuntime } from "@effect-agent/engine";
+import { AnthropicLanguageModel } from "@effect/ai-anthropic";
+import { Effect, Layer } from "effect";
+import { TravelPlanner } from "./planner";
+import { AppLive } from "./setup";
+const input = { city: "Lisbon", days: 2 };
+// ---cut---
+const RuntimeLive = AnthropicLanguageModel.model("claude-sonnet-5").pipe(
+  Layer.provideMerge(AppLive),
+);
 
-There are no daemon fibers. Interrupting the owner prevents new work, interrupts children, closes
-resources, and cannot emit false success.
+const program = AgentRuntime.run(TravelPlanner, input).pipe(Effect.provide(RuntimeLive));
+```
 
-## Effect AI stays Effect AI
+The travel planner's `AppLive` supplies the provider client, tool handlers, IDs, and transient
+history. `Layer.provideMerge` supplies the model's client dependency and keeps those services
+available to the run.
 
-Effect Agent imports `Tool`, `Toolkit`, `LanguageModel`, `Model`, `Prompt`, and `Response` directly
-from Effect AI. Provider integrations are upstream Effect AI Layers. The engine adds multi-Turn and
-durability semantics around those values rather than cloning them.
+## Scope resources {#scope-is-ownership}
 
-This is a deliberately narrow seam: if broadly useful behavior is missing in Effect AI, the first
-option is to contribute it upstream.
+An ephemeral run owns one parent Scope. Model streams, tool fibers, queues, MCP clients, sandbox
+processes, event publication, and attached children live beneath it.
 
-## The architectural test
+`run` completes cleanup before returning. `stream` closes resources when consumption completes,
+fails, or is interrupted. `start` requires a caller Scope because execution and replay continue.
+Requirements from application code remain visible, including any real `Scope` requirement.
 
-Every public API answers the same six questions: expected failure stays typed in `E`,
-acquired capabilities stay visible in `R`, external input is Schema-decoded, every resource has
-one Scope owner, the behavior can be replaced with a Layer, and it adds an Agent concept rather
-than duplicating an Effect AI one. If a feature you are evaluating on top of the framework can
-answer those too, it composes cleanly.
+```ts twoslash
+import { AgentRuntime } from "@effect-agent/engine";
+import { Effect } from "effect";
+import { TravelPlanner } from "./planner";
+const input = { city: "Lisbon", days: 2 };
+// ---cut---
+const program = Effect.gen(function* () {
+  const handle = yield* AgentRuntime.start(TravelPlanner, input);
+  const result = yield* handle.await;
+  const events = yield* handle.events;
+  return { result, events };
+}).pipe(Effect.scoped);
+```
+
+The caller's Scope owns the handle and its replay buffer. Leaving it closes both, including
+when the program fails or is interrupted.
+
+The runtime creates no daemon fibers. Interrupting the owner stops new work, interrupts children,
+and closes resources without reporting false success.
+
+## Use Effect AI directly {#effect-ai-stays-effect-ai}
+
+Effect Agent uses Effect AI's `Tool`, `Toolkit`, `LanguageModel`, `Model`, `Prompt`, and `Response`
+directly. Provider integrations remain Effect AI Layers. The engine adds agent loops,
+conversation history, and durable execution around those values.
+
+```ts twoslash
+import { Schema } from "effect";
+import { Tool, Toolkit } from "effect/unstable/ai";
+
+const SearchActivities = Tool.make("search_activities", {
+  description: "Find activities in a city.",
+  parameters: Schema.Struct({ city: Schema.String }),
+  success: Schema.Array(Schema.String),
+});
+
+const TravelTools = Toolkit.make(SearchActivities);
+```
+
+Pass `TravelTools` directly to `Agent.make` as its `toolkit`. Implement handlers with
+`TravelTools.toLayer`, using the same Effect AI toolkit.

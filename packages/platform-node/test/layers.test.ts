@@ -26,6 +26,7 @@ import {
   SubmissionLookupById,
   WakeScheduler,
   type DurableSubmitOptions,
+  type DurableWorkerFailure,
   type PersistedJson,
   type SubmissionState,
 } from "@effect-agent/session";
@@ -41,6 +42,7 @@ import type { PlatformError } from "effect";
 import {
   Cause,
   Context,
+  Crypto,
   Deferred,
   Duration,
   Effect,
@@ -81,6 +83,40 @@ const runtimeLayerProbe = NodeDurableRuntime.layer({
   producerId: "producer-proof",
 });
 const hostLayerProbe = NodeDurableHost.layer();
+
+class ContextSetupError extends Schema.TaggedError<ContextSetupError>()("ContextSetupError", {}) {}
+class AuthorizationSetupError extends Schema.TaggedError<AuthorizationSetupError>()(
+  "AuthorizationSetupError",
+  {},
+) {}
+class ContextConfig extends Context.Service<ContextConfig, { readonly fail: boolean }>()(
+  "test/ContextConfig",
+) {}
+class AuthorizationConfig extends Context.Service<
+  AuthorizationConfig,
+  { readonly fail: boolean }
+>()("test/AuthorizationConfig") {}
+
+const configuredContext = Layer.effect(
+  RunContextPreparation,
+  Effect.gen(function* () {
+    yield* Crypto.Crypto;
+    const config = yield* ContextConfig;
+    if (config.fail) return yield* new ContextSetupError();
+    return RunContextPreparation.of({});
+  }),
+);
+const configuredAuthorization = Layer.effect(
+  RunToolAuthorization,
+  Effect.gen(function* () {
+    yield* Crypto.Crypto;
+    const config = yield* AuthorizationConfig;
+    if (config.fail) return yield* new AuthorizationSetupError();
+    return RunToolAuthorization.of({
+      authorize: () => Effect.succeed({ _tag: "denied", reason: "test policy" }),
+    });
+  }),
+);
 type RuntimeLayerServicesProof = Assert<
   Equal<Layer.Success<typeof runtimeLayerProbe>, NodeDurableRuntimeServices>
 >;
@@ -225,6 +261,86 @@ const readLogTags = (conversationId: ConversationId) =>
   });
 
 describe("NodeDurableRuntime", () => {
+  it("preserves independent service construction errors and requirements through runtime and host assembly", () => {
+    const contextOnly = NodeDurableRuntime.layer({
+      ...runtimeOptions("unused.sqlite"),
+      runContext: configuredContext,
+    });
+    const authorizationOnly = NodeDurableRuntime.layer({
+      ...runtimeOptions("unused.sqlite"),
+      toolAuthorization: configuredAuthorization,
+    });
+    const both = NodeDurableHost.layerStack({
+      ...runtimeOptions("unused.sqlite"),
+      runContext: configuredContext,
+      toolAuthorization: configuredAuthorization,
+    });
+    const contextErrors: Assert<
+      Equal<
+        Layer.Error<typeof contextOnly>,
+        NodeDurableRuntimeInitializationError | ContextSetupError
+      >
+    > = true;
+    const contextNeeds: Assert<Equal<Layer.Services<typeof contextOnly>, ContextConfig>> = true;
+    const authorizationErrors: Assert<
+      Equal<
+        Layer.Error<typeof authorizationOnly>,
+        NodeDurableRuntimeInitializationError | AuthorizationSetupError
+      >
+    > = true;
+    const authorizationNeeds: Assert<
+      Equal<Layer.Services<typeof authorizationOnly>, AuthorizationConfig>
+    > = true;
+    const hostErrors: Assert<
+      Equal<
+        Layer.Error<typeof both>,
+        | NodeDurableRuntimeInitializationError
+        | DurableWorkerFailure
+        | ContextSetupError
+        | AuthorizationSetupError
+      >
+    > = true;
+    const hostNeeds: Assert<
+      Equal<Layer.Services<typeof both>, ContextConfig | AuthorizationConfig>
+    > = true;
+    expect([
+      contextErrors,
+      contextNeeds,
+      authorizationErrors,
+      authorizationNeeds,
+      hostErrors,
+      hostNeeds,
+    ]).not.toContain(false);
+  });
+
+  it.effect("returns service initialization failures without converting them to defects", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        for (const contextFails of [true, false]) {
+          const opened = yield* Effect.service(NodeDurableHost).pipe(
+            Effect.provide(
+              NodeDurableHost.layerStack({
+                ...runtimeOptions(filename),
+                runContext: configuredContext,
+                toolAuthorization: configuredAuthorization,
+              }),
+            ),
+            Effect.provide([
+              Layer.succeed(ContextConfig, { fail: contextFails }),
+              Layer.succeed(AuthorizationConfig, { fail: !contextFails }),
+            ]),
+            Effect.exit,
+          );
+          if (Exit.isSuccess(opened))
+            return yield* Effect.die("Expected service initialization to fail");
+          expect(Cause.findErrorOption(opened.cause)).toEqual(
+            Option.some(contextFails ? new ContextSetupError() : new AuthorizationSetupError()),
+          );
+        }
+      }),
+    ),
+  );
+
   it("keeps the assembled Layer contract visible in its types", () => {
     const servicesProof: RuntimeLayerServicesProof = true;
     const errorProof: RuntimeLayerErrorProof = true;
