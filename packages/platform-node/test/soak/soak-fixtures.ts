@@ -4,7 +4,7 @@ import {
   SubagentReservationsMemoryLive,
   SubagentRuntime,
 } from "@effect-agent/capabilities";
-import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import {
   DefinitionDigests,
   Digest,
@@ -13,10 +13,9 @@ import {
   Principal,
   type DurableSubmitOptions,
   type ResolvedBinding,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
-import type { Prompt } from "effect/unstable/ai";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
+import { type Prompt, LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 /**
  * P7 WP4 soak fixtures shared by the soak test (submitting client) and the soak worker entry
@@ -50,17 +49,17 @@ export const SOAK_CHILD_DIGESTS = DefinitionDigests.make({
   tools: Schema.decodeSync(Digest)(SOAK_CHILD_DIGEST_STRINGS.tools),
 });
 
-export const decodeConversationId = Schema.decodeSync(ConversationId);
+export const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeRunId = Schema.decodeSync(RunId);
 const decodeTurnId = Schema.decodeSync(TurnId);
 
 export const soakSubmitOptions = (
-  conversation: string,
+  thread: string,
   key: string,
   digests: DefinitionDigests = SOAK_DIGESTS,
 ): DurableSubmitOptions => ({
-  conversationId: decodeConversationId(conversation),
+  threadId: decodeThreadId(thread),
   principal: SOAK_PRINCIPAL,
   idempotencyKey: decodeIdempotencyKey(key),
   definitions: digests,
@@ -182,7 +181,7 @@ const soakIdentifiers = Layer.effect(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
     return {
-      nextConversationId: next(decodeConversationId, "soak-fixture-conversation"),
+      nextThreadId: next(decodeThreadId, "soak-fixture-thread"),
       nextRunId: next(decodeRunId, "soak-fixture-run"),
       nextTurnId: next(decodeTurnId, "soak-fixture-turn"),
     };

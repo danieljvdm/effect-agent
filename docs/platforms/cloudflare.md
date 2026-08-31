@@ -5,7 +5,7 @@ description: Run durable agents on Cloudflare Workers and Durable Objects.
 
 # Cloudflare
 
-`@effect-agent/platform-cloudflare` stores each conversation and its pending work in a
+`@effect-agent/platform-cloudflare` stores each thread and its pending work in a
 SQLite-backed Durable Object. RPC calls and alarms drive execution and recovery.
 
 ## Install
@@ -15,20 +15,20 @@ bun add @effect-agent/platform-cloudflare@beta
 ```
 
 Also install `effect@4.0.0-rc.111`, `effect-cf@^0.37.0`, `@effect-agent/core@beta`,
-`@effect-agent/session@beta`, `@effect/ai-openai@4.0.0-rc.111`, and
+`@effect-agent/thread@beta`, `@effect/ai-openai@4.0.0-rc.111`, and
 `@effect/platform-browser@4.0.0-rc.111` for the examples below.
 Keep framework packages at one release and add your [model provider](../guide/getting-started#installation-and-compatibility).
 
-## Create the conversation object
+## Create the thread object
 
 Compose agent registrations and application services as a layer, then pass it to
-`ConversationObject.make`. This example expects `OPENAI_API_KEY` and a `CONVERSATIONS` Durable
+`ThreadObject.make`. This example expects `OPENAI_API_KEY` and a `THREADS` Durable
 Object namespace in the generated `Cloudflare.Env`.
 
 ```ts
 import { Agent, AgentPolicy } from "@effect-agent/core";
-import { ConversationObject } from "@effect-agent/platform-cloudflare";
-import { DefinitionDigestInput } from "@effect-agent/session";
+import { ThreadObject } from "@effect-agent/platform-cloudflare";
+import { DefinitionDigestInput } from "@effect-agent/thread";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";
@@ -64,15 +64,15 @@ const OpenAiLive = Layer.unwrap(
   ),
 );
 
-const RuntimeLive = ConversationObject.layer([
+const RuntimeLive = ThreadObject.layer([
   {
     agent: Agent.withModel(TravelPlanner, OpenAiLanguageModel.model(modelName)),
     definitions: travelDefinitions,
   },
 ]).pipe(Layer.provide(OpenAiLive));
 
-export class TravelConversation extends ConversationObject.make(RuntimeLive, {
-  namespaceBinding: "CONVERSATIONS",
+export class TravelThread extends ThreadObject.make(RuntimeLive, {
+  namespaceBinding: "THREADS",
   deploymentId: "travel-planner",
   producerPrefix: "travel-worker",
 }) {}
@@ -84,19 +84,19 @@ submitter passes `digestDefinitions(travelDefinitions)` through
 change. Version tool implementations and model configuration when they change.
 
 Application layers can use `WorkerEnvironment`, `DurableObjectState`,
-`ConversationObjectIdentity`, and Crypto. Use `Layer.unwrap` for configuration-dependent registrations.
+`ThreadObjectIdentity`, and Crypto. Use `Layer.unwrap` for configuration-dependent registrations.
 The application is acquired once per Object instance and rebuilt after eviction. Keep initialization
 local and bounded. Eviction does not guarantee finalizers; acquire resources needing timely cleanup
 inside scoped operations or `options.eventLayer`. Each event runs a bounded recovery pass;
 no worker loop is needed.
 
-Register the exported class as a SQLite Durable Object under `CONVERSATIONS`.
-`ConversationObject.layer([])` registers no agents and refuses every agent identity.
+Register the exported class as a SQLite Durable Object under `THREADS`.
+`ThreadObject.layer([])` registers no agents and refuses every agent identity.
 
 ## Configure runtime services
 
-Provide custom services to `ConversationObject.layer(registrations)` before passing the resulting
-layer to `ConversationObject.make`. For example, add `Layer.provide(RunContextLive)` to
+Provide custom services to `ThreadObject.layer(registrations)` before passing the resulting
+layer to `ThreadObject.make`. For example, add `Layer.provide(RunContextLive)` to
 `RuntimeLive` above to install [prompt preparation or compaction](../guide/context-management).
 Provide a [tool authorization layer](../guide/tools#authorize-tool-calls) in the same place when needed.
 
@@ -117,15 +117,15 @@ Use `options.eventLayer` for per-event observability and resources. Use
   "main": "src/worker.ts",
   "compatibility_date": "2026-08-31",
   "durable_objects": {
-    "bindings": [{ "name": "CONVERSATIONS", "class_name": "TravelConversation" }],
+    "bindings": [{ "name": "THREADS", "class_name": "TravelThread" }],
   },
   "exports": {
-    "TravelConversation": { "type": "durable-object", "storage": "sqlite" },
+    "TravelThread": { "type": "durable-object", "storage": "sqlite" },
   },
 }
 ```
 
-Match `CONVERSATIONS` to `namespaceBinding` and `TravelConversation` to the exported class.
+Match `THREADS` to `namespaceBinding` and `TravelThread` to the exported class.
 See Cloudflare's [class configuration guide](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)
 for Workers using the older `migrations` array.
 
@@ -133,21 +133,18 @@ for Workers using the older `migrations` array.
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import {
-  CloudflareConversationClient,
-  conversationNamespaceLayer,
-} from "@effect-agent/platform-cloudflare";
+import { CloudflareThreadClient, threadNamespaceLayer } from "@effect-agent/platform-cloudflare";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { Layer } from "effect";
 
-export const conversationClientLayer = (env: unknown) =>
-  CloudflareConversationClient.layer.pipe(
-    Layer.provide(conversationNamespaceLayer(env, "CONVERSATIONS")),
+export const threadClientLayer = (env: unknown) =>
+  CloudflareThreadClient.layer.pipe(
+    Layer.provide(threadNamespaceLayer(env, "THREADS")),
     Layer.provide(BrowserCrypto.layer),
   );
 ```
 
-In an authenticated handler, call `client.submit(agent, input, options)` with the conversation ID,
+In an authenticated handler, call `client.submit(agent, input, options)` with the thread ID,
 principal, idempotency key, and definition digests. Return its receipt after admission.
 
 Use `client.awaitSettlement(receipt)` for completion.
@@ -175,4 +172,4 @@ its agent runs ephemerally and uses the Object for data only.
 
 The [browser guide](../guide/browser) covers Quick Actions, screenshots, REST capture and crawl,
 and interactive passes with Live View and handoff. Browser adapters use separate package imports
-and can be used without a durable conversation host. REST capture and crawl also work on Node.
+and can be used without a durable thread host. REST capture and crawl also work on Node.

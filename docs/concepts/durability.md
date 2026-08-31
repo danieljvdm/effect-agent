@@ -13,19 +13,19 @@ owes one terminal settlement for every acknowledged submission.
 
 ## Execution modes {#four-deployment-classes}
 
-| Class | Meaning                                                  |
-| ----- | -------------------------------------------------------- |
-| `E`   | ephemeral execution with no process-loss recovery        |
-| `P`   | conversation history survives restart; clients may retry |
-| `DN`  | durable admission and recovery on Node and SQLite        |
-| `DC`  | the same contract on Cloudflare Durable Objects          |
+| Class | Meaning                                            |
+| ----- | -------------------------------------------------- |
+| `E`   | ephemeral execution with no process-loss recovery  |
+| `P`   | thread history survives restart; clients may retry |
+| `DN`  | durable admission and recovery on Node and SQLite  |
+| `DC`  | the same contract on Cloudflare Durable Objects    |
 
 Choose a deployment class and adapter with the recovery guarantees your application needs.
 See the [Node.js](../platforms/node) and [Cloudflare](../platforms/cloudflare) guides for setup.
 
 ## Rebuild from the log {#canonical-history}
 
-The conversation log is an append-only sequence of versioned facts. It is authoritative for
+The thread log is an append-only sequence of versioned facts. It is authoritative for
 applied input and terminal outcomes. Projections, checkpoints, indexes, and UI views can be rebuilt.
 
 Replay rebuilds state from records. It never executes a tool or repeats an external effect.
@@ -36,7 +36,7 @@ The submission ledger owns admission, FIFO readiness, attempt ownership, abort i
 and the obligation to settle accepted work.
 
 ```text
-conversation log              submission ledger
+thread log              submission ledger
 what happened                 what is still owed
 append-only                   operational, mutable, audited
 replay authority              claim and scheduling authority
@@ -61,7 +61,7 @@ need storage, versioned registrations, and a recovery driver. See the platform s
 
 ## Admission and recovery
 
-The runtime returns a Receipt after durable ledger admission, conversation materialization, and
+The runtime returns a Receipt after durable ledger admission, thread materialization, and
 readiness. Reusing an admission key with the same input returns the same Receipt. Different input
 conflicts. Admission sequence sets queue order.
 
@@ -90,7 +90,7 @@ See [Operations](../guide/operations).
 ## Attached subagents
 
 Use [`Subagent.define`](../guide/subagents#define-a-delegation) to expose a child agent as a tool.
-A durable child owns a separate conversation and attempt. While waiting for it, the parent releases
+A durable child owns a separate thread and attempt. While waiting for it, the parent releases
 its worker permit.
 
 Recovery preserves child identity and checks the registered tool's delegation classification.

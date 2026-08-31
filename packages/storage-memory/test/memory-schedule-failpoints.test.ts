@@ -1,4 +1,4 @@
-import { AgentId, ConversationId, ReceiptId, SubmissionId } from "@effect-agent/core";
+import { AgentId, ThreadId, ReceiptId, SubmissionId } from "@effect-agent/core";
 import {
   DefinitionDigests,
   Digest,
@@ -13,7 +13,7 @@ import {
   type ScheduleKey,
   type ScheduleRecord,
   ScheduleStore,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 
@@ -21,14 +21,14 @@ import { MemoryScheduleStoreLive } from "../src/index.ts";
 
 const principal = Schema.decodeSync(Principal)("memory-schedule-failpoint-principal");
 const agentId = Schema.decodeSync(AgentId)("memory-schedule-failpoint-agent");
-const conversationId = Schema.decodeSync(ConversationId)("memory-schedule-failpoint-conversation");
+const threadId = Schema.decodeSync(ThreadId)("memory-schedule-failpoint-thread");
 const digest = Schema.decodeSync(Digest)("d".repeat(64));
 const occurrenceId = Schema.decodeSync(Digest)("e".repeat(64));
 const definitions = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
 const receipt = Receipt.make({
   receiptId: Schema.decodeSync(ReceiptId)("memory-schedule-failpoint-receipt"),
   submissionId: Schema.decodeSync(SubmissionId)("memory-schedule-failpoint-submission"),
-  conversationId,
+  threadId,
   queueSequence: Schema.decodeSync(QueueSequence)(1),
 });
 
@@ -50,7 +50,7 @@ const record = (name: string, pending: boolean): ScheduleRecord => {
     version: 1,
     configuration: {
       timing: { _tag: "At", atMillis: 100 },
-      destination: { _tag: "ExistingConversation", conversationId },
+      destination: { _tag: "ExistingThread", threadId },
       deliveryPrincipal: principal,
       agentId,
       definitions,
@@ -75,7 +75,7 @@ const record = (name: string, pending: boolean): ScheduleRecord => {
         intendedAtMillis: 100,
         preparedAtMillis: 110,
         occurrenceId,
-        conversationId,
+        threadId,
         deliveryPrincipal: principal,
         agentId,
         definitions,

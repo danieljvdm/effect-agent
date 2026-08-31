@@ -9,7 +9,7 @@ import {
   Scheduling,
   ScheduleDriver,
   defaultSchedulingLimits,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { NodeCrypto } from "@effect/platform-node";
 import { Cause, Duration, Effect, Layer, Option, PubSub, Result } from "effect";
 

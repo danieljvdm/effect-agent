@@ -3,13 +3,13 @@ import {
   type DurableSubmitAgent,
   type ScheduleCreateOptions,
   Scheduling,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Layer, type Schema } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 
 import {
   CloudflareSchedulingClient,
-  ConversationObjectNamespace,
+  ThreadObjectNamespace,
   ScheduleOwnerNamespace,
   makeScheduleOwnerObjectClass,
 } from "../src/index.ts";
@@ -25,8 +25,8 @@ export const makeSchedulingOwner = <E>(
     Layer.merge(
       authorizer,
       Layer.effect(
-        ConversationObjectNamespace,
-        Effect.map(WorkerEnvironment, (env) => ({ namespace: env.CONVERSATIONS })),
+        ThreadObjectNamespace,
+        Effect.map(WorkerEnvironment, (env) => ({ namespace: env.THREADS })),
       ),
     ),
   );

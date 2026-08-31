@@ -20,7 +20,7 @@ const definition = Agent.make("support-triage", {
 const run = AgentRuntime.run(definition, input).pipe(Effect.provide(ClaudeModel));
 ```
 
-Definitions contain no provider client, database connection, mutable conversation, or acquired
+Definitions contain no provider client, database connection, mutable thread, or acquired
 resource. Reuse one definition across many runs.
 
 ## Build a definition {#definition-contract}

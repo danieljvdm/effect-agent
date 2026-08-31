@@ -1,22 +1,22 @@
 ---
 title: Certify storage adapters
-description: Certify a SubmissionLedger and ConversationStore pair at three failure levels.
+description: Certify a SubmissionLedger and ThreadStore pair at three failure levels.
 ---
 
 # Certify storage adapters
 
-`certifyDurableAdapters` tests a candidate `SubmissionLedger` and `ConversationStore` pair and
+`certifyDurableAdapters` tests a candidate `SubmissionLedger` and `ThreadStore` pair and
 returns one schema-encoded report.
 
 | Level                      | Evidence                                                                           |
 | -------------------------- | ---------------------------------------------------------------------------------- |
-| 1. Port contract           | Runs all shared ledger and conversation store conformance cases                    |
+| 1. Port contract           | Runs all shared ledger and thread store conformance cases                          |
 | 2. Coordinator convergence | Injects each coordinator failpoint into six durable scenarios and drives recovery  |
 | 3. Runtime loss            | Exercises process termination or eviction, or records the committed suites that do |
 
 ## Implement the store contract {#store-contract}
 
-A `ConversationStore` materializes a conversation, appends fenced batches, reads or observes
+A `ThreadStore` materializes a thread, appends fenced batches, reads or observes
 records, exports history, and inspects the tail. Appends must be atomic, digest-bound, idempotent by
 batch ID, checked against the expected tail, and fenced by producer epoch. Reads decode stored
 values through schemas.
@@ -35,7 +35,7 @@ const certificate = Effect.gen(function* () {
   return yield* certifyDurableAdapters({
     adapter: { name: "@your-org/storage-yours" },
     submissionLedger: yourLedgerLayer,
-    conversationStore: yourStoreLayer,
+    threadStore: yourStoreLayer,
     tierThreeEvidence: ["path/to/your/real-loss.test.ts"],
   });
 });
@@ -72,9 +72,9 @@ without earning durable certification. Reports use the `effect-agent/certificati
 ## Interpret tier 2 results {#what-tier-2-asserts-exactly}
 
 Tier 2 arms every coordinator failpoint across six scenarios. Each cell uses fresh
-conversation state, injects one failpoint, and drives recovery through public operations. The
+thread state, injects one failpoint, and drives recovery through public operations. The
 runner resolves unknown outcomes as `SafeToRetry` and approvals as `approved` only when
-`explainConversation` authorizes that action.
+`explainThread` authorizes that action.
 
 Each cell reports:
 
@@ -102,15 +102,15 @@ checker as the administrative `verify` operation.
 <a id="shipped-adapter-tests"></a>
 
 Import `CertificationReport`, `certifyPorts`, and the shared conformance case arrays from
-`@effect-agent/session/testing`. Production schemas, ports, replay, verification, and runtime APIs
-remain in `@effect-agent/session`.
+`@effect-agent/thread/testing`. Production schemas, ports, replay, verification, and runtime APIs
+remain in `@effect-agent/thread`.
 
 ## Certify subscription stores {#subscription-stores}
 
 An adapter that implements `SubscriptionStore` must also run
-`subscriptionStoreConformanceCases` from `@effect-agent/session/testing`. Give each case a fresh
+`subscriptionStoreConformanceCases` from `@effect-agent/thread/testing`. Give each case a fresh
 partition. The cases cover intake cutoffs, deduplication, once selection, capacity, cancellation,
 prepared recovery, catch-up, scan cursors, and replay after limits tighten.
 
-The conversation and submission certificate does not include these cases. Add restart or eviction
+The thread and submission certificate does not include these cases. Add restart or eviction
 tests around intake, partial fanout, selection, preparation, admission, and receipt persistence.

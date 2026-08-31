@@ -1,6 +1,6 @@
 import type {
   AgentId,
-  ConversationId,
+  ThreadId,
   DelegationDepth,
   DelegationId,
   ReceiptId,
@@ -22,7 +22,7 @@ import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
 /** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
 interface ToolFailureIdentity {
   readonly agentId: AgentId;
-  readonly conversationId: ConversationId;
+  readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly turnId: TurnId;
   readonly toolName: string;
@@ -161,7 +161,7 @@ export type RunApprovalDecision =
 /** Native Effect AI approval request enriched with stable Run identities. */
 export interface RunApprovalRequest {
   readonly request: Response.ToolApprovalRequestPart;
-  readonly conversationId: ConversationId;
+  readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly turnId: TurnId;
   readonly toolCallId: ToolCallId;
@@ -178,7 +178,7 @@ export interface RunApprovalHook<Error = never, Requirements = never> {
 
 /** Input passed to ordered context transformation and compaction adapters. */
 export interface RunContextRequest {
-  readonly conversationId: ConversationId;
+  readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly turnId: TurnId;
   readonly turn: number;
@@ -311,7 +311,7 @@ export type RunToolAuthorizationDecision =
  * reauthorized because no Handler can start for them.
  */
 export interface RunToolAuthorizationRequest {
-  readonly conversationId: ConversationId;
+  readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly turnId: TurnId;
   readonly turn: number;
@@ -329,7 +329,7 @@ export interface RunToolAuthorizationHook<Error = never, Requirements = never> {
 /**
  * Host-owned model-context preparation, independent of action-time Tool authorization.
  *
- * The service is intentionally narrower than a Conversation store. Durable coordinators capture
+ * The service is intentionally narrower than a Thread store. Durable coordinators capture
  * it once while their runtime Layer is acquired. Compatible assemblies explicitly provide
  * `RunContextPreparationPassthrough`. Installing a compactor cannot replace `RunToolAuthorization`.
  */
@@ -462,7 +462,7 @@ export interface RunDurabilityHook<Error = never, Requirements = never> {
 
 /**
  * `DefinitionDigests`-shaped digests of one child Agent Binding in plain
- * string form. The durable coordinator's session-owned digest Schema never
+ * string form. The durable coordinator's thread-owned digest Schema never
  * crosses inward: the delegation capability computes these exact digests at
  * handler-Layer construction and the coordinator stores and verifies them
  * byte-for-byte (SUB-023 exact-digest binding resolution).
@@ -478,7 +478,7 @@ export interface RunSubagentDigests {
  * durable coordinator, expressed strictly
  * in core/engine vocabulary. The coordinator derives everything else
  * deterministically: reservation identity from `(parentRunId, toolCallId)`,
- * child Conversation/Submission identity and the admission idempotency key
+ * child Thread/Submission identity and the admission idempotency key
  * from the parent Run and Tool Call pair, the child principal from the parent
  * Submission, and digests of the encoded input/grant/allocation values (it
  * owns the canonical digest authority). Establishment is idempotent by
@@ -505,7 +505,7 @@ export interface RunSubagentEstablishRequest {
 
 /** Durable identity of one established attached child, in core vocabulary. */
 export interface RunSubagentChildIdentity {
-  readonly childConversationId: ConversationId;
+  readonly childThreadId: ThreadId;
   readonly childSubmissionId: SubmissionId;
   readonly childRunId: RunId;
   /** The child Receipt: establishment is never durable-visible before it exists (SUB-017). */
@@ -716,13 +716,13 @@ export interface RunBufferLimits {
 }
 
 /**
- * Per-Run values and advanced integration hooks. Use ConversationHistory for successful-run
+ * Per-Run values and advanced integration hooks. Use ThreadHistory for successful-run
  * retention. Hook failures and requirements stay visible in the returned Stream / Effect
  * through the generic parameters.
  */
 export interface RunOptions<HookError = never, HookRequirements = never> {
-  /** Reuse a Conversation identity, including retained history, instead of allocating one. */
-  readonly conversationId?: ConversationId | undefined;
+  /** Reuse a Thread identity, including retained history, instead of allocating one. */
+  readonly threadId?: ThreadId | undefined;
   /**
    * Preallocated Run identity used instead of `IdGenerator` when supplied.
    * The S1 Subagent seam preallocates child Run identity through this option
@@ -738,9 +738,9 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    */
   readonly parentLink?: SubagentParentLink | undefined;
   /**
-   * Explicit initial Prompt data, not a retention policy. With ConversationHistory.layerTransient,
+   * Explicit initial Prompt data, not a retention policy. With ThreadHistory.layerTransient,
    * the engine preserves this exact prefix, then appends this Run's evaluated instructions and
-   * rendered input. Context preparation never mutates this source. Retaining ConversationHistory
+   * rendered input. Context preparation never mutates this source. Retaining ThreadHistory
    * adapters load their own prefix and reject this option, even when the Prompt is empty.
    */
   readonly history?: Prompt.Prompt | undefined;
@@ -827,12 +827,12 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   /** Optional tightening-only overrides for the engine's finite in-memory buffer ceilings. */
   readonly bufferLimits?: RunBufferLimits | undefined;
   /**
-   * Advanced incremental history integration, used with ConversationHistory.layerTransient.
+   * Advanced incremental history integration, used with ThreadHistory.layerTransient.
    * Invoked inline with the full Prompt whenever official history advances, including initial
    * instructions/input before the first model call. It can write before the Run succeeds or its
    * resources close. Failure stops execution through HookError; defects and interruption propagate.
    * Earlier callback writes are caller-owned and are not rolled back if this or a later step fails.
-   * Use ConversationHistory for successful-run retention. Retaining adapters reject this hook;
+   * Use ThreadHistory for successful-run retention. Retaining adapters reject this hook;
    * the durable coordinator uses it for live Prompt state while its journal owns durable commits.
    */
   readonly onHistory?:

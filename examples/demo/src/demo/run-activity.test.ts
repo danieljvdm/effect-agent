@@ -9,7 +9,7 @@ const event = (input: typeof RunEvent.Encoded): RunEvent => Schema.decodeSync(Ru
 const base = {
   eventVersion: 1 as const,
   runId: "run-1",
-  conversationId: "conversation-1",
+  threadId: "thread-1",
   agentId: "general-chat-openai",
   timestamp: "2026-07-29T12:00:00.000Z",
 };

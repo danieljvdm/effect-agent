@@ -73,22 +73,22 @@ import {
   submissionAbortRecordId,
   type ChildSettledOutcome,
   type SuspensionOutcome,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Clock, Context, Crypto, DateTime, Effect, Layer, Option, Schema, Stream } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
+import { decodeRows, initializeDoJournal } from "./do-journal.ts";
+import { DoStorageConfig } from "./do-storage-config.ts";
+import { DoStorageFailpoint } from "./do-storage-failpoint.ts";
 import {
   storageConfigLayer,
   storageFailpointLayer,
   type DoStorageInitializationError,
   type DoStorageOptions,
-} from "./do-conversation-store.ts";
-import { decodeRows, initializeDoJournal } from "./do-journal.ts";
-import { DoStorageConfig } from "./do-storage-config.ts";
-import { DoStorageFailpoint } from "./do-storage-failpoint.ts";
+} from "./do-thread-store.ts";
 import {
   DoLedgerError,
   DoStorageCorruptionError,
@@ -117,7 +117,7 @@ const MAX_IDENTIFIER_LENGTH = 1_024;
 
 class SubmissionRow extends Schema.Class<SubmissionRow>("SubmissionRow")({
   submission_id: BoundedIdentifier,
-  conversation_id: BoundedIdentifier,
+  thread_id: BoundedIdentifier,
   queue_sequence: QueueSequence,
   principal: BoundedIdentifier,
   idempotency_key: BoundedIdentifier,
@@ -221,7 +221,7 @@ class CanonicalRecordIdRow extends Schema.Class<CanonicalRecordIdRow>("Canonical
 
 const SUBMISSION_COLUMNS = `
   submission_id,
-  conversation_id,
+  thread_id,
   queue_sequence,
   principal,
   idempotency_key,
@@ -260,7 +260,7 @@ const CHILD_RESERVATION_COLUMNS = `
   released_at
 `;
 
-/** The branded ToolCallId schema, reached through the session port so no core import is needed. */
+/** The branded ToolCallId schema, reached through the thread port so no core import is needed. */
 const ToolCallIdSchema = ApprovalDecisionCommand.fields.toolCallId;
 const ToolCallIdList = Schema.Array(ToolCallIdSchema);
 
@@ -452,20 +452,20 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
   });
 
-  const conversationEpoch = Effect.fn("DoSubmissionLedger.conversationEpoch")(function* (
+  const threadEpoch = Effect.fn("DoSubmissionLedger.threadEpoch")(function* (
     operation: string,
-    conversationId: string,
+    threadId: string,
   ): Effect.fn.Return<ProducerEpoch, LedgerError> {
-    const conversations = yield* journal
-      .getConversation(conversationId)
+    const threads = yield* journal
+      .getThread(threadId)
       .pipe(Effect.mapError(internalFailure(operation)));
-    return conversations.length === 0 ? EPOCH_ZERO : conversations[0].producer_epoch;
+    return threads.length === 0 ? EPOCH_ZERO : threads[0].producer_epoch;
   });
 
   /**
    * Verify inside the surrounding write transaction that the presented token still owns the
    * Submission's lane; a superseded or missing token fails with OwnershipLost carrying the
-   * Conversation's current producer epoch (DUR-006).
+   * Thread's current producer epoch (DUR-006).
    */
   const requireOwnership = Effect.fn("DoSubmissionLedger.requireOwnership")(function* (
     operation: string,
@@ -474,7 +474,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   ): Effect.fn.Return<OwnershipRow, OwnershipLost | LedgerError> {
     const ownership = yield* readOwnership(operation, submission.submission_id);
     if (Option.isNone(ownership) || ownership.value.ownership_token !== ownershipToken) {
-      const actualEpoch = yield* conversationEpoch(operation, submission.conversation_id);
+      const actualEpoch = yield* threadEpoch(operation, submission.thread_id);
       const submissionId = yield* Schema.decodeUnknownEffect(
         SubmissionSnapshot.fields.submissionId,
       )(submission.submission_id).pipe(Effect.mapError(internalFailure(operation)));
@@ -518,7 +518,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       }
       return yield* decodeSubmissionSnapshotUnknown({
         submissionId: row.submission_id,
-        conversationId: row.conversation_id,
+        threadId: row.thread_id,
         queueSequence: row.queue_sequence,
         principal: row.principal,
         idempotencyKey: row.idempotency_key,
@@ -889,20 +889,20 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
    */
   const canonicalAbortRecordId = Effect.fn("DoSubmissionLedger.canonicalAbortRecordId")(function* (
     operation: string,
-    conversationId: string,
+    threadId: string,
     submissionId: SubmissionId,
   ): Effect.fn.Return<string | undefined, LedgerError> {
     const recordId = submissionAbortRecordId(submissionId);
     const rows = yield* sql<Record<string, unknown>>`
       SELECT record_id
       FROM effect_agent_canonical_records
-      WHERE conversation_id = ${conversationId}
+      WHERE thread_id = ${threadId}
         AND record_id = ${recordId}
     `.pipe(Effect.mapError(sqlFailure(operation)));
     const decoded = yield* decodeRows(
       Schema.Array(CanonicalRecordIdRow),
       "effect_agent_canonical_records",
-      `${conversationId}/${recordId}`,
+      `${threadId}/${recordId}`,
       rows,
     ).pipe(Effect.mapError(internalFailure(operation)));
     return decoded.length === 0 ? undefined : recordId;
@@ -916,7 +916,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   ): Effect.fn.Return<AbortIntent, LedgerError> {
     const canonicalRecordId = yield* canonicalAbortRecordId(
       operation,
-      submission.conversation_id,
+      submission.thread_id,
       submissionId,
     );
     return yield* decodeAbortIntent({
@@ -961,17 +961,17 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       const agentDigestsJson = yield* encodeDefinitionDigestsText(validated.agentDigests).pipe(
         Effect.mapError(internalFailure(operation)),
       );
-      // Routable Submission identity (D-P6-5): `{uuidv7}:{conversationId}`. The cross-DO
+      // Routable Submission identity (D-P6-5): `{uuidv7}:{threadId}`. The cross-DO
       // routing layer parses ITS OWN minted format (split at the first ":") to address
-      // submissionId-only operations to the owning Conversation Object; the id stays opaque
+      // submissionId-only operations to the owning Thread Object; the id stays opaque
       // to every other component, exactly like DN's `submission-{uuid}` prefix.
-      const mintedSubmissionId = `${yield* mintUuid(operation)}:${validated.conversationId}`;
+      const mintedSubmissionId = `${yield* mintUuid(operation)}:${validated.threadId}`;
       if (mintedSubmissionId.length > MAX_IDENTIFIER_LENGTH) {
         return yield* LedgerError.make({
           operation,
           message:
             `A routable Submission identity of ${mintedSubmissionId.length} characters exceeds ` +
-            `the ${MAX_IDENTIFIER_LENGTH}-character ledger row bound; shorten the Conversation identity.`,
+            `the ${MAX_IDENTIFIER_LENGTH}-character ledger row bound; shorten the Thread identity.`,
         });
       }
       const mintedReceiptId = `receipt-${yield* mintUuid(operation)}`;
@@ -979,11 +979,11 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       const result = yield* inWriteTransaction(
         operation,
         Effect.gen(function* () {
-          const keyRowKey = `${validated.conversationId}/${validated.principal}/${validated.idempotencyKey}`;
+          const keyRowKey = `${validated.threadId}/${validated.principal}/${validated.idempotencyKey}`;
           const existingRows = yield* sql<Record<string, unknown>>`
             SELECT ${sql.literal(SUBMISSION_COLUMNS)}
             FROM effect_agent_submissions
-            WHERE conversation_id = ${validated.conversationId}
+            WHERE thread_id = ${validated.threadId}
               AND principal = ${validated.principal}
               AND idempotency_key = ${validated.idempotencyKey}
           `.pipe(Effect.mapError(sqlFailure(operation)));
@@ -1007,7 +1007,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
                   existing[0].parent_tool_call_id === validated.parentLinkage.parentToolCallId;
             if (existing[0].input_digest !== validated.inputDigest || !sameLinkage) {
               return yield* AdmissionConflict.make({
-                conversationId: validated.conversationId,
+                threadId: validated.threadId,
                 principal: validated.principal,
                 idempotencyKey: validated.idempotencyKey,
                 existingInputDigest: existing[0].input_digest,
@@ -1026,12 +1026,12 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           const maxRows = yield* sql<Record<string, unknown>>`
             SELECT COALESCE(MAX(queue_sequence), 0) AS max_queue_sequence
             FROM effect_agent_submissions
-            WHERE conversation_id = ${validated.conversationId}
+            WHERE thread_id = ${validated.threadId}
           `.pipe(Effect.mapError(sqlFailure(operation)));
           const decodedMax = yield* decodeRows(
             Schema.Array(MaxQueueSequenceRow),
             "effect_agent_submissions",
-            validated.conversationId,
+            validated.threadId,
             maxRows,
           ).pipe(Effect.mapError(internalFailure(operation)));
           const queueSequence = yield* decodeQueueSequence(
@@ -1042,7 +1042,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           yield* sql`
             INSERT INTO effect_agent_submissions (
               submission_id,
-              conversation_id,
+              thread_id,
               queue_sequence,
               principal,
               idempotency_key,
@@ -1058,7 +1058,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               parent_tool_call_id
             ) VALUES (
               ${mintedSubmissionId},
-              ${validated.conversationId},
+              ${validated.threadId},
               ${queueSequence},
               ${validated.principal},
               ${validated.idempotencyKey},
@@ -1127,20 +1127,20 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       const rows = yield* sql<Record<string, unknown>>`
       SELECT ${sql.literal(SUBMISSION_COLUMNS)}
       FROM effect_agent_submissions
-      WHERE conversation_id = ${validated.conversationId}
+      WHERE thread_id = ${validated.threadId}
         AND principal = ${validated.principal}
         AND idempotency_key = ${validated.idempotencyKey}
     `.pipe(Effect.mapError(sqlFailure(operation)));
       const decoded = yield* decodeSubmissionRows(
         operation,
-        `${validated.conversationId}/${validated.principal}/${validated.idempotencyKey}`,
+        `${validated.threadId}/${validated.principal}/${validated.idempotencyKey}`,
         rows,
       );
       if (decoded.length > 1) {
         return yield* corruptionFailure(
           operation,
           "effect_agent_submissions",
-          `${validated.conversationId}/${validated.principal}/${validated.idempotencyKey}`,
+          `${validated.threadId}/${validated.principal}/${validated.idempotencyKey}`,
           "An admission idempotency key returned more than one row.",
         );
       }
@@ -1149,7 +1149,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     },
   );
 
-  // This LOCAL facet is the authoritative owner of every Conversation stored in this Durable
+  // This LOCAL facet is the authoritative owner of every Thread stored in this Durable
   // Object, so the key-scoped read IS the admission truth and the tri-state degenerates to
   // NotAdmitted or Admitted (SUB-031). `AdmissionIndeterminate` becomes real one layer out:
   // the WP2 routed decorator answers it when the OWNING Durable Object is unreachable.
@@ -1163,20 +1163,20 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     const rows = yield* sql<Record<string, unknown>>`
       SELECT ${sql.literal(SUBMISSION_COLUMNS)}
       FROM effect_agent_submissions
-      WHERE conversation_id = ${validated.conversationId}
+      WHERE thread_id = ${validated.threadId}
         AND principal = ${validated.principal}
         AND idempotency_key = ${validated.idempotencyKey}
     `.pipe(Effect.mapError(sqlFailure(operation)));
     const decoded = yield* decodeSubmissionRows(
       operation,
-      `${validated.conversationId}/${validated.principal}/${validated.idempotencyKey}`,
+      `${validated.threadId}/${validated.principal}/${validated.idempotencyKey}`,
       rows,
     );
     if (decoded.length > 1) {
       return yield* corruptionFailure(
         operation,
         "effect_agent_submissions",
-        `${validated.conversationId}/${validated.principal}/${validated.idempotencyKey}`,
+        `${validated.threadId}/${validated.principal}/${validated.idempotencyKey}`,
         "An admission idempotency key returned more than one row.",
       );
     }
@@ -1201,12 +1201,12 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           const headRows = yield* sql<Record<string, unknown>>`
             SELECT ${sql.literal(SUBMISSION_COLUMNS)}
             FROM effect_agent_submissions
-            WHERE conversation_id = ${validated.conversationId}
+            WHERE thread_id = ${validated.threadId}
               AND state <> 'settled'
             ORDER BY queue_sequence ASC
             LIMIT 1
           `.pipe(Effect.mapError(sqlFailure(operation)));
-          const heads = yield* decodeSubmissionRows(operation, validated.conversationId, headRows);
+          const heads = yield* decodeSubmissionRows(operation, validated.threadId, headRows);
           if (heads.length === 0) return Option.none<Claim>();
           const head = heads[0];
 
@@ -1236,25 +1236,25 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             if (expiresAt > now.millis) return Option.none<Claim>();
           }
 
-          // Bump the Conversation's producer epoch atomically with the claim so every stale
-          // Attempt is fenced out of canonical appends (DUR-006). A Conversation that was
+          // Bump the Thread's producer epoch atomically with the claim so every stale
+          // Attempt is fenced out of canonical appends (DUR-006). A Thread that was
           // never materialized (eviction between admission and materialization) is created
           // here so recovery can claim first and re-materialize idempotently at this epoch.
-          const conversations = yield* journal
-            .getConversation(head.conversation_id)
+          const threads = yield* journal
+            .getThread(head.thread_id)
             .pipe(Effect.mapError(internalFailure(operation)));
           let producerEpoch: number;
-          if (conversations.length === 0) {
+          if (threads.length === 0) {
             producerEpoch = 1;
             yield* sql`
-              INSERT INTO effect_agent_conversations (
-                conversation_id,
+              INSERT INTO effect_agent_threads (
+                thread_id,
                 created_at,
                 tail_sequence,
                 tail_digest,
                 producer_epoch
               ) VALUES (
-                ${head.conversation_id},
+                ${head.thread_id},
                 ${now.iso},
                 0,
                 ${EMPTY_TAIL_DIGEST},
@@ -1262,11 +1262,11 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               )
             `.pipe(Effect.mapError(sqlFailure(operation)));
           } else {
-            producerEpoch = conversations[0].producer_epoch + 1;
+            producerEpoch = threads[0].producer_epoch + 1;
             yield* sql`
-              UPDATE effect_agent_conversations
+              UPDATE effect_agent_threads
               SET producer_epoch = ${producerEpoch}
-              WHERE conversation_id = ${head.conversation_id}
+              WHERE thread_id = ${head.thread_id}
             `.pipe(Effect.mapError(sqlFailure(operation)));
           }
 
@@ -1299,14 +1299,14 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             INSERT INTO effect_agent_attempts (
               attempt_id,
               submission_id,
-              conversation_id,
+              thread_id,
               owner_producer_id,
               producer_epoch,
               claimed_at
             ) VALUES (
               ${attemptId},
               ${head.submission_id},
-              ${head.conversation_id},
+              ${head.thread_id},
               ${validated.producerId},
               ${producerEpoch},
               ${now.iso}
@@ -1743,7 +1743,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         `.pipe(Effect.mapError(sqlFailure(operation)));
         const canonicalRecordId = yield* canonicalAbortRecordId(
           operation,
-          submission.conversation_id,
+          submission.thread_id,
           validated.submissionId,
         );
         return yield* decodeAbortIntent({
@@ -1771,10 +1771,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       operation,
       Effect.gen(function* () {
         const host = yield* requireSubmission(operation, validated.hostSubmissionId);
-        if (host.conversation_id !== validated.conversationId) {
+        if (host.thread_id !== validated.threadId) {
           return yield* LedgerError.make({
             operation,
-            message: `Host submission ${validated.hostSubmissionId} does not belong to conversation ${validated.conversationId}.`,
+            message: `Host submission ${validated.hostSubmissionId} does not belong to thread ${validated.threadId}.`,
           });
         }
         // The host Attempt already owns the lane; no epoch bump happens here (plan §2.5).
@@ -1782,11 +1782,11 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         const laterRows = yield* sql<Record<string, unknown>>`
           SELECT ${sql.literal(SUBMISSION_COLUMNS)}
           FROM effect_agent_submissions
-          WHERE conversation_id = ${validated.conversationId}
+          WHERE thread_id = ${validated.threadId}
             AND queue_sequence > ${host.queue_sequence}
           ORDER BY queue_sequence ASC
         `.pipe(Effect.mapError(sqlFailure(operation)));
-        const later = yield* decodeSubmissionRows(operation, validated.conversationId, laterRows);
+        const later = yield* decodeSubmissionRows(operation, validated.threadId, laterRows);
         const claimed: Array<JoiningClaim> = [];
         for (const row of later) {
           if (claimed.length >= validated.maxCount) break;
@@ -1956,7 +1956,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           // A covering event that raced ahead of the suspend transaction resumes the caller
           // immediately WITHOUT releasing the lane (plan §2.6, §12). For WaitingForChild the
           // covering evidence is EITHER a locally settled child row OR a durable cross-store
-          // notification marker: parent and child Conversations live in different Durable
+          // notification marker: parent and child Threads live in different Durable
           // Objects, and the port contract requires that a child settlement reported (via
           // `recordChildSettled` → marker) before this suspend commits is observed here.
           if (validated.reason._tag === "ApprovalPending") {
@@ -2667,7 +2667,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   });
 
   interface ScanCursor {
-    readonly conversationId: string;
+    readonly threadId: string;
     readonly queueSequence: number;
   }
 
@@ -2684,7 +2684,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           SELECT ${sql.literal(SUBMISSION_COLUMNS)}
           FROM effect_agent_submissions
           WHERE state <> 'settled'
-          ORDER BY conversation_id ASC, queue_sequence ASC
+          ORDER BY thread_id ASC, queue_sequence ASC
           LIMIT ${SCAN_PAGE_SIZE}
         `
         : sql<Record<string, unknown>>`
@@ -2692,13 +2692,13 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           FROM effect_agent_submissions
           WHERE state <> 'settled'
             AND (
-              conversation_id > ${cursor.conversationId}
+              thread_id > ${cursor.threadId}
               OR (
-                conversation_id = ${cursor.conversationId}
+                thread_id = ${cursor.threadId}
                 AND queue_sequence > ${cursor.queueSequence}
               )
             )
-          ORDER BY conversation_id ASC, queue_sequence ASC
+          ORDER BY thread_id ASC, queue_sequence ASC
           LIMIT ${SCAN_PAGE_SIZE}
         `
     ).pipe(Effect.mapError(sqlFailure(operation)));
@@ -2711,7 +2711,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       last === undefined || decoded.length < SCAN_PAGE_SIZE
         ? Option.none()
         : Option.some({
-            conversationId: last.conversation_id,
+            threadId: last.thread_id,
             queueSequence: last.queue_sequence,
           });
     return [snapshots, next] as const;
@@ -2987,7 +2987,7 @@ export const submissionLedgerLayer: Layer.Layer<
 
 /**
  * A composition-root convenience Layer for the durable Submission Ledger. Point it at the
- * same `ctx.storage` as the ConversationStore so claims fence the same producer epochs.
+ * same `ctx.storage` as the ThreadStore so claims fence the same producer epochs.
  */
 export const ledgerLayer = (
   options: DoStorageOptions,

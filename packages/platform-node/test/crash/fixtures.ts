@@ -9,7 +9,7 @@ import {
 import {
   Agent,
   AgentPolicy,
-  ConversationId,
+  ThreadId,
   IdGenerator,
   RunId,
   ToolCallId,
@@ -31,7 +31,7 @@ import {
   ToolReconciler,
   type DurableSubmitOptions,
   type ResolvedBinding,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
@@ -45,7 +45,7 @@ import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unsta
 export const CrashEnv = {
   database: "EFFECT_AGENT_DB",
   scenario: "EFFECT_AGENT_SCENARIO",
-  conversation: "EFFECT_AGENT_CONVERSATION",
+  thread: "EFFECT_AGENT_THREAD",
   idempotencyKey: "EFFECT_AGENT_KEY",
   killAt: "EFFECT_AGENT_KILL_AT",
   killAtStorage: "EFFECT_AGENT_KILL_AT_STORAGE",
@@ -98,7 +98,7 @@ export const CrashEnv = {
  * - `subagent-run` — submit the coordinator, then drive parent → child → parent lanes to the
  *   join; armed kill/block failpoints land inside establishment (drive 1), the child Settlement
  *   (drive 2), or the join/release (drive 3).
- * - `subagent-child` — drive ONLY the derived child Conversation lane (a second worker process
+ * - `subagent-child` — drive ONLY the derived child Thread lane (a second worker process
  *   for the simultaneous-kill and independent-fencing rows); honors the blocked child model.
  * - `subagent-abort` — submit, drive the parent to `waitingForChild`, then durably abort it
  *   (killAt `abort:after-intent` dies right after the parent abort intent commits).
@@ -147,15 +147,15 @@ const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 export const CRASH_DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 export const CRASH_PRINCIPAL = Schema.decodeSync(Principal)("principal-crash");
 
-export const decodeConversationId = Schema.decodeSync(ConversationId);
+export const decodeThreadId = Schema.decodeSync(ThreadId);
 export const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 export const decodeToolCallId = Schema.decodeSync(ToolCallId);
 
 export const crashSubmitOptions = (
-  conversationId: string,
+  threadId: string,
   idempotencyKey: string,
 ): DurableSubmitOptions => ({
-  conversationId: decodeConversationId(conversationId),
+  threadId: decodeThreadId(threadId),
   principal: CRASH_PRINCIPAL,
   idempotencyKey: decodeIdempotencyKey(idempotencyKey),
   definitions: CRASH_DIGESTS,
@@ -695,7 +695,7 @@ const crashIdentifiers = Layer.effect(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
     return {
-      nextConversationId: next(decodeConversationId, "crash-fixture-conversation"),
+      nextThreadId: next(decodeThreadId, "crash-fixture-thread"),
       nextRunId: next(decodeRunId, "crash-fixture-run"),
       nextTurnId: next(decodeTurnId, "crash-fixture-turn"),
     };

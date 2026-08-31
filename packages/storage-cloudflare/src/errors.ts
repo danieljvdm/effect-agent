@@ -1,4 +1,4 @@
-import { CanonicalSequence, ProducerEpoch } from "@effect-agent/session";
+import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread";
 import { Schema } from "effect";
 
 /** The Durable Object's SQLite storage uses a private-development format this adapter cannot read. */
@@ -75,7 +75,7 @@ export class DoAppendConflict extends Schema.TaggedError<DoAppendConflict>()("Do
 }) {}
 
 /**
- * A producer epoch does not match the Conversation's current writer registration. Appends
+ * A producer epoch does not match the Thread's current writer registration. Appends
  * require the exact registered epoch, so both older and newer unregistered epochs are fenced;
  * a newer epoch takes over by materializing first.
  */
@@ -109,7 +109,7 @@ export const DoStorageFailpointLocation = Schema.Literals([
   "append:after-record-insert",
   "append:after-tail-update",
   "append:after",
-  "export:after-conversation-read",
+  "export:after-thread-read",
   "save-checkpoint:before",
   "save-checkpoint:after",
   "ledger:admit:before",

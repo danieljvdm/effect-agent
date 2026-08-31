@@ -1,7 +1,7 @@
 ---
 "@effect-agent/core": patch
 "@effect-agent/engine": patch
-"@effect-agent/session": patch
+"@effect-agent/thread": patch
 ---
 
 Harden context economics per the reviewer's second pass: the cost budget is

@@ -1,13 +1,4 @@
-import {
-  CertificationCaseResult,
-  CertificationReport,
-  conversationStoreConformanceCases,
-  submissionLedgerConformanceCases,
-} from "@effect-agent/session/testing";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
+import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
 import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,
@@ -15,6 +6,12 @@ import {
   resolveTierThree,
   tier2NeverFiredLocations,
 } from "@effect-agent/testing/certification";
+import {
+  CertificationCaseResult,
+  CertificationReport,
+  threadStoreConformanceCases,
+  submissionLedgerConformanceCases,
+} from "@effect-agent/thread/testing";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
@@ -42,7 +39,7 @@ const certified = Effect.gen(function* () {
   const report = yield* certifyDurableAdapters({
     adapter: { name: "@effect-agent/storage-memory" },
     submissionLedger: MemorySubmissionLedgerLive,
-    conversationStore: MemoryConversationStoreLive,
+    threadStore: MemoryThreadStoreLive,
   }).pipe(Effect.provide(NodeCrypto.layer));
   yield* maybeWriteReport("storage-memory", report);
   cached = report;
@@ -51,14 +48,14 @@ const certified = Effect.gen(function* () {
 
 describe("TEST-004 STORE-010 adapter certification — storage-memory reference (Tier 3 N/A)", () => {
   it.effect(
-    "TIER1: all SubmissionLedger and ConversationStore contract cases pass",
+    "TIER1: all SubmissionLedger and ThreadStore contract cases pass",
     () =>
       Effect.gen(function* () {
         const report = yield* certified;
         const ledgerCases = report.tier1.filter((result) => result.suite === "submission-ledger");
-        const storeCases = report.tier1.filter((result) => result.suite === "conversation-store");
+        const storeCases = report.tier1.filter((result) => result.suite === "thread-store");
         expect(ledgerCases).toHaveLength(submissionLedgerConformanceCases.length);
-        expect(storeCases).toHaveLength(conversationStoreConformanceCases.length);
+        expect(storeCases).toHaveLength(threadStoreConformanceCases.length);
         expect(report.tier1.filter((result) => result.status !== "passed")).toEqual([]);
       }),
     120_000,

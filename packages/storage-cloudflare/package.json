@@ -25,7 +25,7 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@effect-agent/session": "workspace:*",
+    "@effect-agent/thread": "workspace:*",
     "@effect/platform-browser": "catalog:",
     "@effect/sql-sqlite-do": "catalog:"
   },

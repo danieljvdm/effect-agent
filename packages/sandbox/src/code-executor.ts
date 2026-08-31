@@ -325,7 +325,7 @@ export type CodeExecutionError = typeof CodeExecutionError.Type;
 /**
  * Callback-capable isolated execution port for Code Mode (ADR-0017), a sibling
  * of the command-shaped `Sandbox` service. One `execute` is one stateless pass:
- * the executor owns no approval, Tool, replay, or Conversation semantics, holds
+ * the executor owns no approval, Tool, replay, or Thread semantics, holds
  * every pass resource in the given Scope, and reaches the host only through the
  * `CodeExecutionHost` service in its requirement channel. Implementations must
  * identify their isolation posture honestly; an `unisolated` executor is never

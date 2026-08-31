@@ -248,7 +248,7 @@ deadline. Keep limits lower for an agent request and declare the narrowest
 bounded `image/png` byte array, which the caller owns. Use the Quick Action screenshot layer in a
 Worker; the REST capture adapter implements `PageCapture`, not `PageScreenshot`. Set the full-page
 choice and byte limit in `PageScreenshotRequest`; do not persist image bytes in framework
-conversation records by default.
+thread records by default.
 
 For a single known URL, use a stateless screenshot instead of opening an interactive session.
 Choose an interactive screenshot only when it must reflect the page after navigation, filling,
@@ -335,7 +335,7 @@ needs exact-session cleanup. The browser closes on Scope exit even after an inte
 `BrowserRunInteractiveHost` extends the regular pass with a short-lived redacted Live View URL,
 handoff start, handoff state, and host-controlled close. Keep these operations in trusted Worker
 code. Your application can expose these controls through an authenticated operator UI. Never
-expose them to the model or store them in canonical conversations.
+expose them to the model or store them in canonical threads.
 
 The host layer requires `BrowserRunSessionLifecycle.layer({ accountId, apiToken })` and
 `FetchHttpClient.layer` in addition to the browser binding. The lifecycle token permits exact-session

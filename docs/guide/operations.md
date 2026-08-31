@@ -13,18 +13,18 @@ administration contract applies to Node and SQLite class `DN` and Cloudflare Dur
 
 `DurableAgentRuntime` provides five operator functions:
 
-- `explain(submissionId)` and `explainConversation(conversationId)` return the recovery decision,
+- `explain(submissionId)` and `explainThread(threadId)` return the recovery decision,
   operator meaning, and expected disposition. They write nothing.
-- `verify(conversationId)` runs read-only integrity checks. The digest-chain check reports
+- `verify(threadId)` runs read-only integrity checks. The digest-chain check reports
   `skipped` unless the host supplies producer identity.
 - `retry(submissionId, { author, reason })` records an audit entry and repeats the classifier's
   decision. It refuses settled work and lanes owned by `resolveUnknown` or `resolveApproval`.
-- `wake(conversationId)` sends a droppable liveness hint.
+- `wake(threadId)` sends a droppable liveness hint.
 - `scanObligations(thresholds)` reports blocked or aging accepted work.
 
 `NodeDurableHost` exposes all five. Use
 `vp run admin:durable <explain|verify|retry|wake|obligations> --database <file>` on Node.
-Cloudflare Conversation Objects expose encoded administration methods through the application's
+Cloudflare Thread Objects expose encoded administration methods through the application's
 Worker.
 
 Every runtime operation consults `OperationAuthorizer`, including observation, settlement waits,
@@ -34,7 +34,7 @@ real authorizer before exposing these methods outside a trusted host. Denial fai
 
 ## Monitor unfinished work {#obligation-monitoring}
 
-`scanObligations` scans current ledger state. It returns `submissionId`, `conversationId`, state,
+`scanObligations` scans current ledger state. It returns `submissionId`, `threadId`, state,
 age, severity, and one of these blockers: `unknown`, `approval`, `waitingForChild`, `ready-aged`,
 or `running-aged`.
 
@@ -50,7 +50,7 @@ After authorization, abort a submission with:
 DurableAgentRuntime.abort(AbortCommand.make({ submissionId, author, reason }));
 ```
 
-On Cloudflare, call `CloudflareConversationClient.abort(receipt.conversationId, command)`.
+On Cloudflare, call `CloudflareThreadClient.abort(receipt.threadId, command)`.
 The runtime checks authorization before reading or mutating the target.
 
 Recovery claims the unknown head with its abort intent, handles attached children, records an
@@ -69,10 +69,10 @@ authorized mutation restores maintenance.
 
 ## Observe an outcome
 
-Persist the admission `Receipt`. Its submission, receipt, conversation, and queue identifiers
+Persist the admission `Receipt`. Its submission, receipt, thread, and queue identifiers
 remain stable across retries and replacement attempts.
 
-`awaitSettlement` authorizes the receipt's conversation and submission before lookup. A receipt
+`awaitSettlement` authorizes the receipt's thread and submission before lookup. A receipt
 that mixes identifiers fails as `OperationDenied`. Authorization lasts for one wait. To enforce
 revocation, interrupt the wait and start another. Interrupting a wait does not abort work.
 
@@ -85,12 +85,12 @@ revocation, interrupt the wait and start another. Interrupting a wait does not a
 | terminal outcome          | `awaitSettlement(receipt)` returns the durable settlement                             |
 | budget or stop detail     | `SubmissionSettled` records `finishReason`, `exhausted`, and `policyLimit`            |
 
-Use `DurableAgentRuntime.observe(receipt, { after })` for live progress. Filter the conversation
+Use `DurableAgentRuntime.observe(receipt, { after })` for live progress. Filter the thread
 stream by submission or run identifier. Joined input shares its host run, while its own terminal
 record keeps the original submission identifier.
 
 ```ts
-import { DurableAgentRuntime, type ObservationOffset, type Receipt } from "@effect-agent/session";
+import { DurableAgentRuntime, type ObservationOffset, type Receipt } from "@effect-agent/thread";
 import { Effect, Stream } from "effect";
 
 const observeOutcome = (receipt: Receipt, after?: ObservationOffset) =>
@@ -115,7 +115,7 @@ Keep reads incremental and retain only the application's projection.
 
 The public Cloudflare client cannot read the complete local recovery snapshot or scan all
 nonterminal rows. If an external Worker needs suspension, FIFO blocker, input marker, or child
-references, add an authorized Schema-backed read-only RPC to the owning Conversation Object. Use
+references, add an authorized Schema-backed read-only RPC to the owning Thread Object. Use
 its local ledger and recovery snapshot. Do not copy the recovery classifier into the Worker.
 
 Persist observation cursors and make downstream projection or delivery idempotent. A crash after
@@ -146,7 +146,7 @@ SQLite-backed Durable Objects provide [30-day point-in-time recovery](https://de
 `getCurrentBookmark`, `getBookmarkForTime`, and `onNextSessionRestoreBookmark`. Miniflare does not
 implement these APIs, so follow this hosted runbook:
 
-1. stop admission for affected conversations and let current alarms drain;
+1. stop admission for affected threads and let current alarms drain;
 2. obtain the desired bookmark;
 3. call `onNextSessionRestoreBookmark(bookmark)` inside the Object, then `ctx.abort()`;
 4. apply the four restore rules above, including unknown external effects and lost receipts;
@@ -163,24 +163,24 @@ identify records. They grant no access.
 
 ### Storage and addressing
 
-Schedule and subscription owners are tenant-qualified. Ordinary conversation requests and records
-have no tenant field. A different principal does not create a separate conversation log.
+Schedule and subscription owners are tenant-qualified. Ordinary thread requests and records
+have no tenant field. A different principal does not create a separate thread log.
 
 - On Node, bind each tenant to its own SQLite database or enforce application isolation on every
   read, write, scan, worker, and administration path.
-- On Cloudflare, derive tenant-qualified Conversation Object addresses in trusted Worker code.
-  `CloudflareConversationClient` does not infer or authorize a tenant from a conversation ID.
+- On Cloudflare, derive tenant-qualified Thread Object addresses in trusted Worker code.
+  `CloudflareThreadClient` does not infer or authorize a tenant from a thread ID.
 
 Keep tenant addressing stable across admission, history, children, schedules, subscriptions,
 exports, backups, and operator access. Always check that a submission belongs to its selected
-conversation.
+thread.
 
 ### Authorize each operation
 
 | Operation                       | Host responsibility                                                     | Framework boundary                                                                     |
 | ------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | admission and prepared delivery | authenticate ingress, derive principal, authorize agent and destination | Schema validation and idempotency grant no access; authorizer is not an admission hook |
-| reads and observation           | authorize the conversation and submission before returning data         | runtime observation and waits consult the authorizer; direct store reads do not        |
+| reads and observation           | authorize the thread and submission before returning data               | runtime observation and waits consult the authorizer; direct store reads do not        |
 | abort and resolution            | authorize the decision and supply trusted audit fields                  | runtime checks authorization before target I/O                                         |
 | administration and scans        | restrict operators to the selected storage domain                       | default authorizer allows all; scans have no automatic tenant filter                   |
 
@@ -262,8 +262,8 @@ captured services.
 
 `SubscriptionAuthorizer` covers management, intake, reconciliation, and preparation. Recovery has
 its own `reconcile` decision. Keep stores, intake, and drivers out of model tool environments.
-Restricted tools must bind owner, agent, principal, source catalog, and conversation in the host.
-A host may also permit a deterministic fresh conversation for each selected event.
+Restricted tools must bind owner, agent, principal, source catalog, and thread in the host.
+A host may also permit a deterministic fresh thread for each selected event.
 
 Registrations cannot be edited, paused, or resumed. Cancel and create a new identity to change
 configuration. Reusing a creation identity with the same fingerprint returns the retained
@@ -272,7 +272,7 @@ registration; conflicting reuse fails. An uncertain ordinary tool is never repla
 Intake deduplicates by tenant, source address, and logical event ID. Conflicting payload or source
 version fails. Each event records a registration cutoff. Duplicate intake cannot move that cutoff
 or reopen routing. Selection atomically advances the cursor, creates delivery obligations, and
-consumes once registrations. Continuous subscriptions retain each event separately. Conversation
+consumes once registrations. Continuous subscriptions retain each event separately. Thread
 admission order decides execution order.
 
 Preparation rechecks authority, validates input, and freezes destination, principal, digests,
@@ -294,7 +294,7 @@ examples.
 
 ### GitHub workflow run completion
 
-Import GitHub integration from `@effect-agent/session/github`.
+Import GitHub integration from `@effect-agent/thread/github`.
 `makeGitHubWorkflowRunSource` watches one repository, run ID, attempt, and expected head SHA. It
 reports successful and unsuccessful completion. It does not aggregate every check for a commit.
 

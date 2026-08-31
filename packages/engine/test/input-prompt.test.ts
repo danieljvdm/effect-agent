@@ -1,4 +1,4 @@
-import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
@@ -16,13 +16,11 @@ import {
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/unstable/ai";
 
-import { ConversationHistory } from "../src/conversation-history.ts";
 import { AgentRuntime, ContextCompactor, type CompactionDecision } from "../src/index.ts";
+import { ThreadHistory } from "../src/thread-history.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextConversationId: Effect.succeed(
-    Schema.decodeSync(ConversationId)("input-prompt-conversation"),
-  ),
+  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("input-prompt-thread")),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("input-prompt-run")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("input-prompt-turn")),
 });
@@ -64,7 +62,7 @@ class InputPromptFailure extends Schema.TaggedError<InputPromptFailure>()(
   {},
 ) {}
 
-const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
 
 layer(testLayer)("Agent input prompts", (it) => {
   it.effect("projects decoded native content before context preparation and summary requests", () =>
@@ -108,7 +106,7 @@ layer(testLayer)("Agent input prompts", (it) => {
           requests.push(prompt);
           expect(JSON.stringify(prompt)).not.toContain(sentinel);
           expect(prompt.content).toContainEqual(projected.content[0]);
-          return requests.length === 1 ? "Prior conversation summary." : '"done"';
+          return requests.length === 1 ? "Prior thread summary." : '"done"';
         }),
       );
       const compactor = Layer.succeed(

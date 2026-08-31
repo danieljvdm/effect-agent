@@ -1,37 +1,10 @@
 import { SubagentDurableAccounting, SubagentReservationAmounts } from "@effect-agent/capabilities";
-import { ConversationId, ToolCallId, type SubmissionId } from "@effect-agent/core";
+import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
 import {
   NodeDurableHost,
   NodeDurableRuntime,
   type NodeDurableRuntimeOptions,
 } from "@effect-agent/platform-node";
-import {
-  AbortCommand,
-  AdmissionRequest,
-  ClaimRequest,
-  ConversationRead,
-  ConversationStore,
-  DurableAgentRuntime,
-  DurableRuntimeFailpointError,
-  IdempotencyKey,
-  ParentLinkage,
-  PersistedJson,
-  Principal,
-  ProducerId,
-  RecoverySnapshotRequest,
-  ResolutionCompletedWithResult,
-  SubmissionLedger,
-  SubmissionLookupById,
-  SubmissionLookupByKey,
-  UnknownResolutionCommand,
-  childConversationIdFor,
-  runIdForSubmission,
-  type CanonicalRecordEnvelope,
-  type DurableRuntimeFailpointHandler,
-  type DurableRuntimeFailpointLocation,
-  type Receipt,
-  type ResolvedBinding,
-} from "@effect-agent/session";
 import {
   DestinationShortlist,
   TravelPlannerSubagentDurabilityProfile,
@@ -52,13 +25,40 @@ import {
   s2TravelPlannerProfile,
   s2TravelPlannerSubmitOptions,
 } from "@effect-agent/testing/fixtures/travel-planner";
+import {
+  AbortCommand,
+  AdmissionRequest,
+  ClaimRequest,
+  ThreadRead,
+  ThreadStore,
+  DurableAgentRuntime,
+  DurableRuntimeFailpointError,
+  IdempotencyKey,
+  ParentLinkage,
+  PersistedJson,
+  Principal,
+  ProducerId,
+  RecoverySnapshotRequest,
+  ResolutionCompletedWithResult,
+  SubmissionLedger,
+  SubmissionLookupById,
+  SubmissionLookupByKey,
+  UnknownResolutionCommand,
+  childThreadIdFor,
+  runIdForSubmission,
+  type CanonicalRecordEnvelope,
+  type DurableRuntimeFailpointHandler,
+  type DurableRuntimeFailpointLocation,
+  type Receipt,
+  type ResolvedBinding,
+} from "@effect-agent/thread";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import { Cause, Duration, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const decodeProducerId = Schema.decodeSync(ProducerId);
@@ -126,29 +126,27 @@ const withTemporaryDirectory = <A, E>(
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
 
-const submitParent = (conversation: string, key: string) =>
+const submitParent = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     return yield* runtime.submit(
       s2CoordinatorSubmitAgent,
       researchMission,
-      s2TravelPlannerSubmitOptions(decodeConversationId(conversation), decodeIdempotencyKey(key)),
+      s2TravelPlannerSubmitOptions(decodeThreadId(thread), decodeIdempotencyKey(key)),
     );
   });
 
-/** Drive one Conversation lane through the S2 multi-binding worker entry point. */
-const drive = (bindings: ReadonlyArray<ResolvedBinding>, conversationId: ConversationId) =>
+/** Drive one Thread lane through the S2 multi-binding worker entry point. */
+const drive = (bindings: ReadonlyArray<ResolvedBinding>, threadId: ThreadId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
-    return yield* runtime.processConversationResolved(conversationId, bindings);
+    return yield* runtime.processThreadResolved(threadId, bindings);
   });
 
-const readLog = (conversationId: ConversationId) =>
+const readLog = (threadId: ThreadId) =>
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
-    return yield* Stream.runCollect(
-      store.read(ConversationRead.make({ conversationId, limit: 1_024 })),
-    );
+    const store = yield* ThreadStore;
+    return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1_024 })));
   });
 
 const recordIds = (records: ReadonlyArray<CanonicalRecordEnvelope>): ReadonlyArray<string> =>
@@ -217,20 +215,16 @@ const awaitSettledState = (submissionId: SubmissionId) =>
   });
 
 /** Drive parent → child → parent to full settlement and return the shared identities. */
-const runHappyPath = (
-  bindings: ReadonlyArray<ResolvedBinding>,
-  conversation: string,
-  key: string,
-) =>
+const runHappyPath = (bindings: ReadonlyArray<ResolvedBinding>, thread: string, key: string) =>
   Effect.gen(function* () {
-    const receipt = yield* submitParent(conversation, key);
-    const childConversationId = childConversationIdFor(receipt.submissionId, DELEGATE_CALL);
-    yield* drive(bindings, receipt.conversationId);
-    const childSettlements = yield* drive(bindings, childConversationId);
+    const receipt = yield* submitParent(thread, key);
+    const childThreadId = childThreadIdFor(receipt.submissionId, DELEGATE_CALL);
+    yield* drive(bindings, receipt.threadId);
+    const childSettlements = yield* drive(bindings, childThreadId);
     expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
-    const settlements = yield* drive(bindings, receipt.conversationId);
+    const settlements = yield* drive(bindings, receipt.threadId);
     expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
-    return { receipt, childConversationId };
+    return { receipt, childThreadId };
   });
 
 const shortlistFromSettlement = (records: ReadonlyArray<CanonicalRecordEnvelope>) =>
@@ -266,24 +260,24 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
           yield* Effect.gen(function* () {
             const receipt = yield* submitParent("travel-planner-s2-happy", "s2-happy-1");
             const parentRunId = runIdForSubmission(receipt.submissionId);
-            const childConversationId = childConversationIdFor(receipt.submissionId, DELEGATE_CALL);
+            const childThreadId = childThreadIdFor(receipt.submissionId, DELEGATE_CALL);
 
             // Phase 1: establishment ends with the parent suspended waitingForChild. The lane
             // holds no worker permit and is not claimable (SUB-030), and no in-process child
             // fiber ever ran (spec §12 step 10).
-            const first = yield* drive(harness.bindings, receipt.conversationId);
+            const first = yield* drive(harness.bindings, receipt.threadId);
             expect(first).toHaveLength(0);
             expect((yield* parentState(receipt.submissionId)).state).toBe("suspended");
             const ledger = yield* SubmissionLedger;
             const claimed = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: receipt.conversationId,
+                threadId: receipt.threadId,
                 producerId: decodeProducerId("travel-planner-s2-probe"),
               }),
             );
             expect(Option.isNone(claimed)).toBe(true);
             expect(yield* harness.childModelCalls).toBe(0);
-            const afterEstablish = yield* readLog(receipt.conversationId);
+            const afterEstablish = yield* readLog(receipt.threadId);
             expect(recordIds(afterEstablish)).toContain(
               `subagent-requested:${parentRunId}:${durableResearchCallId}`,
             );
@@ -300,13 +294,13 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
 
             // Phase 2: the child lane runs to Settlement under its own Attempt ownership and
             // wakes the parent durably (recordChildSettled → input-applied).
-            const childSettlements = yield* drive(harness.bindings, childConversationId);
+            const childSettlements = yield* drive(harness.bindings, childThreadId);
             expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             expect(yield* harness.childModelCalls).toBe(2);
             expect(yield* harness.guideInvocations).toBe(1);
             expect((yield* parentState(receipt.submissionId)).state).toBe("input-applied");
-            const childLog = yield* readLog(childConversationId);
-            expect(recordIds(childLog)).toContain(`subagent-lineage:${childConversationId}`);
+            const childLog = yield* readLog(childThreadId);
+            expect(recordIds(childLog)).toContain(`subagent-lineage:${childThreadId}`);
             // Context isolation (SUB-006/SUB-015): the child saw only the projected brief,
             // never the coordinator's transcript or the mission's confidential markers.
             for (const prompt of yield* harness.childPrompts) {
@@ -317,9 +311,9 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
 
             // Phase 3: the woken parent joins the VERIFIED child Settlement in one atomic
             // batch (SUB-019) and settles completed with the projected shortlist.
-            const settlements = yield* drive(harness.bindings, receipt.conversationId);
+            const settlements = yield* drive(harness.bindings, receipt.threadId);
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
-            const log = yield* readLog(receipt.conversationId);
+            const log = yield* readLog(receipt.threadId);
             expect(yield* shortlistFromSettlement(log)).toEqual(durableResearchShortlist("LHR"));
             const joined = payloadsOf(log, "SubagentJoined");
             expect(joined).toHaveLength(1);
@@ -362,7 +356,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(released[0]?.accounting).toEqual(joinedPayload.finalAccounting);
 
             // The parent log never copies the child transcript (SUB-015): the guide's
-            // highlights stay in the child Conversation; only the advisory crossed.
+            // highlights stay in the child Thread; only the advisory crossed.
             const parentLogJson = JSON.stringify(log.map((envelope) => envelope.record.payload));
             expect(parentLogJson).not.toContain("Barbican brutalism walk");
             const finalPrompt = (yield* harness.parentPrompts).at(-1);
@@ -378,7 +372,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
   );
 
   it.effect(
-    "a kill at subagent:after-request-append resumes to the same child Receipt and one child Conversation (SUB-016/SUB-017)",
+    "a kill at subagent:after-request-append resumes to the same child Receipt and one child Thread (SUB-016/SUB-017)",
     () =>
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
@@ -386,30 +380,30 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
           const arm: FailpointArm = { location: undefined };
           yield* Effect.gen(function* () {
             const receipt = yield* submitParent("travel-planner-s2-duplicate", "s2-duplicate-1");
-            const childConversationId = childConversationIdFor(receipt.submissionId, DELEGATE_CALL);
+            const childThreadId = childThreadIdFor(receipt.submissionId, DELEGATE_CALL);
 
             arm.location = "subagent:after-request-append";
-            const exit = yield* Effect.exit(drive(harness.bindings, receipt.conversationId));
+            const exit = yield* Effect.exit(drive(harness.bindings, receipt.threadId));
             expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
             arm.location = undefined;
             yield* expireAbandonedLease;
 
             // Idempotent handler re-entry replays establishment from the canonical
             // SubagentRequested record: the derived admission idempotency key converges on ONE
-            // child — a duplicate admission attempt can never create a second Conversation.
-            yield* drive(harness.bindings, receipt.conversationId);
-            const childSettlements = yield* drive(harness.bindings, childConversationId);
+            // child — a duplicate admission attempt can never create a second Thread.
+            yield* drive(harness.bindings, receipt.threadId);
+            const childSettlements = yield* drive(harness.bindings, childThreadId);
             expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
-            const settlements = yield* drive(harness.bindings, receipt.conversationId);
+            const settlements = yield* drive(harness.bindings, receipt.threadId);
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             expect(yield* harness.childModelCalls).toBe(2);
 
-            const log = yield* readLog(receipt.conversationId);
+            const log = yield* readLog(receipt.threadId);
             expect(payloadsOf(log, "SubagentRequested")).toHaveLength(1);
             expect(payloadsOf(log, "SubagentStarted")).toHaveLength(1);
             expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
-            const childLog = yield* readLog(childConversationId);
-            expect(payloadsOf(childLog, "ConversationCreated")).toHaveLength(1);
+            const childLog = yield* readLog(childThreadId);
+            expect(payloadsOf(childLog, "ThreadCreated")).toHaveLength(1);
             expect(payloadsOf(childLog, "SubagentLineageRecorded")).toHaveLength(1);
 
             // The one recorded Receipt is the one admitted child's Receipt (SUB-017): the
@@ -422,7 +416,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             const ledger = yield* SubmissionLedger;
             const resolution = yield* ledger.resolveAdmission(
               SubmissionLookupByKey.make({
-                conversationId: childConversationId,
+                threadId: childThreadId,
                 principal: s2TravelPlannerPrincipal,
                 idempotencyKey: decodeIdempotencyKey(
                   `subagent:${runIdForSubmission(receipt.submissionId)}:${durableResearchCallId}`,
@@ -460,20 +454,17 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             const arm: FailpointArm = { location: undefined };
             yield* Effect.gen(function* () {
               const receipt = yield* submitParent(`travel-planner-s2-${slug}`, `s2-join-${slug}`);
-              const childConversationId = childConversationIdFor(
-                receipt.submissionId,
-                DELEGATE_CALL,
-              );
+              const childThreadId = childThreadIdFor(receipt.submissionId, DELEGATE_CALL);
 
-              yield* drive(harness.bindings, receipt.conversationId);
-              const childSettlements = yield* drive(harness.bindings, childConversationId);
+              yield* drive(harness.bindings, receipt.threadId);
+              const childSettlements = yield* drive(harness.bindings, childThreadId);
               expect(childSettlements.map((settlement) => settlement.outcome)).toEqual([
                 "completed",
               ]);
               expect(yield* harness.childModelCalls).toBe(2);
 
               arm.location = location;
-              const exit = yield* Effect.exit(drive(harness.bindings, receipt.conversationId));
+              const exit = yield* Effect.exit(drive(harness.bindings, receipt.threadId));
               expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
               arm.location = undefined;
               yield* expireAbandonedLease;
@@ -481,11 +472,11 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               // The canonical SubagentJoined record (or the frozen releasePending decision) is
               // the replay source: re-entry completes the release idempotently and the settled
               // child is NEVER re-executed merely because the acknowledgment was lost.
-              const settlements = yield* drive(harness.bindings, receipt.conversationId);
+              const settlements = yield* drive(harness.bindings, receipt.threadId);
               expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
               expect(yield* harness.childModelCalls).toBe(2);
               expect(yield* harness.guideInvocations).toBe(1);
-              const log = yield* readLog(receipt.conversationId);
+              const log = yield* readLog(receipt.threadId);
               expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
               const reservations = yield* childReservations(receipt.submissionId);
               expect(reservations.map((row) => row.status)).toEqual(["released"]);
@@ -516,7 +507,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               s2CoordinatorSubmitAgent,
               researchMission,
               s2TravelPlannerSubmitOptions(
-                decodeConversationId("travel-planner-s2-smallest-pool"),
+                decodeThreadId("travel-planner-s2-smallest-pool"),
                 decodeIdempotencyKey("s2-pool-1"),
               ),
             );
@@ -533,7 +524,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(yield* harness.parentModelCalls).toBe(2);
             expect(yield* harness.childModelCalls).toBe(2);
             expect(yield* harness.guideInvocations).toBe(1);
-            const log = yield* readLog(receipt.conversationId);
+            const log = yield* readLog(receipt.threadId);
             expect(yield* shortlistFromSettlement(log)).toEqual(durableResearchShortlist("LHR"));
             expect(payloadsOf(log, "SubagentRequested")).toHaveLength(1);
             expect(payloadsOf(log, "SubagentStarted")).toHaveLength(1);
@@ -574,20 +565,20 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
           // second handle observes a fenced, classifiable lane.
           const crashed = yield* Effect.gen(function* () {
             const receipt = yield* submitParent("travel-planner-s2-unknown", "s2-unknown-1");
-            const childConversationId = childConversationIdFor(receipt.submissionId, DELEGATE_CALL);
-            yield* drive(harness.bindings, receipt.conversationId);
+            const childThreadId = childThreadIdFor(receipt.submissionId, DELEGATE_CALL);
+            yield* drive(harness.bindings, receipt.threadId);
             expect((yield* parentState(receipt.submissionId)).state).toBe("suspended");
-            const started = payloadsOf(yield* readLog(receipt.conversationId), "SubagentStarted")[0]
+            const started = payloadsOf(yield* readLog(receipt.threadId), "SubagentStarted")[0]
               ?.record.payload;
             if (started?._tag !== "SubagentStarted") throw new Error("Expected SubagentStarted");
 
             arm.location = "tools:after-prepared-append";
-            const exit = yield* Effect.exit(drive(harness.bindings, childConversationId));
+            const exit = yield* Effect.exit(drive(harness.bindings, childThreadId));
             expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
             arm.location = undefined;
             expect(yield* harness.childModelCalls).toBe(1);
             expect(yield* harness.guideInvocations).toBe(0);
-            return { receipt, childConversationId, childSubmissionId: started.childSubmissionId };
+            return { receipt, childThreadId, childSubmissionId: started.childSubmissionId };
           }).pipe(
             Effect.provide(
               NodeDurableRuntime.layer(
@@ -619,13 +610,13 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
 
             // The blocked lanes grant no claims and fabricate nothing: driving either lane
             // settles nothing and the child model/guide never re-execute.
-            expect(yield* drive(harness.bindings, crashed.childConversationId)).toEqual([]);
-            expect(yield* drive(harness.bindings, crashed.receipt.conversationId)).toEqual([]);
+            expect(yield* drive(harness.bindings, crashed.childThreadId)).toEqual([]);
+            expect(yield* drive(harness.bindings, crashed.receipt.threadId)).toEqual([]);
             expect(yield* harness.childModelCalls).toBe(1);
             expect(yield* harness.guideInvocations).toBe(0);
             const childRunId = runIdForSubmission(crashed.childSubmissionId);
             const lookupCallId = durableChildLookupCallId("LHR");
-            expect(recordIds(yield* readLog(crashed.childConversationId))).toContain(
+            expect(recordIds(yield* readLog(crashed.childThreadId))).toContain(
               `tool-unknown:${childRunId}:1:${lookupCallId}`,
             );
 
@@ -643,12 +634,12 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
                 }),
               }),
             );
-            const childSettlements = yield* drive(harness.bindings, crashed.childConversationId);
+            const childSettlements = yield* drive(harness.bindings, crashed.childThreadId);
             expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             // Turn 1 was never re-invoked; only the report Turn ran after resolution.
             expect(yield* harness.childModelCalls).toBe(2);
             expect(yield* harness.guideInvocations).toBe(0);
-            const childLog = yield* readLog(crashed.childConversationId);
+            const childLog = yield* readLog(crashed.childThreadId);
             expect(payloadsOf(childLog, "ToolCallUnknown")).toHaveLength(1);
             expect(payloadsOf(childLog, "ToolCallResolved")).toHaveLength(1);
             const settledLookup = childLog.find(
@@ -660,9 +651,9 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             ).toEqual(encodedDestinationFacts("LHR"));
 
             // The wake converges the parent: verified join, completed settlement.
-            const settlements = yield* drive(harness.bindings, crashed.receipt.conversationId);
+            const settlements = yield* drive(harness.bindings, crashed.receipt.threadId);
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
-            const log = yield* readLog(crashed.receipt.conversationId);
+            const log = yield* readLog(crashed.receipt.threadId);
             expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
             expect(yield* shortlistFromSettlement(log)).toEqual(durableResearchShortlist("LHR"));
           }).pipe(
@@ -687,9 +678,9 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             const receipt = yield* submitParent("travel-planner-s2-abort", "s2-abort-1");
             const parentRunId = runIdForSubmission(receipt.submissionId);
 
-            yield* drive(harness.bindings, receipt.conversationId);
+            yield* drive(harness.bindings, receipt.threadId);
             expect((yield* parentState(receipt.submissionId)).state).toBe("suspended");
-            const started = payloadsOf(yield* readLog(receipt.conversationId), "SubagentStarted")[0]
+            const started = payloadsOf(yield* readLog(receipt.threadId), "SubagentStarted")[0]
               ?.record.payload;
             if (started?._tag !== "SubagentStarted") throw new Error("Expected SubagentStarted");
 
@@ -734,10 +725,10 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(parent.state).toBe("input-applied");
 
             // The woken parent joins the child's ACTUAL aborted outcome, then settles aborted.
-            const settlements = yield* drive(harness.bindings, receipt.conversationId);
+            const settlements = yield* drive(harness.bindings, receipt.threadId);
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["aborted"]);
 
-            const log = yield* readLog(receipt.conversationId);
+            const log = yield* readLog(receipt.threadId);
             const joined = payloadsOf(log, "SubagentJoined");
             expect(joined).toHaveLength(1);
             const joinedPayload = joined[0]?.record.payload;
@@ -794,17 +785,15 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             const ledger = yield* SubmissionLedger;
             const receipt = yield* submitParent("travel-planner-s2-idor", "s2-idor-1");
 
-            // Crash after the canonical request: the intended child identity (Conversation,
+            // Crash after the canonical request: the intended child identity (Thread,
             // principal, idempotency key) is now deterministic, guessable knowledge.
             arm.location = "subagent:after-request-append";
-            const exit = yield* Effect.exit(drive(harness.bindings, receipt.conversationId));
+            const exit = yield* Effect.exit(drive(harness.bindings, receipt.threadId));
             expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
             arm.location = undefined;
             yield* expireAbandonedLease;
-            const requested = payloadsOf(
-              yield* readLog(receipt.conversationId),
-              "SubagentRequested",
-            )[0]?.record.payload;
+            const requested = payloadsOf(yield* readLog(receipt.threadId), "SubagentRequested")[0]
+              ?.record.payload;
             if (requested?._tag !== "SubagentRequested") {
               throw new Error("Expected SubagentRequested");
             }
@@ -815,7 +804,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             // become "the same child".
             const fabricated = yield* ledger.admit(
               AdmissionRequest.make({
-                conversationId: requested.childConversationId,
+                threadId: requested.childThreadId,
                 principal: decodePrincipal(requested.childPrincipal),
                 idempotencyKey: decodeIdempotencyKey(requested.childIdempotencyKey),
                 agentId: requested.targetAgentId,
@@ -833,7 +822,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             // The resumed establishment verifies the admitted row against the canonical
             // request and fails closed (SUB-016): no start link, no join, no child execution,
             // and the reservation stays an unavailable, visible obligation.
-            const resumed = yield* Effect.exit(drive(harness.bindings, receipt.conversationId));
+            const resumed = yield* Effect.exit(drive(harness.bindings, receipt.threadId));
             expect(failureTag(resumed)).toBe("LedgerError");
             const failure = failureOf(resumed);
             expect(
@@ -841,7 +830,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
                 ? String(failure.message)
                 : "",
             ).toContain("fails closed");
-            const log = yield* readLog(receipt.conversationId);
+            const log = yield* readLog(receipt.threadId);
             expect(payloadsOf(log, "SubagentStarted")).toHaveLength(0);
             expect(payloadsOf(log, "SubagentJoined")).toHaveLength(0);
             expect(yield* harness.childModelCalls).toBe(0);
@@ -869,7 +858,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
   );
 
   it.effect(
-    "a Receipt for an unrelated Conversation observes nothing of the child log (D10 honest scope)",
+    "a Receipt for an unrelated Thread observes nothing of the child log (D10 honest scope)",
     () =>
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
@@ -882,12 +871,12 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               "s2-observe-1",
             );
             const started = payloadsOf(
-              yield* readLog(settled.receipt.conversationId),
+              yield* readLog(settled.receipt.threadId),
               "SubagentStarted",
             )[0]?.record.payload;
             if (started?._tag !== "SubagentStarted") throw new Error("Expected SubagentStarted");
 
-            // A legitimately obtained Receipt for a DIFFERENT Conversation: its observation
+            // A legitimately obtained Receipt for a DIFFERENT Thread: its observation
             // stream is scoped to its own lane and carries nothing of the parent/child
             // delegation — no lineage, no child identity, no child transcript content.
             // (Authenticated per-read Principal/Tenant authorization is a P7 deliverable;
@@ -897,7 +886,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               "travel-planner-s2-unrelated",
               "s2-unrelated-1",
             );
-            const unrelatedLog = yield* readLog(unrelated.conversationId);
+            const unrelatedLog = yield* readLog(unrelated.threadId);
             expect(unrelatedLog.length).toBeGreaterThan(0);
             const observed = yield* runtime
               .observe(unrelated)
@@ -905,7 +894,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(recordIds(observed)).toEqual(recordIds(unrelatedLog));
 
             const observedJson = JSON.stringify(observed.map((envelope) => envelope.record));
-            expect(observedJson).not.toContain(settled.childConversationId);
+            expect(observedJson).not.toContain(settled.childThreadId);
             expect(observedJson).not.toContain(started.childSubmissionId);
             expect(observedJson).not.toContain("SubagentLineageRecorded");
             expect(observedJson).not.toContain("SubagentRequested");

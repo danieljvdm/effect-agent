@@ -1,8 +1,8 @@
-import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
-import { AgentRuntime, ConversationHistory } from "@effect-agent/engine";
-import { PersistentHistory } from "@effect-agent/session/history";
+import { Agent, AgentPolicy, ThreadId } from "@effect-agent/core";
+import { AgentRuntime, ThreadHistory } from "@effect-agent/engine";
 import { layer as sqliteStore } from "@effect-agent/storage-sqlite";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
+import { PersistentHistory } from "@effect-agent/thread/history";
 import { Console, Effect, Layer, Schema } from "effect";
 import { Model, Prompt, Toolkit } from "effect/unstable/ai";
 import { Command, Flag } from "effect/unstable/cli";
@@ -10,11 +10,11 @@ import { Command, Flag } from "effect/unstable/cli";
 const sqliteHistory = (filename: string) =>
   PersistentHistory.layer.pipe(Layer.provide(sqliteStore({ filename })));
 
-const conversationId = Schema.decodeSync(ConversationId)("persistent-history-example");
+const threadId = Schema.decodeSync(ThreadId)("persistent-history-example");
 const definition = Agent.make("history-example", {
   input: Schema.String,
   output: Schema.String,
-  instructions: "Answer using the conversation history.",
+  instructions: "Answer using the thread history.",
   toolkit: Toolkit.empty,
   policy: AgentPolicy.make({
     maxTurns: 2,
@@ -49,19 +49,19 @@ const binding = (answer: string) => {
 /** Two inputs share one SQLite history; each call closes its connection before the next opens. */
 export const writeHistory = Effect.fn("example.writeHistory")(function* (filename: string) {
   const first = yield* AgentRuntime.run(binding("I'll remember Kyoto."), "I'm visiting Kyoto.", {
-    conversationId,
+    threadId,
   }).pipe(Effect.provide(sqliteHistory(filename)));
   const second = yield* AgentRuntime.run(
     binding("You're visiting Kyoto."),
     "Which city am I visiting?",
-    { conversationId },
+    { threadId },
   ).pipe(Effect.provide(sqliteHistory(filename)));
   return [first.output, second.output];
 });
 
 /** No model or Agent is needed to reconstruct the retained Prompt after the process restarts. */
 export const readHistory = Effect.fn("example.readHistory")((filename: string) =>
-  Effect.flatMap(ConversationHistory, (history) => history.load(conversationId)).pipe(
+  Effect.flatMap(ThreadHistory, (history) => history.load(threadId)).pipe(
     Effect.provide(sqliteHistory(filename)),
   ),
 );
@@ -85,7 +85,7 @@ const seed = Command.make(
     const replies = yield* writeHistory(database);
     yield* Console.log(replies.join("\n"));
   }),
-).pipe(Command.withDescription("Append two successful Runs to the example Conversation"));
+).pipe(Command.withDescription("Append two successful Runs to the example Thread"));
 const show = Command.make(
   "show",
   {},

@@ -1,7 +1,7 @@
 {
   "name": "@effect-agent/storage-sqlite",
   "version": "0.1.0-beta.38",
-  "description": "Node SQLite Conversation store and submission ledger adapters for the Effect Agent durable runtime.",
+  "description": "Node SQLite Thread store and submission ledger adapters for the Effect Agent durable runtime.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -26,7 +26,7 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "@effect-agent/session": "workspace:*",
+    "@effect-agent/thread": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:"
   },

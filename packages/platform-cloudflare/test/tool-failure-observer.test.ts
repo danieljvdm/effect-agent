@@ -1,26 +1,22 @@
-import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId } from "@effect-agent/core";
 import { toolFailureObserverLayer, type ToolFailureObservation } from "@effect-agent/engine";
-import { DurableAgentRuntime } from "@effect-agent/session";
+import { DurableAgentRuntime } from "@effect-agent/thread";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import { expect, it } from "vite-plus/test";
 
-import {
-  ConversationObject,
-  DurableObjectContext,
-  conversationNamespaceLayer,
-} from "../src/index.ts";
+import { ThreadObject, DurableObjectContext, threadNamespaceLayer } from "../src/index.ts";
 import { submitOptions } from "./fixtures.ts";
 import { stubFor } from "./harness.ts";
 
 it.each([false, true])(
   "RUN-036 Cloudflare observer option owns installation (configured=%s)",
   (configured) => {
-    const conversation = `cf-tool-failure-observer-${configured}`;
+    const thread = `cf-tool-failure-observer-${configured}`;
     // The platform test API owns this Promise boundary. The Run and observer stay in Effect and
     // observations are asserted inside the Object, never encoded into an RPC or stored record.
-    return runInDurableObject(stubFor(conversation), (_instance, state) => {
+    return runInDurableObject(stubFor(thread), (_instance, state) => {
       const observations: Array<ToolFailureObservation> = [];
       const ambient: Array<ToolFailureObservation> = [];
       const Failed = Tool.make("failed", {
@@ -31,9 +27,9 @@ it.each([false, true])(
       });
       const tools = Toolkit.make(Failed);
       const usage = { inputTokens: {}, outputTokens: {} };
-      const runtimeLayer = ConversationObject.layer([]).pipe(
+      const runtimeLayer = ThreadObject.layer([]).pipe(
         Layer.provide(
-          ConversationObject.layerConfig({
+          ThreadObject.layerConfig({
             deploymentId: "observer-test",
             producerPrefix: "observer-test",
             toolFailureObserver: configured
@@ -48,7 +44,7 @@ it.each([false, true])(
         ),
         Layer.provide([
           DurableObjectContext.layer(state, env),
-          conversationNamespaceLayer(env, "CONVERSATIONS"),
+          threadNamespaceLayer(env, "THREADS"),
           toolFailureObserverLayer({
             observe: (observation) =>
               Effect.sync(() => {
@@ -115,10 +111,10 @@ it.each([false, true])(
           const receipt = yield* runtime.submit(
             agent,
             { question: "try", ref: "observer" },
-            submitOptions(conversation, "observer"),
+            submitOptions(thread, "observer"),
           );
           yield* runtime
-            .processConversation(agent, ConversationId.make(conversation))
+            .processThread(agent, ThreadId.make(thread))
             .pipe(Effect.provide(tools.toLayer({ failed: () => Effect.fail("unavailable") })));
           expect((yield* runtime.awaitSettlement(receipt)).outcome).toBe("completed");
           expect(observations).toEqual(

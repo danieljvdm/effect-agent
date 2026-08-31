@@ -3,18 +3,8 @@ import {
   StructuralRedactorLive,
   SubagentExecutionFailure,
 } from "@effect-agent/capabilities";
-import { ConversationId, ToolCallId } from "@effect-agent/core";
+import { ThreadId, ToolCallId } from "@effect-agent/core";
 import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
-import {
-  ConversationRead,
-  ConversationStore,
-  DurableAgentRuntime,
-  IdempotencyKey,
-  childConversationIdFor,
-  runIdForSubmission,
-  type CanonicalRecordEnvelope,
-  type ResolvedBinding,
-} from "@effect-agent/session";
 import {
   docsCoordinatorConfidentialMarker,
   docsDocumentBodySecret,
@@ -30,6 +20,16 @@ import {
   researchMissionRequest,
   summarizeCallId,
 } from "@effect-agent/testing/fixtures/docs-researcher";
+import {
+  ThreadRead,
+  ThreadStore,
+  DurableAgentRuntime,
+  IdempotencyKey,
+  childThreadIdFor,
+  runIdForSubmission,
+  type CanonicalRecordEnvelope,
+  type ResolvedBinding,
+} from "@effect-agent/thread";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
@@ -38,7 +38,7 @@ import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
 // Red-team suite: child exfiltration through the durable join.
 // Failure, progress, and provenance payloads may contain secret-bearing values.
 //
-// The threat: a Subagent child holds secrets in its OWN Conversation (fetched
+// The threat: a Subagent child holds secrets in its OWN Thread (fetched
 // document bodies, internal working notes) and, if compromised or
 // prompt-injected, tries to smuggle them across the delegation boundary into
 // the parent — through the successful join, a failure payload, or a raw Cause.
@@ -53,7 +53,7 @@ import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
 // payload preview.
 // ---------------------------------------------------------------------------
 
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 
@@ -81,28 +81,26 @@ const withTemporaryDirectory = <A, E>(
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
 
-const submitMission = (conversation: string, key: string) =>
+const submitMission = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     return yield* runtime.submit(
       docsResearcherSubmitAgent,
       researchMissionRequest,
-      docsResearcherSubmitOptions(decodeConversationId(conversation), decodeIdempotencyKey(key)),
+      docsResearcherSubmitOptions(decodeThreadId(thread), decodeIdempotencyKey(key)),
     );
   });
 
-const drive = (bindings: ReadonlyArray<ResolvedBinding>, conversationId: ConversationId) =>
+const drive = (bindings: ReadonlyArray<ResolvedBinding>, threadId: ThreadId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
-    return yield* runtime.processConversationResolved(conversationId, bindings);
+    return yield* runtime.processThreadResolved(threadId, bindings);
   });
 
-const readLog = (conversationId: ConversationId) =>
+const readLog = (threadId: ThreadId) =>
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
-    return yield* Stream.runCollect(
-      store.read(ConversationRead.make({ conversationId, limit: 1_024 })),
-    );
+    const store = yield* ThreadStore;
+    return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1_024 })));
   });
 
 const payloadsOf = (
@@ -122,27 +120,24 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
             const receipt = yield* submitMission("redteam-exfiltration", "redteam-exfil-1");
             const documents = researchCorpusDocumentIds;
             const parentRunId = runIdForSubmission(receipt.submissionId);
-            const childConversations = documents.map((documentId) =>
-              childConversationIdFor(
-                receipt.submissionId,
-                decodeToolCallId(summarizeCallId(documentId)),
-              ),
+            const childThreads = documents.map((documentId) =>
+              childThreadIdFor(receipt.submissionId, decodeToolCallId(summarizeCallId(documentId))),
             );
 
             // Establish, run each child, and join — the full durable delegation.
-            yield* drive(harness.bindings, receipt.conversationId);
-            for (const childConversationId of childConversations) {
-              const settlements = yield* drive(harness.bindings, childConversationId);
+            yield* drive(harness.bindings, receipt.threadId);
+            for (const childThreadId of childThreads) {
+              const settlements = yield* drive(harness.bindings, childThreadId);
               expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             }
-            const settlements = yield* drive(harness.bindings, receipt.conversationId);
+            const settlements = yield* drive(harness.bindings, receipt.threadId);
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
 
             // The child DID read the secret: each child log holds the fetched body verbatim.
-            for (const [index, childConversationId] of childConversations.entries()) {
+            for (const [index, childThreadId] of childThreads.entries()) {
               const documentId = documents[index] ?? "";
               const childLogJson = JSON.stringify(
-                (yield* readLog(childConversationId)).map((envelope) => envelope.record.payload),
+                (yield* readLog(childThreadId)).map((envelope) => envelope.record.payload),
               );
               expect(childLogJson).toContain(docsDocumentBodySecret);
               expect(childLogJson).toContain(documentBodyPhrase(documentId));
@@ -150,7 +145,7 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
 
             // The parent NEVER saw it: no body secret, no raw body phrase, not in the log, not
             // in any coordinator prompt, and not in the final settlement result.
-            const parentLog = yield* readLog(receipt.conversationId);
+            const parentLog = yield* readLog(receipt.threadId);
             const parentLogJson = JSON.stringify(
               parentLog.map((envelope) => envelope.record.payload),
             );
@@ -180,9 +175,9 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
             expect(payloadsOf(parentLog, "SubagentJoined")).toHaveLength(documents.length);
 
             // And the mission/coordinator secrets never leaked DOWN into a child either.
-            for (const childConversationId of childConversations) {
+            for (const childThreadId of childThreads) {
               const childLogJson = JSON.stringify(
-                (yield* readLog(childConversationId)).map((envelope) => envelope.record.payload),
+                (yield* readLog(childThreadId)).map((envelope) => envelope.record.payload),
               );
               expect(childLogJson).not.toContain(docsMissionConfidentialMarker);
               expect(childLogJson).not.toContain(docsCoordinatorConfidentialMarker);

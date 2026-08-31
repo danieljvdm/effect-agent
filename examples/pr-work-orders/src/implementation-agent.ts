@@ -3,7 +3,7 @@ import {
   Agent,
   AgentPolicy,
   AgentRuntime,
-  ConversationHistory,
+  ThreadHistory,
   IdGenerator,
   ToolExecutionClass,
 } from "effect-agent";
@@ -225,7 +225,7 @@ export const makeImplementationAgent = <Provider, ModelProvides, ModelRequires>(
         ImplementationWorkspaceService,
         ImplementationWorkspaceService.of(workspace),
       ),
-      Effect.provide([IdGenerator.layer, ConversationHistory.layerTransient]),
+      Effect.provide([IdGenerator.layer, ThreadHistory.layerTransient]),
       Effect.scoped,
     );
   return { definition: PullRequestImplementer, binding, run } as const;

@@ -1,22 +1,24 @@
-import { ConversationId } from "@effect-agent/core";
-import type { ConversationCheckpoint, ProducerEpoch, RecordId } from "@effect-agent/session";
+import { ThreadId } from "@effect-agent/core";
 import {
+  type ThreadCheckpoint,
+  type ProducerEpoch,
+  type RecordId,
   AppendConflict,
   AppendResult,
   CanonicalRecordEnvelope,
   CanonicalSequence,
   CheckpointRejected,
-  ConversationExportRequest,
-  ConversationExport,
-  ConversationMaterialization,
-  ConversationNotMaterialized,
-  ConversationObservation,
-  ConversationRead,
-  ConversationStore,
-  type ConversationCheckpoints,
-  ConversationStoreError,
-  ConversationTail,
-  ConversationTailRequest,
+  ThreadExportRequest,
+  ThreadExport,
+  ThreadMaterialization,
+  ThreadNotMaterialized,
+  ThreadObservation,
+  ThreadRead,
+  ThreadStore,
+  type ThreadCheckpoints,
+  ThreadStoreError,
+  ThreadTail,
+  ThreadTailRequest,
   digestCanonicalBatch,
   EMPTY_TAIL_DIGEST,
   FenceRejected,
@@ -26,19 +28,19 @@ import {
   SaveCheckpointRequest,
   type BatchId,
   type Digest,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Crypto, Effect, Encoding, Layer, Option, PubSub, Ref, Schema, Stream } from "effect";
 
-const MAX_CONVERSATIONS = 256;
-const MAX_RECORDS_PER_CONVERSATION = 65_536;
-const MAX_CHECKPOINTS_PER_CONVERSATION = 1_024;
+const MAX_THREADS = 256;
+const MAX_RECORDS_PER_THREAD = 65_536;
+const MAX_CHECKPOINTS_PER_THREAD = 1_024;
 
 interface StoredBatch {
   readonly digest: Digest;
   readonly result: AppendResult;
 }
 
-interface StoredConversation {
+interface StoredThread {
   readonly producerEpoch: ProducerEpoch;
   readonly tailSequence: CanonicalSequence;
   readonly tailDigest: Digest;
@@ -46,21 +48,17 @@ interface StoredConversation {
   readonly recordIds: ReadonlySet<RecordId>;
   readonly batches: ReadonlyMap<BatchId, StoredBatch>;
   readonly tailDigests: ReadonlyMap<CanonicalSequence, Digest>;
-  readonly checkpoints: ReadonlyMap<CanonicalSequence, ConversationCheckpoint>;
+  readonly checkpoints: ReadonlyMap<CanonicalSequence, ThreadCheckpoint>;
 }
 
 interface MemoryState {
-  readonly conversations: ReadonlyMap<ConversationId, StoredConversation>;
+  readonly threads: ReadonlyMap<ThreadId, StoredThread>;
 }
 
 type AppendDecision =
   | {
       readonly _tag: "failure";
-      readonly error:
-        | ConversationStoreError
-        | ConversationNotMaterialized
-        | AppendConflict
-        | FenceRejected;
+      readonly error: ThreadStoreError | ThreadNotMaterialized | AppendConflict | FenceRejected;
     }
   | {
       readonly _tag: "success";
@@ -69,27 +67,27 @@ type AppendDecision =
     };
 
 type MaterializeDecision =
-  | { readonly _tag: "failure"; readonly error: ConversationStoreError | FenceRejected }
+  | { readonly _tag: "failure"; readonly error: ThreadStoreError | FenceRejected }
   | { readonly _tag: "success" };
 
 type CheckpointDecision =
   | {
       readonly _tag: "failure";
-      readonly error: ConversationNotMaterialized | ConversationStoreError | CheckpointRejected;
+      readonly error: ThreadNotMaterialized | ThreadStoreError | CheckpointRejected;
     }
   | { readonly _tag: "success" };
 
-const storeError = (operation: string, message: string, cause?: unknown): ConversationStoreError =>
+const storeError = (operation: string, message: string, cause?: unknown): ThreadStoreError =>
   cause === undefined
-    ? ConversationStoreError.make({ operation, message })
-    : ConversationStoreError.make({ operation, message, cause });
+    ? ThreadStoreError.make({ operation, message })
+    : ThreadStoreError.make({ operation, message, cause });
 
-const validate = Effect.fn("MemoryConversationStore.validate")(
+const validate = Effect.fn("MemoryThreadStore.validate")(
   <A, I>(
     schema: Schema.Codec<A, I>,
     operation: string,
     value: unknown,
-  ): Effect.Effect<A, ConversationStoreError> =>
+  ): Effect.Effect<A, ThreadStoreError> =>
     Schema.encodeUnknownEffect(schema)(value).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(schema)),
       Effect.mapError((error) => storeError(operation, `Invalid ${operation} request`, error)),
@@ -99,12 +97,12 @@ const validate = Effect.fn("MemoryConversationStore.validate")(
 const decodeCanonicalSequence = Schema.decodeSync(CanonicalSequence);
 const ZERO_CANONICAL_SEQUENCE = decodeCanonicalSequence(0);
 
-const offsetSequence = Effect.fn("MemoryConversationStore.offsetSequence")((
-  conversationId: ConversationId,
+const offsetSequence = Effect.fn("MemoryThreadStore.offsetSequence")((
+  threadId: ThreadId,
   offset: ObservationOffset | undefined,
-): Effect.Effect<CanonicalSequence, ConversationStoreError> => {
+): Effect.Effect<CanonicalSequence, ThreadStoreError> => {
   if (offset === undefined) return Effect.succeed(ZERO_CANONICAL_SEQUENCE);
-  const prefix = `memory:v1:${Encoding.encodeBase64(conversationId)}:`;
+  const prefix = `memory:v1:${Encoding.encodeBase64(threadId)}:`;
   const encodedSequence = offset.startsWith(prefix) ? offset.slice(prefix.length) : "";
   if (!/^\d+$/.test(encodedSequence)) {
     return Effect.fail(storeError("observe", "Malformed observation offset"));
@@ -117,67 +115,62 @@ const offsetSequence = Effect.fn("MemoryConversationStore.offsetSequence")((
     : Effect.fail(storeError("observe", "Malformed observation offset"));
 });
 
-const observationOffset = (
-  conversationId: ConversationId,
-  sequence: CanonicalSequence,
-): ObservationOffset =>
-  Schema.decodeSync(ObservationOffset)(
-    `memory:v1:${Encoding.encodeBase64(conversationId)}:${sequence}`,
-  );
+const observationOffset = (threadId: ThreadId, sequence: CanonicalSequence): ObservationOffset =>
+  Schema.decodeSync(ObservationOffset)(`memory:v1:${Encoding.encodeBase64(threadId)}:${sequence}`);
 
-const findConversation = Effect.fn("MemoryConversationStore.findConversation")((
+const findThread = Effect.fn("MemoryThreadStore.findThread")((
   state: MemoryState,
-  conversationId: ConversationId,
-): Effect.Effect<StoredConversation, ConversationNotMaterialized> => {
-  const conversation = state.conversations.get(conversationId);
-  return conversation === undefined
-    ? Effect.fail(ConversationNotMaterialized.make({ conversationId }))
-    : Effect.succeed(conversation);
+  threadId: ThreadId,
+): Effect.Effect<StoredThread, ThreadNotMaterialized> => {
+  const thread = state.threads.get(threadId);
+  return thread === undefined
+    ? Effect.fail(ThreadNotMaterialized.make({ threadId }))
+    : Effect.succeed(thread);
 });
 
 const CheckpointVersionEnvelope = Schema.Struct({
   checkpoint: Schema.Struct({
-    conversationId: ConversationId,
+    threadId: ThreadId,
     schemaVersion: Schema.Natural,
   }),
 });
 
-const validateCheckpointVersion = Effect.fn("MemoryConversationStore.validateCheckpointVersion")(
-  function* (value: unknown): Effect.fn.Return<void, ConversationStoreError | CheckpointRejected> {
+const validateCheckpointVersion = Effect.fn("MemoryThreadStore.validateCheckpointVersion")(
+  function* (value: unknown): Effect.fn.Return<void, ThreadStoreError | CheckpointRejected> {
     const envelope = yield* Schema.decodeUnknownEffect(CheckpointVersionEnvelope)(value).pipe(
       Effect.mapError(() => storeError("saveCheckpoint", "Invalid saveCheckpoint request")),
     );
     if (envelope.checkpoint.schemaVersion !== 1) {
       return yield* CheckpointRejected.make({
-        conversationId: envelope.checkpoint.conversationId,
+        threadId: envelope.checkpoint.threadId,
         reason: "unsupported-version",
       });
     }
   },
 );
 
-const makeConversationStore = Effect.gen(function* () {
+const makeThreadStore = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
-  const state = yield* Ref.make<MemoryState>({ conversations: new Map() });
+  const state = yield* Ref.make<MemoryState>({ threads: new Map() });
   const updates = yield* PubSub.sliding<void>(1);
   yield* Effect.addFinalizer(() => PubSub.shutdown(updates));
 
-  const materialize: ConversationStore["Service"]["materialize"] = Effect.fn(
-    "MemoryConversationStore.materialize",
+  const materialize: ThreadStore["Service"]["materialize"] = Effect.fn(
+    "MemoryThreadStore.materialize",
   )((unvalidated) =>
     Effect.gen(function* () {
-      const request = yield* validate(ConversationMaterialization, "materialize", unvalidated);
+      const request = yield* validate(ThreadMaterialization, "materialize", unvalidated);
       const decision = yield* Ref.modify(
         state,
         (current): readonly [MaterializeDecision, MemoryState] => {
-          const existing = current.conversations.get(request.conversationId);
+          const existing = current.threads.get(request.threadId);
           if (existing !== undefined) {
             if (request.producerEpoch < existing.producerEpoch) {
               return [
                 {
                   _tag: "failure",
                   error: FenceRejected.make({
-                    conversationId: request.conversationId,
+                    threadId: request.threadId,
                     actualEpoch: existing.producerEpoch,
                     attemptedEpoch: request.producerEpoch,
                   }),
@@ -188,27 +181,24 @@ const makeConversationStore = Effect.gen(function* () {
             if (request.producerEpoch === existing.producerEpoch) {
               return [{ _tag: "success" }, current];
             }
-            const conversations = new Map(current.conversations);
-            conversations.set(request.conversationId, {
+            const threads = new Map(current.threads);
+            threads.set(request.threadId, {
               ...existing,
               producerEpoch: request.producerEpoch,
             });
-            return [{ _tag: "success" }, { conversations }];
+            return [{ _tag: "success" }, { threads }];
           }
-          if (current.conversations.size >= MAX_CONVERSATIONS) {
+          if (current.threads.size >= MAX_THREADS) {
             return [
               {
                 _tag: "failure",
-                error: storeError(
-                  "materialize",
-                  `In-memory conversation limit ${MAX_CONVERSATIONS} exceeded`,
-                ),
+                error: storeError("materialize", `In-memory thread limit ${MAX_THREADS} exceeded`),
               },
               current,
             ];
           }
-          const conversations = new Map(current.conversations);
-          conversations.set(request.conversationId, {
+          const threads = new Map(current.threads);
+          threads.set(request.threadId, {
             producerEpoch: request.producerEpoch,
             tailSequence: ZERO_CANONICAL_SEQUENCE,
             tailDigest: EMPTY_TAIL_DIGEST,
@@ -218,218 +208,207 @@ const makeConversationStore = Effect.gen(function* () {
             tailDigests: new Map([[ZERO_CANONICAL_SEQUENCE, EMPTY_TAIL_DIGEST]]),
             checkpoints: new Map(),
           });
-          return [{ _tag: "success" }, { conversations }];
+          return [{ _tag: "success" }, { threads }];
         },
       );
       if (decision._tag === "failure") return yield* decision.error;
     }),
   );
 
-  const append: ConversationStore["Service"]["append"] = Effect.fn(
-    "MemoryConversationStore.append",
-  )((unvalidated) =>
-    Effect.gen(function* () {
-      const request = yield* validate(FencedAppendRequest, "append", unvalidated);
-      const digest = yield* digestCanonicalBatch(request.expectedTailDigest, request.batch).pipe(
-        Effect.provideService(Crypto.Crypto, crypto),
-        Effect.mapError((error) => storeError("append", error.message, error)),
-      );
+  const append: ThreadStore["Service"]["append"] = Effect.fn("MemoryThreadStore.append")(
+    (unvalidated) =>
+      Effect.gen(function* () {
+        const request = yield* validate(FencedAppendRequest, "append", unvalidated);
+        const digest = yield* digestCanonicalBatch(request.expectedTailDigest, request.batch).pipe(
+          Effect.provideService(Crypto.Crypto, crypto),
+          Effect.mapError((error) => storeError("append", error.message, error)),
+        );
 
-      const decision = yield* Effect.uninterruptible(
-        Ref.modify(state, (current): readonly [AppendDecision, MemoryState] => {
-          const conversation = current.conversations.get(request.conversationId);
-          if (conversation === undefined) {
-            return [
-              {
-                _tag: "failure",
-                error: ConversationNotMaterialized.make({
-                  conversationId: request.conversationId,
-                }),
-              },
-              current,
-            ];
-          }
-          if (request.producerEpoch !== conversation.producerEpoch) {
-            return [
-              {
-                _tag: "failure",
-                error: FenceRejected.make({
-                  conversationId: request.conversationId,
-                  actualEpoch: conversation.producerEpoch,
-                  attemptedEpoch: request.producerEpoch,
-                }),
-              },
-              current,
-            ];
-          }
-          const previous = conversation.batches.get(request.batch.batchId);
-          if (previous !== undefined) {
-            if (previous.digest !== digest) {
+        const decision = yield* Effect.uninterruptible(
+          Ref.modify(state, (current): readonly [AppendDecision, MemoryState] => {
+            const thread = current.threads.get(request.threadId);
+            if (thread === undefined) {
               return [
                 {
                   _tag: "failure",
-                  error: AppendConflict.make({
-                    conversationId: request.conversationId,
-                    batchId: request.batch.batchId,
-                    reason: "batch-digest",
+                  error: ThreadNotMaterialized.make({
+                    threadId: request.threadId,
                   }),
                 },
                 current,
               ];
             }
-            return [
-              {
-                _tag: "success",
-                result: AppendResult.make({
-                  firstSequence: previous.result.firstSequence,
-                  lastSequence: previous.result.lastSequence,
-                  tailDigest: previous.result.tailDigest,
-                  replayed: true,
-                }),
-                records: [],
-              },
-              current,
-            ];
-          }
-          if (
-            request.expectedTailSequence !== conversation.tailSequence ||
-            request.expectedTailDigest !== conversation.tailDigest
-          ) {
-            return [
-              {
-                _tag: "failure",
-                error: AppendConflict.make({
-                  conversationId: request.conversationId,
-                  batchId: request.batch.batchId,
-                  reason: "tail",
-                  actualTailSequence: conversation.tailSequence,
-                  actualTailDigest: conversation.tailDigest,
-                }),
-              },
-              current,
-            ];
-          }
-          if (
-            conversation.records.length + request.batch.records.length >
-            MAX_RECORDS_PER_CONVERSATION
-          ) {
-            return [
-              {
-                _tag: "failure",
-                error: storeError(
-                  "append",
-                  `In-memory record limit ${MAX_RECORDS_PER_CONVERSATION} exceeded`,
-                ),
-              },
-              current,
-            ];
-          }
-
-          const batchRecordIds = new Set<RecordId>();
-          for (const record of request.batch.records) {
+            if (request.producerEpoch !== thread.producerEpoch) {
+              return [
+                {
+                  _tag: "failure",
+                  error: FenceRejected.make({
+                    threadId: request.threadId,
+                    actualEpoch: thread.producerEpoch,
+                    attemptedEpoch: request.producerEpoch,
+                  }),
+                },
+                current,
+              ];
+            }
+            const previous = thread.batches.get(request.batch.batchId);
+            if (previous !== undefined) {
+              if (previous.digest !== digest) {
+                return [
+                  {
+                    _tag: "failure",
+                    error: AppendConflict.make({
+                      threadId: request.threadId,
+                      batchId: request.batch.batchId,
+                      reason: "batch-digest",
+                    }),
+                  },
+                  current,
+                ];
+              }
+              return [
+                {
+                  _tag: "success",
+                  result: AppendResult.make({
+                    firstSequence: previous.result.firstSequence,
+                    lastSequence: previous.result.lastSequence,
+                    tailDigest: previous.result.tailDigest,
+                    replayed: true,
+                  }),
+                  records: [],
+                },
+                current,
+              ];
+            }
             if (
-              conversation.recordIds.has(record.recordId) ||
-              batchRecordIds.has(record.recordId)
+              request.expectedTailSequence !== thread.tailSequence ||
+              request.expectedTailDigest !== thread.tailDigest
             ) {
               return [
                 {
                   _tag: "failure",
                   error: AppendConflict.make({
-                    conversationId: request.conversationId,
+                    threadId: request.threadId,
                     batchId: request.batch.batchId,
-                    reason: "record-identity",
+                    reason: "tail",
+                    actualTailSequence: thread.tailSequence,
+                    actualTailDigest: thread.tailDigest,
                   }),
                 },
                 current,
               ];
             }
-            batchRecordIds.add(record.recordId);
-          }
+            if (thread.records.length + request.batch.records.length > MAX_RECORDS_PER_THREAD) {
+              return [
+                {
+                  _tag: "failure",
+                  error: storeError(
+                    "append",
+                    `In-memory record limit ${MAX_RECORDS_PER_THREAD} exceeded`,
+                  ),
+                },
+                current,
+              ];
+            }
 
-          const records = request.batch.records.map((record, index) => {
-            const sequence = decodeCanonicalSequence(conversation.tailSequence + index + 1);
-            return CanonicalRecordEnvelope.make({
-              conversationId: request.conversationId,
-              batchId: request.batch.batchId,
-              sequence,
-              offset: observationOffset(request.conversationId, sequence),
-              record,
+            const batchRecordIds = new Set<RecordId>();
+            for (const record of request.batch.records) {
+              if (thread.recordIds.has(record.recordId) || batchRecordIds.has(record.recordId)) {
+                return [
+                  {
+                    _tag: "failure",
+                    error: AppendConflict.make({
+                      threadId: request.threadId,
+                      batchId: request.batch.batchId,
+                      reason: "record-identity",
+                    }),
+                  },
+                  current,
+                ];
+              }
+              batchRecordIds.add(record.recordId);
+            }
+
+            const records = request.batch.records.map((record, index) => {
+              const sequence = decodeCanonicalSequence(thread.tailSequence + index + 1);
+              return CanonicalRecordEnvelope.make({
+                threadId: request.threadId,
+                batchId: request.batch.batchId,
+                sequence,
+                offset: observationOffset(request.threadId, sequence),
+                record,
+              });
             });
-          });
-          const lastSequence = decodeCanonicalSequence(conversation.tailSequence + records.length);
-          const result = AppendResult.make({
-            firstSequence: decodeCanonicalSequence(conversation.tailSequence + 1),
-            lastSequence,
-            tailDigest: digest,
-            replayed: false,
-          });
-          const batches = new Map(conversation.batches);
-          batches.set(request.batch.batchId, { digest, result });
-          const recordIds = new Set(conversation.recordIds);
-          for (const recordId of batchRecordIds) recordIds.add(recordId);
-          const tailDigests = new Map(conversation.tailDigests);
-          tailDigests.set(lastSequence, digest);
-          const conversations = new Map(current.conversations);
-          conversations.set(request.conversationId, {
-            ...conversation,
-            tailSequence: lastSequence,
-            tailDigest: digest,
-            records: [...conversation.records, ...records],
-            recordIds,
-            batches,
-            tailDigests,
-          });
-          return [{ _tag: "success", result, records }, { conversations }];
-        }).pipe(
-          Effect.tap((decision) =>
-            decision._tag === "success" && decision.records.length > 0
-              ? PubSub.publish(updates, undefined)
-              : Effect.void,
+            const lastSequence = decodeCanonicalSequence(thread.tailSequence + records.length);
+            const result = AppendResult.make({
+              firstSequence: decodeCanonicalSequence(thread.tailSequence + 1),
+              lastSequence,
+              tailDigest: digest,
+              replayed: false,
+            });
+            const batches = new Map(thread.batches);
+            batches.set(request.batch.batchId, { digest, result });
+            const recordIds = new Set(thread.recordIds);
+            for (const recordId of batchRecordIds) recordIds.add(recordId);
+            const tailDigests = new Map(thread.tailDigests);
+            tailDigests.set(lastSequence, digest);
+            const threads = new Map(current.threads);
+            threads.set(request.threadId, {
+              ...thread,
+              tailSequence: lastSequence,
+              tailDigest: digest,
+              records: [...thread.records, ...records],
+              recordIds,
+              batches,
+              tailDigests,
+            });
+            return [{ _tag: "success", result, records }, { threads }];
+          }).pipe(
+            Effect.tap((decision) =>
+              decision._tag === "success" && decision.records.length > 0
+                ? PubSub.publish(updates, undefined)
+                : Effect.void,
+            ),
           ),
-        ),
-      );
-      if (decision._tag === "failure") return yield* decision.error;
-      return decision.result;
-    }),
+        );
+        if (decision._tag === "failure") return yield* decision.error;
+        return decision.result;
+      }),
   );
 
-  const readSnapshot = Effect.fn("MemoryConversationStore.readSnapshot")(
-    (conversationId: ConversationId, afterSequence: CanonicalSequence | undefined, limit: number) =>
+  const readSnapshot = Effect.fn("MemoryThreadStore.readSnapshot")(
+    (threadId: ThreadId, afterSequence: CanonicalSequence | undefined, limit: number) =>
       Ref.get(state).pipe(
-        Effect.flatMap((current) => findConversation(current, conversationId)),
-        Effect.map((conversation) =>
-          conversation.records
+        Effect.flatMap((current) => findThread(current, threadId)),
+        Effect.map((thread) =>
+          thread.records
             .filter((record) => record.sequence > (afterSequence ?? ZERO_CANONICAL_SEQUENCE))
             .slice(0, limit),
         ),
       ),
   );
 
-  const read: ConversationStore["Service"]["read"] = (unvalidated) =>
+  const read: ThreadStore["Service"]["read"] = (unvalidated) =>
     Stream.unwrap(
       Effect.gen(function* () {
-        const request = yield* validate(ConversationRead, "read", unvalidated);
-        const records = yield* readSnapshot(
-          request.conversationId,
-          request.afterSequence,
-          request.limit,
-        );
+        const request = yield* validate(ThreadRead, "read", unvalidated);
+        const records = yield* readSnapshot(request.threadId, request.afterSequence, request.limit);
         return Stream.fromIterable(records);
       }),
     );
 
-  const observe: ConversationStore["Service"]["observe"] = (unvalidated) =>
+  const observe: ThreadStore["Service"]["observe"] = (unvalidated) =>
     Stream.unwrap(
       Effect.gen(function* () {
-        const request = yield* validate(ConversationObservation, "observe", unvalidated);
-        const afterSequence = yield* offsetSequence(request.conversationId, request.afterOffset);
+        const request = yield* validate(ThreadObservation, "observe", unvalidated);
+        const afterSequence = yield* offsetSequence(request.threadId, request.afterOffset);
         return Stream.unwrap(
           Effect.gen(function* () {
             const subscription = yield* PubSub.subscribe(updates);
             const initial = yield* readSnapshot(
-              request.conversationId,
+              request.threadId,
               afterSequence,
-              MAX_RECORDS_PER_CONVERSATION,
+              MAX_RECORDS_PER_THREAD,
             );
             const highWater =
               initial.length === 0 ? afterSequence : (initial.at(-1)?.sequence ?? afterSequence);
@@ -437,11 +416,7 @@ const makeConversationStore = Effect.gen(function* () {
               Stream.mapAccumEffect(
                 () => highWater,
                 (lastSequence) =>
-                  readSnapshot(
-                    request.conversationId,
-                    lastSequence,
-                    MAX_RECORDS_PER_CONVERSATION,
-                  ).pipe(
+                  readSnapshot(request.threadId, lastSequence, MAX_RECORDS_PER_THREAD).pipe(
                     Effect.map(
                       (records) => [records.at(-1)?.sequence ?? lastSequence, records] as const,
                     ),
@@ -454,159 +429,156 @@ const makeConversationStore = Effect.gen(function* () {
       }),
     );
 
-  const exportConversation: ConversationStore["Service"]["export"] = Effect.fn(
-    "MemoryConversationStore.export",
-  )((unvalidated) =>
-    Effect.gen(function* () {
-      const request = yield* validate(ConversationExportRequest, "export", unvalidated);
-      const conversation = yield* Ref.get(state).pipe(
-        Effect.flatMap((current) => findConversation(current, request.conversationId)),
-      );
-      return ConversationExport.make({
-        format: "effect-agent/conversation@1",
-        conversationId: request.conversationId,
-        tailSequence: conversation.tailSequence,
-        tailDigest: conversation.tailDigest,
-        records: conversation.records,
-      });
-    }),
-  );
-
-  const inspectTail: ConversationStore["Service"]["inspectTail"] = Effect.fn(
-    "MemoryConversationStore.inspectTail",
-  )((unvalidated) =>
-    Effect.gen(function* () {
-      const request = yield* validate(ConversationTailRequest, "inspectTail", unvalidated);
-      const conversation = yield* Ref.get(state).pipe(
-        Effect.flatMap((current) => findConversation(current, request.conversationId)),
-      );
-      return ConversationTail.make({
-        conversationId: request.conversationId,
-        tailSequence: conversation.tailSequence,
-        tailDigest: conversation.tailDigest,
-        producerEpoch: conversation.producerEpoch,
-      });
-    }),
-  );
-
-  const saveCheckpoint: ConversationCheckpoints["save"] = Effect.fn(
-    "MemoryConversationStore.saveCheckpoint",
-  )((unvalidated) =>
-    Effect.gen(function* () {
-      yield* validateCheckpointVersion(unvalidated);
-      const request = yield* validate(SaveCheckpointRequest, "saveCheckpoint", unvalidated);
-      const decision = yield* Ref.modify(
-        state,
-        (current): readonly [CheckpointDecision, MemoryState] => {
-          const checkpoint = request.checkpoint;
-          const conversation = current.conversations.get(checkpoint.conversationId);
-          if (conversation === undefined) {
-            return [
-              {
-                _tag: "failure",
-                error: ConversationNotMaterialized.make({
-                  conversationId: checkpoint.conversationId,
-                }),
-              },
-              current,
-            ];
-          }
-          if (checkpoint.throughSequence > conversation.tailSequence) {
-            return [
-              {
-                _tag: "failure",
-                error: CheckpointRejected.make({
-                  conversationId: checkpoint.conversationId,
-                  reason: "ahead-of-tail",
-                }),
-              },
-              current,
-            ];
-          }
-          if (conversation.tailDigests.get(checkpoint.throughSequence) !== checkpoint.tailDigest) {
-            return [
-              {
-                _tag: "failure",
-                error: CheckpointRejected.make({
-                  conversationId: checkpoint.conversationId,
-                  reason: "digest-mismatch",
-                }),
-              },
-              current,
-            ];
-          }
-          if (
-            !conversation.checkpoints.has(checkpoint.throughSequence) &&
-            conversation.checkpoints.size >= MAX_CHECKPOINTS_PER_CONVERSATION
-          ) {
-            return [
-              {
-                _tag: "failure",
-                error: storeError(
-                  "saveCheckpoint",
-                  `In-memory checkpoint limit ${MAX_CHECKPOINTS_PER_CONVERSATION} exceeded`,
-                ),
-              },
-              current,
-            ];
-          }
-          const checkpoints = new Map(conversation.checkpoints);
-          checkpoints.set(checkpoint.throughSequence, checkpoint);
-          const conversations = new Map(current.conversations);
-          conversations.set(checkpoint.conversationId, { ...conversation, checkpoints });
-          return [{ _tag: "success" }, { conversations }];
-        },
-      );
-      if (decision._tag === "failure") return yield* decision.error;
-    }),
-  );
-
-  const loadCheckpoint: ConversationCheckpoints["load"] = Effect.fn(
-    "MemoryConversationStore.loadCheckpoint",
-  )((unvalidated) =>
-    Effect.gen(function* () {
-      const request = yield* validate(LoadCheckpointRequest, "loadCheckpoint", unvalidated);
-      const conversation = yield* Ref.get(state).pipe(
-        Effect.flatMap((current) => findConversation(current, request.conversationId)),
-      );
-      const maximum = request.atOrBeforeSequence ?? conversation.tailSequence;
-      let selected: ConversationCheckpoint | undefined;
-      for (const [sequence, checkpoint] of conversation.checkpoints) {
-        if (
-          sequence <= maximum &&
-          (selected === undefined || sequence > selected.throughSequence)
-        ) {
-          selected = checkpoint;
-        }
-      }
-      if (
-        selected !== undefined &&
-        conversation.tailDigests.get(selected.throughSequence) !== selected.tailDigest
-      ) {
-        return yield* CheckpointRejected.make({
-          conversationId: request.conversationId,
-          reason: "digest-mismatch",
+  const exportThread: ThreadStore["Service"]["export"] = Effect.fn("MemoryThreadStore.export")(
+    (unvalidated) =>
+      Effect.gen(function* () {
+        const request = yield* validate(ThreadExportRequest, "export", unvalidated);
+        const thread = yield* Ref.get(state).pipe(
+          Effect.flatMap((current) => findThread(current, request.threadId)),
+        );
+        return ThreadExport.make({
+          format: "effect-agent/thread@1",
+          threadId: request.threadId,
+          tailSequence: thread.tailSequence,
+          tailDigest: thread.tailDigest,
+          records: thread.records,
         });
-      }
-      return Option.fromNullishOr(selected);
+      }),
+  );
+
+  const inspectTail: ThreadStore["Service"]["inspectTail"] = Effect.fn(
+    "MemoryThreadStore.inspectTail",
+  )((unvalidated) =>
+    Effect.gen(function* () {
+      const request = yield* validate(ThreadTailRequest, "inspectTail", unvalidated);
+      const thread = yield* Ref.get(state).pipe(
+        Effect.flatMap((current) => findThread(current, request.threadId)),
+      );
+      return ThreadTail.make({
+        threadId: request.threadId,
+        tailSequence: thread.tailSequence,
+        tailDigest: thread.tailDigest,
+        producerEpoch: thread.producerEpoch,
+      });
     }),
   );
 
-  return ConversationStore.of({
+  const saveCheckpoint: ThreadCheckpoints["save"] = Effect.fn("MemoryThreadStore.saveCheckpoint")(
+    (unvalidated) =>
+      Effect.gen(function* () {
+        yield* validateCheckpointVersion(unvalidated);
+        const request = yield* validate(SaveCheckpointRequest, "saveCheckpoint", unvalidated);
+        const decision = yield* Ref.modify(
+          state,
+          (current): readonly [CheckpointDecision, MemoryState] => {
+            const checkpoint = request.checkpoint;
+            const thread = current.threads.get(checkpoint.threadId);
+            if (thread === undefined) {
+              return [
+                {
+                  _tag: "failure",
+                  error: ThreadNotMaterialized.make({
+                    threadId: checkpoint.threadId,
+                  }),
+                },
+                current,
+              ];
+            }
+            if (checkpoint.throughSequence > thread.tailSequence) {
+              return [
+                {
+                  _tag: "failure",
+                  error: CheckpointRejected.make({
+                    threadId: checkpoint.threadId,
+                    reason: "ahead-of-tail",
+                  }),
+                },
+                current,
+              ];
+            }
+            if (thread.tailDigests.get(checkpoint.throughSequence) !== checkpoint.tailDigest) {
+              return [
+                {
+                  _tag: "failure",
+                  error: CheckpointRejected.make({
+                    threadId: checkpoint.threadId,
+                    reason: "digest-mismatch",
+                  }),
+                },
+                current,
+              ];
+            }
+            if (
+              !thread.checkpoints.has(checkpoint.throughSequence) &&
+              thread.checkpoints.size >= MAX_CHECKPOINTS_PER_THREAD
+            ) {
+              return [
+                {
+                  _tag: "failure",
+                  error: storeError(
+                    "saveCheckpoint",
+                    `In-memory checkpoint limit ${MAX_CHECKPOINTS_PER_THREAD} exceeded`,
+                  ),
+                },
+                current,
+              ];
+            }
+            const checkpoints = new Map(thread.checkpoints);
+            checkpoints.set(checkpoint.throughSequence, checkpoint);
+            const threads = new Map(current.threads);
+            threads.set(checkpoint.threadId, { ...thread, checkpoints });
+            return [{ _tag: "success" }, { threads }];
+          },
+        );
+        if (decision._tag === "failure") return yield* decision.error;
+      }),
+  );
+
+  const loadCheckpoint: ThreadCheckpoints["load"] = Effect.fn("MemoryThreadStore.loadCheckpoint")(
+    (unvalidated) =>
+      Effect.gen(function* () {
+        const request = yield* validate(LoadCheckpointRequest, "loadCheckpoint", unvalidated);
+        const thread = yield* Ref.get(state).pipe(
+          Effect.flatMap((current) => findThread(current, request.threadId)),
+        );
+        const maximum = request.atOrBeforeSequence ?? thread.tailSequence;
+        let selected: ThreadCheckpoint | undefined;
+        for (const [sequence, checkpoint] of thread.checkpoints) {
+          if (
+            sequence <= maximum &&
+            (selected === undefined || sequence > selected.throughSequence)
+          ) {
+            selected = checkpoint;
+          }
+        }
+        if (
+          selected !== undefined &&
+          thread.tailDigests.get(selected.throughSequence) !== selected.tailDigest
+        ) {
+          return yield* CheckpointRejected.make({
+            threadId: request.threadId,
+            reason: "digest-mismatch",
+          });
+        }
+        return Option.fromNullishOr(selected);
+      }),
+  );
+
+  return ThreadStore.of({
     materialize,
     append,
     read,
     observe,
-    export: exportConversation,
+    export: exportThread,
     inspectTail,
     checkpoints: { save: saveCheckpoint, load: loadCheckpoint },
   });
 });
 
-export const MemoryConversationStoreLive = Layer.effect(ConversationStore, makeConversationStore);
+export const MemoryThreadStoreLive = Layer.effect(ThreadStore, makeThreadStore);
 
 /**
- * In-memory canonical Conversation persistence. Durable accepted work is served by the separate
- * SubmissionLedger port; this Layer deliberately provides only the ConversationStore.
+ * In-memory canonical Thread persistence. Durable accepted work is served by the separate
+ * SubmissionLedger port; this Layer deliberately provides only the ThreadStore.
  */
-export const MemoryStorageLive = MemoryConversationStoreLive;
+export const MemoryStorageLive = MemoryThreadStoreLive;

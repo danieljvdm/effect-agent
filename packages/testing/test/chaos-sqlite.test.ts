@@ -1,16 +1,7 @@
 import {
-  DeploymentId,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  ProducerId,
-  ToolReconciler,
-  WakeScheduler,
-} from "@effect-agent/session";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
-import {
   SqliteStorageFailpointError,
   SqliteStorageFailpointLocation,
-  layer as sqliteConversationStoreLayer,
+  layer as sqliteThreadStoreLayer,
   ledgerLayer as sqliteLedgerLayer,
 } from "@effect-agent/storage-sqlite";
 import {
@@ -20,6 +11,15 @@ import {
   type ChaosAdapterFailpoints,
   type ChaosPlan,
 } from "@effect-agent/testing/chaos";
+import {
+  DeploymentId,
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  ProducerId,
+  ToolReconciler,
+  WakeScheduler,
+} from "@effect-agent/thread";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
@@ -102,7 +102,7 @@ const freshLayer = (
     Layer.provideMerge(
       Layer.mergeAll(
         sqliteLedgerLayer({ filename, observationPollInterval: 1, failpoint: handler }),
-        sqliteConversationStoreLayer({
+        sqliteThreadStoreLayer({
           filename,
           observationPollInterval: 1,
           failpoint: handler,
@@ -156,10 +156,9 @@ describe("DUR-002/DUR-004/DUR-017 P7 chaos (SQLite adapters)", () => {
             }
             expect(exit.value.openObligations).toBe(0);
             for (const lane of exit.value.lanes) {
-              expect(
-                lane.verified,
-                `${replayHint(planIndex, plan)} lane ${lane.conversationId}`,
-              ).toBe(true);
+              expect(lane.verified, `${replayHint(planIndex, plan)} lane ${lane.threadId}`).toBe(
+                true,
+              );
             }
           }
           // The reduced sweep still exercises adapter-owned failpoint arms.

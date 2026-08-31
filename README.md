@@ -77,7 +77,7 @@ The [concept guides](docs/concepts/effect-native.md) explain these choices:
 
 - build an Effect-native core;
 - use Effect AI Tool, Toolkit, LanguageModel, Prompt, Response, and Model directly;
-- separate the canonical Conversation Log from the operational Submission Ledger;
+- separate the canonical Thread Log from the operational Submission Ledger;
 - represent uncertain external effects instead of blindly replaying them;
 - keep framework packages deliberately scoped and runnable consumer benches in leaf `examples/*`
   workspaces;
@@ -96,12 +96,12 @@ Application Agent Definitions
                   |
         @effect-agent/engine
           /                \
- Conversation/Submission  capabilities
+ Thread/Submission  capabilities
           \                /
         Node or Cloudflare host
 ```
 
-The engine uses Effect AI directly. It owns only the additional agent-loop, Conversation,
+The engine uses Effect AI directly. It owns only the additional agent-loop, Thread,
 Submission, recovery, and durability concepts. Provider SDK internals, database drivers,
 transports, and platform types must not become canonical domain records.
 
@@ -126,14 +126,14 @@ package creation, hooks, and CI.
 
 The beta includes bounded execution, persistent history, durable accepted work, scheduled input,
 and event subscriptions. It does not provide hosted execution, a turnkey chat UI, a visual builder,
-runtime Skills, separate persistent agent memory/state, SessionStore metadata, or generic dynamic
+runtime Skills, separate persistent agent memory/state, arbitrary Thread metadata, or generic dynamic
 Turn Plans. Nested Subagent delegation, handoff, detachment, and a marketplace remain unsupported.
 MCP exposes a validated connector port whose transport the application implements. The local
 sandbox runs trusted code without isolation. See the
 [capability inventory](docs/reference/packages.md#capability-inventory) and
 [host isolation responsibilities](docs/guide/operations.md#authorization-and-isolation).
 
-Likewise, conversation persistence is not the same as durable execution. The framework may only
+Likewise, thread persistence is not the same as durable execution. The framework may only
 claim durable execution after it can demonstrate:
 
 - durable admission before acknowledging work;

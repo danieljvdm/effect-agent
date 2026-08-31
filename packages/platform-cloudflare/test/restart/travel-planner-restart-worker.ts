@@ -1,8 +1,3 @@
-import {
-  DurableRuntimeFailpointLocation,
-  Receipt,
-  type CanonicalRecordEnvelope,
-} from "@effect-agent/session";
 import { DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare";
 import {
   TravelPlannerPhase4,
@@ -13,21 +8,26 @@ import {
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
 } from "@effect-agent/testing/fixtures/travel-planner";
+import {
+  DurableRuntimeFailpointLocation,
+  Receipt,
+  type CanonicalRecordEnvelope,
+} from "@effect-agent/thread";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { Effect, Layer, Schema } from "effect";
 
 import {
-  CloudflareConversationClient,
-  ConversationObjectNamespace,
-  ConversationObject,
-  type ConversationObjectRpc,
+  CloudflareThreadClient,
+  ThreadObjectNamespace,
+  ThreadObject,
+  type ThreadObjectRpc,
 } from "../../src/index.ts";
 import { layerFromBindings } from "../../src/layers.ts";
 import {
   armRuntimeEviction,
   armStorageEviction,
   armedEvictionsRemaining,
-  decodeConversationId,
+  decodeThreadId,
   decodeIdempotencyKey,
   runtimeEvictionFailpoint,
   storageEvictionFailpoint,
@@ -35,7 +35,7 @@ import {
 
 /**
  * The WP5 Miniflare restart-lane Worker (plan §3, §6 restart row): the REAL Travel Planner
- * Conversation Object under armed `ctx.abort()` failpoints, plus an HTTP control plane the
+ * Thread Object under armed `ctx.abort()` failpoints, plus an HTTP control plane the
  * Node-side test drives ACROSS full runtime restarts. Module state (armed queues, delivery
  * counters) intentionally dies with each runtime: a reopened Miniflare starts unarmed — the
  * "fresh deployment over surviving storage" the lane exists to prove.
@@ -49,10 +49,10 @@ import {
 let alarmDeliveries = 0;
 const clientEntries: Array<string> = [];
 
-const baseClass = ConversationObject.make(
+const baseClass = ThreadObject.make(
   Layer.unwrap(Effect.map(makePhase6TravelPlannerBindings, layerFromBindings)),
   {
-    namespaceBinding: "CONVERSATIONS",
+    namespaceBinding: "THREADS",
     deploymentId: phase6TravelPlannerDeploymentId,
     producerPrefix: phase6TravelPlannerProducerPrefix,
     ownershipLeaseDuration: 1_000,
@@ -69,7 +69,7 @@ const baseClass = ConversationObject.make(
   },
 );
 
-/** The restart lane's Conversation Object, with entry-kind instrumentation. */
+/** The restart lane's Thread Object, with entry-kind instrumentation. */
 export class TravelPlannerRestartObject extends baseClass {
   override async alarm(): Promise<void> {
     alarmDeliveries += 1;
@@ -114,39 +114,39 @@ const decodeReceipt = Schema.decodeUnknownSync(Receipt);
 
 const ArmRequest = Schema.Union([
   Schema.TaggedStruct("runtime", {
-    conversation: Schema.String,
+    thread: Schema.String,
     location: DurableRuntimeFailpointLocation,
     count: Schema.Int.check(Schema.isGreaterThan(0)),
   }),
   Schema.TaggedStruct("storage", {
-    conversation: Schema.String,
+    thread: Schema.String,
     location: DoStorageFailpointLocation,
     count: Schema.Int.check(Schema.isGreaterThan(0)),
   }),
 ]);
 const decodeArmRequest = Schema.decodeUnknownSync(ArmRequest);
 
-const SubmitRequest = Schema.Struct({ conversation: Schema.String, key: Schema.String });
+const SubmitRequest = Schema.Struct({ thread: Schema.String, key: Schema.String });
 const decodeSubmitRequest = Schema.decodeUnknownSync(SubmitRequest);
 
 const AwaitRequest = Schema.Struct({ receipt: Schema.Unknown });
 const decodeAwaitRequest = Schema.decodeUnknownSync(AwaitRequest);
 
-const RecordsRequest = Schema.Struct({ conversation: Schema.String });
+const RecordsRequest = Schema.Struct({ thread: Schema.String });
 const decodeRecordsRequest = Schema.decodeUnknownSync(RecordsRequest);
 
 const runClient = <A, E>(
   env: Cloudflare.Env,
-  effect: Effect.Effect<A, E, CloudflareConversationClient>,
+  effect: Effect.Effect<A, E, CloudflareThreadClient>,
 ): Promise<A> =>
   Effect.runPromise(
     effect.pipe(
       Effect.provide(
-        CloudflareConversationClient.layer.pipe(
+        CloudflareThreadClient.layer.pipe(
           Layer.provide(
             Layer.mergeAll(
-              ConversationObjectNamespace.layer(
-                env.CONVERSATIONS as unknown as DurableObjectNamespace<ConversationObjectRpc>,
+              ThreadObjectNamespace.layer(
+                env.THREADS as unknown as DurableObjectNamespace<ThreadObjectRpc>,
               ),
               BrowserCrypto.layer,
             ),
@@ -165,20 +165,20 @@ export default {
           const arm = decodeArmRequest(await request.json());
           if (arm._tag === "runtime") {
             armRuntimeEviction(
-              arm.conversation,
+              arm.thread,
               ...Array.from({ length: arm.count }, () => arm.location),
             );
           } else {
             armStorageEviction(
-              arm.conversation,
+              arm.thread,
               ...Array.from({ length: arm.count }, () => arm.location),
             );
           }
           return Response.json({ armed: arm.count });
         }
         case "/armed": {
-          const conversation = url.searchParams.get("conversation") ?? "";
-          return Response.json({ remaining: armedEvictionsRemaining(conversation) });
+          const thread = url.searchParams.get("thread") ?? "";
+          return Response.json({ remaining: armedEvictionsRemaining(thread) });
         }
         case "/introspect": {
           return Response.json({ alarmDeliveries, clientEntries });
@@ -188,12 +188,12 @@ export default {
           const receipt = await runClient(
             env,
             Effect.gen(function* () {
-              const client = yield* CloudflareConversationClient;
+              const client = yield* CloudflareThreadClient;
               return yield* client.submit(
                 { definition: TravelPlannerPhase4 },
                 phase1Trip,
                 phase4TravelPlannerSubmitOptions(
-                  decodeConversationId(submit.conversation),
+                  decodeThreadId(submit.thread),
                   decodeIdempotencyKey(submit.key),
                 ),
               );
@@ -207,7 +207,7 @@ export default {
           const settlement = await runClient(
             env,
             Effect.gen(function* () {
-              const client = yield* CloudflareConversationClient;
+              const client = yield* CloudflareThreadClient;
               return yield* client.awaitSettlement(receipt);
             }),
           );
@@ -218,8 +218,8 @@ export default {
           const records: ReadonlyArray<CanonicalRecordEnvelope> = await runClient(
             env,
             Effect.gen(function* () {
-              const client = yield* CloudflareConversationClient;
-              return yield* client.readAll(decodeConversationId(body.conversation));
+              const client = yield* CloudflareThreadClient;
+              return yield* client.readAll(decodeThreadId(body.thread));
             }),
           );
           return Response.json({

@@ -2,7 +2,7 @@ import {
   Agent,
   AgentOutputError,
   AgentPolicy,
-  ConversationId,
+  ThreadId,
   IdGenerator,
   RunId,
   TurnId,
@@ -11,9 +11,9 @@ import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Exit, Layer, Logger, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
-import { ConversationHistory } from "../src/conversation-history.ts";
 import { AgentRuntime } from "../src/index.ts";
 import { insertOutputContract, outputSchemaContract } from "../src/output-contract-internal.ts";
+import { ThreadHistory } from "../src/thread-history.ts";
 
 /**
  * The model-visible final-output contract (RUN-028, TEST-016).
@@ -34,7 +34,7 @@ const usage = {
 };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextConversationId: Effect.succeed(Schema.decodeSync(ConversationId)("conversation-1")),
+  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-1")),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-1")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-1")),
 });
@@ -147,7 +147,7 @@ const policy = AgentPolicy.make({
   toolConcurrency: 1,
 });
 
-const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
 
 layer(testLayer)("RUN-028 model-visible output contract", (it) => {
   it.effect(
@@ -572,11 +572,11 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
     expect(systemText(doubleSystem.content[2]!)).toBe(contract);
 
     // Only the last contiguous system group survives on Anthropic (a prior
-    // Conversation's instructions ahead of this Run's evaluated instructions,
+    // Thread's instructions ahead of this Run's evaluated instructions,
     // for example), so the contract extends the LAST block, never an earlier
     // one.
     const resumed = insertOutputContract(
-      Prompt.fromMessages([system("old-conversation"), user, system("new-instructions"), user]),
+      Prompt.fromMessages([system("old-thread"), user, system("new-instructions"), user]),
       contract,
     );
     expect(roles(resumed)).toEqual(["system", "user", "system", "system", "user"]);

@@ -2,7 +2,7 @@ import {
   Agent,
   AgentPolicy,
   AgentPolicyError,
-  ConversationId,
+  ThreadId,
   ModelProtocolError,
   IdGenerator,
   RunId,
@@ -25,7 +25,6 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
-import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentRuntime,
   formatRunStatus,
@@ -33,9 +32,10 @@ import {
   type RunTurnResume,
   type RunUsageDelta,
 } from "../src/index.ts";
+import { ThreadHistory } from "../src/thread-history.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextConversationId: Effect.succeed(Schema.decodeSync(ConversationId)("conversation-1")),
+  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-1")),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-1")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-1")),
 });
@@ -174,7 +174,7 @@ const postMessageToolkit = Toolkit.make(PostMessageTool);
 
 const answerOutput = Schema.Struct({ answer: Schema.String });
 
-const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
 
 layer(testLayer)("context economics — bounding, tracking, status, exhaustion", (it) => {
   // ---------------------------------------------------------------- RUN-022

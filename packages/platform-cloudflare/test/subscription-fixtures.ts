@@ -1,4 +1,4 @@
-import { AgentId, ConversationId } from "@effect-agent/core";
+import { AgentId, ThreadId } from "@effect-agent/core";
 import {
   EventSources,
   Principal,
@@ -8,7 +8,7 @@ import {
   makeEventSource,
   makeSubscriptionInputBinding,
   SubscriptionInputBindings,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Layer, Schema } from "effect";
 import { DurableObjectState } from "effect-cf";
 
@@ -101,5 +101,5 @@ export const subscriptionSourcesLayer = Layer.merge(
   ),
 );
 
-export const subscriptionConversationId = (suffix: string) =>
-  Schema.decodeSync(ConversationId)(`cf-subscription-${suffix}`);
+export const subscriptionThreadId = (suffix: string) =>
+  Schema.decodeSync(ThreadId)(`cf-subscription-${suffix}`);

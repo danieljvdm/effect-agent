@@ -7,7 +7,7 @@ import {
 import {
   Agent,
   AgentPolicy,
-  ConversationId,
+  ThreadId,
   IdGenerator,
   RunId,
   ToolCallId,
@@ -18,8 +18,8 @@ import { DurableStep, DurableStepError, ToolExecutionClass } from "@effect-agent
 import {
   AbortCommand,
   ApprovalDecisionCommand,
-  ConversationExportRequest,
-  ConversationStore,
+  ThreadExportRequest,
+  ThreadStore,
   DefinitionDigests,
   Digest,
   DurableAgentRuntime,
@@ -36,8 +36,8 @@ import {
   SubmissionLedger,
   SubmissionLookupById,
   UnknownResolutionCommand,
-  childConversationIdFor,
-  verifyConversationInvariants,
+  childThreadIdFor,
+  verifyThreadInvariants,
   type CanonicalRecordEnvelope,
   type BatchId,
   type DurableBindingFailure,
@@ -49,8 +49,8 @@ import {
   type Settlement,
   type SubmissionSnapshot,
   type UnknownResolution,
-} from "@effect-agent/session";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
+} from "@effect-agent/thread";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
 import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { FastCheck } from "effect/testing";
 import {
@@ -68,7 +68,7 @@ import {
  * deterministic runner that drives the durable coordinator over whatever adapter pair the test
  * provides. Every plan ends in the SAME claims the crash matrices make:
  *
- * 1. `verifyConversationInvariants` in convergence mode over every touched Conversation (the
+ * 1. `verifyThreadInvariants` in convergence mode over every touched Thread (the
  *    shared WP1 checker — one set of claims for admin verify, certification, chaos, and soak);
  * 2. `scanObligations` returning ZERO entries (everything settled; nothing invisibly stuck);
  * 3. supplier non-fabrication wherever the deterministic desk was in play (durability §10: no
@@ -151,10 +151,10 @@ export class ChaosPlan extends Schema.Class<ChaosPlan>("@effect-agent/testing/Ch
 export class ChaosLaneReport extends Schema.Class<ChaosLaneReport>(
   "@effect-agent/testing/ChaosLaneReport",
 )({
-  conversationId: ConversationId,
+  threadId: ThreadId,
   kind: ChaosScenarioKind,
   submissionCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  /** Verdict of `verifyConversationInvariants` in convergence mode. */
+  /** Verdict of `verifyThreadInvariants` in convergence mode. */
   verified: Schema.Boolean,
 }) {}
 
@@ -486,7 +486,7 @@ const childLaneDigests = (lane: number): DefinitionDigests => {
 };
 
 const CHAOS_PRINCIPAL = Schema.decodeSync(Principal)("principal-chaos");
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const decodeRunId = Schema.decodeSync(RunId);
@@ -502,7 +502,7 @@ const chaosIdentifiers = Layer.effect(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
     return {
-      nextConversationId: next(decodeConversationId, "chaos-fixture-conversation"),
+      nextThreadId: next(decodeThreadId, "chaos-fixture-thread"),
       nextRunId: next(decodeRunId, "chaos-fixture-run"),
       nextTurnId: next(decodeTurnId, "chaos-fixture-turn"),
     };
@@ -572,7 +572,7 @@ const tolerateTyped = <A, E, R>(
 interface LaneFixture {
   readonly index: number;
   readonly kind: ChaosScenarioKind;
-  readonly conversationId: ConversationId;
+  readonly threadId: ThreadId;
   readonly ref: string;
   readonly deskInPlay: boolean;
   readonly submissionIndexes: ReadonlyArray<number>;
@@ -582,7 +582,7 @@ interface LaneFixture {
   ) => ReadonlyArray<
     Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure>
   >;
-  readonly childConversationOf: (firstReceipt: Receipt) => ConversationId | undefined;
+  readonly childThreadOf: (firstReceipt: Receipt) => ThreadId | undefined;
 }
 
 interface SubmissionState {
@@ -626,14 +626,14 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
   desk: ChaosDesk,
 ) {
   const runtime = yield* DurableAgentRuntime;
-  const conversationId = decodeConversationId(`chaos-${plan.seed}-lane-${laneIndex}`);
+  const threadId = decodeThreadId(`chaos-${plan.seed}-lane-${laneIndex}`);
   const ref = `ref-l${laneIndex}`;
   const script = scriptFor(kind, ref);
   const model = promptScriptedModel(`chaos-${kind}-${laneIndex}`, script);
   const digests = laneDigests(laneIndex);
 
   const submitOptionsFor = (flatIndex: number) => ({
-    conversationId,
+    threadId,
     principal: CHAOS_PRINCIPAL,
     idempotencyKey: decodeIdempotencyKey(`chaos-${plan.seed}-s${flatIndex}`),
     definitions: digests,
@@ -654,33 +654,28 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
   ): LaneFixture => ({
     index: laneIndex,
     kind,
-    conversationId,
+    threadId,
     ref,
     deskInPlay,
     submissionIndexes,
     submitOne,
     drives: () => [drive],
-    childConversationOf: () => undefined,
+    childThreadOf: () => undefined,
   });
 
   switch (kind) {
     case "plain":
     case "join": {
       const agent = Agent.withModel(plainDefinition, model);
-      return plainLaneFixture(
-        false,
-        runtime.processConversation(agent, conversationId),
-        (flatIndex) =>
-          runtime.submit(agent, { question: `chaos ${flatIndex}` }, submitOptionsFor(flatIndex)),
+      return plainLaneFixture(false, runtime.processThread(agent, threadId), (flatIndex) =>
+        runtime.submit(agent, { question: `chaos ${flatIndex}` }, submitOptionsFor(flatIndex)),
       );
     }
     case "uncertain-tool": {
       const agent = Agent.withModel(bookDefinition, model);
       return plainLaneFixture(
         true,
-        runtime
-          .processConversation(agent, conversationId)
-          .pipe(Effect.provide(bookToolLayerFor(bookTools))),
+        runtime.processThread(agent, threadId).pipe(Effect.provide(bookToolLayerFor(bookTools))),
         (flatIndex) =>
           runtime.submit(agent, { question: `chaos ${flatIndex}` }, submitOptionsFor(flatIndex)),
       );
@@ -690,7 +685,7 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
       return plainLaneFixture(
         true,
         runtime
-          .processConversation(agent, conversationId)
+          .processThread(agent, threadId)
           .pipe(Effect.provide(bookToolLayerFor(approvalTools))),
         (flatIndex) =>
           runtime.submit(agent, { question: `chaos ${flatIndex}` }, submitOptionsFor(flatIndex)),
@@ -717,7 +712,7 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
       });
       return plainLaneFixture(
         true,
-        runtime.processConversation(agent, conversationId).pipe(Effect.provide(toolLayer)),
+        runtime.processThread(agent, threadId).pipe(Effect.provide(toolLayer)),
         (flatIndex) =>
           runtime.submit(agent, { question: `chaos ${flatIndex}` }, submitOptionsFor(flatIndex)),
       );
@@ -741,12 +736,11 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
         childLaneDigests(laneIndex),
       );
       const bindings = [parentResolved, childResolved];
-      const driveResolved = (conversation: ConversationId) =>
-        runtime.processConversationResolved(conversation, bindings);
+      const driveResolved = (thread: ThreadId) => runtime.processThreadResolved(thread, bindings);
       const fixture: LaneFixture = {
         index: laneIndex,
         kind,
-        conversationId,
+        threadId,
         ref,
         deskInPlay: false,
         submissionIndexes,
@@ -759,21 +753,18 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
         drives: (firstReceipt) => {
           const drives: Array<
             Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure>
-          > = [driveResolved(conversationId)];
+          > = [driveResolved(threadId)];
           if (firstReceipt !== undefined) {
             drives.push(
               driveResolved(
-                childConversationIdFor(
-                  firstReceipt.submissionId,
-                  decodeToolCallId(DELEGATE_CALL_ID),
-                ),
+                childThreadIdFor(firstReceipt.submissionId, decodeToolCallId(DELEGATE_CALL_ID)),
               ),
             );
           }
           return drives;
         },
-        childConversationOf: (firstReceipt) =>
-          childConversationIdFor(firstReceipt.submissionId, decodeToolCallId(DELEGATE_CALL_ID)),
+        childThreadOf: (firstReceipt) =>
+          childThreadIdFor(firstReceipt.submissionId, decodeToolCallId(DELEGATE_CALL_ID)),
       };
       return fixture;
     }
@@ -965,7 +956,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
 ) {
   const runtime = yield* DurableAgentRuntime;
   const ledger = yield* SubmissionLedger;
-  const store = yield* ConversationStore;
+  const store = yield* ThreadStore;
   const config = yield* DurableRuntimeConfig;
   const failpoints = yield* DurableRuntimeFailpointTestControl;
   const random = mulberry32(plan.seed);
@@ -1033,7 +1024,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
     }
 
     // Admission chaos: pending submissions retry under the active arm until a Receipt lands;
-    // the identical (conversation, principal, key) triple reattaches, never duplicates.
+    // the identical (thread, principal, key) triple reattaches, never duplicates.
     for (const state of states) {
       if (state.receipt !== undefined) continue;
       const receipt = yield* tolerateTyped(state.lane.submitOne(state.flatIndex));
@@ -1103,20 +1094,20 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
     });
   }
 
-  // Final claims: the shared invariant checker per touched Conversation, in convergence mode,
+  // Final claims: the shared invariant checker per touched Thread, in convergence mode,
   // with the full digest chain (single known producer), plus the desk non-fabrication sweep.
   const produced = yield* desk.produced;
   const laneReports: Array<ChaosLaneReport> = [];
-  const verifyConversation = Effect.fn("Chaos.verifyConversation")(function* (
-    conversationId: ConversationId,
+  const verifyThread = Effect.fn("Chaos.verifyThread")(function* (
+    threadId: ThreadId,
     kind: ChaosScenarioKind,
     deskInPlay: boolean,
   ) {
-    const exported = yield* store.export(ConversationExportRequest.make({ conversationId })).pipe(
+    const exported = yield* store.export(ThreadExportRequest.make({ threadId })).pipe(
       Effect.mapError((error) =>
         ChaosConvergenceFailure.make({
           seed: plan.seed,
-          message: `export of ${conversationId} failed: ${String(error)}`,
+          message: `export of ${threadId} failed: ${String(error)}`,
         }),
       ),
     );
@@ -1135,7 +1126,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
     const batchProducers = new Map<BatchId, ProducerId>(
       exported.records.map((envelope) => [envelope.batchId, config.producerId]),
     );
-    const report = yield* verifyConversationInvariants({
+    const report = yield* verifyThreadInvariants({
       export: exported,
       submissions: rows,
       batchProducers,
@@ -1148,7 +1139,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
         .join("; ");
       return yield* ChaosConvergenceFailure.make({
         seed: plan.seed,
-        message: `invariants failed for ${conversationId} (${kind}): ${failed}`,
+        message: `invariants failed for ${threadId} (${kind}): ${failed}`,
       });
     }
     if (deskInPlay) {
@@ -1156,7 +1147,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
     }
     laneReports.push(
       ChaosLaneReport.make({
-        conversationId,
+        threadId,
         kind,
         submissionCount: rows.length,
         verified: report.ok,
@@ -1165,18 +1156,18 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
   });
 
   for (const lane of lanes) {
-    yield* verifyConversation(lane.conversationId, lane.kind, lane.deskInPlay);
-    // Delegation lanes: verify every materialized child Conversation too.
+    yield* verifyThread(lane.threadId, lane.kind, lane.deskInPlay);
+    // Delegation lanes: verify every materialized child Thread too.
     for (const flatIndex of lane.submissionIndexes) {
       const receipt = states[flatIndex]?.receipt;
       if (receipt === undefined) continue;
-      const child = lane.childConversationOf(receipt);
+      const child = lane.childThreadOf(receipt);
       if (child === undefined) continue;
       const childExport = yield* Effect.exit(
-        store.export(ConversationExportRequest.make({ conversationId: child })),
+        store.export(ThreadExportRequest.make({ threadId: child })),
       );
       if (Exit.isSuccess(childExport) && childExport.value.records.length > 0) {
-        yield* verifyConversation(child, "plain", false);
+        yield* verifyThread(child, "plain", false);
       }
     }
   }

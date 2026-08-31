@@ -8,29 +8,29 @@ import {
   ScheduledInputAdmission,
   ScheduledInputRetryable,
   ScheduleStorageError,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Layer } from "effect";
 
-import { CloudflareConversationClient, type ConversationClientError } from "./client.ts";
+import { CloudflareThreadClient, type ThreadClientError } from "./client.ts";
 
 const passthroughAgent = (agentId: AgentId): DurableSubmitAgent<typeof PersistedJson> => ({
   definition: { id: agentId, input: PersistedJson },
 });
 
-/** Ordinary prepared admission through one freshly addressed Conversation Object call. */
+/** Ordinary prepared admission through one freshly addressed Thread Object call. */
 export const cloudflarePreparedInputAdmissionLayer: Layer.Layer<
   PreparedInputAdmission,
   never,
-  CloudflareConversationClient
+  CloudflareThreadClient
 > = Layer.effect(
   PreparedInputAdmission,
   Effect.gen(function* () {
-    const client = yield* CloudflareConversationClient;
+    const client = yield* CloudflareThreadClient;
     return PreparedInputAdmission.of({
       submit: (envelope) =>
         client
           .submit(passthroughAgent(envelope.agentId), envelope.input, {
-            conversationId: envelope.conversationId,
+            threadId: envelope.threadId,
             principal: envelope.deliveryPrincipal,
             idempotencyKey: envelope.admissionKey,
             definitions: envelope.definitions,
@@ -40,20 +40,19 @@ export const cloudflarePreparedInputAdmissionLayer: Layer.Layer<
               AdmissionConflict: () =>
                 ScheduleStorageError.make({ operation: "prepared admission", reason: "corrupt" }),
               AdmissionLimitExceeded: () => ScheduledInputRetryable.make({ reason: "capacity" }),
-              ConversationClientError: (error: ConversationClientError) =>
+              ThreadClientError: (error: ThreadClientError) =>
                 ScheduledInputRetryable.make({
                   reason: error.overloaded === true ? "capacity" : "transport",
                 }),
               HostProtocolError: () => ScheduledInputRetryable.make({ reason: "ambiguous" }),
               LedgerError: () => ScheduledInputRetryable.make({ reason: "storage" }),
-              ConversationStoreError: () => ScheduledInputRetryable.make({ reason: "storage" }),
+              ThreadStoreError: () => ScheduledInputRetryable.make({ reason: "storage" }),
               DurableAlarmError: () => ScheduledInputRetryable.make({ reason: "storage" }),
               AgentInputError: () =>
                 ScheduleStorageError.make({ operation: "prepared admission", reason: "corrupt" }),
               DigestError: () =>
                 ScheduleStorageError.make({ operation: "prepared admission", reason: "corrupt" }),
-              ConversationNotMaterialized: () =>
-                ScheduledInputRetryable.make({ reason: "storage" }),
+              ThreadNotMaterialized: () => ScheduledInputRetryable.make({ reason: "storage" }),
               AppendConflict: () => ScheduledInputRetryable.make({ reason: "ambiguous" }),
               FenceRejected: () => ScheduledInputRetryable.make({ reason: "ambiguous" }),
               DurableRuntimeFailpointError: () =>
@@ -66,7 +65,7 @@ export const cloudflarePreparedInputAdmissionLayer: Layer.Layer<
 
 const preparedFromSchedule = (envelope: ScheduledEnvelope): PreparedInput => ({
   schemaVersion: 1,
-  conversationId: envelope.conversationId,
+  threadId: envelope.threadId,
   deliveryPrincipal: envelope.deliveryPrincipal,
   agentId: envelope.agentId,
   definitions: envelope.definitions,

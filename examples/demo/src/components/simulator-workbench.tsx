@@ -101,7 +101,7 @@ const scenarios: ReadonlyArray<{
 ];
 
 const isRunEvent = (event: DemoOperationalEventValue): event is RunEvent =>
-  "eventVersion" in event && "sequence" in event && "runId" in event && "conversationId" in event;
+  "eventVersion" in event && "sequence" in event && "runId" in event && "threadId" in event;
 
 const encodedEvent = (event: DemoOperationalEventValue): string =>
   JSON.stringify(Schema.encodeSync(DemoOperationalEvent)(event), null, 2);

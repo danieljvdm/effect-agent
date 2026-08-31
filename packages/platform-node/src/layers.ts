@@ -9,8 +9,18 @@ import {
   type RunToolFailureObserver,
 } from "@effect-agent/engine";
 import {
+  threadStoreLayer,
+  scheduleStoreLayer,
+  SqliteStorageConfig,
+  SqliteStorageConfigValue,
+  storageFailpointLayer,
+  submissionLedgerLayer,
+  type SqliteStorageFailpointHandler,
+  type SqliteStorageInitializationError,
+} from "@effect-agent/storage-sqlite";
+import {
   type ScheduleStore,
-  type ConversationStore,
+  type ThreadStore,
   type WakeScheduler,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   DeploymentId,
@@ -23,17 +33,7 @@ import {
   ToolReconciler,
   type DurableRuntimeFailpointHandler,
   type OwnershipToken,
-} from "@effect-agent/session";
-import {
-  conversationStoreLayer,
-  scheduleStoreLayer,
-  SqliteStorageConfig,
-  SqliteStorageConfigValue,
-  storageFailpointLayer,
-  submissionLedgerLayer,
-  type SqliteStorageFailpointHandler,
-  type SqliteStorageInitializationError,
-} from "@effect-agent/storage-sqlite";
+} from "@effect-agent/thread";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Context, type Crypto, Duration, Effect, Layer, Ref, Schema } from "effect";
@@ -64,7 +64,7 @@ export class NodePlatformConfigError extends Schema.TaggedError<NodePlatformConf
 export class NodeDurableRuntimeConfigValue extends Schema.Class<NodeDurableRuntimeConfigValue>(
   "@effect-agent/platform-node/NodeDurableRuntimeConfigValue",
 )({
-  /** SQLite database file backing BOTH the Conversation Log and the Submission Ledger. */
+  /** SQLite database file backing BOTH the Thread Log and the Submission Ledger. */
   filename: Schema.NonEmptyString,
   deploymentId: DeploymentId,
   producerId: ProducerId,
@@ -168,7 +168,7 @@ export type NodeDurableRuntimeInitializationError =
 export type NodeDurableRuntimeServices =
   | DurableAgentRuntime
   | SubmissionLedger
-  | ConversationStore
+  | ThreadStore
   | ScheduleStore
   | WakeScheduler
   | DurableRuntimeConfig
@@ -216,7 +216,7 @@ const sqliteStorageConfigLayer: Layer.Layer<SqliteStorageConfig, never, NodeDura
     }),
   );
 
-/** Session coordinator configuration derived from the single validated Node configuration. */
+/** Thread coordinator configuration derived from the single validated Node configuration. */
 const durableRuntimeConfigLayer = (
   estimateCostMicrousd: RunCostEstimator | undefined,
 ): Layer.Layer<DurableRuntimeConfig, never, NodeDurableRuntimeConfig> =>
@@ -356,7 +356,7 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
 /**
  * The DN Layer assembly (deployment §12: a Layer-assembly library, not an app entrypoint).
  * `layer(options)` decodes the configuration, opens ONE SQLite database serving both the
- * Conversation Log and the Submission Ledger (so claims fence the same producer epochs), wires
+ * Thread Log and the Submission Ledger (so claims fence the same producer epochs), wires
  * the Node wake scheduler with its ledger-scan fallback, wraps the ledger with the shutdown
  * ownership drain, defaults the Tool reconciliation policy to the fail-closed
  * `ToolReconciler.uncertain` (override via `options.toolReconciler`), and provides a ready
@@ -422,7 +422,7 @@ export class NodeDurableRuntime {
             ? Layer.succeed(CurrentToolFailureObserver)(undefined)
             : toolFailureObserverLayer(options.toolFailureObserver);
         const ports = Layer.mergeAll(
-          conversationStoreLayer,
+          threadStoreLayer,
           scheduleStoreLayer,
           nodeWakeSchedulerLayer.pipe(
             Layer.provideMerge(ownershipDrainLayer.pipe(Layer.provide(submissionLedgerLayer))),

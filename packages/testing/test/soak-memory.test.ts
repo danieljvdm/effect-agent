@@ -1,7 +1,8 @@
 import * as v8 from "node:v8";
 import * as vm from "node:vm";
 
-import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId } from "@effect-agent/core";
+import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
 import {
   DeploymentId,
   Digest,
@@ -17,11 +18,7 @@ import {
   ToolReconciler,
   WakeScheduler,
   type DurableSubmitOptions,
-} from "@effect-agent/session";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
+} from "@effect-agent/thread";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
@@ -38,7 +35,7 @@ import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai
  * fail the window-to-window stability bound.
  */
 
-// The memory ConversationStore bounds itself to 256 Conversations (SEC-013), so each wave
+// The memory ThreadStore bounds itself to 256 Threads (SEC-013), so each wave
 // stays under that bound and the 5,000-Submission total spans two scoped waves.
 const LANES = 250;
 const SUBMISSIONS_PER_LANE = 10;
@@ -47,7 +44,7 @@ const WAVES = 2;
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-soak-memory");
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 
 const usage = { inputTokens: {}, outputTokens: {} };
@@ -97,7 +94,7 @@ const freshLayer = () =>
     Layer.provideMerge(
       Layer.mergeAll(
         MemorySubmissionLedgerLive,
-        MemoryConversationStoreLive,
+        MemoryThreadStoreLive,
         WakeScheduler.layerNoop,
         DurableRuntimeFailpoint.layer,
         ToolReconciler.uncertain,
@@ -107,7 +104,7 @@ const freshLayer = () =>
   );
 
 const submitOptions = (wave: number, lane: number, member: number): DurableSubmitOptions => ({
-  conversationId: decodeConversationId(`soak-memory-w${wave}-lane-${lane}`),
+  threadId: decodeThreadId(`soak-memory-w${wave}-lane-${lane}`),
   principal: PRINCIPAL,
   idempotencyKey: decodeIdempotencyKey(`soak-w${wave}-l${lane}-s${member}`),
   definitions: DIGESTS,
@@ -139,9 +136,9 @@ const runWave = (wave: number) =>
           submitOptions(wave, lane, member),
         );
       }
-      const settlements = yield* runtime.processConversation(
+      const settlements = yield* runtime.processThread(
         agent,
-        decodeConversationId(`soak-memory-w${wave}-lane-${lane}`),
+        decodeThreadId(`soak-memory-w${wave}-lane-${lane}`),
       );
       expect(settlements.length).toBeGreaterThan(0);
     }

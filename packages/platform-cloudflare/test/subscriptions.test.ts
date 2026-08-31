@@ -1,8 +1,4 @@
-import {
-  defaultSubscriptionLimits,
-  SubscriptionIntake,
-  Subscriptions,
-} from "@effect-agent/session";
+import { defaultSubscriptionLimits, SubscriptionIntake, Subscriptions } from "@effect-agent/thread";
 import { env, runDurableObjectAlarm } from "cloudflare:test";
 import { Effect, Layer } from "effect";
 import { expect, it } from "vite-plus/test";
@@ -17,7 +13,7 @@ import { laneRows } from "./harness.ts";
 import {
   armSubscriptionEviction,
   subscriptionAgentId,
-  subscriptionConversationId,
+  subscriptionThreadId,
   subscriptionDefinitions,
   subscriptionEvictionsRemaining,
   subscriptionPartition,
@@ -87,11 +83,11 @@ for (const [caseIndex, row] of cases.entries()) {
     const topic = `topic-${caseIndex}`;
     const eventId = `event-${caseIndex}`;
     const ownerId = `owner-${caseIndex}`;
-    const conversations: Array<string> = [];
+    const threads: Array<string> = [];
 
     for (let index = 0; index < row.registrations; index += 1) {
-      const conversationId = subscriptionConversationId(`${caseIndex}-${index}`);
-      conversations.push(conversationId);
+      const threadId = subscriptionThreadId(`${caseIndex}-${index}`);
+      threads.push(threadId);
       await runClient(
         Effect.gen(function* () {
           const subscriptions = yield* Subscriptions;
@@ -104,7 +100,7 @@ for (const [caseIndex, row] of cases.entries()) {
               context: { instruction: "continue after the event" },
               mode: "once",
               expiresAtMillis: Date.now() + 60_000,
-              destination: { _tag: "ExistingConversation", conversationId },
+              destination: { _tag: "ExistingThread", threadId },
               deliveryPrincipal: subscriptionPrincipal,
               agentId: subscriptionAgentId,
               definitions: subscriptionDefinitions,
@@ -166,8 +162,8 @@ for (const [caseIndex, row] of cases.entries()) {
 
     expect(delivered).toBe(true);
     expect(subscriptionEvictionsRemaining(partitionName)).toBe(0);
-    for (const conversation of conversations) {
-      expect(await laneRows(conversation)).toHaveLength(1);
+    for (const thread of threads) {
+      expect(await laneRows(thread)).toHaveLength(1);
     }
   });
 }

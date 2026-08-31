@@ -43,7 +43,7 @@ the Phase 2 features in chat.
 
 ## Simulator
 
-A server-scoped runtime owns the simulator's ephemeral Conversation, bounded input queue, approval
+A server-scoped runtime owns the simulator's ephemeral Thread, bounded input queue, approval
 resolver, and event queue. The generated RPC client streams Schema-encoded framework and
 operational events; separate unary RPCs admit steering, follow-up, and approval decisions without
 replacing the stream.
@@ -65,7 +65,7 @@ Simulator scenarios:
 The guided scenario also validates one bounded deterministic MCP discovery result, executes a
 fixed `/bin/echo` request through `@effect-agent/sandbox-local`, and shows the implementation's
 explicit `unisolated` posture, disabled network, output bound, deadline, and exit status. Its
-context hook presents a compacted model view while the ephemeral Conversation retains the full
+context hook presents a compacted model view while the ephemeral Thread retains the full
 official Effect AI `Prompt`.
 
 The scripted replay path is credential-free and makes no external network call. The demo does not

@@ -10,14 +10,14 @@ import {
   CanonicalRecordEnvelope,
   ChildSettledNotification,
   ChildSettledOutcome,
-  ConversationExport,
-  ConversationExportRequest,
-  ConversationMaterialization,
-  ConversationNotMaterialized,
-  ConversationRead,
-  ConversationStoreError,
-  ConversationTail,
-  ConversationTailRequest,
+  ThreadExport,
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadNotMaterialized,
+  ThreadRead,
+  ThreadStoreError,
+  ThreadTail,
+  ThreadTailRequest,
   FenceRejected,
   FencedAppendRequest,
   JoinedToHost,
@@ -27,20 +27,20 @@ import {
   SubmissionLookup,
   SubmissionLookupByKey,
   SubmissionSnapshot,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Schema } from "effect";
 
 /**
  * The cross-Durable-Object port protocol (plan §1.3, D-P6-3): Schema request/response/error
- * envelopes for the CLOSED route-capable subset of the session ports. One Conversation's
- * Durable Object executes another Conversation's request against its OWN local facets; the
+ * envelopes for the CLOSED route-capable subset of the thread ports. One Thread's
+ * Durable Object executes another Thread's request against its OWN local facets; the
  * envelopes here are the only values that cross the Object boundary, and they are
  * transport-agnostic — native Durable Object JS RPC is the shipped carrier, fetch-with-JSON
  * the documented fallback, and both move the same Schema-encoded JSON.
  *
  * The closed subset is exactly the set of operations the durable coordinator performs against
- * a FOREIGN Conversation (parent/child establishment, status checks, abort propagation,
- * child-settlement notification, and the child-conversation store operations used by
+ * a FOREIGN Thread (parent/child establishment, status checks, abort propagation,
+ * child-settlement notification, and the child-thread store operations used by
  * establishment, `verifySettledChild`, and result projection):
  *
  * - ledger: `admit`, `markReady`, `lookup`, `resolveAdmission`, `requestAbort`,
@@ -53,7 +53,7 @@ import { Schema } from "effect";
  *
  * Failures cross the boundary as the `PortFailure` union and re-decode on the caller side to
  * the SAME tagged error types the local facet would have produced, so routed calls keep
- * error-tag fidelity. `cause` chains inside `LedgerError`/`ConversationStoreError` travel as
+ * error-tag fidelity. `cause` chains inside `LedgerError`/`ThreadStoreError` travel as
  * Schema defects and do not claim instance fidelity across Objects (plan §2.8).
  */
 
@@ -71,7 +71,7 @@ export const boundPortDiagnostic = (value: string): string =>
 /**
  * The envelope itself could not be honored: the receiving Object could not decode the
  * request, or a response could not be encoded/decoded. It never carries port semantics —
- * callers fold it into the operation's base error (`LedgerError`/`ConversationStoreError`),
+ * callers fold it into the operation's base error (`LedgerError`/`ThreadStoreError`),
  * except `resolveAdmission`, which folds it into `AdmissionIndeterminate` because a
  * non-answer is never proof of absence (SUB-031).
  */
@@ -128,39 +128,39 @@ export class LedgerRecordChildSettledCall extends Schema.TaggedClass<LedgerRecor
   request: ChildSettledNotification,
 }) {}
 
-/** Routed `ConversationStore.materialize` against the owning Object. */
+/** Routed `ThreadStore.materialize` against the owning Object. */
 export class StoreMaterializeCall extends Schema.TaggedClass<StoreMaterializeCall>(
   "@effect-agent/storage-cloudflare/StoreMaterializeCall",
 )("StoreMaterialize", {
-  request: ConversationMaterialization,
+  request: ThreadMaterialization,
 }) {}
 
-/** Routed `ConversationStore.append` against the owning Object. */
+/** Routed `ThreadStore.append` against the owning Object. */
 export class StoreAppendCall extends Schema.TaggedClass<StoreAppendCall>(
   "@effect-agent/storage-cloudflare/StoreAppendCall",
 )("StoreAppend", {
   request: FencedAppendRequest,
 }) {}
 
-/** Routed one-page `ConversationStore.read`; the page bound is the request's own `limit`. */
+/** Routed one-page `ThreadStore.read`; the page bound is the request's own `limit`. */
 export class StoreReadPageCall extends Schema.TaggedClass<StoreReadPageCall>(
   "@effect-agent/storage-cloudflare/StoreReadPageCall",
 )("StoreReadPage", {
-  request: ConversationRead,
+  request: ThreadRead,
 }) {}
 
-/** Routed `ConversationStore.inspectTail` against the owning Object. */
+/** Routed `ThreadStore.inspectTail` against the owning Object. */
 export class StoreInspectTailCall extends Schema.TaggedClass<StoreInspectTailCall>(
   "@effect-agent/storage-cloudflare/StoreInspectTailCall",
 )("StoreInspectTail", {
-  request: ConversationTailRequest,
+  request: ThreadTailRequest,
 }) {}
 
-/** Routed `ConversationStore.export` against the owning Object. */
+/** Routed `ThreadStore.export` against the owning Object. */
 export class StoreExportCall extends Schema.TaggedClass<StoreExportCall>(
   "@effect-agent/storage-cloudflare/StoreExportCall",
 )("StoreExport", {
-  request: ConversationExportRequest,
+  request: ThreadExportRequest,
 }) {}
 
 /** Every request that may cross a Durable Object boundary — the CLOSED route-capable subset. */
@@ -241,13 +241,13 @@ export class StoreReadPageResult extends Schema.TaggedClass<StoreReadPageResult>
 export class StoreInspectTailResult extends Schema.TaggedClass<StoreInspectTailResult>(
   "@effect-agent/storage-cloudflare/StoreInspectTailResult",
 )("StoreInspectTailResult", {
-  tail: ConversationTail,
+  tail: ThreadTail,
 }) {}
 
 export class StoreExportResult extends Schema.TaggedClass<StoreExportResult>(
   "@effect-agent/storage-cloudflare/StoreExportResult",
 )("StoreExportResult", {
-  export: ConversationExport,
+  export: ThreadExport,
 }) {}
 
 /** Every successful routed result. Callers narrow by the tag their request implies. */
@@ -273,15 +273,15 @@ export type PortResult = typeof PortResult.Type;
 /**
  * Every typed failure a route-capable operation can produce on its owning Object, plus the
  * protocol's own `PortProtocolError`. Members re-decode to the SAME tagged classes the
- * session ports declare, so a routed caller observes identical error tags and fields.
+ * thread ports declare, so a routed caller observes identical error tags and fields.
  */
 export const PortFailure = Schema.Union([
   AdmissionConflict,
   SettlementConflict,
   JoinedToHost,
   LedgerError,
-  ConversationStoreError,
-  ConversationNotMaterialized,
+  ThreadStoreError,
+  ThreadNotMaterialized,
   AppendConflict,
   FenceRejected,
   PortProtocolError,

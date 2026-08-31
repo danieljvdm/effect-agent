@@ -1,4 +1,4 @@
-import { CanonicalBatch, CanonicalRecord, UserInputRecorded } from "@effect-agent/session";
+import { CanonicalBatch, CanonicalRecord, UserInputRecorded } from "@effect-agent/thread";
 import { Schema } from "effect";
 
 import { at, id, TEST_DEPLOYMENT, TEST_PRODUCER } from "./harness.ts";
@@ -7,10 +7,10 @@ import { at, id, TEST_DEPLOYMENT, TEST_PRODUCER } from "./harness.ts";
 export const inputRecord = (recordId: string, input: string): CanonicalRecord =>
   CanonicalRecord.make({
     recordId: id(
-      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/RecordId")),
+      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/RecordId")),
       recordId,
     ),
-    family: "conversation",
+    family: "thread",
     schemaVersion: 1,
     createdAt: at(1),
     deploymentId: TEST_DEPLOYMENT,
@@ -27,7 +27,7 @@ export const batch = (
   records: readonly [CanonicalRecord, ...Array<CanonicalRecord>],
 ): CanonicalBatch =>
   CanonicalBatch.make({
-    batchId: id(Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/BatchId")), batchId),
+    batchId: id(Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/BatchId")), batchId),
     producerId: TEST_PRODUCER,
     records,
   });

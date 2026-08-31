@@ -5,7 +5,7 @@ import {
   submissionSettlementRecordId,
   type CanonicalRecordEnvelope,
   type Scheduling,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Crypto, Effect, Layer, Schema } from "effect";
@@ -13,36 +13,36 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { expect } from "vite-plus/test";
 
 import {
-  CloudflareConversationClient,
+  CloudflareThreadClient,
   CloudflareSchedulingClient,
-  ConversationObjectNamespace,
+  ThreadObjectNamespace,
   ScheduleOwnerNamespace,
-  type ConversationObjectRpc,
+  type ThreadObjectRpc,
 } from "../src/index.ts";
-import { decodeConversationId, supplierCountsFor, supplierValuesFor } from "./fixtures.ts";
+import { decodeThreadId, supplierCountsFor, supplierValuesFor } from "./fixtures.ts";
 import type {
-  ContextCompactorConversationObject,
-  DynamicBindingsConversationObject,
-  DeniedConversationObject,
-  LimitedConversationObject,
-  SubagentConversationObject,
-  TelemetryConversationObject,
-  TestConversationObject,
+  ContextCompactorThreadObject,
+  DynamicBindingsThreadObject,
+  DeniedThreadObject,
+  LimitedThreadObject,
+  SubagentThreadObject,
+  TelemetryThreadObject,
+  TestThreadObject,
   TestScheduleOwnerObject,
-  TinyDatabaseConversationObject,
+  TinyDatabaseThreadObject,
 } from "./worker.ts";
 
 declare global {
   namespace Cloudflare {
     interface Env {
-      CONVERSATIONS: DurableObjectNamespace<TestConversationObject>;
-      LIMITED: DurableObjectNamespace<LimitedConversationObject>;
-      TINYDB: DurableObjectNamespace<TinyDatabaseConversationObject>;
-      DENIED: DurableObjectNamespace<DeniedConversationObject>;
-      SUBAGENTS: DurableObjectNamespace<SubagentConversationObject>;
-      DYNAMIC_BINDINGS: DurableObjectNamespace<DynamicBindingsConversationObject>;
-      TELEMETRY: DurableObjectNamespace<TelemetryConversationObject>;
-      CONTEXT_COMPACTOR: DurableObjectNamespace<ContextCompactorConversationObject>;
+      THREADS: DurableObjectNamespace<TestThreadObject>;
+      LIMITED: DurableObjectNamespace<LimitedThreadObject>;
+      TINYDB: DurableObjectNamespace<TinyDatabaseThreadObject>;
+      DENIED: DurableObjectNamespace<DeniedThreadObject>;
+      SUBAGENTS: DurableObjectNamespace<SubagentThreadObject>;
+      DYNAMIC_BINDINGS: DurableObjectNamespace<DynamicBindingsThreadObject>;
+      TELEMETRY: DurableObjectNamespace<TelemetryThreadObject>;
+      CONTEXT_COMPACTOR: DurableObjectNamespace<ContextCompactorThreadObject>;
       SCHEDULES: DurableObjectNamespace<TestScheduleOwnerObject>;
     }
   }
@@ -56,7 +56,7 @@ declare global {
  */
 
 export type TestNamespace =
-  | "CONVERSATIONS"
+  | "THREADS"
   | "LIMITED"
   | "TINYDB"
   | "DENIED"
@@ -65,10 +65,10 @@ export type TestNamespace =
   | "TELEMETRY"
   | "CONTEXT_COMPACTOR";
 
-/** A FRESH stub for the named Conversation (never cache stubs across aborts). */
-export const stubFor = (conversation: string, namespace: TestNamespace = "CONVERSATIONS") => {
+/** A FRESH stub for the named Thread (never cache stubs across aborts). */
+export const stubFor = (thread: string, namespace: TestNamespace = "THREADS") => {
   const binding = env[namespace];
-  return binding.get(binding.idFromName(conversation));
+  return binding.get(binding.idFromName(thread));
 };
 
 let nextProgressWaitIdentity = 0;
@@ -89,11 +89,11 @@ const deterministicClientCrypto = Layer.succeed(
 );
 
 const clientLayer = (namespace: TestNamespace) =>
-  CloudflareConversationClient.layer.pipe(
+  CloudflareThreadClient.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
-        ConversationObjectNamespace.layer(
-          env[namespace] as unknown as DurableObjectNamespace<ConversationObjectRpc>,
+        ThreadObjectNamespace.layer(
+          env[namespace] as unknown as DurableObjectNamespace<ThreadObjectRpc>,
         ),
         deterministicClientCrypto,
       ),
@@ -102,8 +102,8 @@ const clientLayer = (namespace: TestNamespace) =>
 
 /** Run one client Effect against a namespace binding through the real Worker-side client. */
 export const runClient = <A, E>(
-  effect: Effect.Effect<A, E, CloudflareConversationClient>,
-  namespace: TestNamespace = "CONVERSATIONS",
+  effect: Effect.Effect<A, E, CloudflareThreadClient>,
+  namespace: TestNamespace = "THREADS",
 ): Promise<A> => Effect.runPromise(effect.pipe(Effect.provide(clientLayer(namespace))));
 
 const scheduleClientLayer = CloudflareSchedulingClient.layer.pipe(
@@ -119,8 +119,8 @@ export const runScheduleClient = <A, E>(effect: Effect.Effect<A, E, Scheduling>)
 
 /** Fork one client Effect so tests can interrupt the real Worker-side caller deterministically. */
 export const runClientFiber = <A, E>(
-  effect: Effect.Effect<A, E, CloudflareConversationClient>,
-  namespace: TestNamespace = "CONVERSATIONS",
+  effect: Effect.Effect<A, E, CloudflareThreadClient>,
+  namespace: TestNamespace = "THREADS",
 ) => Effect.runFork(effect.pipe(Effect.provide(clientLayer(namespace))));
 
 const isDurableObjectReset = (cause: unknown): boolean =>
@@ -135,7 +135,7 @@ const isDurableObjectReset = (cause: unknown): boolean =>
  * incarnation; the count condition itself is an Object-side latch, never a timed poll.
  */
 export const awaitReconstructedProgressWaiter = async (
-  conversation: string,
+  thread: string,
   previousIncarnation: number,
   expected: number,
 ): Promise<number> => {
@@ -143,7 +143,7 @@ export const awaitReconstructedProgressWaiter = async (
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
       const incarnation = await (
-        stubFor(conversation) as DurableObjectStub<TestConversationObject>
+        stubFor(thread) as DurableObjectStub<TestThreadObject>
       ).awaitProgressWaiterCountAfter(previousIncarnation, expected);
       if (incarnation !== null) return incarnation;
     } catch (cause) {
@@ -159,8 +159,8 @@ export const awaitReconstructedProgressWaiter = async (
 
 /** Exit-capturing variant for rows whose client call is EXPECTED to die mid-eviction. */
 export const runClientExit = <A, E>(
-  effect: Effect.Effect<A, E, CloudflareConversationClient>,
-  namespace: TestNamespace = "CONVERSATIONS",
+  effect: Effect.Effect<A, E, CloudflareThreadClient>,
+  namespace: TestNamespace = "THREADS",
 ): Promise<{ readonly ok: boolean; readonly value?: A; readonly error?: unknown }> =>
   runClient(effect.pipe(Effect.exit), namespace).then(
     (exit) =>
@@ -196,11 +196,11 @@ const withAbortedInstanceRetry = async <A>(probe: () => Promise<A>): Promise<A> 
 
 /** Raw ledger rows straight from the Object's own storage (never through an entry point). */
 export const laneRows = (
-  conversation: string,
-  namespace: TestNamespace = "CONVERSATIONS",
+  thread: string,
+  namespace: TestNamespace = "THREADS",
 ): Promise<ReadonlyArray<LaneRow>> =>
   withAbortedInstanceRetry(() =>
-    runInDurableObject(stubFor(conversation, namespace), (_instance, state) =>
+    runInDurableObject(stubFor(thread, namespace), (_instance, state) =>
       Effect.runPromise(
         Effect.gen(function* () {
           const sql = yield* SqlClientService.SqlClient;
@@ -216,13 +216,11 @@ export const laneRows = (
 
 /** The persisted alarm deadline (epoch millis) or null. */
 export const scheduledAlarm = (
-  conversation: string,
-  namespace: TestNamespace = "CONVERSATIONS",
+  thread: string,
+  namespace: TestNamespace = "THREADS",
 ): Promise<number | null> =>
   withAbortedInstanceRetry(() =>
-    runInDurableObject(stubFor(conversation, namespace), (_instance, state) =>
-      state.storage.getAlarm(),
-    ),
+    runInDurableObject(stubFor(thread, namespace), (_instance, state) => state.storage.getAlarm()),
   );
 
 /**
@@ -237,25 +235,25 @@ export const scheduledAlarm = (
  * admitted child awaiting parent establishment) are intentionally allowed to quiesce.
  */
 export const drainAlarmsUntil = async (
-  conversation: string,
+  thread: string,
   predicate: () => Promise<boolean>,
   options?: { readonly namespace?: TestNamespace; readonly rounds?: number },
 ): Promise<void> => {
-  const namespace = options?.namespace ?? "CONVERSATIONS";
+  const namespace = options?.namespace ?? "THREADS";
   const rounds = options?.rounds ?? 600;
   let consecutiveIdleWithWork = 0;
   for (let round = 0; round < rounds; round++) {
     if (await predicate()) return;
     let fired = false;
     try {
-      fired = await runDurableObjectAlarm(stubFor(conversation, namespace));
+      fired = await runDurableObjectAlarm(stubFor(thread, namespace));
     } catch {
       // The pass aborted the Object (armed eviction) or failed typed (workerd would retry);
       // either way the pre-armed alarm survives in storage for the next round.
       fired = true;
     }
     if (!fired) {
-      const rows = await laneRows(conversation, namespace);
+      const rows = await laneRows(thread, namespace);
       const actionable = rows.some((row) =>
         ["ready", "input-applied", "running", "joining", "terminalizing"].includes(row.state),
       );
@@ -265,7 +263,7 @@ export const drainAlarmsUntil = async (
         // concurrently-running pass to re-arm before declaring it broken.
         if (consecutiveIdleWithWork >= 20) {
           throw new Error(
-            `Alarm invariant broken for ${conversation}: actionable work with no scheduled alarm`,
+            `Alarm invariant broken for ${thread}: actionable work with no scheduled alarm`,
           );
         }
       } else {
@@ -276,25 +274,23 @@ export const drainAlarmsUntil = async (
     }
     await sleep(10);
   }
-  const rows = await laneRows(conversation, namespace);
-  throw new Error(
-    `Alarm drain did not converge for ${conversation}; lane: ${JSON.stringify(rows)}`,
-  );
+  const rows = await laneRows(thread, namespace);
+  throw new Error(`Alarm drain did not converge for ${thread}; lane: ${JSON.stringify(rows)}`);
 };
 
 /** Predicate: every Submission on the lane is settled (and at least one exists). */
 export const allSettled =
-  (conversation: string, namespace: TestNamespace = "CONVERSATIONS") =>
+  (thread: string, namespace: TestNamespace = "THREADS") =>
   async (): Promise<boolean> => {
-    const rows = await laneRows(conversation, namespace);
+    const rows = await laneRows(thread, namespace);
     return rows.length > 0 && rows.every((row) => row.state === "settled");
   };
 
 /** Predicate: some Submission on the lane is durably in `state`. */
 export const anyInState =
-  (conversation: string, state: string, namespace: TestNamespace = "CONVERSATIONS") =>
+  (thread: string, state: string, namespace: TestNamespace = "THREADS") =>
   async (): Promise<boolean> => {
-    const rows = await laneRows(conversation, namespace);
+    const rows = await laneRows(thread, namespace);
     return rows.some((row) => row.state === state);
   };
 
@@ -302,13 +298,13 @@ const decodeSubmissionId = Schema.decodeSync(SubmissionId);
 
 /** Every canonical record of the lane, through the real paged observation entry point. */
 export const readCanonical = (
-  conversation: string,
-  namespace: TestNamespace = "CONVERSATIONS",
+  thread: string,
+  namespace: TestNamespace = "THREADS",
 ): Promise<ReadonlyArray<CanonicalRecordEnvelope>> =>
   runClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
-      return yield* client.readAll(decodeConversationId(conversation));
+      const client = yield* CloudflareThreadClient;
+      return yield* client.readAll(decodeThreadId(thread));
     }),
     namespace,
   );
@@ -329,19 +325,19 @@ export interface SupplierExpectation {
  * no recorded result was fabricated and the invocation counts match the claim exactly.
  */
 export const assertConvergence = async (
-  conversation: string,
+  thread: string,
   options?: {
     readonly namespace?: TestNamespace;
     readonly supplier?: SupplierExpectation;
   },
 ): Promise<void> => {
-  const namespace = options?.namespace ?? "CONVERSATIONS";
-  const rows = await laneRows(conversation, namespace);
+  const namespace = options?.namespace ?? "THREADS";
+  const rows = await laneRows(thread, namespace);
   expect(rows.length).toBeGreaterThan(0);
   for (const row of rows) {
     expect(row.state, `submission ${row.submission_id}`).toBe("settled");
   }
-  const records = await readCanonical(conversation, namespace);
+  const records = await readCanonical(thread, namespace);
   const recordIds = records.map((envelope) => envelope.record.recordId);
   expect(new Set(recordIds).size).toBe(recordIds.length);
   const ordered = [...rows].sort((left, right) => left.queue_sequence - right.queue_sequence);
@@ -364,7 +360,7 @@ export const assertConvergence = async (
   // P7 §7(c) exemption: an ABORTED settlement for never-run work (no canonical `input:{sid}`
   // record) settles immediately by design — without waiting for the head — so it is excluded
   // from the FIFO settlement comparison. DUR-004 bounds EXECUTION order, which never-run work
-  // has none of (mirrors `verifyConversationInvariants`).
+  // has none of (mirrors `verifyThreadInvariants`).
   const abortedNeverRan = (submissionId: string): boolean =>
     !recordIds.includes(submissionInputRecordId(decodeSubmissionId(submissionId))) &&
     records.some(

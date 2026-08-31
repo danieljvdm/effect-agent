@@ -3,8 +3,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Effect, Layer, Option, Tracer } from "effect";
 
-import { CloudflareConversationClient, conversationNamespaceLayer } from "../src/index.ts";
-import { decodeConversationId } from "./fixtures.ts";
+import { CloudflareThreadClient, threadNamespaceLayer } from "../src/index.ts";
+import { decodeThreadId } from "./fixtures.ts";
 import { telemetryProbe } from "./observability-fixture.ts";
 
 describe("DEPLOY-016 native receiver invocation contract", () => {
@@ -14,9 +14,7 @@ describe("DEPLOY-016 native receiver invocation contract", () => {
     { rpcTracing: false, sampled: true },
   ])("preserves live context and starts a fresh alarm root %#", (options) =>
     Effect.gen(function* () {
-      const conversationId = decodeConversationId(
-        `native-tracing-${options.rpcTracing}-${options.sampled}`,
-      );
+      const threadId = decodeThreadId(`native-tracing-${options.rpcTracing}-${options.sampled}`);
       const request = { limit: 7 };
       const spans: Array<Tracer.NativeSpan> = [];
       const tracer = Tracer.make({
@@ -26,21 +24,21 @@ describe("DEPLOY-016 native receiver invocation contract", () => {
           return span;
         },
       });
-      const clientLayer = CloudflareConversationClient.layer.pipe(
-        Layer.provide([conversationNamespaceLayer(env, "TELEMETRY", options), BrowserCrypto.layer]),
+      const clientLayer = CloudflareThreadClient.layer.pipe(
+        Layer.provide([threadNamespaceLayer(env, "TELEMETRY", options), BrowserCrypto.layer]),
       );
       const failure = yield* Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
-        return yield* client.readPage(conversationId, request).pipe(Effect.flip);
+        const client = yield* CloudflareThreadClient;
+        return yield* client.readPage(threadId, request).pipe(Effect.flip);
       }).pipe(
         Effect.withSpan("application-caller", { sampled: options.sampled }),
         Effect.provide(clientLayer),
         Effect.provideService(Tracer.Tracer, tracer),
         Effect.withTracerEnabled(true),
       );
-      expect(failure).toMatchObject({ _tag: "ConversationNotMaterialized", conversationId });
+      expect(failure).toMatchObject({ _tag: "ThreadNotMaterialized", threadId });
       const clientSpan = spans.find((span) => span.kind === "client");
-      const stub = env.TELEMETRY.get(env.TELEMETRY.idFromName(conversationId));
+      const stub = env.TELEMETRY.get(env.TELEMETRY.idFromName(threadId));
 
       yield* Effect.promise(() =>
         runInDurableObject(stub, (instance, state) => {
@@ -94,8 +92,8 @@ describe("DEPLOY-016 native receiver invocation contract", () => {
 
   it.effect("leaves malformed native metadata in the arguments and does not adopt it", () =>
     Effect.gen(function* () {
-      const conversationId = decodeConversationId("native-tracing-invalid-metadata");
-      const stub = env.TELEMETRY.get(env.TELEMETRY.idFromName(conversationId));
+      const threadId = decodeThreadId("native-tracing-invalid-metadata");
+      const stub = env.TELEMETRY.get(env.TELEMETRY.idFromName(threadId));
       const invalid = {
         _tag: "effect-cf/RpcTraceContext/v1",
         traceId: "invalid-trace-id",
@@ -106,7 +104,7 @@ describe("DEPLOY-016 native receiver invocation contract", () => {
       const result = yield* Effect.promise(() => stub.observePage(request, invalid));
       expect(result).toMatchObject({
         _tag: "HostFailed",
-        failure: { _tag: "ConversationNotMaterialized", conversationId },
+        failure: { _tag: "ThreadNotMaterialized", threadId },
       });
       yield* Effect.promise(() =>
         runInDurableObject(stub, (_instance, state) => {

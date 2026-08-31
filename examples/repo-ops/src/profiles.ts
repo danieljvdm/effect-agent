@@ -1,4 +1,4 @@
-import { Agent, type ConversationId } from "@effect-agent/core";
+import { Agent, type ThreadId } from "@effect-agent/core";
 import {
   DefinitionDigests,
   DeploymentId,
@@ -7,7 +7,7 @@ import {
   ProducerId,
   type DurableSubmitOptions,
   type IdempotencyKey,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response } from "effect/unstable/ai";
@@ -63,10 +63,10 @@ export const repoOpsAuditorDigests = DefinitionDigests.make({
 
 /** Durable admission options for one audit Submission on one mission lane. */
 export const repoOpsSubmitOptions = (
-  conversationId: ConversationId,
+  threadId: ThreadId,
   idempotencyKey: IdempotencyKey,
 ): DurableSubmitOptions => ({
-  conversationId,
+  threadId,
   principal: repoOpsPrincipal,
   idempotencyKey,
   definitions: repoOpsAuditorDigests,

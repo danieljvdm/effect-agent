@@ -80,7 +80,7 @@ non-finite allowances. A run allowance never raises the definition's ceiling.
 ## Hierarchical usage budgets
 
 `@effect-agent/capabilities` can apply shared budgets in this order:
-`global → tenant → agent → conversation → run`.
+`global → tenant → agent → thread → run`.
 
 ```ts
 Effect.gen(function* () {
@@ -129,7 +129,7 @@ To extend work:
 2. the parent starts a new delegation with a larger author-owned parameter;
 3. the runtime clamps the new allowance, and the child continues from forwarded findings.
 
-An extension creates a new child conversation. It cannot enlarge a live reservation. Durable
+An extension creates a new child thread. It cannot enlarge a live reservation. Durable
 establishment records the effective allowance before the child becomes runnable. Each replacement
 attempt restores that allowance and the committed tool-call usage, including after approval
 suspension or ownership loss. Recovery never grants a fresh budget. The child's settlement carries

@@ -1,7 +1,7 @@
-import { ConversationId, RunId } from "@effect-agent/core";
+import { ThreadId, RunId } from "@effect-agent/core";
 import { Effect, Option, Queue, Schema } from "effect";
 
-import { ConversationText } from "./conversation.ts";
+import { ThreadText } from "./thread.ts";
 
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -9,9 +9,9 @@ const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 export class SteeringCommand extends Schema.TaggedClass<SteeringCommand>()("SteeringCommand", {
   id: Schema.NonEmptyString,
   runId: RunId,
-  conversationId: ConversationId,
+  threadId: ThreadId,
   author: Schema.NonEmptyString,
-  content: ConversationText,
+  content: ThreadText,
   createdAt: Schema.DateTimeUtcFromString,
 }) {}
 
@@ -19,9 +19,9 @@ export class SteeringCommand extends Schema.TaggedClass<SteeringCommand>()("Stee
 export class FollowUpCommand extends Schema.TaggedClass<FollowUpCommand>()("FollowUpCommand", {
   id: Schema.NonEmptyString,
   runId: RunId,
-  conversationId: ConversationId,
+  threadId: ThreadId,
   author: Schema.NonEmptyString,
-  content: ConversationText,
+  content: ThreadText,
   createdAt: Schema.DateTimeUtcFromString,
 }) {}
 

@@ -5,13 +5,13 @@ import {
   type SubscriptionAuthorizer,
   SubscriptionIntake,
   Subscriptions,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Layer } from "effect";
 import type { DurableObjectState, WorkerEnvironment } from "effect-cf";
 
 import {
   CloudflareSubscriptionsClient,
-  type ConversationObjectNamespace,
+  type ThreadObjectNamespace,
   makeSubscriptionPartitionObjectClass,
   type SubscriptionPartitionIdentity,
   SubscriptionPartitionNamespace,
@@ -24,7 +24,7 @@ import {
  */
 export const makeSubscriptionPartition = <E>(
   host: Layer.Layer<
-    SubscriptionAuthorizer | EventSources | SubscriptionInputBindings | ConversationObjectNamespace,
+    SubscriptionAuthorizer | EventSources | SubscriptionInputBindings | ThreadObjectNamespace,
     E,
     DurableObjectState.DurableObjectState | WorkerEnvironment | SubscriptionPartitionIdentity
   >,

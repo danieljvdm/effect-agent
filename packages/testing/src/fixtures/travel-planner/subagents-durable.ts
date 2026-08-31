@@ -3,7 +3,7 @@ import {
   SubagentReservationsMemoryLive,
   SubagentRuntime,
 } from "@effect-agent/capabilities";
-import { Agent, type ConversationId } from "@effect-agent/core";
+import { Agent, type ThreadId } from "@effect-agent/core";
 import type { RuntimeBinding } from "@effect-agent/engine";
 import {
   DefinitionDigests,
@@ -15,7 +15,7 @@ import {
   type DurableSubmitOptions,
   type IdempotencyKey,
   type ResolvedBinding,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response, type Toolkit } from "effect/unstable/ai";
 
@@ -59,7 +59,7 @@ export class TravelPlannerSubagentDurabilityProfile extends Schema.Class<TravelP
   deploymentClass: Schema.Literal("DN"),
   durableAttachedSubagents: Schema.Literal(true),
   canonicalSchemaVersion: Schema.Literal(1),
-  /** Establishment/join replay converges on one child Receipt, Conversation, and join batch. */
+  /** Establishment/join replay converges on one child Receipt, Thread, and join batch. */
   subagentReplaySafe: Schema.Literal(true),
   /** Never claimed (rule 8): child ordinary Tools stop at Unknown Outcomes, they do not replay. */
   childExternalEffectsExactlyOnce: Schema.Literal(false),
@@ -114,10 +114,10 @@ export const s2ResearcherDigests = DefinitionDigests.make({
 
 /** Durable admission options for one coordinator Submission on one mission lane. */
 export const s2TravelPlannerSubmitOptions = (
-  conversationId: ConversationId,
+  threadId: ThreadId,
   idempotencyKey: IdempotencyKey,
 ): DurableSubmitOptions => ({
-  conversationId,
+  threadId,
   principal: s2TravelPlannerPrincipal,
   idempotencyKey,
   definitions: s2CoordinatorDigests,

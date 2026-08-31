@@ -29,7 +29,7 @@ an **isolated Dynamic Worker** with no ambient authority and reaches the
 warehouse only through the brokered `warehouse.query` method, which runs one
 **read-only** SQL statement against a SQLite Durable Object. Deployment class
 **E**: the Agent runs ephemerally; the Durable Object is the warehouse data
-store, not a Conversation store.
+store, not a Thread store.
 
 The response includes the Tool, isolated executor, generated JavaScript, and result:
 

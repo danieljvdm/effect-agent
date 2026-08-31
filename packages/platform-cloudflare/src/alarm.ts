@@ -6,7 +6,7 @@ import {
   type DurableWorkerFailure,
   type RecoveryReport,
   type SubmissionSnapshot,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import {
   Clock,
   Context,
@@ -20,7 +20,7 @@ import {
   Stream,
 } from "effect";
 
-import { ConversationObjectIdentity, DurableObjectContext } from "./bindings.ts";
+import { ThreadObjectIdentity, DurableObjectContext } from "./bindings.ts";
 import { safeCauseMessage } from "./boundary.ts";
 import { CloudflareDurableRuntimeConfig } from "./config.ts";
 
@@ -163,7 +163,7 @@ export class MaintenancePassReport extends Schema.Class<MaintenancePassReport>(
 }) {}
 
 /** Fault boundaries around every maintenance-owned durable mutation. */
-export type ConversationMaintenanceFailpointLocation =
+export type ThreadMaintenanceFailpointLocation =
   | "maintenance:dirty:before"
   | "maintenance:dirty:after"
   | "maintenance:mutation:armed"
@@ -175,17 +175,17 @@ export type ConversationMaintenanceFailpointLocation =
   | "maintenance:finish:before"
   | "maintenance:finish:after";
 
-export type ConversationMaintenanceFailpointHandler = (
-  location: ConversationMaintenanceFailpointLocation,
+export type ThreadMaintenanceFailpointHandler = (
+  location: ThreadMaintenanceFailpointLocation,
 ) => Effect.Effect<void>;
 
 /** Test-only fault authority; production uses the inert layer. */
-export class ConversationMaintenanceFailpoint extends Context.Service<
-  ConversationMaintenanceFailpoint,
+export class ThreadMaintenanceFailpoint extends Context.Service<
+  ThreadMaintenanceFailpoint,
   {
-    readonly hit: ConversationMaintenanceFailpointHandler;
+    readonly hit: ThreadMaintenanceFailpointHandler;
   }
->()("@effect-agent/platform-cloudflare/ConversationMaintenanceFailpoint") {
+>()("@effect-agent/platform-cloudflare/ThreadMaintenanceFailpoint") {
   static readonly layer = Layer.succeed(this)({ hit: () => Effect.void });
 }
 
@@ -194,8 +194,8 @@ const MaintenanceGeneration = Schema.BigIntFromString.check(
 );
 
 /** Versioned, platform-private maintenance state stored through Durable Object KV. */
-class ConversationMaintenanceState extends Schema.Class<ConversationMaintenanceState>(
-  "@effect-agent/platform-cloudflare/ConversationMaintenanceState",
+class ThreadMaintenanceState extends Schema.Class<ThreadMaintenanceState>(
+  "@effect-agent/platform-cloudflare/ThreadMaintenanceState",
 )({
   schemaVersion: Schema.Literal(1),
   dirty: MaintenanceGeneration,
@@ -203,12 +203,12 @@ class ConversationMaintenanceState extends Schema.Class<ConversationMaintenanceS
   nonterminal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 }) {}
 
-const MAINTENANCE_STATE_KEY = "effect-agent:conversation-maintenance:v1";
-const decodeMaintenanceState = Schema.decodeUnknownSync(ConversationMaintenanceState);
-const encodeMaintenanceState = Schema.encodeSync(ConversationMaintenanceState);
+const MAINTENANCE_STATE_KEY = "effect-agent:thread-maintenance:v1";
+const decodeMaintenanceState = Schema.decodeUnknownSync(ThreadMaintenanceState);
+const encodeMaintenanceState = Schema.encodeSync(ThreadMaintenanceState);
 
-const initialMaintenanceState = (): ConversationMaintenanceState =>
-  ConversationMaintenanceState.make({
+const initialMaintenanceState = (): ThreadMaintenanceState =>
+  ThreadMaintenanceState.make({
     schemaVersion: 1,
     // Bootstrap Objects created by the pre-generation release without scanning the ledger in
     // the constructor. One useful pass classifies and acknowledges any existing obligation.
@@ -219,7 +219,7 @@ const initialMaintenanceState = (): ConversationMaintenanceState =>
 
 const readMaintenanceState = async (
   transaction: DurableObjectTransaction,
-): Promise<{ readonly state: ConversationMaintenanceState; readonly initialized: boolean }> => {
+): Promise<{ readonly state: ThreadMaintenanceState; readonly initialized: boolean }> => {
   const encoded = await transaction.get(MAINTENANCE_STATE_KEY);
   return encoded === undefined
     ? { state: initialMaintenanceState(), initialized: false }
@@ -279,8 +279,8 @@ export type MaintenancePassFailure =
  * 4. Stable external waits acknowledge and clear. Autonomous retry, indeterminate, and lease
  *    recovery states leave their generation dirty and retain bounded backoff rearming.
  */
-export class ConversationMaintenance extends Context.Service<
-  ConversationMaintenance,
+export class ThreadMaintenance extends Context.Service<
+  ThreadMaintenance,
   {
     /** One idempotent maintenance pass; failures propagate so workerd retries the alarm. */
     readonly pass: Effect.Effect<MaintenancePassReport, MaintenancePassFailure>;
@@ -298,29 +298,29 @@ export class ConversationMaintenance extends Context.Service<
       body: Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E | DurableAlarmError, R>;
   }
->()("@effect-agent/platform-cloudflare/ConversationMaintenance") {
+>()("@effect-agent/platform-cloudflare/ThreadMaintenance") {
   static readonly layer = (
     bindings: ReadonlyArray<ResolvedBinding>,
   ): Layer.Layer<
-    ConversationMaintenance,
+    ThreadMaintenance,
     never,
     | DurableAgentRuntime
     | SubmissionLedger
     | DurableAlarmService
-    | ConversationMaintenanceFailpoint
+    | ThreadMaintenanceFailpoint
     | CloudflareDurableRuntimeConfig
-    | ConversationObjectIdentity
+    | ThreadObjectIdentity
     | DurableObjectContext
   > =>
-    Layer.effect(ConversationMaintenance)(
+    Layer.effect(ThreadMaintenance)(
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const ledger = yield* SubmissionLedger;
         const alarm = yield* DurableAlarmService;
         const config = yield* CloudflareDurableRuntimeConfig;
-        const identity = yield* ConversationObjectIdentity;
+        const identity = yield* ThreadObjectIdentity;
         const { ctx } = yield* DurableObjectContext;
-        const failpoint = yield* ConversationMaintenanceFailpoint;
+        const failpoint = yield* ThreadMaintenanceFailpoint;
 
         /**
          * Consecutive no-progress passes — an in-memory CACHE, not state: a fresh incarnation
@@ -350,13 +350,13 @@ export class ConversationMaintenance extends Context.Service<
             catch: alarmFailure(operation),
           });
 
-        const beginMutation = Effect.fn("ConversationMaintenance.beginMutation")(function* () {
+        const beginMutation = Effect.fn("ThreadMaintenance.beginMutation")(function* () {
           yield* failpoint.hit("maintenance:dirty:before");
           const now = yield* Clock.currentTimeMillis;
           yield* runTransaction("advance maintenance generation", () =>
             ctx.storage.transaction(async (transaction) => {
               const { state } = await readMaintenanceState(transaction);
-              const next = ConversationMaintenanceState.make({
+              const next = ThreadMaintenanceState.make({
                 ...state,
                 dirty: state.dirty + 1n,
               });
@@ -387,7 +387,7 @@ export class ConversationMaintenance extends Context.Service<
             () => endMutation,
           );
 
-        const ensureAlarm = Effect.fn("ConversationMaintenance.ensureAlarm")(function* () {
+        const ensureAlarm = Effect.fn("ThreadMaintenance.ensureAlarm")(function* () {
           yield* failpoint.hit("maintenance:ensure:before");
           const now = yield* Clock.currentTimeMillis;
           yield* runTransaction("ensure maintenance alarm", () =>
@@ -404,7 +404,7 @@ export class ConversationMaintenance extends Context.Service<
           yield* failpoint.hit("maintenance:ensure:after");
         });
 
-        const beginPass = Effect.fn("ConversationMaintenance.beginPass")(function* () {
+        const beginPass = Effect.fn("ThreadMaintenance.beginPass")(function* () {
           yield* failpoint.hit("maintenance:begin:before");
           const now = yield* Clock.currentTimeMillis;
           const result = yield* runTransaction("begin maintenance pass", () =>
@@ -427,7 +427,7 @@ export class ConversationMaintenance extends Context.Service<
           return result;
         });
 
-        const rearmDelay = Effect.fn("ConversationMaintenance.rearmDelay")(function* (
+        const rearmDelay = Effect.fn("ThreadMaintenance.rearmDelay")(function* (
           progressed: boolean,
         ) {
           const priorStalls = yield* Ref.getAndUpdate(stalls, (count) =>
@@ -443,7 +443,7 @@ export class ConversationMaintenance extends Context.Service<
           return Math.min(jittered, config.wakeScanInterval);
         });
 
-        const pass = Effect.fn("ConversationMaintenance.pass")(function* (): Effect.fn.Return<
+        const pass = Effect.fn("ThreadMaintenance.pass")(function* (): Effect.fn.Return<
           MaintenancePassReport,
           MaintenancePassFailure
         > {
@@ -477,10 +477,7 @@ export class ConversationMaintenance extends Context.Service<
           // Step 2 — reconciliation strictly precedes new work in this pass (exit gate).
           const recovered: ReadonlyArray<RecoveryReport> = yield* runtime.runRecovery;
           // Step 3 — one bounded drain pass over this Object's own lane.
-          const settlements = yield* runtime.processConversationResolved(
-            identity.conversationId,
-            bindings,
-          );
+          const settlements = yield* runtime.processThreadResolved(identity.threadId, bindings);
           // Observe residual state before acknowledging this exact pass-start generation.
           const remaining = yield* Stream.runCollect(ledger.scanNonterminal);
           const reports = new Map(recovered.map((report) => [report.submissionId, report]));
@@ -517,7 +514,7 @@ export class ConversationMaintenance extends Context.Service<
                       : state.processed > started.generation
                         ? state.processed
                         : started.generation;
-                  const next = ConversationMaintenanceState.make({
+                  const next = ThreadMaintenanceState.make({
                     ...state,
                     processed,
                     nonterminal: remaining.length,
@@ -560,7 +557,7 @@ export class ConversationMaintenance extends Context.Service<
           );
         });
 
-        return ConversationMaintenance.of({
+        return ThreadMaintenance.of({
           // A mid-pass immediate hint is droppable; durable dirty state decides the final alarm.
           pass: alarm.withWakesDeferred(maintenancePassGate.withPermit(pass())),
           ensureAlarm: ensureAlarm(),

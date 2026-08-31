@@ -9,9 +9,9 @@ import {
   ObligationThresholds,
   SubmissionLedger,
   SubmissionLookupById,
-  childConversationIdFor,
+  childThreadIdFor,
   type Receipt,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Duration, Effect, FileSystem, Option, Schema, Stream, type Scope } from "effect";
@@ -22,7 +22,7 @@ import {
   SOAK_DELEGATE_CALL_ID,
   SOAK_KILL_EXIT_CODE,
   SoakEnv,
-  decodeConversationId,
+  decodeThreadId,
   soakCoordinatorSubmitSlice,
   soakPlannerSubmitSlice,
   soakSubmitOptions,
@@ -47,7 +47,7 @@ import {
 const PLAIN_LANES = 16;
 const PLAIN_PER_LANE = 30; // 480 plain submissions (joins mixed in by queue depth)
 const DELEGATION_LANES = 4;
-const DELEGATION_PER_LANE = 5; // 20 delegation submissions → 20 child Conversations
+const DELEGATION_PER_LANE = 5; // 20 delegation submissions → 20 child Threads
 const TOTAL_SUBMISSIONS = PLAIN_LANES * PLAIN_PER_LANE + DELEGATION_LANES * DELEGATION_PER_LANE;
 const KILLS = 6;
 const SOAK_BUDGET_MS = 300_000;
@@ -254,32 +254,30 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   expect(Option.isSome(row)).toBe(true);
                   if (Option.isSome(row)) expect(row.value.state).toBe("settled");
                 }
-                // The shared integrity claims for every parent lane and child Conversation.
-                const conversations = [
+                // The shared integrity claims for every parent lane and child Thread.
+                const threads = [
                   ...Array.from({ length: PLAIN_LANES }, (_, lane) => plainLane(lane)),
                   ...Array.from({ length: DELEGATION_LANES }, (_, lane) => delegationLane(lane)),
-                ].map((name) => decodeConversationId(name));
-                for (const conversationId of conversations) {
-                  const report = yield* host.verify(conversationId);
+                ].map((name) => decodeThreadId(name));
+                for (const threadId of threads) {
+                  const report = yield* host.verify(threadId);
                   expect(
                     report.ok,
-                    `integrity report for ${conversationId}: ${JSON.stringify(report.checks)}`,
+                    `integrity report for ${threadId}: ${JSON.stringify(report.checks)}`,
                   ).toBe(true);
                 }
                 // Delegation receipts that were JOINED into a host Run settle with it and never
-                // own a child Conversation (DUR-016), so only materialized children are
+                // own a child Thread (DUR-016), so only materialized children are
                 // verified — and every delegation lane's host Run established at least one.
                 let verifiedChildren = 0;
                 for (const receipt of delegationReceipts) {
-                  const child = childConversationIdFor(
+                  const child = childThreadIdFor(
                     receipt.submissionId,
                     decodeToolCallId(SOAK_DELEGATE_CALL_ID),
                   );
                   const report = yield* host.verify(child).pipe(
                     Effect.map(Option.some),
-                    Effect.catchTag("ConversationNotMaterialized", () =>
-                      Effect.succeed(Option.none()),
-                    ),
+                    Effect.catchTag("ThreadNotMaterialized", () => Effect.succeed(Option.none())),
                   );
                   if (Option.isSome(report)) {
                     expect(

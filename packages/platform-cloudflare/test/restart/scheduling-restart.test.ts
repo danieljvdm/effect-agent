@@ -51,8 +51,8 @@ const openRuntime = (persistDirectory: string, script: string) =>
             compatibilityDate: "2025-05-01",
             compatibilityFlags: ["nodejs_compat"],
             durableObjects: {
-              RESTART_CONVERSATIONS: {
-                className: "SchedulingRestartConversation",
+              RESTART_THREADS: {
+                className: "SchedulingRestartThread",
                 useSQLite: true,
               },
               RESTART_SCHEDULES: { className: "SchedulingRestartOwner", useSQLite: true },

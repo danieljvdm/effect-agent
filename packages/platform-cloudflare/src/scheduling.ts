@@ -1,5 +1,10 @@
 import { AgentId } from "@effect-agent/core";
 import {
+  DoScheduleAlarmControl,
+  DoScheduleTransaction,
+  scheduleStoreLayer,
+} from "@effect-agent/storage-cloudflare";
+import {
   DefinitionDigests,
   PersistedJson,
   type DurableSubmitAgent,
@@ -26,12 +31,7 @@ import {
   defaultSchedulingLimits,
   scheduleOwnerKey,
   ScheduleWakeNoop,
-} from "@effect-agent/session";
-import {
-  DoScheduleAlarmControl,
-  DoScheduleTransaction,
-  scheduleStoreLayer,
-} from "@effect-agent/storage-cloudflare";
+} from "@effect-agent/thread";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Clock, Context, DateTime, Effect, Layer, Schema } from "effect";
@@ -42,8 +42,8 @@ import {
   type WorkerEnvironment,
 } from "effect-cf";
 
-import type { ConversationObjectNamespace } from "./bindings.ts";
-import { CloudflareConversationClient } from "./client.ts";
+import type { ThreadObjectNamespace } from "./bindings.ts";
+import { CloudflareThreadClient } from "./client.ts";
 import {
   cloudflarePreparedInputAdmissionLayer,
   cloudflareScheduledInputAdmissionLayer,
@@ -575,7 +575,7 @@ export interface ScheduleOwnerObjectClass {
  */
 export const makeScheduleOwnerObjectClass = <E>(
   host: Layer.Layer<
-    ScheduleAuthorizer | ConversationObjectNamespace,
+    ScheduleAuthorizer | ThreadObjectNamespace,
     E,
     EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment | ScheduleOwnerIdentity
   >,
@@ -600,7 +600,7 @@ export const makeScheduleOwnerObjectClass = <E>(
     Layer.provide(
       cloudflareScheduledInputAdmissionLayer.pipe(
         Layer.provide(cloudflarePreparedInputAdmissionLayer),
-        Layer.provide(CloudflareConversationClient.layer),
+        Layer.provide(CloudflareThreadClient.layer),
       ),
     ),
     Layer.provide(ScheduleWakeNoop),

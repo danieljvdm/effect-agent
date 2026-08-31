@@ -1,4 +1,4 @@
-import type { SubscriptionFailpointError } from "@effect-agent/session";
+import type { SubscriptionFailpointError } from "@effect-agent/thread";
 import {
   AcceptedEvent,
   applySubscriptionDeliveryChange,
@@ -20,15 +20,15 @@ import {
   SubscriptionScanCursors,
   SubscriptionStore,
   subscriptionDeliveryKeyString,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Clock, Effect, Layer, Result, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
-import type { SqliteStorageInitializationError } from "./sqlite-conversation-store.ts";
 import { initializeSqliteJournal } from "./sqlite-journal.ts";
 import type { SqliteStorageConfig } from "./sqlite-storage-config.ts";
 import type { SqliteStorageFailpoint } from "./sqlite-storage-failpoint.ts";
+import type { SqliteStorageInitializationError } from "./sqlite-thread-store.ts";
 
 const StoredJson = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
 const CountRow = Schema.Struct({ count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) });
@@ -100,7 +100,7 @@ const sameDeliveryIdentity = (left: SubscriptionDelivery, right: SubscriptionDel
   left.deliveryId === right.deliveryId &&
   left.source.name === right.source.name &&
   left.source.version === right.source.version &&
-  left.conversationId === right.conversationId &&
+  left.threadId === right.threadId &&
   left.admissionKey === right.admissionKey &&
   left.subscriptionFingerprint === right.subscriptionFingerprint &&
   left.eventDigest === right.eventDigest;

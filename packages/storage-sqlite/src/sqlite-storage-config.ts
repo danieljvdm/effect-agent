@@ -19,7 +19,7 @@ export class SqliteStorageConfigValue extends Schema.Class<SqliteStorageConfigVa
    * Submission ownership lease duration in milliseconds (D5). The lease is a liveness hint
    * that makes an abandoned claim reclaimable; correctness never depends on it because every
    * canonical append is fenced by producer epoch. Convenience layers default this to
-   * `DEFAULT_OWNERSHIP_LEASE_DURATION` from `@effect-agent/session`.
+   * `DEFAULT_OWNERSHIP_LEASE_DURATION` from `@effect-agent/thread`.
    */
   ownershipLeaseDuration: OwnershipLeaseMillis,
   /**

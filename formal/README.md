@@ -24,7 +24,7 @@ expected verdict of each. The negative controls must fail.
 
 | File                             | What it is                                                                                                                                                      |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DurableSubmission.tla`          | PlusCal: one Conversation lane, FIFO Submissions, workers, recovery, resolution dependency, abort, lease expiry, crash at every durable boundary                |
+| `DurableSubmission.tla`          | PlusCal: one Thread lane, FIFO Submissions, workers, recovery, resolution dependency, abort, lease expiry, crash at every durable boundary                      |
 | `DurableSubmission.cfg`          | safety instance with 2 Submissions, 2 workers, a fault budget of 2, and 8 invariants                                                                            |
 | `DurableSubmissionLiveness.cfg`  | liveness instance (1 worker): `EventuallySettled` under the documented fairness + fault-budget assumptions                                                      |
 | `DurableSubmissionNoFencing.cfg` | **negative control** with fencing disabled. TLC must report a `FencingSafety` violation                                                                         |

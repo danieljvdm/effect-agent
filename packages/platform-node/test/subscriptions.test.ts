@@ -1,4 +1,10 @@
-import { Agent, AgentId, AgentPolicy, ConversationId } from "@effect-agent/core";
+import { Agent, AgentId, AgentPolicy, ThreadId } from "@effect-agent/core";
+import {
+  SqliteStorageConfig,
+  SqliteStorageConfigValue,
+  SqliteStorageFailpoint,
+  subscriptionStoreLayer,
+} from "@effect-agent/storage-sqlite";
 import {
   DefinitionDigests,
   Digest,
@@ -18,7 +24,7 @@ import {
   SubmissionLookupByKey,
   defaultSubscriptionLimits,
   type DurableRuntimeFailpointHandler,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import {
   GitHubRepository,
   GitHubWorkflowRunSourceVersion,
@@ -26,13 +32,7 @@ import {
   GitHubWorkflowRunCompletion,
   GitHubWorkflowRunWatch,
   makeGitHubWorkflowRunSource,
-} from "@effect-agent/session/github";
-import {
-  SqliteStorageConfig,
-  SqliteStorageConfigValue,
-  SqliteStorageFailpoint,
-  subscriptionStoreLayer,
-} from "@effect-agent/storage-sqlite";
+} from "@effect-agent/thread/github";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
@@ -60,7 +60,7 @@ const partition = SourcePartition.make({
   address: "github:repository:42",
 });
 const principal = Schema.decodeSync(Principal)("node-subscription-principal");
-const conversationId = Schema.decodeSync(ConversationId)("node-subscription-conversation");
+const threadId = Schema.decodeSync(ThreadId)("node-subscription-thread");
 const digest = Schema.decodeSync(Digest)("b".repeat(64));
 const definitions = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
 const agentId = Schema.decodeSync(AgentId)("node-subscription-agent");
@@ -214,7 +214,7 @@ const subscribe = (subscriptions: Subscriptions["Service"]) =>
     context: { instruction: "continue reviewing" },
     mode: "once",
     expiresAtMillis: 60_000,
-    destination: { _tag: "ExistingConversation", conversationId },
+    destination: { _tag: "ExistingThread", threadId },
     deliveryPrincipal: principal,
     agentId,
     definitions,
@@ -345,9 +345,9 @@ it.effect(
           const initialReceipt = yield* firstHost.submit(
             initialAgent,
             { question: "is the workflow registered?" },
-            { conversationId, principal, idempotencyKey: initialAdmissionKey, definitions },
+            { threadId, principal, idempotencyKey: initialAdmissionKey, definitions },
           );
-          yield* firstRuntime.processConversation(initialAgent, conversationId);
+          yield* firstRuntime.processThread(initialAgent, threadId);
           const initialSettlement = yield* firstHost.awaitSettlement(initialReceipt);
           expect(initialSettlement.outcome).toBe("completed");
 
@@ -393,14 +393,14 @@ it.effect(
             thirdSubscriptions,
             (delivery) => delivery.receipt !== null,
           );
-          expect(delivered.receipt?.conversationId).toBe(conversationId);
+          expect(delivered.receipt?.threadId).toBe(threadId);
 
           const delivery = yield* store.delivery(delivered.key);
           if (delivery === null)
             return yield* Effect.die("Expected retained subscription delivery");
           const admitted = yield* ledger.lookup(
             SubmissionLookupByKey.make({
-              conversationId,
+              threadId,
               principal,
               idempotencyKey: delivery.admissionKey,
             }),

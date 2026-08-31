@@ -1,4 +1,4 @@
-import { AgentId, ConversationId, ReceiptId, SubmissionId } from "@effect-agent/core";
+import { AgentId, ThreadId, ReceiptId, SubmissionId } from "@effect-agent/core";
 import {
   AcceptedEvent,
   DefinitionDigests,
@@ -30,7 +30,7 @@ import {
   type PreparedInput,
   type SubscribeOptions,
   type SubscriptionLimits,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
@@ -43,7 +43,7 @@ const principal = Schema.decodeSync(Principal)("manager");
 const scope = { partition, ownerId: "owner", principal };
 const source = { name: "trusted", version: "1" };
 const agentId = Schema.decodeSync(AgentId)("subscription-agent");
-const conversationId = Schema.decodeSync(ConversationId)("subscription-conversation");
+const threadId = Schema.decodeSync(ThreadId)("subscription-thread");
 const digest = Schema.decodeSync(Digest)("a".repeat(64));
 const definitions = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
 const Event = Schema.Struct({ id: Schema.String, key: Schema.String, text: Schema.String });
@@ -66,7 +66,7 @@ const options = (
   context: { text: "private-continuation" },
   mode,
   expiresAtMillis: 100_000,
-  destination: { _tag: "ExistingConversation", conversationId },
+  destination: { _tag: "ExistingThread", threadId },
   deliveryPrincipal: principal,
   agentId,
   definitions,
@@ -78,7 +78,7 @@ const key = (subscriptionId = "watch", eventId = "completion") => ({
 });
 const receipt = (input: PreparedInput) =>
   Receipt.make({
-    conversationId: input.conversationId,
+    threadId: input.threadId,
     receiptId: Schema.decodeSync(ReceiptId)(`receipt:${input.admissionKey}`),
     submissionId: Schema.decodeSync(SubmissionId)(`submission:${input.admissionKey}`),
     queueSequence: Schema.decodeSync(QueueSequence)(1),
@@ -414,7 +414,7 @@ describe("Durable subscription delivery", () => {
               envelopeDigest: digest,
               envelope: {
                 schemaVersion: 1,
-                conversationId,
+                threadId,
                 deliveryPrincipal: principal,
                 agentId,
                 definitions,

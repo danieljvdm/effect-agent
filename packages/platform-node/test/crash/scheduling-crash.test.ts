@@ -3,7 +3,7 @@ import {
   ScheduleRecord,
   Scheduling,
   defaultSchedulingLimits,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { NodeServices } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";

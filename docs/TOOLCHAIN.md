@@ -60,8 +60,8 @@ Provider integrations come from upstream Effect AI Layers.
 core <- engine <- capabilities
 core <- sandbox <- sandbox-local
 core <- sandbox <- capabilities
-core <- engine <- session <- storage adapters
-engine + session + sandbox + adapters <- platform packages
+core <- engine <- thread <- storage adapters
+engine + thread + sandbox + adapters <- platform packages
 core + engine <- testing
 core + engine + capabilities <- effect-agent <- pr-review
 ```
@@ -197,7 +197,7 @@ CI suppresses lifecycle scripts, then explicitly patches the compiler in jobs th
 or build TypeScript. Read installed Effect sources in `node_modules/effect`.
 
 `preferTypedSchemaDecoder` is disabled in `tsconfig.base.json` because `@effect/tsgo@0.33.0`
-panics in that rule while checking session. Re-enable it after the upstream fix.
+panics in that rule while checking thread. Re-enable it after the upstream fix.
 
 To upgrade Effect:
 

@@ -1,12 +1,13 @@
 import * as path from "node:path";
 
-import { Agent, ConversationId, ToolCallId, type SubmissionId } from "@effect-agent/core";
+import { Agent, ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
 import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
 import { layer as LocalSandboxLayer } from "@effect-agent/sandbox-local";
+import { phase7LiveProfileEnabled } from "@effect-agent/testing/fixtures/travel-planner";
 import {
   ApprovalDecisionCommand,
-  ConversationRead,
-  ConversationStore,
+  ThreadRead,
+  ThreadStore,
   DurableAgentRuntime,
   IdempotencyKey,
   SubmissionLedger,
@@ -15,8 +16,7 @@ import {
   toolStepSettledRecordId,
   type CanonicalRecordEnvelope,
   type Receipt,
-} from "@effect-agent/session";
-import { phase7LiveProfileEnabled } from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/thread";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -47,7 +47,7 @@ import {
   repoOpsSubmitOptions,
 } from "../src/index.ts";
 
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const decodeReport = Schema.decodeUnknownEffect(EvidenceAuditReport);
@@ -133,12 +133,10 @@ const workerLayerFor = (workspace: {
   );
 };
 
-const readLog = (conversationId: ConversationId) =>
+const readLog = (threadId: ThreadId) =>
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
-    return yield* Stream.runCollect(
-      store.read(ConversationRead.make({ conversationId, limit: 1_024 })),
-    );
+    const store = yield* ThreadStore;
+    return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1_024 })));
   });
 
 const payloadsOf = <Tag extends string>(
@@ -226,11 +224,11 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
           yield* Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
             const runtime = yield* DurableAgentRuntime;
-            const conversation = decodeConversationId("repo-ops-audit-happy");
+            const thread = decodeThreadId("repo-ops-audit-happy");
             const receipt: Receipt = yield* runtime.submit(
               agent,
               AuditMission.make({ evidenceDocuments: documents }),
-              repoOpsSubmitOptions(conversation, decodeIdempotencyKey("repo-ops-happy-1")),
+              repoOpsSubmitOptions(thread, decodeIdempotencyKey("repo-ops-happy-1")),
             );
             const runId = runIdForSubmission(receipt.submissionId);
 
@@ -238,13 +236,13 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
             // sandbox, one named durable step per document) and the report
             // write suspends durably on its canonical approval request.
             const first = yield* runtime
-              .processConversation(agent, conversation)
+              .processThread(agent, thread)
               .pipe(Effect.provide(workerLayer));
             expect(first).toHaveLength(0);
             expect((yield* submissionState(receipt.submissionId)).state).toBe("suspended");
             expect(yield* fs.exists(reportFile)).toBe(false);
 
-            const suspendedLog = yield* readLog(conversation);
+            const suspendedLog = yield* readLog(thread);
             const stepIds = documents.map((document) =>
               toolStepSettledRecordId(
                 runId,
@@ -295,11 +293,11 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
               }),
             );
             const settlements = yield* runtime
-              .processConversation(agent, conversation)
+              .processThread(agent, thread)
               .pipe(Effect.provide(workerLayer));
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
 
-            const log = yield* readLog(conversation);
+            const log = yield* readLog(thread);
             expect(yield* settledReport(log)).toEqual(expectedOfflineReport(documents, missing));
             const decision = payloadsOf(log, "ToolApprovalDecided")[0]?.record.payload;
             if (decision?._tag !== "ToolApprovalDecided") {
@@ -358,24 +356,24 @@ describe.skipIf(!liveEnabled)("CAP-010 evidence auditor live profile (opt-in)", 
 
           yield* Effect.gen(function* () {
             const runtime = yield* DurableAgentRuntime;
-            const conversation = decodeConversationId("repo-ops-audit-live");
+            const thread = decodeThreadId("repo-ops-audit-live");
             const receipt = yield* runtime.submit(
               OpenAiEvidenceAuditor,
               AuditMission.make({ evidenceDocuments: ["docs/S2-EVIDENCE.md"] }),
-              repoOpsSubmitOptions(conversation, decodeIdempotencyKey("repo-ops-live-1")),
+              repoOpsSubmitOptions(thread, decodeIdempotencyKey("repo-ops-live-1")),
             );
 
             // Bounded drive loop: resolve any pending approval between drives.
             let outcome: string | undefined;
             for (let drive = 0; drive < 4 && outcome === undefined; drive += 1) {
               const settlements = yield* runtime
-                .processConversation(OpenAiEvidenceAuditor, conversation)
+                .processThread(OpenAiEvidenceAuditor, thread)
                 .pipe(Effect.provide(workerLayer));
               outcome = settlements[0]?.outcome;
               if (outcome !== undefined) break;
               const state = yield* submissionState(receipt.submissionId);
               if (state.state === "suspended") {
-                const log = yield* readLog(conversation);
+                const log = yield* readLog(thread);
                 const request = payloadsOf(log, "ToolApprovalRequested").at(-1)?.record.payload;
                 if (request?._tag === "ToolApprovalRequested") {
                   yield* runtime.resolveApproval(
@@ -391,7 +389,7 @@ describe.skipIf(!liveEnabled)("CAP-010 evidence auditor live profile (opt-in)", 
               }
             }
             expect(outcome).toBe("completed");
-            const report = yield* settledReport(yield* readLog(conversation));
+            const report = yield* settledReport(yield* readLog(thread));
             expect(report.documentsAudited).toBe(1);
           }).pipe(
             Effect.provide(NodeDurableRuntime.layer(runtimeOptions(`${directory}/live.sqlite`))),

@@ -1,4 +1,4 @@
-import { scheduleStoreConformanceCases } from "@effect-agent/session/testing";
+import { scheduleStoreConformanceCases } from "@effect-agent/thread/testing";
 import { describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 

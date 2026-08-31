@@ -1,8 +1,9 @@
-import { Agent, AgentPolicy, ConversationId, type SubmissionId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId, type SubmissionId } from "@effect-agent/core";
+import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
 import {
   AbortCommand,
-  ConversationRead,
-  ConversationStore,
+  ThreadRead,
+  ThreadStore,
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -21,12 +22,8 @@ import {
   type DurableRuntimeFailpointLocation,
   type DurableSubmitOptions,
   type CanonicalRecordEnvelope,
-} from "@effect-agent/session";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
+} from "@effect-agent/thread";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
@@ -35,11 +32,11 @@ import { LanguageModel, Model, Toolkit, type Prompt, type Response } from "effec
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-join");
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 
-const submitOptions = (conversationId: string, idempotencyKey: string): DurableSubmitOptions => ({
-  conversationId: decodeConversationId(conversationId),
+const submitOptions = (threadId: string, idempotencyKey: string): DurableSubmitOptions => ({
+  threadId: decodeThreadId(threadId),
   principal: PRINCIPAL,
   idempotencyKey: decodeIdempotencyKey(idempotencyKey),
   definitions: DIGESTS,
@@ -110,7 +107,7 @@ const configLayer = DurableRuntimeConfig.layer({
 
 const baseLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
-  MemoryConversationStoreLive,
+  MemoryThreadStoreLive,
   WakeScheduler.layerNoop,
   DurableRuntimeFailpointTestControl.layer,
   ToolReconciler.uncertain,
@@ -119,13 +116,13 @@ const baseLayer = Layer.mergeAll(
 
 const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
 
-const readLog = (conversationId: string) =>
+const readLog = (threadId: string) =>
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
+    const store = yield* ThreadStore;
     return yield* Stream.runCollect(
       store.read(
-        ConversationRead.make({
-          conversationId: decodeConversationId(conversationId),
+        ThreadRead.make({
+          threadId: decodeThreadId(threadId),
           limit: 1_024,
         }),
       ),
@@ -201,23 +198,20 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const runtime = yield* DurableAgentRuntime;
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"host answer"}'));
       const agent = Agent.withModel(joinDefinition, scripted.model);
-      const conversation = "conversation-join-basic";
+      const thread = "thread-join-basic";
 
       const host = yield* runtime.submit(
         agent,
         { question: "host question" },
-        submitOptions(conversation, "join-basic-host"),
+        submitOptions(thread, "join-basic-host"),
       );
       const joined = yield* runtime.submit(
         agent,
         { question: "queued question" },
-        submitOptions(conversation, "join-basic-2"),
+        submitOptions(thread, "join-basic-2"),
       );
 
-      const settlements = yield* runtime.processConversation(
-        agent,
-        decodeConversationId(conversation),
-      );
+      const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
       // The lane produced ONE head settlement; the joined Submission settled with it
       // (DUR-002: each accepted Submission still gets its own settlement record).
       expect(settlements).toHaveLength(1);
@@ -229,9 +223,9 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       expect(settled.outcome).toBe("completed");
 
       const hostRunId = runIdForSubmission(host.submissionId);
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       expect(logTags(records)).toEqual([
-        "ConversationCreated",
+        "ThreadCreated",
         "UserInputRecorded",
         "RunStarted",
         "UserInputRecorded",
@@ -268,22 +262,22 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const runtime = yield* DurableAgentRuntime;
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"covered"}'));
       const agent = Agent.withModel(joinDefinition, scripted.model);
-      const conversation = "conversation-join-canonical-first";
+      const thread = "thread-join-canonical-first";
 
       const host = yield* runtime.submit(
         agent,
         { question: "host question" },
-        submitOptions(conversation, "canonical-host"),
+        submitOptions(thread, "canonical-host"),
       );
       const joined = yield* runtime.submit(
         agent,
         { question: "queued question" },
-        submitOptions(conversation, "canonical-2"),
+        submitOptions(thread, "canonical-2"),
       );
-      yield* runtime.processConversation(agent, decodeConversationId(conversation));
+      yield* runtime.processThread(agent, decodeThreadId(thread));
 
       const hostRunId = runIdForSubmission(host.submissionId);
-      const byId = recordsById(yield* readLog(conversation));
+      const byId = recordsById(yield* readLog(thread));
       const input = byId.get(`input:${joined.submissionId}`);
       const response = byId.get(`model-response:${hostRunId}:1`);
       expect(input).toBeDefined();
@@ -308,27 +302,24 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         call === 0 ? finalParts('{"answer":"turn one"}') : finalParts('{"answer":"turn two"}'),
       );
       const agent = Agent.withModel(joinDefinition, scripted.model);
-      const conversation = "conversation-join-policy-one";
+      const thread = "thread-join-policy-one";
 
       const host = yield* runtime.submit(
         agent,
         { question: "host question" },
-        submitOptions(conversation, "policy-host"),
+        submitOptions(thread, "policy-host"),
       );
       const second = yield* runtime.submit(
         agent,
         { question: "second request" },
-        submitOptions(conversation, "policy-2"),
+        submitOptions(thread, "policy-2"),
       );
       const third = yield* runtime.submit(
         agent,
         { question: "third request" },
-        submitOptions(conversation, "policy-3"),
+        submitOptions(thread, "policy-3"),
       );
-      const settlements = yield* runtime.processConversation(
-        agent,
-        decodeConversationId(conversation),
-      );
+      const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
       expect(settlements).toHaveLength(1);
       expect(yield* lookupState(second.submissionId)).toBe("settled");
       expect(yield* lookupState(third.submissionId)).toBe("settled");
@@ -344,7 +335,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       ).toBe(1);
 
       const hostRunId = runIdForSubmission(host.submissionId);
-      const byId = recordsById(yield* readLog(conversation));
+      const byId = recordsById(yield* readLog(thread));
       const inputSecond = byId.get(`input:${second.submissionId}`);
       const inputThird = byId.get(`input:${third.submissionId}`);
       const responseOne = byId.get(`model-response:${hostRunId}:1`);
@@ -375,47 +366,40 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         const runtime = yield* DurableAgentRuntime;
         const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"resumed"}'));
         const agent = Agent.withModel(joinDefinition, scripted.model);
-        const conversation = "conversation-join-fp-claim";
+        const thread = "thread-join-fp-claim";
 
         yield* runtime.submit(
           agent,
           { question: "host question" },
-          submitOptions(conversation, "fp-claim-host"),
+          submitOptions(thread, "fp-claim-host"),
         );
         const joined = yield* runtime.submit(
           agent,
           { question: "queued question" },
-          submitOptions(conversation, "fp-claim-2"),
+          submitOptions(thread, "fp-claim-2"),
         );
         yield* armFailpoint("join:after-claim");
-        const killed = yield* Effect.exit(
-          runtime.processConversation(agent, decodeConversationId(conversation)),
-        );
+        const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
         // The claim is durable but the canonical input never committed: pre-append `joining`
         // reverts to ready (DUR-016) and no `input:{sid}` record exists.
         expect(yield* lookupState(joined.submissionId)).toBe("joining");
-        expect(recordsById(yield* readLog(conversation)).has(`input:${joined.submissionId}`)).toBe(
-          false,
-        );
+        expect(recordsById(yield* readLog(thread)).has(`input:${joined.submissionId}`)).toBe(false);
         const reports = yield* runtime.runRecovery;
         const report = reports.find((entry) => entry.submissionId === joined.submissionId);
         expect(report?.decision._tag).toBe("RevertJoining");
         expect(report?.disposition).toBe("repaired");
         expect(yield* lookupState(joined.submissionId)).toBe("ready");
 
-        const settlements = yield* runtime.processConversation(
-          agent,
-          decodeConversationId(conversation),
-        );
+        const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
         expect(settlements[0]?.outcome).toBe("completed");
         const settled = yield* runtime.awaitSettlement(joined);
         expect(settled.outcome).toBe("completed");
 
         // Exactly one canonical `input:{sid}` record ever, delivered exactly once.
-        const records = yield* readLog(conversation);
+        const records = yield* readLog(thread);
         expect(
           records.filter((envelope) => envelope.record.recordId === `input:${joined.submissionId}`),
         ).toHaveLength(1);
@@ -431,46 +415,39 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         const runtime = yield* DurableAgentRuntime;
         const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"reattached"}'));
         const agent = Agent.withModel(joinDefinition, scripted.model);
-        const conversation = "conversation-join-fp-append";
+        const thread = "thread-join-fp-append";
 
         yield* runtime.submit(
           agent,
           { question: "host question" },
-          submitOptions(conversation, "fp-append-host"),
+          submitOptions(thread, "fp-append-host"),
         );
         const joined = yield* runtime.submit(
           agent,
           { question: "queued question" },
-          submitOptions(conversation, "fp-append-2"),
+          submitOptions(thread, "fp-append-2"),
         );
         yield* armFailpoint("join:after-canonical-append");
-        const killed = yield* Effect.exit(
-          runtime.processConversation(agent, decodeConversationId(conversation)),
-        );
+        const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
         // The input is canonical but the joined marker was lost.
         expect(yield* lookupState(joined.submissionId)).toBe("joining");
-        expect(recordsById(yield* readLog(conversation)).has(`input:${joined.submissionId}`)).toBe(
-          true,
-        );
+        expect(recordsById(yield* readLog(thread)).has(`input:${joined.submissionId}`)).toBe(true);
         const reports = yield* runtime.runRecovery;
         const report = reports.find((entry) => entry.submissionId === joined.submissionId);
         expect(report?.decision._tag).toBe("RepairJoinMarker");
         expect(report?.disposition).toBe("repaired");
         expect(yield* lookupState(joined.submissionId)).toBe("joined");
 
-        const settlements = yield* runtime.processConversation(
-          agent,
-          decodeConversationId(conversation),
-        );
+        const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
         expect(settlements[0]?.outcome).toBe("completed");
         const settled = yield* runtime.awaitSettlement(joined);
         expect(settled.outcome).toBe("completed");
 
         // Reattached, never duplicated: one canonical record, one prompt delivery.
-        const records = yield* readLog(conversation);
+        const records = yield* readLog(thread);
         expect(
           records.filter((envelope) => envelope.record.recordId === `input:${joined.submissionId}`),
         ).toHaveLength(1);
@@ -484,35 +461,30 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const runtime = yield* DurableAgentRuntime;
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"inline"}'));
       const agent = Agent.withModel(joinDefinition, scripted.model);
-      const conversation = "conversation-join-inline-repair";
+      const thread = "thread-join-inline-repair";
 
       yield* runtime.submit(
         agent,
         { question: "host question" },
-        submitOptions(conversation, "inline-host"),
+        submitOptions(thread, "inline-host"),
       );
       const joined = yield* runtime.submit(
         agent,
         { question: "queued question" },
-        submitOptions(conversation, "inline-2"),
+        submitOptions(thread, "inline-2"),
       );
       yield* armFailpoint("join:after-canonical-append");
-      const killed = yield* Effect.exit(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
-      );
+      const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
       expect(yield* lookupState(joined.submissionId)).toBe("joining");
 
       // No recovery pass: the resuming host Attempt repairs the marker from history at its
       // first drain seam (DUR-015) and re-delivers the uncovered input.
-      const settlements = yield* runtime.processConversation(
-        agent,
-        decodeConversationId(conversation),
-      );
+      const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
       expect(settlements[0]?.outcome).toBe("completed");
       expect(yield* lookupState(joined.submissionId)).toBe("settled");
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       expect(
         records.filter((envelope) => envelope.record.recordId === `input:${joined.submissionId}`),
       ).toHaveLength(1);
@@ -528,27 +500,24 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       // `failed` WITH the host — never with a fabricated outcome of its own.
       const scripted = yield* makeScriptedModel(() => finalParts("not json"));
       const agent = Agent.withModel(joinDefinition, scripted.model);
-      const conversation = "conversation-join-host-outcome";
+      const thread = "thread-join-host-outcome";
 
       const host = yield* runtime.submit(
         agent,
         { question: "host question" },
-        submitOptions(conversation, "outcome-host"),
+        submitOptions(thread, "outcome-host"),
       );
       const joined = yield* runtime.submit(
         agent,
         { question: "queued question" },
-        submitOptions(conversation, "outcome-2"),
+        submitOptions(thread, "outcome-2"),
       );
-      const settlements = yield* runtime.processConversation(
-        agent,
-        decodeConversationId(conversation),
-      );
+      const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
       expect(settlements[0]?.outcome).toBe("failed");
       const settled = yield* runtime.awaitSettlement(joined);
       expect(settled.outcome).toBe("failed");
 
-      const byId = recordsById(yield* readLog(conversation));
+      const byId = recordsById(yield* readLog(thread));
       const hostSettlement = byId.get(`settlement:${host.submissionId}`);
       const joinedSettlement = byId.get(`settlement:${joined.submissionId}`);
       if (
@@ -579,24 +548,22 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const runtime = yield* DurableAgentRuntime;
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"reserved"}'));
       const agent = Agent.withModel(joinDefinition, scripted.model);
-      const conversation = "conversation-join-abort-joined";
+      const thread = "thread-join-abort-joined";
 
       const host = yield* runtime.submit(
         agent,
         { question: "host question" },
-        submitOptions(conversation, "abort-joined-host"),
+        submitOptions(thread, "abort-joined-host"),
       );
       const joined = yield* runtime.submit(
         agent,
         { question: "queued question" },
-        submitOptions(conversation, "abort-joined-2"),
+        submitOptions(thread, "abort-joined-2"),
       );
       // Kill after the HOST's settlement reservation: the joined Submission is durably
       // `joined` while the host is not yet settled.
       yield* armFailpointAt("terminalize:after-reserve", 1);
-      const killed = yield* Effect.exit(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
-      );
+      const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
       expect(yield* lookupState(joined.submissionId)).toBe("joined");
@@ -634,22 +601,20 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const runtime = yield* DurableAgentRuntime;
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"alone"}'));
       const agent = Agent.withModel(joinDefinition, scripted.model);
-      const conversation = "conversation-join-abort-joining";
+      const thread = "thread-join-abort-joining";
 
       yield* runtime.submit(
         agent,
         { question: "host question" },
-        submitOptions(conversation, "abort-joining-host"),
+        submitOptions(thread, "abort-joining-host"),
       );
       const joining = yield* runtime.submit(
         agent,
         { question: "queued question" },
-        submitOptions(conversation, "abort-joining-2"),
+        submitOptions(thread, "abort-joining-2"),
       );
       yield* armFailpoint("join:after-claim");
-      const killed = yield* Effect.exit(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
-      );
+      const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
       expect(yield* lookupState(joining.submissionId)).toBe("joining");
@@ -671,16 +636,13 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
 
       // The resuming host honors the pre-consumption intent: the re-claimed row reverts
       // instead of joining, the host completes alone, and the abort settles the Submission.
-      const settlements = yield* runtime.processConversation(
-        agent,
-        decodeConversationId(conversation),
-      );
+      const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
       expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed", "aborted"]);
       const settled = yield* runtime.awaitSettlement(joining);
       expect(settled.outcome).toBe("aborted");
 
       // The input was never consumed: no canonical `input:{sid}` record, no prompt delivery.
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       expect(recordsById(records).has(`input:${joining.submissionId}`)).toBe(false);
       expect(recordsById(records).has(`abort:${joining.submissionId}`)).toBe(true);
       for (const prompt of scripted.prompts) {
@@ -698,24 +660,22 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         // the joined settlement instead of reconstructing it from a live Cause.
         const scripted = yield* makeScriptedModel(() => finalParts("not json"));
         const agent = Agent.withModel(joinDefinition, scripted.model);
-        const conversation = "conversation-join-settle-history";
+        const thread = "thread-join-settle-history";
 
         const host = yield* runtime.submit(
           agent,
           { question: "host question" },
-          submitOptions(conversation, "history-host"),
+          submitOptions(thread, "history-host"),
         );
         const joined = yield* runtime.submit(
           agent,
           { question: "queued question" },
-          submitOptions(conversation, "history-2"),
+          submitOptions(thread, "history-2"),
         );
         // Kill after the HOST's canonical settlement append: the host outcome is canonical, the
         // ledger is not finalized, and the joined settlement never started.
         yield* armFailpointAt("terminalize:after-canonical-append", 1);
-        const killed = yield* Effect.exit(
-          runtime.processConversation(agent, decodeConversationId(conversation)),
-        );
+        const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
         expect(yield* lookupState(joined.submissionId)).toBe("joined");
@@ -733,7 +693,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         const settledJoined = yield* runtime.awaitSettlement(joined);
         expect(settledHost.outcome).toBe("failed");
         expect(settledJoined.outcome).toBe("failed");
-        const byId = recordsById(yield* readLog(conversation));
+        const byId = recordsById(yield* readLog(thread));
         const hostRecord = byId.get(`settlement:${host.submissionId}`);
         const joinedRecord = byId.get(`settlement:${joined.submissionId}`);
         if (
@@ -757,24 +717,22 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const runtime = yield* DurableAgentRuntime;
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"loop"}'));
       const agent = Agent.withModel(joinDefinition, scripted.model);
-      const conversation = "conversation-join-settle-loop";
+      const thread = "thread-join-settle-loop";
 
       const host = yield* runtime.submit(
         agent,
         { question: "host question" },
-        submitOptions(conversation, "loop-host"),
+        submitOptions(thread, "loop-host"),
       );
       const joined = yield* runtime.submit(
         agent,
         { question: "queued question" },
-        submitOptions(conversation, "loop-2"),
+        submitOptions(thread, "loop-2"),
       );
       // First reserve is the host's, the second is the JOINED Submission's: kill right after
       // the joined reservation commits, before its canonical append.
       yield* armFailpointAt("terminalize:after-reserve", 2);
-      const killed = yield* Effect.exit(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
-      );
+      const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
       expect(yield* lookupState(host.submissionId)).toBe("settled");
@@ -786,7 +744,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       expect(report?.disposition).toBe("repaired");
       const settled = yield* runtime.awaitSettlement(joined);
       expect(settled.outcome).toBe("completed");
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       expect(
         records.filter(
           (envelope) => envelope.record.recordId === `settlement:${joined.submissionId}`,
@@ -807,26 +765,22 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
             : finalParts('{"answer":"gap answer"}'),
         );
         const agent = Agent.withModel(joinDefinition, scripted.model);
-        const conversation = "conversation-join-fifo-gap";
+        const thread = "thread-join-fifo-gap";
 
         const host = yield* runtime.submit(
           agent,
           { question: "host question" },
-          submitOptions(conversation, "fifo-host"),
+          submitOptions(thread, "fifo-host"),
         );
         const joined = yield* runtime.submit(
           agent,
           { question: "queued question" },
-          submitOptions(conversation, "fifo-2"),
+          submitOptions(thread, "fifo-2"),
         );
         // The gap: admitted but never marked ready (killed between admission and readiness).
         yield* armFailpoint("submit:after-admit");
         const gapExit = yield* Effect.exit(
-          runtime.submit(
-            agent,
-            { question: "gap question" },
-            submitOptions(conversation, "fifo-3"),
-          ),
+          runtime.submit(agent, { question: "gap question" }, submitOptions(thread, "fifo-3")),
         );
         expect(failureTag(gapExit)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
@@ -835,10 +789,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         );
         expect(Option.isSome(gapSnapshot)).toBe(true);
 
-        const settlements = yield* runtime.processConversation(
-          agent,
-          decodeConversationId(conversation),
-        );
+        const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
         // Two head settlements: the host (with the joined Submission settling alongside) and the
         // gap Submission as its OWN later Run — never skipped, never joined past the gap.
         expect(settlements.map((settlement) => settlement.outcome)).toEqual([
@@ -848,7 +799,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         expect(yield* lookupState(joined.submissionId)).toBe("settled");
 
         const hostRunId = runIdForSubmission(host.submissionId);
-        const records = yield* readLog(conversation);
+        const records = yield* readLog(thread);
         const byId = recordsById(records);
         const joinedSettlement = byId.get(`settlement:${joined.submissionId}`);
         if (joinedSettlement?.record.payload._tag === "SubmissionSettled") {

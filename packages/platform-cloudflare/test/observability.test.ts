@@ -1,15 +1,15 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import type { TelemetryConversationObject } from "./worker.ts";
+import type { TelemetryThreadObject } from "./worker.ts";
 
 describe("effect-cf Durable Object observability ownership", () => {
   const runEventAndDrainFlush = async <A>(
-    conversationId: string,
-    run: (instance: TelemetryConversationObject) => Promise<A> | A,
+    threadId: string,
+    run: (instance: TelemetryThreadObject) => Promise<A> | A,
     options?: { readonly failFlush?: boolean },
   ): Promise<A> => {
-    const stub = env.TELEMETRY.get(env.TELEMETRY.idFromName(conversationId));
+    const stub = env.TELEMETRY.get(env.TELEMETRY.idFromName(threadId));
     return runInDurableObject(stub, async (instance, state) => {
       const eventWaitUntilWork: Array<Promise<unknown>> = [];
       const nativeWaitUntil = state.waitUntil.bind(state);

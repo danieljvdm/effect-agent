@@ -1,7 +1,7 @@
 import {
   subscriptionConformancePartition,
   subscriptionStoreConformanceCases,
-} from "@effect-agent/session/testing";
+} from "@effect-agent/thread/testing";
 import { describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 

@@ -1,3 +1,4 @@
+import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing";
 import {
   BeginChildBudgetReleaseRequest,
   ChildBudgetReservationRequest,
@@ -12,9 +13,8 @@ import {
   SubmissionLookupByKey,
   IdempotencyKey,
   UnknownResolutionCommand,
-} from "@effect-agent/session";
-import { submissionLedgerConformanceCases } from "@effect-agent/session/testing";
-import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing";
+} from "@effect-agent/thread";
+import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runInDurableObject } from "cloudflare:test";
@@ -35,13 +35,13 @@ import {
 } from "../src/index.ts";
 import {
   admission,
-  conversation,
-  conversationStub,
+  thread,
+  threadStub,
   id,
   TEST_PRINCIPAL,
   TEST_PRODUCER,
   toolCall,
-  withConversationStorage,
+  withThreadStorage,
 } from "./harness.ts";
 
 type Equal<Left, Right> =
@@ -73,7 +73,7 @@ describe("DoSubmissionLedger", () => {
   describe("shared SubmissionLedger conformance", () => {
     for (const conformanceCase of submissionLedgerConformanceCases) {
       it(conformanceCase.name, () =>
-        withConversationStorage(`wp1-ledger:${conformanceCase.name}`, (storage) =>
+        withThreadStorage(`wp1-ledger:${conformanceCase.name}`, (storage) =>
           conformanceCase.run.pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
         ),
       );
@@ -89,7 +89,7 @@ describe("DoSubmissionLedger", () => {
   });
 
   it("validates convenience-layer configuration before initializing storage", () =>
-    withConversationStorage("wp1-ledger-invalid-config", (storage) =>
+    withThreadStorage("wp1-ledger-invalid-config", (storage) =>
       Effect.gen(function* () {
         const opened = yield* SubmissionLedger.pipe(
           Effect.provide(ledgerLayer({ storage, observationPollInterval: -1 })),
@@ -117,18 +117,18 @@ describe("DoSubmissionLedger", () => {
     ));
 
   it("treats reordered persisted JSON as an idempotent replay", () =>
-    withConversationStorage("wp1-ledger-semantic-json", (storage) =>
+    withThreadStorage("wp1-ledger-semantic-json", (storage) =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
-        const lane = conversation("conversation-do-semantic-json");
+        const lane = thread("thread-do-semantic-json");
         const admitted = yield* ledger.admit(
-          yield* admission("conversation-do-semantic-json", "semantic-json-key", {
+          yield* admission("thread-do-semantic-json", "semantic-json-key", {
             work: "semantic JSON",
           }),
         );
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
         const claim = yield* ledger.claim(
-          ClaimRequest.make({ conversationId: lane, producerId: TEST_PRODUCER }),
+          ClaimRequest.make({ threadId: lane, producerId: TEST_PRODUCER }),
         );
         if (Option.isNone(claim)) return yield* Effect.die("missing semantic JSON claim");
 
@@ -215,9 +215,9 @@ describe("DoSubmissionLedger", () => {
   // committed admission is the recovery truth, with no in-memory field involved.
   it("persists admissions across Durable Object re-instantiation (ctx.abort eviction + reread)", async () => {
     const objectName = "wp1-ledger-eviction-reread";
-    const lane = "conversation-eviction-reread";
+    const lane = "thread-eviction-reread";
 
-    const first = conversationStub(objectName);
+    const first = threadStub(objectName);
     const outcome = await runInDurableObject(first, (_instance, state) =>
       Effect.runPromise(
         Effect.gen(function* () {
@@ -247,7 +247,7 @@ describe("DoSubmissionLedger", () => {
     // A fresh incarnation over the SAME storage: the committed admission survives, the
     // client retry replays the identical identities (DUR-001), and the nonterminal scan —
     // recovery's admission-independent worklist — sees the accepted obligation.
-    const second = conversationStub(objectName);
+    const second = threadStub(objectName);
     const reread = await runInDurableObject(second, (_instance, state) =>
       Effect.runPromise(
         Effect.gen(function* () {
@@ -258,7 +258,7 @@ describe("DoSubmissionLedger", () => {
           );
           const byKey = yield* ledger.lookup(
             SubmissionLookupByKey.make({
-              conversationId: conversation(lane),
+              threadId: thread(lane),
               principal: TEST_PRINCIPAL,
               idempotencyKey: id(IdempotencyKey, "eviction-key"),
             }),
@@ -281,31 +281,31 @@ describe("DoSubmissionLedger", () => {
     ]);
   });
 
-  it("mints routable Submission identities that carry the Conversation identity", () =>
-    withConversationStorage("wp1-ledger-routable-ids", (storage) =>
+  it("mints routable Submission identities that carry the Thread identity", () =>
+    withThreadStorage("wp1-ledger-routable-ids", (storage) =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const admitted = yield* ledger.admit(
-          yield* admission("conversation-routable", "routable-key", { work: "route" }),
+          yield* admission("thread-routable", "routable-key", { work: "route" }),
         );
-        // D-P6-5: `{uuidv7}:{conversationId}`, split at the FIRST ":" — the tail is the
-        // owning Conversation, which may itself contain colons. Opaque to every consumer;
+        // D-P6-5: `{uuidv7}:{threadId}`, split at the FIRST ":" — the tail is the
+        // owning Thread, which may itself contain colons. Opaque to every consumer;
         // parsed only by this adapter's routing layer (WP2).
         const separator = admitted.submissionId.indexOf(":");
         expect(separator).toBeGreaterThan(0);
-        expect(admitted.submissionId.slice(separator + 1)).toBe("conversation-routable");
+        expect(admitted.submissionId.slice(separator + 1)).toBe("thread-routable");
       }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
     ));
 
   it("refuses an over-bound admission input payload typed before any ledger row exists", () =>
-    withConversationStorage("wp1-ledger-value-bound", (storage) =>
+    withThreadStorage("wp1-ledger-value-bound", (storage) =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const sql = yield* SqlClientService.SqlClient;
 
         const exit = yield* ledger
           .admit(
-            yield* admission("conversation-ledger-bound", "bound-key", {
+            yield* admission("thread-ledger-bound", "bound-key", {
               blob: "x".repeat(2_048),
             }),
           )

@@ -1,4 +1,4 @@
-import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId } from "@effect-agent/core";
 import type { SubmissionId } from "@effect-agent/core";
 import {
   RunContextPreparation,
@@ -8,10 +8,15 @@ import {
   type ToolFailureObservation,
 } from "@effect-agent/engine";
 import {
+  CurrentSqliteStorageVersion,
+  SqliteStorageCompatibilityError,
+  type SqliteStorageInitializationError,
+} from "@effect-agent/storage-sqlite";
+import {
   AdmissionRequest,
   ClaimRequest,
-  ConversationRead,
-  ConversationStore,
+  ThreadRead,
+  ThreadStore,
   DefinitionDigests,
   Digest,
   digestJson,
@@ -29,12 +34,7 @@ import {
   type DurableWorkerFailure,
   type PersistedJson,
   type SubmissionState,
-} from "@effect-agent/session";
-import {
-  CurrentSqliteStorageVersion,
-  SqliteStorageCompatibilityError,
-  type SqliteStorageInitializationError,
-} from "@effect-agent/storage-sqlite";
+} from "@effect-agent/thread";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -138,7 +138,7 @@ type HostLayerRequirementsProof = Assert<
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-platform-node");
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeProducerId = Schema.decodeSync(ProducerId);
 const decodeAgentId = Schema.decodeSync(AdmissionRequest.fields.agentId);
@@ -155,8 +155,8 @@ const runtimeOptions = (
   ...overrides,
 });
 
-const submitOptions = (conversationId: string, idempotencyKey: string): DurableSubmitOptions => ({
-  conversationId: decodeConversationId(conversationId),
+const submitOptions = (threadId: string, idempotencyKey: string): DurableSubmitOptions => ({
+  threadId: decodeThreadId(threadId),
   principal: PRINCIPAL,
   idempotencyKey: decodeIdempotencyKey(idempotencyKey),
   definitions: DIGESTS,
@@ -251,11 +251,11 @@ const lookupState = (
     return snapshot.value.state;
   });
 
-const readLogTags = (conversationId: ConversationId) =>
+const readLogTags = (threadId: ThreadId) =>
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
+    const store = yield* ThreadStore;
     const records = yield* Stream.runCollect(
-      store.read(ConversationRead.make({ conversationId, limit: 1_024 })),
+      store.read(ThreadRead.make({ threadId, limit: 1_024 })),
     );
     return records.map((envelope) => envelope.record.payload._tag);
   });
@@ -412,14 +412,14 @@ describe("NodeDurableRuntime", () => {
             model,
           );
           const runtime = yield* DurableAgentRuntime;
-          const conversationId = decodeConversationId("node-observer");
+          const threadId = decodeThreadId("node-observer");
           const receipt = yield* runtime.submit(
             agent,
             { question: "try" },
-            submitOptions(conversationId, "node-observer"),
+            submitOptions(threadId, "node-observer"),
           );
           yield* runtime
-            .processConversation(agent, conversationId)
+            .processThread(agent, threadId)
             .pipe(Effect.provide(tools.toLayer({ failed: () => Effect.fail("unavailable") })));
           expect((yield* runtime.awaitSettlement(receipt)).outcome).toBe("completed");
           expect(observations).toEqual(
@@ -543,7 +543,7 @@ describe("NodeDurableRuntime", () => {
               return "booked";
             }),
         });
-        const conversationId = decodeConversationId("node-run-services");
+        const threadId = decodeThreadId("node-run-services");
         for (const incarnation of [1, 2]) {
           const runContext = Layer.effect(
             RunContextPreparation,
@@ -599,17 +599,15 @@ describe("NodeDurableRuntime", () => {
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
               if (incarnation === 1) {
-                yield* runtime.submit(agent, "book", submitOptions(conversationId, "book"));
-                const interrupted = yield* runtime
-                  .processConversation(agent, conversationId)
-                  .pipe(Effect.exit);
+                yield* runtime.submit(agent, "book", submitOptions(threadId, "book"));
+                const interrupted = yield* runtime.processThread(agent, threadId).pipe(Effect.exit);
                 expect(failureOf(interrupted)).toHaveProperty(
                   "_tag",
                   "DurableRuntimeFailpointError",
                 );
               } else {
                 const settlements = yield* runtime
-                  .processConversation(agent, conversationId)
+                  .processThread(agent, threadId)
                   .pipe(Effect.provide(RunToolAuthorization.allowAll));
                 expect(settlements[0]).toMatchObject({
                   outcome: "failed",
@@ -684,7 +682,7 @@ describe("NodeDurableRuntime", () => {
           }),
           model,
         );
-        const conversationId = decodeConversationId("node-input-projection");
+        const threadId = decodeThreadId("node-input-projection");
         const rootInput = { question: "public root question", hostOnly: sentinel };
         const joinedInput = { question: "public joined question", hostOnly: sentinel };
         const handlers = tools.toLayer({ lookup: () => Effect.succeed("public result") });
@@ -708,17 +706,17 @@ describe("NodeDurableRuntime", () => {
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
               if (incarnation === 1) {
-                yield* runtime.submit(agent, rootInput, submitOptions(conversationId, "root"));
-                yield* runtime.submit(agent, joinedInput, submitOptions(conversationId, "joined"));
+                yield* runtime.submit(agent, rootInput, submitOptions(threadId, "root"));
+                yield* runtime.submit(agent, joinedInput, submitOptions(threadId, "joined"));
               }
-              const result = yield* Effect.exit(runtime.processConversation(agent, conversationId));
+              const result = yield* Effect.exit(runtime.processThread(agent, threadId));
               if (incarnation < 3) {
                 expect(failureOf(result)).toHaveProperty("_tag", "DurableRuntimeFailpointError");
               } else {
                 expect(Exit.isSuccess(result)).toBe(true);
-                const store = yield* ConversationStore;
+                const store = yield* ThreadStore;
                 const records = yield* Stream.runCollect(
-                  store.read(ConversationRead.make({ conversationId, limit: 1_024 })),
+                  store.read(ThreadRead.make({ threadId, limit: 1_024 })),
                 );
                 const inputs = records.flatMap(({ record }) =>
                   record.payload._tag === "UserInputRecorded" ? [record.payload.input] : [],
@@ -789,29 +787,23 @@ describe("NodeDurableRuntime", () => {
             }),
             model,
           );
-          const conversationId = decodeConversationId(`node-projection-${kind}-${mode}`);
+          const threadId = decodeThreadId(`node-projection-${kind}-${mode}`);
           const joinedInput = { ...input, question: "public joined question" };
           yield* withHost(
             runtimeOptions(filename),
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
-              const receipt = yield* runtime.submit(
-                agent,
-                input,
-                submitOptions(conversationId, mode),
-              );
+              const receipt = yield* runtime.submit(agent, input, submitOptions(threadId, mode));
               if (kind === "joined") {
-                yield* runtime.submit(agent, joinedInput, submitOptions(conversationId, "joined"));
+                yield* runtime.submit(agent, joinedInput, submitOptions(threadId, "joined"));
               }
               if (mode === "failure") {
-                const settlements = yield* runtime.processConversation(agent, conversationId);
+                const settlements = yield* runtime.processThread(agent, threadId);
                 expect(settlements).toMatchObject([
                   { outcome: "failed", failure: { errorTag: "ProjectionFailure" } },
                 ]);
               } else {
-                const worker = yield* runtime
-                  .processConversation(agent, conversationId)
-                  .pipe(Effect.forkChild);
+                const worker = yield* runtime.processThread(agent, threadId).pipe(Effect.forkChild);
                 yield* Deferred.await(started);
                 yield* Fiber.interrupt(worker);
                 expect(Exit.hasInterrupts(yield* Fiber.await(worker))).toBe(true);
@@ -823,9 +815,9 @@ describe("NodeDurableRuntime", () => {
               );
               expect(Option.isSome(stored)).toBe(true);
               if (Option.isSome(stored)) expect(stored.value.inputPayload).toEqual(input);
-              const store = yield* ConversationStore;
+              const store = yield* ThreadStore;
               const records = yield* Stream.runCollect(
-                store.read(ConversationRead.make({ conversationId, limit: 1_024 })),
+                store.read(ThreadRead.make({ threadId, limit: 1_024 })),
               );
               expect(
                 records.flatMap(({ record }) =>
@@ -851,7 +843,7 @@ describe("NodeDurableRuntime", () => {
   it.effect("startup reconciliation settles an orphaned reserved settlement before admission", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
-        const conversation = decodeConversationId("conversation-reconcile");
+        const thread = decodeThreadId("thread-reconcile");
 
         // Host process 1: the Attempt crashes (typed failpoint) AFTER reserving the exact
         // settlement record but BEFORE appending it canonically (durability §12 step 1→2 gap).
@@ -871,9 +863,9 @@ describe("NodeDurableRuntime", () => {
             const receipt = yield* host.submit(
               agent,
               { question: "reconcile?" },
-              submitOptions("conversation-reconcile", "reconcile-1"),
+              submitOptions("thread-reconcile", "reconcile-1"),
             );
-            const crashed = yield* Effect.exit(runtime.processConversation(agent, conversation));
+            const crashed = yield* Effect.exit(runtime.processThread(agent, thread));
             const error = failureOf(crashed);
             expect(error).toHaveProperty("_tag", "DurableRuntimeFailpointError");
             expect(yield* lookupState(receipt.submissionId)).toBe("terminalizing");
@@ -901,7 +893,7 @@ describe("NodeDurableRuntime", () => {
             const replayed = yield* host.submit(
               agent,
               { question: "reconcile?" },
-              submitOptions("conversation-reconcile", "reconcile-1"),
+              submitOptions("thread-reconcile", "reconcile-1"),
             );
             expect(replayed).toEqual(receipt);
 
@@ -909,8 +901,8 @@ describe("NodeDurableRuntime", () => {
             expect(settlement.outcome).toBe("completed");
             expect(settlement.receiptId).toBe(receipt.receiptId);
 
-            expect(yield* readLogTags(conversation)).toEqual([
-              "ConversationCreated",
+            expect(yield* readLogTags(thread)).toEqual([
+              "ThreadCreated",
               "UserInputRecorded",
               "RunStarted",
               "ModelResponseRecorded",
@@ -927,7 +919,7 @@ describe("NodeDurableRuntime", () => {
   it.effect("shutdown closes admission and releases ownership for the next host", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
-        const conversation = decodeConversationId("conversation-shutdown");
+        const thread = decodeThreadId("thread-shutdown");
 
         // Host process 1, with an explicit Scope so shutdown ordering is observable.
         const scope = yield* Scope.make();
@@ -942,14 +934,14 @@ describe("NodeDurableRuntime", () => {
         const receipt = yield* host.submit(
           agent,
           { question: "shutdown?" },
-          submitOptions("conversation-shutdown", "shutdown-1"),
+          submitOptions("thread-shutdown", "shutdown-1"),
         );
         expect(yield* host.admissionOpen).toBe(true);
 
         // Hold an ownership lease (default 30s; the TestClock never advances past it).
         const claimed = yield* ledger.claim(
           ClaimRequest.make({
-            conversationId: conversation,
+            threadId: thread,
             producerId: decodeProducerId("producer-platform-node"),
           }),
         );
@@ -960,11 +952,7 @@ describe("NodeDurableRuntime", () => {
         // Shutdown step 1: admission is closed before anything else.
         expect(yield* host.admissionOpen).toBe(false);
         const refused = yield* Effect.exit(
-          host.submit(
-            agent,
-            { question: "late" },
-            submitOptions("conversation-shutdown", "late-1"),
-          ),
+          host.submit(agent, { question: "late" }, submitOptions("thread-shutdown", "late-1")),
         );
         expect(failureOf(refused)).toHaveProperty("_tag", "AdmissionClosed");
 
@@ -983,7 +971,7 @@ describe("NodeDurableRuntime", () => {
 
             const reclaimed = yield* nextLedger.claim(
               ClaimRequest.make({
-                conversationId: conversation,
+                threadId: thread,
                 producerId: decodeProducerId("producer-platform-node-2"),
               }),
             );
@@ -1006,7 +994,7 @@ describe("NodeDurableRuntime", () => {
           const ledger = yield* SubmissionLedger;
           const wake = yield* WakeScheduler;
           const runtime = yield* DurableAgentRuntime;
-          const conversation = decodeConversationId("conversation-wake");
+          const thread = decodeThreadId("thread-wake");
 
           // Seed accepted work through the ledger alone: no `notify` is ever sent, exactly like
           // an admission from another process that this worker never heard about.
@@ -1014,7 +1002,7 @@ describe("NodeDurableRuntime", () => {
           const inputDigest = yield* digestJson(input).pipe(Effect.provide(NodeCrypto.layer));
           const admitted = yield* ledger.admit(
             AdmissionRequest.make({
-              conversationId: conversation,
+              threadId: thread,
               principal: PRINCIPAL,
               idempotencyKey: decodeIdempotencyKey("wake-1"),
               agentId: decodeAgentId("platform-node-planner"),
@@ -1028,11 +1016,11 @@ describe("NodeDurableRuntime", () => {
 
           const woken = yield* Effect.forkChild(Stream.runCollect(Stream.take(wake.wakes, 1)));
           yield* TestClock.adjust(Duration.millis(1_000));
-          expect(yield* Fiber.join(woken)).toEqual([conversation]);
+          expect(yield* Fiber.join(woken)).toEqual([thread]);
 
           const model = yield* makeScriptedModel(() => finalParts('{"answer":"woken"}'));
           const agent = Agent.withModel(plannerDefinition, model);
-          const settlements = yield* runtime.processConversation(agent, conversation);
+          const settlements = yield* runtime.processThread(agent, thread);
           expect(settlements).toHaveLength(1);
           expect(settlements[0]?.outcome).toBe("completed");
           expect(yield* lookupState(admitted.submissionId)).toBe("settled");

@@ -82,7 +82,7 @@ export default defineConfig({
           { text: "Agent definitions", link: "/guide/agents" },
           { text: "Tools & layers", link: "/guide/tools" },
           { text: "Run & stream", link: "/guide/run-agents" },
-          { text: "Conversations", link: "/guide/conversations" },
+          { text: "Threads", link: "/guide/threads" },
           { text: "Context management", link: "/guide/context-management" },
         ],
       },

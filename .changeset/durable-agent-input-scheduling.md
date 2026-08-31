@@ -1,5 +1,5 @@
 ---
-"@effect-agent/session": minor
+"@effect-agent/thread": minor
 "@effect-agent/storage-memory": minor
 "@effect-agent/storage-sqlite": minor
 "@effect-agent/storage-cloudflare": minor

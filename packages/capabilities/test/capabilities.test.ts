@@ -1,6 +1,6 @@
 import {
   AgentId,
-  ConversationId,
+  ThreadId,
   RunId,
   RunStarted,
   TextDelta,
@@ -27,13 +27,13 @@ import {
   BudgetExceeded,
   BudgetNodeConflict,
   CompactionArtifact,
-  ConversationAppend,
-  ConversationExport,
-  ConversationHistoryDiverged,
-  ConversationLimitExceeded,
+  ThreadAppend,
+  ThreadExport,
+  ThreadHistoryDiverged,
+  ThreadLimitExceeded,
   digestCompactionSource,
-  EphemeralConversations,
-  EphemeralConversationsLive,
+  EphemeralThreads,
+  EphemeralThreadsLive,
   FollowUpCommand,
   makeApprovalRequest,
   makeRunCommandQueue,
@@ -54,13 +54,13 @@ import {
   UsageBudgetNodeConfig,
   UsageDelta,
   validateMcpDiscovery,
-  conversationPrompt,
+  threadPrompt,
   toRunBudgetHook,
-  toRunConversationOptions,
+  toRunThreadOptions,
   toRunApprovalHook,
 } from "../src/index.ts";
 
-const conversationId = Schema.decodeSync(ConversationId)("trip-1");
+const threadId = Schema.decodeSync(ThreadId)("trip-1");
 const runId = Schema.decodeSync(RunId)("run-1");
 const toolCallId = Schema.decodeSync(ToolCallId)("hold-1");
 const turnId = Schema.decodeSync(TurnId)("turn-1");
@@ -83,7 +83,7 @@ const approvalDraft = (
   ApprovalRequestDraft.make({
     requestId,
     runId,
-    conversationId,
+    threadId,
     toolCallId,
     toolName: "holdItinerary",
     actionSummary: "Place a 24-hour itinerary hold",
@@ -95,42 +95,42 @@ const approvalDraft = (
 
 describe("capability contracts", () => {
   it.effect(
-    "keeps one bounded ephemeral conversation available to multiple Runs and exports a snapshot",
+    "keeps one bounded ephemeral thread available to multiple Runs and exports a snapshot",
     () =>
       Effect.gen(function* () {
-        const conversations = yield* EphemeralConversations;
-        yield* conversations.create(conversationId);
-        yield* conversations.append(
-          conversationId,
-          ConversationAppend.make({
+        const threads = yield* EphemeralThreads;
+        yield* threads.create(threadId);
+        yield* threads.append(
+          threadId,
+          ThreadAppend.make({
             runId,
             message: textMessage("user", "Find a hotel"),
           }),
         );
-        const snapshot = yield* conversations.append(
-          conversationId,
-          ConversationAppend.make({
+        const snapshot = yield* threads.append(
+          threadId,
+          ThreadAppend.make({
             message: textMessage("assistant", "Which dates?"),
           }),
         );
-        const exported = yield* conversations.export(conversationId);
+        const exported = yield* threads.export(threadId);
 
         expect(snapshot.messages.map((message) => message.sequence)).toEqual([0, 1]);
         expect(snapshot.messages[0]?.runId).toBe(runId);
         expect(snapshot.contentBytes).toBeGreaterThan(0);
         expect(exported.snapshot).toEqual(snapshot);
         expect(
-          yield* Schema.decodeEffect(ConversationExport)(
-            yield* Schema.encodeEffect(ConversationExport)(exported),
+          yield* Schema.decodeEffect(ThreadExport)(
+            yield* Schema.encodeEffect(ThreadExport)(exported),
           ),
         ).toEqual(exported);
-      }).pipe(Effect.provide(EphemeralConversationsLive)),
+      }).pipe(Effect.provide(EphemeralThreadsLive)),
   );
 
   it.effect("round-trips structured Effect AI Prompt history through the engine adapter", () =>
     Effect.gen(function* () {
-      const conversations = yield* EphemeralConversations;
-      yield* conversations.create(conversationId);
+      const threads = yield* EphemeralThreads;
+      yield* threads.create(threadId);
       const richAssistant = Prompt.assistantMessage({
         options: { provider: { trace: "native-option" } },
         content: [
@@ -150,12 +150,9 @@ describe("capability contracts", () => {
           }),
         ],
       });
-      yield* conversations.append(
-        conversationId,
-        ConversationAppend.make({ runId, message: richAssistant }),
-      );
+      yield* threads.append(threadId, ThreadAppend.make({ runId, message: richAssistant }));
 
-      const options = yield* toRunConversationOptions(conversations, conversationId, runId);
+      const options = yield* toRunThreadOptions(threads, threadId, runId);
       expect(yield* Schema.encodeEffect(Prompt.Prompt)(options.history ?? Prompt.empty)).toEqual(
         yield* Schema.encodeEffect(Prompt.Prompt)(Prompt.fromMessages([richAssistant])),
       );
@@ -174,44 +171,41 @@ describe("capability contracts", () => {
       const extended = Prompt.fromMessages([richAssistant, toolMessage]);
       expect(options.onHistory).toBeDefined();
       if (options.onHistory !== undefined) yield* options.onHistory(extended);
-      const snapshot = yield* conversations.snapshot(conversationId);
-      expect(yield* Schema.encodeEffect(Prompt.Prompt)(conversationPrompt(snapshot))).toEqual(
+      const snapshot = yield* threads.snapshot(threadId);
+      expect(yield* Schema.encodeEffect(Prompt.Prompt)(threadPrompt(snapshot))).toEqual(
         yield* Schema.encodeEffect(Prompt.Prompt)(extended),
       );
-    }).pipe(Effect.provide(EphemeralConversationsLive)),
+    }).pipe(Effect.provide(EphemeralThreadsLive)),
   );
 
-  it.effect("bounds the aggregate number of process-local conversations", () =>
+  it.effect("bounds the aggregate number of process-local threads", () =>
     Effect.gen(function* () {
-      const conversations = yield* EphemeralConversations;
+      const threads = yield* EphemeralThreads;
       for (let index = 0; index < 256; index += 1) {
-        yield* conversations.create(yield* Schema.decodeEffect(ConversationId)(`bounded-${index}`));
+        yield* threads.create(yield* Schema.decodeEffect(ThreadId)(`bounded-${index}`));
       }
-      const overflowId = yield* Schema.decodeEffect(ConversationId)("bounded-overflow");
-      const exit = yield* conversations.create(overflowId).pipe(Effect.exit);
+      const overflowId = yield* Schema.decodeEffect(ThreadId)("bounded-overflow");
+      const exit = yield* threads.create(overflowId).pipe(Effect.exit);
       expect(Exit.isFailure(exit)).toBe(true);
-    }).pipe(Effect.provide(EphemeralConversationsLive)),
+    }).pipe(Effect.provide(EphemeralThreadsLive)),
   );
 
   it.effect("commits exactly one of two concurrently recorded diverging histories", () =>
     Effect.gen(function* () {
-      const conversations = yield* EphemeralConversations;
-      yield* conversations.create(conversationId);
-      const base = yield* conversations.append(
-        conversationId,
-        ConversationAppend.make({ message: textMessage("user", "shared base") }),
+      const threads = yield* EphemeralThreads;
+      yield* threads.create(threadId);
+      const base = yield* threads.append(
+        threadId,
+        ThreadAppend.make({ message: textMessage("user", "shared base") }),
       );
       const extend = (content: string) =>
-        Prompt.fromMessages([
-          ...conversationPrompt(base).content,
-          textMessage("assistant", content),
-        ]);
+        Prompt.fromMessages([...threadPrompt(base).content, textMessage("assistant", content)]);
       const historyA = extend("suffix A");
       const historyB = extend("suffix B");
       const record = (label: "A" | "B", history: Prompt.Prompt) =>
-        conversations.recordHistory(conversationId, runId, history).pipe(
+        threads.recordHistory(threadId, runId, history).pipe(
           Effect.map(() => ({ _tag: "committed" as const, label })),
-          Effect.catchTag("ConversationHistoryDiverged", () =>
+          Effect.catchTag("ThreadHistoryDiverged", () =>
             Effect.succeed({ _tag: "diverged" as const, label }),
           ),
         );
@@ -223,61 +217,59 @@ describe("capability contracts", () => {
 
       expect(committed).toHaveLength(1);
       expect(diverged).toHaveLength(1);
-      const snapshot = yield* conversations.snapshot(conversationId);
+      const snapshot = yield* threads.snapshot(threadId);
       const winnerHistory = committed[0]?.label === "A" ? historyA : historyB;
-      expect(yield* Schema.encodeEffect(Prompt.Prompt)(conversationPrompt(snapshot))).toEqual(
+      expect(yield* Schema.encodeEffect(Prompt.Prompt)(threadPrompt(snapshot))).toEqual(
         yield* Schema.encodeEffect(Prompt.Prompt)(winnerHistory),
       );
-    }).pipe(Effect.provide(EphemeralConversationsLive)),
+    }).pipe(Effect.provide(EphemeralThreadsLive)),
   );
 
   it.effect("commits no suffix message when a recorded history exceeds content bounds", () =>
     Effect.gen(function* () {
-      const conversations = yield* EphemeralConversations;
-      yield* conversations.create(conversationId);
-      const base = yield* conversations.append(
-        conversationId,
-        ConversationAppend.make({ message: textMessage("user", "bounded base") }),
+      const threads = yield* EphemeralThreads;
+      yield* threads.create(threadId);
+      const base = yield* threads.append(
+        threadId,
+        ThreadAppend.make({ message: textMessage("user", "bounded base") }),
       );
       const oversized = Prompt.fromMessages([
-        ...conversationPrompt(base).content,
+        ...threadPrompt(base).content,
         textMessage("assistant", "a".repeat(3 * 1024 * 1024)),
         textMessage("assistant", "b".repeat(3 * 1024 * 1024)),
       ]);
-      const error = yield* conversations
-        .recordHistory(conversationId, runId, oversized)
-        .pipe(Effect.flip);
+      const error = yield* threads.recordHistory(threadId, runId, oversized).pipe(Effect.flip);
 
-      expect(error).toBeInstanceOf(ConversationLimitExceeded);
-      expect(yield* conversations.snapshot(conversationId)).toEqual(base);
-    }).pipe(Effect.provide(EphemeralConversationsLive)),
+      expect(error).toBeInstanceOf(ThreadLimitExceeded);
+      expect(yield* threads.snapshot(threadId)).toEqual(base);
+    }).pipe(Effect.provide(EphemeralThreadsLive)),
   );
 
   it.effect(
     "rejects an engine history that is not an append-only extension of official history",
     () =>
       Effect.gen(function* () {
-        const conversations = yield* EphemeralConversations;
-        yield* conversations.create(conversationId);
-        const official = yield* conversations.append(
-          conversationId,
-          ConversationAppend.make({ message: textMessage("user", "official input") }),
+        const threads = yield* EphemeralThreads;
+        yield* threads.create(threadId);
+        const official = yield* threads.append(
+          threadId,
+          ThreadAppend.make({ message: textMessage("user", "official input") }),
         );
         const rewritten = Prompt.fromMessages([
           textMessage("user", "rewritten input"),
           textMessage("assistant", "suffix built on a rewritten base"),
         ]);
-        const rewrittenError = yield* conversations
-          .recordHistory(conversationId, runId, rewritten)
+        const rewrittenError = yield* threads
+          .recordHistory(threadId, runId, rewritten)
           .pipe(Effect.flip);
-        const truncatedError = yield* conversations
-          .recordHistory(conversationId, runId, Prompt.empty)
+        const truncatedError = yield* threads
+          .recordHistory(threadId, runId, Prompt.empty)
           .pipe(Effect.flip);
 
-        expect(rewrittenError).toBeInstanceOf(ConversationHistoryDiverged);
-        expect(truncatedError).toBeInstanceOf(ConversationHistoryDiverged);
-        expect(yield* conversations.snapshot(conversationId)).toEqual(official);
-      }).pipe(Effect.provide(EphemeralConversationsLive)),
+        expect(rewrittenError).toBeInstanceOf(ThreadHistoryDiverged);
+        expect(truncatedError).toBeInstanceOf(ThreadHistoryDiverged);
+        expect(yield* threads.snapshot(threadId)).toEqual(official);
+      }).pipe(Effect.provide(EphemeralThreadsLive)),
   );
 
   it.effect(
@@ -293,7 +285,7 @@ describe("capability contracts", () => {
             SteeringCommand.make({
               id: "steer-1",
               runId,
-              conversationId,
+              threadId,
               author: "traveler",
               content: "Move the trip one day later",
               createdAt: at(1),
@@ -303,7 +295,7 @@ describe("capability contracts", () => {
             FollowUpCommand.make({
               id: "follow-1",
               runId,
-              conversationId,
+              threadId,
               author: "traveler",
               content: "I prefer a quiet room",
               createdAt: at(2),
@@ -327,7 +319,7 @@ describe("capability contracts", () => {
           SteeringCommand.make({
             id: "late-steer",
             runId,
-            conversationId,
+            threadId,
             author: "traveler",
             content: "This run has ended",
             createdAt: at(3),
@@ -384,7 +376,7 @@ describe("capability contracts", () => {
       const base = {
         eventVersion: 1 as const,
         runId,
-        conversationId,
+        threadId,
         agentId: Schema.decodeSync(AgentId)("agent-redacted-transcript"),
         sequence: 0,
         timestamp: DateTime.toUtc(DateTime.makeUnsafe(1_000)),
@@ -582,7 +574,7 @@ describe("capability contracts", () => {
           approvalId: "approval-invalid-policy",
           toolCallId,
         }),
-        conversationId,
+        threadId,
         runId,
         turnId,
         toolCallId,
@@ -623,7 +615,7 @@ describe("capability contracts", () => {
           approvalId: "approval-valid-policy",
           toolCallId,
         }),
-        conversationId,
+        threadId,
         runId,
         turnId,
         toolCallId,
@@ -1074,15 +1066,15 @@ describe("capability contracts", () => {
     "verifies exact compaction digests, preserves a nonzero uncovered prefix, and retains source",
     () =>
       Effect.gen(function* () {
-        const conversations = yield* EphemeralConversations;
-        yield* conversations.create(conversationId);
+        const threads = yield* EphemeralThreads;
+        yield* threads.create(threadId);
         for (const content of ["Original first", "Compact this", "Original last"]) {
-          yield* conversations.append(
-            conversationId,
-            ConversationAppend.make({ message: textMessage("user", content) }),
+          yield* threads.append(
+            threadId,
+            ThreadAppend.make({ message: textMessage("user", content) }),
           );
         }
-        const snapshot = yield* conversations.snapshot(conversationId);
+        const snapshot = yield* threads.snapshot(threadId);
         const context = yield* prepareModelContext(snapshot, [
           {
             id: "model-view-only",
@@ -1093,7 +1085,7 @@ describe("capability contracts", () => {
         const sourceDigest = yield* digestCompactionSource(snapshot, 1, 1);
         const artifact = CompactionArtifact.make({
           version: 1,
-          conversationId,
+          threadId,
           coversFrom: 1,
           coversThrough: 1,
           summary: ModelContextMessage.make({
@@ -1115,20 +1107,20 @@ describe("capability contracts", () => {
           "Middle message summary.",
           "Original last",
         ]);
-      }).pipe(Effect.provide(Layer.mergeAll(EphemeralConversationsLive, NodeCrypto.layer))),
+      }).pipe(Effect.provide(Layer.mergeAll(EphemeralThreadsLive, NodeCrypto.layer))),
   );
 
   it.effect("keeps transform-synthesized and partially covered model-view messages visible", () =>
     Effect.gen(function* () {
-      const conversations = yield* EphemeralConversations;
-      yield* conversations.create(conversationId);
+      const threads = yield* EphemeralThreads;
+      yield* threads.create(threadId);
       for (const content of ["first", "second", "third"]) {
-        yield* conversations.append(
-          conversationId,
-          ConversationAppend.make({ message: textMessage("user", content) }),
+        yield* threads.append(
+          threadId,
+          ThreadAppend.make({ message: textMessage("user", content) }),
         );
       }
-      const snapshot = yield* conversations.snapshot(conversationId);
+      const snapshot = yield* threads.snapshot(threadId);
       const context = yield* prepareModelContext(snapshot, [
         {
           id: "merge-and-synthesize",
@@ -1152,7 +1144,7 @@ describe("capability contracts", () => {
       const sourceDigest = yield* digestCompactionSource(snapshot, 1, 1);
       const artifact = CompactionArtifact.make({
         version: 1,
-        conversationId,
+        threadId,
         coversFrom: 1,
         coversThrough: 1,
         summary: ModelContextMessage.make({
@@ -1173,21 +1165,21 @@ describe("capability contracts", () => {
         "second summarized",
         "third",
       ]);
-    }).pipe(Effect.provide(Layer.mergeAll(EphemeralConversationsLive, NodeCrypto.layer))),
+    }).pipe(Effect.provide(Layer.mergeAll(EphemeralThreadsLive, NodeCrypto.layer))),
   );
 
   it.effect("rejects a compaction artifact whose exact source digest mismatches", () =>
     Effect.gen(function* () {
-      const conversations = yield* EphemeralConversations;
-      yield* conversations.create(conversationId);
-      const snapshot = yield* conversations.append(
-        conversationId,
-        ConversationAppend.make({ message: textMessage("user", "Canonical source") }),
+      const threads = yield* EphemeralThreads;
+      yield* threads.create(threadId);
+      const snapshot = yield* threads.append(
+        threadId,
+        ThreadAppend.make({ message: textMessage("user", "Canonical source") }),
       );
       const context = yield* prepareModelContext(snapshot);
       const artifact = CompactionArtifact.make({
         version: 1,
-        conversationId,
+        threadId,
         coversFrom: 0,
         coversThrough: 0,
         summary: ModelContextMessage.make({
@@ -1203,25 +1195,22 @@ describe("capability contracts", () => {
       const exit = yield* applyCompaction(context, artifact).pipe(Effect.exit);
 
       expect(Exit.isFailure(exit)).toBe(true);
-    }).pipe(Effect.provide(Layer.mergeAll(EphemeralConversationsLive, NodeCrypto.layer))),
+    }).pipe(Effect.provide(Layer.mergeAll(EphemeralThreadsLive, NodeCrypto.layer))),
   );
 
   it.effect("rejects compaction provenance outside the exact covered source range", () =>
     Effect.gen(function* () {
-      const conversations = yield* EphemeralConversations;
-      yield* conversations.create(conversationId);
-      yield* conversations.append(
-        conversationId,
-        ConversationAppend.make({ message: textMessage("user", "first") }),
-      );
-      const snapshot = yield* conversations.append(
-        conversationId,
-        ConversationAppend.make({ message: textMessage("user", "second") }),
+      const threads = yield* EphemeralThreads;
+      yield* threads.create(threadId);
+      yield* threads.append(threadId, ThreadAppend.make({ message: textMessage("user", "first") }));
+      const snapshot = yield* threads.append(
+        threadId,
+        ThreadAppend.make({ message: textMessage("user", "second") }),
       );
       const sourceDigest = yield* digestCompactionSource(snapshot, 1, 1);
       const artifact = CompactionArtifact.make({
         version: 1,
-        conversationId,
+        threadId,
         coversFrom: 1,
         coversThrough: 1,
         summary: ModelContextMessage.make({
@@ -1238,18 +1227,18 @@ describe("capability contracts", () => {
         Effect.exit,
       );
       expect(Exit.isFailure(exit)).toBe(true);
-    }).pipe(Effect.provide(Layer.merge(EphemeralConversationsLive, NodeCrypto.layer))),
+    }).pipe(Effect.provide(Layer.merge(EphemeralThreadsLive, NodeCrypto.layer))),
   );
 
   it.effect(
     "retains authoritative source even when a transform replaces the entire model view",
     () =>
       Effect.gen(function* () {
-        const conversations = yield* EphemeralConversations;
-        yield* conversations.create(conversationId);
-        const snapshot = yield* conversations.append(
-          conversationId,
-          ConversationAppend.make({ message: textMessage("user", "Official history") }),
+        const threads = yield* EphemeralThreads;
+        yield* threads.create(threadId);
+        const snapshot = yield* threads.append(
+          threadId,
+          ThreadAppend.make({ message: textMessage("user", "Official history") }),
         );
         const context = yield* prepareModelContext(snapshot, [
           {
@@ -1264,7 +1253,7 @@ describe("capability contracts", () => {
         expect(context.source.messages[0]?.message).toEqual(
           textMessage("user", "Official history"),
         );
-      }).pipe(Effect.provide(EphemeralConversationsLive)),
+      }).pipe(Effect.provide(EphemeralThreadsLive)),
   );
 
   it.effect("enforces native MCP discovery count and byte contracts", () =>

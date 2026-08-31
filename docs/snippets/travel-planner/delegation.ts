@@ -22,7 +22,7 @@ export const Research = Subagent.define("delegate_research_activities", {
     Effect.succeed({
       activities: output.activities,
       partial: budgetExhausted,
-      // researchNotes stays in the child's conversation.
+      // researchNotes stays in the child's thread.
     }),
   policy: SubagentPolicy.make({
     maxChildren: 2,

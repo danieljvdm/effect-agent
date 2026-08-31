@@ -10,7 +10,7 @@ import {
   Digest,
   DurableWorkerBinding,
   type ResolvedBinding,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
@@ -33,10 +33,10 @@ import {
  *   an in-memory call counter), so one registered Binding is correct at every resume point —
  *   a fresh incarnation's Attempt continues from exactly the committed history in its prompt.
  * - Child-model invocations are counted through the fixtures' supplier log keyed by the
- *   Conversation-unique `ref`, so "a completed child is never re-executed" (SUB-018, §16.4)
+ *   Thread-unique `ref`, so "a completed child is never re-executed" (SUB-018, §16.4)
  *   is asserted from state that survives `ctx.abort()` exactly like a real supplier's ledger.
  * - The delegation Tool Call id embeds the `ref` (`delegate-{ref}`), which makes the derived
- *   child Conversation (`subagent:{parentSubmissionId}:delegate-{ref}`) suffix-addressable
+ *   child Thread (`subagent:{parentSubmissionId}:delegate-{ref}`) suffix-addressable
  *   BEFORE the parent Submission id exists — the seam the transport-fault switch needs.
  */
 
@@ -47,7 +47,7 @@ import {
 const faultedTargetSuffixes = new Set<string>();
 
 /**
- * Make every cross-Object call ADDRESSED TO a Conversation whose name ends with `suffix`
+ * Make every cross-Object call ADDRESSED TO a Thread whose name ends with `suffix`
  * reject at the RPC boundary — the platform's own "Durable Object unreachable" failure mode
  * (workerd overload, deploy-in-progress). The routed caller sees a `PortTransportError`;
  * on `resolveAdmission` the WP2 routing layer answers `AdmissionIndeterminate` (SUB-031).
@@ -163,7 +163,7 @@ const toolCallPart = (
   providerExecuted: false,
 });
 
-/** Extract the Conversation-unique `ref` the coordinator instructions embed as `[ref:...]`. */
+/** Extract the Thread-unique `ref` the coordinator instructions embed as `[ref:...]`. */
 const refFromPrompt = (promptJson: string): string => {
   const match = /\[ref:([^\]]+)\]/.exec(promptJson);
   return match?.[1] ?? "unknown-ref";

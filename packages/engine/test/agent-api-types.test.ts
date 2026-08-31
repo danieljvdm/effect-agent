@@ -9,7 +9,7 @@ import {
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
   type AgentCompletionProjectionRequirements,
-  type ConversationHistory,
+  type ThreadHistory,
 } from "../src/index.ts";
 
 class Instructions extends Context.Service<Instructions, string>()("api-types/Instructions") {}
@@ -79,7 +79,7 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
   const run = AgentRuntime.run(planner, input);
   const provided = run.pipe(Effect.provide(model));
   type DefinitionServices =
-    | ConversationHistory
+    | ThreadHistory
     | Instructions
     | Decoder
     | Encoder
@@ -231,7 +231,7 @@ it("preserves disjoint tool schemas and callbacks with different input types", (
   const binding = Agent.withModel(select(true), model);
   const execution = AgentRuntime.run(binding, { topic: "Lisbon" });
   expectTypeOf<Effect.Services<typeof execution>>().toEqualTypeOf<
-    ExpectedServices | ProviderClient | ConversationHistory | IdGenerator
+    ExpectedServices | ProviderClient | ThreadHistory | IdGenerator
   >();
   expectTypeOf<
     Extract<Effect.Error<typeof execution>, InstructionError | ToolError | TopicFailure>
@@ -260,7 +260,7 @@ it("retains every branch's tool requirements and failures across execution views
     | Tool.HandlersFor<typeof toolkit.tools>;
   type RuntimeServices =
     | DefinitionServices
-    | ConversationHistory
+    | ThreadHistory
     | IdGenerator
     | LanguageModel.LanguageModel
     | Model.ProviderName
@@ -310,9 +310,9 @@ it("retains every branch's tool requirements and failures across execution views
   const boundRun = AgentRuntime.run(binding, input);
   const selectedRun = AgentRuntime.run(bindSelected, input);
   expectTypeOf<Effect.Services<typeof boundRun>>().toEqualTypeOf<
-    BoundServices | ConversationHistory | IdGenerator
+    BoundServices | ThreadHistory | IdGenerator
   >();
   expectTypeOf<Effect.Services<typeof selectedRun>>().toEqualTypeOf<
-    BoundServices | ConversationHistory | IdGenerator
+    BoundServices | ThreadHistory | IdGenerator
   >();
 });

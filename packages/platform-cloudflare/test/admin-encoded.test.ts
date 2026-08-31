@@ -1,8 +1,8 @@
-import { AbortCommand } from "@effect-agent/session";
+import { AbortCommand } from "@effect-agent/thread";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { CloudflareConversationClient, ConversationObject } from "../src/index.ts";
+import { CloudflareThreadClient, ThreadObject } from "../src/index.ts";
 import { plannerDefinition, submitOptions } from "./fixtures.ts";
 import { allSettled, drainAlarmsUntil, runClient, stubFor } from "./harness.ts";
 
@@ -16,14 +16,14 @@ import { allSettled, drainAlarmsUntil, runClient, stubFor } from "./harness.ts";
 let laneCounter = 0;
 const lane = (): string => `cf-admin-encoded-${laneCounter++}`;
 
-const submitPlanner = (conversation: string, key: string) =>
+const submitPlanner = (thread: string, key: string) =>
   runClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       return yield* client.submit(
         { definition: plannerDefinition },
-        { question: "explain the settled lane", ref: conversation },
-        submitOptions(conversation, key),
+        { question: "explain the settled lane", ref: thread },
+        submitOptions(thread, key),
       );
     }),
   );
@@ -33,9 +33,9 @@ const submitPlanner = (conversation: string, key: string) =>
  * methods' results as `unknown`, so the resolution is normalized through `Promise.resolve`
  * instead of awaiting an untyped value directly.
  */
-const callAdmin = async (invoke: () => unknown): Promise<ConversationObject.AdminResponse> => {
+const callAdmin = async (invoke: () => unknown): Promise<ThreadObject.AdminResponse> => {
   const raw: unknown = await Promise.resolve(invoke());
-  return Effect.runPromise(ConversationObject.decodeAdminResponse(raw));
+  return Effect.runPromise(ThreadObject.decodeAdminResponse(raw));
 };
 
 describe("P7 admin encoded entry points (DC)", () => {
@@ -43,7 +43,7 @@ describe("P7 admin encoded entry points (DC)", () => {
     const receipt = await submitPlanner(lane(), "deny-target");
     const operations = await runClient(
       Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
+        const client = yield* CloudflareThreadClient;
         const awaited = yield* client.awaitSettlement(receipt).pipe(
           Effect.match({
             onSuccess: () => "unexpected success",
@@ -52,7 +52,7 @@ describe("P7 admin encoded entry points (DC)", () => {
         );
         const aborted = yield* client
           .abort(
-            receipt.conversationId,
+            receipt.threadId,
             AbortCommand.make({
               submissionId: receipt.submissionId,
               author: "operator",
@@ -72,10 +72,10 @@ describe("P7 admin encoded entry points (DC)", () => {
     expect(operations).toEqual(["OperationDenied", "OperationDenied"]);
   });
   it("explainEncoded answers typed explanations for one Submission and for the lane", async () => {
-    const conversation = lane();
-    const receipt = await submitPlanner(conversation, "admin-explain");
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    const stub = stubFor(conversation);
+    const thread = lane();
+    const receipt = await submitPlanner(thread, "admin-explain");
+    await drainAlarmsUntil(thread, allSettled(thread));
+    const stub = stubFor(thread);
 
     const explained = await callAdmin(() =>
       stub.explainEncoded({ submissionId: receipt.submissionId }),
@@ -99,11 +99,11 @@ describe("P7 admin encoded entry points (DC)", () => {
   });
 
   it("verifyEncoded answers the typed integrity report with honest digest-chain scoping", async () => {
-    const conversation = lane();
-    await submitPlanner(conversation, "admin-verify");
-    await drainAlarmsUntil(conversation, allSettled(conversation));
+    const thread = lane();
+    await submitPlanner(thread, "admin-verify");
+    await drainAlarmsUntil(thread, allSettled(thread));
 
-    const verified = await callAdmin(() => stubFor(conversation).verifyEncoded({}));
+    const verified = await callAdmin(() => stubFor(thread).verifyEncoded({}));
     expect(verified._tag).toBe("VerifiedIntegrity");
     if (verified._tag === "VerifiedIntegrity") {
       expect(verified.report.ok).toBe(true);
@@ -119,10 +119,10 @@ describe("P7 admin encoded entry points (DC)", () => {
   });
 
   it("retryEncoded refuses settled work typed and answers protocol anomalies typed", async () => {
-    const conversation = lane();
-    const receipt = await submitPlanner(conversation, "admin-retry");
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    const stub = stubFor(conversation);
+    const thread = lane();
+    const receipt = await submitPlanner(thread, "admin-retry");
+    await drainAlarmsUntil(thread, allSettled(thread));
+    const stub = stubFor(thread);
 
     const refused = await callAdmin(() =>
       stub.retryEncoded({
@@ -149,12 +149,12 @@ describe("P7 admin encoded entry points (DC)", () => {
   });
 
   it("obligationsEncoded answers the typed obligation report", async () => {
-    const conversation = lane();
-    await submitPlanner(conversation, "admin-obligations");
-    await drainAlarmsUntil(conversation, allSettled(conversation));
+    const thread = lane();
+    await submitPlanner(thread, "admin-obligations");
+    await drainAlarmsUntil(thread, allSettled(thread));
 
     const scanned = await callAdmin(() =>
-      stubFor(conversation).obligationsEncoded({ agingSeconds: 60, overdueSeconds: 600 }),
+      stubFor(thread).obligationsEncoded({ agingSeconds: 60, overdueSeconds: 600 }),
     );
     expect(scanned._tag).toBe("ObligationsScanned");
     if (scanned._tag === "ObligationsScanned") {

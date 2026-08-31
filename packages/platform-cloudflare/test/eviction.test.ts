@@ -1,27 +1,27 @@
 import {
+  StoreExportCall,
+  encodePortRequest,
+  layer as doThreadStoreLayer,
+  type DoStorageFailpointLocation,
+} from "@effect-agent/storage-cloudflare";
+import {
   AbortCommand,
   ApprovalDecisionCommand,
-  ConversationCheckpoint,
-  ConversationExportRequest,
-  ConversationTailRequest,
-  ConversationStore,
+  ThreadCheckpoint,
+  ThreadExportRequest,
+  ThreadTailRequest,
+  ThreadStore,
   ResolutionNeverHappened,
   SaveCheckpointRequest,
   UnknownResolutionCommand,
   type DurableRuntimeFailpointLocation,
   type Receipt,
-} from "@effect-agent/session";
-import {
-  StoreExportCall,
-  encodePortRequest,
-  layer as doConversationStoreLayer,
-  type DoStorageFailpointLocation,
-} from "@effect-agent/storage-cloudflare";
+} from "@effect-agent/thread";
 import { runInDurableObject } from "cloudflare:test";
 import { DateTime, Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { CloudflareConversationClient } from "../src/index.ts";
+import { CloudflareThreadClient } from "../src/index.ts";
 import {
   BOOK_TOOL_CALL_ID,
   TEST_DIGESTS,
@@ -30,7 +30,7 @@ import {
   armStorageEviction,
   armedEvictionsRemaining,
   bookDefinition,
-  decodeConversationId,
+  decodeThreadId,
   itineraryDefinition,
   joinDefinition,
   plannerDefinition,
@@ -64,7 +64,7 @@ import {
  * the fresh one converges, exactly like a production eviction.
  *
  * The `subagent:*` coordinator locations and the `ledger:child-*` storage locations are
- * deliberately NOT here: in DC a parent and its child Conversations always live in different
+ * deliberately NOT here: in DC a parent and its child Threads always live in different
  * Durable Objects, so those rows belong to WP4's cross-Object subagent matrix
  * (`subagents-cross-do.test.ts`), which re-runs them with parent and child evictions.
  */
@@ -92,26 +92,26 @@ const definitionFor = (fixture: Fixture) => {
   }
 };
 
-const submitFixture = (fixture: Fixture, conversation: string, key: string) =>
+const submitFixture = (fixture: Fixture, thread: string, key: string) =>
   runClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       return yield* client.submit(
         { definition: definitionFor(fixture) },
-        { question: "converge across eviction", ref: conversation },
-        submitOptions(conversation, key),
+        { question: "converge across eviction", ref: thread },
+        submitOptions(thread, key),
       );
     }),
   );
 
-const submitFixtureExit = (fixture: Fixture, conversation: string, key: string) =>
+const submitFixtureExit = (fixture: Fixture, thread: string, key: string) =>
   runClientExit(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       return yield* client.submit(
         { definition: definitionFor(fixture) },
-        { question: "converge across eviction", ref: conversation },
-        submitOptions(conversation, key),
+        { question: "converge across eviction", ref: thread },
+        submitOptions(thread, key),
       );
     }),
   );
@@ -120,21 +120,21 @@ type Arm =
   | { readonly kind: "storage"; readonly location: DoStorageFailpointLocation }
   | { readonly kind: "runtime"; readonly location: DurableRuntimeFailpointLocation };
 
-const arm = (conversation: string, target: Arm): void => {
-  if (target.kind === "storage") armStorageEviction(conversation, target.location);
-  else armRuntimeEviction(conversation, target.location);
+const arm = (thread: string, target: Arm): void => {
+  if (target.kind === "storage") armStorageEviction(thread, target.location);
+  else armRuntimeEviction(thread, target.location);
 };
 
-const armConsumed = (conversation: string): boolean => armedEvictionsRemaining(conversation) === 0;
+const armConsumed = (thread: string): boolean => armedEvictionsRemaining(thread) === 0;
 
-const modelResponseCount = async (conversation: string): Promise<number> => {
-  const records = await readCanonical(conversation);
+const modelResponseCount = async (thread: string): Promise<number> => {
+  const records = await readCanonical(thread);
   return records.filter((envelope) => envelope.record.payload._tag === "ModelResponseRecorded")
     .length;
 };
 
-const settlementOutcome = async (conversation: string): Promise<string | undefined> => {
-  const records = await readCanonical(conversation);
+const settlementOutcome = async (thread: string): Promise<string | undefined> => {
+  const records = await readCanonical(thread);
   const settled = records.find((envelope) => envelope.record.payload._tag === "SubmissionSettled")
     ?.record.payload;
   return settled !== undefined && "outcome" in settled && typeof settled.outcome === "string"
@@ -152,36 +152,36 @@ const submitPathRow = async (
   target: Arm,
   options: { readonly nothingDurable?: boolean },
 ): Promise<void> => {
-  const conversation = lane(target.location);
-  const key = `${conversation}-key`;
-  arm(conversation, target);
+  const thread = lane(target.location);
+  const key = `${thread}-key`;
+  arm(thread, target);
 
-  const first = await submitFixtureExit("planner", conversation, key);
+  const first = await submitFixtureExit("planner", thread, key);
   expect(first.ok, "the armed eviction must kill the submit call").toBe(false);
-  expect(armConsumed(conversation), "the armed location must actually have fired").toBe(true);
+  expect(armConsumed(thread), "the armed location must actually have fired").toBe(true);
 
   if (options.nothingDurable === true) {
     // Nothing was admitted, so nothing is owed: alarms (if any) settle to an empty lane.
-    await drainAlarmsUntil(conversation, async () => {
-      const rows = await laneRows(conversation);
-      return rows.length === 0 && (await scheduledAlarm(conversation)) === null;
+    await drainAlarmsUntil(thread, async () => {
+      const rows = await laneRows(thread);
+      return rows.length === 0 && (await scheduledAlarm(thread)) === null;
     });
     // The client legitimately retries the refused call; the lane then converges normally.
-    const receipt = await submitFixture("planner", conversation, key);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    const rows = await laneRows(conversation);
+    const receipt = await submitFixture("planner", thread, key);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    const rows = await laneRows(thread);
     expect(rows.map((row) => row.submission_id)).toEqual([receipt.submissionId]);
-    await assertConvergence(conversation);
+    await assertConvergence(thread);
     return;
   }
 
   // The admission is durable even though the caller never saw a Receipt: the persisted
   // alarm ALONE converges the accepted work (exit gate 1) …
-  await drainAlarmsUntil(conversation, allSettled(conversation));
-  await assertConvergence(conversation);
+  await drainAlarmsUntil(thread, allSettled(thread));
+  await assertConvergence(thread);
   // … and the same idempotency key resumes with the ORIGINAL durable identity.
-  const rows = await laneRows(conversation);
-  const replayed = await submitFixture("planner", conversation, key);
+  const rows = await laneRows(thread);
+  const replayed = await submitFixture("planner", thread, key);
   expect(replayed.submissionId).toBe(rows[0]?.submission_id);
 };
 
@@ -197,29 +197,29 @@ const passRow = async (
   target: Arm,
   expectation: "settled" | "unknown" | "suspended",
   options?: { readonly supplier?: SupplierExpectation },
-): Promise<{ readonly conversation: string; readonly receipt: Receipt }> => {
-  const conversation = lane(target.location);
-  const key = `${conversation}-key`;
-  arm(conversation, target);
-  const receipt = await submitFixture(fixture, conversation, key);
+): Promise<{ readonly thread: string; readonly receipt: Receipt }> => {
+  const thread = lane(target.location);
+  const key = `${thread}-key`;
+  arm(thread, target);
+  const receipt = await submitFixture(fixture, thread, key);
 
   const predicate =
-    expectation === "settled" ? allSettled(conversation) : anyInState(conversation, expectation);
-  await drainAlarmsUntil(conversation, predicate);
-  expect(armConsumed(conversation), "the armed location must actually have fired").toBe(true);
+    expectation === "settled" ? allSettled(thread) : anyInState(thread, expectation);
+  await drainAlarmsUntil(thread, predicate);
+  expect(armConsumed(thread), "the armed location must actually have fired").toBe(true);
 
   if (expectation === "settled") {
-    await assertConvergence(conversation, { supplier: options?.supplier });
+    await assertConvergence(thread, { supplier: options?.supplier });
   }
-  return { conversation, receipt };
+  return { thread, receipt };
 };
 
-const approveBooking = (conversation: string, receipt: Receipt, decision: "approved" | "denied") =>
+const approveBooking = (thread: string, receipt: Receipt, decision: "approved" | "denied") =>
   runClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       return yield* client.resolveApproval(
-        decodeConversationId(conversation),
+        decodeThreadId(thread),
         ApprovalDecisionCommand.make({
           submissionId: receipt.submissionId,
           toolCallId: BOOK_TOOL_CALL_ID,
@@ -231,12 +231,12 @@ const approveBooking = (conversation: string, receipt: Receipt, decision: "appro
     }),
   );
 
-const resolveNeverHappened = (conversation: string, receipt: Receipt) =>
+const resolveNeverHappened = (thread: string, receipt: Receipt) =>
   runClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       return yield* client.resolveUnknown(
-        decodeConversationId(conversation),
+        decodeThreadId(thread),
         UnknownResolutionCommand.make({
           submissionId: receipt.submissionId,
           toolCallId: BOOK_TOOL_CALL_ID,
@@ -285,7 +285,7 @@ describe("DC eviction matrix — submit path (abort mid-submitEncoded, alarm-onl
   );
 
   it(
-    "eviction at append:before: the conversation-created append is retried idempotently",
+    "eviction at append:before: the thread-created append is retried idempotently",
     () => submitPathRow({ kind: "storage", location: "append:before" }, {}),
     30_000,
   );
@@ -351,14 +351,14 @@ describe("DC eviction matrix — maintenance pass (abort mid-pass, alarm-only co
   }, 30_000);
 
   it("eviction at input:after-canonical-append: the marker is repaired and FIFO holds for the queued Submission", async () => {
-    const conversation = lane("input:after-canonical-append");
-    arm(conversation, { kind: "runtime", location: "input:after-canonical-append" });
-    await submitFixture("planner", conversation, `${conversation}-k1`);
-    await submitFixture("planner", conversation, `${conversation}-k2`);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    expect(armConsumed(conversation)).toBe(true);
-    expect(await laneRows(conversation)).toHaveLength(2);
-    await assertConvergence(conversation);
+    const thread = lane("input:after-canonical-append");
+    arm(thread, { kind: "runtime", location: "input:after-canonical-append" });
+    await submitFixture("planner", thread, `${thread}-k1`);
+    await submitFixture("planner", thread, `${thread}-k2`);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    expect(armConsumed(thread)).toBe(true);
+    expect(await laneRows(thread)).toHaveLength(2);
+    await assertConvergence(thread);
   }, 30_000);
 
   it("eviction at ledger:mark-input-applied:before: the committed input reattaches through prompt coverage", async () => {
@@ -386,23 +386,23 @@ describe("DC eviction matrix — maintenance pass (abort mid-pass, alarm-only co
   }, 30_000);
 
   it("eviction at turn:after-response-append: the declared batch resumes without model re-invocation", async () => {
-    const { conversation } = await passRow(
+    const { thread } = await passRow(
       "search",
       { kind: "runtime", location: "turn:after-response-append" },
       "settled",
     );
     // Exactly two model responses ever became canonical: the declared batch resumed from
     // canonical history, and only the post-batch request re-invoked the model.
-    expect(await modelResponseCount(conversation)).toBe(2);
+    expect(await modelResponseCount(thread)).toBe(2);
   }, 30_000);
 
   it("eviction at turn:after-results-append: committed results are never re-executed", async () => {
-    const { conversation } = await passRow(
+    const { thread } = await passRow(
       "search",
       { kind: "runtime", location: "turn:after-results-append" },
       "settled",
     );
-    expect(await modelResponseCount(conversation)).toBe(2);
+    expect(await modelResponseCount(thread)).toBe(2);
   }, 30_000);
 
   it("eviction at ledger:reserve-settlement:before: the outcome is recomputed and settles exactly once", async () => {
@@ -414,12 +414,12 @@ describe("DC eviction matrix — maintenance pass (abort mid-pass, alarm-only co
   }, 30_000);
 
   it("eviction at terminalize:after-reserve: recovery appends the EXACT reserved record", async () => {
-    const { conversation } = await passRow(
+    const { thread } = await passRow(
       "planner",
       { kind: "runtime", location: "terminalize:after-reserve" },
       "settled",
     );
-    expect(await settlementOutcome(conversation)).toBe("completed");
+    expect(await settlementOutcome(thread)).toBe("completed");
   }, 30_000);
 
   it("eviction at ledger:reserve-settlement:after: the durable reservation finalizes from history", async () => {
@@ -461,162 +461,162 @@ describe("DC eviction matrix — maintenance pass (abort mid-pass, alarm-only co
 
 describe("DC eviction matrix — uncertainty, approval, and durable steps", () => {
   it("eviction at tools:after-prepared-append under the default reconciler: Unknown blocks the lane until resolveUnknown", async () => {
-    const { conversation, receipt } = await passRow(
+    const { thread, receipt } = await passRow(
       "book",
       { kind: "runtime", location: "tools:after-prepared-append" },
       "unknown",
     );
     // The unresolved ordinary call is never auto-replayed: alarm passes grant nothing.
-    expect(supplierCountsFor(conversation)).toEqual({});
-    await resolveNeverHappened(conversation, receipt);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    expect(supplierCountsFor(thread)).toEqual({});
+    await resolveNeverHappened(thread, receipt);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at ledger:mark-unknown:before: the open call is re-reconciled and blocks honestly", async () => {
     // The Unknown mark is only crossed by the RECOVERY of a stranded prepared call, so the
     // whole chain arms up front: tools abort first, then the mark eviction.
-    const conversation = lane("ledger:mark-unknown:before");
-    armRuntimeEviction(conversation, "tools:after-prepared-append");
-    armStorageEviction(conversation, "ledger:mark-unknown:before");
-    const receipt = await submitFixture("book", conversation, `${conversation}-key`);
-    await drainAlarmsUntil(conversation, anyInState(conversation, "unknown"));
-    expect(armConsumed(conversation)).toBe(true);
-    await resolveNeverHappened(conversation, receipt);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    const thread = lane("ledger:mark-unknown:before");
+    armRuntimeEviction(thread, "tools:after-prepared-append");
+    armStorageEviction(thread, "ledger:mark-unknown:before");
+    const receipt = await submitFixture("book", thread, `${thread}-key`);
+    await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
+    expect(armConsumed(thread)).toBe(true);
+    await resolveNeverHappened(thread, receipt);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at ledger:mark-unknown:after: the durable Unknown mark is never re-applied", async () => {
-    const conversation = lane("ledger:mark-unknown:after");
-    armRuntimeEviction(conversation, "tools:after-prepared-append");
-    armStorageEviction(conversation, "ledger:mark-unknown:after");
-    const receipt = await submitFixture("book", conversation, `${conversation}-key`);
-    await drainAlarmsUntil(conversation, anyInState(conversation, "unknown"));
-    expect(armConsumed(conversation)).toBe(true);
-    await resolveNeverHappened(conversation, receipt);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    const thread = lane("ledger:mark-unknown:after");
+    armRuntimeEviction(thread, "tools:after-prepared-append");
+    armStorageEviction(thread, "ledger:mark-unknown:after");
+    const receipt = await submitFixture("book", thread, `${thread}-key`);
+    await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
+    expect(armConsumed(thread)).toBe(true);
+    await resolveNeverHappened(thread, receipt);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at ledger:release:before: the blocked lane's claim lapses by lease expiry", async () => {
     // Chain: first strand the prepared call (tools abort), then evict the RECOVERY pass at
     // the release that follows its Unknown mark.
-    const conversation = lane("ledger:release:before");
-    armRuntimeEviction(conversation, "tools:after-prepared-append");
-    armStorageEviction(conversation, "ledger:release:before");
-    const receipt = await submitFixture("book", conversation, `${conversation}-key`);
-    await drainAlarmsUntil(conversation, anyInState(conversation, "unknown"));
-    expect(armConsumed(conversation)).toBe(true);
-    await resolveNeverHappened(conversation, receipt);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    const thread = lane("ledger:release:before");
+    armRuntimeEviction(thread, "tools:after-prepared-append");
+    armStorageEviction(thread, "ledger:release:before");
+    const receipt = await submitFixture("book", thread, `${thread}-key`);
+    await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
+    expect(armConsumed(thread)).toBe(true);
+    await resolveNeverHappened(thread, receipt);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at ledger:release:after: the released claim is not double-released", async () => {
-    const conversation = lane("ledger:release:after");
-    armRuntimeEviction(conversation, "tools:after-prepared-append");
-    armStorageEviction(conversation, "ledger:release:after");
-    const receipt = await submitFixture("book", conversation, `${conversation}-key`);
-    await drainAlarmsUntil(conversation, anyInState(conversation, "unknown"));
-    expect(armConsumed(conversation)).toBe(true);
-    await resolveNeverHappened(conversation, receipt);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    const thread = lane("ledger:release:after");
+    armRuntimeEviction(thread, "tools:after-prepared-append");
+    armStorageEviction(thread, "ledger:release:after");
+    const receipt = await submitFixture("book", thread, `${thread}-key`);
+    await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
+    expect(armConsumed(thread)).toBe(true);
+    await resolveNeverHappened(thread, receipt);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at approval:after-request-append: recovery repairs the suspension from history and nothing executes", async () => {
-    const { conversation, receipt } = await passRow(
+    const { thread, receipt } = await passRow(
       "approval",
       { kind: "runtime", location: "approval:after-request-append" },
       "suspended",
     );
-    expect(supplierCountsFor(conversation)).toEqual({});
-    await approveBooking(conversation, receipt, "approved");
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    expect(supplierCountsFor(thread)).toEqual({});
+    await approveBooking(thread, receipt, "approved");
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at approval:after-suspend: resolveApproval(approved) resumes the declared batch", async () => {
-    const { conversation, receipt } = await passRow(
+    const { thread, receipt } = await passRow(
       "approval",
       { kind: "runtime", location: "approval:after-suspend" },
       "suspended",
     );
-    await approveBooking(conversation, receipt, "approved");
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    await approveBooking(thread, receipt, "approved");
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at approval:after-suspend: a denial settles failed with the canonical decision", async () => {
-    const { conversation, receipt } = await passRow(
+    const { thread, receipt } = await passRow(
       "approval",
       { kind: "runtime", location: "approval:after-suspend" },
       "suspended",
     );
-    await approveBooking(conversation, receipt, "denied");
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    expect(await settlementOutcome(conversation)).toBe("failed");
+    await approveBooking(thread, receipt, "denied");
+    await drainAlarmsUntil(thread, allSettled(thread));
+    expect(await settlementOutcome(thread)).toBe("failed");
     // The denied handler never executed: no supplier call ever happened.
-    expect(supplierCountsFor(conversation)).toEqual({});
+    expect(supplierCountsFor(thread)).toEqual({});
   }, 30_000);
 
   it("eviction at ledger:suspend:before: the suspension is repaired from the canonical request", async () => {
-    const { conversation, receipt } = await passRow(
+    const { thread, receipt } = await passRow(
       "approval",
       { kind: "storage", location: "ledger:suspend:before" },
       "suspended",
     );
-    await approveBooking(conversation, receipt, "approved");
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    await approveBooking(thread, receipt, "approved");
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at ledger:suspend:after: the durable suspension holds until the recorded decision", async () => {
-    const { conversation, receipt } = await passRow(
+    const { thread, receipt } = await passRow(
       "approval",
       { kind: "storage", location: "ledger:suspend:after" },
       "suspended",
     );
-    await approveBooking(conversation, receipt, "approved");
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    await approveBooking(thread, receipt, "approved");
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at step:after-step-append: step 1 replays from its record while step 2 executes once", async () => {
-    const { conversation } = await passRow(
+    const { thread } = await passRow(
       "itinerary",
       { kind: "runtime", location: "step:after-step-append" },
       "settled",
     );
     // The handler is honestly re-entered; each Step's external effect happened exactly once
     // because step 1 replayed from its exactly-once record (durability §10).
-    expect(supplierCountsFor(conversation)).toEqual({
+    expect(supplierCountsFor(thread)).toEqual({
       "itinerary-enter": 2,
       "reserve-flight": 1,
       "reserve-lodging": 1,
     });
-    await assertConvergence(conversation, {
+    await assertConvergence(thread, {
       supplier: {
-        ref: conversation,
+        ref: thread,
         counts: { "itinerary-enter": 2, "reserve-flight": 1, "reserve-lodging": 1 },
       },
     });
@@ -629,14 +629,14 @@ describe("DC eviction matrix — uncertainty, approval, and durable steps", () =
 
 describe("DC eviction matrix — client mutation entry points", () => {
   it("eviction at abort:after-intent: ready work settles aborted without an Attempt", async () => {
-    const conversation = lane("abort:after-intent");
-    const receipt = await submitFixture("planner", conversation, `${conversation}-key`);
-    arm(conversation, { kind: "runtime", location: "abort:after-intent" });
+    const thread = lane("abort:after-intent");
+    const receipt = await submitFixture("planner", thread, `${thread}-key`);
+    arm(thread, { kind: "runtime", location: "abort:after-intent" });
     const aborted = await runClientExit(
       Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
+        const client = yield* CloudflareThreadClient;
         return yield* client.abort(
-          decodeConversationId(conversation),
+          decodeThreadId(thread),
           AbortCommand.make({
             submissionId: receipt.submissionId,
             author: "cf-eviction-operator",
@@ -646,20 +646,20 @@ describe("DC eviction matrix — client mutation entry points", () => {
       }),
     );
     expect(aborted.ok).toBe(false);
-    expect(armConsumed(conversation)).toBe(true);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    expect(await settlementOutcome(conversation)).toBe("aborted");
+    expect(armConsumed(thread)).toBe(true);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    expect(await settlementOutcome(thread)).toBe("aborted");
   }, 30_000);
 
   it("eviction at ledger:request-abort:after: the durable intent settles the lane aborted", async () => {
-    const conversation = lane("ledger:request-abort:after");
-    const receipt = await submitFixture("planner", conversation, `${conversation}-key`);
-    arm(conversation, { kind: "storage", location: "ledger:request-abort:after" });
+    const thread = lane("ledger:request-abort:after");
+    const receipt = await submitFixture("planner", thread, `${thread}-key`);
+    arm(thread, { kind: "storage", location: "ledger:request-abort:after" });
     const aborted = await runClientExit(
       Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
+        const client = yield* CloudflareThreadClient;
         return yield* client.abort(
-          decodeConversationId(conversation),
+          decodeThreadId(thread),
           AbortCommand.make({
             submissionId: receipt.submissionId,
             author: "cf-eviction-operator",
@@ -669,9 +669,9 @@ describe("DC eviction matrix — client mutation entry points", () => {
       }),
     );
     expect(aborted.ok).toBe(false);
-    expect(armConsumed(conversation)).toBe(true);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    expect(await settlementOutcome(conversation)).toBe("aborted");
+    expect(armConsumed(thread)).toBe(true);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    expect(await settlementOutcome(thread)).toBe("aborted");
   }, 30_000);
 
   it("an aborted non-head ready submission settles without waiting for the head", async () => {
@@ -679,16 +679,16 @@ describe("DC eviction matrix — client mutation entry points", () => {
     // on a durable approval; a second Submission queues behind it; aborting the second
     // settles it by alarm alone while the head is STILL suspended (DUR-004 bounds execution
     // order; DUR-012 permits settling inactive accepted work without an Attempt).
-    const conversation = lane("abort-queued-non-head");
-    const head = await submitFixture("approval", conversation, `${conversation}-head`);
-    await drainAlarmsUntil(conversation, anyInState(conversation, "suspended"));
+    const thread = lane("abort-queued-non-head");
+    const head = await submitFixture("approval", thread, `${thread}-head`);
+    await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
 
-    const queued = await submitFixture("planner", conversation, `${conversation}-queued`);
+    const queued = await submitFixture("planner", thread, `${thread}-queued`);
     await runClient(
       Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
+        const client = yield* CloudflareThreadClient;
         return yield* client.abort(
-          decodeConversationId(conversation),
+          decodeThreadId(thread),
           AbortCommand.make({
             submissionId: queued.submissionId,
             author: "cf-eviction-operator",
@@ -697,20 +697,20 @@ describe("DC eviction matrix — client mutation entry points", () => {
         );
       }),
     );
-    await drainAlarmsUntil(conversation, async () => {
-      const rows = await laneRows(conversation);
+    await drainAlarmsUntil(thread, async () => {
+      const rows = await laneRows(thread);
       return rows.some(
         (row) => row.submission_id === queued.submissionId && row.state === "settled",
       );
     });
 
     // The aborted non-head settled while the head is still durably suspended.
-    const rows = await laneRows(conversation);
+    const rows = await laneRows(thread);
     expect(
       rows.find((row) => row.submission_id === head.submissionId)?.state,
       "the suspended head must remain unsettled",
     ).toBe("suspended");
-    const records = await readCanonical(conversation);
+    const records = await readCanonical(thread);
     const queuedSettlement = records.find(
       (envelope) =>
         envelope.record.payload._tag === "SubmissionSettled" &&
@@ -731,22 +731,22 @@ describe("DC eviction matrix — client mutation entry points", () => {
     ).toBe(false);
 
     // The head then resumes through its own authorized decision and completes normally.
-    await approveBooking(conversation, head, "approved");
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    await approveBooking(thread, head, "approved");
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at ledger:request-abort:before: no intent exists, so the accepted work completes", async () => {
-    const conversation = lane("ledger:request-abort:before");
-    const receipt = await submitFixture("planner", conversation, `${conversation}-key`);
-    arm(conversation, { kind: "storage", location: "ledger:request-abort:before" });
+    const thread = lane("ledger:request-abort:before");
+    const receipt = await submitFixture("planner", thread, `${thread}-key`);
+    arm(thread, { kind: "storage", location: "ledger:request-abort:before" });
     const aborted = await runClientExit(
       Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
+        const client = yield* CloudflareThreadClient;
         return yield* client.abort(
-          decodeConversationId(conversation),
+          decodeThreadId(thread),
           AbortCommand.make({
             submissionId: receipt.submissionId,
             author: "cf-eviction-operator",
@@ -756,25 +756,25 @@ describe("DC eviction matrix — client mutation entry points", () => {
       }),
     );
     expect(aborted.ok).toBe(false);
-    expect(armConsumed(conversation)).toBe(true);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    expect(await settlementOutcome(conversation)).toBe("completed");
-    await assertConvergence(conversation);
+    expect(armConsumed(thread)).toBe(true);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    expect(await settlementOutcome(thread)).toBe("completed");
+    await assertConvergence(thread);
   }, 30_000);
 
   it("eviction at ledger:approval-decision:before: the undecided suspension holds; the re-issued decision resumes", async () => {
-    const { conversation, receipt } = await passRow(
+    const { thread, receipt } = await passRow(
       "approval",
       { kind: "runtime", location: "approval:after-suspend" },
       "suspended",
     );
     // The suspension row above consumed its arm; now evict the DECISION write itself.
-    arm(conversation, { kind: "storage", location: "ledger:approval-decision:before" });
+    arm(thread, { kind: "storage", location: "ledger:approval-decision:before" });
     const decided = await runClientExit(
       Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
+        const client = yield* CloudflareThreadClient;
         return yield* client.resolveApproval(
-          decodeConversationId(conversation),
+          decodeThreadId(thread),
           ApprovalDecisionCommand.make({
             submissionId: receipt.submissionId,
             toolCallId: BOOK_TOOL_CALL_ID,
@@ -786,28 +786,28 @@ describe("DC eviction matrix — client mutation entry points", () => {
       }),
     );
     expect(decided.ok).toBe(false);
-    expect(armConsumed(conversation)).toBe(true);
+    expect(armConsumed(thread)).toBe(true);
     // No decision committed: alarm passes keep the suspension honestly durable.
-    await drainAlarmsUntil(conversation, anyInState(conversation, "suspended"));
-    await approveBooking(conversation, receipt, "approved");
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
+    await approveBooking(thread, receipt, "approved");
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at ledger:approval-decision:after: the durable decision resumes the lane by alarm alone", async () => {
-    const { conversation, receipt } = await passRow(
+    const { thread, receipt } = await passRow(
       "approval",
       { kind: "runtime", location: "approval:after-suspend" },
       "suspended",
     );
-    arm(conversation, { kind: "storage", location: "ledger:approval-decision:after" });
+    arm(thread, { kind: "storage", location: "ledger:approval-decision:after" });
     const decided = await runClientExit(
       Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
+        const client = yield* CloudflareThreadClient;
         return yield* client.resolveApproval(
-          decodeConversationId(conversation),
+          decodeThreadId(thread),
           ApprovalDecisionCommand.make({
             submissionId: receipt.submissionId,
             toolCallId: BOOK_TOOL_CALL_ID,
@@ -819,26 +819,26 @@ describe("DC eviction matrix — client mutation entry points", () => {
       }),
     );
     expect(decided.ok).toBe(false);
-    expect(armConsumed(conversation)).toBe(true);
+    expect(armConsumed(thread)).toBe(true);
     // The decision committed before the abort: alarms alone resume and settle the lane.
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at ledger:unknown-resolution:before: the lane stays blocked; the re-issued resolution releases it", async () => {
-    const { conversation, receipt } = await passRow(
+    const { thread, receipt } = await passRow(
       "book",
       { kind: "runtime", location: "tools:after-prepared-append" },
       "unknown",
     );
-    arm(conversation, { kind: "storage", location: "ledger:unknown-resolution:before" });
+    arm(thread, { kind: "storage", location: "ledger:unknown-resolution:before" });
     const resolved = await runClientExit(
       Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
+        const client = yield* CloudflareThreadClient;
         return yield* client.resolveUnknown(
-          decodeConversationId(conversation),
+          decodeThreadId(thread),
           UnknownResolutionCommand.make({
             submissionId: receipt.submissionId,
             toolCallId: BOOK_TOOL_CALL_ID,
@@ -850,27 +850,27 @@ describe("DC eviction matrix — client mutation entry points", () => {
       }),
     );
     expect(resolved.ok).toBe(false);
-    expect(armConsumed(conversation)).toBe(true);
-    await drainAlarmsUntil(conversation, anyInState(conversation, "unknown"));
-    await resolveNeverHappened(conversation, receipt);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    expect(armConsumed(thread)).toBe(true);
+    await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
+    await resolveNeverHappened(thread, receipt);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at ledger:unknown-resolution:after: the durable covering resolution wakes the lane by alarm alone", async () => {
-    const { conversation, receipt } = await passRow(
+    const { thread, receipt } = await passRow(
       "book",
       { kind: "runtime", location: "tools:after-prepared-append" },
       "unknown",
     );
-    arm(conversation, { kind: "storage", location: "ledger:unknown-resolution:after" });
+    arm(thread, { kind: "storage", location: "ledger:unknown-resolution:after" });
     const resolved = await runClientExit(
       Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
+        const client = yield* CloudflareThreadClient;
         return yield* client.resolveUnknown(
-          decodeConversationId(conversation),
+          decodeThreadId(thread),
           UnknownResolutionCommand.make({
             submissionId: receipt.submissionId,
             toolCallId: BOOK_TOOL_CALL_ID,
@@ -882,25 +882,25 @@ describe("DC eviction matrix — client mutation entry points", () => {
       }),
     );
     expect(resolved.ok).toBe(false);
-    expect(armConsumed(conversation)).toBe(true);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    expect(armConsumed(thread)).toBe(true);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 
   it("eviction at resolve:after-intent: the durable resolution intent survives and converges", async () => {
-    const { conversation, receipt } = await passRow(
+    const { thread, receipt } = await passRow(
       "book",
       { kind: "runtime", location: "tools:after-prepared-append" },
       "unknown",
     );
-    arm(conversation, { kind: "runtime", location: "resolve:after-intent" });
+    arm(thread, { kind: "runtime", location: "resolve:after-intent" });
     const resolved = await runClientExit(
       Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
+        const client = yield* CloudflareThreadClient;
         return yield* client.resolveUnknown(
-          decodeConversationId(conversation),
+          decodeThreadId(thread),
           UnknownResolutionCommand.make({
             submissionId: receipt.submissionId,
             toolCallId: BOOK_TOOL_CALL_ID,
@@ -912,10 +912,10 @@ describe("DC eviction matrix — client mutation entry points", () => {
       }),
     );
     expect(resolved.ok).toBe(false);
-    expect(armConsumed(conversation)).toBe(true);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation, {
-      supplier: { ref: conversation, counts: { book: 1 } },
+    expect(armConsumed(thread)).toBe(true);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread, {
+      supplier: { ref: thread, counts: { book: 1 } },
     });
   }, 30_000);
 });
@@ -926,21 +926,21 @@ describe("DC eviction matrix — client mutation entry points", () => {
 
 describe("DC eviction matrix — joined input and lease renewal", () => {
   const joinRow = async (target: Arm): Promise<string> => {
-    const conversation = lane(target.location);
+    const thread = lane(target.location);
     // S1's model hangs on the gate, so the pass stays active while S2 queues.
-    const receipt1 = await submitFixture("join", conversation, `${conversation}-k1`);
+    const receipt1 = await submitFixture("join", thread, `${thread}-k1`);
     void receipt1;
-    const passPromise = drainAlarmsUntil(conversation, allSettled(conversation), {
+    const passPromise = drainAlarmsUntil(thread, allSettled(thread), {
       rounds: 1_200,
     });
-    await submitFixture("join", conversation, `${conversation}-k2`);
-    arm(conversation, target);
-    releaseGate(conversation);
+    await submitFixture("join", thread, `${thread}-k2`);
+    arm(thread, target);
+    releaseGate(thread);
     await passPromise;
-    expect(armConsumed(conversation)).toBe(true);
-    expect(await laneRows(conversation)).toHaveLength(2);
-    await assertConvergence(conversation);
-    return conversation;
+    expect(armConsumed(thread)).toBe(true);
+    expect(await laneRows(thread)).toHaveLength(2);
+    await assertConvergence(thread);
+    return thread;
   };
 
   it("eviction at join:after-claim: RevertJoining returns the queued Submission and it joins exactly once", async () => {
@@ -970,55 +970,55 @@ describe("DC eviction matrix — joined input and lease renewal", () => {
   it("eviction at ledger:revert-joining:before and after: the revert repair is idempotent across evictions", async () => {
     // Chain: strand a joining Submission (claim-joining:after), then evict the recovery
     // pass INSIDE its RevertJoining repair — first before the revert commits, then after.
-    const conversation = lane("ledger:revert-joining");
-    await submitFixture("join", conversation, `${conversation}-k1`);
-    const passPromise = drainAlarmsUntil(conversation, allSettled(conversation), {
+    const thread = lane("ledger:revert-joining");
+    await submitFixture("join", thread, `${thread}-k1`);
+    const passPromise = drainAlarmsUntil(thread, allSettled(thread), {
       rounds: 1_200,
     });
-    await submitFixture("join", conversation, `${conversation}-k2`);
+    await submitFixture("join", thread, `${thread}-k2`);
     // The whole chain up front: the recovery pass after each abort runs within milliseconds
     // (due alarms auto-fire), so post-abort arming would always lose the race.
     armStorageEviction(
-      conversation,
+      thread,
       "ledger:claim-joining:after",
       "ledger:revert-joining:before",
       "ledger:revert-joining:after",
     );
-    releaseGate(conversation);
+    releaseGate(thread);
     await passPromise;
-    expect(armConsumed(conversation)).toBe(true);
-    expect(await laneRows(conversation)).toHaveLength(2);
-    await assertConvergence(conversation);
+    expect(armConsumed(thread)).toBe(true);
+    expect(await laneRows(thread)).toHaveLength(2);
+    await assertConvergence(thread);
   }, 60_000);
 
   it("eviction at ledger:renew:before: the unrenewed lease lapses and the next incarnation reclaims", async () => {
-    const conversation = lane("ledger:renew:before");
-    arm(conversation, { kind: "storage", location: "ledger:renew:before" });
-    await submitFixture("join", conversation, `${conversation}-key`);
+    const thread = lane("ledger:renew:before");
+    arm(thread, { kind: "storage", location: "ledger:renew:before" });
+    await submitFixture("join", thread, `${thread}-key`);
     // The hung model keeps the Attempt alive until the renewal cadence crosses the armed
     // location; the abort then kills the incarnation mid-lease.
-    const passPromise = drainAlarmsUntil(conversation, allSettled(conversation), {
+    const passPromise = drainAlarmsUntil(thread, allSettled(thread), {
       rounds: 1_200,
     });
     await new Promise((resolve) => setTimeout(resolve, 300));
-    releaseGate(conversation);
+    releaseGate(thread);
     await passPromise;
-    expect(armConsumed(conversation)).toBe(true);
-    await assertConvergence(conversation);
+    expect(armConsumed(thread)).toBe(true);
+    await assertConvergence(thread);
   }, 60_000);
 
   it("eviction at ledger:renew:after: the extended lease still lapses with its incarnation", async () => {
-    const conversation = lane("ledger:renew:after");
-    arm(conversation, { kind: "storage", location: "ledger:renew:after" });
-    await submitFixture("join", conversation, `${conversation}-key`);
-    const passPromise = drainAlarmsUntil(conversation, allSettled(conversation), {
+    const thread = lane("ledger:renew:after");
+    arm(thread, { kind: "storage", location: "ledger:renew:after" });
+    await submitFixture("join", thread, `${thread}-key`);
+    const passPromise = drainAlarmsUntil(thread, allSettled(thread), {
       rounds: 1_200,
     });
     await new Promise((resolve) => setTimeout(resolve, 300));
-    releaseGate(conversation);
+    releaseGate(thread);
     await passPromise;
-    expect(armConsumed(conversation)).toBe(true);
-    await assertConvergence(conversation);
+    expect(armConsumed(thread)).toBe(true);
+    await assertConvergence(thread);
   }, 60_000);
 });
 
@@ -1028,55 +1028,55 @@ describe("DC eviction matrix — joined input and lease renewal", () => {
 
 describe("DC eviction matrix — checkpoints and export", () => {
   const settledLane = async (): Promise<string> => {
-    const conversation = lane("derivative");
-    await submitFixture("planner", conversation, `${conversation}-key`);
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    return conversation;
+    const thread = lane("derivative");
+    await submitFixture("planner", thread, `${thread}-key`);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    return thread;
   };
 
-  it("eviction at export:after-conversation-read: the read-only export dies without a trace", async () => {
-    const conversation = await settledLane();
-    const before = await readCanonical(conversation);
-    armStorageEviction(conversation, "export:after-conversation-read");
+  it("eviction at export:after-thread-read: the read-only export dies without a trace", async () => {
+    const thread = await settledLane();
+    const before = await readCanonical(thread);
+    armStorageEviction(thread, "export:after-thread-read");
     const request = await Effect.runPromise(
       encodePortRequest(
         StoreExportCall.make({
-          request: ConversationExportRequest.make({
-            conversationId: decodeConversationId(conversation),
+          request: ThreadExportRequest.make({
+            threadId: decodeThreadId(thread),
           }),
         }),
       ),
     );
-    const failure = await runInDurableObject(stubFor(conversation), (instance) =>
+    const failure = await runInDurableObject(stubFor(thread), (instance) =>
       instance.portCall(request),
     ).then(
       () => undefined,
       (error: unknown) => error,
     );
     expect(failure).toBeDefined();
-    expect(armConsumed(conversation)).toBe(true);
-    const after = await readCanonical(conversation);
+    expect(armConsumed(thread)).toBe(true);
+    const after = await readCanonical(thread);
     expect(after).toEqual(before);
-    await assertConvergence(conversation);
+    await assertConvergence(thread);
   }, 30_000);
 
   const checkpointRow = async (location: DoStorageFailpointLocation): Promise<void> => {
-    const conversation = await settledLane();
-    const before = await readCanonical(conversation);
-    armStorageEviction(conversation, location);
-    const attempted = await runInDurableObject(stubFor(conversation), async (_instance, state) => {
+    const thread = await settledLane();
+    const before = await readCanonical(thread);
+    armStorageEviction(thread, location);
+    const attempted = await runInDurableObject(stubFor(thread), async (_instance, state) => {
       // Drive the checkpoint through the adapter with THIS incarnation's abort lever;
       // checkpoints are disposable derivatives, so an eviction here must never matter.
       const program = Effect.gen(function* () {
-        const store = yield* ConversationStore;
+        const store = yield* ThreadStore;
         const tail = yield* store.inspectTail(
-          ConversationTailRequest.make({
-            conversationId: decodeConversationId(conversation),
+          ThreadTailRequest.make({
+            threadId: decodeThreadId(thread),
           }),
         );
-        const checkpoint = ConversationCheckpoint.make({
+        const checkpoint = ThreadCheckpoint.make({
           schemaVersion: 1,
-          conversationId: decodeConversationId(conversation),
+          threadId: decodeThreadId(thread),
           throughSequence: tail.tailSequence,
           tailDigest: tail.tailDigest,
           engineVersion: "cf-eviction-harness",
@@ -1089,7 +1089,7 @@ describe("DC eviction matrix — checkpoints and export", () => {
         yield* store.checkpoints!.save(SaveCheckpointRequest.make({ checkpoint }));
       }).pipe(
         Effect.provide(
-          doConversationStoreLayer({
+          doThreadStoreLayer({
             storage: state.storage,
             failpoint: storageEvictionFailpoint(state),
           }),
@@ -1101,10 +1101,10 @@ describe("DC eviction matrix — checkpoints and export", () => {
       );
     }).catch(() => "aborted" as const);
     expect(attempted).toBe("aborted");
-    expect(armConsumed(conversation)).toBe(true);
-    const after = await readCanonical(conversation);
+    expect(armConsumed(thread)).toBe(true);
+    const after = await readCanonical(thread);
     expect(after).toEqual(before);
-    await assertConvergence(conversation);
+    await assertConvergence(thread);
   };
 
   it(

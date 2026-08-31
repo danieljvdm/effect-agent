@@ -6,7 +6,7 @@ description: Define Effect AI tools and run them with bounded, deterministic sch
 # Tools & layers
 
 Define tools and toolkits with Effect AI. Effect Agent runs their native handlers under its
-scheduling, policy, and conversation rules.
+scheduling, policy, and thread rules.
 
 ## Define tools once {#one-tool-system}
 

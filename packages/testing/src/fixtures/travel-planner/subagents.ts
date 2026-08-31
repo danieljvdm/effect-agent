@@ -230,7 +230,7 @@ export const destinationResearchDelegation = Subagent.define("delegate_destinati
       });
     }),
   // The explicit declassification boundary (SUB-015): only the advisory
-  // crosses to the parent; guide highlights stay in the child Conversation.
+  // crosses to the parent; guide highlights stay in the child Thread.
   projectResult: (report) =>
     Effect.succeed(
       DestinationResearchFindings.make({
@@ -313,7 +313,7 @@ export const TravelCoordinator = Agent.make("travel-coordinator", {
 });
 
 export const researchMission = Schema.decodeSync(ResearchMission)({
-  request: `Shortlist one September culture city; keep ${missionConfidentialMarker} inside the coordinator conversation.`,
+  request: `Shortlist one September culture city; keep ${missionConfidentialMarker} inside the coordinator thread.`,
   candidates: ["LHR", "CDG"],
 });
 

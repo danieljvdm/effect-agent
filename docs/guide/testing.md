@@ -37,7 +37,7 @@ specialized helpers from these paths:
 These paths ship JavaScript and declarations. Install the storage and runtime adapters used by
 your tests directly.
 
-Mutable failpoint controls live under `@effect-agent/session/testing`,
+Mutable failpoint controls live under `@effect-agent/thread/testing`,
 `@effect-agent/storage-sqlite/testing`, and `@effect-agent/storage-cloudflare/testing`. Their
 `.layer` values provide the production failpoint service and mutable test control over one Ref.
 The Cloudflare path also exports `evictionFailpointHandler`.
@@ -49,7 +49,7 @@ counter when assertions depend on stable IDs.
 
 ```ts
 import { Effect, Layer, Ref, Schema } from "effect";
-import { ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import { ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 
 const DeterministicIdGeneratorLive = Layer.effect(
   IdGenerator,
@@ -58,9 +58,7 @@ const DeterministicIdGeneratorLive = Layer.effect(
     const next = Ref.updateAndGet(sequence, (n) => n + 1);
 
     return IdGenerator.of({
-      nextConversationId: next.pipe(
-        Effect.map((n) => Schema.decodeSync(ConversationId)(`conversation-${n}`)),
-      ),
+      nextThreadId: next.pipe(Effect.map((n) => Schema.decodeSync(ThreadId)(`thread-${n}`))),
       nextRunId: next.pipe(Effect.map((n) => Schema.decodeSync(RunId)(`run-${n}`))),
       nextTurnId: next.pipe(Effect.map((n) => Schema.decodeSync(TurnId)(`turn-${n}`))),
     });
@@ -68,7 +66,7 @@ const DeterministicIdGeneratorLive = Layer.effect(
 );
 
 const TestRuntimeLive = Layer.mergeAll(
-  ConversationHistory.layerTransient,
+  ThreadHistory.layerTransient,
   ToolkitLive,
   DomainServicesTest,
   DeterministicIdGeneratorLive,
@@ -101,10 +99,10 @@ Useful assertions include:
 
 ## Test storage contracts, not implementations
 
-Run shared conformance cases against every memory, SQLite, or custom store. The conversation cases
+Run shared conformance cases against every memory, SQLite, or custom store. The thread cases
 cover materialization, idempotent append, tail conflicts, fencing, observation offsets, export, and
-corruption. Stores with `ConversationStore.checkpoints` also run
-`conversationCheckpointConformanceCases`.
+corruption. Stores with `ThreadStore.checkpoints` also run
+`threadCheckpointConformanceCases`.
 
 Durable adapters also need ledger conformance, failpoint coverage, and real process-loss tests.
 See [Certify storage adapters](./certify-adapters).

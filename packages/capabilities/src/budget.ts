@@ -1,7 +1,7 @@
 import { Clock, Duration, Effect, Ref, Schema, type Scope } from "effect";
 
 const Natural = Schema.Natural;
-const BudgetLevel = Schema.Literals(["global", "tenant", "agent", "conversation", "run"]);
+const BudgetLevel = Schema.Literals(["global", "tenant", "agent", "thread", "run"]);
 export type BudgetLevel = typeof BudgetLevel.Type;
 
 /** Fixed units avoid floating-point currency accounting: costs are micro-USD. */
@@ -149,7 +149,7 @@ const levelOrder: Readonly<Record<BudgetLevel, number>> = {
   global: 0,
   tenant: 1,
   agent: 2,
-  conversation: 3,
+  thread: 3,
   run: 4,
 };
 

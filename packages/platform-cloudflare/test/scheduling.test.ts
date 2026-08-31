@@ -1,17 +1,17 @@
+import { DoScheduleAlarmControl } from "@effect-agent/storage-cloudflare";
 import {
   ScheduleId,
   type ScheduleAuthorizer,
   type ScheduleOwner,
   Scheduling,
-} from "@effect-agent/session";
-import { DoScheduleAlarmControl } from "@effect-agent/storage-cloudflare";
+} from "@effect-agent/thread";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, type Layer, Schema } from "effect";
 import { DurableObject, type DurableObjectState, type WorkerEnvironment } from "effect-cf";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  type ConversationObjectNamespace,
+  type ThreadObjectNamespace,
   type ScheduleOwnerIdentity,
   type makeScheduleOwnerObjectClass,
 } from "../src/index.ts";
@@ -22,7 +22,7 @@ import {
   armScheduleAdmissionPause,
   armScheduleEviction,
   armScheduleFailure,
-  decodeConversationId,
+  decodeThreadId,
   holdScheduleAuthorizationFailures,
   observedCommittedPrepareBeforeEviction,
   observeSchedulePolicyResources,
@@ -47,7 +47,7 @@ const fixture = (label: string) => {
     owner,
     scope: { owner, principal: TEST_PRINCIPAL },
     scheduleId: Schema.decodeSync(ScheduleId)(`schedule-${label}-${suffix}`),
-    conversation: `cf-schedule-conversation-${label}-${suffix}`,
+    thread: `cf-schedule-thread-${label}-${suffix}`,
   };
 };
 
@@ -119,8 +119,8 @@ const manage = (
         scheduleId: data.scheduleId,
         timing: { _tag: "At" as const, atMillis },
         destination: {
-          _tag: "ExistingConversation" as const,
-          conversationId: decodeConversationId(data.conversation),
+          _tag: "ExistingThread" as const,
+          threadId: decodeThreadId(data.thread),
         },
         deliveryPrincipal: TEST_PRINCIPAL,
         definitions: TEST_DIGESTS,
@@ -128,12 +128,12 @@ const manage = (
       return expectedRevision === undefined
         ? yield* client.create(
             { definition: plannerDefinition },
-            { question, ref: data.conversation },
+            { question, ref: data.thread },
             options,
           )
         : yield* client.update(
             { definition: plannerDefinition },
-            { question, ref: data.conversation },
+            { question, ref: data.thread },
             { ...options, expectedRevision },
           );
     }),
@@ -142,9 +142,8 @@ const manage = (
 describe("Cloudflare Schedule Owner", () => {
   it("requires host policy and routing Layers with all application dependencies provided", () => {
     type Host = Parameters<typeof makeScheduleOwnerObjectClass>[0];
-    type Ports = ScheduleAuthorizer | ConversationObjectNamespace;
-    const policyRequired: Layer.Layer<ConversationObjectNamespace> extends Host ? false : true =
-      true;
+    type Ports = ScheduleAuthorizer | ThreadObjectNamespace;
+    const policyRequired: Layer.Layer<ThreadObjectNamespace> extends Host ? false : true = true;
     const routingRequired: Layer.Layer<ScheduleAuthorizer> extends Host ? false : true = true;
     const applicationDependenciesRequired: Layer.Layer<Ports, never, Scheduling> extends Host
       ? false
@@ -209,7 +208,7 @@ describe("Cloudflare Schedule Owner", () => {
     const result = await runAlarmDirectExit(broken.owner);
     expect(result._tag).toBe("Success");
     expect((await snapshotFor(healthy)).lastReceipt).not.toBeNull();
-    expect(await laneRows(healthy.conversation)).toHaveLength(1);
+    expect(await laneRows(healthy.thread)).toHaveLength(1);
     const alarms = await alarmRows(broken.owner);
     expect(alarms).toHaveLength(1);
     expect(alarms[0]?.run_at).toBeGreaterThan(passStartedAt);
@@ -328,18 +327,18 @@ describe("Cloudflare Schedule Owner", () => {
       await Effect.runPromise(Effect.yieldNow);
     }
 
-    const rows = await laneRows(data.conversation);
+    const rows = await laneRows(data.thread);
     expect(rows).toHaveLength(1);
     await runDurableObjectAlarm(stub);
-    expect(await laneRows(data.conversation)).toHaveLength(1);
+    expect(await laneRows(data.thread)).toHaveLength(1);
     expect(await alarmRows(data.owner)).toEqual([]);
   });
 
   for (const operation of ["pause", "cancel"] as const) {
-    it(`${operation}s without stranding an occurrence already accepted by Conversation`, async () => {
+    it(`${operation}s without stranding an occurrence already accepted by Thread`, async () => {
       const data = fixture(`pending-${operation}`);
       const gate = armScheduleAdmissionPause(data.owner);
-      const created = await manage(data, Date.now(), `${operation} after Conversation accepts`);
+      const created = await manage(data, Date.now(), `${operation} after Thread accepts`);
       const alarm = runDurableObjectAlarm(scheduleStubFor(data.owner));
       await gate.reached;
 
@@ -362,7 +361,7 @@ describe("Cloudflare Schedule Owner", () => {
       const recovered = await snapshotFor(data);
       expect(recovered.pending).toBeNull();
       expect(recovered.lastReceipt).not.toBeNull();
-      expect(await laneRows(data.conversation)).toHaveLength(1);
+      expect(await laneRows(data.thread)).toHaveLength(1);
       expect(await alarmRows(data.owner)).toEqual([]);
     });
   }
@@ -390,7 +389,7 @@ describe("Cloudflare Schedule Owner", () => {
     const afterOldAcknowledgement = await alarmRows(data.owner);
     expect(afterOldAcknowledgement).toHaveLength(1);
     expect(afterOldAcknowledgement[0]?.run_at).toBe(replacementDeadline);
-    expect(await laneRows(data.conversation)).toHaveLength(1);
+    expect(await laneRows(data.thread)).toHaveLength(1);
   });
 
   it("recovers after admission succeeds but the Schedule Owner incarnation loses the reply", async () => {
@@ -404,7 +403,7 @@ describe("Cloudflare Schedule Owner", () => {
     for (let attempt = 0; attempt < 10; attempt++) {
       await Effect.runPromise(Effect.sleep("110 millis"));
       await runAlarmExit(data.owner);
-      const rows = await laneRows(data.conversation);
+      const rows = await laneRows(data.thread);
       if (rows.length === 1) {
         const snapshot = await snapshotFor(data);
         if (snapshot.lastReceipt !== null) break;
@@ -412,7 +411,7 @@ describe("Cloudflare Schedule Owner", () => {
     }
     const recovered = await snapshotFor(data);
     expect(recovered.lastReceipt).not.toBeNull();
-    expect(await laneRows(data.conversation)).toHaveLength(1);
+    expect(await laneRows(data.thread)).toHaveLength(1);
     expect(await alarmRows(data.owner)).toEqual([]);
   });
 
@@ -436,7 +435,7 @@ describe("Cloudflare Schedule Owner", () => {
     const recovered = await snapshotFor(data);
     expect(recovered.pending).toBeNull();
     expect(recovered.lastReceipt).not.toBeNull();
-    expect(await laneRows(data.conversation)).toHaveLength(1);
+    expect(await laneRows(data.thread)).toHaveLength(1);
   });
 
   it("keeps a recovery wake through Cloudflare's six native retry attempts", async () => {
@@ -452,7 +451,7 @@ describe("Cloudflare Schedule Owner", () => {
     await runAlarmExit(data.owner);
     const recovered = await snapshotFor(data);
     expect(recovered.lastReceipt).not.toBeNull();
-    expect(await laneRows(data.conversation)).toHaveLength(1);
+    expect(await laneRows(data.thread)).toHaveLength(1);
     expect(await alarmRows(data.owner)).toEqual([]);
   });
 

@@ -1,17 +1,17 @@
 import {
   CanonicalBatch,
   CanonicalRecord,
-  ConversationMaterialization,
-  ConversationStore,
-  ConversationStoreError,
+  ThreadMaterialization,
+  ThreadStore,
+  ThreadStoreError,
   EMPTY_TAIL_DIGEST,
   FencedAppendRequest,
   UserInputRecorded,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import {
-  conversationStoreConformanceCases,
-  conversationCheckpointConformanceCases,
-} from "@effect-agent/session/testing";
+  threadStoreConformanceCases,
+  threadCheckpointConformanceCases,
+} from "@effect-agent/thread/testing";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { Crypto } from "effect";
@@ -20,8 +20,10 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  CurrentDoStorageVersion,
   type DoStorageConfig,
-  conversationStoreLayer,
+  threadStoreLayer,
+  DoStorageCompatibilityError,
   DoStorageError,
   DoStorageFailpoint,
   DoValueBoundExceeded,
@@ -30,14 +32,14 @@ import {
   type DoStorageInitializationError,
 } from "../src/index.ts";
 import {
-  conversation,
+  thread,
   epoch,
   id,
   at,
   sequence,
   TEST_DEPLOYMENT,
   TEST_PRODUCER,
-  withConversationStorage,
+  withThreadStorage,
 } from "./harness.ts";
 
 type Equal<Left, Right> =
@@ -47,26 +49,27 @@ type Equal<Left, Right> =
       : false
     : false;
 type Assert<Value extends true> = Value;
-type ConversationStoreLayerRequirementsProof = Assert<
+type ThreadStoreLayerRequirementsProof = Assert<
   Equal<
-    Layer.Services<typeof conversationStoreLayer>,
+    Layer.Services<typeof threadStoreLayer>,
     DoStorageConfig | DoStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
   >
 >;
-type ConversationStoreLayerErrorProof = Assert<
-  Equal<Layer.Error<typeof conversationStoreLayer>, DoStorageInitializationError>
+type ThreadStoreLayerErrorProof = Assert<
+  Equal<Layer.Error<typeof threadStoreLayer>, DoStorageInitializationError>
 >;
-const isConversationStoreError = Schema.is(ConversationStoreError);
+const isThreadStoreError = Schema.is(ThreadStoreError);
+const isDoStorageCompatibilityError = Schema.is(DoStorageCompatibilityError);
 const isDoStorageError = Schema.is(DoStorageError);
 const isDoValueBoundExceeded = Schema.is(DoValueBoundExceeded);
 
 const inputRecord = (recordId: string, input: string): CanonicalRecord =>
   CanonicalRecord.make({
     recordId: id(
-      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/RecordId")),
+      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/RecordId")),
       recordId,
     ),
-    family: "conversation",
+    family: "thread",
     schemaVersion: 1,
     createdAt: at(1),
     deploymentId: TEST_DEPLOYMENT,
@@ -82,19 +85,19 @@ const batch = (
   records: readonly [CanonicalRecord, ...Array<CanonicalRecord>],
 ): CanonicalBatch =>
   CanonicalBatch.make({
-    batchId: id(Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/BatchId")), batchId),
+    batchId: id(Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/BatchId")), batchId),
     producerId: TEST_PRODUCER,
     records,
   });
 
-describe("DoConversationStore", () => {
+describe("DoThreadStore", () => {
   // The SAME adapter-neutral contract suite the Node/SQLite and in-memory adapters run,
   // executed in-workerd against a real SQLite-backed Durable Object's storage. One Durable
   // Object per case: the 0.21.x pool shares storage across tests within a run.
-  describe("shared ConversationStore conformance", () => {
+  describe("shared ThreadStore conformance", () => {
     for (const conformanceCase of [
-      ...conversationStoreConformanceCases,
-      ...conversationCheckpointConformanceCases,
+      ...threadStoreConformanceCases,
+      ...threadCheckpointConformanceCases,
     ]) {
       it(conformanceCase.name, () => {
         const spanNames: Array<string> = [];
@@ -104,7 +107,7 @@ describe("DoConversationStore", () => {
             return new Tracer.NativeSpan(options);
           },
         });
-        return withConversationStorage(`wp1-store:${conformanceCase.name}`, (storage) =>
+        return withThreadStorage(`wp1-store:${conformanceCase.name}`, (storage) =>
           conformanceCase.run.pipe(
             Effect.provide(layer({ storage, observationPollInterval: 1 })),
             Effect.provideService(Tracer.Tracer, tracer),
@@ -115,14 +118,14 @@ describe("DoConversationStore", () => {
                 for (const helper of [
                   "DoJournal.decodeRows",
                   "DoJournal.decodeSingleRow",
-                  "DoConversationStore.makeOffset",
-                  "DoConversationStore.parseOffset",
-                  "DoConversationStore.encodeCanonicalRecord",
-                  "DoConversationStore.encodeCanonicalBatch",
-                  "DoConversationStore.encodeCheckpoint",
-                  "DoConversationStore.decodeEnvelope",
-                  "DoConversationStore.decodeCheckpoint",
-                  "DoConversationStore.hitFailpoint",
+                  "DoThreadStore.makeOffset",
+                  "DoThreadStore.parseOffset",
+                  "DoThreadStore.encodeCanonicalRecord",
+                  "DoThreadStore.encodeCanonicalBatch",
+                  "DoThreadStore.encodeCheckpoint",
+                  "DoThreadStore.decodeEnvelope",
+                  "DoThreadStore.decodeCheckpoint",
+                  "DoThreadStore.hitFailpoint",
                 ]) {
                   expect(spanNames).not.toContain(helper);
                 }
@@ -135,17 +138,17 @@ describe("DoConversationStore", () => {
   });
 
   it("keeps configuration, failpoint, SQL, and Crypto authority in the named Layer input", () => {
-    const requirementsProof: ConversationStoreLayerRequirementsProof = true;
-    const errorProof: ConversationStoreLayerErrorProof = true;
+    const requirementsProof: ThreadStoreLayerRequirementsProof = true;
+    const errorProof: ThreadStoreLayerErrorProof = true;
 
     expect(requirementsProof).toBe(true);
     expect(errorProof).toBe(true);
   });
 
   it("validates convenience-layer configuration before initializing storage", () =>
-    withConversationStorage("wp1-store-invalid-config", (storage) =>
+    withThreadStorage("wp1-store-invalid-config", (storage) =>
       Effect.gen(function* () {
-        const opened = yield* ConversationStore.pipe(
+        const opened = yield* ThreadStore.pipe(
           Effect.provide(layer({ storage, observationPollInterval: -1 })),
           Effect.exit,
         );
@@ -170,16 +173,63 @@ describe("DoConversationStore", () => {
       }),
     ));
 
-  it("refuses an over-bound canonical append typed before any write", () =>
-    withConversationStorage("wp1-store-value-bound", (storage) =>
+  it("rejects the Conversation-era storage version without mutating its tables", () =>
+    withThreadStorage("wp1-store-conversation-era-version", (storage) =>
       Effect.gen(function* () {
-        const store = yield* ConversationStore;
+        const previousVersion = CurrentDoStorageVersion - 1;
+        storage.sql.exec(`
+          CREATE TABLE effect_agent_meta (
+            key TEXT PRIMARY KEY NOT NULL,
+            value TEXT NOT NULL
+          );
+          INSERT INTO effect_agent_meta (key, value)
+          VALUES ('storage_version', '${previousVersion}');
+          CREATE TABLE effect_agent_conversations (
+            conversation_id TEXT PRIMARY KEY NOT NULL
+          );
+          INSERT INTO effect_agent_conversations (conversation_id)
+          VALUES ('legacy-conversation');
+        `);
+
+        const opened = yield* ThreadStore.pipe(
+          Effect.provide(layer({ storage, observationPollInterval: 1 })),
+          Effect.exit,
+        );
+        expect(Exit.isFailure(opened)).toBe(true);
+        if (Exit.isFailure(opened)) {
+          const failure = Cause.findErrorOption(opened.cause);
+          expect(Option.isSome(failure)).toBe(true);
+          if (Option.isSome(failure)) {
+            expect(isDoStorageCompatibilityError(failure.value)).toBe(true);
+            if (isDoStorageCompatibilityError(failure.value)) {
+              expect(failure.value.actualVersion).toBe(previousVersion);
+              expect(failure.value.supportedVersion).toBe(CurrentDoStorageVersion);
+              expect(failure.value.message).toContain(
+                "Replace the development namespace explicitly",
+              );
+            }
+          }
+        }
+
+        const rows = storage.sql
+          .exec<{ conversation_id: string }>(
+            "SELECT conversation_id FROM effect_agent_conversations",
+          )
+          .toArray();
+        expect(rows).toEqual([{ conversation_id: "legacy-conversation" }]);
+      }),
+    ));
+
+  it("refuses an over-bound canonical append typed before any write", () =>
+    withThreadStorage("wp1-store-value-bound", (storage) =>
+      Effect.gen(function* () {
+        const store = yield* ThreadStore;
         const sql = yield* SqlClientService.SqlClient;
-        const conversationId = "conversation-value-bound";
+        const threadId = "thread-value-bound";
 
         yield* store.materialize(
-          ConversationMaterialization.make({
-            conversationId: conversation(conversationId),
+          ThreadMaterialization.make({
+            threadId: thread(threadId),
             producerEpoch: epoch(1),
           }),
         );
@@ -190,7 +240,7 @@ describe("DoConversationStore", () => {
         const exit = yield* store
           .append(
             FencedAppendRequest.make({
-              conversationId: conversation(conversationId),
+              threadId: thread(threadId),
               batch: batch("value-bound-batch", [
                 inputRecord("value-bound-record", "x".repeat(2_048)),
               ]),
@@ -203,8 +253,8 @@ describe("DoConversationStore", () => {
         expect(Exit.isFailure(exit)).toBe(true);
         if (Exit.isFailure(exit)) {
           const error = Cause.squash(exit.cause);
-          expect(error).toBeInstanceOf(ConversationStoreError);
-          if (isConversationStoreError(error)) {
+          expect(error).toBeInstanceOf(ThreadStoreError);
+          if (isThreadStoreError(error)) {
             expect(error.cause).toBeInstanceOf(DoValueBoundExceeded);
             if (isDoValueBoundExceeded(error.cause)) {
               expect(error.cause.maxBytes).toBe(1_024);
@@ -225,7 +275,7 @@ describe("DoConversationStore", () => {
         expect(recordRows).toEqual([]);
       }).pipe(
         Effect.provide(
-          conversationStoreLayer.pipe(
+          threadStoreLayer.pipe(
             Layer.provideMerge(
               Layer.mergeAll(
                 storageConfigLayer({ storage, maxStoredValueBytes: 1_024 }),

@@ -3,9 +3,10 @@ import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import type { SubmissionId } from "@effect-agent/core";
+import type { SqliteStorageFailpointLocation } from "@effect-agent/storage-sqlite";
 import {
-  ConversationRead,
-  ConversationStore,
+  ThreadRead,
+  ThreadStore,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
@@ -15,8 +16,7 @@ import {
   type DurableRuntimeFailpointLocation,
   type ResolvedBinding,
   type SubmissionSnapshot,
-} from "@effect-agent/session";
-import type { SqliteStorageFailpointLocation } from "@effect-agent/storage-sqlite";
+} from "@effect-agent/thread";
 import { expect } from "@effect/vitest";
 import {
   Cause,
@@ -42,7 +42,7 @@ import {
   KILL_EXIT_CODE,
   crashSubmitOptions,
   decodeChildMessageOption,
-  decodeConversationId,
+  decodeThreadId,
   supplierCounts,
   supplierValues,
   type ChildMessage,
@@ -107,7 +107,7 @@ export const touchFile = (path: string): Effect.Effect<void> =>
 export interface ChildOptions {
   readonly db: string;
   readonly scenario: CrashScenario;
-  readonly conversation: string;
+  readonly thread: string;
   readonly key: string;
   readonly killAt?: DurableRuntimeFailpointLocation | undefined;
   readonly killAtStorage?: SqliteStorageFailpointLocation | undefined;
@@ -133,7 +133,7 @@ const childEnv = (options: ChildOptions): Record<string, string> => {
   const env: Record<string, string> = {
     [CrashEnv.database]: options.db,
     [CrashEnv.scenario]: options.scenario,
-    [CrashEnv.conversation]: options.conversation,
+    [CrashEnv.thread]: options.thread,
     [CrashEnv.idempotencyKey]: options.key,
   };
   if (options.killAt !== undefined) env[CrashEnv.killAt] = options.killAt;
@@ -311,13 +311,13 @@ export const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
     : "unknown";
 };
 
-export const readLog = (conversation: string) =>
+export const readLog = (thread: string) =>
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
+    const store = yield* ThreadStore;
     return yield* Stream.runCollect(
       store.read(
-        ConversationRead.make({
-          conversationId: decodeConversationId(conversation),
+        ThreadRead.make({
+          threadId: decodeThreadId(thread),
           limit: 1_024,
         }),
       ),
@@ -333,14 +333,14 @@ export const payloadsOf = (
 ): ReadonlyArray<CanonicalRecordEnvelope> =>
   records.filter((envelope) => envelope.record.payload._tag === tag);
 
-export const lookupByKey = (conversation: string, key: string) =>
+export const lookupByKey = (thread: string, key: string) =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
     const snapshot = yield* ledger.lookup(
       SubmissionLookupByKey.make({
-        conversationId: decodeConversationId(conversation),
-        principal: crashSubmitOptions(conversation, key).principal,
-        idempotencyKey: crashSubmitOptions(conversation, key).idempotencyKey,
+        threadId: decodeThreadId(thread),
+        principal: crashSubmitOptions(thread, key).principal,
+        idempotencyKey: crashSubmitOptions(thread, key).idempotencyKey,
       }),
     );
     expect(Option.isSome(snapshot)).toBe(true);
@@ -423,7 +423,7 @@ const assertSupplierHonesty = (
  * invocation count matches the row's honesty claim.
  */
 export const assertConvergence = (
-  conversation: string,
+  thread: string,
   submissionIds: ReadonlyArray<SubmissionId>,
   supplier?: SupplierExpectation,
 ) =>
@@ -441,7 +441,7 @@ export const assertConvergence = (
     const ordered = [...snapshots].sort(
       (left, right) => Number(left.queueSequence) - Number(right.queueSequence),
     );
-    const records = yield* readLog(conversation);
+    const records = yield* readLog(thread);
     const recordIds = records.map((envelope) => envelope.record.recordId);
     expect(new Set(recordIds).size).toBe(recordIds.length);
     for (const snapshot of ordered) {
@@ -462,7 +462,7 @@ export const assertConvergence = (
     // P7 §7(c) exemption: an ABORTED settlement for never-run work (no canonical
     // `input:{sid}` record) settles immediately by design — without waiting for the head —
     // so it is excluded from the FIFO settlement comparison. DUR-004 bounds EXECUTION order,
-    // which never-run work has none of (mirrors `verifyConversationInvariants`).
+    // which never-run work has none of (mirrors `verifyThreadInvariants`).
     const abortedNeverRan = (snapshot: SubmissionSnapshot): boolean =>
       !recordIds.includes(submissionInputRecordId(snapshot.submissionId)) &&
       records.some(

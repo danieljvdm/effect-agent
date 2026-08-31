@@ -1,5 +1,5 @@
-import { ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import { ConversationHistory } from "@effect-agent/engine";
+import { ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import { ThreadHistory } from "@effect-agent/engine";
 import { Context, Deferred, Effect, Layer, Option, Ref, Schema } from "effect";
 
 import {
@@ -406,12 +406,12 @@ export const TravelGuidanceLayer = Layer.succeed(
 export const DeterministicIdGeneratorLayer = Layer.effect(
   IdGenerator,
   Effect.gen(function* () {
-    const conversation = yield* Ref.make(0);
+    const thread = yield* Ref.make(0);
     const run = yield* Ref.make(0);
     const turn = yield* Ref.make(0);
     return IdGenerator.of({
-      nextConversationId: Ref.updateAndGet(conversation, (n) => n + 1).pipe(
-        Effect.map((n) => Schema.decodeSync(ConversationId)(`conversation-${n}`)),
+      nextThreadId: Ref.updateAndGet(thread, (n) => n + 1).pipe(
+        Effect.map((n) => Schema.decodeSync(ThreadId)(`thread-${n}`)),
       ),
       nextRunId: Ref.updateAndGet(run, (n) => n + 1).pipe(
         Effect.map((n) => Schema.decodeSync(RunId)(`run-${n}`)),
@@ -423,7 +423,7 @@ export const DeterministicIdGeneratorLayer = Layer.effect(
   }),
 );
 export const TravelPlannerRuntimeLayer = Layer.mergeAll(
-  ConversationHistory.layerTransient,
+  ThreadHistory.layerTransient,
   TravelPlannerToolkitLayer,
   FlightCatalogLayer,
   LodgingCatalogLayer,

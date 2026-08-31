@@ -1,12 +1,12 @@
 import { ToolCallId } from "@effect-agent/core";
 import {
-  childConversationIdFor,
+  childThreadIdFor,
   runIdForSubmission,
   toolCallSettledRecordId,
   type CanonicalRecordEnvelope,
   type Receipt,
   type SubagentStarted,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, Schema } from "effect";
@@ -38,24 +38,24 @@ const decodeToolCallId = Schema.decodeSync(ToolCallId);
 export const delegateCallOf = (ref: string): ToolCallId => decodeToolCallId(delegateCallIdFor(ref));
 
 /**
- * The derived child Conversation of one coordinator Submission — a DIFFERENT Durable Object
+ * The derived child Thread of one coordinator Submission — a DIFFERENT Durable Object
  * of the same namespace by the identity rule (`idFromName`), which is the whole point of the
  * WP4 matrix.
  */
-export const childConversationOf = (receipt: Receipt, ref: string): string =>
-  childConversationIdFor(receipt.submissionId, delegateCallOf(ref));
+export const childThreadOf = (receipt: Receipt, ref: string): string =>
+  childThreadIdFor(receipt.submissionId, delegateCallOf(ref));
 
 const sleep = (millis: number) => new Promise((resolve) => setTimeout(resolve, millis));
 
 /**
  * Alarm-only convergence across BOTH Objects of one delegation: each round fires whatever
- * persisted alarm each listed Conversation holds (at-least-once; an armed eviction or a typed
+ * persisted alarm each listed Thread holds (at-least-once; an armed eviction or a typed
  * pass failure rejects the delivery while the pre-armed slot survives for the next round).
  * NO client entry point is ever called — the exit gate's "recovers without an incoming
  * request", now with the accepted work spread over two Durable Objects.
  */
 export const drainDelegationUntil = async (
-  conversations: ReadonlyArray<string>,
+  threads: ReadonlyArray<string>,
   predicate: () => Promise<boolean>,
   options?: { readonly rounds?: number },
 ): Promise<void> => {
@@ -63,9 +63,9 @@ export const drainDelegationUntil = async (
   let lastDeliveryError: unknown;
   for (let round = 0; round < rounds; round++) {
     if (await predicate()) return;
-    for (const conversation of conversations) {
+    for (const thread of threads) {
       try {
-        await runDurableObjectAlarm(stubFor(conversation, SUBAGENTS));
+        await runDurableObjectAlarm(stubFor(thread, SUBAGENTS));
       } catch (error) {
         // The pass aborted its Object (armed eviction) or failed typed (workerd would retry);
         // either way the pre-armed alarm survives in storage for the next round. The last
@@ -76,13 +76,13 @@ export const drainDelegationUntil = async (
     await sleep(10);
   }
   const lanes: Record<string, unknown> = {};
-  for (const conversation of conversations) {
-    const rows = await laneRows(conversation, SUBAGENTS);
-    const tags = await readCanonical(conversation, SUBAGENTS).then(
+  for (const thread of threads) {
+    const rows = await laneRows(thread, SUBAGENTS);
+    const tags = await readCanonical(thread, SUBAGENTS).then(
       (records) => records.map((envelope) => envelope.record.payload._tag),
       (error) => [`<read failed: ${String(error)}>`],
     );
-    lanes[conversation] = { rows, tags };
+    lanes[thread] = { rows, tags };
   }
   throw new Error(
     `Delegation drain did not converge; lanes: ${JSON.stringify(lanes)}; ` +
@@ -92,10 +92,10 @@ export const drainDelegationUntil = async (
 
 /** Predicate: every listed lane exists and every Submission on it is settled. */
 export const allLanesSettled =
-  (...conversations: ReadonlyArray<string>) =>
+  (...threads: ReadonlyArray<string>) =>
   async (): Promise<boolean> => {
-    for (const conversation of conversations) {
-      const rows = await laneRows(conversation, SUBAGENTS);
+    for (const thread of threads) {
+      const rows = await laneRows(thread, SUBAGENTS);
       if (rows.length === 0 || rows.some((row) => row.state !== "settled")) return false;
     }
     return true;
@@ -132,11 +132,11 @@ const withAbortedInstanceRetry = async <A>(probe: () => Promise<A>): Promise<A> 
 };
 
 const sqlProbe = <Row extends object>(
-  conversation: string,
+  thread: string,
   query: (sql: SqlClientService.SqlClient) => Effect.Effect<ReadonlyArray<Row>, unknown>,
 ): Promise<ReadonlyArray<Row>> =>
   withAbortedInstanceRetry(() =>
-    runInDurableObject(stubFor(conversation, SUBAGENTS), (_instance, state) =>
+    runInDurableObject(stubFor(thread, SUBAGENTS), (_instance, state) =>
       Effect.runPromise(
         Effect.gen(function* () {
           const sql = yield* SqlClientService.SqlClient;
@@ -176,7 +176,7 @@ export const settlementMarkers = (parent: string): Promise<ReadonlyArray<Settlem
     `,
   );
 
-/** Every canonical envelope of `conversation` whose payload carries this `_tag`. */
+/** Every canonical envelope of `thread` whose payload carries this `_tag`. */
 export const payloadsOf = (
   records: ReadonlyArray<CanonicalRecordEnvelope>,
   tag: string,
@@ -205,7 +205,7 @@ export const parentOutcomeOf = async (parent: string): Promise<string | undefine
 export interface DelegationExpectation {
   /** The coordinator Submission's Receipt. */
   readonly receipt: Receipt;
-  /** The Conversation-unique ref (also the parent Conversation name). */
+  /** The Thread-unique ref (also the parent Thread name). */
   readonly ref: string;
   /** Expected parent settlement outcome. */
   readonly outcome: "completed" | "aborted";
@@ -218,7 +218,7 @@ export interface DelegationExpectation {
 /**
  * The convergence claims common to every WP4 row (the Node crash suite's
  * `assertOneEstablishedChild` + `assertDelegationSettled`, re-proven across two Objects):
- * exactly one SubagentRequested/Started/Joined record; one child Conversation with one
+ * exactly one SubagentRequested/Started/Joined record; one child Thread with one
  * lineage record in ITS OWN Object; the recorded start link naming the one admitted child
  * (Receipt included); the delegation Tool Call settled exactly once with the expected
  * projection; the parent-owned reservation released; the durable child-settlement marker
@@ -229,7 +229,7 @@ export const assertDelegationConverged = async (
   expectation: DelegationExpectation,
 ): Promise<SubagentStarted> => {
   const parent = expectation.ref;
-  const child = childConversationOf(expectation.receipt, expectation.ref);
+  const child = childThreadOf(expectation.receipt, expectation.ref);
 
   const parentRecords = await readCanonical(parent, SUBAGENTS);
   expect(payloadsOf(parentRecords, "SubagentRequested")).toHaveLength(1);
@@ -237,11 +237,11 @@ export const assertDelegationConverged = async (
   expect(payloadsOf(parentRecords, "SubagentJoined")).toHaveLength(1);
 
   const childRecords = await readCanonical(child, SUBAGENTS);
-  expect(payloadsOf(childRecords, "ConversationCreated")).toHaveLength(1);
+  expect(payloadsOf(childRecords, "ThreadCreated")).toHaveLength(1);
   expect(payloadsOf(childRecords, "SubagentLineageRecorded")).toHaveLength(1);
 
   const started = await startedPayloadOf(parent);
-  expect(started.childConversationId).toBe(child);
+  expect(started.childThreadId).toBe(child);
 
   // The child lane in ITS OWN Object: exactly the one admitted Submission, settled, and its
   // canonical settlement carrying the Receipt the start link recorded (one child Receipt).

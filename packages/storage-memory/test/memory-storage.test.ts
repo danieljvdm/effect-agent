@@ -1,35 +1,35 @@
-import { ConversationId, RunId, SubmissionId } from "@effect-agent/core";
+import { ThreadId, RunId, SubmissionId } from "@effect-agent/core";
 import {
   type AppendResult,
   CanonicalBatch,
   CanonicalRecord,
   CanonicalSequence,
   CheckpointRejected,
-  ConversationCheckpoint,
-  ConversationExportRequest,
-  ConversationMaterialization,
-  ConversationObservation,
-  ConversationProjection,
-  ConversationRead,
-  ConversationStore,
-  ConversationStoreError,
+  ThreadCheckpoint,
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadObservation,
+  ThreadProjection,
+  ThreadRead,
+  ThreadStore,
+  ThreadStoreError,
   EMPTY_TAIL_DIGEST,
   FencedAppendRequest,
   LoadCheckpointRequest,
   MAX_PERSISTED_JSON_BYTES,
   ObservationOffset,
   ProducerEpoch,
-  replayConversation,
-  replayConversationFromCheckpoint,
+  replayThread,
+  replayThreadFromCheckpoint,
   RunCompleted,
   SaveCheckpointRequest,
   UserInputRecorded,
   type CanonicalRecordPayload,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import {
-  conversationStoreConformanceCases,
-  conversationCheckpointConformanceCases,
-} from "@effect-agent/session/testing";
+  threadStoreConformanceCases,
+  threadCheckpointConformanceCases,
+} from "@effect-agent/thread/testing";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, describe, it } from "@effect/vitest";
 import {
@@ -51,14 +51,14 @@ import { MemoryStorageLive } from "../src/index.ts";
 
 const testLayer = MemoryStorageLive.pipe(Layer.provide(NodeCrypto.layer));
 
-const conversationId = Schema.decodeSync(ConversationId)("conversation-memory-1");
+const threadId = Schema.decodeSync(ThreadId)("thread-memory-1");
 const runId = Schema.decodeSync(RunId)("run-memory-1");
 const submissionId = Schema.decodeSync(SubmissionId)("submission-memory-1");
 const canonicalSequence = Schema.decodeSync(CanonicalSequence);
 const producerEpoch = Schema.decodeSync(ProducerEpoch);
 const ZERO_CANONICAL_SEQUENCE = canonicalSequence(0);
 const FIRST_PRODUCER_EPOCH = producerEpoch(1);
-const isConversationStoreError = Schema.is(ConversationStoreError);
+const isThreadStoreError = Schema.is(ThreadStoreError);
 
 const id = <A>(schema: Schema.Codec<A, string>, value: string): A =>
   Schema.decodeSync(schema)(value);
@@ -68,14 +68,14 @@ const at = (millis: number) => DateTime.toUtc(DateTime.makeUnsafe(millis));
 const canonicalRecord = (recordId: string, payload: CanonicalRecordPayload): CanonicalRecord =>
   CanonicalRecord.make({
     recordId: id(
-      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/RecordId")),
+      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/RecordId")),
       recordId,
     ),
-    family: "conversation",
+    family: "thread",
     schemaVersion: 1,
     createdAt: at(1),
     deploymentId: id(
-      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/DeploymentId")),
+      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/DeploymentId")),
       "deployment-memory",
     ),
     payload,
@@ -86,9 +86,9 @@ const batch = (
   records: readonly [CanonicalRecord, ...Array<CanonicalRecord>],
 ): CanonicalBatch =>
   CanonicalBatch.make({
-    batchId: id(Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/BatchId")), batchId),
+    batchId: id(Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/BatchId")), batchId),
     producerId: id(
-      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/ProducerId")),
+      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/ProducerId")),
       "producer-memory",
     ),
     records,
@@ -106,7 +106,7 @@ const inputRecord = (recordId: string, input: string): CanonicalRecord =>
   );
 
 const append = (
-  store: ConversationStore["Service"],
+  store: ThreadStore["Service"],
   canonicalBatch: CanonicalBatch,
   tail: Pick<AppendResult, "lastSequence" | "tailDigest"> = {
     lastSequence: ZERO_CANONICAL_SEQUENCE,
@@ -116,7 +116,7 @@ const append = (
 ) =>
   store.append(
     FencedAppendRequest.make({
-      conversationId,
+      threadId,
       batch: canonicalBatch,
       expectedTailSequence: tail.lastSequence,
       expectedTailDigest: tail.tailDigest,
@@ -124,12 +124,12 @@ const append = (
     }),
   );
 
-describe("MemoryConversationStore", () => {
-  describe("shared ConversationStore conformance", () => {
-    for (const conformanceCase of conversationStoreConformanceCases) {
+describe("MemoryThreadStore", () => {
+  describe("shared ThreadStore conformance", () => {
+    for (const conformanceCase of threadStoreConformanceCases) {
       it.effect(conformanceCase.name, () =>
         conformanceCase.run.pipe(
-          Effect.updateService(ConversationStore, (store) => ({
+          Effect.updateService(ThreadStore, (store) => ({
             materialize: store.materialize,
             append: store.append,
             read: store.read,
@@ -141,7 +141,7 @@ describe("MemoryConversationStore", () => {
         ),
       );
     }
-    for (const conformanceCase of conversationCheckpointConformanceCases) {
+    for (const conformanceCase of threadCheckpointConformanceCases) {
       it.effect(conformanceCase.name, () => conformanceCase.run.pipe(Effect.provide(testLayer)));
     }
   });
@@ -149,15 +149,15 @@ describe("MemoryConversationStore", () => {
   it.layer(testLayer)((it) => {
     it.effect("rejects unsupported record versions before mutating canonical state", () =>
       Effect.gen(function* () {
-        const store = yield* ConversationStore;
+        const store = yield* ThreadStore;
         yield* store.materialize(
-          ConversationMaterialization.make({
-            conversationId,
+          ThreadMaterialization.make({
+            threadId,
             producerEpoch: FIRST_PRODUCER_EPOCH,
           }),
         );
         const invalid = {
-          conversationId,
+          threadId,
           expectedTailSequence: 0,
           expectedTailDigest: EMPTY_TAIL_DIGEST,
           producerEpoch: 1,
@@ -167,7 +167,7 @@ describe("MemoryConversationStore", () => {
             records: [
               {
                 recordId: "unsupported-record",
-                family: "conversation",
+                family: "thread",
                 schemaVersion: 2,
                 createdAt: "1970-01-01T00:00:00.001Z",
                 deploymentId: "deployment-memory",
@@ -191,16 +191,16 @@ describe("MemoryConversationStore", () => {
           return yield* Effect.die(new Error("Expected append to return an Effect"));
         }
         const failure = yield* unvalidatedResult.pipe(Effect.flip);
-        if (!isConversationStoreError(failure)) {
-          return yield* Effect.die(new Error("Expected a ConversationStoreError"));
+        if (!isThreadStoreError(failure)) {
+          return yield* Effect.die(new Error("Expected a ThreadStoreError"));
         }
         expect(failure).toMatchObject({
-          _tag: "ConversationStoreError",
+          _tag: "ThreadStoreError",
           operation: "append",
         });
         expect(failure.cause).toBeDefined();
 
-        const exported = yield* store.export(ConversationExportRequest.make({ conversationId }));
+        const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
         expect(exported.records).toEqual([]);
       }),
     );
@@ -209,15 +209,15 @@ describe("MemoryConversationStore", () => {
   it.layer(testLayer)((it) => {
     it.effect("rejects oversized persisted JSON before mutating canonical state", () =>
       Effect.gen(function* () {
-        const store = yield* ConversationStore;
+        const store = yield* ThreadStore;
         yield* store.materialize(
-          ConversationMaterialization.make({
-            conversationId,
+          ThreadMaterialization.make({
+            threadId,
             producerEpoch: FIRST_PRODUCER_EPOCH,
           }),
         );
         const invalid = {
-          conversationId,
+          threadId,
           expectedTailSequence: 0,
           expectedTailDigest: EMPTY_TAIL_DIGEST,
           producerEpoch: 1,
@@ -227,7 +227,7 @@ describe("MemoryConversationStore", () => {
             records: [
               {
                 recordId: "oversized-record",
-                family: "conversation",
+                family: "thread",
                 schemaVersion: 1,
                 createdAt: "1970-01-01T00:00:00.001Z",
                 deploymentId: "deployment-memory",
@@ -251,16 +251,16 @@ describe("MemoryConversationStore", () => {
           return yield* Effect.die(new Error("Expected append to return an Effect"));
         }
         const failure = yield* unvalidatedResult.pipe(Effect.flip);
-        if (!isConversationStoreError(failure)) {
-          return yield* Effect.die(new Error("Expected a ConversationStoreError"));
+        if (!isThreadStoreError(failure)) {
+          return yield* Effect.die(new Error("Expected a ThreadStoreError"));
         }
         expect(failure).toMatchObject({
-          _tag: "ConversationStoreError",
+          _tag: "ThreadStoreError",
           operation: "append",
         });
         expect(failure.cause).toBeDefined();
 
-        const exported = yield* store.export(ConversationExportRequest.make({ conversationId }));
+        const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
         expect(exported.records).toEqual([]);
         expect(exported.tailDigest).toBe(EMPTY_TAIL_DIGEST);
       }),
@@ -270,17 +270,17 @@ describe("MemoryConversationStore", () => {
   it.layer(testLayer)((it) => {
     it.effect("classifies an unsupported checkpoint version before mutation", () =>
       Effect.gen(function* () {
-        const store = yield* ConversationStore;
+        const store = yield* ThreadStore;
         yield* store.materialize(
-          ConversationMaterialization.make({
-            conversationId,
+          ThreadMaterialization.make({
+            threadId,
             producerEpoch: FIRST_PRODUCER_EPOCH,
           }),
         );
         const invalid = {
           checkpoint: {
             schemaVersion: 2,
-            conversationId,
+            threadId,
             throughSequence: 0,
             tailDigest: EMPTY_TAIL_DIGEST,
             engineVersion: "phase-3",
@@ -303,13 +303,11 @@ describe("MemoryConversationStore", () => {
         const checkpointFailure = yield* Schema.decodeUnknownEffect(CheckpointRejected)(failure);
         expect(checkpointFailure).toMatchObject({
           _tag: "CheckpointRejected",
-          conversationId,
+          threadId,
           reason: "unsupported-version",
         });
         expect(
-          Option.isNone(
-            yield* store.checkpoints!.load(LoadCheckpointRequest.make({ conversationId })),
-          ),
+          Option.isNone(yield* store.checkpoints!.load(LoadCheckpointRequest.make({ threadId }))),
         ).toBe(true);
       }),
     );
@@ -318,10 +316,10 @@ describe("MemoryConversationStore", () => {
   it.layer(testLayer)((it) => {
     it.effect("resumes observation from an opaque cursor and emits later appends", () =>
       Effect.gen(function* () {
-        const store = yield* ConversationStore;
+        const store = yield* ThreadStore;
         yield* store.materialize(
-          ConversationMaterialization.make({
-            conversationId,
+          ThreadMaterialization.make({
+            threadId,
             producerEpoch: FIRST_PRODUCER_EPOCH,
           }),
         );
@@ -335,7 +333,7 @@ describe("MemoryConversationStore", () => {
           first,
         );
         const existing = yield* store
-          .read(ConversationRead.make({ conversationId, limit: 1_024 }))
+          .read(ThreadRead.make({ threadId, limit: 1_024 }))
           .pipe(Stream.runCollect);
         const firstExisting = existing.at(0);
         const secondExisting = existing.at(1);
@@ -345,22 +343,22 @@ describe("MemoryConversationStore", () => {
         const malformedOffset = id(ObservationOffset, "foreign-adapter:1");
         const malformed = yield* store
           .observe(
-            ConversationObservation.make({
-              conversationId,
+            ThreadObservation.make({
+              threadId,
               afterOffset: malformedOffset,
             }),
           )
           .pipe(Stream.take(1), Stream.runCollect, Effect.flip);
         expect(malformed).toMatchObject({
-          _tag: "ConversationStoreError",
+          _tag: "ThreadStoreError",
           operation: "observe",
           message: "Malformed observation offset",
         });
 
         const resumed = yield* store
           .observe(
-            ConversationObservation.make({
-              conversationId,
+            ThreadObservation.make({
+              threadId,
               afterOffset: firstExisting.offset,
             }),
           )
@@ -371,8 +369,8 @@ describe("MemoryConversationStore", () => {
 
         const liveFiber = yield* store
           .observe(
-            ConversationObservation.make({
-              conversationId,
+            ThreadObservation.make({
+              threadId,
               afterOffset: secondExisting.offset,
             }),
           )
@@ -386,7 +384,7 @@ describe("MemoryConversationStore", () => {
         const live = yield* Fiber.join(liveFiber);
         expect(live[0]?.record.recordId).toBe(
           id(
-            Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/RecordId")),
+            Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/RecordId")),
             "observe-record-3",
           ),
         );
@@ -397,23 +395,21 @@ describe("MemoryConversationStore", () => {
   it.layer(testLayer)((it) => {
     it.effect("coalesces wakeups without dropping records for a slow observer", () =>
       Effect.gen(function* () {
-        const store = yield* ConversationStore;
+        const store = yield* ThreadStore;
         yield* store.materialize(
-          ConversationMaterialization.make({
-            conversationId,
+          ThreadMaterialization.make({
+            threadId,
             producerEpoch: FIRST_PRODUCER_EPOCH,
           }),
         );
         const releaseObserver = yield* Deferred.make<void>();
         const recordCount = 32;
-        const observerFiber = yield* store
-          .observe(ConversationObservation.make({ conversationId }))
-          .pipe(
-            Stream.tap(() => Deferred.await(releaseObserver)),
-            Stream.take(recordCount),
-            Stream.runCollect,
-            Effect.forkChild,
-          );
+        const observerFiber = yield* store.observe(ThreadObservation.make({ threadId })).pipe(
+          Stream.tap(() => Deferred.await(releaseObserver)),
+          Stream.take(recordCount),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
         yield* Effect.yieldNow;
 
         let tail: Pick<AppendResult, "lastSequence" | "tailDigest"> = {
@@ -441,15 +437,15 @@ describe("MemoryConversationStore", () => {
     Effect.gen(function* () {
       const layerScope = yield* Scope.make();
       const context = yield* Layer.buildWithScope(testLayer, layerScope);
-      const store = Context.get(context, ConversationStore);
+      const store = Context.get(context, ThreadStore);
       yield* store.materialize(
-        ConversationMaterialization.make({
-          conversationId,
+        ThreadMaterialization.make({
+          threadId,
           producerEpoch: FIRST_PRODUCER_EPOCH,
         }),
       );
       const observerFiber = yield* store
-        .observe(ConversationObservation.make({ conversationId }))
+        .observe(ThreadObservation.make({ threadId }))
         .pipe(Stream.runDrain, Effect.forkChild);
       yield* Effect.yieldNow;
 
@@ -465,10 +461,10 @@ describe("MemoryConversationStore", () => {
   it.layer(testLayer)((it) => {
     it.effect("makes valid checkpoint replay equivalent to full export replay", () =>
       Effect.gen(function* () {
-        const store = yield* ConversationStore;
+        const store = yield* ThreadStore;
         yield* store.materialize(
-          ConversationMaterialization.make({
-            conversationId,
+          ThreadMaterialization.make({
+            threadId,
             producerEpoch: FIRST_PRODUCER_EPOCH,
           }),
         );
@@ -477,16 +473,16 @@ describe("MemoryConversationStore", () => {
           batch("checkpoint-1", [inputRecord("checkpoint-record-1", "Kyoto")]),
         );
         const firstRecords = yield* store
-          .read(ConversationRead.make({ conversationId, limit: 1_024 }))
+          .read(ThreadRead.make({ threadId, limit: 1_024 }))
           .pipe(Stream.runCollect);
-        const atCheckpoint = replayConversation(conversationId, firstRecords, first.tailDigest);
-        const checkpointState = yield* Schema.encodeEffect(ConversationProjection)(atCheckpoint);
+        const atCheckpoint = replayThread(threadId, firstRecords, first.tailDigest);
+        const checkpointState = yield* Schema.encodeEffect(ThreadProjection)(atCheckpoint);
         const rejectedCheckpoint = yield* store
           .checkpoints!.save(
             SaveCheckpointRequest.make({
-              checkpoint: ConversationCheckpoint.make({
+              checkpoint: ThreadCheckpoint.make({
                 schemaVersion: 1,
-                conversationId,
+                threadId,
                 throughSequence: first.lastSequence,
                 tailDigest: EMPTY_TAIL_DIGEST,
                 engineVersion: "phase-3",
@@ -501,20 +497,18 @@ describe("MemoryConversationStore", () => {
           .pipe(Effect.flip);
         expect(rejectedCheckpoint).toMatchObject({
           _tag: "CheckpointRejected",
-          conversationId,
+          threadId,
           reason: "digest-mismatch",
         });
         expect(
-          Option.isNone(
-            yield* store.checkpoints!.load(LoadCheckpointRequest.make({ conversationId })),
-          ),
+          Option.isNone(yield* store.checkpoints!.load(LoadCheckpointRequest.make({ threadId }))),
         ).toBe(true);
 
         yield* store.checkpoints!.save(
           SaveCheckpointRequest.make({
-            checkpoint: ConversationCheckpoint.make({
+            checkpoint: ThreadCheckpoint.make({
               schemaVersion: 1,
-              conversationId,
+              threadId,
               throughSequence: first.lastSequence,
               tailDigest: first.tailDigest,
               engineVersion: "phase-3",
@@ -532,28 +526,22 @@ describe("MemoryConversationStore", () => {
           RunCompleted.make({ runId, output: { itinerary: "Kyoto" } }),
         );
         const second = yield* append(store, batch("checkpoint-2", [completed]), first);
-        const exported = yield* store.export(ConversationExportRequest.make({ conversationId }));
-        const loaded = yield* store.checkpoints!.load(
-          LoadCheckpointRequest.make({ conversationId }),
-        );
+        const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
+        const loaded = yield* store.checkpoints!.load(LoadCheckpointRequest.make({ threadId }));
         expect(Option.isSome(loaded)).toBe(true);
         if (Option.isNone(loaded)) return;
-        const decodedCheckpoint = yield* Schema.decodeUnknownEffect(ConversationProjection)(
+        const decodedCheckpoint = yield* Schema.decodeUnknownEffect(ThreadProjection)(
           loaded.value.state,
         );
         const tail = exported.records.filter(
           (record) => record.sequence > loaded.value.throughSequence,
         );
-        const checkpointReplay = replayConversationFromCheckpoint(
+        const checkpointReplay = replayThreadFromCheckpoint(
           decodedCheckpoint,
           tail,
           second.tailDigest,
         );
-        const fullReplay = replayConversation(
-          conversationId,
-          exported.records,
-          exported.tailDigest,
-        );
+        const fullReplay = replayThread(threadId, exported.records, exported.tailDigest);
 
         expect(checkpointReplay).toEqual(fullReplay);
         expect(exported.records).toHaveLength(2);

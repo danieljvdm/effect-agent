@@ -11,7 +11,7 @@ const opened = Schema.decodeSync(DemoRunOpened)({
   handle,
   emittedAt: "2026-07-30T12:00:00.000Z",
   runId: "demo-run-rpc",
-  conversationId: "demo-conversation-rpc",
+  threadId: "demo-thread-rpc",
   scenario: "guided",
   executionClass: "ephemeral",
   schedulerConcurrency: 3,

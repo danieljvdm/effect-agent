@@ -1,5 +1,5 @@
 import { IdGenerator } from "@effect-agent/core";
-import { ConversationHistoryError } from "@effect-agent/session/history";
+import { ThreadHistoryError } from "@effect-agent/thread/history";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Layer, Schema } from "effect";
 import { Command } from "effect/unstable/cli";
@@ -10,7 +10,7 @@ const program = Command.run(historyCommand, { version: "0.0.0" }).pipe(
   Effect.provide(Layer.merge(NodeServices.layer, IdGenerator.layer)),
   Effect.tapError((error) =>
     Console.error(
-      Schema.is(ConversationHistoryError)(error) && error.reason === "not-found"
+      Schema.is(ThreadHistoryError)(error) && error.reason === "not-found"
         ? "No saved history. Run seed with the same --database file first."
         : String(error),
     ),

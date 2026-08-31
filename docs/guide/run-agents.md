@@ -10,9 +10,9 @@ before instructions execute and require native model services. Use `runUnknown`,
 or `startUnknown` for external values typed as `unknown`. See
 [Agent definitions](./agents#typed-and-external-inputs).
 
-Every entry point also requires `ConversationHistory`. Use
-`ConversationHistory.layerTransient` when you do not need retained history. Use
-`PersistentHistory.layer` with a store to [retain completed runs](./conversations#retain-completed-runs).
+Every entry point also requires `ThreadHistory`. Use
+`ThreadHistory.layerTransient` when you do not need retained history. Use
+`PersistentHistory.layer` with a store to [retain completed runs](./threads#retain-completed-runs).
 History commits before a successful result or `RunCompleted` event becomes visible.
 
 ## Await one result
@@ -27,7 +27,7 @@ const program = Effect.gen(function* () {
 `run` closes run-owned resources before returning decoded output. A self-contained run needs no
 caller `Effect.scoped`.
 
-The result contains `output`, `conversationId`, `runId`, `turns`, and `finishReason`.
+The result contains `output`, `threadId`, `runId`, `turns`, and `finishReason`.
 Budget-limited results also include `exhausted`, naming `"turns"`, `"tool-calls"`, or `"tokens"`.
 
 `runDisposition` appears only after ordinary completion when the definition declares one and its
@@ -76,7 +76,7 @@ The handle remains process-local and never creates a daemon fiber.
 
 ## Run durably on Cloudflare
 
-Use a [Cloudflare conversation object](../platforms/cloudflare#create-the-conversation-object)
+Use a [Cloudflare thread object](../platforms/cloudflare#create-the-thread-object)
 to accept work that survives eviction. For a process with SQLite, use the
 [Node host](../platforms/node).
 
@@ -91,7 +91,7 @@ Here are the defaults written out; replace either layer with your application's 
 
 ```ts twoslash
 import { RunContextPreparationPassthrough, RunToolAuthorization } from "@effect-agent/engine";
-import { DurableAgentRuntime } from "@effect-agent/session";
+import { DurableAgentRuntime } from "@effect-agent/thread";
 import { Layer } from "effect";
 
 export const RuntimeLive = DurableAgentRuntime.layerWithServices.pipe(
@@ -100,7 +100,7 @@ export const RuntimeLive = DurableAgentRuntime.layerWithServices.pipe(
 );
 ```
 
-This layer still requires `SubmissionLedger`, `ConversationStore`, `WakeScheduler`,
+This layer still requires `SubmissionLedger`, `ThreadStore`, `WakeScheduler`,
 `DurableRuntimeFailpoint`, `DurableRuntimeConfig`, `ToolReconciler`, and `Crypto.Crypto`.
 Provide those before acquiring the runtime.
 
@@ -135,7 +135,7 @@ prepare context
 
 ```ts
 const options: RunOptions<AppError, AppRequirements> = {
-  conversationId,
+  threadId,
   history,
   input: toRunInputHook(commands),
   approval: toRunApprovalHook(approvalPolicy),
@@ -174,7 +174,7 @@ const program = AgentRuntime.run(agent, input).pipe(Effect.provide(failureReport
 
 The engine does not forward observations to `ErrorReporter` by itself. Choose what to record and
 redact. The observer runs inline at most once per in-memory Attempt. Replacement Attempts may
-repeat an observation. Nothing here is serialized into conversation history.
+repeat an observation. Nothing here is serialized into thread history.
 
 Observer defects cannot change the tool result, though a slow observer holds a tool permit. Avoid
 calling the broker, running another agent, or interrupting the observer itself. Durable hosts

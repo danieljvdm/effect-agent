@@ -6,13 +6,13 @@ import {
 } from "@effect-agent/testing/fixtures/travel-planner";
 import { Effect, Layer } from "effect";
 
-import { ConversationObject } from "../src/index.ts";
+import { ThreadObject } from "../src/index.ts";
 import { layerFromBindings } from "../src/layers.ts";
 import { runtimeEvictionFailpoint, storageEvictionFailpoint } from "./fixtures.ts";
 
 /**
  * The WP5 Travel Planner test Worker entry (plan §6): the REAL
- * `ConversationObject.make` output serving the SAME cumulative Travel Planner fixtures as
+ * `ThreadObject.make` output serving the SAME cumulative Travel Planner fixtures as
  * the DN suites — the P4 planner, the P5 booking agent over the shared supplier desk with the
  * REAL supplier reconciliation policy, and the S2 coordinator/researcher delegation pair —
  * under the shared armed-failpoint eviction levers. It runs as its own vitest project (own
@@ -21,8 +21,8 @@ import { runtimeEvictionFailpoint, storageEvictionFailpoint } from "./fixtures.t
  * phase-6 fixture module (supplier desk, guide counter, gates) — never in Object fields.
  */
 
-const baseOptions: ConversationObject.Options = {
-  namespaceBinding: "CONVERSATIONS",
+const baseOptions: ThreadObject.Options = {
+  namespaceBinding: "THREADS",
   deploymentId: phase6TravelPlannerDeploymentId,
   producerPrefix: phase6TravelPlannerProducerPrefix,
   // Compressed cadences (worker.ts conventions): a dead incarnation's lease must lapse
@@ -44,14 +44,14 @@ const baseOptions: ConversationObject.Options = {
   runtimeFailpoint: runtimeEvictionFailpoint,
 };
 
-/** The Travel Planner DC suite's Conversation Object. */
-export class TravelPlannerConversationObject extends ConversationObject.make(
+/** The Travel Planner DC suite's Thread Object. */
+export class TravelPlannerThreadObject extends ThreadObject.make(
   Layer.unwrap(Effect.map(makePhase6TravelPlannerBindings, layerFromBindings)),
   baseOptions,
 ) {}
 
 /** Tight quotas for the Travel Planner admission-limits rows (refusal before any row). */
-export class TravelPlannerLimitedObject extends ConversationObject.make(
+export class TravelPlannerLimitedObject extends ThreadObject.make(
   Layer.unwrap(Effect.map(makePhase6TravelPlannerBindings, layerFromBindings)),
   {
     ...baseOptions,

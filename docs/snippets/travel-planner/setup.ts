@@ -1,5 +1,5 @@
 import { IdGenerator } from "@effect-agent/core";
-import { ConversationHistory } from "@effect-agent/engine";
+import { ThreadHistory } from "@effect-agent/engine";
 import { AnthropicClient } from "@effect/ai-anthropic";
 import { Config, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -13,6 +13,6 @@ const AnthropicLive = AnthropicClient.layerConfig({
 export const AppLive = Layer.mergeAll(
   TravelToolsLive,
   IdGenerator.layer,
-  ConversationHistory.layerTransient,
+  ThreadHistory.layerTransient,
   AnthropicLive,
 );

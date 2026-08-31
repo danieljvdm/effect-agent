@@ -7,7 +7,7 @@ import {
 import {
   Agent,
   AgentPolicy,
-  ConversationId,
+  ThreadId,
   IdGenerator,
   RunId,
   ToolCallId,
@@ -18,8 +18,8 @@ import {
 import { DurableStep, DurableStepError } from "@effect-agent/engine";
 import {
   ApprovalDecisionCommand,
-  ConversationExportRequest,
-  ConversationStore,
+  ThreadExportRequest,
+  ThreadStore,
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -39,15 +39,15 @@ import {
   UnknownResolutionCommand,
   WakeScheduler,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
-  childConversationIdFor,
-  verifyConversationInvariants,
+  childThreadIdFor,
+  verifyThreadInvariants,
   type BatchId,
   type DurableSubmitFailure,
   type DurableSubmitOptions,
   type Receipt,
   type ResolvedBinding,
   type SubmissionSnapshot,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import {
   DurableRuntimeFailpointTestControl,
   type CertificationCaseResult,
@@ -57,7 +57,7 @@ import {
   CertifiedAdapterIdentity,
   certifyPorts,
   type CertificationScenario,
-} from "@effect-agent/session/testing";
+} from "@effect-agent/thread/testing";
 import type { Crypto } from "effect";
 import {
   Cause,
@@ -87,7 +87,7 @@ import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unsta
  *   (plain / uncertain-tool / durable-steps / approval / join / delegation). After the injected
  *   fault the runner asserts the state stays CLASSIFIABLE (recovery + the public unblocking
  *   operations `resolveUnknown`/`resolveApproval` are the only levers used) and that the
- *   re-drive CONVERGES to `verifyConversationInvariants` with `requireAllSettled` — including a
+ *   re-drive CONVERGES to `verifyThreadInvariants` with `requireAllSettled` — including a
  *   fully discharged digest-chain check, because the runner captures per-batch producer
  *   identity at append time.
  * - **Tier 3 — real loss lever**: recorded honestly. A durable adapter either supplies a
@@ -126,7 +126,7 @@ export interface CertifyDurableAdaptersOptions<LedgerE = never, StoreE = never> 
    * does); the certification's own environment supplies nothing else.
    */
   readonly submissionLedger: Layer.Layer<SubmissionLedger, LedgerE, Crypto.Crypto>;
-  readonly conversationStore: Layer.Layer<ConversationStore, StoreE, Crypto.Crypto>;
+  readonly threadStore: Layer.Layer<ThreadStore, StoreE, Crypto.Crypto>;
   /** Defaults to `WakeScheduler.layerNoop`; the runner re-drives lanes explicitly. */
   readonly wakeScheduler?: Layer.Layer<WakeScheduler> | undefined;
   /** Executes Tier 3 in this run; takes precedence over `tierThreeEvidence`. */
@@ -207,7 +207,7 @@ const CHILD_DIGESTS = DefinitionDigests.make({
   tools: Schema.decodeSync(Digest)(CHILD_DIGEST_STRINGS.tools),
 });
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-certification");
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 
@@ -404,7 +404,7 @@ const identifiers = Layer.effect(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
     return {
-      nextConversationId: next(decodeConversationId, "certify-fixture-conversation"),
+      nextThreadId: next(decodeThreadId, "certify-fixture-thread"),
       nextRunId: next(Schema.decodeSync(RunId), "certify-fixture-run"),
       nextTurnId: next(Schema.decodeSync(TurnId), "certify-fixture-turn"),
     };
@@ -422,11 +422,11 @@ interface CertificationCell {
   /** Idempotent submission batch — safe to replay verbatim after a submit-boundary fault. */
   readonly submit: Effect.Effect<ReadonlyArray<Receipt>, DurableSubmitFailure, DurableAgentRuntime>;
   /** All lanes of the cell in drive order, computed from the (possibly replayed) receipts. */
-  readonly lanes: (receipts: ReadonlyArray<Receipt>) => ReadonlyArray<ConversationId>;
+  readonly lanes: (receipts: ReadonlyArray<Receipt>) => ReadonlyArray<ThreadId>;
 }
 
-const submitOptionsFor = (slug: string, conversationId: ConversationId): DurableSubmitOptions => ({
-  conversationId,
+const submitOptionsFor = (slug: string, threadId: ThreadId): DurableSubmitOptions => ({
+  threadId,
   principal: PRINCIPAL,
   idempotencyKey: decodeIdempotencyKey(`certify-key-${slug}`),
   definitions: DIGESTS,
@@ -438,20 +438,20 @@ const makeSingleAgentCell = (
   resolved: ResolvedBinding,
   slug: string,
 ): CertificationCell => {
-  const conversationId = decodeConversationId(`certify-${slug}`);
+  const threadId = decodeThreadId(`certify-${slug}`);
   const submit = Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     const receipt = yield* runtime.submit(
       { definition: { id: definition.id, input: definition.input } },
       { question: `certify ${slug}` },
-      submitOptionsFor(slug, conversationId),
+      submitOptionsFor(slug, threadId),
     );
     return [receipt];
   });
   return {
     bindings: [resolved],
     submit,
-    lanes: () => [conversationId],
+    lanes: () => [threadId],
   };
 };
 
@@ -539,7 +539,7 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
         promptShapeModel("certify-join", '{"answer":"host answer"}'),
       );
       const resolved = yield* DurableWorkerBinding.make(binding, DIGESTS);
-      const conversationId = decodeConversationId(`certify-${slug}`);
+      const threadId = decodeThreadId(`certify-${slug}`);
       const submitOne = (key: string, question: string) =>
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
@@ -547,7 +547,7 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
             { definition: { id: plainDefinition.id, input: plainDefinition.input } },
             { question },
             {
-              conversationId,
+              threadId,
               principal: PRINCIPAL,
               idempotencyKey: decodeIdempotencyKey(key),
               definitions: DIGESTS,
@@ -561,7 +561,7 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
           const queued = yield* submitOne(`certify-key-${slug}-queued`, "queued question");
           return [host, queued];
         }),
-        lanes: () => [conversationId],
+        lanes: () => [threadId],
       };
       return cell;
     }
@@ -592,7 +592,7 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
         Effect.provide(Layer.mergeAll(delegationLayer, lookupLayer)),
       );
       const childResolved = yield* DurableWorkerBinding.make(childBinding, CHILD_DIGESTS);
-      const conversationId = decodeConversationId(`certify-${slug}`);
+      const threadId = decodeThreadId(`certify-${slug}`);
       const cell: CertificationCell = {
         bindings: [parentResolved, childResolved],
         submit: Effect.gen(function* () {
@@ -600,15 +600,15 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
           const receipt = yield* runtime.submit(
             { definition: { id: coordinatorDefinition.id, input: coordinatorDefinition.input } },
             { mission: "plan" },
-            submitOptionsFor(slug, conversationId),
+            submitOptionsFor(slug, threadId),
           );
           return [receipt];
         }),
         lanes: (receipts) => {
           const parent = receipts.at(0);
           return parent === undefined
-            ? [conversationId]
-            : [conversationId, childConversationIdFor(parent.submissionId, DELEGATE_CALL)];
+            ? [threadId]
+            : [threadId, childThreadIdFor(parent.submissionId, DELEGATE_CALL)];
         },
       };
       return cell;
@@ -626,16 +626,16 @@ const MAX_REDRIVE_ROUNDS = 8;
  * the digest chain is fully recomputed instead of skipped.
  */
 const verifyLane = Effect.fn("Certification.verifyLane")(function* (
-  lane: ConversationId,
+  lane: ThreadId,
   batchProducers: ReadonlyMap<BatchId, ProducerId>,
 ) {
-  const store = yield* ConversationStore;
+  const store = yield* ThreadStore;
   const ledger = yield* SubmissionLedger;
-  const exported = yield* store.export(ConversationExportRequest.make({ conversationId: lane }));
+  const exported = yield* store.export(ThreadExportRequest.make({ threadId: lane }));
   const rows = new Map<SubmissionId, SubmissionSnapshot>();
   const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
   for (const submission of nonterminal) {
-    if (submission.conversationId === lane) rows.set(submission.submissionId, submission);
+    if (submission.threadId === lane) rows.set(submission.submissionId, submission);
   }
   const named = new Set<SubmissionId>();
   for (const envelope of exported.records) {
@@ -651,15 +651,15 @@ const verifyLane = Effect.fn("Certification.verifyLane")(function* (
   for (const submissionId of named) {
     if (rows.has(submissionId)) continue;
     const found = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
-    if (Option.isSome(found) && found.value.conversationId === lane) {
+    if (Option.isSome(found) && found.value.threadId === lane) {
       rows.set(submissionId, found.value);
     }
   }
   const checkpoint =
     store.checkpoints === undefined
       ? Option.none()
-      : yield* store.checkpoints.load(LoadCheckpointRequest.make({ conversationId: lane }));
-  return yield* verifyConversationInvariants({
+      : yield* store.checkpoints.load(LoadCheckpointRequest.make({ threadId: lane }));
+  return yield* verifyThreadInvariants({
     export: exported,
     submissions: [...rows.values()],
     batchProducers,
@@ -738,8 +738,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
   }
   const lanes = cell.lanes(receipts);
 
-  const driveLane = (lane: ConversationId) =>
-    runtime.processConversationResolved(lane, cell.bindings);
+  const driveLane = (lane: ThreadId) => runtime.processThreadResolved(lane, cell.bindings);
 
   const allSettled = Effect.gen(function* () {
     for (const receipt of receipts) {
@@ -752,7 +751,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
   });
 
   // Re-drive to convergence using ONLY public operations: worker drives, recovery passes,
-  // and the authorized DUR-017/approval unblocking paths chosen from `explainConversation`.
+  // and the authorized DUR-017/approval unblocking paths chosen from `explainThread`.
   let converged = false;
   for (let round = 0; round < MAX_REDRIVE_ROUNDS && !converged; round++) {
     // Expire any lease a faulted Attempt left behind (D5): virtual time is the
@@ -763,7 +762,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
       yield* Effect.exit(driveLane(lane));
     }
     for (const lane of lanes) {
-      const explains = yield* Effect.exit(runtime.explainConversation(lane));
+      const explains = yield* Effect.exit(runtime.explainThread(lane));
       if (Exit.isFailure(explains)) continue;
       for (const explanation of explains.value) {
         for (const unknown of explanation.evidence.unknownCalls) {
@@ -919,12 +918,12 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
 ): Effect.Effect<CertificationReport, LedgerE | StoreE, Crypto.Crypto> => {
   const batchProducers = new Map<BatchId, ProducerId>();
   // Interpose the candidate store with an append-time capture of each batch's producer
-  // identity — the one value the ConversationStore port deliberately does not export — so
+  // identity — the one value the ThreadStore port deliberately does not export — so
   // Tier 2's invariant verification recomputes the FULL digest chain instead of skipping it.
-  const capturingStore = Layer.effect(ConversationStore)(
+  const capturingStore = Layer.effect(ThreadStore)(
     Effect.gen(function* () {
-      const inner = yield* ConversationStore;
-      return ConversationStore.of({
+      const inner = yield* ThreadStore;
+      return ThreadStore.of({
         ...inner,
         append: (request) =>
           Effect.sync(() => {
@@ -932,7 +931,7 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
           }).pipe(Effect.andThen(inner.append(request))),
       });
     }),
-  ).pipe(Layer.provide(options.conversationStore));
+  ).pipe(Layer.provide(options.threadStore));
 
   const support = Layer.mergeAll(
     options.submissionLedger,

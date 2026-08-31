@@ -4,7 +4,7 @@ import {
   CompactionPolicy,
   ContextBudgetError,
   ContextOverflowError,
-  ConversationId,
+  ThreadId,
   IdGenerator,
   ModelProtocolError,
   RunId,
@@ -46,7 +46,6 @@ import {
   renderForSummary,
   SUMMARY_INPUT_BUDGET,
 } from "../src/compaction.ts";
-import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentRuntime,
   CompactionError,
@@ -59,9 +58,10 @@ import {
   type RunDurabilityHook,
   type RunTurnUsage,
 } from "../src/index.ts";
+import { ThreadHistory } from "../src/thread-history.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextConversationId: Effect.succeed(Schema.decodeSync(ConversationId)("conversation-1")),
+  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-1")),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-1")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-1")),
 });
@@ -253,7 +253,7 @@ const driveRun = (setup: RunSetup) => driveRunWith(answerOutput, setup);
 
 const compactionTestLayer = Layer.merge(identifiers, ContextCompactor.layer);
 
-const testLayer = Layer.merge(compactionTestLayer, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(compactionTestLayer, ThreadHistory.layerTransient);
 
 layer(testLayer)("engine compaction and overflow recovery", (it) => {
   const replacementSetup: RunSetup = {

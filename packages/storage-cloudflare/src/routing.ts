@@ -3,10 +3,10 @@ import {
   AdmissionConflict,
   AppendConflict,
   ChildAttachmentSnapshot,
-  ConversationMaterialization,
-  ConversationNotMaterialized,
-  ConversationStore,
-  ConversationStoreError,
+  ThreadMaterialization,
+  ThreadNotMaterialized,
+  ThreadStore,
+  ThreadStoreError,
   FenceRejected,
   JoinedToHost,
   LedgerError,
@@ -16,7 +16,7 @@ import {
   SubmissionLookupById,
   type SubmissionLookupByKey,
   type SubmissionSnapshot,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
 
 import {
@@ -57,11 +57,11 @@ import {
   type PortResult,
 } from "./port-protocol.ts";
 
-type ConversationId = ConversationMaterialization["conversationId"];
+type ThreadId = ThreadMaterialization["threadId"];
 type SubmissionId = SubmissionSnapshot["submissionId"];
 
-const ConversationIdSchema = ConversationMaterialization.fields.conversationId;
-const decodeConversationId = Schema.decodeUnknownEffect(ConversationIdSchema);
+const ThreadIdSchema = ThreadMaterialization.fields.threadId;
+const decodeThreadId = Schema.decodeUnknownEffect(ThreadIdSchema);
 
 /**
  * The ledger row bound routable Submission identities must respect (mirrors the local
@@ -76,7 +76,7 @@ const UUID_HEAD_PATTERN =
 
 /**
  * A transport could not deliver a port request to (or an answer from) the owning
- * Conversation's Durable Object. `retryable` carries the platform's own stub signal when one
+ * Thread's Durable Object. `retryable` carries the platform's own stub signal when one
  * exists. This error never crosses the wire — it is the CALLER-side evidence that the
  * authority was unreachable, which is exactly the case `AdmissionIndeterminate` was
  * specified for (SUB-031).
@@ -126,42 +126,42 @@ export const portTransportFailure = (target: string, cause: unknown): PortTransp
 
 /**
  * Delivery of Schema-encoded port envelopes to the Durable Object that owns a FOREIGN
- * Conversation (plan §1.3, D-P6-3). The shipped implementation (platform-cloudflare, WP3)
+ * Thread (plan §1.3, D-P6-3). The shipped implementation (platform-cloudflare, WP3)
  * calls the owner's `portCall` over native Durable Object JS RPC via
- * `namespace.idFromName(conversationId)`; the protocol is transport-agnostic and any carrier
+ * `namespace.idFromName(threadId)`; the protocol is transport-agnostic and any carrier
  * that moves the encoded envelopes verbatim satisfies this service. Implementations MUST
  * surface every delivery problem as `PortTransportError` and must never fabricate an answer.
  */
-export class ConversationPortTransport extends Context.Service<
-  ConversationPortTransport,
+export class ThreadPortTransport extends Context.Service<
+  ThreadPortTransport,
   {
     readonly call: (
-      conversationId: ConversationId,
+      threadId: ThreadId,
       request: PortRequestEnvelope,
     ) => Effect.Effect<unknown, PortTransportError>;
   }
->()("@effect-agent/storage-cloudflare/ConversationPortTransport") {}
+>()("@effect-agent/storage-cloudflare/ThreadPortTransport") {}
 
 /** Construction options shared by both routed port Layers. */
 export interface RoutedPortOptions {
   /**
-   * The Conversation this Durable Object owns (the Object identity rule is
-   * `namespace.idFromName(conversationId)`). Requests addressed here execute on the local
+   * The Thread this Durable Object owns (the Object identity rule is
+   * `namespace.idFromName(threadId)`). Requests addressed here execute on the local
    * facet; requests addressed anywhere else route through the transport or fail fast typed.
    */
-  readonly localConversationId: ConversationId;
+  readonly localThreadId: ThreadId;
 }
 
 /** Where one port request must execute. */
 type RouteTarget =
   | { readonly _tag: "local" }
-  | { readonly _tag: "foreign"; readonly conversationId: ConversationId };
+  | { readonly _tag: "foreign"; readonly threadId: ThreadId };
 
 const LOCAL: RouteTarget = { _tag: "local" };
 
 /**
- * Parse a DC-minted routable Submission identity — `{uuidv7}:{conversationId}`, split at the
- * FIRST `:` because the Conversation tail may itself contain colons (D-P6-5). This adapter
+ * Parse a DC-minted routable Submission identity — `{uuidv7}:{threadId}`, split at the
+ * FIRST `:` because the Thread tail may itself contain colons (D-P6-5). This adapter
  * minted the format at admission and is the ONLY component that parses it; identities that do
  * not carry the minted shape (no separator, non-UUID head, empty tail) fall back to the local
  * facet, which is the only authority this Object can consult without inventing an owner.
@@ -169,7 +169,7 @@ const LOCAL: RouteTarget = { _tag: "local" };
  * refused them at admission, so they cannot name any stored row anywhere.
  */
 const routableSubmissionTarget = (
-  localConversationId: ConversationId,
+  localThreadId: ThreadId,
 ): ((operation: string, submissionId: string) => Effect.Effect<RouteTarget, LedgerError>) =>
   Effect.fn("DoPortRouting.routableSubmissionTarget")(function* (
     operation: string,
@@ -188,47 +188,43 @@ const routableSubmissionTarget = (
     if (separator === -1) return LOCAL;
     if (!UUID_HEAD_PATTERN.test(submissionId.slice(0, separator))) return LOCAL;
     const tail = submissionId.slice(separator + 1);
-    if (tail === localConversationId) return LOCAL;
-    return yield* decodeConversationId(tail).pipe(
-      Effect.map((conversationId): RouteTarget => ({ _tag: "foreign", conversationId })),
+    if (tail === localThreadId) return LOCAL;
+    return yield* decodeThreadId(tail).pipe(
+      Effect.map((threadId): RouteTarget => ({ _tag: "foreign", threadId })),
       Effect.orElseSucceed(() => LOCAL),
     );
   });
 
 const NoAdditionalPortFailure = Schema.Never;
 const AbortPortFailure = Schema.Union([SettlementConflict, JoinedToHost]);
-const AppendPortFailure = Schema.Union([
-  ConversationNotMaterialized,
-  AppendConflict,
-  FenceRejected,
-]);
+const AppendPortFailure = Schema.Union([ThreadNotMaterialized, AppendConflict, FenceRejected]);
 
 /**
  * The fail-fast refusal for any foreign operation OUTSIDE the closed route-capable subset
  * (plan §1.3): honesty over accidental distribution.
  */
-const crossConversationLedgerError = (operation: string, target: string): LedgerError =>
+const crossThreadLedgerError = (operation: string, target: string): LedgerError =>
   LedgerError.make({
     operation,
     message:
-      `${operation} addressed to foreign Conversation ${target} is not route-capable; the ` +
+      `${operation} addressed to foreign Thread ${target} is not route-capable; the ` +
       "closed cross-Object subset is admit, markReady, lookup, resolveAdmission, " +
       "requestAbort, and recordChildSettled. Every other ledger operation is lane-local by " +
-      "construction and must execute inside the owning Conversation's Durable Object.",
+      "construction and must execute inside the owning Thread's Durable Object.",
   });
 
-const crossConversationStoreError = (operation: string, target: string): ConversationStoreError =>
-  ConversationStoreError.make({
+const crossThreadStoreError = (operation: string, target: string): ThreadStoreError =>
+  ThreadStoreError.make({
     operation,
     message:
-      `${operation} addressed to foreign Conversation ${target} is not route-capable; the ` +
+      `${operation} addressed to foreign Thread ${target} is not route-capable; the ` +
       "closed cross-Object subset is materialize, append, read (paged), inspectTail, and " +
       "export. Observation and checkpoints are lane-local by construction and must execute " +
-      "inside the owning Conversation's Durable Object.",
+      "inside the owning Thread's Durable Object.",
   });
 
-const makeTransportCall = (transport: ConversationPortTransport["Service"]) =>
-  Effect.fn("DoPortRouting.transportCall")(function* (target: ConversationId, call: PortRequest) {
+const makeTransportCall = (transport: ThreadPortTransport["Service"]) =>
+  Effect.fn("DoPortRouting.transportCall")(function* (target: ThreadId, call: PortRequest) {
     const encoded = yield* encodePortRequest(call).pipe(
       Effect.mapError((error) =>
         PortProtocolError.make({
@@ -252,9 +248,9 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
   options: RoutedPortOptions,
 ) {
   const local = yield* SubmissionLedger;
-  const transport = yield* ConversationPortTransport;
+  const transport = yield* ThreadPortTransport;
   const transportCall: TransportCall = makeTransportCall(transport);
-  const submissionTarget = routableSubmissionTarget(options.localConversationId);
+  const submissionTarget = routableSubmissionTarget(options.localThreadId);
 
   const routeFailure =
     (operation: string, target: string) =>
@@ -262,7 +258,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
       LedgerError.make({
         operation,
         message: boundPortDiagnostic(
-          `Routed ${operation} to the Conversation Object owning ${target} failed: ${error.message}`,
+          `Routed ${operation} to the Thread Object owning ${target} failed: ${error.message}`,
         ),
         cause: error,
       });
@@ -275,7 +271,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
    */
   const foreignLedgerCall = <ResultSchema extends Schema.Top, FailureSchema extends Schema.Top>(
     operation: string,
-    target: ConversationId,
+    target: ThreadId,
     call: PortRequest,
     resultSchema: ResultSchema,
     failureSchema: FailureSchema,
@@ -294,7 +290,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
               LedgerError.make({
                 operation,
                 message: boundPortDiagnostic(
-                  `The Conversation Object owning ${target} answered ${operation} with the ` +
+                  `The Thread Object owning ${target} answered ${operation} with the ` +
                     `out-of-contract failure ${failure._tag}: ${failure.message}`,
                 ),
                 cause: failure,
@@ -307,7 +303,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
               LedgerError.make({
                 operation,
                 message:
-                  `The Conversation Object owning ${target} answered ${operation} with the ` +
+                  `The Thread Object owning ${target} answered ${operation} with the ` +
                   `mismatched result ${result._tag}.`,
               }),
             );
@@ -330,7 +326,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
    * reached and reported its own storage failure.
    */
   const resolveForeignAdmission = (
-    target: ConversationId,
+    target: ThreadId,
     request: SubmissionLookupByKey,
   ): Effect.Effect<
     | AdmissionIndeterminate
@@ -344,7 +340,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
           return Effect.succeed(
             AdmissionIndeterminate.make({
               reason: boundPortDiagnostic(
-                `The Conversation Object owning ${target} answered resolveAdmission with the ` +
+                `The Thread Object owning ${target} answered resolveAdmission with the ` +
                   `out-of-contract failure ${response.failure._tag}: ${response.failure.message}`,
               ),
             }),
@@ -354,7 +350,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
           return Effect.succeed(
             AdmissionIndeterminate.make({
               reason: boundPortDiagnostic(
-                `The Conversation Object owning ${target} answered resolveAdmission with the ` +
+                `The Thread Object owning ${target} answered resolveAdmission with the ` +
                   `mismatched result ${response.result._tag}.`,
               ),
             }),
@@ -367,7 +363,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
           Effect.succeed(
             AdmissionIndeterminate.make({
               reason: boundPortDiagnostic(
-                `The Conversation Object owning ${target} is unreachable: ${error.message}`,
+                `The Thread Object owning ${target} is unreachable: ${error.message}`,
               ),
             }),
           ),
@@ -375,7 +371,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
           Effect.succeed(
             AdmissionIndeterminate.make({
               reason: boundPortDiagnostic(
-                `The answer of the Conversation Object owning ${target} could not be ` +
+                `The answer of the Thread Object owning ${target} could not be ` +
                   `understood: ${error.message}`,
               ),
             }),
@@ -386,7 +382,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
 
   const foreignLookupById = (
     operation: string,
-    target: ConversationId,
+    target: ThreadId,
     submissionId: SubmissionId,
   ): Effect.Effect<Option.Option<SubmissionSnapshot>, LedgerError> =>
     foreignLedgerCall(
@@ -423,7 +419,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
       // A local or opaque child identity was already answered authoritatively by the local
       // facet; absence there means the child admission never committed.
       if (target._tag !== "foreign") continue;
-      const child = yield* foreignLookupById(operation, target.conversationId, childSubmissionId);
+      const child = yield* foreignLookupById(operation, target.threadId, childSubmissionId);
       if (Option.isNone(child)) continue;
       attachments.set(
         childSubmissionId,
@@ -453,11 +449,11 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
     capabilities: local.capabilities,
 
     admit: (request) =>
-      request.conversationId === options.localConversationId
+      request.threadId === options.localThreadId
         ? local.admit(request)
         : foreignLedgerCall(
             "ledger admit",
-            request.conversationId,
+            request.threadId,
             LedgerAdmitCall.make({ request }),
             LedgerAdmitResult,
             AdmissionConflict,
@@ -470,7 +466,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
             ? local.markReady(request)
             : foreignLedgerCall(
                 "ledger mark ready",
-                target.conversationId,
+                target.threadId,
                 LedgerMarkReadyCall.make({ request }),
                 LedgerMarkReadyResult,
                 NoAdditionalPortFailure,
@@ -484,14 +480,14 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
             Effect.flatMap((target) =>
               target._tag === "local"
                 ? local.lookup(request)
-                : foreignLookupById("ledger lookup", target.conversationId, request.submissionId),
+                : foreignLookupById("ledger lookup", target.threadId, request.submissionId),
             ),
           )
-        : request.conversationId === options.localConversationId
+        : request.threadId === options.localThreadId
           ? local.lookup(request)
           : foreignLedgerCall(
               "ledger lookup",
-              request.conversationId,
+              request.threadId,
               LedgerLookupCall.make({ request }),
               LedgerLookupResult,
               NoAdditionalPortFailure,
@@ -502,9 +498,9 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
             ),
 
     resolveAdmission: (request) =>
-      request.conversationId === options.localConversationId
+      request.threadId === options.localThreadId
         ? local.resolveAdmission(request)
-        : resolveForeignAdmission(request.conversationId, request),
+        : resolveForeignAdmission(request.threadId, request),
 
     requestAbort: (request) =>
       submissionTarget("ledger request abort", request.submissionId).pipe(
@@ -513,7 +509,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
             ? local.requestAbort(request)
             : foreignLedgerCall(
                 "ledger request abort",
-                target.conversationId,
+                target.threadId,
                 LedgerRequestAbortCall.make({ request }),
                 LedgerRequestAbortResult,
                 AbortPortFailure,
@@ -528,7 +524,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
             ? local.recordChildSettled(request)
             : foreignLedgerCall(
                 "ledger record child settled",
-                target.conversationId,
+                target.threadId,
                 LedgerRecordChildSettledCall.make({ request }),
                 LedgerRecordChildSettledResult,
                 NoAdditionalPortFailure,
@@ -539,23 +535,21 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
     // Every operation below is lane-local by construction (plan §1.3): a foreign address is
     // an out-of-contract call and fails fast typed instead of being quietly distributed.
     claim: (request) =>
-      request.conversationId === options.localConversationId
+      request.threadId === options.localThreadId
         ? local.claim(request)
-        : Effect.fail(crossConversationLedgerError("ledger claim", request.conversationId)),
+        : Effect.fail(crossThreadLedgerError("ledger claim", request.threadId)),
 
     claimJoining: (request) =>
-      request.conversationId === options.localConversationId
+      request.threadId === options.localThreadId
         ? local.claimJoining(request)
-        : Effect.fail(crossConversationLedgerError("ledger claim joining", request.conversationId)),
+        : Effect.fail(crossThreadLedgerError("ledger claim joining", request.threadId)),
 
     renewOwnership: (request) =>
       submissionTarget("ledger renew ownership", request.submissionId).pipe(
         Effect.flatMap((target) =>
           target._tag === "local"
             ? local.renewOwnership(request)
-            : Effect.fail(
-                crossConversationLedgerError("ledger renew ownership", target.conversationId),
-              ),
+            : Effect.fail(crossThreadLedgerError("ledger renew ownership", target.threadId)),
         ),
       ),
 
@@ -564,9 +558,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
         Effect.flatMap((target) =>
           target._tag === "local"
             ? local.releaseOwnership(request)
-            : Effect.fail(
-                crossConversationLedgerError("ledger release ownership", target.conversationId),
-              ),
+            : Effect.fail(crossThreadLedgerError("ledger release ownership", target.threadId)),
         ),
       ),
 
@@ -575,9 +567,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
         Effect.flatMap((target) =>
           target._tag === "local"
             ? local.markInputApplied(request)
-            : Effect.fail(
-                crossConversationLedgerError("ledger mark input applied", target.conversationId),
-              ),
+            : Effect.fail(crossThreadLedgerError("ledger mark input applied", target.threadId)),
         ),
       ),
 
@@ -586,9 +576,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
         Effect.flatMap((target) =>
           target._tag === "local"
             ? local.reserveSettlement(request)
-            : Effect.fail(
-                crossConversationLedgerError("ledger reserve settlement", target.conversationId),
-              ),
+            : Effect.fail(crossThreadLedgerError("ledger reserve settlement", target.threadId)),
         ),
       ),
 
@@ -597,9 +585,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
         Effect.flatMap((target) =>
           target._tag === "local"
             ? local.finalizeSettlement(request)
-            : Effect.fail(
-                crossConversationLedgerError("ledger finalize settlement", target.conversationId),
-              ),
+            : Effect.fail(crossThreadLedgerError("ledger finalize settlement", target.threadId)),
         ),
       ),
 
@@ -608,9 +594,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
         Effect.flatMap((target) =>
           target._tag === "local"
             ? local.markJoined(request)
-            : Effect.fail(
-                crossConversationLedgerError("ledger mark joined", target.conversationId),
-              ),
+            : Effect.fail(crossThreadLedgerError("ledger mark joined", target.threadId)),
         ),
       ),
 
@@ -619,9 +603,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
         Effect.flatMap((target) =>
           target._tag === "local"
             ? local.revertJoining(request)
-            : Effect.fail(
-                crossConversationLedgerError("ledger revert joining", target.conversationId),
-              ),
+            : Effect.fail(crossThreadLedgerError("ledger revert joining", target.threadId)),
         ),
       ),
 
@@ -630,7 +612,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
         Effect.flatMap((target) =>
           target._tag === "local"
             ? local.suspend(request)
-            : Effect.fail(crossConversationLedgerError("ledger suspend", target.conversationId)),
+            : Effect.fail(crossThreadLedgerError("ledger suspend", target.threadId)),
         ),
       ),
 
@@ -640,10 +622,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
           target._tag === "local"
             ? local.recordApprovalDecision(command)
             : Effect.fail(
-                crossConversationLedgerError(
-                  "ledger record approval decision",
-                  target.conversationId,
-                ),
+                crossThreadLedgerError("ledger record approval decision", target.threadId),
               ),
         ),
       ),
@@ -653,9 +632,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
         Effect.flatMap((target) =>
           target._tag === "local"
             ? local.markUnknown(request)
-            : Effect.fail(
-                crossConversationLedgerError("ledger mark unknown", target.conversationId),
-              ),
+            : Effect.fail(crossThreadLedgerError("ledger mark unknown", target.threadId)),
         ),
       ),
 
@@ -665,10 +642,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
           target._tag === "local"
             ? local.recordUnknownResolution(command)
             : Effect.fail(
-                crossConversationLedgerError(
-                  "ledger record unknown resolution",
-                  target.conversationId,
-                ),
+                crossThreadLedgerError("ledger record unknown resolution", target.threadId),
               ),
         ),
       ),
@@ -678,20 +652,18 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
         Effect.flatMap((target) =>
           target._tag === "local"
             ? local.reserveChildBudget(request)
-            : Effect.fail(
-                crossConversationLedgerError("ledger reserve child budget", target.conversationId),
-              ),
+            : Effect.fail(crossThreadLedgerError("ledger reserve child budget", target.threadId)),
         ),
       ),
 
-    // Reservation identities carry no Conversation address; the reservation row lives in the
+    // Reservation identities carry no Thread address; the reservation row lives in the
     // parent's own Object and these transitions are parent-lane-local by construction, so
     // they always execute on the local facet (which fails typed for an unknown row).
     attachChildToReservation: local.attachChildToReservation,
     beginChildBudgetRelease: local.beginChildBudgetRelease,
     releaseChildBudget: local.releaseChildBudget,
 
-    // The local scan IS the whole worklist: one Conversation per Object (durability §5).
+    // The local scan IS the whole worklist: one Thread per Object (durability §5).
     scanNonterminal: local.scanNonterminal,
 
     loadRecoverySnapshot: (request) =>
@@ -699,12 +671,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
         Effect.flatMap((target) =>
           target._tag === "local"
             ? local.loadRecoverySnapshot(request).pipe(Effect.flatMap(enrichChildAttachments))
-            : Effect.fail(
-                crossConversationLedgerError(
-                  "ledger load recovery snapshot",
-                  target.conversationId,
-                ),
-              ),
+            : Effect.fail(crossThreadLedgerError("ledger load recovery snapshot", target.threadId)),
         ),
       ),
   });
@@ -715,30 +682,30 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
 const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices")(function* (
   options: RoutedPortOptions,
 ) {
-  const local = yield* ConversationStore;
+  const local = yield* ThreadStore;
   const checkpoints = local.checkpoints;
-  const transport = yield* ConversationPortTransport;
+  const transport = yield* ThreadPortTransport;
   const transportCall: TransportCall = makeTransportCall(transport);
 
   const routeFailure =
     (operation: string, target: string) =>
-    (error: PortTransportError | PortProtocolError): ConversationStoreError =>
-      ConversationStoreError.make({
+    (error: PortTransportError | PortProtocolError): ThreadStoreError =>
+      ThreadStoreError.make({
         operation,
         message: boundPortDiagnostic(
-          `Routed ${operation} to the Conversation Object owning ${target} failed: ${error.message}`,
+          `Routed ${operation} to the Thread Object owning ${target} failed: ${error.message}`,
         ),
         cause: error,
       });
 
-  /** The store twin of `foreignLedgerCall` with `ConversationStoreError` as the base error. */
+  /** The store twin of `foreignLedgerCall` with `ThreadStoreError` as the base error. */
   const foreignStoreCall = <ResultSchema extends Schema.Top, FailureSchema extends Schema.Top>(
     operation: string,
-    target: ConversationId,
+    target: ThreadId,
     call: PortRequest,
     resultSchema: ResultSchema,
     failureSchema: FailureSchema,
-  ): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | ConversationStoreError> => {
+  ): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | ThreadStoreError> => {
     const isExpectedResult = Schema.is(resultSchema);
     const isExpectedFailure = Schema.is(failureSchema);
     return transportCall(target, call).pipe(
@@ -746,16 +713,16 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
       Effect.flatMap(
         (
           response,
-        ): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | ConversationStoreError> => {
+        ): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | ThreadStoreError> => {
           if (response._tag === "PortFailed") {
             const failure = response.failure;
             if (isExpectedFailure(failure)) return Effect.fail(failure);
-            if (failure._tag === "ConversationStoreError") return Effect.fail(failure);
+            if (failure._tag === "ThreadStoreError") return Effect.fail(failure);
             return Effect.fail(
-              ConversationStoreError.make({
+              ThreadStoreError.make({
                 operation,
                 message: boundPortDiagnostic(
-                  `The Conversation Object owning ${target} answered ${operation} with the ` +
+                  `The Thread Object owning ${target} answered ${operation} with the ` +
                     `out-of-contract failure ${failure._tag}: ${failure.message}`,
                 ),
                 cause: failure,
@@ -765,10 +732,10 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
           const result = response.result;
           if (!isExpectedResult(result)) {
             return Effect.fail(
-              ConversationStoreError.make({
+              ThreadStoreError.make({
                 operation,
                 message:
-                  `The Conversation Object owning ${target} answered ${operation} with the ` +
+                  `The Thread Object owning ${target} answered ${operation} with the ` +
                   `mismatched result ${result._tag}.`,
               }),
             );
@@ -782,125 +749,113 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
     );
   };
 
-  const routed = ConversationStore.of({
+  const routed = ThreadStore.of({
     materialize: (request) =>
-      request.conversationId === options.localConversationId
+      request.threadId === options.localThreadId
         ? local.materialize(request)
         : foreignStoreCall(
-            "conversation materialize",
-            request.conversationId,
+            "thread materialize",
+            request.threadId,
             StoreMaterializeCall.make({ request }),
             StoreMaterializeResult,
             FenceRejected,
           ).pipe(Effect.asVoid),
 
     append: (request) =>
-      request.conversationId === options.localConversationId
+      request.threadId === options.localThreadId
         ? local.append(request)
         : foreignStoreCall(
-            "conversation append",
-            request.conversationId,
+            "thread append",
+            request.threadId,
             StoreAppendCall.make({ request }),
             StoreAppendResult,
             AppendPortFailure,
           ).pipe(Effect.map((reply) => reply.result)),
 
     read: (request) =>
-      request.conversationId === options.localConversationId
+      request.threadId === options.localThreadId
         ? local.read(request)
         : Stream.unwrap(
             foreignStoreCall(
-              "conversation read",
-              request.conversationId,
+              "thread read",
+              request.threadId,
               StoreReadPageCall.make({ request }),
               StoreReadPageResult,
-              ConversationNotMaterialized,
+              ThreadNotMaterialized,
             ).pipe(Effect.map((reply) => Stream.fromIterable(reply.records))),
           ),
 
     inspectTail: (request) =>
-      request.conversationId === options.localConversationId
+      request.threadId === options.localThreadId
         ? local.inspectTail(request)
         : foreignStoreCall(
-            "conversation inspect tail",
-            request.conversationId,
+            "thread inspect tail",
+            request.threadId,
             StoreInspectTailCall.make({ request }),
             StoreInspectTailResult,
-            ConversationNotMaterialized,
+            ThreadNotMaterialized,
           ).pipe(Effect.map((reply) => reply.tail)),
 
     export: (request) =>
-      request.conversationId === options.localConversationId
+      request.threadId === options.localThreadId
         ? local.export(request)
         : foreignStoreCall(
-            "conversation export",
-            request.conversationId,
+            "thread export",
+            request.threadId,
             StoreExportCall.make({ request }),
             StoreExportResult,
-            ConversationNotMaterialized,
+            ThreadNotMaterialized,
           ).pipe(Effect.map((reply) => reply.export)),
 
     // Observation and checkpoints are lane-local by construction (plan §1.3): the closed
     // route-capable store subset is materialize/append/read/inspectTail/export, and a
     // foreign address on anything else fails fast typed.
     observe: (request) =>
-      request.conversationId === options.localConversationId
+      request.threadId === options.localThreadId
         ? local.observe(request)
-        : Stream.unwrap(
-            Effect.fail(
-              crossConversationStoreError("conversation observe", request.conversationId),
-            ),
-          ),
+        : Stream.unwrap(Effect.fail(crossThreadStoreError("thread observe", request.threadId))),
 
     ...(checkpoints === undefined
       ? {}
       : {
           checkpoints: {
             save: (request) =>
-              request.checkpoint.conversationId === options.localConversationId
+              request.checkpoint.threadId === options.localThreadId
                 ? checkpoints.save(request)
                 : Effect.fail(
-                    crossConversationStoreError(
-                      "conversation save checkpoint",
-                      request.checkpoint.conversationId,
-                    ),
+                    crossThreadStoreError("thread save checkpoint", request.checkpoint.threadId),
                   ),
             load: (request) =>
-              request.conversationId === options.localConversationId
+              request.threadId === options.localThreadId
                 ? checkpoints.load(request)
-                : Effect.fail(
-                    crossConversationStoreError(
-                      "conversation load checkpoint",
-                      request.conversationId,
-                    ),
-                  ),
+                : Effect.fail(crossThreadStoreError("thread load checkpoint", request.threadId)),
           },
         }),
   });
 
-  return Context.make(ConversationStore, routed);
+  return Context.make(ThreadStore, routed);
 });
 
 /**
  * Routing decorator over the LOCAL `SubmissionLedger` facet (plan §1.3): a request addressing
- * this Object's Conversation executes locally; a route-capable request addressing another
- * Conversation is Schema-encoded onto the `ConversationPortTransport` and executed by the
+ * this Object's Thread executes locally; a route-capable request addressing another
+ * Thread is Schema-encoded onto the `ThreadPortTransport` and executed by the
  * owning Object's local facet; any other foreign request fails fast typed. Provide the WP1
  * local facet (`submissionLedgerLayer`/`ledgerLayer`) and a transport to close it.
  */
 export const routedSubmissionLedgerLayer = (
   options: RoutedPortOptions,
-): Layer.Layer<SubmissionLedger, never, SubmissionLedger | ConversationPortTransport> =>
+): Layer.Layer<SubmissionLedger, never, SubmissionLedger | ThreadPortTransport> =>
   Layer.effectContext(makeRoutedLedgerServices(options));
 
 /**
- * Routing decorator over the LOCAL `ConversationStore` facet (plan §1.3): this-conversation
+ * Routing decorator over the LOCAL `ThreadStore` facet (plan §1.3): this-thread
  * requests execute locally; foreign materialize/append/read/inspectTail/export travel the
  * transport; foreign observation and checkpoints fail fast typed.
  */
-export const routedConversationStoreLayer = (
+export const routedThreadStoreLayer = (
   options: RoutedPortOptions,
-): Layer.Layer<ConversationStore, never, ConversationStore | ConversationPortTransport> =>
+): Layer.Layer<ThreadStore, never, ThreadStore | ThreadPortTransport> =>
   Layer.effectContext(makeRoutedStoreServices(options));
 
 // ---------------------------------------------------------------------------
@@ -920,13 +875,13 @@ const capture = <Failure extends PortFailure>(
  * Execute one decoded port request against THIS Object's LOCAL facets — the owner-side half
  * of the routed ports (plan §1.3). Callers must provide the WP1 local facets, never the
  * routed decorators: the routing layer already established that this Object owns the
- * addressed Conversation, and re-routing here could bounce a request between Objects.
+ * addressed Thread, and re-routing here could bounce a request between Objects.
  * Failures never escape — every typed port failure becomes a `PortFailed` envelope that
  * re-decodes on the caller side.
  */
 export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(function* (
   request: PortRequest,
-): Effect.fn.Return<PortResponse, never, SubmissionLedger | ConversationStore> {
+): Effect.fn.Return<PortResponse, never, SubmissionLedger | ThreadStore> {
   switch (request._tag) {
     case "LedgerAdmit": {
       const ledger = yield* SubmissionLedger;
@@ -981,13 +936,13 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
       );
     }
     case "StoreMaterialize": {
-      const store = yield* ConversationStore;
+      const store = yield* ThreadStore;
       return yield* capture(
         store.materialize(request.request).pipe(Effect.map(() => StoreMaterializeResult.make({}))),
       );
     }
     case "StoreAppend": {
-      const store = yield* ConversationStore;
+      const store = yield* ThreadStore;
       return yield* capture(
         store
           .append(request.request)
@@ -995,7 +950,7 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
       );
     }
     case "StoreReadPage": {
-      const store = yield* ConversationStore;
+      const store = yield* ThreadStore;
       return yield* capture(
         store.read(request.request).pipe(
           Stream.runCollect,
@@ -1004,7 +959,7 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
       );
     }
     case "StoreInspectTail": {
-      const store = yield* ConversationStore;
+      const store = yield* ThreadStore;
       return yield* capture(
         store
           .inspectTail(request.request)
@@ -1012,15 +967,11 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
       );
     }
     case "StoreExport": {
-      const store = yield* ConversationStore;
+      const store = yield* ThreadStore;
       return yield* capture(
         store
           .export(request.request)
-          .pipe(
-            Effect.map((conversationExport) =>
-              StoreExportResult.make({ export: conversationExport }),
-            ),
-          ),
+          .pipe(Effect.map((threadExport) => StoreExportResult.make({ export: threadExport }))),
       );
     }
   }
@@ -1044,9 +995,7 @@ const encodedProtocolFailure = (message: string): unknown => ({
  * transport never has to interpret exceptions as protocol answers.
  */
 export const handleEncodedPortRequest = Effect.fn("DoPortRouting.handleEncodedPortRequest")(
-  function* (
-    encoded: unknown,
-  ): Effect.fn.Return<unknown, never, SubmissionLedger | ConversationStore> {
+  function* (encoded: unknown): Effect.fn.Return<unknown, never, SubmissionLedger | ThreadStore> {
     const response = yield* decodePortRequest(encoded).pipe(
       Effect.flatMap(executePortRequest),
       Effect.catch((error) =>

@@ -1,12 +1,13 @@
-import { Agent, AgentPolicy, ConversationId, ToolCallId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId, ToolCallId } from "@effect-agent/core";
+import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
   CanonicalRecordEnvelope,
-  ConversationExport,
-  ConversationExportRequest,
-  ConversationRead,
-  ConversationStore,
+  ThreadExport,
+  ThreadExportRequest,
+  ThreadRead,
+  ThreadStore,
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -33,7 +34,7 @@ import {
   UserInputRecorded,
   WakeScheduler,
   renderRecoveryExplanation,
-  verifyConversationInvariants,
+  verifyThreadInvariants,
   type AuthorizedOperation,
   type BatchId,
   type DurableExplainFailure,
@@ -49,12 +50,8 @@ import {
   type OperationAuthorizerService,
   type RecoveryExplanation,
   type RecoveryReport,
-} from "@effect-agent/session";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
+} from "@effect-agent/thread";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
@@ -65,12 +62,12 @@ const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-admin-operations");
 const PRODUCER_ID = Schema.decodeSync(ProducerId)("producer-admin-operations");
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 
-const submitOptions = (conversationId: string, idempotencyKey: string): DurableSubmitOptions => ({
-  conversationId: decodeConversationId(conversationId),
+const submitOptions = (threadId: string, idempotencyKey: string): DurableSubmitOptions => ({
+  threadId: decodeThreadId(threadId),
   principal: PRINCIPAL,
   idempotencyKey: decodeIdempotencyKey(idempotencyKey),
   definitions: DIGESTS,
@@ -205,9 +202,7 @@ const authorizerLayer = Layer.effectContext(
             return yield* OperationDenied.make({
               operation: request.operation,
               reason: "denied by the test authorization policy",
-              ...(request.conversationId === undefined
-                ? {}
-                : { conversationId: request.conversationId }),
+              ...(request.threadId === undefined ? {} : { threadId: request.threadId }),
               ...(request.submissionId === undefined ? {} : { submissionId: request.submissionId }),
             });
           }
@@ -230,7 +225,7 @@ const authorizerLayer = Layer.effectContext(
 
 const baseLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
-  MemoryConversationStoreLive,
+  MemoryThreadStoreLive,
   WakeScheduler.layerNoop,
   DurableRuntimeFailpointTestControl.layer,
   ToolReconciler.uncertain,
@@ -240,13 +235,13 @@ const baseLayer = Layer.mergeAll(
 
 const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
 
-const readLog = (conversationId: string) =>
+const readLog = (threadId: string) =>
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
+    const store = yield* ThreadStore;
     return yield* Stream.runCollect(
       store.read(
-        ConversationRead.make({
-          conversationId: decodeConversationId(conversationId),
+        ThreadRead.make({
+          threadId: decodeThreadId(threadId),
           limit: 1_024,
         }),
       ),
@@ -296,14 +291,14 @@ const encodeSnapshots = Schema.encodeEffect(Schema.Array(RecoverySnapshot));
 const encodeEnvelopes = Schema.encodeEffect(Schema.Array(CanonicalRecordEnvelope));
 
 /** Byte-exact durable-state fingerprint: the full canonical log + every recovery snapshot. */
-const durableStateFingerprint = (conversationId: string) =>
+const durableStateFingerprint = (threadId: string) =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
-    const records = yield* readLog(conversationId);
+    const records = yield* readLog(threadId);
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
     const snapshots: Array<RecoverySnapshot> = [];
     for (const submission of nonterminal) {
-      if (submission.conversationId !== conversationId) continue;
+      if (submission.threadId !== threadId) continue;
       snapshots.push(
         yield* ledger.loadRecoverySnapshot(
           RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
@@ -316,7 +311,7 @@ const durableStateFingerprint = (conversationId: string) =>
   });
 
 /** Drive one lane into the durable `unknown` state (prepared call, no outcome, recovery). */
-const makeUnknownLane = (conversation: string, key: string) =>
+const makeUnknownLane = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     const scripted = yield* makeScriptedModel((call) =>
@@ -328,13 +323,11 @@ const makeUnknownLane = (conversation: string, key: string) =>
     const receipt = yield* runtime.submit(
       agent,
       { question: "book it" },
-      submitOptions(conversation, key),
+      submitOptions(thread, key),
     );
     yield* armFailpoint("tools:after-prepared-append");
     const killed = yield* Effect.exit(
-      runtime
-        .processConversation(agent, decodeConversationId(conversation))
-        .pipe(Effect.provide(bookToolLayer)),
+      runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(bookToolLayer)),
     );
     expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
     yield* clearFailpoint;
@@ -345,7 +338,7 @@ const makeUnknownLane = (conversation: string, key: string) =>
   });
 
 /** Drive one lane into the durable `suspended(ApprovalPending)` state. */
-const makeApprovalSuspendedLane = (conversation: string, key: string) =>
+const makeApprovalSuspendedLane = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     const scripted = yield* makeScriptedModel((call) =>
@@ -357,17 +350,17 @@ const makeApprovalSuspendedLane = (conversation: string, key: string) =>
     const receipt = yield* runtime.submit(
       agent,
       { question: "book it" },
-      submitOptions(conversation, key),
+      submitOptions(thread, key),
     );
     const settlements = yield* runtime
-      .processConversation(agent, decodeConversationId(conversation))
+      .processThread(agent, decodeThreadId(thread))
       .pipe(Effect.provide(approvalToolLayer));
     expect(settlements).toEqual([]);
     return receipt;
   });
 
 /** Run one plain lane to a completed settlement. */
-const makeSettledLane = (conversation: string, key: string) =>
+const makeSettledLane = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"done"}'));
@@ -375,12 +368,9 @@ const makeSettledLane = (conversation: string, key: string) =>
     const receipt = yield* runtime.submit(
       agent,
       { question: "answer" },
-      submitOptions(conversation, key),
+      submitOptions(thread, key),
     );
-    const settlements = yield* runtime.processConversation(
-      agent,
-      decodeConversationId(conversation),
-    );
+    const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
     expect(settlements[0]?.outcome).toBe("completed");
     return receipt;
   });
@@ -402,15 +392,13 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       Effect.gen(function* () {
         yield* resetAuthorizer;
         const runtime = yield* DurableAgentRuntime;
-        const conversation = "conversation-admin-explain";
-        const receipt = yield* makeUnknownLane(conversation, "explain-1");
+        const thread = "thread-admin-explain";
+        const receipt = yield* makeUnknownLane(thread, "explain-1");
 
-        const before = yield* durableStateFingerprint(conversation);
+        const before = yield* durableStateFingerprint(thread);
         const explanation = yield* runtime.explain(receipt.submissionId);
-        const laneExplanations = yield* runtime.explainConversation(
-          decodeConversationId(conversation),
-        );
-        const after = yield* durableStateFingerprint(conversation);
+        const laneExplanations = yield* runtime.explainThread(decodeThreadId(thread));
+        const after = yield* durableStateFingerprint(thread);
         expect(after).toBe(before);
 
         expect(explanation.submission.submissionId).toBe(receipt.submissionId);
@@ -438,10 +426,10 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
     Effect.gen(function* () {
       yield* resetAuthorizer;
       const runtime = yield* DurableAgentRuntime;
-      const conversation = "conversation-admin-verify";
-      yield* makeSettledLane(conversation, "verify-1");
+      const thread = "thread-admin-verify";
+      yield* makeSettledLane(thread, "verify-1");
 
-      const report = yield* runtime.verify(decodeConversationId(conversation));
+      const report = yield* runtime.verify(decodeThreadId(thread));
       expect(report.ok).toBe(true);
       expect(report.submissionCount).toBe(1);
       expect(checkByName(report, "schema-round-trip").status).toBe("passed");
@@ -457,8 +445,8 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       expect(digestCheck.status).toBe("skipped");
       expect(digestCheck.detail).toContain("producer identity");
 
-      const store = yield* ConversationStore;
-      const withoutCheckpoints = ConversationStore.of({
+      const store = yield* ThreadStore;
+      const withoutCheckpoints = ThreadStore.of({
         materialize: store.materialize,
         append: store.append,
         read: store.read,
@@ -467,10 +455,10 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         inspectTail: store.inspectTail,
       });
       const unsupported = yield* Effect.flatMap(DurableAgentRuntime, (runtime) =>
-        runtime.verify(decodeConversationId(conversation)),
+        runtime.verify(decodeThreadId(thread)),
       ).pipe(
         Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
-        Effect.provideService(ConversationStore, withoutCheckpoints),
+        Effect.provideService(ThreadStore, withoutCheckpoints),
       );
       expect(unsupported.ok).toBe(true);
       expect(checkByName(unsupported, "checkpoint-binding")).toMatchObject({
@@ -481,18 +469,18 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
   );
 
   it.effect(
-    "verifyConversationInvariants catches an injected digest break and a record-identity duplicate on a corrupted copy",
+    "verifyThreadInvariants catches an injected digest break and a record-identity duplicate on a corrupted copy",
     () =>
       Effect.gen(function* () {
         yield* resetAuthorizer;
-        const conversation = "conversation-admin-corrupt";
-        const receipt = yield* makeSettledLane(conversation, "corrupt-1");
+        const thread = "thread-admin-corrupt";
+        const receipt = yield* makeSettledLane(thread, "corrupt-1");
         const ledger = yield* SubmissionLedger;
-        const store = yield* ConversationStore;
+        const store = yield* ThreadStore;
 
         const exported = yield* store.export(
-          ConversationExportRequest.make({
-            conversationId: decodeConversationId(conversation),
+          ThreadExportRequest.make({
+            threadId: decodeThreadId(thread),
           }),
         );
         const submissionRow = yield* ledger.lookup(
@@ -507,7 +495,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           exported.records.map((envelope) => [envelope.batchId, PRODUCER_ID]),
         );
 
-        const clean = yield* verifyConversationInvariants({
+        const clean = yield* verifyThreadInvariants({
           export: exported,
           submissions,
           batchProducers,
@@ -522,7 +510,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           const payload = envelope.record.payload;
           if (payload._tag !== "UserInputRecorded") return envelope;
           return CanonicalRecordEnvelope.make({
-            conversationId: envelope.conversationId,
+            threadId: envelope.threadId,
             batchId: envelope.batchId,
             sequence: envelope.sequence,
             offset: envelope.offset,
@@ -541,10 +529,10 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
             }),
           });
         });
-        const digestBroken = yield* verifyConversationInvariants({
-          export: ConversationExport.make({
+        const digestBroken = yield* verifyThreadInvariants({
+          export: ThreadExport.make({
             format: exported.format,
-            conversationId: exported.conversationId,
+            threadId: exported.threadId,
             tailSequence: exported.tailSequence,
             tailDigest: exported.tailDigest,
             records: tamperedRecords,
@@ -565,7 +553,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         const duplicated = [
           ...exported.records.slice(0, -1),
           CanonicalRecordEnvelope.make({
-            conversationId: last.conversationId,
+            threadId: last.threadId,
             batchId: last.batchId,
             sequence: last.sequence,
             offset: last.offset,
@@ -579,10 +567,10 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
             }),
           }),
         ];
-        const identityBroken = yield* verifyConversationInvariants({
-          export: ConversationExport.make({
+        const identityBroken = yield* verifyThreadInvariants({
+          export: ThreadExport.make({
             format: exported.format,
-            conversationId: exported.conversationId,
+            threadId: exported.threadId,
             tailSequence: exported.tailSequence,
             tailDigest: exported.tailDigest,
             records: duplicated,
@@ -603,20 +591,20 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       yield* resetAuthorizer;
       const runtime = yield* DurableAgentRuntime;
       const ledger = yield* SubmissionLedger;
-      const conversation = "conversation-admin-retry";
+      const thread = "thread-admin-retry";
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"done"}'));
       const agent = Agent.withModel(plainDefinition, scripted.model);
 
       // Crash between admission and materialization: the lane is admitted, nothing more.
       yield* armFailpoint("submit:after-admit");
       const killed = yield* Effect.exit(
-        runtime.submit(agent, { question: "answer" }, submitOptions(conversation, "retry-1")),
+        runtime.submit(agent, { question: "answer" }, submitOptions(thread, "retry-1")),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
       const row = yield* ledger.lookup(
         SubmissionLookupByKey.make({
-          conversationId: decodeConversationId(conversation),
+          threadId: decodeThreadId(thread),
           principal: PRINCIPAL,
           idempotencyKey: decodeIdempotencyKey("retry-1"),
         }),
@@ -636,7 +624,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       expect(report.disposition).toBe("repaired");
 
       // DUR-013: the executed repair carries its deterministic RepairAnnotated audit record.
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       const audit = records.find(
         (envelope) =>
           envelope.record.recordId === `repair:${row.value.submissionId}:CompleteMaterialization`,
@@ -647,10 +635,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       }
 
       // The repaired lane finishes normally.
-      const settlements = yield* runtime.processConversation(
-        agent,
-        decodeConversationId(conversation),
-      );
+      const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
       expect(settlements[0]?.outcome).toBe("completed");
     }),
   );
@@ -660,7 +645,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       yield* resetAuthorizer;
       const runtime = yield* DurableAgentRuntime;
 
-      const settled = yield* makeSettledLane("conversation-admin-refuse-settled", "refuse-1");
+      const settled = yield* makeSettledLane("thread-admin-refuse-settled", "refuse-1");
       const settledExit = yield* Effect.exit(
         runtime.retry(
           RetryCommand.make({
@@ -673,7 +658,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       const settledRefusal = failureValue(settledExit);
       expect(settledRefusal).toMatchObject({ _tag: "RetryRefused", refusal: "settled" });
 
-      const unknown = yield* makeUnknownLane("conversation-admin-refuse-unknown", "refuse-2");
+      const unknown = yield* makeUnknownLane("thread-admin-refuse-unknown", "refuse-2");
       const unknownExit = yield* Effect.exit(
         runtime.retry(
           RetryCommand.make({
@@ -689,10 +674,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         decisionTag: "AwaitUnknownResolution",
       });
 
-      const approval = yield* makeApprovalSuspendedLane(
-        "conversation-admin-refuse-approval",
-        "refuse-3",
-      );
+      const approval = yield* makeApprovalSuspendedLane("thread-admin-refuse-approval", "refuse-3");
       const approvalExit = yield* Effect.exit(
         runtime.retry(
           RetryCommand.make({
@@ -717,14 +699,14 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
 
       // Three obligations at TestClock time zero: an unknown block, an approval suspension,
       // and a ready lane nobody claims.
-      const unknown = yield* makeUnknownLane("conversation-admin-age-unknown", "age-1");
-      const approval = yield* makeApprovalSuspendedLane("conversation-admin-age-approval", "age-2");
+      const unknown = yield* makeUnknownLane("thread-admin-age-unknown", "age-1");
+      const approval = yield* makeApprovalSuspendedLane("thread-admin-age-approval", "age-2");
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"queued"}'));
       const agent = Agent.withModel(plainDefinition, scripted.model);
       const ready = yield* runtime.submit(
         agent,
         { question: "wait" },
-        submitOptions("conversation-admin-age-ready", "age-3"),
+        submitOptions("thread-admin-age-ready", "age-3"),
       );
 
       yield* TestClock.adjust(Duration.seconds(120));
@@ -759,7 +741,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
   it.effect("denies settlement waits and aborts before protected access or notifications", () =>
     Effect.gen(function* () {
       yield* resetAuthorizer;
-      const receipt = yield* makeSettledLane("conversation-denied-settlement", "denied");
+      const receipt = yield* makeSettledLane("thread-denied-settlement", "denied");
       const ledger = yield* SubmissionLedger;
       const wake = yield* WakeScheduler;
       const control = yield* AuthorizerTestControl;
@@ -809,7 +791,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       expect(yield* control.requests).toMatchObject([
         {
           operation: "awaitSettlement",
-          conversationId: receipt.conversationId,
+          threadId: receipt.threadId,
           submissionId: receipt.submissionId,
         },
         { operation: "abort", submissionId: receipt.submissionId },
@@ -819,11 +801,11 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
     }),
   );
 
-  it.effect("rejects a receipt mixing an authorized Conversation with another Submission", () =>
+  it.effect("rejects a receipt mixing an authorized Thread with another Submission", () =>
     Effect.gen(function* () {
       yield* resetAuthorizer;
-      const allowed = yield* makeSettledLane("conversation-receipt-allowed", "allowed");
-      const forbidden = yield* makeSettledLane("conversation-receipt-forbidden", "forbidden");
+      const allowed = yield* makeSettledLane("thread-receipt-allowed", "allowed");
+      const forbidden = yield* makeSettledLane("thread-receipt-forbidden", "forbidden");
       const ledger = yield* SubmissionLedger;
       const accesses: Array<string> = [];
       const note = (name: string) =>
@@ -840,12 +822,12 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       });
       const authorizer: OperationAuthorizerService = {
         authorize: (request) =>
-          request.conversationId === allowed.conversationId
+          request.threadId === allowed.threadId
             ? Effect.void
             : Effect.fail(
                 OperationDenied.make({
                   operation: request.operation,
-                  reason: "Conversation denied",
+                  reason: "Thread denied",
                 }),
               ),
       };
@@ -856,7 +838,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         );
         expect(accesses).toEqual([]);
 
-        const mixed = { ...forbidden, conversationId: allowed.conversationId };
+        const mixed = { ...forbidden, threadId: allowed.threadId };
         expect(failureTag(yield* Effect.exit(runtime.awaitSettlement(mixed)))).toBe(
           "OperationDenied",
         );
@@ -878,9 +860,9 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       yield* resetAuthorizer;
       const runtime = yield* DurableAgentRuntime;
       const control = yield* AuthorizerTestControl;
-      const conversation = "conversation-admin-deny";
-      const receipt = yield* makeSettledLane(conversation, "deny-1");
-      const before = yield* durableStateFingerprint(conversation);
+      const thread = "thread-admin-deny";
+      const receipt = yield* makeSettledLane(thread, "deny-1");
+      const before = yield* durableStateFingerprint(thread);
 
       yield* control.deny([
         "observe",
@@ -895,7 +877,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
 
       const explainExit = yield* Effect.exit(runtime.explain(receipt.submissionId));
       expect(failureTag(explainExit)).toBe("OperationDenied");
-      const verifyExit = yield* Effect.exit(runtime.verify(decodeConversationId(conversation)));
+      const verifyExit = yield* Effect.exit(runtime.verify(decodeThreadId(thread)));
       expect(failureTag(verifyExit)).toBe("OperationDenied");
       const retryExit = yield* Effect.exit(
         runtime.retry(
@@ -907,7 +889,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         ),
       );
       expect(failureTag(retryExit)).toBe("OperationDenied");
-      const wakeExit = yield* Effect.exit(runtime.wake(decodeConversationId(conversation)));
+      const wakeExit = yield* Effect.exit(runtime.wake(decodeThreadId(thread)));
       expect(failureTag(wakeExit)).toBe("OperationDenied");
       const scanExit = yield* Effect.exit(
         runtime.scanObligations(
@@ -943,7 +925,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       expect(failureTag(approvalExit)).toBe("OperationDenied");
 
       // Fail-closed means fail-before-effect: nothing was read into a repair, nothing written.
-      const after = yield* durableStateFingerprint(conversation);
+      const after = yield* durableStateFingerprint(thread);
       expect(after).toBe(before);
       const requests = yield* control.requests;
       expect(requests.map((request) => request.operation)).toEqual([
@@ -968,21 +950,21 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
   it.effect("keeps the admin failure channels typed (E proofs)", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
-      const conversationId = decodeConversationId("conversation-admin-types");
-      const receipt = yield* makeSettledLane("conversation-admin-types", "types-1");
+      const threadId = decodeThreadId("thread-admin-types");
+      const receipt = yield* makeSettledLane("thread-admin-types", "types-1");
 
       const explainEffect: Effect.Effect<RecoveryExplanation, DurableExplainFailure> =
         runtime.explain(receipt.submissionId);
       const explainLane: Effect.Effect<
         ReadonlyArray<RecoveryExplanation>,
         DurableExplainFailure
-      > = runtime.explainConversation(conversationId);
+      > = runtime.explainThread(threadId);
       const verifyEffect: Effect.Effect<IntegrityReport, DurableVerifyFailure> =
-        runtime.verify(conversationId);
+        runtime.verify(threadId);
       const retryEffect: Effect.Effect<RecoveryReport, DurableRetryFailure> = runtime.retry(
         RetryCommand.make({ submissionId: receipt.submissionId, author: "a", reason: "b" }),
       );
-      const wakeEffect: Effect.Effect<void, OperationDenied> = runtime.wake(conversationId);
+      const wakeEffect: Effect.Effect<void, OperationDenied> = runtime.wake(threadId);
       const scanEffect: Effect.Effect<ObligationReport, DurableObligationFailure> =
         runtime.scanObligations(ObligationThresholds.make({ agingSeconds: 1, overdueSeconds: 2 }));
 

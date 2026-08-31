@@ -86,7 +86,7 @@ const packageNames = [
   "pr-review",
   "sandbox",
   "sandbox-local",
-  "session",
+  "thread",
   "storage-cloudflare",
   "storage-memory",
   "storage-sqlite",
@@ -113,7 +113,7 @@ const effectTestPackageNames = [
   "platform-node",
   "pr-review",
   "sandbox-local",
-  "session",
+  "thread",
   "storage-cloudflare",
   "storage-memory",
   "storage-sqlite",
@@ -129,7 +129,7 @@ const productionPackageNames = [
   "pr-review",
   "sandbox",
   "sandbox-local",
-  "session",
+  "thread",
   "storage-cloudflare",
   "storage-memory",
   "storage-sqlite",
@@ -155,7 +155,7 @@ const inwardPackageNames = [
   "engine",
   "sandbox",
   "sandbox-local",
-  "session",
+  "thread",
   "storage-memory",
   "storage-sqlite",
 ] as const;
@@ -195,25 +195,25 @@ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray
     "core",
     "engine",
     "sandbox",
-    "session",
+    "thread",
     "storage-cloudflare",
     "testing",
   ],
-  "platform-node": ["capabilities", "core", "engine", "session", "storage-sqlite"],
+  "platform-node": ["capabilities", "core", "engine", "thread", "storage-sqlite"],
   "pr-review": ["effect-agent"],
   sandbox: ["core"],
   "sandbox-local": ["core", "sandbox"],
-  session: ["core", "engine"],
-  "storage-cloudflare": ["core", "session", "testing"],
-  "storage-memory": ["core", "session"],
-  "storage-sqlite": ["core", "session"],
+  thread: ["core", "engine"],
+  "storage-cloudflare": ["core", "thread", "testing"],
+  "storage-memory": ["core", "thread"],
+  "storage-sqlite": ["core", "thread"],
   testing: [
     "capabilities",
     "core",
     "engine",
     "platform-node",
     "sandbox",
-    "session",
+    "thread",
     "storage-memory",
     "storage-sqlite",
   ],
@@ -1739,7 +1739,7 @@ Exercise the generated release verifier.
 
   it.effect("keeps Cloudflare platform dependencies out of inward framework manifests", () =>
     Effect.gen(function* () {
-      // The P6 gate at the manifest layer: core/engine/capabilities/session and
+      // The P6 gate at the manifest layer: core/engine/capabilities/thread and
       // the non-Cloudflare storage adapters carry no @cloudflare/* dependency and
       // no @effect/sql-sqlite-do in any dependency section — the Durable Object
       // SqlClient and the Cloudflare types stay confined to storage-cloudflare

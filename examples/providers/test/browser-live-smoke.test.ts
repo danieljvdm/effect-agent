@@ -1,6 +1,6 @@
 import { WebCapture, WebCaptureSuccess } from "@effect-agent/capabilities";
 import { Agent, AgentPolicy, IdGenerator } from "@effect-agent/core";
-import { AgentRuntime, ConversationHistory } from "@effect-agent/engine";
+import { AgentRuntime, ThreadHistory } from "@effect-agent/engine";
 import {
   BrowserQuickActionBrowserBinding,
   BrowserQuickActionRpcError,
@@ -141,7 +141,7 @@ const OpenAiClientLayer = OpenAiClient.layerConfig({
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
 const BrowserSmokeLayer = Layer.mergeAll(
-  ConversationHistory.layerTransient,
+  ThreadHistory.layerTransient,
   IdGenerator.layer,
   OpenAiClientLayer,
   FetchHttpClient.layer,

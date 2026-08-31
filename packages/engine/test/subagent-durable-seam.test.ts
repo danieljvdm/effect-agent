@@ -2,7 +2,7 @@ import {
   Agent,
   AgentId,
   AgentPolicy,
-  ConversationId,
+  ThreadId,
   DelegationId,
   IdGenerator,
   ReceiptId,
@@ -35,7 +35,6 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
-import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentChildPending,
   AgentRuntime,
@@ -50,6 +49,7 @@ import {
   type RunSubagentJoinRequest,
   type RunTurnResume,
 } from "../src/index.ts";
+import { ThreadHistory } from "../src/thread-history.ts";
 
 class DelegationFailed extends Schema.TaggedError<DelegationFailed>()("DelegationFailed", {
   message: Schema.String,
@@ -68,7 +68,7 @@ const usage = {
   outputTokens: {},
 };
 
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeRunId = Schema.decodeSync(RunId);
 const decodeTurnId = Schema.decodeSync(TurnId);
 const decodeSubmissionId = Schema.decodeSync(SubmissionId);
@@ -85,7 +85,7 @@ const makeIdentifiers = () =>
           Effect.map((value) => decode(`${prefix}-${value}`)),
         );
       return {
-        nextConversationId: next(decodeConversationId, "conversation"),
+        nextThreadId: next(decodeThreadId, "thread"),
         nextRunId: next(decodeRunId, "run"),
         nextTurnId: next(decodeTurnId, "turn"),
       };
@@ -144,7 +144,7 @@ const delegationId = Schema.decodeSync(DelegationId)("delegate_child");
 const targetAgentId = Schema.decodeSync(AgentId)("scripted-child");
 
 const childIdentityFor = (suffix: string): RunSubagentChildIdentity => ({
-  childConversationId: decodeConversationId(`child-conversation-${suffix}`),
+  childThreadId: decodeThreadId(`child-thread-${suffix}`),
   childSubmissionId: decodeSubmissionId(`child-submission-${suffix}`),
   childRunId: decodeRunId(`child-run-${suffix}`),
   receiptId: decodeReceiptId(`child-receipt-${suffix}`),
@@ -267,7 +267,7 @@ const scriptedHook = (
     joins === undefined ? Effect.void : Ref.update(joins, (all) => [...all, request]),
 });
 
-const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
 
 layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
   it.effect("a waiting delegation call does not trigger the batch failure policy", () =>
@@ -307,7 +307,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       expect(failure.children).toEqual([
         {
           toolCallId: "delegate-1",
-          childConversationId: child.childConversationId,
+          childThreadId: child.childThreadId,
           childSubmissionId: child.childSubmissionId,
           childRunId: child.childRunId,
         },

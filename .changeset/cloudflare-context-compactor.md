@@ -2,10 +2,10 @@
 "@effect-agent/engine": minor
 "@effect-agent/capabilities": minor
 "@effect-agent/platform-cloudflare": minor
-"@effect-agent/session": patch
+"@effect-agent/thread": patch
 ---
 
-Expose host-supplied model-context preparation through Cloudflare Conversation Object options
+Expose host-supplied model-context preparation through Cloudflare Thread Object options
 (#49). A generic scoped `RunContextPreparation` service now composes after canonical durable
 resume reconstruction, `contextCompactorRunContextLayer` adapts the digest-bound
 `ContextCompactor` capability with typed failures, and `CloudflareDurableRuntimeOptions.runContext`

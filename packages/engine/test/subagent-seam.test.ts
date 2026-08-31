@@ -2,7 +2,7 @@ import {
   Agent,
   AgentId,
   AgentPolicy,
-  ConversationId,
+  ThreadId,
   DelegationId,
   IdGenerator,
   RunId,
@@ -15,7 +15,6 @@ import { expect, layer } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
-import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentRuntime,
   AgentSpawner,
@@ -24,13 +23,14 @@ import {
   type RunEventSinkService,
   type SubagentEventBasePayload,
 } from "../src/index.ts";
+import { ThreadHistory } from "../src/thread-history.ts";
 
 const usage = {
   inputTokens: {},
   outputTokens: {},
 };
 
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeRunId = Schema.decodeSync(RunId);
 const decodeTurnId = Schema.decodeSync(TurnId);
 
@@ -43,7 +43,7 @@ const identifiers = Layer.effect(IdGenerator)(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
     return {
-      nextConversationId: next(decodeConversationId, "conversation"),
+      nextThreadId: next(decodeThreadId, "thread"),
       nextRunId: next(decodeRunId, "run"),
       nextTurnId: next(decodeTurnId, "turn"),
     };
@@ -166,7 +166,7 @@ const spawningDefinition = Agent.make("seam-spawning-parent", {
 const fabricatedChildIdentity: SubagentEventBasePayload = {
   toolCallId: delegateCallId,
   delegationId,
-  childConversationId: Schema.decodeSync(ConversationId)("child-conversation"),
+  childThreadId: Schema.decodeSync(ThreadId)("child-thread"),
   childRunId: Schema.decodeSync(RunId)("child-run"),
   targetAgentId: Schema.decodeSync(AgentId)("child-agent"),
   depth: 1,
@@ -187,11 +187,11 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
 
 const isSubagentEvent = (event: RunEvent) => event._tag.startsWith("Subagent");
 
-const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
 
 layer(testLayer)("SUB S1 engine execution seam", (it) => {
-  it.effect("honors preallocated Conversation and Run identity in every emitted event", () => {
-    const conversationId = Schema.decodeSync(ConversationId)("conversation-preallocated");
+  it.effect("honors preallocated Thread and Run identity in every emitted event", () => {
+    const threadId = Schema.decodeSync(ThreadId)("thread-preallocated");
     const runId = Schema.decodeSync(RunId)("run-preallocated");
     const agent = Agent.withModel(
       simpleDefinition,
@@ -202,12 +202,12 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
       const events = yield* AgentRuntime.stream(
         agent,
         { question: "who?" },
-        { conversationId, runId },
+        { threadId, runId },
       ).pipe(Stream.runCollect);
 
       expect(events.length).toBeGreaterThan(0);
       for (const event of events) {
-        expect(event.conversationId).toBe(conversationId);
+        expect(event.threadId).toBe(threadId);
         expect(event.runId).toBe(runId);
       }
       expect(events.at(-1)?._tag).toBe("RunCompleted");
@@ -267,7 +267,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         for (const event of subagentEvents) {
           // Engine-stamped base identity is the parent's, plus the batch Turn.
           expect(event.eventVersion).toBe(1);
-          expect(event.conversationId).toBe(runStarted?.conversationId);
+          expect(event.threadId).toBe(runStarted?.threadId);
           expect(event.runId).toBe(runStarted?.runId);
           expect(event.agentId).toBe(emittingDefinition.id);
           expect(event.turnId).toBe(firstTurn?.turnId);
@@ -277,7 +277,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         const progress = subagentEvents.find((event) => event._tag === "SubagentProgress");
         expect(completed).toMatchObject({
           delegationId,
-          childConversationId: "child-conversation",
+          childThreadId: "child-thread",
           childRunId: "child-run",
           targetAgentId: "child-agent",
           depth: 1,
@@ -345,7 +345,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         const childDepth = yield* Ref.make(-1);
         const captured = yield* Ref.make<
           | {
-              readonly conversationId: string;
+              readonly threadId: string;
               readonly runId: string;
               readonly parentLink: SubagentParentLink;
               readonly childEvents: ReadonlyArray<RunEvent>;
@@ -427,7 +427,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
               const result = yield* child.await.pipe(Effect.orDie);
               const childEvents = yield* child.events;
               yield* Ref.set(captured, {
-                conversationId: child.conversationId,
+                threadId: child.threadId,
                 runId: child.runId,
                 parentLink: child.parentLink,
                 childEvents,
@@ -454,12 +454,12 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
           throw new Error("Expected the delegate handler to capture the spawned child");
         }
         // The child owns fresh, distinct identity supplied by the spawner.
-        expect(snapshot.conversationId).not.toBe(result.conversationId);
+        expect(snapshot.threadId).not.toBe(result.threadId);
         expect(snapshot.runId).not.toBe(result.runId);
         expect(snapshot.parentLink).toMatchObject({
           delegationId,
           parentAgentId: spawningDefinition.id,
-          parentConversationId: result.conversationId,
+          parentThreadId: result.threadId,
           parentRunId: result.runId,
           parentToolCallId: delegateCallId,
           depth: 1,
@@ -467,7 +467,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         // The preallocated identity flowed through the interpreter unchanged.
         const childStarted = snapshot.childEvents.at(0);
         expect(childStarted?._tag).toBe("RunStarted");
-        expect(childStarted?.conversationId).toBe(snapshot.conversationId);
+        expect(childStarted?.threadId).toBe(snapshot.threadId);
         expect(childStarted?.runId).toBe(snapshot.runId);
         expect(snapshot.childEvents.at(-1)?._tag).toBe("RunCompleted");
       }),

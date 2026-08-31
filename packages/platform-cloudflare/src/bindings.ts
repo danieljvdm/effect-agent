@@ -1,11 +1,11 @@
-import type { ConversationId } from "@effect-agent/core";
-import type { ProducerId } from "@effect-agent/session";
+import type { ThreadId } from "@effect-agent/core";
+import type { ProducerId } from "@effect-agent/thread";
 import { Context, Effect, Layer, Predicate, Schema } from "effect";
 
 /**
  * Cloudflare platform bindings as Effect services (DEPLOY-010: "Cloudflare platform bindings
  * are supplied as Effect services/Layers"). Application code never reads `env` or touches a
- * `DurableObjectState` directly — the Conversation Object class constructs these Layers once
+ * `DurableObjectState` directly — the Thread Object class constructs these Layers once
  * per incarnation and everything downstream consumes the services.
  */
 
@@ -19,8 +19,8 @@ export class CloudflareBindingError extends Schema.TaggedError<CloudflareBinding
 ) {}
 
 /**
- * The RPC surface one Conversation Durable Object exposes to Workers and to sibling
- * Conversation Objects. `ConversationObject.make` implements it; the Worker-side client
+ * The RPC surface one Thread Durable Object exposes to Workers and to sibling
+ * Thread Objects. `ThreadObject.make` implements it; the Worker-side client
  * and the cross-Object transport call it through `DurableObjectNamespace` stubs. Every
  * `encoded` value is a Schema-encoded envelope (`client.ts` wire schemas for host entry
  * points, `@effect-agent/storage-cloudflare` port envelopes for `portCall`), so the RPC
@@ -28,7 +28,7 @@ export class CloudflareBindingError extends Schema.TaggedError<CloudflareBinding
  * transient native RPC metadata, stripped by an opted-in effect-cf receiver before decoding
  * the host envelope. It never enters durable state.
  */
-export interface ConversationObjectRpc extends Rpc.DurableObjectBranded {
+export interface ThreadObjectRpc extends Rpc.DurableObjectBranded {
   /** Admission-limits gate + `DurableAgentRuntime.submit`; answers a `SubmitResponse`. */
   submitEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Wake-hinted, poll-guaranteed settlement wait; answers an `AwaitSettlementResponse`. */
@@ -52,22 +52,22 @@ export interface ConversationObjectRpc extends Rpc.DurableObjectBranded {
 }
 
 /**
- * The `DurableObjectNamespace` binding that addresses Conversation Objects. The Object
- * identity rule is `namespace.idFromName(conversationId)` (plan §1.2): Conversation IDs are
+ * The `DurableObjectNamespace` binding that addresses Thread Objects. The Object
+ * identity rule is `namespace.idFromName(threadId)` (plan §1.2): Thread IDs are
  * globally unique, so the mapping is total and deterministic and no directory service exists.
  */
-export class ConversationObjectNamespace extends Context.Service<
-  ConversationObjectNamespace,
+export class ThreadObjectNamespace extends Context.Service<
+  ThreadObjectNamespace,
   {
-    readonly namespace: DurableObjectNamespace<ConversationObjectRpc>;
+    readonly namespace: DurableObjectNamespace<ThreadObjectRpc>;
     /** Stable binding name for opted-in native RPC tracing; absent by default. */
     readonly rpcTracing?: string;
   }
->()("@effect-agent/platform-cloudflare/ConversationObjectNamespace") {
+>()("@effect-agent/platform-cloudflare/ThreadObjectNamespace") {
   static layer(
-    namespace: DurableObjectNamespace<ConversationObjectRpc>,
-  ): Layer.Layer<ConversationObjectNamespace> {
-    return Layer.succeed(ConversationObjectNamespace)({ namespace });
+    namespace: DurableObjectNamespace<ThreadObjectRpc>,
+  ): Layer.Layer<ThreadObjectNamespace> {
+    return Layer.succeed(ThreadObjectNamespace)({ namespace });
   }
 }
 
@@ -77,10 +77,10 @@ export class ConversationObjectNamespace extends Context.Service<
  * narrowest-boundary check (structural probe for the namespace surface the transport uses);
  * a missing or misshaped binding fails typed before any Layer is built.
  */
-export const conversationNamespaceFromEnv = Effect.fn("conversationNamespaceFromEnv")(function* (
+export const threadNamespaceFromEnv = Effect.fn("threadNamespaceFromEnv")(function* (
   env: unknown,
   binding: string,
-): Effect.fn.Return<DurableObjectNamespace<ConversationObjectRpc>, CloudflareBindingError> {
+): Effect.fn.Return<DurableObjectNamespace<ThreadObjectRpc>, CloudflareBindingError> {
   if (!Predicate.isObjectKeyword(env)) {
     return yield* CloudflareBindingError.make({
       binding,
@@ -104,12 +104,12 @@ export const conversationNamespaceFromEnv = Effect.fn("conversationNamespaceFrom
   if (candidate !== undefined) {
     // The structural probe above is the entire runtime contract this package relies on;
     // the assertion records that `idFromName`/`get` name a DurableObjectNamespace.
-    return candidate as unknown as DurableObjectNamespace<ConversationObjectRpc>;
+    return candidate as unknown as DurableObjectNamespace<ThreadObjectRpc>;
   }
   return yield* CloudflareBindingError.make({
     binding,
     message:
-      `env.${binding} is not a DurableObjectNamespace binding; declare the Conversation ` +
+      `env.${binding} is not a DurableObjectNamespace binding; declare the Thread ` +
       "Object class under this binding in the Worker configuration.",
   });
 });
@@ -118,13 +118,13 @@ export const conversationNamespaceFromEnv = Effect.fn("conversationNamespaceFrom
  * Build the namespace from Worker `env` (fails typed). Enable `rpcTracing` only when the
  * receiver also opts into the effect-cf native RPC trace-context contract.
  */
-export const conversationNamespaceLayer = (
+export const threadNamespaceLayer = (
   env: unknown,
   binding: string,
   options: { readonly rpcTracing?: boolean } = {},
-): Layer.Layer<ConversationObjectNamespace, CloudflareBindingError> =>
-  Layer.effect(ConversationObjectNamespace)(
-    Effect.map(conversationNamespaceFromEnv(env, binding), (namespace) => ({
+): Layer.Layer<ThreadObjectNamespace, CloudflareBindingError> =>
+  Layer.effect(ThreadObjectNamespace)(
+    Effect.map(threadNamespaceFromEnv(env, binding), (namespace) => ({
       namespace,
       ...(options.rpcTracing === true ? { rpcTracing: binding } : {}),
     })),
@@ -148,14 +148,14 @@ export class DurableObjectContext extends Context.Service<
 }
 
 /**
- * The Conversation identity this Object serializes and the producer identity its Attempts
- * write with (`{producerPrefix}:{conversationId}`, plan §1.4). Derived once per incarnation
- * from `ctx.id.name` — the Object identity rule guarantees the name IS the Conversation ID.
+ * The Thread identity this Object serializes and the producer identity its Attempts
+ * write with (`{producerPrefix}:{threadId}`, plan §1.4). Derived once per incarnation
+ * from `ctx.id.name` — the Object identity rule guarantees the name IS the Thread ID.
  */
-export class ConversationObjectIdentity extends Context.Service<
-  ConversationObjectIdentity,
+export class ThreadObjectIdentity extends Context.Service<
+  ThreadObjectIdentity,
   {
-    readonly conversationId: ConversationId;
+    readonly threadId: ThreadId;
     readonly producerId: ProducerId;
   }
->()("@effect-agent/platform-cloudflare/ConversationObjectIdentity") {}
+>()("@effect-agent/platform-cloudflare/ThreadObjectIdentity") {}

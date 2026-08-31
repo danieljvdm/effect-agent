@@ -27,7 +27,7 @@ import {
   unserializableToolResult,
   CompactionPolicy,
   ContextOverflowError,
-  ConversationId,
+  ThreadId,
   DelegationId,
   IdGenerator,
   InputTokenUsage,
@@ -306,7 +306,7 @@ describe("core schemas", () => {
       _tag: "RunStarted",
       eventVersion: 1,
       runId: "run-1",
-      conversationId: "conversation-1",
+      threadId: "thread-1",
       agentId: "travel-planner",
       sequence: 0,
       timestamp: "2026-07-29T12:00:00.000Z",
@@ -326,7 +326,7 @@ describe("core schemas", () => {
       _tag: "RunCompleted",
       eventVersion: 1,
       runId: "run-1",
-      conversationId: "conversation-1",
+      threadId: "thread-1",
       agentId: "travel-planner",
       sequence: 5,
       timestamp: "2026-07-29T12:00:00.000Z",
@@ -349,7 +349,7 @@ describe("core schemas", () => {
       _tag: "ToolCallDeclared",
       eventVersion: 1,
       runId: "run-1",
-      conversationId: "conversation-1",
+      threadId: "thread-1",
       agentId: "travel-planner",
       sequence: 3,
       timestamp: "2026-07-29T12:00:00.000Z",
@@ -372,7 +372,7 @@ describe("core schemas", () => {
       _tag: "ToolCallFailed",
       eventVersion: 1,
       runId: "run-1",
-      conversationId: "conversation-1",
+      threadId: "thread-1",
       agentId: "travel-planner",
       sequence: 4,
       timestamp: "2026-07-29T12:00:00.000Z",
@@ -406,7 +406,7 @@ describe("core schemas", () => {
     const encodedLink = {
       delegationId: "delegate-research",
       parentAgentId: "travel-planner",
-      parentConversationId: "conversation-1",
+      parentThreadId: "thread-1",
       parentRunId: "run-1",
       parentToolCallId: "delegate-1",
       depth: 1,
@@ -432,14 +432,14 @@ describe("core schemas", () => {
     const base = {
       eventVersion: 1,
       runId: "run-1",
-      conversationId: "conversation-1",
+      threadId: "thread-1",
       agentId: "travel-planner",
       sequence: 5,
       timestamp: "2026-07-29T12:00:00.000Z",
       turnId: "turn-1",
       toolCallId: "delegate-1",
       delegationId: "delegate-research",
-      childConversationId: "conversation-2",
+      childThreadId: "thread-2",
       childRunId: "run-2",
       targetAgentId: "research-specialist",
       depth: 1,
@@ -483,14 +483,14 @@ describe("core schemas", () => {
     const base = {
       eventVersion: 1,
       runId: "run-1",
-      conversationId: "conversation-1",
+      threadId: "thread-1",
       agentId: "travel-planner",
       sequence: 5,
       timestamp: "2026-07-29T12:00:00.000Z",
       turnId: "turn-1",
       toolCallId: "delegate-1",
       delegationId: "delegate-research",
-      childConversationId: "conversation-2",
+      childThreadId: "thread-2",
       childRunId: "run-2",
       targetAgentId: "research-specialist",
       depth: 1,
@@ -505,9 +505,7 @@ describe("core schemas", () => {
     expect(() => Schema.decodeUnknownSync(RunEvent)({ ...progress, eventVersion: 2 })).toThrow();
     expect(() => Schema.decodeUnknownSync(RunEvent)({ ...progress, depth: 0 })).toThrow();
     expect(() => Schema.decodeUnknownSync(RunEvent)({ ...progress, childRunId: "" })).toThrow();
-    expect(() =>
-      Schema.decodeUnknownSync(RunEvent)({ ...progress, childConversationId: "" }),
-    ).toThrow();
+    expect(() => Schema.decodeUnknownSync(RunEvent)({ ...progress, childThreadId: "" })).toThrow();
     expect(() =>
       Schema.decodeUnknownSync(RunEvent)({ ...progress, summary: "x".repeat(4 * 1024 + 1) }),
     ).toThrow();
@@ -549,19 +547,19 @@ describe("core schemas", () => {
     const program = Effect.gen(function* () {
       const ids = yield* IdGenerator;
       return {
-        firstConversation: yield* ids.nextConversationId,
-        secondConversation: yield* ids.nextConversationId,
+        firstThread: yield* ids.nextThreadId,
+        secondThread: yield* ids.nextThreadId,
         run: yield* ids.nextRunId,
         turn: yield* ids.nextTurnId,
       };
     }).pipe(Effect.provide(IdGenerator.layer), Random.withSeed("core-id-generator"));
-    const { firstConversation, secondConversation, run, turn } = Effect.runSync(program);
+    const { firstThread, secondThread, run, turn } = Effect.runSync(program);
 
-    expect(Schema.decodeSync(ConversationId)(firstConversation)).toBe(firstConversation);
+    expect(Schema.decodeSync(ThreadId)(firstThread)).toBe(firstThread);
     expect(Schema.decodeSync(RunId)(run)).toBe(run);
     expect(Schema.decodeSync(TurnId)(turn)).toBe(turn);
-    expect(firstConversation).not.toBe(secondConversation);
-    expect(firstConversation.startsWith("conversation-")).toBe(true);
+    expect(firstThread).not.toBe(secondThread);
+    expect(firstThread.startsWith("thread-")).toBe(true);
     expect(run.startsWith("run-")).toBe(true);
     expect(turn.startsWith("turn-")).toBe(true);
   });
@@ -734,7 +732,7 @@ describe("context-economics errors and events", () => {
     const base = {
       eventVersion: 1,
       runId: "run-1",
-      conversationId: "conversation-1",
+      threadId: "thread-1",
       agentId: "travel-planner",
       sequence: 6,
       timestamp: "2026-08-15T12:00:00.000Z",
@@ -774,7 +772,7 @@ describe("context-economics errors and events", () => {
       _tag: "RunCompleted",
       eventVersion: 1,
       runId: "run-1",
-      conversationId: "conversation-1",
+      threadId: "thread-1",
       agentId: "travel-planner",
       sequence: 9,
       timestamp: "2026-08-15T12:00:00.000Z",
@@ -813,14 +811,14 @@ describe("context-economics errors and events", () => {
       _tag: "SubagentCompleted",
       eventVersion: 1,
       runId: "run-1",
-      conversationId: "conversation-1",
+      threadId: "thread-1",
       agentId: "travel-planner",
       sequence: 10,
       timestamp: "2026-08-15T12:00:00.000Z",
       turnId: "turn-1",
       toolCallId: "delegate-1",
       delegationId: "delegate-research",
-      childConversationId: "conversation-2",
+      childThreadId: "thread-2",
       childRunId: "run-2",
       targetAgentId: "research-specialist",
       depth: 1,

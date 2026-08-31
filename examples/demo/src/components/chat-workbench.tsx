@@ -9,11 +9,6 @@ import { ChevronDown, FlaskConical, RotateCcw, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { AgentActivity } from "@/components/ai-elements/agent-activity";
-import {
-  Conversation,
-  ConversationContent,
-  ConversationScrollButton,
-} from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import {
   PromptInput,
@@ -22,6 +17,7 @@ import {
   PromptInputTextarea,
 } from "@/components/ai-elements/prompt-input";
 import { Reasoning } from "@/components/ai-elements/reasoning";
+import { Thread, ThreadContent, ThreadScrollButton } from "@/components/ai-elements/thread";
 import { Tool, ToolContent, ToolData, ToolHeader } from "@/components/ai-elements/tool";
 import { CapabilityChatTrace } from "@/components/capability-chat-trace";
 import { Badge } from "@/components/ui/badge";
@@ -190,7 +186,7 @@ export function ChatWorkbench() {
       <div className="mx-auto flex min-h-[calc(100svh-6.25rem)] max-w-4xl flex-col">
         <div className="mb-4 flex items-center justify-between gap-3 px-1">
           <div>
-            <p className="text-sm font-medium text-slate-900">Conversation</p>
+            <p className="text-sm font-medium text-slate-900">Thread</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               Plan a trip, revise it mid-run, or try a guarded demo hold.
             </p>
@@ -266,8 +262,8 @@ export function ChatWorkbench() {
         </div>
 
         <Card className="flex min-h-0 flex-1 flex-col overflow-hidden border-slate-300 bg-white/90 shadow-[0_20px_60px_-40px_rgb(15_23_42/0.4)] backdrop-blur-sm">
-          <Conversation aria-label="Conversation">
-            <ConversationContent className="mx-auto w-full max-w-3xl gap-6 px-4 py-7 sm:px-8">
+          <Thread aria-label="Thread">
+            <ThreadContent className="mx-auto w-full max-w-3xl gap-6 px-4 py-7 sm:px-8">
               {state.messages.map((message) => {
                 const activeAssistant =
                   message.role === "assistant" && message.id === activeAssistantId;
@@ -402,9 +398,9 @@ export function ChatWorkbench() {
                   {state.error}
                 </div>
               )}
-            </ConversationContent>
-            <ConversationScrollButton />
-          </Conversation>
+            </ThreadContent>
+            <ThreadScrollButton />
+          </Thread>
 
           <div className="border-t border-border bg-slate-50/80 p-3 sm:p-4">
             <div className="mx-auto max-w-3xl">

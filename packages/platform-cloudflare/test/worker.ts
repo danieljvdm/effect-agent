@@ -1,21 +1,21 @@
 import { Agent } from "@effect-agent/core";
-import { OperationDenied, ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/session";
+import { OperationDenied, ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/thread";
 import { Context, Crypto, Effect, Layer } from "effect";
 import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
 
 import {
-  ConversationObject,
+  ThreadObject,
   makeScheduleOwnerObjectClass,
   makeSubscriptionPartitionObjectClass,
-  ConversationObjectNamespace,
-  ConversationObjectIdentity,
+  ThreadObjectNamespace,
+  ThreadObjectIdentity,
   ScheduleOwnerIdentity,
-  type ConversationObjectRpc,
+  type ThreadObjectRpc,
 } from "../src/index.ts";
 import { layerFromBindings } from "../src/layers.ts";
 import {
-  CONVERSATIONS_BINDING,
+  THREADS_BINDING,
   DEPLOYMENT_ID,
   PRODUCER_PREFIX,
   fixtureReconcilerLayer,
@@ -45,15 +45,15 @@ import {
 } from "./subscription-fixtures.ts";
 
 /**
- * The WP3 test Worker entry: the REAL `ConversationObject.make` output under three
+ * The WP3 test Worker entry: the REAL `ThreadObject.make` output under three
  * bindings. Cadences are compressed for test speed; the armed-failpoint factories map hits
  * to `ctx.abort()` (arm-once, isolate-shared with the test files); the fixture Bindings are
  * captured per incarnation during Layer construction. The classes hold no test state of
  * their own — everything observable lives in Durable Object storage or the fixtures module.
  */
 
-const baseOptions: ConversationObject.Options = {
-  namespaceBinding: CONVERSATIONS_BINDING,
+const baseOptions: ThreadObject.Options = {
+  namespaceBinding: THREADS_BINDING,
   deploymentId: DEPLOYMENT_ID,
   producerPrefix: PRODUCER_PREFIX,
   // A dead incarnation's lease must lapse quickly so alarm passes reclaim its lane.
@@ -81,12 +81,12 @@ const scheduleHostLayer = Layer.mergeAll(
     Effect.map(DurableObjectState.DurableObjectState, (state) => scheduleFailpoint(state.raw)),
   ),
   Layer.effect(
-    ConversationObjectNamespace,
-    Effect.map(WorkerEnvironment, (env) => ({ namespace: env.CONVERSATIONS })),
+    ThreadObjectNamespace,
+    Effect.map(WorkerEnvironment, (env) => ({ namespace: env.THREADS })),
   ),
 );
 
-/** Real Schedule Owner object routed to the test Conversation namespace. */
+/** Real Schedule Owner object routed to the test Thread namespace. */
 export class TestScheduleOwnerObject extends makeScheduleOwnerObjectClass(scheduleHostLayer, {
   maxSchedulesPerOwner: 100,
   minIntervalMillis: 60_000,
@@ -104,12 +104,12 @@ const subscriptionHostLayer = Layer.mergeAll(
   subscriptionSourcesLayer,
   subscriptionFailpointLayer,
   Layer.effect(
-    ConversationObjectNamespace,
-    Effect.map(WorkerEnvironment, (env) => ({ namespace: env.CONVERSATIONS })),
+    ThreadObjectNamespace,
+    Effect.map(WorkerEnvironment, (env) => ({ namespace: env.THREADS })),
   ),
 );
 
-/** Real source-addressed Subscription Partition object routed to Conversation Objects. */
+/** Real source-addressed Subscription Partition object routed to Thread Objects. */
 export class TestSubscriptionPartitionObject extends makeSubscriptionPartitionObjectClass(
   subscriptionHostLayer,
   {
@@ -131,7 +131,7 @@ export class TestSubscriptionPartitionObject extends makeSubscriptionPartitionOb
 interface BindingSourceProbe {
   readonly evaluationCount: number;
   readonly incarnation: number;
-  readonly conversationId: string;
+  readonly threadId: string;
   readonly producerId: string;
   readonly rawEnvHasNamespace: boolean;
 }
@@ -151,13 +151,13 @@ const registrationResourceLayer = Layer.effect(
   Effect.gen(function* () {
     const { raw: ctx } = yield* DurableObjectState.DurableObjectState;
     const env = yield* WorkerEnvironment;
-    const { conversationId, producerId } = yield* ConversationObjectIdentity;
+    const { threadId, producerId } = yield* ThreadObjectIdentity;
     yield* Crypto.Crypto;
     const previous = bindingSourceProbes.get(ctx);
     bindingSourceProbes.set(ctx, {
       evaluationCount: (previous?.evaluationCount ?? 0) + 1,
       incarnation: previous?.incarnation ?? ++nextBindingSourceIncarnation,
-      conversationId,
+      threadId,
       producerId,
       rawEnvHasNamespace: env.DYNAMIC_BINDINGS !== undefined,
     });
@@ -176,7 +176,7 @@ const registrationResourceLayer = Layer.effect(
   }),
 );
 
-const dynamicRuntime = ConversationObject.layer([
+const dynamicRuntime = ThreadObject.layer([
   {
     agent: Agent.withModel(
       Agent.make(plannerDefinition.id, {
@@ -197,7 +197,7 @@ const dynamicRuntime = ConversationObject.layer([
   },
 ]).pipe(Layer.provideMerge(registrationResourceLayer));
 
-/** The eviction/alarm/chaos suites' Conversation Object. */
+/** The eviction/alarm/chaos suites' Thread Object. */
 const progressWaiterCounts = new WeakMap<DurableObjectState, number>();
 interface ProgressWaiterCountLatch {
   readonly expected: number;
@@ -246,7 +246,7 @@ const progressIncarnation = (ctx: DurableObjectState): number => {
   return created;
 };
 
-export class TestConversationObject extends ConversationObject.make(testRuntimeLayer, baseOptions) {
+export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, baseOptions) {
   override async awaitProgressEncoded(encoded: unknown): Promise<unknown> {
     progressIncarnation(this.ctx);
     setProgressWaiterCount(this.ctx, (progressWaiterCounts.get(this.ctx) ?? 0) + 1);
@@ -281,7 +281,7 @@ export class TestConversationObject extends ConversationObject.make(testRuntimeL
 }
 
 /** Tight queue-depth and input-size quotas for the admission-limits gate rows. */
-export class LimitedConversationObject extends ConversationObject.make(testRuntimeLayer, {
+export class LimitedThreadObject extends ThreadObject.make(testRuntimeLayer, {
   ...baseOptions,
   namespaceBinding: "LIMITED",
   maxQueueDepthPerLane: 2,
@@ -289,14 +289,14 @@ export class LimitedConversationObject extends ConversationObject.make(testRunti
 }) {}
 
 /** A database-size ceiling below any real database: every admission must refuse typed. */
-export class TinyDatabaseConversationObject extends ConversationObject.make(testRuntimeLayer, {
+export class TinyDatabaseThreadObject extends ThreadObject.make(testRuntimeLayer, {
   ...baseOptions,
   namespaceBinding: "TINYDB",
   maxDatabaseBytes: 1,
 }) {}
 
 /** Fail-closed authorization fixture for host-protocol error-tag fidelity. */
-export class DeniedConversationObject extends ConversationObject.make(testRuntimeLayer, {
+export class DeniedThreadObject extends ThreadObject.make(testRuntimeLayer, {
   ...baseOptions,
   namespaceBinding: "DENIED",
   operationAuthorizer: {
@@ -305,9 +305,7 @@ export class DeniedConversationObject extends ConversationObject.make(testRuntim
         OperationDenied.make({
           operation: request.operation,
           reason: "denied by the #94 Cloudflare fixture",
-          ...(request.conversationId === undefined
-            ? {}
-            : { conversationId: request.conversationId }),
+          ...(request.threadId === undefined ? {} : { threadId: request.threadId }),
           ...(request.submissionId === undefined ? {} : { submissionId: request.submissionId }),
         }),
       ),
@@ -315,7 +313,7 @@ export class DeniedConversationObject extends ConversationObject.make(testRuntim
 }) {}
 
 /** Registration acquisition through yielded effect-cf and platform services. */
-export class DynamicBindingsConversationObject extends ConversationObject.make(dynamicRuntime, {
+export class DynamicBindingsThreadObject extends ThreadObject.make(dynamicRuntime, {
   ...baseOptions,
   namespaceBinding: "DYNAMIC_BINDINGS",
   eventLayer: Layer.effectDiscard(
@@ -330,20 +328,18 @@ export class DynamicBindingsConversationObject extends ConversationObject.make(d
 }
 
 /** Issue #49: a scoped run-context Layer captured once per Object incarnation. */
-export class ContextCompactorConversationObject extends ConversationObject.make(
+export class ContextCompactorThreadObject extends ThreadObject.make(
   testRuntimeLayer.pipe(
     Layer.provide(
       Layer.unwrap(
-        Effect.map(ConversationObjectIdentity, ({ conversationId }) =>
-          makeContextCompactorRunContextLayer(conversationId),
+        Effect.map(ThreadObjectIdentity, ({ threadId }) =>
+          makeContextCompactorRunContextLayer(threadId),
         ),
       ),
     ),
     Layer.provide(
       Layer.unwrap(
-        Effect.map(ConversationObjectIdentity, ({ conversationId }) =>
-          makeContextAuthorizationLayer(conversationId),
-        ),
+        Effect.map(ThreadObjectIdentity, ({ threadId }) => makeContextAuthorizationLayer(threadId)),
       ),
     ),
   ),
@@ -354,7 +350,7 @@ export class ContextCompactorConversationObject extends ConversationObject.make(
 ) {}
 
 /** Minimal integration proof that effect-cf owns native RPC event scopes and OTLP flushing. */
-const TelemetryConversationObjectBase = ConversationObject.make(testRuntimeLayer, {
+const TelemetryThreadObjectBase = ThreadObject.make(testRuntimeLayer, {
   ...baseOptions,
   namespaceBinding: "TELEMETRY",
   wakeScanInterval: 60_000,
@@ -363,23 +359,21 @@ const TelemetryConversationObjectBase = ConversationObject.make(testRuntimeLayer
 });
 
 type TelemetryServices = Effect.Services<
-  Parameters<
-    InstanceType<typeof TelemetryConversationObjectBase>[typeof DurableObject.RunSymbol]
-  >[0]
+  Parameters<InstanceType<typeof TelemetryThreadObjectBase>[typeof DurableObject.RunSymbol]>[0]
 >;
 
-export class TelemetryConversationObject extends TelemetryConversationObjectBase {
+export class TelemetryThreadObject extends TelemetryThreadObjectBase {
   override [DurableObject.RunSymbol]<A, E>(
     effect: Effect.Effect<A, E, TelemetryServices>,
     options: DurableObject.RunOptions = {},
   ): Promise<A> {
     const event = options.event;
     if (event === undefined) return super[DurableObject.RunSymbol](effect, options);
-    const conversationId = this.ctx.id.name ?? this.ctx.id.toString();
+    const threadId = this.ctx.id.name ?? this.ctx.id.toString();
     const observed = Effect.gen(function* () {
       // Also proves that the factory's public hook retains the event Layer's service type.
       yield* OtlpExporter.Flusher;
-      telemetryProbe(conversationId).invocations.push(options);
+      telemetryProbe(threadId).invocations.push(options);
       return yield* effect;
     });
     return super[DurableObject.RunSymbol](
@@ -400,14 +394,14 @@ export class TelemetryConversationObject extends TelemetryConversationObjectBase
 }
 
 /**
- * The WP4 cross-Object subagent matrix's Conversation Object: parent and child Conversations
+ * The WP4 cross-Object subagent matrix's Thread Object: parent and child Threads
  * of one delegation are DIFFERENT Objects of this namespace by the identity rule. The
  * namespace wrapper is the DO-unreachable lever — an armed transport fault makes the
  * caller-side stub throw BEFORE owner-side execution, so the routed caller observes a
  * `PortTransportError` (and `AdmissionIndeterminate` on `resolveAdmission`, SUB-031). Wake
  * hints fail at the same seam and remain droppable. Unarmed, every stub is a passthrough.
  */
-const SubagentConversationObjectBase = ConversationObject.make(
+const SubagentThreadObjectBase = ThreadObject.make(
   Layer.unwrap(Effect.map(makeSubagentTestBindings, layerFromBindings)),
   {
     ...baseOptions,
@@ -415,7 +409,7 @@ const SubagentConversationObjectBase = ConversationObject.make(
   },
 );
 
-const faultableStub = <RpcService extends ConversationObjectRpc>(
+const faultableStub = <RpcService extends ThreadObjectRpc>(
   stub: DurableObjectStub<RpcService>,
   name: string | undefined,
 ): DurableObjectStub<RpcService> =>
@@ -440,7 +434,7 @@ const faultableStub = <RpcService extends ConversationObjectRpc>(
     },
   });
 
-const faultableNamespace = <RpcService extends ConversationObjectRpc>(
+const faultableNamespace = <RpcService extends ThreadObjectRpc>(
   namespace: DurableObjectNamespace<RpcService>,
 ): DurableObjectNamespace<RpcService> =>
   new Proxy(namespace, {
@@ -470,7 +464,7 @@ const faultableEnvironment = (env: Cloudflare.Env): Cloudflare.Env =>
     },
   });
 
-export class SubagentConversationObject extends SubagentConversationObjectBase {
+export class SubagentThreadObject extends SubagentThreadObjectBase {
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, faultableEnvironment(env));
   }
