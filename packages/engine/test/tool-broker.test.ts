@@ -1,4 +1,4 @@
-import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
@@ -18,7 +18,6 @@ import {
 } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
-import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentRuntime,
   ToolBroker,
@@ -29,6 +28,7 @@ import {
   type ToolBrokerPassOptions,
   type RunOptions,
 } from "../src/index.ts";
+import { ThreadHistory } from "../src/thread-history.ts";
 
 class QueryFailure extends Schema.TaggedError<QueryFailure>()("QueryFailure", {
   message: Schema.String,
@@ -40,7 +40,7 @@ const usage = {
 };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextConversationId: Effect.succeed(Schema.decodeSync(ConversationId)("conversation-broker")),
+  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-broker")),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-broker")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-broker")),
 });
@@ -171,7 +171,7 @@ const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
     return result;
   });
 
-const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
 
 layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
   it.effect("serializes cumulative reservations across concurrent outer handlers", () =>
@@ -593,7 +593,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
           "gen_ai.tool.name": "observed_query",
           "gen_ai.tool.call.id": "orchestrate-1#0",
           "gen_ai.agent.name": "broker-host",
-          "gen_ai.conversation.id": "conversation-broker",
+          "gen_ai.conversation.id": "thread-broker",
           "effect_agent.tool.execution_class": "readonly",
           "effect_agent.tool.invocation_kind": "programmatic",
           "effect_agent.tool.outcome": "success",

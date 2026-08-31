@@ -17,7 +17,7 @@
       "@effect-agent/pr-review",
       "@effect-agent/sandbox",
       "@effect-agent/sandbox-local",
-      "@effect-agent/session",
+      "@effect-agent/thread",
       "@effect-agent/storage-cloudflare",
       "@effect-agent/storage-memory",
       "@effect-agent/storage-sqlite",

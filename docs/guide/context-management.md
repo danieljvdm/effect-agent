@@ -137,7 +137,7 @@ the last provider-reported input and estimates appended content. The default com
 2. if pruning is insufficient, makes one metered summary call and keeps the instruction prefix,
    summary, and recent tail.
 
-Compaction changes the model view. It never rewrites the conversation log. `CompactionPerformed`
+Compaction changes the model view. It never rewrites the thread log. `CompactionPerformed`
 reports each reduction. DN and DC also append `CompactionCreated`, so later attempts and runs use
 the same compacted view.
 
@@ -153,7 +153,7 @@ ambiguity can duplicate that model call. A second rejection, or overflow without
 
 Install a `ContextCompactor` Layer to change the strategy, estimator, or summary model. The default
 is `ContextCompactor.layer`. All `AgentRuntime` entry points also need a
-[Conversation history policy](./conversations#history-policy-and-append-ownership).
+[Thread history policy](./threads#history-policy-and-append-ownership).
 
 ```ts
 const compactorLayer = ContextCompactor.layerWithModel(summaryModel);
@@ -207,7 +207,7 @@ value with both `hook` and `compactor` fields.
 ### Manage summaries yourself {#explicit-compaction-artifacts}
 
 `@effect-agent/capabilities` also has an application-managed data path.
-`prepareModelContext` derives bounded text from a `ConversationSnapshot`.
+`prepareModelContext` derives bounded text from a `ThreadSnapshot`.
 `digestCompactionSource` binds a `CompactionArtifact` to that source. `applyCompaction` validates
 the artifact before replacing covered view messages with its summary. The application creates,
 stores, and applies the artifact.

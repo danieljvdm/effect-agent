@@ -20,7 +20,7 @@ import {
   scheduleKeyString,
   scheduleKeyOf,
   scheduleOwnerKey,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Layer, Ref, Result, Schema } from "effect";
 
 interface MemoryScheduleState {

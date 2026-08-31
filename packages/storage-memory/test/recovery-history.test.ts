@@ -1,15 +1,15 @@
-import { AgentId, ConversationId } from "@effect-agent/core";
-import type { ConversationRead, RecoveryDecision } from "@effect-agent/session";
+import { AgentId, ThreadId } from "@effect-agent/core";
+import type { ThreadRead, RecoveryDecision } from "@effect-agent/thread";
 import {
   AbortCommand,
   AdmissionRequest,
   CanonicalBatch,
   CanonicalRecord,
   CanonicalSequence,
-  ConversationCreated,
-  ConversationMaterialization,
-  ConversationNotMaterialized,
-  ConversationStore,
+  ThreadCreated,
+  ThreadMaterialization,
+  ThreadNotMaterialized,
+  ThreadStore,
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -28,28 +28,28 @@ import {
   ToolReconciler,
   WakeScheduler,
   digestJson,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Context, DateTime, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 
-import { MemoryConversationStoreLive, MemorySubmissionLedgerLive } from "../src/index.ts";
+import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "../src/index.ts";
 
 class RecoveryReadProbe extends Context.Service<
   RecoveryReadProbe,
   {
     readonly failReadAfter: (sequence: CanonicalSequence) => Effect.Effect<void>;
-    readonly requests: Effect.Effect<ReadonlyArray<ConversationRead>>;
+    readonly requests: Effect.Effect<ReadonlyArray<ThreadRead>>;
     readonly reset: Effect.Effect<void>;
   }
 >()("@effect-agent/storage-memory/test/RecoveryReadProbe") {}
 
-const countingConversationStoreLayer = Layer.effectContext(
+const countingThreadStoreLayer = Layer.effectContext(
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
-    const requests = yield* Ref.make<ReadonlyArray<ConversationRead>>([]);
+    const store = yield* ThreadStore;
+    const requests = yield* Ref.make<ReadonlyArray<ThreadRead>>([]);
     const failingAfter = yield* Ref.make<Option.Option<CanonicalSequence>>(Option.none());
-    const counted = ConversationStore.of({
+    const counted = ThreadStore.of({
       materialize: store.materialize,
       append: store.append,
       read: (request) =>
@@ -59,9 +59,7 @@ const countingConversationStoreLayer = Layer.effectContext(
             const failure = yield* Ref.get(failingAfter);
             if (Option.isSome(failure) && request.afterSequence === failure.value) {
               yield* Ref.set(failingAfter, Option.none());
-              return Stream.fail(
-                ConversationNotMaterialized.make({ conversationId: request.conversationId }),
-              );
+              return Stream.fail(ThreadNotMaterialized.make({ threadId: request.threadId }));
             }
             return store.read(request);
           }),
@@ -71,7 +69,7 @@ const countingConversationStoreLayer = Layer.effectContext(
       inspectTail: store.inspectTail,
       checkpoints: store.checkpoints,
     });
-    return Context.make(ConversationStore, counted).pipe(
+    return Context.make(ThreadStore, counted).pipe(
       Context.add(
         RecoveryReadProbe,
         RecoveryReadProbe.of({
@@ -82,9 +80,9 @@ const countingConversationStoreLayer = Layer.effectContext(
       ),
     );
   }),
-).pipe(Layer.provide(MemoryConversationStoreLive));
+).pipe(Layer.provide(MemoryThreadStoreLive));
 
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeAgentId = Schema.decodeSync(AgentId);
 const decodeDeploymentId = Schema.decodeSync(DeploymentId);
 const decodeDigest = Schema.decodeSync(Digest);
@@ -95,7 +93,7 @@ const decodeProducerId = Schema.decodeSync(ProducerId);
 const decodeBatchId = Schema.decodeSync(CanonicalBatch.fields.batchId);
 const decodeRecordId = Schema.decodeSync(CanonicalRecord.fields.recordId);
 
-const CONVERSATION_ID = decodeConversationId("conversation-recovery-history-bound");
+const THREAD_ID = decodeThreadId("thread-recovery-history-bound");
 const AGENT_ID = decodeAgentId("agent-recovery-history-bound");
 const DEPLOYMENT_ID = decodeDeploymentId("deployment-recovery-history-bound");
 const PRODUCER_ID = decodeProducerId("producer-recovery-history-bound");
@@ -110,7 +108,7 @@ const HISTORY_TAIL = Schema.decodeSync(CanonicalSequence)(HISTORY_RECORDS);
 const runtimeLayer = DurableAgentRuntime.layer.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
-      countingConversationStoreLayer,
+      countingThreadStoreLayer,
       MemorySubmissionLedgerLive,
       WakeScheduler.layerNoop,
       DurableRuntimeFailpoint.layer,
@@ -124,10 +122,10 @@ const runtimeLayer = DurableAgentRuntime.layer.pipe(
 );
 
 const seedHistory = Effect.fn("RecoveryHistoryTest.seedHistory")(function* () {
-  const store = yield* ConversationStore;
+  const store = yield* ThreadStore;
   yield* store.materialize(
-    ConversationMaterialization.make({
-      conversationId: CONVERSATION_ID,
+    ThreadMaterialization.make({
+      threadId: THREAD_ID,
       producerEpoch: FIRST_EPOCH,
     }),
   );
@@ -140,13 +138,13 @@ const seedHistory = Effect.fn("RecoveryHistoryTest.seedHistory")(function* () {
       const sequence = start + offset;
       return CanonicalRecord.make({
         recordId: decodeRecordId(`history-seed:${sequence}`),
-        family: "conversation",
+        family: "thread",
         schemaVersion: 1,
         createdAt: DateTime.toUtc(DateTime.makeUnsafe(sequence + 1)),
         deploymentId: DEPLOYMENT_ID,
         payload:
           sequence === 0
-            ? ConversationCreated.make({ agentId: AGENT_ID, definitions: DEFINITIONS })
+            ? ThreadCreated.make({ agentId: AGENT_ID, definitions: DEFINITIONS })
             : RepairAnnotated.make({ reason: "history seed", details: { sequence } }),
       });
     });
@@ -156,7 +154,7 @@ const seedHistory = Effect.fn("RecoveryHistoryTest.seedHistory")(function* () {
     }
     const appended = yield* store.append(
       FencedAppendRequest.make({
-        conversationId: CONVERSATION_ID,
+        threadId: THREAD_ID,
         batch: CanonicalBatch.make({
           batchId: decodeBatchId(`history-seed:${start}`),
           producerId: PRODUCER_ID,
@@ -186,7 +184,7 @@ describe("DurableAgentRuntime recovery history", () => {
         admitted.push(
           yield* ledger.admit(
             AdmissionRequest.make({
-              conversationId: CONVERSATION_ID,
+              threadId: THREAD_ID,
               principal: PRINCIPAL,
               idempotencyKey: decodeIdempotencyKey(`recovery-history-${index}`),
               agentId: AGENT_ID,
@@ -255,7 +253,7 @@ describe("DurableAgentRuntime recovery history", () => {
         const inputDigest = yield* digestJson(input);
         const admitted = yield* ledger.admit(
           AdmissionRequest.make({
-            conversationId: CONVERSATION_ID,
+            threadId: THREAD_ID,
             principal: PRINCIPAL,
             idempotencyKey: decodeIdempotencyKey(`recovery-suffix-race-${index}`),
             agentId: AGENT_ID,
@@ -281,7 +279,7 @@ describe("DurableAgentRuntime recovery history", () => {
       yield* probe.failReadAfter(HISTORY_TAIL);
       const failure = yield* runtime.runRecovery.pipe(Effect.flip);
       expect(failure).toMatchObject({
-        _tag: "ConversationStoreError",
+        _tag: "ThreadStoreError",
         operation: "read recovery history",
       });
       const requests = (yield* probe.requests).map((request) => ({

@@ -14,7 +14,7 @@ import {
   RunId,
   ToolCallId,
 } from "@effect-agent/core";
-import { AgentRuntime, AgentSpawner, ConversationHistory } from "@effect-agent/engine";
+import { AgentRuntime, AgentSpawner, ThreadHistory } from "@effect-agent/engine";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
 import {
   AirportCode,
@@ -61,7 +61,7 @@ const makeCoordinator = (turns: ReadonlyArray<ScriptedTurnInput>) =>
   );
 
 const TestSupportLayer = Layer.mergeAll(
-  ConversationHistory.layerTransient,
+  ThreadHistory.layerTransient,
   SubagentReservationsMemoryLive,
   CatalogLifecycle.layerNoDeps,
   DeterministicIdGeneratorLayer,
@@ -357,7 +357,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
         // Base identity is the parent's; delegation lineage names the child.
         expect(event).toMatchObject({
           runId,
-          conversationId: result.conversationId,
+          threadId: result.threadId,
           agentId: "travel-coordinator",
           toolCallId: "research-lhr-1",
           delegationId: "delegate_destination_research",
@@ -366,11 +366,11 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
         });
         expect(event?.turnId).toBeDefined();
         expect(event?.childRunId).toBe(requested?.childRunId);
-        expect(event?.childConversationId).toBe(requested?.childConversationId);
+        expect(event?.childThreadId).toBe(requested?.childThreadId);
       }
       // The child owns fresh, distinct identity (SUB-004).
       expect(requested?.childRunId).not.toBe(runId);
-      expect(requested?.childConversationId).not.toBe(result.conversationId);
+      expect(requested?.childThreadId).not.toBe(result.threadId);
       expect(completed).toMatchObject({ turns: 2 });
 
       // The parent Tool result is the projected, Schema-encoded finding.
@@ -745,7 +745,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
       expect(result.output).toEqual(lhrShortlist);
       expect(childPromptChecks).toBe(2);
       // Only the projected finding crossed back to the parent: the child's
-      // guide highlights and report internals stay in the child Conversation
+      // guide highlights and report internals stay in the child Thread
       // (SUB-015).
       expect(parentSecondPrompt).toContain("London favors museum mornings");
       expect(parentSecondPrompt).not.toContain("Barbican brutalism walk");

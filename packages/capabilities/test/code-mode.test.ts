@@ -1,5 +1,5 @@
-import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import { ToolExecutionClass, AgentRuntime, ConversationHistory } from "@effect-agent/engine";
+import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import { ToolExecutionClass, AgentRuntime, ThreadHistory } from "@effect-agent/engine";
 import {
   CodeExecutionHost,
   CodeExecutionResult,
@@ -210,7 +210,7 @@ const scriptedExecutorLayer = Layer.succeed(CodeExecutor)(
 const usage = { inputTokens: {}, outputTokens: {} };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextConversationId: Effect.succeed(Schema.decodeSync(ConversationId)("conversation-code-mode")),
+  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-code-mode")),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-code-mode")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-code-mode")),
 });
@@ -323,7 +323,7 @@ const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number 
     } satisfies ScenarioOutcome;
   });
 
-const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
 
 layer(testLayer)("CAP-016 Code Mode handler through a scripted executor", (it) => {
   it.effect(

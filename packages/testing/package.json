@@ -34,7 +34,7 @@
     "@effect-agent/core": "workspace:*",
     "@effect-agent/engine": "workspace:*",
     "@effect-agent/sandbox": "workspace:*",
-    "@effect-agent/session": "workspace:*"
+    "@effect-agent/thread": "workspace:*"
   },
   "devDependencies": {
     "@effect-agent/platform-node": "workspace:*",

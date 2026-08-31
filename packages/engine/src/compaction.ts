@@ -15,8 +15,7 @@ import { Prompt } from "effect/unstable/ai";
 export const CLEARED_TOOL_RESULT = "[tool result cleared by compaction]";
 
 /** Prefix of the user message that carries a compaction summary into the prompt. */
-export const COMPACTION_SUMMARY_PREFIX =
-  "The prior conversation was compacted into this summary:\n\n";
+export const COMPACTION_SUMMARY_PREFIX = "The prior thread was compacted into this summary:\n\n";
 
 /**
  * Fixed summarization instruction (RUN-026). The skeleton mirrors what the
@@ -24,7 +23,7 @@ export const COMPACTION_SUMMARY_PREFIX =
  * survive because the continuing agent sees only this summary plus the tail.
  */
 export const COMPACTION_INSTRUCTION = [
-  "You are compacting an agent conversation to reclaim context space.",
+  "You are compacting an agent thread to reclaim context space.",
   "Summarize the transcript below for the SAME agent to continue working:",
   "it will see only this summary plus the most recent messages.",
   "Structure the summary exactly as:",
@@ -35,7 +34,7 @@ export const COMPACTION_INSTRUCTION = [
   "Next steps:",
   "Critical context:",
   "Be terse. Preserve exact file paths, identifiers, and values needed to",
-  "continue. Do not continue the conversation; output only the summary.",
+  "continue. Do not continue the thread; output only the summary.",
 ].join("\n");
 
 /**

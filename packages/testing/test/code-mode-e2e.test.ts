@@ -1,15 +1,17 @@
 import { CodeMode } from "@effect-agent/capabilities";
-import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import {
-  ConversationHistory,
+  ThreadHistory,
   AgentRuntime,
   ToolExecutionClass,
   toolFailureObserverLayer,
   type ToolFailureObservation,
 } from "@effect-agent/engine";
+import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+import { inProcessCodeExecutorLayer } from "@effect-agent/testing/code-executor";
 import {
-  ConversationRead,
-  ConversationStore,
+  ThreadRead,
+  ThreadStore,
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -21,12 +23,7 @@ import {
   ProducerId,
   ToolReconciler,
   WakeScheduler,
-} from "@effect-agent/session";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
-import { inProcessCodeExecutorLayer } from "@effect-agent/testing/code-executor";
+} from "@effect-agent/thread";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Layer, Logger, Ref, References, Schema, Stream } from "effect";
@@ -42,7 +39,7 @@ import {
 const usage = { inputTokens: {}, outputTokens: {} };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextConversationId: Effect.succeed(Schema.decodeSync(ConversationId)("conversation-cm-e2e")),
+  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-cm-e2e")),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-cm-e2e")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-cm-e2e")),
 });
@@ -168,7 +165,7 @@ const runScenario = (options: { readonly code: string; readonly maxToolCalls: nu
 // The suite opts out of the injected test services because the in-process
 // executor's wall-clock deadline runs on the live Clock (see the substitute
 // suite for the rationale).
-const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
 
 layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => {
   it.effect(
@@ -221,7 +218,7 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
       const runtimeLayer = DurableAgentRuntime.layer.pipe(
         Layer.provideMerge(
           Layer.mergeAll(
-            MemoryConversationStoreLive,
+            MemoryThreadStoreLive,
             MemorySubmissionLedgerLive,
             WakeScheduler.layerNoop,
             DurableRuntimeFailpoint.layer,
@@ -300,15 +297,15 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
         );
         const agent = Agent.withModel(definition, model);
         const runtime = yield* DurableAgentRuntime;
-        const conversationId = ConversationId.make("code-mode-observer");
+        const threadId = ThreadId.make("code-mode-observer");
         const digest = Digest.make("a".repeat(64));
         const receipt = yield* runtime.submit(agent, "search", {
-          conversationId,
+          threadId,
           principal: Principal.make("test"),
           idempotencyKey: IdempotencyKey.make("search"),
           definitions: DefinitionDigests.make({ agent: digest, model: digest, tools: digest }),
         });
-        yield* runtime.processConversation(agent, conversationId).pipe(Effect.provide(handlers));
+        yield* runtime.processThread(agent, threadId).pipe(Effect.provide(handlers));
         const settlement = yield* runtime.awaitSettlement(receipt);
         expect(settlement.outcome).toBe("completed");
         expect(observations).toHaveLength(3);
@@ -338,9 +335,9 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
         });
         expect(observations[2]).not.toHaveProperty("cause");
         expect(observations[2]).not.toHaveProperty("message");
-        const store = yield* ConversationStore;
+        const store = yield* ThreadStore;
         const records = yield* store
-          .read(ConversationRead.make({ conversationId, limit: 1_024 }))
+          .read(ThreadRead.make({ threadId, limit: 1_024 }))
           .pipe(Stream.runCollect);
         const tools = records.filter(
           (envelope) => envelope.record.payload._tag === "ToolCallSettled",

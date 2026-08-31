@@ -1,8 +1,8 @@
-import { ConversationId } from "@effect-agent/core";
+import { ThreadId } from "@effect-agent/core";
 import { Crypto, Effect, Encoding, Schema } from "effect";
 import type { Prompt } from "effect/unstable/ai";
 
-import { ConversationMessage, ConversationSnapshot, ConversationText } from "./conversation.ts";
+import { ThreadMessage, ThreadSnapshot, ThreadText } from "./thread.ts";
 
 const MAX_CONTEXT_MESSAGES = 1_024;
 const MAX_CONTEXT_MESSAGE_BYTES = 4 * 1024 * 1024;
@@ -20,7 +20,7 @@ export class ModelContextMessage extends Schema.Class<ModelContextMessage>(
   "@effect-agent/capabilities/ModelContextMessage",
 )({
   role: Schema.Literals(["system", "user", "assistant", "tool"]),
-  content: ConversationText,
+  content: ThreadText,
   sourceSequences: SourceSequences,
 }) {}
 
@@ -63,7 +63,7 @@ export class CompactionArtifact extends Schema.Class<CompactionArtifact>(
   "@effect-agent/capabilities/CompactionArtifact",
 )({
   version: Schema.Literal(1),
-  conversationId: ConversationId,
+  threadId: ThreadId,
   coversFrom: Schema.Natural,
   coversThrough: Schema.Natural,
   summary: ModelContextMessage,
@@ -77,7 +77,7 @@ export class CompactionArtifact extends Schema.Class<CompactionArtifact>(
 export class PreparedModelContext extends Schema.Class<PreparedModelContext>(
   "@effect-agent/capabilities/PreparedModelContext",
 )({
-  source: ConversationSnapshot,
+  source: ThreadSnapshot,
   messages: ModelContextMessages,
   compactions: Schema.Array(CompactionArtifact).check(Schema.isMaxLength(MAX_COMPACTIONS)),
 }) {}
@@ -136,7 +136,7 @@ const messageText = (message: Prompt.Message): string => {
   return content.slice(0, 64 * 1024);
 };
 
-const asModelMessages = (snapshot: ConversationSnapshot): ReadonlyArray<ModelContextMessage> =>
+const asModelMessages = (snapshot: ThreadSnapshot): ReadonlyArray<ModelContextMessage> =>
   snapshot.messages.map((entry) =>
     ModelContextMessage.make({
       role: entry.message.role,
@@ -170,7 +170,7 @@ const validateModelView = (
 
 /** Apply transforms in declaration order, always restoring the original source snapshot. */
 export const prepareModelContext = (
-  snapshot: ConversationSnapshot,
+  snapshot: ThreadSnapshot,
   transforms: ReadonlyArray<ContextTransform> = [],
 ): Effect.Effect<PreparedModelContext, ContextTransformError> =>
   transforms
@@ -193,10 +193,10 @@ export const prepareModelContext = (
     );
 
 const exactSourceRange = (
-  snapshot: ConversationSnapshot,
+  snapshot: ThreadSnapshot,
   coversFrom: number,
   coversThrough: number,
-): Effect.Effect<ReadonlyArray<ConversationMessage>, InvalidCompactionArtifact> => {
+): Effect.Effect<ReadonlyArray<ThreadMessage>, InvalidCompactionArtifact> => {
   if (coversFrom > coversThrough || coversThrough >= snapshot.nextSequence) {
     return Effect.fail(
       InvalidCompactionArtifact.make({
@@ -233,12 +233,12 @@ const utf8Bytes = (value: string): Uint8Array => {
 
 /** Compute a cryptographic digest over the canonical encoded exact source range. */
 export const digestCompactionSource = Effect.fn("digestCompactionSource")(function* (
-  snapshot: ConversationSnapshot,
+  snapshot: ThreadSnapshot,
   coversFrom: number,
   coversThrough: number,
 ) {
   const selected = yield* exactSourceRange(snapshot, coversFrom, coversThrough);
-  const encoded = yield* Schema.encodeEffect(Schema.Array(ConversationMessage))(selected).pipe(
+  const encoded = yield* Schema.encodeEffect(Schema.Array(ThreadMessage))(selected).pipe(
     Effect.mapError((error) =>
       CompactionDigestError.make({
         message: `Could not encode compaction source: ${error.message}`,
@@ -269,9 +269,9 @@ export const applyCompaction = Effect.fn("applyCompaction")(function* (
   context: PreparedModelContext,
   artifact: CompactionArtifact,
 ) {
-  if (artifact.conversationId !== context.source.conversationId) {
+  if (artifact.threadId !== context.source.threadId) {
     return yield* InvalidCompactionArtifact.make({
-      message: "Compaction artifact belongs to another Conversation",
+      message: "Compaction artifact belongs to another Thread",
     });
   }
   const actualDigest = yield* digestCompactionSource(

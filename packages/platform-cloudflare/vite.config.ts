@@ -22,11 +22,11 @@ const run: NonNullable<UserConfig["run"]> = {
 
 // Two lanes, one runner (WP0 probe contract, D-P6-7 Fallback A):
 //
-// - `workerd` — tests execute inside workerd against real SQLite-backed Conversation Durable
+// - `workerd` — tests execute inside workerd against real SQLite-backed Thread Durable
 //   Objects (`@cloudflare/vitest-pool-workers` 0.21.x via its `cloudflareTest` Vite plugin;
 //   `defineWorkersConfig` no longer exists on the vitest 4 line). The 0.21.x pool has no
 //   `isolatedStorage`: Durable Object storage is SHARED across tests within a run, so every
-//   suite mints a unique Conversation name per case.
+//   suite mints a unique Thread name per case.
 // - `restart` — Node-side Miniflare programmatic runtimes for restart-persistence evidence
 //   (dispose/reopen over one persist directory); these spawn real runtimes and HTTP
 //   listeners and cannot run inside workerd.
@@ -62,23 +62,23 @@ export default defineConfig({
               compatibilityDate: "2025-05-01",
               compatibilityFlags: ["nodejs_compat"],
               durableObjects: {
-                CONVERSATIONS: { className: "TestConversationObject", useSQLite: true },
+                THREADS: { className: "TestThreadObject", useSQLite: true },
                 SCHEDULES: { className: "TestScheduleOwnerObject", useSQLite: true },
                 SUBSCRIPTIONS: { className: "TestSubscriptionPartitionObject", useSQLite: true },
-                LIMITED: { className: "LimitedConversationObject", useSQLite: true },
-                TINYDB: { className: "TinyDatabaseConversationObject", useSQLite: true },
-                DENIED: { className: "DeniedConversationObject", useSQLite: true },
-                SUBAGENTS: { className: "SubagentConversationObject", useSQLite: true },
+                LIMITED: { className: "LimitedThreadObject", useSQLite: true },
+                TINYDB: { className: "TinyDatabaseThreadObject", useSQLite: true },
+                DENIED: { className: "DeniedThreadObject", useSQLite: true },
+                SUBAGENTS: { className: "SubagentThreadObject", useSQLite: true },
                 DYNAMIC_BINDINGS: {
-                  className: "DynamicBindingsConversationObject",
+                  className: "DynamicBindingsThreadObject",
                   useSQLite: true,
                 },
                 TELEMETRY: {
-                  className: "TelemetryConversationObject",
+                  className: "TelemetryThreadObject",
                   useSQLite: true,
                 },
                 CONTEXT_COMPACTOR: {
-                  className: "ContextCompactorConversationObject",
+                  className: "ContextCompactorThreadObject",
                   useSQLite: true,
                 },
               },
@@ -117,7 +117,7 @@ export default defineConfig({
               compatibilityDate: "2025-05-01",
               compatibilityFlags: ["nodejs_compat"],
               durableObjects: {
-                CONVERSATIONS: { className: "TravelPlannerConversationObject", useSQLite: true },
+                THREADS: { className: "TravelPlannerThreadObject", useSQLite: true },
                 LIMITED: { className: "TravelPlannerLimitedObject", useSQLite: true },
               },
             },

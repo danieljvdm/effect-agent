@@ -1,16 +1,16 @@
-import type {
-  ConversationStore,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  SubmissionLedger,
-} from "@effect-agent/session";
-import type { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
 import {
   ChaosPlan,
   ChaosSubmissionSpec,
   runChaosPlan,
   type ChaosConvergenceFailure,
 } from "@effect-agent/testing/chaos";
+import type {
+  ThreadStore,
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  SubmissionLedger,
+} from "@effect-agent/thread";
+import type { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
 import type { Crypto, Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -36,7 +36,7 @@ const program = runChaosPlan(
 );
 
 type ExpectedRequirements =
-  | ConversationStore
+  | ThreadStore
   | Crypto.Crypto
   | DurableAgentRuntime
   | DurableRuntimeConfig

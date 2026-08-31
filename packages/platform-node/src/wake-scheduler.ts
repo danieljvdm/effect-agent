@@ -1,6 +1,7 @@
-import type { ConversationId } from "@effect-agent/core";
-import { makeWakeSubscriptionHub, SubmissionLedger, WakeScheduler } from "@effect-agent/session";
-import { Context, Duration, Effect, Layer, PubSub, Stream } from "effect";
+import type { ThreadId } from "@effect-agent/core";
+import { makeWakeSubscriptionHub, SubmissionLedger, WakeScheduler } from "@effect-agent/thread";
+import type { Duration } from "effect";
+import { Context, Effect, Layer, PubSub, Stream } from "effect";
 
 /**
  * Bounded in-process wake buffer. Wake hints are droppable by contract (the ledger-scan fallback
@@ -12,7 +13,7 @@ const WAKE_BUFFER_CAPACITY = 1_024;
 export class NodeWakeSchedulerConfig extends Context.Service<
   NodeWakeSchedulerConfig,
   {
-    /** Interval between ledger scans that re-emit every nonterminal Conversation lane. */
+    /** Interval between ledger scans that re-emit every nonterminal Thread lane. */
     readonly scanInterval: Duration.Duration;
   }
 >()("@effect-agent/platform-node/NodeWakeSchedulerConfig") {
@@ -26,28 +27,28 @@ export class NodeWakeSchedulerConfig extends Context.Service<
 const makeWakeScheduler = Effect.gen(function* () {
   const ledger = yield* SubmissionLedger;
   const config = yield* NodeWakeSchedulerConfig;
-  const hints = yield* PubSub.sliding<ConversationId>(WAKE_BUFFER_CAPACITY);
+  const hints = yield* PubSub.sliding<ThreadId>(WAKE_BUFFER_CAPACITY);
   const progress = yield* makeWakeSubscriptionHub;
   yield* Effect.addFinalizer(() => PubSub.shutdown(hints));
 
   /**
-   * One fallback scan: every Conversation lane with nonterminal work, deduplicated. A scan
+   * One fallback scan: every Thread lane with nonterminal work, deduplicated. A scan
    * failure degrades to "no hints this round" — the wake channel has no error contract and the
    * next round retries — but is logged so a persistently failing ledger stays visible.
    */
-  const scanOnce: Effect.Effect<ReadonlyArray<ConversationId>> = Stream.runCollect(
+  const scanOnce: Effect.Effect<ReadonlyArray<ThreadId>> = Stream.runCollect(
     ledger.scanNonterminal,
   ).pipe(
     Effect.map((snapshots) => {
-      const lanes = new Set<ConversationId>();
+      const lanes = new Set<ThreadId>();
       for (const snapshot of snapshots) {
-        lanes.add(snapshot.conversationId);
+        lanes.add(snapshot.threadId);
       }
       return [...lanes];
     }),
     Effect.catch((error) =>
       Effect.logWarning("NodeWakeScheduler fallback scan failed", error).pipe(
-        Effect.as([] as ReadonlyArray<ConversationId>),
+        Effect.as([] as ReadonlyArray<ThreadId>),
       ),
     ),
   );
@@ -57,15 +58,15 @@ const makeWakeScheduler = Effect.gen(function* () {
    * merges its PubSub subscription with a Clock-driven ledger-scan loop. Both live entirely in
    * the consuming run's Scope; no fiber outlives its subscriber.
    */
-  const fallbackScans: Stream.Stream<ConversationId> = Stream.fromIterableEffectRepeat(
+  const fallbackScans: Stream.Stream<ThreadId> = Stream.fromIterableEffectRepeat(
     Effect.sleep(config.scanInterval).pipe(Effect.andThen(scanOnce)),
   );
 
   return WakeScheduler.of({
-    notify: (conversationId) =>
+    notify: (threadId) =>
       progress
-        .notify(conversationId)
-        .pipe(Effect.andThen(PubSub.publish(hints, conversationId)), Effect.asVoid),
+        .notify(threadId)
+        .pipe(Effect.andThen(PubSub.publish(hints, threadId)), Effect.asVoid),
     subscribe: progress.subscribe,
     wakes: Stream.merge(Stream.fromPubSub(hints), fallbackScans),
   });

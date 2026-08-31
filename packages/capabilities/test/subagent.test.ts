@@ -2,7 +2,7 @@ import {
   Agent,
   type AgentOutputError,
   AgentPolicy,
-  ConversationId,
+  ThreadId,
   IdGenerator,
   ReceiptId,
   type RunEvent,
@@ -12,7 +12,7 @@ import {
   TurnId,
 } from "@effect-agent/core";
 import {
-  ConversationHistory,
+  ThreadHistory,
   type RunEventSink,
   type SubagentDurability,
   type SubagentDurabilityError,
@@ -84,7 +84,7 @@ const usage = {
   outputTokens: {},
 };
 
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeRunId = Schema.decodeSync(RunId);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const decodeTurnId = Schema.decodeSync(TurnId);
@@ -98,7 +98,7 @@ const identifiers = Layer.effect(IdGenerator)(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
     return {
-      nextConversationId: next(decodeConversationId, "conversation"),
+      nextThreadId: next(decodeThreadId, "thread"),
       nextRunId: next(decodeRunId, "run"),
       nextTurnId: next(decodeTurnId, "turn"),
     };
@@ -108,7 +108,7 @@ const identifiers = Layer.effect(IdGenerator)(
 const TestServices = Layer.mergeAll(
   identifiers,
   SubagentReservationsMemoryLive,
-  ConversationHistory.layerTransient,
+  ThreadHistory.layerTransient,
 );
 
 const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncoded> => [
@@ -412,7 +412,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       });
       // The child owns fresh, distinct identity preallocated by the spawner.
       expect(joined?.childRunId).not.toBe(runId);
-      expect(joined?.childConversationId).not.toBe(result.conversationId);
+      expect(joined?.childThreadId).not.toBe(result.threadId);
       const requested = findEvent(events, "SubagentRequested");
       expect(requested?.childRunId).toBe(joined?.childRunId);
       expect(findEvent(events, "SubagentCompleted")).toMatchObject({ turns: 1 });
@@ -1355,7 +1355,7 @@ const decodeSubmissionId = Schema.decodeSync(SubmissionId);
 const decodeReceiptId = Schema.decodeSync(ReceiptId);
 
 const durableChildIdentity = (suffix: string): RunSubagentChildIdentity => ({
-  childConversationId: decodeConversationId(`durable-child-conversation-${suffix}`),
+  childThreadId: decodeThreadId(`durable-child-thread-${suffix}`),
   childSubmissionId: decodeSubmissionId(`durable-child-submission-${suffix}`),
   childRunId: decodeRunId(`durable-child-run-${suffix}`),
   receiptId: decodeReceiptId(`durable-child-receipt-${suffix}`),
@@ -1525,7 +1525,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       expect(failure.children).toEqual([
         {
           toolCallId: "call-1",
-          childConversationId: child.childConversationId,
+          childThreadId: child.childThreadId,
           childSubmissionId: child.childSubmissionId,
           childRunId: child.childRunId,
         },
@@ -1584,7 +1584,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         });
         expect(findEvent(events, "SubagentJoined")).toMatchObject({
           toolCallId: "call-1",
-          childConversationId: child.childConversationId,
+          childThreadId: child.childThreadId,
           childRunId: child.childRunId,
         });
         expect(yield* Ref.get(joins)).toEqual([
@@ -1669,7 +1669,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         classification: "child-failed",
         delegationId: "delegate_research",
         targetAgentId: "research-child",
-        childConversationId: child.childConversationId,
+        childThreadId: child.childThreadId,
         childSubmissionId: child.childSubmissionId,
         childRunId: child.childRunId,
         errorTag: "TravelPlanningFailed",
@@ -1685,9 +1685,9 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       const encodedFailure = recordedJoins[0]?.encodedResult as Record<string, unknown>;
       expect(Object.keys(encodedFailure).sort()).toEqual([
         "_tag",
-        "childConversationId",
         "childRunId",
         "childSubmissionId",
+        "childThreadId",
         "classification",
         "delegationId",
         "errorTag",

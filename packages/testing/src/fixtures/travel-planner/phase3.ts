@@ -1,23 +1,23 @@
-import { AgentId, ConversationId, RunId, SubmissionId } from "@effect-agent/core";
+import { AgentId, ThreadId, RunId, SubmissionId } from "@effect-agent/core";
 import {
   BatchId,
   CanonicalBatch,
-  ConversationCheckpoint,
-  ConversationProjection,
+  ThreadCheckpoint,
+  ThreadProjection,
   DefinitionDigests,
   DeploymentId,
   Digest,
   ProducerId,
   RecordEnvelope,
   RecordId,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Schema } from "effect";
 
 import { TravelPlan, TripRequest } from "./definition.ts";
 import { expectedTravelPlan, phase1Trip } from "./scenarios.ts";
 
 /**
- * The Phase 3 profile persists Conversation history but deliberately does not
+ * The Phase 3 profile persists Thread history but deliberately does not
  * claim durable admission or recovery of accepted work.
  */
 export class TravelPlannerPersistenceProfile extends Schema.Class<TravelPlannerPersistenceProfile>(
@@ -34,9 +34,7 @@ export const phase3TravelPlannerProfile = TravelPlannerPersistenceProfile.make({
   canonicalSchemaVersion: 1,
 });
 
-export const phase3TravelPlannerConversationId = Schema.decodeSync(ConversationId)(
-  "travel-planner-p3-conversation",
-);
+export const phase3TravelPlannerThreadId = Schema.decodeSync(ThreadId)("travel-planner-p3-thread");
 export const phase3TravelPlannerProducerId = Schema.decodeSync(ProducerId)(
   "travel-planner-p3-producer",
 );
@@ -61,7 +59,7 @@ const travelPlanOutput = Schema.encodeSync(TravelPlan)(expectedTravelPlan);
 const record = (recordId: string, createdAt: string, payload: unknown) =>
   Schema.decodeUnknownSync(RecordEnvelope)({
     recordId: Schema.decodeSync(RecordId)(recordId),
-    family: "conversation",
+    family: "thread",
     schemaVersion: 1,
     createdAt,
     deploymentId,
@@ -69,7 +67,7 @@ const record = (recordId: string, createdAt: string, payload: unknown) =>
   });
 
 /**
- * The first atomic append establishes the Conversation and records its input.
+ * The first atomic append establishes the Thread and records its input.
  * Its encoded value is the redacted current-version persistence fixture.
  */
 export const phase3TravelPlannerInitialBatch = CanonicalBatch.make({
@@ -77,7 +75,7 @@ export const phase3TravelPlannerInitialBatch = CanonicalBatch.make({
   producerId: phase3TravelPlannerProducerId,
   records: [
     record("travel-planner-p3-created", "2026-09-01T00:00:00.000Z", {
-      _tag: "ConversationCreated",
+      _tag: "ThreadCreated",
       agentId,
       definitions: phase3TravelPlannerDefinitionDigests,
     }),
@@ -125,7 +123,7 @@ export class TravelPlannerProjectionError extends Schema.TaggedError<TravelPlann
 
 /** Decode the itinerary projection rebuilt from canonical model-completion records. */
 export const travelPlanFromProjection = (
-  projection: ConversationProjection,
+  projection: ThreadProjection,
 ): Effect.Effect<TravelPlan, TravelPlannerProjectionError> => {
   const output = projection.modelOutputs.at(-1);
   if (output === undefined) {
@@ -141,18 +139,16 @@ export const travelPlanFromProjection = (
 };
 
 /** Build a disposable checkpoint bound to a validated canonical prefix. */
-export const makePhase3TravelPlannerCheckpoint = (
-  projection: ConversationProjection,
-): ConversationCheckpoint =>
-  Schema.decodeSync(ConversationCheckpoint)({
+export const makePhase3TravelPlannerCheckpoint = (projection: ThreadProjection): ThreadCheckpoint =>
+  Schema.decodeSync(ThreadCheckpoint)({
     schemaVersion: 1,
-    conversationId: projection.conversationId,
+    threadId: projection.threadId,
     throughSequence: projection.throughSequence,
     tailDigest: projection.tailDigest,
     engineVersion: "phase-3-test-runtime",
     agentDefinitionDigest: phase3TravelPlannerDefinitionDigests.agent,
     modelDigest: phase3TravelPlannerDefinitionDigests.model,
     toolDigest: phase3TravelPlannerDefinitionDigests.tools,
-    state: Schema.encodeSync(ConversationProjection)(projection),
+    state: Schema.encodeSync(ThreadProjection)(projection),
     createdAt: "2026-09-01T00:00:04.000Z",
   });

@@ -1,4 +1,10 @@
 import {
+  SqliteStorageConfig,
+  SqliteStorageConfigValue,
+  SqliteStorageFailpoint,
+  subscriptionStoreLayer,
+} from "@effect-agent/storage-sqlite";
+import {
   EventSources,
   SubscriptionInputBindings,
   makeSubscriptionInputBinding,
@@ -8,7 +14,7 @@ import {
   SubscriptionIntake,
   Subscriptions,
   type EventSource,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import {
   acceptVerifiedGitHubWorkflowRunWebhook,
   githubWorkflowRunsHttpLayer,
@@ -20,13 +26,7 @@ import {
   makeGitHubWorkflowRunSource,
   type VerifiedGitHubWorkflowRunWebhookRequest,
   webCryptoGitHubWebhookSignatureVerifierLayer,
-} from "@effect-agent/session/github";
-import {
-  SqliteStorageConfig,
-  SqliteStorageConfigValue,
-  SqliteStorageFailpoint,
-  subscriptionStoreLayer,
-} from "@effect-agent/storage-sqlite";
+} from "@effect-agent/thread/github";
 import { NodeHttpClient } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Effect, Layer, Schema, type Redacted } from "effect";

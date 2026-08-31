@@ -1,9 +1,9 @@
-import { submissionSettlementRecordId } from "@effect-agent/session";
+import { submissionSettlementRecordId } from "@effect-agent/thread";
 import { runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { CloudflareConversationClient } from "../src/index.ts";
+import { CloudflareThreadClient } from "../src/index.ts";
 import {
   contextCompactorDefinition,
   contextCompactorProbe,
@@ -24,31 +24,31 @@ let laneCounter = 0;
 const lane = (label: string): string => `cf-context-compactor-${label}-${laneCounter++}`;
 
 const submitAndSettle = async (
-  conversation: string,
+  thread: string,
   question: string,
   key: string,
   namespace: TestNamespace,
 ) => {
   const receipt = await runClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       return yield* client.submit(
         { definition: contextCompactorDefinition },
-        { question, ref: conversation },
-        submitOptions(conversation, key),
+        { question, ref: thread },
+        submitOptions(thread, key),
       );
     }),
     namespace,
   );
-  await drainAlarmsUntil(conversation, allSettled(conversation, namespace), { namespace });
+  await drainAlarmsUntil(thread, allSettled(thread, namespace), { namespace });
   const settlement = await runClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       return yield* client.awaitSettlement(receipt);
     }),
     namespace,
   );
-  const records = await readCanonical(conversation, namespace);
+  const records = await readCanonical(thread, namespace);
   const terminal = records.find(
     (envelope) => envelope.record.recordId === submissionSettlementRecordId(receipt.submissionId),
   )?.record.payload;
@@ -58,8 +58,8 @@ const submitAndSettle = async (
   return { receipt, settlement, records, terminal };
 };
 
-const abortIncarnation = (conversation: string): Promise<void> =>
-  runInDurableObject(stubFor(conversation, "CONTEXT_COMPACTOR"), (_instance, state) => {
+const abortIncarnation = (thread: string): Promise<void> =>
+  runInDurableObject(stubFor(thread, "CONTEXT_COMPACTOR"), (_instance, state) => {
     state.abort("issue #49 reconstruction probe");
   }).then(
     () => undefined,
@@ -68,36 +68,31 @@ const abortIncarnation = (conversation: string): Promise<void> =>
 
 describe("Cloudflare replaceable compaction", () => {
   it("retains independent Tool authorization alongside a compactor after eviction", async () => {
-    const conversation = lane("authorization");
+    const thread = lane("authorization");
     for (const incarnation of [1, 2]) {
-      await submitAndSettle(
-        conversation,
-        "seed",
-        `${conversation}-seed-${incarnation}`,
-        "CONTEXT_COMPACTOR",
-      );
+      await submitAndSettle(thread, "seed", `${thread}-seed-${incarnation}`, "CONTEXT_COMPACTOR");
       const compacted = await submitAndSettle(
-        conversation,
+        thread,
         "compact",
-        `${conversation}-compact-${incarnation}`,
+        `${thread}-compact-${incarnation}`,
         "CONTEXT_COMPACTOR",
       );
       expect(compacted.terminal.result).toEqual({ answer: "compacted" });
       const receipt = await runClient(
-        CloudflareConversationClient.use((client) =>
+        CloudflareThreadClient.use((client) =>
           client.submit(
             { definition: searchDefinition },
-            { question: "search", ref: conversation },
-            submitOptions(conversation, `${conversation}-denied-${incarnation}`),
+            { question: "search", ref: thread },
+            submitOptions(thread, `${thread}-denied-${incarnation}`),
           ),
         ),
         "CONTEXT_COMPACTOR",
       );
-      await drainAlarmsUntil(conversation, allSettled(conversation, "CONTEXT_COMPACTOR"), {
+      await drainAlarmsUntil(thread, allSettled(thread, "CONTEXT_COMPACTOR"), {
         namespace: "CONTEXT_COMPACTOR",
       });
       const settlement = await runClient(
-        CloudflareConversationClient.use((client) => client.awaitSettlement(receipt)),
+        CloudflareThreadClient.use((client) => client.awaitSettlement(receipt)),
         "CONTEXT_COMPACTOR",
       );
       expect(settlement).toMatchObject({
@@ -107,24 +102,24 @@ describe("Cloudflare replaceable compaction", () => {
           message: "host denied Tool execution",
         },
       });
-      expect(contextAuthorizationProbe(conversation)).toEqual({
+      expect(contextAuthorizationProbe(thread)).toEqual({
         acquisitions: incarnation,
         calls: incarnation,
       });
-      expect(contextCompactorProbe(conversation).acquisitions).toBe(incarnation);
-      const records = await readCanonical(conversation, "CONTEXT_COMPACTOR");
+      expect(contextCompactorProbe(thread).acquisitions).toBe(incarnation);
+      const records = await readCanonical(thread, "CONTEXT_COMPACTOR");
       expect(records.some(({ record }) => record.payload._tag === "ToolCallSettled")).toBe(false);
-      if (incarnation === 1) await abortIncarnation(conversation);
+      if (incarnation === 1) await abortIncarnation(thread);
     }
   });
 
   it("keeps the existing no-compactor construction behavior", async () => {
-    const conversation = lane("default");
+    const thread = lane("default");
     const result = await submitAndSettle(
-      conversation,
+      thread,
       "without a host compactor",
-      `${conversation}-key`,
-      "CONVERSATIONS",
+      `${thread}-key`,
+      "THREADS",
     );
 
     expect(result.settlement.outcome).toBe("completed");
@@ -132,19 +127,14 @@ describe("Cloudflare replaceable compaction", () => {
   });
 
   it("invokes the provided compactor without replacing canonical history", async () => {
-    const conversation = lane("provided");
+    const thread = lane("provided");
     const original = "preserve this exact canonical input";
-    await submitAndSettle(conversation, original, `${conversation}-seed`, "CONTEXT_COMPACTOR");
-    const result = await submitAndSettle(
-      conversation,
-      original,
-      `${conversation}-key`,
-      "CONTEXT_COMPACTOR",
-    );
+    await submitAndSettle(thread, original, `${thread}-seed`, "CONTEXT_COMPACTOR");
+    const result = await submitAndSettle(thread, original, `${thread}-key`, "CONTEXT_COMPACTOR");
 
     expect(result.settlement.outcome).toBe("completed");
     expect(result.terminal.result).toEqual({ answer: "compacted" });
-    expect(contextCompactorProbe(conversation)).toMatchObject({
+    expect(contextCompactorProbe(thread)).toMatchObject({
       acquisitions: 1,
       invocations: 1,
     });
@@ -156,12 +146,12 @@ describe("Cloudflare replaceable compaction", () => {
   });
 
   it("settles a typed compactor failure without persisting its cause", async () => {
-    const conversation = lane("typed-failure");
-    await submitAndSettle(conversation, "seed", `${conversation}-seed`, "CONTEXT_COMPACTOR");
+    const thread = lane("typed-failure");
+    await submitAndSettle(thread, "seed", `${thread}-seed`, "CONTEXT_COMPACTOR");
     const result = await submitAndSettle(
-      conversation,
+      thread,
       "[host-compactor-failure] preserve the refused input",
-      `${conversation}-key`,
+      `${thread}-key`,
       "CONTEXT_COMPACTOR",
     );
 
@@ -177,24 +167,24 @@ describe("Cloudflare replaceable compaction", () => {
   });
 
   it("DEPLOY-013 acquires once per incarnation and reconstructs from canonical history after eviction", async () => {
-    const conversation = lane("reconstruction");
-    await submitAndSettle(conversation, "first", `${conversation}-first`, "CONTEXT_COMPACTOR");
-    await submitAndSettle(conversation, "second", `${conversation}-second`, "CONTEXT_COMPACTOR");
+    const thread = lane("reconstruction");
+    await submitAndSettle(thread, "first", `${thread}-first`, "CONTEXT_COMPACTOR");
+    await submitAndSettle(thread, "second", `${thread}-second`, "CONTEXT_COMPACTOR");
 
-    const beforeEviction = contextCompactorProbe(conversation);
+    const beforeEviction = contextCompactorProbe(thread);
     expect(beforeEviction.acquisitions).toBe(1);
     expect(beforeEviction.invocations).toBe(1);
 
-    await abortIncarnation(conversation);
+    await abortIncarnation(thread);
     const reconstructed = await submitAndSettle(
-      conversation,
+      thread,
       "third after eviction",
-      `${conversation}-third`,
+      `${thread}-third`,
       "CONTEXT_COMPACTOR",
     );
     expect(reconstructed.terminal.result).toEqual({ answer: "compacted" });
 
-    const afterEviction = contextCompactorProbe(conversation);
+    const afterEviction = contextCompactorProbe(thread);
     expect(afterEviction.acquisitions).toBe(2);
     expect(afterEviction.invocations).toBe(2);
     expect(JSON.stringify(reconstructed.records)).toContain("third after eviction");

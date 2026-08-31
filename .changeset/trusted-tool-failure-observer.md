@@ -1,6 +1,6 @@
 ---
 "@effect-agent/engine": minor
-"@effect-agent/session": minor
+"@effect-agent/thread": minor
 "@effect-agent/platform-node": minor
 "@effect-agent/platform-cloudflare": minor
 ---

@@ -19,7 +19,7 @@ import {
   subscriptionDeliveryCanSelect,
   subscriptionDeliveryKeyString,
   subscriptionKeyString,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Clock, Effect, Layer, Ref, Result, Schema } from "effect";
 
 interface MemorySubscriptionState {
@@ -95,7 +95,7 @@ const sameDeliveryIdentity = (left: SubscriptionDelivery, right: SubscriptionDel
   left.deliveryId === right.deliveryId &&
   left.source.name === right.source.name &&
   left.source.version === right.source.version &&
-  left.conversationId === right.conversationId &&
+  left.threadId === right.threadId &&
   left.admissionKey === right.admissionKey &&
   left.subscriptionFingerprint === right.subscriptionFingerprint &&
   left.eventDigest === right.eventDigest;

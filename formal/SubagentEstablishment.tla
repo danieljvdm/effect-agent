@@ -2,7 +2,7 @@
 (***************************************************************************)
 (* Bounded model of the durable attached-Subagent protocol:               *)
 (* one parent Submission with one                                        *)
-(* delegation Tool Call, one child Conversation lane, the recoverable      *)
+(* delegation Tool Call, one child Thread lane, the recoverable      *)
 (* establishment ladder (reserve -> request -> admit -> materialize ->     *)
 (* lineage -> ready -> start), waitingForChild suspension, at-least-once   *)
 (* recordChildSettled wakes, the canonical-settlement join, the budget     *)
@@ -53,7 +53,7 @@ variables
   \* -- child lane --
   cState = "none",            \* none | admitted | ready | input-applied | terminalizing | settled
   cOwner = "none",
-  cMat = FALSE,               \* child Conversation materialized + ConversationCreated
+  cMat = FALSE,               \* child Thread materialized + ThreadCreated
   lineageRec = FALSE,         \* canonical SubagentLineageRecorded (child log)
   cInputRec = FALSE,          \* canonical child input:{sid}
   cTurn = FALSE,              \* the child ran a model Turn (ModelResponseRecorded)
@@ -179,7 +179,7 @@ PAdmit:
     goto PMat;
   end either;
 PMat:
-  \* child store.materialize + ConversationCreated (idempotent)
+  \* child store.materialize + ThreadCreated (idempotent)
   either
     await faults < MaxFaults; faults := faults + 1;
     pOwner := "none"; goto PIdle;
@@ -375,7 +375,7 @@ PAbortWait:
 end process;
 
 \* ========================= child worker =========================
-\* The child's own Attempt on its own Conversation lane (SUB-020): claims a
+\* The child's own Attempt on its own Thread lane (SUB-020): claims a
 \* ready child, applies input, runs one Turn, terminalizes, finalizes, then
 \* routes the at-least-once recordChildSettled wake to the parent lane.
 fair process cworker = "cworker"

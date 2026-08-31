@@ -43,7 +43,7 @@
     "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/sandbox": "workspace:*",
     "@effect-agent/sandbox-local": "workspace:*",
-    "@effect-agent/session": "workspace:*",
+    "@effect-agent/thread": "workspace:*",
     "@effect/ai-anthropic": "catalog:",
     "@effect/ai-openai": "catalog:",
     "@effect/platform-browser": "catalog:",

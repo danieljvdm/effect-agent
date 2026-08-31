@@ -4,30 +4,30 @@ import {
   CanonicalSequence,
   Receipt,
   UnknownResolutionCommand,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Tracer } from "effect";
 import { TestClock } from "effect/testing";
 
 import {
-  CloudflareConversationClient,
-  conversationNamespaceLayer,
+  CloudflareThreadClient,
+  threadNamespaceLayer,
   decodeAwaitProgressRequest,
   decodeCancelProgressRequest,
   type ClientObserveFailure,
-  type ConversationClientError,
-  type ConversationObjectRpc,
+  type ThreadClientError,
+  type ThreadObjectRpc,
   type HostFailure,
 } from "../src/index.ts";
-import { decodeConversationId, plannerDefinition, submitOptions } from "./fixtures.ts";
+import { decodeThreadId, plannerDefinition, submitOptions } from "./fixtures.ts";
 
 const binding = "TASK_ORCHESTRATORS";
-const conversationId = decodeConversationId("private-conversation-not-a-span-name");
+const threadId = decodeThreadId("private-thread-not-a-span-name");
 const receipt = Schema.decodeUnknownSync(Receipt)({
   receiptId: "receipt-tracing",
   submissionId: "submission-tracing",
-  conversationId,
+  threadId,
   queueSequence: 1,
 });
 const zeroSequence = Schema.decodeSync(CanonicalSequence)(0);
@@ -46,7 +46,7 @@ const clientMethods = [
   "abortEncoded",
   "resolveApprovalEncoded",
   "resolveUnknownEncoded",
-] as const satisfies ReadonlyArray<keyof ConversationObjectRpc>;
+] as const satisfies ReadonlyArray<keyof ThreadObjectRpc>;
 type ClientMethod = (typeof clientMethods)[number];
 interface NativeCall {
   readonly method: ClientMethod;
@@ -70,9 +70,9 @@ const clientFixture = (
     ]),
   );
   const service = options.binding ?? binding;
-  const layer = CloudflareConversationClient.layer.pipe(
+  const layer = CloudflareThreadClient.layer.pipe(
     Layer.provide([
-      conversationNamespaceLayer(
+      threadNamespaceLayer(
         { [service]: { idFromName: (name: string) => name, get: () => stub } },
         service,
         options,
@@ -97,7 +97,7 @@ const spanContext = (span: Tracer.Span) => ({
   sampled: span.sampled,
 });
 
-describe("DEPLOY-016 opt-in native Conversation RPC tracing", () => {
+describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
   it.effect.each([
     { label: "omitted", options: {}, sampled: true, tracerEnabled: true },
     { label: "disabled", options: { rpcTracing: false }, sampled: true, tracerEnabled: true },
@@ -112,50 +112,49 @@ describe("DEPLOY-016 opt-in native Conversation RPC tracing", () => {
   ])("preserves every host method's native contract with $label tracing", (scenario) => {
     const fixture = clientFixture(() => Promise.resolve(protocolFailure), scenario.options);
     return Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       const outer = yield* Effect.currentSpan;
-      const requests: ReadonlyArray<Effect.Effect<unknown, HostFailure | ConversationClientError>> =
-        [
-          client.submit(
-            { definition: plannerDefinition },
-            {
-              question: "private input https://capability.invalid/?token=secret",
-              ref: "private-ref",
-            },
-            submitOptions(conversationId, "idempotency-tracing"),
-          ),
-          client.awaitSettlement(receipt),
-          client.awaitProgress(conversationId, zeroSequence),
-          client.readPage(conversationId),
-          client.abort(
-            conversationId,
-            AbortCommand.make({
-              submissionId: receipt.submissionId,
-              author: "operator",
-              reason: "stop",
-            }),
-          ),
-          client.resolveApproval(
-            conversationId,
-            Schema.decodeUnknownSync(ApprovalDecisionCommand)({
-              submissionId: receipt.submissionId,
-              toolCallId: "tool-tracing",
-              decision: "approved",
-              resolver: "operator",
-              reason: "approve",
-            }),
-          ),
-          client.resolveUnknown(
-            conversationId,
-            Schema.decodeUnknownSync(UnknownResolutionCommand)({
-              submissionId: receipt.submissionId,
-              toolCallId: "tool-tracing",
-              author: "operator",
-              reason: "resolve",
-              resolution: { _tag: "AbortSubmission" },
-            }),
-          ),
-        ];
+      const requests: ReadonlyArray<Effect.Effect<unknown, HostFailure | ThreadClientError>> = [
+        client.submit(
+          { definition: plannerDefinition },
+          {
+            question: "private input https://capability.invalid/?token=secret",
+            ref: "private-ref",
+          },
+          submitOptions(threadId, "idempotency-tracing"),
+        ),
+        client.awaitSettlement(receipt),
+        client.awaitProgress(threadId, zeroSequence),
+        client.readPage(threadId),
+        client.abort(
+          threadId,
+          AbortCommand.make({
+            submissionId: receipt.submissionId,
+            author: "operator",
+            reason: "stop",
+          }),
+        ),
+        client.resolveApproval(
+          threadId,
+          Schema.decodeUnknownSync(ApprovalDecisionCommand)({
+            submissionId: receipt.submissionId,
+            toolCallId: "tool-tracing",
+            decision: "approved",
+            resolver: "operator",
+            reason: "approve",
+          }),
+        ),
+        client.resolveUnknown(
+          threadId,
+          Schema.decodeUnknownSync(UnknownResolutionCommand)({
+            submissionId: receipt.submissionId,
+            toolCallId: "tool-tracing",
+            author: "operator",
+            reason: "resolve",
+            resolution: { _tag: "AbortSubmission" },
+          }),
+        ),
+      ];
       for (const request of requests) {
         const exit = yield* request.pipe(Effect.exit);
         if (!Exit.isFailure(exit)) throw new Error("Expected the host refusal to remain a failure");
@@ -214,8 +213,8 @@ describe("DEPLOY-016 opt-in native Conversation RPC tracing", () => {
       { rpcTracing: true, binding: "PERSONA_ADVISORS" },
     );
     return Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
-      const fiber = yield* client.readPage(conversationId).pipe(Effect.forkChild);
+      const client = yield* CloudflareThreadClient;
+      const fiber = yield* client.readPage(threadId).pipe(Effect.forkChild);
       yield* Deferred.await(started);
       const span = fixture.spans.find((candidate) => candidate.kind === "client");
       if (span === undefined) throw new Error("Missing waiting client span");
@@ -250,8 +249,8 @@ describe("DEPLOY-016 opt-in native Conversation RPC tracing", () => {
   ])("omits native context for $reason without dropping the client span", (scenario) => {
     const fixture = clientFixture(() => Promise.resolve(observedPage), { rpcTracing: true });
     return Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
-      expect(yield* client.readPage(conversationId)).toEqual([]);
+      const client = yield* CloudflareThreadClient;
+      expect(yield* client.readPage(threadId)).toEqual([]);
       expect(fixture.calls[0]?.args).toHaveLength(1);
       const spans = fixture.spans.filter((span) => span.kind === "client");
       expect(spans).toHaveLength(1);
@@ -280,14 +279,12 @@ describe("DEPLOY-016 opt-in native Conversation RPC tracing", () => {
         { rpcTracing: true },
       );
       return Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
-        const failure: ClientObserveFailure = yield* client
-          .readPage(conversationId)
-          .pipe(Effect.flip);
+        const client = yield* CloudflareThreadClient;
+        const failure: ClientObserveFailure = yield* client.readPage(threadId).pipe(Effect.flip);
         expect(failure._tag).toBe(
-          failureMode === "transport" ? "ConversationClientError" : "HostProtocolError",
+          failureMode === "transport" ? "ThreadClientError" : "HostProtocolError",
         );
-        if (failure._tag === "ConversationClientError") expect(failure.cause).toBe(rejected);
+        if (failure._tag === "ThreadClientError") expect(failure.cause).toBe(rejected);
         const span = fixture.spans.find((candidate) => candidate.kind === "client");
         if (span?.status._tag !== "Ended" || !Exit.isFailure(span.status.exit)) {
           throw new Error("Expected a closed, failed client span");
@@ -321,8 +318,8 @@ describe("DEPLOY-016 opt-in native Conversation RPC tracing", () => {
       return Promise.resolve({ _tag: "ProgressCancelled" });
     }, options);
     return Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
-      const wait = client.awaitProgress(conversationId, zeroSequence);
+      const client = yield* CloudflareThreadClient;
+      const wait = client.awaitProgress(threadId, zeroSequence);
       const fiber = yield* (options.timeout ? wait.pipe(Effect.timeout("1 second")) : wait).pipe(
         Effect.forkChild,
       );
@@ -368,10 +365,8 @@ describe("DEPLOY-016 opt-in native Conversation RPC tracing", () => {
       { rpcTracing: true },
     );
     return Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
-      const fiber = yield* client
-        .awaitProgress(conversationId, zeroSequence)
-        .pipe(Effect.forkChild);
+      const client = yield* CloudflareThreadClient;
+      const fiber = yield* client.awaitProgress(threadId, zeroSequence).pipe(Effect.forkChild);
       yield* Deferred.await(started);
       yield* TestClock.adjust("10 millis");
       yield* Fiber.join(fiber);

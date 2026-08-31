@@ -1,4 +1,5 @@
-import { Effect, Layer, Option, Tracer } from "effect";
+import type { Option } from "effect";
+import { Effect, Layer, Tracer } from "effect";
 import type { DurableObject } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
 
@@ -15,18 +16,18 @@ interface TelemetryProbe {
 
 // Test-only observations of live invocations, never exported or written to Object storage.
 const probes = new Map<string, TelemetryProbe>();
-export const telemetryProbe = (conversationId: string): TelemetryProbe => {
-  const existing = probes.get(conversationId);
+export const telemetryProbe = (threadId: string): TelemetryProbe => {
+  const existing = probes.get(threadId);
   if (existing !== undefined) return existing;
   const probe: TelemetryProbe = { invocations: [], layerParents: [], spans: [] };
-  probes.set(conversationId, probe);
+  probes.set(threadId, probe);
   return probe;
 };
 
-export const flushCount = (conversationId: string): number => flushes.get(conversationId) ?? 0;
+export const flushCount = (threadId: string): number => flushes.get(threadId) ?? 0;
 
-export const failNextFlush = (conversationId: string): void => {
-  failingFlushes.add(conversationId);
+export const failNextFlush = (threadId: string): void => {
+  failingFlushes.add(threadId);
 };
 
 /** One event-scoped OTLP flusher proving the effect-cf native RPC integration. */
@@ -34,11 +35,11 @@ export const observabilityProbeLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const { ctx } = yield* DurableObjectContext;
     const flusher = yield* OtlpExporter.Flusher;
-    const conversationId = ctx.id.name ?? ctx.id.toString();
+    const threadId = ctx.id.name ?? ctx.id.toString();
     yield* flusher.register(
       Effect.sync(() => {
-        flushes.set(conversationId, flushCount(conversationId) + 1);
-        if (failingFlushes.delete(conversationId)) {
+        flushes.set(threadId, flushCount(threadId) + 1);
+        if (failingFlushes.delete(threadId)) {
           throw new Error("fixture exporter defect");
         }
       }),

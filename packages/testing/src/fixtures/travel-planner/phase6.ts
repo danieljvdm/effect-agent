@@ -10,7 +10,7 @@ import {
   type Receipt,
   type ResolvedBinding,
   type ToolReconciler,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response } from "effect/unstable/ai";
 
@@ -58,7 +58,7 @@ import {
 // Phase 6 (P6): the SAME cumulative Travel Planner on the Cloudflare Durable
 // Object runtime, deployment class DC. This module is deliberately
 // platform-neutral (it imports no Cloudflare types): the worker Bindings it
-// builds are plain `ResolvedBinding` values a Conversation Object registers,
+// builds are plain `ResolvedBinding` values a Thread Object registers,
 // and the cross-platform evidence normal form is shared by the DN and DC
 // halves of the equivalence suite (plan §1.8, D-P6-6).
 // ---------------------------------------------------------------------------
@@ -101,11 +101,11 @@ export const phase6TravelPlannerProfile = TravelPlannerCloudflareProfile.make({
 export const phase6TravelPlannerDeploymentId = Schema.decodeSync(DeploymentId)(
   "travel-planner-p6-deployment",
 );
-/** Producer prefix of the DC host; each Object mints `{prefix}:{conversationId}`. */
+/** Producer prefix of the DC host; each Object mints `{prefix}:{threadId}`. */
 export const phase6TravelPlannerProducerPrefix = "travel-planner-p6-producer";
-/** The full producer identity one DC Conversation Object mints for itself. */
-export const phase6TravelPlannerProducerId = (conversationId: string): ProducerId =>
-  Schema.decodeSync(ProducerId)(`${phase6TravelPlannerProducerPrefix}:${conversationId}`);
+/** The full producer identity one DC Thread Object mints for itself. */
+export const phase6TravelPlannerProducerId = (threadId: string): ProducerId =>
+  Schema.decodeSync(ProducerId)(`${phase6TravelPlannerProducerPrefix}:${threadId}`);
 
 const digestOf = (character: string) => Schema.decodeSync(Digest)(character.repeat(64));
 
@@ -127,11 +127,11 @@ export const phase6GatedPlannerDefinitionDigests = DefinitionDigests.make({
 
 /** The run-specific identities the cross-platform normal form scrubs. */
 export interface CrossPlatformEvidenceIdentity {
-  /** The Conversation lane the evidence came from. */
-  readonly conversationId: string;
+  /** The Thread lane the evidence came from. */
+  readonly threadId: string;
   /** The host's deployment identity (`DeploymentId` on every record envelope). */
   readonly deploymentId: string;
-  /** The full producer identity of the run (DN: configured; DC: `{prefix}:{conversationId}`). */
+  /** The full producer identity of the run (DN: configured; DC: `{prefix}:{threadId}`). */
   readonly producerId: string;
 }
 
@@ -148,7 +148,7 @@ const decodeComparableEnvelopes = Schema.decodeUnknownEffect(Schema.Array(Compar
 /**
  * The CROSS-PLATFORM extension of `normalizeDurableTravelPlannerEvidence` (D-P6-6): after the
  * base normalization replaces the two ledger-minted identities (which also normalizes the
- * DC-format routable `{uuidv7}:{conversationId}` Submission identities and everything derived
+ * DC-format routable `{uuidv7}:{threadId}` Submission identities and everything derived
  * from them), this form additionally scrubs everything that legitimately differs between a DN
  * process and a DC Durable Object over the same scenario:
  *
@@ -158,7 +158,7 @@ const decodeComparableEnvelopes = Schema.decodeUnknownEffect(Schema.Array(Compar
  *   control (on DC even a CLEAN run carries one, because every pass reconciles before it
  *   claims, so the ready lane's input is applied through the recovery path). Canonical ORDER
  *   is the durability §5 claim; sequence contiguity is a platform artifact of who appended;
- * - the Conversation identity (DC lanes mint unique names per test run);
+ * - the Thread identity (DC lanes mint unique names per test run);
  * - the deployment and producer identities (host configuration, not canonical semantics);
  * - `createdAt` commit timestamps (wall clock);
  * - 64-hex digests (they hash RAW content that legally embeds run-specific identity, so they
@@ -185,7 +185,7 @@ export const normalizeCrossPlatformTravelPlannerEvidence = Effect.fn(
     JSON.stringify(base)
       .replaceAll(identity.producerId, "{producerId}")
       .replaceAll(identity.deploymentId, "{deploymentId}")
-      .replaceAll(identity.conversationId, "{conversationId}")
+      .replaceAll(identity.threadId, "{threadId}")
       .replaceAll(/\d{4}-\d{2}-\d{2}T[0-9:.]+Z/g, "{timestamp}")
       .replaceAll(/"[0-9a-f]{64}"/g, '"{digest}"'),
   );
@@ -291,7 +291,7 @@ export const phase6PlannerModel = promptAwareModel("travel-planner-phase-4", pla
 // ---------------------------------------------------------------------------
 // Deterministic test gate for the admission-limits rows. Module state is
 // intentionally NOT durable: it plays the external world's role (a slow
-// upstream model), never Conversation state.
+// upstream model), never Thread state.
 // ---------------------------------------------------------------------------
 
 const releasedPlannerGates = new Set<string>();
@@ -381,7 +381,7 @@ export const phase6SupplierDeskLayer: Layer.Layer<SupplierBookingDesk> = Layer.s
 
 /**
  * The REAL P5 supplier reconciliation policy over the shared desk, closed to no requirements
- * so a Conversation Object can install it directly: `book_flight` recovers only from supplier
+ * so a Thread Object can install it directly: `book_flight` recovers only from supplier
  * truth (absence stays fail-closed `Uncertain` → durable Unknown Outcome), keyed Steps are
  * provably re-enterable.
  */
@@ -576,14 +576,14 @@ export const phase6ResearcherModel = promptAwareModel("destination-researcher-p6
 );
 
 // ---------------------------------------------------------------------------
-// Worker Binding registrations for the DC Conversation Object
+// Worker Binding registrations for the DC Thread Object
 // ---------------------------------------------------------------------------
 
 /**
  * Every phase-6 Travel Planner worker Binding, captured with its requirement Contexts:
  * the P4 planner and its gated twin, the P5 booking agent over the
  * shared supplier desk, and the S2 coordinator/researcher pair wired through the durable
- * delegation Layer. A Conversation Object registers these via its `bindings` option; the
+ * delegation Layer. A Thread Object registers these via its `bindings` option; the
  * capture runs once per incarnation, and everything stateful the assertions rely on (desk,
  * guide counter, gates) lives at module level so it survives incarnation loss.
  */
@@ -656,16 +656,16 @@ export const makePhase6TravelPlannerBindings: Effect.Effect<ReadonlyArray<Resolv
  */
 export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
   {
-    batchId: "conversation-created:{conversationId}",
+    batchId: "thread-created:{threadId}",
     sequence: 1,
     record: {
-      recordId: "conversation-created:{conversationId}",
-      family: "conversation",
+      recordId: "thread-created:{threadId}",
+      family: "thread",
       schemaVersion: 1,
       createdAt: "{timestamp}",
       deploymentId: "{deploymentId}",
       payload: {
-        _tag: "ConversationCreated",
+        _tag: "ThreadCreated",
         agentId: "travel-planner-phase-4",
         definitions: {
           agent: "{digest}",
@@ -680,7 +680,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
     sequence: 2,
     record: {
       recordId: "input:{submissionId}",
-      family: "conversation",
+      family: "thread",
       schemaVersion: 1,
       createdAt: "{timestamp}",
       deploymentId: "{deploymentId}",
@@ -708,7 +708,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
     sequence: 3,
     record: {
       recordId: "run-start:run:{submissionId}",
-      family: "conversation",
+      family: "thread",
       schemaVersion: 1,
       createdAt: "{timestamp}",
       deploymentId: "{deploymentId}",
@@ -725,7 +725,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
     sequence: 4,
     record: {
       recordId: "model-response:run:{submissionId}:1",
-      family: "conversation",
+      family: "thread",
       schemaVersion: 1,
       createdAt: "{timestamp}",
       deploymentId: "{deploymentId}",
@@ -825,7 +825,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
     sequence: 5,
     record: {
       recordId: "tool-settled:run:{submissionId}:1:flight-call-1",
-      family: "conversation",
+      family: "thread",
       schemaVersion: 1,
       createdAt: "{timestamp}",
       deploymentId: "{deploymentId}",
@@ -849,7 +849,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
     sequence: 6,
     record: {
       recordId: "tool-settled:run:{submissionId}:1:lodging-call-1",
-      family: "conversation",
+      family: "thread",
       schemaVersion: 1,
       createdAt: "{timestamp}",
       deploymentId: "{deploymentId}",
@@ -872,7 +872,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
     sequence: 7,
     record: {
       recordId: "tool-settled:run:{submissionId}:1:activity-call-1",
-      family: "conversation",
+      family: "thread",
       schemaVersion: 1,
       createdAt: "{timestamp}",
       deploymentId: "{deploymentId}",
@@ -893,7 +893,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
     sequence: 8,
     record: {
       recordId: "model-response:run:{submissionId}:2",
-      family: "conversation",
+      family: "thread",
       schemaVersion: 1,
       createdAt: "{timestamp}",
       deploymentId: "{deploymentId}",
@@ -941,7 +941,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
     sequence: 9,
     record: {
       recordId: "run-completed:run:{submissionId}",
-      family: "conversation",
+      family: "thread",
       schemaVersion: 1,
       createdAt: "{timestamp}",
       deploymentId: "{deploymentId}",
@@ -979,7 +979,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
     sequence: 10,
     record: {
       recordId: "settlement:{submissionId}",
-      family: "conversation",
+      family: "thread",
       schemaVersion: 1,
       createdAt: "{timestamp}",
       deploymentId: "{deploymentId}",

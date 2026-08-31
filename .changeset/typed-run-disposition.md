@@ -1,7 +1,7 @@
 ---
 "@effect-agent/core": minor
 "@effect-agent/engine": minor
-"@effect-agent/session": minor
+"@effect-agent/thread": minor
 ---
 
 Add a Definition-owned Schema boundary for typed application run dispositions and persist valid

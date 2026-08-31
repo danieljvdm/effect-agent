@@ -1,5 +1,5 @@
-import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import { ConversationHistory, AgentRuntime, ToolExecutionClass } from "@effect-agent/engine";
+import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import { ThreadHistory, AgentRuntime, ToolExecutionClass } from "@effect-agent/engine";
 import {
   PageCapture,
   PageCaptureInferencePolicyError,
@@ -297,7 +297,7 @@ const makeScriptedPort = Effect.gen(function* () {
 const usage = { inputTokens: {}, outputTokens: {} };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextConversationId: Effect.succeed(Schema.decodeSync(ConversationId)("conversation-web-capture")),
+  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-web-capture")),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-web-capture")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-web-capture")),
 });
@@ -381,7 +381,7 @@ interface ScenarioOutcome {
 const runCapture = (
   params: Record<string, unknown>,
   options?: { readonly actions?: ReadonlyArray<"markdown" | "content" | "links"> },
-): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ConversationHistory> =>
+): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ThreadHistory> =>
   Effect.gen(function* () {
     const definition = WebCapture.make("read_webpage", {
       description: "Read documentation pages.",
@@ -410,7 +410,7 @@ const runCapture = (
 
 const runExtract = (
   params: Record<string, unknown>,
-): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ConversationHistory> =>
+): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ThreadHistory> =>
   Effect.gen(function* () {
     const definition = WebCapture.makeExtract("extract_pricing", {
       description: "Extract pricing plans.",
@@ -440,7 +440,7 @@ const runExtract = (
 
 const runScrape = (
   params: Record<string, unknown>,
-): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ConversationHistory> =>
+): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ThreadHistory> =>
   Effect.gen(function* () {
     const definition = WebCapture.makeScrape("scrape_webpage", {
       description: "Scrape rendered elements.",
@@ -467,7 +467,7 @@ const runScrape = (
     };
   });
 
-const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
 
 layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
   it.effect("projects an allowed markdown capture onto the port and returns the page", () =>

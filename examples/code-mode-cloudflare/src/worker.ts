@@ -1,5 +1,5 @@
 import { IdGenerator } from "@effect-agent/core";
-import { AgentRuntime, ConversationHistory } from "@effect-agent/engine";
+import { AgentRuntime, ThreadHistory } from "@effect-agent/engine";
 import {
   dynamicWorkerCodeExecutorLayer,
   dynamicWorkerImplementation,
@@ -18,7 +18,7 @@ import { isValidTenant, Warehouse, WarehouseObject, warehouseLayer } from "./war
  * only through the brokered `warehouse.query` method, which runs a read-only
  * SQL query against a SQLite-backed Durable Object. Deployment class E: the
  * Agent runs ephemerally; the Durable Object is the warehouse data store, not
- * a Conversation store.
+ * a Thread store.
  *
  * `WarehouseObject` is exported for the Worker runtime. The Code Mode
  * executor creates each host RPC capability inside the request that owns it,
@@ -116,7 +116,7 @@ const runBound = (
       Layer.provide(dynamicWorkerCodeExecutorLayer({ loader: env.LOADER })),
     ),
     IdGenerator.layer,
-    ConversationHistory.layerTransient,
+    ThreadHistory.layerTransient,
   );
   return Effect.gen(function* () {
     // Stream the Run and correlate each `run_javascript` call's declared

@@ -6,7 +6,7 @@ import {
   type RedactedPreview,
   type RedactionError,
 } from "@effect-agent/capabilities";
-import { Agent, type ConversationId } from "@effect-agent/core";
+import { Agent, type ThreadId } from "@effect-agent/core";
 import {
   DefinitionDigests,
   DeploymentId,
@@ -17,7 +17,7 @@ import {
   type DurableSubmitOptions,
   type IdempotencyKey,
   type ResolvedBinding,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import type { Crypto } from "effect";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response } from "effect/unstable/ai";
@@ -76,10 +76,10 @@ export const docsSummarizerDigests = DefinitionDigests.make({
 
 /** Durable admission options for one docs-researcher Submission on one mission lane. */
 export const docsResearcherSubmitOptions = (
-  conversationId: ConversationId,
+  threadId: ThreadId,
   idempotencyKey: IdempotencyKey,
 ): DurableSubmitOptions => ({
-  conversationId,
+  threadId,
   principal: docsResearcherPrincipal,
   idempotencyKey,
   definitions: docsCoordinatorDigests,
@@ -298,7 +298,7 @@ const encodeResearchDocument = Schema.encodeEffect(ResearchDocument);
 /**
  * The audit-surface preview of one fetched document: the raw document —
  * secret marker and all — passes through the configured structural `Redactor`
- * before anything may quote it outside the child Conversation (SEC-008,
+ * before anything may quote it outside the child Thread (SEC-008,
  * CAP-013). Tests assert the preview keeps shape but no scalar content.
  */
 export const redactedDocumentPreview = Effect.fn("DocsResearcher.redactedDocumentPreview")(

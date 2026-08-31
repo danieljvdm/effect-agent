@@ -1,8 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect";
 
+import type { DemoApprovalPending } from "./operational-contracts";
 import {
-  DemoApprovalPending,
   type DemoOperationalEvent,
   DemoRunFailure,
   ResolveRunApprovalRequest,
@@ -19,7 +19,7 @@ const statusesFor = (
   );
 
 describe("Phase 2 operational runtime", () => {
-  it.effect("extends one official conversation across consecutive Runs", () =>
+  it.effect("extends one official thread across consecutive Runs", () =>
     Effect.gen(function* () {
       const runtime = yield* DemoInteractiveRuntime;
       const first = yield* runtime

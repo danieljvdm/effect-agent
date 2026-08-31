@@ -1,12 +1,12 @@
 import { Schema } from "effect";
 
-import { AgentId, ConversationId, DelegationId, RunId, ToolCallId, TurnId } from "./identifiers.ts";
+import { AgentId, ThreadId, DelegationId, RunId, ToolCallId, TurnId } from "./identifiers.ts";
 import { DelegationDepth } from "./subagent.ts";
 
 const RunEventBase = {
   eventVersion: Schema.Literal(1),
   runId: RunId,
-  conversationId: ConversationId,
+  threadId: ThreadId,
   agentId: AgentId,
   sequence: Schema.Natural,
   timestamp: Schema.DateTimeUtcFromString,
@@ -225,7 +225,7 @@ const SubagentEventBase = {
   turnId: TurnId,
   toolCallId: ToolCallId,
   delegationId: DelegationId,
-  childConversationId: ConversationId,
+  childThreadId: ThreadId,
   childRunId: RunId,
   targetAgentId: AgentId,
   depth: DelegationDepth,

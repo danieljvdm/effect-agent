@@ -1,32 +1,32 @@
-import {
-  CanonicalBatch,
-  CanonicalSequence,
-  ConversationExport,
-  ConversationExportRequest,
-  ConversationMaterialization,
-  ConversationObservation,
-  ConversationProjection,
-  ConversationRead,
-  ConversationStore,
-  EMPTY_TAIL_DIGEST,
-  FencedAppendRequest,
-  LoadCheckpointRequest,
-  ProducerEpoch,
-  replayConversation,
-  replayConversationFromCheckpoint,
-  SaveCheckpointRequest,
-} from "@effect-agent/session";
 import { MemoryStorageLive } from "@effect-agent/storage-memory";
 import { layer as sqliteStorageLayer } from "@effect-agent/storage-sqlite";
 import {
   expectedTravelPlan,
   makePhase3TravelPlannerCheckpoint,
   phase3TravelPlannerBatches,
-  phase3TravelPlannerConversationId,
+  phase3TravelPlannerThreadId,
   phase3TravelPlannerEncodedFixture,
   phase3TravelPlannerProfile,
   travelPlanFromProjection,
 } from "@effect-agent/testing/fixtures/travel-planner";
+import {
+  CanonicalBatch,
+  CanonicalSequence,
+  ThreadExport,
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadObservation,
+  ThreadProjection,
+  ThreadRead,
+  ThreadStore,
+  EMPTY_TAIL_DIGEST,
+  FencedAppendRequest,
+  LoadCheckpointRequest,
+  ProducerEpoch,
+  replayThread,
+  replayThreadFromCheckpoint,
+  SaveCheckpointRequest,
+} from "@effect-agent/thread";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
@@ -35,17 +35,17 @@ const producerEpoch = Schema.decodeSync(ProducerEpoch)(1);
 const initialSequence = Schema.decodeSync(CanonicalSequence)(0);
 
 const writePersistentTravelPlanner = Effect.gen(function* () {
-  const store = yield* ConversationStore;
+  const store = yield* ThreadStore;
   yield* store.materialize(
-    ConversationMaterialization.make({
-      conversationId: phase3TravelPlannerConversationId,
+    ThreadMaterialization.make({
+      threadId: phase3TravelPlannerThreadId,
       producerEpoch,
     }),
   );
 
   const initial = yield* store.append(
     FencedAppendRequest.make({
-      conversationId: phase3TravelPlannerConversationId,
+      threadId: phase3TravelPlannerThreadId,
       batch: phase3TravelPlannerBatches[0],
       expectedTailSequence: initialSequence,
       expectedTailDigest: EMPTY_TAIL_DIGEST,
@@ -54,17 +54,13 @@ const writePersistentTravelPlanner = Effect.gen(function* () {
   );
   const prefix = yield* store
     .read(
-      ConversationRead.make({
-        conversationId: phase3TravelPlannerConversationId,
+      ThreadRead.make({
+        threadId: phase3TravelPlannerThreadId,
         limit: 1_024,
       }),
     )
     .pipe(Stream.runCollect);
-  const prefixProjection = replayConversation(
-    phase3TravelPlannerConversationId,
-    prefix,
-    initial.tailDigest,
-  );
+  const prefixProjection = replayThread(phase3TravelPlannerThreadId, prefix, initial.tailDigest);
   yield* store.checkpoints!.save(
     SaveCheckpointRequest.make({
       checkpoint: makePhase3TravelPlannerCheckpoint(prefixProjection),
@@ -73,7 +69,7 @@ const writePersistentTravelPlanner = Effect.gen(function* () {
 
   yield* store.append(
     FencedAppendRequest.make({
-      conversationId: phase3TravelPlannerConversationId,
+      threadId: phase3TravelPlannerThreadId,
       batch: phase3TravelPlannerBatches[1],
       expectedTailSequence: initial.lastSequence,
       expectedTailDigest: initial.tailDigest,
@@ -83,33 +79,33 @@ const writePersistentTravelPlanner = Effect.gen(function* () {
 });
 
 const inspectPersistentTravelPlanner = Effect.gen(function* () {
-  const store = yield* ConversationStore;
+  const store = yield* ThreadStore;
   const exported = yield* store.export(
-    ConversationExportRequest.make({
-      conversationId: phase3TravelPlannerConversationId,
+    ThreadExportRequest.make({
+      threadId: phase3TravelPlannerThreadId,
     }),
   );
   const checkpoint = yield* store.checkpoints!.load(
     LoadCheckpointRequest.make({
-      conversationId: phase3TravelPlannerConversationId,
+      threadId: phase3TravelPlannerThreadId,
     }),
   );
   if (Option.isNone(checkpoint)) {
     return yield* Effect.die(new Error("Expected the Travel Planner checkpoint to exist"));
   }
 
-  const checkpointProjection = yield* Schema.decodeUnknownEffect(ConversationProjection)(
+  const checkpointProjection = yield* Schema.decodeUnknownEffect(ThreadProjection)(
     checkpoint.value.state,
   );
   const suffix = exported.records.filter(
     (record) => record.sequence > checkpoint.value.throughSequence,
   );
-  const fullReplay = replayConversation(
-    phase3TravelPlannerConversationId,
+  const fullReplay = replayThread(
+    phase3TravelPlannerThreadId,
     exported.records,
     exported.tailDigest,
   );
-  const checkpointReplay = replayConversationFromCheckpoint(
+  const checkpointReplay = replayThreadFromCheckpoint(
     checkpointProjection,
     suffix,
     exported.tailDigest,
@@ -124,15 +120,15 @@ const inspectPersistentTravelPlanner = Effect.gen(function* () {
   }
   const observedSuffix = yield* store
     .observe(
-      ConversationObservation.make({
-        conversationId: phase3TravelPlannerConversationId,
+      ThreadObservation.make({
+        threadId: phase3TravelPlannerThreadId,
         afterOffset: checkpointRecord.offset,
       }),
     )
     .pipe(Stream.take(suffix.length), Stream.runCollect);
 
-  const portableExport = yield* Schema.encodeEffect(ConversationExport)(exported).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(ConversationExport)),
+  const portableExport = yield* Schema.encodeEffect(ThreadExport)(exported).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(ThreadExport)),
   );
 
   return {

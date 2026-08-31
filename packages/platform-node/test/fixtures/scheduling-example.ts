@@ -3,7 +3,7 @@ import {
   type ResolvedBinding,
   type ScheduleCreateOptions,
   Scheduling,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Layer, type Schema } from "effect";
 
 import {

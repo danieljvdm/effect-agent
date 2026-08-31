@@ -1,16 +1,4 @@
-import {
-  DeploymentId,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  ProducerId,
-  ToolReconciler,
-  WakeScheduler,
-} from "@effect-agent/session";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
+import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
 import {
   ChaosPlan,
   DEFAULT_CHAOS_SEED,
@@ -18,6 +6,15 @@ import {
   generateChaosPlans,
   runChaosPlan,
 } from "@effect-agent/testing/chaos";
+import {
+  DeploymentId,
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  ProducerId,
+  ToolReconciler,
+  WakeScheduler,
+} from "@effect-agent/thread";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Layer, Schema } from "effect";
@@ -25,7 +22,7 @@ import { Cause, Duration, Effect, Exit, Layer, Schema } from "effect";
 /**
  * P7 WP4 memory chaos lane (plan §5): ~200 seeded plans over the in-memory adapter pair,
  * deterministic under the test services (TestClock — no real waiting anywhere in the runner).
- * Every plan ends in the shared `verifyConversationInvariants` convergence claims, a zero-entry
+ * Every plan ends in the shared `verifyThreadInvariants` convergence claims, a zero-entry
  * `scanObligations`, and the desk non-fabrication sweep. Failure output prints the root seed
  * (replay with `CHAOS_SEED=<seed> bun run test`) and the failing plan's own seed.
  */
@@ -47,7 +44,7 @@ const freshLayer = () =>
     Layer.provideMerge(
       Layer.mergeAll(
         MemorySubmissionLedgerLive,
-        MemoryConversationStoreLive,
+        MemoryThreadStoreLive,
         WakeScheduler.layerNoop,
         DurableRuntimeFailpointTestControl.layer,
         ToolReconciler.uncertain,
@@ -88,10 +85,9 @@ describe("DUR-002/DUR-004/DUR-017 P7 chaos (memory adapters)", () => {
           }
           expect(exit.value.openObligations).toBe(0);
           for (const lane of exit.value.lanes) {
-            expect(
-              lane.verified,
-              `${replayHint(planIndex, plan)} lane ${lane.conversationId}`,
-            ).toBe(true);
+            expect(lane.verified, `${replayHint(planIndex, plan)} lane ${lane.threadId}`).toBe(
+              true,
+            );
           }
           verifiedLanes += exit.value.lanes.length;
         }

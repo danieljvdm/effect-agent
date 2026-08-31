@@ -1,4 +1,4 @@
-import { ConversationId } from "@effect-agent/core";
+import { ThreadId } from "@effect-agent/core";
 import type {
   RunContextPreparation,
   RunCostEstimator,
@@ -11,26 +11,9 @@ import {
   toolFailureObserverLayer,
 } from "@effect-agent/engine";
 import {
-  compileRegistrations,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
-  ProducerId,
-  operationAuthorizerLayer,
-  ToolReconciler,
-  type AgentRegistration,
-  type ConversationStore,
-  type DigestError,
-  type DurableRuntimeFailpointHandler,
-  type OperationAuthorizerService,
-  type ResolvedBinding,
-  type SubmissionLedger,
-  type WakeScheduler,
-} from "@effect-agent/session";
-import {
-  conversationStoreLayer,
+  threadStoreLayer,
   executePortRequest,
-  routedConversationStoreLayer,
+  routedThreadStoreLayer,
   routedSubmissionLedgerLayer,
   storageConfigLayer,
   storageFailpointLayer,
@@ -42,21 +25,38 @@ import {
   type PortRequest,
   type PortResponse,
 } from "@effect-agent/storage-cloudflare";
+import {
+  compileRegistrations,
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  DurableRuntimeFailpoint,
+  ProducerId,
+  operationAuthorizerLayer,
+  ToolReconciler,
+  type AgentRegistration,
+  type ThreadStore,
+  type DigestError,
+  type DurableRuntimeFailpointHandler,
+  type OperationAuthorizerService,
+  type ResolvedBinding,
+  type SubmissionLedger,
+  type WakeScheduler,
+} from "@effect-agent/thread";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { Crypto } from "effect";
 import { Context, Duration, Effect, Layer, Schema } from "effect";
 
 import {
-  ConversationMaintenance,
-  ConversationMaintenanceFailpoint,
+  ThreadMaintenance,
+  ThreadMaintenanceFailpoint,
   DurableAlarmService,
-  type ConversationMaintenanceFailpointHandler,
+  type ThreadMaintenanceFailpointHandler,
 } from "./alarm.ts";
 import {
-  ConversationObjectIdentity,
+  ThreadObjectIdentity,
   DurableObjectContext,
-  type ConversationObjectNamespace,
+  type ThreadObjectNamespace,
 } from "./bindings.ts";
 import {
   CLOUDFLARE_RUNTIME_DEFAULTS,
@@ -65,18 +65,18 @@ import {
   CloudflarePlatformConfigError,
 } from "./config.ts";
 import { ProgressWaitRegistry } from "./progress-wait.ts";
-import { conversationPortTransportLayer } from "./transport.ts";
+import { threadPortTransportLayer } from "./transport.ts";
 import { cloudflareWakeSchedulerLayer } from "./wake-scheduler.ts";
 
 /**
- * Raw (unvalidated) construction options for `ConversationObject.make`, mirroring
+ * Raw (unvalidated) construction options for `ThreadObject.make`, mirroring
  * `NodeDurableRuntimeOptions`. Optional fields default to the documented production values
  * (`CLOUDFLARE_RUNTIME_DEFAULTS`); everything is schema-decoded into
  * `CloudflareDurableRuntimeConfigValue` before any resource opens (deployment §5 gate 1).
  */
 export interface CloudflareDurableRuntimeOptions {
   readonly deploymentId: string;
-  /** Head of the minted producer identity `{producerPrefix}:{conversationId}`. */
+  /** Head of the minted producer identity `{producerPrefix}:{threadId}`. */
   readonly producerPrefix: string;
   /** Milliseconds; default 30s (D5). */
   readonly ownershipLeaseDuration?: number | undefined;
@@ -118,9 +118,9 @@ export interface CloudflareDurableRuntimeOptions {
   readonly runtimeFailpoint?:
     | ((ctx: DurableObjectState) => DurableRuntimeFailpointHandler)
     | undefined;
-  /** Conversation-maintenance generation/alarm fault injection; default none. */
+  /** Thread-maintenance generation/alarm fault injection; default none. */
   readonly maintenanceFailpoint?:
-    | ((ctx: DurableObjectState) => ConversationMaintenanceFailpointHandler)
+    | ((ctx: DurableObjectState) => ThreadMaintenanceFailpointHandler)
     | undefined;
   /** Host-supplied fail-closed authorization policy; defaults to service possession. */
   readonly operationAuthorizer?: OperationAuthorizerService | undefined;
@@ -135,12 +135,12 @@ export interface CloudflareDurableRuntimeOptions {
 /** Services supplied before the application graph is built, including its dependencies. */
 export type CloudflareBootstrapServices =
   | CloudflareDurableRuntimeConfig
-  | ConversationObjectIdentity
+  | ThreadObjectIdentity
   | DurableRuntimeConfig
   | Crypto.Crypto
   | DoStorageFailpoint
   | DurableRuntimeFailpoint
-  | ConversationMaintenanceFailpoint
+  | ThreadMaintenanceFailpoint
   | RunContextPreparation
   | RunToolAuthorization
   | ToolReconciler;
@@ -151,15 +151,15 @@ export type CloudflareDurableRuntimeInitializationError =
   | DigestError
   | DoStorageInitializationError;
 
-/** The services `ConversationObject.layer` provides. */
+/** The services `ThreadObject.layer` provides. */
 export type CloudflareDurableRuntimeServices =
   | DurableAgentRuntime
   | SubmissionLedger
-  | ConversationStore
+  | ThreadStore
   | WakeScheduler
   | DurableAlarmService
-  | ConversationMaintenance
-  | ConversationObjectPorts
+  | ThreadMaintenance
+  | ThreadObjectPorts
   | ProgressWaitRegistry;
 
 /**
@@ -168,15 +168,15 @@ export type CloudflareDurableRuntimeServices =
  * request cannot bounce between Objects — and returns the typed response for the endpoint to
  * encode.
  */
-export class ConversationObjectPorts extends Context.Service<
-  ConversationObjectPorts,
+export class ThreadObjectPorts extends Context.Service<
+  ThreadObjectPorts,
   {
     readonly handle: (request: PortRequest) => Effect.Effect<PortResponse>;
   }
->()("@effect-agent/platform-cloudflare/ConversationObjectPorts") {}
+>()("@effect-agent/platform-cloudflare/ThreadObjectPorts") {}
 
 const decodeConfigValue = Schema.decodeUnknownEffect(CloudflareDurableRuntimeConfigValue);
-const decodeConversationId = Schema.decodeUnknownEffect(ConversationId);
+const decodeThreadId = Schema.decodeUnknownEffect(ThreadId);
 const decodeProducerId = Schema.decodeUnknownEffect(ProducerId);
 
 const configFromOptions = (
@@ -219,25 +219,25 @@ const configFromOptions = (
   );
 
 /**
- * The Conversation this Object owns, from the Object identity rule (plan §1.2): Conversation
- * Objects are addressed exclusively by `idFromName(conversationId)`, so `ctx.id.name` IS the
- * Conversation ID. An unnamed Object (from `newUniqueId`) is a deployment error, not a lane.
+ * The Thread this Object owns, from the Object identity rule (plan §1.2): Thread
+ * Objects are addressed exclusively by `idFromName(threadId)`, so `ctx.id.name` IS the
+ * Thread ID. An unnamed Object (from `newUniqueId`) is a deployment error, not a lane.
  */
-const conversationIdFromState = (
+const threadIdFromState = (
   ctx: DurableObjectState,
-): Effect.Effect<ConversationId, CloudflarePlatformConfigError> =>
+): Effect.Effect<ThreadId, CloudflarePlatformConfigError> =>
   ctx.id.name === undefined
     ? Effect.fail(
         CloudflarePlatformConfigError.make({
           message:
-            "This Durable Object was not created via idFromName(conversationId); Conversation " +
-            "Objects must be addressed by their Conversation identity (plan §1.2).",
+            "This Durable Object was not created via idFromName(threadId); Thread " +
+            "Objects must be addressed by their Thread identity (plan §1.2).",
         }),
       )
-    : decodeConversationId(ctx.id.name).pipe(
+    : decodeThreadId(ctx.id.name).pipe(
         Effect.mapError((error) =>
           CloudflarePlatformConfigError.make({
-            message: `The Durable Object name is not a valid ConversationId: ${error.message}`,
+            message: `The Durable Object name is not a valid ThreadId: ${error.message}`,
             cause: error,
           }),
         ),
@@ -255,8 +255,8 @@ export const layerConfig = (
     Effect.gen(function* () {
       const { ctx } = yield* DurableObjectContext;
       const config = yield* configFromOptions(options);
-      const conversationId = yield* conversationIdFromState(ctx);
-      const producerId = yield* decodeProducerId(`${config.producerPrefix}:${conversationId}`).pipe(
+      const threadId = yield* threadIdFromState(ctx);
+      const producerId = yield* decodeProducerId(`${config.producerPrefix}:${threadId}`).pipe(
         Effect.mapError((error) =>
           CloudflarePlatformConfigError.make({
             message: `The minted producer identity is invalid: ${error.message}`,
@@ -266,7 +266,7 @@ export const layerConfig = (
       );
       return Layer.mergeAll(
         Layer.succeed(CloudflareDurableRuntimeConfig, config),
-        Layer.succeed(ConversationObjectIdentity, { conversationId, producerId }),
+        Layer.succeed(ThreadObjectIdentity, { threadId, producerId }),
         DurableRuntimeConfig.layer({
           deploymentId: config.deploymentId,
           producerId,
@@ -283,8 +283,8 @@ export const layerConfig = (
           ? DurableRuntimeFailpoint.layer
           : Layer.succeed(DurableRuntimeFailpoint, { hit: options.runtimeFailpoint(ctx) }),
         options.maintenanceFailpoint === undefined
-          ? ConversationMaintenanceFailpoint.layer
-          : Layer.succeed(ConversationMaintenanceFailpoint, {
+          ? ThreadMaintenanceFailpoint.layer
+          : Layer.succeed(ThreadMaintenanceFailpoint, {
               hit: options.maintenanceFailpoint(ctx),
             }),
         options.toolReconciler ?? ToolReconciler.uncertain,
@@ -316,13 +316,13 @@ export const layerFromBindings = (
 ): Layer.Layer<
   CloudflareDurableRuntimeServices,
   DoStorageInitializationError,
-  DurableObjectContext | ConversationObjectNamespace | CloudflareBootstrapServices
+  DurableObjectContext | ThreadObjectNamespace | CloudflareBootstrapServices
 > =>
   Layer.unwrap(
     Effect.gen(function* () {
       const { ctx } = yield* DurableObjectContext;
       const config = yield* CloudflareDurableRuntimeConfig;
-      const { conversationId } = yield* ConversationObjectIdentity;
+      const { threadId } = yield* ThreadObjectIdentity;
       const storageOptions: DoStorageOptions = {
         storage: ctx.storage,
         observationPollInterval: config.observationPollInterval,
@@ -337,21 +337,21 @@ export const layerFromBindings = (
 
       // The same local ports serve routed decorators and owner-side RPC execution.
       // The RPC executor must never receive routed ports and bounce requests between Objects.
-      const localPorts = Layer.mergeAll(conversationStoreLayer, submissionLedgerLayer).pipe(
+      const localPorts = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
         Layer.provide(infrastructure),
       );
-      const portsEndpointLayer = Layer.effect(ConversationObjectPorts)(
+      const portsEndpointLayer = Layer.effect(ThreadObjectPorts)(
         Effect.gen(function* () {
-          const local = yield* Effect.context<SubmissionLedger | ConversationStore>();
-          return ConversationObjectPorts.of({
+          const local = yield* Effect.context<SubmissionLedger | ThreadStore>();
+          return ThreadObjectPorts.of({
             handle: (request) => executePortRequest(request).pipe(Effect.provide(local)),
           });
         }),
       ).pipe(Layer.provide(localPorts));
       const routedPorts = Layer.mergeAll(
-        routedSubmissionLedgerLayer({ localConversationId: conversationId }),
-        routedConversationStoreLayer({ localConversationId: conversationId }),
-      ).pipe(Layer.provide(localPorts), Layer.provide(conversationPortTransportLayer));
+        routedSubmissionLedgerLayer({ localThreadId: threadId }),
+        routedThreadStoreLayer({ localThreadId: threadId }),
+      ).pipe(Layer.provide(localPorts), Layer.provide(threadPortTransportLayer));
       const base = Layer.mergeAll(DurableAlarmService.layer, ProgressWaitRegistry.layer);
       const runtimeStack = DurableAgentRuntime.layerWithServices.pipe(
         Layer.provideMerge(routedPorts),
@@ -360,7 +360,7 @@ export const layerFromBindings = (
       );
       return Layer.mergeAll(
         runtimeStack,
-        ConversationMaintenance.layer(bindings).pipe(Layer.provide(runtimeStack)),
+        ThreadMaintenance.layer(bindings).pipe(Layer.provide(runtimeStack)),
         portsEndpointLayer,
       );
     }),

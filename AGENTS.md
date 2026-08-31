@@ -67,7 +67,7 @@ specifications, planning documents, decision registers, ADRs, roadmaps, or evide
 4. Every acquired resource belongs to `Scope`. The engine must not create daemon fibers.
 5. Use the pinned Effect v4 AI primitives directly. Do not introduce framework-owned copies of
    Effect AI `Tool`, `Toolkit`, `LanguageModel`, `Prompt`, `Response`, or `Model`.
-6. Provider SDK values never become canonical conversation records. Effect AI values may be used
+6. Provider SDK values never become canonical thread records. Effect AI values may be used
    by the interpreter, but durable records remain explicit, versioned Schemas.
 7. The canonical log is append-only. Projections and checkpoints are disposable derivatives.
 8. No code may claim exactly-once external side-effect execution.
@@ -83,8 +83,8 @@ specifications, planning documents, decision registers, ADRs, roadmaps, or evide
 core <- engine <- capabilities
 core <- sandbox <- sandbox-local
 core <- sandbox <- capabilities
-core <- engine <- session <- storage adapters
-engine + session + sandbox + selected adapters <- platform packages
+core <- engine <- thread <- storage adapters
+engine + thread + sandbox + selected adapters <- platform packages
 core + engine <- testing
 core + engine + capabilities <- effect-agent (umbrella) <- pr-review
 ```

@@ -375,7 +375,7 @@ jobs:
           pr-review	@effect-agent/pr-review
           sandbox	@effect-agent/sandbox
           sandbox-local	@effect-agent/sandbox-local
-          session	@effect-agent/session
+          thread	@effect-agent/thread
           storage-cloudflare	@effect-agent/storage-cloudflare
           storage-memory	@effect-agent/storage-memory
           storage-sqlite	@effect-agent/storage-sqlite
@@ -398,7 +398,7 @@ jobs:
               "@effect-agent/pr-review",
               "@effect-agent/sandbox",
               "@effect-agent/sandbox-local",
-              "@effect-agent/session",
+              "@effect-agent/thread",
               "@effect-agent/storage-cloudflare",
               "@effect-agent/storage-memory",
               "@effect-agent/storage-sqlite",
@@ -548,7 +548,7 @@ jobs:
           pr-review	@effect-agent/pr-review
           sandbox	@effect-agent/sandbox
           sandbox-local	@effect-agent/sandbox-local
-          session	@effect-agent/session
+          thread	@effect-agent/thread
           storage-cloudflare	@effect-agent/storage-cloudflare
           storage-memory	@effect-agent/storage-memory
           storage-sqlite	@effect-agent/storage-sqlite
@@ -571,7 +571,7 @@ jobs:
               "@effect-agent/pr-review",
               "@effect-agent/sandbox",
               "@effect-agent/sandbox-local",
-              "@effect-agent/session",
+              "@effect-agent/thread",
               "@effect-agent/storage-cloudflare",
               "@effect-agent/storage-memory",
               "@effect-agent/storage-sqlite",

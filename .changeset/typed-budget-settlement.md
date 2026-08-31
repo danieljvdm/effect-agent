@@ -1,6 +1,6 @@
 ---
 "@effect-agent/core": minor
-"@effect-agent/session": minor
+"@effect-agent/thread": minor
 ---
 
 Typed budget dimension on durable settlements (RUN-011, #83): the canonical `SubmissionSettled`

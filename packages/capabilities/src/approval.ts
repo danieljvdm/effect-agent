@@ -1,4 +1,4 @@
-import { ConversationId, RunId, ToolCallId } from "@effect-agent/core";
+import { ThreadId, RunId, ToolCallId } from "@effect-agent/core";
 import { Clock, Context, DateTime, Duration, Effect, Encoding, Layer, Ref, Schema } from "effect";
 
 import { RedactedPreview, Redactor, type RedactionError } from "./redaction.ts";
@@ -20,7 +20,7 @@ const ApprovalTargets = Schema.Array(Schema.String.check(Schema.isMaxLength(2 * 
 const ApprovalRequestFields = {
   requestId: Schema.NonEmptyString,
   runId: RunId,
-  conversationId: ConversationId,
+  threadId: ThreadId,
   toolCallId: ToolCallId,
   toolName: Schema.NonEmptyString,
   actionSummary: Schema.String.check(Schema.isMaxLength(2 * 1024)),
@@ -221,7 +221,7 @@ export const makeApprovalRequest = Effect.fn("makeApprovalRequest")(function* (
   return ApprovalRequest.make({
     requestId: draft.requestId,
     runId: draft.runId,
-    conversationId: draft.conversationId,
+    threadId: draft.threadId,
     toolCallId: draft.toolCallId,
     toolName: draft.toolName,
     actionSummary: draft.actionSummary,

@@ -18,14 +18,14 @@ import {
   ScheduleStorageError,
   ScheduleStore,
   scheduleDeadline,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Layer, Result, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
-import type { SqliteStorageInitializationError } from "./sqlite-conversation-store.ts";
 import { initializeSqliteJournal } from "./sqlite-journal.ts";
 import type { SqliteStorageConfig } from "./sqlite-storage-config.ts";
 import type { SqliteStorageFailpoint } from "./sqlite-storage-failpoint.ts";
+import type { SqliteStorageInitializationError } from "./sqlite-thread-store.ts";
 
 // Configuration and the immutable pending envelope may each carry the canonical input. Leave
 // room for JSON escaping and bounded status while rejecting an unreadable oversized row.

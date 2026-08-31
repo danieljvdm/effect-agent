@@ -670,7 +670,7 @@ export type PageCaptureError = typeof PageCaptureError.Type;
 
 /**
  * Stateless page-capture port. One `capture` is one pass: the adapter owns no
- * session, replay, approval, or Conversation semantics, identifies its
+ * session, replay, approval, or Thread semantics, identifies its
  * isolation posture honestly (CAP-010), enforces or rejects every requested
  * limit and policy, and returns exactly one bounded output. Capture results
  * are untrusted input to whatever reads them.

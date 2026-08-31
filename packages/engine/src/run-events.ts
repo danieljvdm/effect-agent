@@ -1,6 +1,6 @@
 import type {
   AgentId,
-  ConversationId,
+  ThreadId,
   DelegationDepth,
   DelegationId,
   RunId,
@@ -13,14 +13,14 @@ import type { Effect } from "effect";
  * Shared identity carried by every pre-base Subagent event payload. The
  * emitting Tool handler supplies delegation lineage and its own Tool Call
  * identity; the engine stamps the remaining fields it is authoritative for
- * (`eventVersion`, `runId`, `conversationId`, `agentId`, `sequence`,
+ * (`eventVersion`, `runId`, `threadId`, `agentId`, `sequence`,
  * `timestamp`, and the emitting batch's `turnId`) when the payload is woven
  * into the parent stream.
  */
 export interface SubagentEventBasePayload {
   readonly toolCallId: ToolCallId;
   readonly delegationId: DelegationId;
-  readonly childConversationId: ConversationId;
+  readonly childThreadId: ThreadId;
   readonly childRunId: RunId;
   readonly targetAgentId: AgentId;
   readonly depth: DelegationDepth;

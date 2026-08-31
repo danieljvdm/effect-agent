@@ -4,12 +4,12 @@ import {
   SubagentReservationsMemoryLive,
   SubagentRuntime,
 } from "@effect-agent/capabilities";
-import { Agent, AgentPolicy, ConversationId, IdGenerator, ToolCallId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId, IdGenerator, ToolCallId } from "@effect-agent/core";
 import { ToolExecutionClass } from "@effect-agent/engine";
 import {
   ApprovalDecisionCommand,
-  ConversationRead,
-  ConversationStore,
+  ThreadRead,
+  ThreadStore,
   DefinitionDigests,
   Digest,
   DurableAgentRuntime,
@@ -17,9 +17,9 @@ import {
   DurableWorkerBinding,
   IdempotencyKey,
   Principal,
-  childConversationIdFor,
+  childThreadIdFor,
   type DurableRuntimeFailpointLocation,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
@@ -48,11 +48,9 @@ const toolTurn = (
   { type: "tool-call", id, name, params, providerExecuted: false },
   { type: "finish", reason: "tool-calls", usage },
 ];
-const readLog = Effect.fn("AllowanceTest.readLog")(function* (conversationId: ConversationId) {
-  const store = yield* ConversationStore;
-  return yield* Stream.runCollect(
-    store.read(ConversationRead.make({ conversationId, limit: 1024 })),
-  );
+const readLog = Effect.fn("AllowanceTest.readLog")(function* (threadId: ThreadId) {
+  const store = yield* ThreadStore;
+  return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1024 })));
 });
 
 it.effect(
@@ -221,19 +219,17 @@ it.effect(
             yield* DurableWorkerBinding.make(parent, digests).pipe(Effect.provide(delegationLayer)),
             yield* DurableWorkerBinding.make(child, digests).pipe(Effect.provide(handlers)),
           ];
-          const parentId = Schema.decodeSync(ConversationId)(`allowance-parent-${index}`);
+          const parentId = Schema.decodeSync(ThreadId)(`allowance-parent-${index}`);
           const receipt = yield* withRuntime(
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
               const receipt = yield* runtime.submit(parent, "probe", {
-                conversationId: parentId,
+                threadId: parentId,
                 principal: Schema.decodeSync(Principal)("allowance-test"),
                 idempotencyKey: Schema.decodeSync(IdempotencyKey)("one"),
                 definitions: digests,
               });
-              const exit = yield* Effect.exit(
-                runtime.processConversationResolved(parentId, bindings),
-              );
+              const exit = yield* Effect.exit(runtime.processThreadResolved(parentId, bindings));
               expect(
                 Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : Option.none(),
               ).toEqual(Option.some(DurableRuntimeFailpointError.make({ location: row.fault })));
@@ -243,16 +239,16 @@ it.effect(
           );
           // Re-evaluating the delegation on the next Attempt must not raise its pinned limit.
           offeredAllowance = 99;
-          const childId = childConversationIdFor(receipt.submissionId, delegationCall);
+          const childId = childThreadIdFor(receipt.submissionId, delegationCall);
           const childSubmission = yield* withRuntime(
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
               // Complete admission from the request record, without a delegation handler.
               yield* runtime.runRecovery;
-              yield* runtime.processConversationResolved(parentId, bindings);
-              expect(yield* runtime.processConversationResolved(childId, bindings)).toEqual([]);
+              yield* runtime.processThreadResolved(parentId, bindings);
+              expect(yield* runtime.processThreadResolved(childId, bindings)).toEqual([]);
               expect(starts).toEqual([]);
-              const explanations = yield* runtime.explainConversation(childId);
+              const explanations = yield* runtime.explainThread(childId);
               expect(explanations[0]?.evidence.approvalsPending).toHaveLength(1);
               const submission = explanations[0]?.submission;
               if (submission === undefined) return yield* Effect.die("Missing child Submission");
@@ -271,9 +267,7 @@ it.effect(
                   reason: "first probe approved",
                 }),
               );
-              const exit = yield* Effect.exit(
-                runtime.processConversationResolved(childId, bindings),
-              );
+              const exit = yield* Effect.exit(runtime.processThreadResolved(childId, bindings));
               expect(
                 Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : Option.none(),
               ).toEqual(
@@ -289,14 +283,14 @@ it.effect(
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
               yield* runtime.runRecovery;
-              const settlements = yield* runtime.processConversationResolved(childId, bindings);
+              const settlements = yield* runtime.processThreadResolved(childId, bindings);
               expect(settlements[0]?.outcome).toBe("completed");
               expect(starts).toEqual(
                 Array.from({ length: row.effective }, (_, index) => index + 1),
               );
-              expect(
-                (yield* runtime.processConversationResolved(parentId, bindings))[0]?.outcome,
-              ).toBe("completed");
+              expect((yield* runtime.processThreadResolved(parentId, bindings))[0]?.outcome).toBe(
+                "completed",
+              );
               const parentLog = yield* readLog(parentId);
               const childLog = yield* readLog(childId);
               expect(

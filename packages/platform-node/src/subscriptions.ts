@@ -19,7 +19,7 @@ import {
   Subscriptions,
   defaultSubscriptionLimits,
   ScheduleStorageError,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { NodeCrypto } from "@effect/platform-node";
 import { Cause, Duration, Effect, Exit, Layer, Option } from "effect";
 
@@ -48,7 +48,7 @@ export const nodePreparedInputAdmissionLayer: Layer.Layer<
       submit: (envelope) =>
         host
           .submit(passthroughSubmitAgent(envelope.agentId), envelope.input, {
-            conversationId: envelope.conversationId,
+            threadId: envelope.threadId,
             principal: envelope.deliveryPrincipal,
             idempotencyKey: envelope.admissionKey,
             definitions: envelope.definitions,
@@ -61,8 +61,8 @@ export const nodePreparedInputAdmissionLayer: Layer.Layer<
               AdmissionConflict: () => Effect.fail(corrupt("prepared admission conflict")),
               DigestError: () => Effect.fail(ambiguous()),
               LedgerError: () => Effect.fail(ambiguous()),
-              ConversationStoreError: () => Effect.fail(ambiguous()),
-              ConversationNotMaterialized: () => Effect.fail(ambiguous()),
+              ThreadStoreError: () => Effect.fail(ambiguous()),
+              ThreadNotMaterialized: () => Effect.fail(ambiguous()),
               AppendConflict: () => Effect.fail(ambiguous()),
               FenceRejected: () => Effect.fail(ambiguous()),
               DurableRuntimeFailpointError: () => Effect.fail(ambiguous()),
@@ -74,7 +74,7 @@ export const nodePreparedInputAdmissionLayer: Layer.Layer<
 
 const preparedFromSchedule = (envelope: ScheduledEnvelope): PreparedInput => ({
   schemaVersion: 1,
-  conversationId: envelope.conversationId,
+  threadId: envelope.threadId,
   deliveryPrincipal: envelope.deliveryPrincipal,
   agentId: envelope.agentId,
   definitions: envelope.definitions,

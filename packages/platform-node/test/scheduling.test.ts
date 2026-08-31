@@ -15,7 +15,7 @@ import {
   SubmissionLookupByKey,
   defaultSchedulingLimits,
   type ScheduleSnapshot,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
@@ -137,7 +137,7 @@ it.effect("recovers one pending admission after a lost reply and host reopen", (
             scope: scheduleScope,
             scheduleId,
             timing: { _tag: "After", delayMillis: 100 },
-            destination: { _tag: "FreshConversation" },
+            destination: { _tag: "FreshThread" },
             deliveryPrincipal: principal,
             definitions,
           },
@@ -172,12 +172,12 @@ it.effect("recovers one pending admission after a lost reply and host reopen", (
           (snapshot) => snapshot.pending === null && snapshot.lastReceipt !== null,
         );
         expect(completed.lastReceipt?.occurrenceId).toBe(envelope?.occurrenceId);
-        expect(completed.lastReceipt?.receipt.conversationId).toBe(envelope?.conversationId);
+        expect(completed.lastReceipt?.receipt.threadId).toBe(envelope?.threadId);
 
         if (envelope === undefined) return yield* Effect.die("Expected a pending envelope");
         const admitted = yield* ledger.lookup(
           SubmissionLookupByKey.make({
-            conversationId: envelope.conversationId,
+            threadId: envelope.threadId,
             principal: envelope.deliveryPrincipal,
             idempotencyKey: envelope.admissionKey,
           }),
@@ -258,7 +258,7 @@ it.effect("wakes for an earlier deadline and repairs a lost insert hint by index
             scope: scheduleScope,
             scheduleId: wakeScheduleId,
             timing: { _tag: "After", delayMillis: 100 },
-            destination: { _tag: "FreshConversation" },
+            destination: { _tag: "FreshThread" },
             deliveryPrincipal: principal,
             definitions,
           },
@@ -279,7 +279,7 @@ it.effect("wakes for an earlier deadline and repairs a lost insert hint by index
               scope: scheduleScope,
               scheduleId: lostHintScheduleId,
               timing: { _tag: "After", delayMillis: 100 },
-              destination: { _tag: "FreshConversation" },
+              destination: { _tag: "FreshThread" },
               deliveryPrincipal: principal,
               definitions,
             },
@@ -329,7 +329,7 @@ it.effect("stops the scheduling driver when its Scope closes", () =>
             scope: scheduleScope,
             scheduleId: stoppedScheduleId,
             timing: { _tag: "After", delayMillis: 100 },
-            destination: { _tag: "FreshConversation" },
+            destination: { _tag: "FreshThread" },
             deliveryPrincipal: principal,
             definitions,
           },

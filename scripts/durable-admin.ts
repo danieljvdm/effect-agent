@@ -1,4 +1,4 @@
-import { ConversationId, SubmissionId } from "@effect-agent/core";
+import { ThreadId, SubmissionId } from "@effect-agent/core";
 import { NodeDurableRuntime } from "@effect-agent/platform-node";
 import {
   DurableAgentRuntime,
@@ -9,7 +9,7 @@ import {
   type IntegrityReport,
   type ObligationReport,
   type RecoveryReport,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Schema } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
@@ -38,17 +38,17 @@ class MissingSelector extends Schema.TaggedError<MissingSelector>()("MissingSele
 }) {}
 
 class IntegrityViolation extends Schema.TaggedError<IntegrityViolation>()("IntegrityViolation", {
-  conversationId: Schema.String,
+  threadId: Schema.String,
   failed: Schema.Array(Schema.String),
 }) {
   override get message() {
-    return `Integrity verification failed for ${this.conversationId}: ${this.failed.join("; ")}`;
+    return `Integrity verification failed for ${this.threadId}: ${this.failed.join("; ")}`;
   }
 }
 
-const decodeConversationId = (value: string) =>
-  Schema.decodeUnknownEffect(ConversationId)(value).pipe(
-    Effect.mapError(() => InvalidIdentifier.make({ kind: "ConversationId", value })),
+const decodeThreadId = (value: string) =>
+  Schema.decodeUnknownEffect(ThreadId)(value).pipe(
+    Effect.mapError(() => InvalidIdentifier.make({ kind: "ThreadId", value })),
   );
 
 const decodeSubmissionId = (value: string) =>
@@ -59,7 +59,7 @@ const decodeSubmissionId = (value: string) =>
 const encodeExplanation = Schema.encodeEffect(RecoveryExplanation);
 
 const database = Flag.file("database").pipe(
-  Flag.withDescription("SQLite database file of the DN deployment (Conversation Log + ledger)."),
+  Flag.withDescription("SQLite database file of the DN deployment (Thread Log + ledger)."),
 );
 
 const json = Flag.boolean("json").pipe(
@@ -79,7 +79,7 @@ const admin = CliCommand.make("durable-admin").pipe(
   CliCommand.withSharedFlags({ database }),
   CliCommand.withDescription(
     "Administrative operations over a DN durable deployment: explain recovery state, verify " +
-      "conversation integrity, re-drive one recovery decision, nudge a lane, and report aged " +
+      "thread integrity, re-drive one recovery decision, nudge a lane, and report aged " +
       "settlement obligations.",
   ),
 );
@@ -104,13 +104,13 @@ const explainCommand = CliCommand.make(
       Flag.optional,
       Flag.withDescription("Explain one Submission by identity."),
     ),
-    conversation: Flag.string("conversation").pipe(
+    thread: Flag.string("thread").pipe(
       Flag.optional,
-      Flag.withDescription("Explain every nonterminal Submission of one Conversation lane."),
+      Flag.withDescription("Explain every nonterminal Submission of one Thread lane."),
     ),
     json,
   },
-  ({ conversation, json: asJson, submission }) =>
+  ({ thread, json: asJson, submission }) =>
     withRuntime(
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
@@ -119,13 +119,11 @@ const explainCommand = CliCommand.make(
           const explanation = yield* runtime.explain(submissionId);
           return yield* printExplanation(explanation, asJson);
         }
-        if (conversation._tag === "Some") {
-          const conversationId = yield* decodeConversationId(conversation.value);
-          const explanations = yield* runtime.explainConversation(conversationId);
+        if (thread._tag === "Some") {
+          const threadId = yield* decodeThreadId(thread.value);
+          const explanations = yield* runtime.explainThread(threadId);
           if (explanations.length === 0) {
-            return yield* Console.log(
-              `No nonterminal Submissions on conversation ${conversationId}.`,
-            );
+            return yield* Console.log(`No nonterminal Submissions on thread ${threadId}.`);
           }
           return yield* Effect.forEach(
             explanations,
@@ -134,7 +132,7 @@ const explainCommand = CliCommand.make(
           );
         }
         return yield* MissingSelector.make({
-          message: "Pass --submission <id> or --conversation <id>.",
+          message: "Pass --submission <id> or --thread <id>.",
         });
       }),
     ),
@@ -146,7 +144,7 @@ const explainCommand = CliCommand.make(
 );
 
 const renderReport = (report: IntegrityReport): ReadonlyArray<string> => [
-  `Conversation ${report.conversationId}: ${report.recordCount} records, tail ${report.tailSequence}, ${report.submissionCount} submissions`,
+  `Thread ${report.threadId}: ${report.recordCount} records, tail ${report.tailSequence}, ${report.submissionCount} submissions`,
   ...report.checks.map(
     (check) =>
       `  ${check.status === "passed" ? "PASS" : check.status === "failed" ? "FAIL" : "SKIP"} ${check.name}${
@@ -159,20 +157,20 @@ const renderReport = (report: IntegrityReport): ReadonlyArray<string> => [
 const verifyCommand = CliCommand.make(
   "verify",
   {
-    conversation: Flag.string("conversation").pipe(Flag.withDescription("Conversation to verify.")),
+    thread: Flag.string("thread").pipe(Flag.withDescription("Thread to verify.")),
   },
-  ({ conversation }) =>
+  ({ thread }) =>
     withRuntime(
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
-        const conversationId = yield* decodeConversationId(conversation);
-        const report = yield* runtime.verify(conversationId);
+        const threadId = yield* decodeThreadId(thread);
+        const report = yield* runtime.verify(threadId);
         yield* Effect.forEach(renderReport(report), (line) => Console.log(line), {
           discard: true,
         });
         if (!report.ok) {
           return yield* IntegrityViolation.make({
-            conversationId: conversation,
+            threadId: thread,
             failed: report.checks
               .filter((check) => check.status === "failed")
               .map((check) => check.name),
@@ -231,18 +229,16 @@ const retryCommand = CliCommand.make(
 const wakeCommand = CliCommand.make(
   "wake",
   {
-    conversation: Flag.string("conversation").pipe(
-      Flag.withDescription("Conversation lane to nudge."),
-    ),
+    thread: Flag.string("thread").pipe(Flag.withDescription("Thread lane to nudge.")),
   },
-  ({ conversation }) =>
+  ({ thread }) =>
     withRuntime(
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
-        const conversationId = yield* decodeConversationId(conversation);
-        yield* runtime.wake(conversationId);
+        const threadId = yield* decodeThreadId(thread);
+        yield* runtime.wake(threadId);
         yield* Console.log(
-          `Wake hint sent for ${conversationId} (droppable by contract; workers' ledger scans stay authoritative).`,
+          `Wake hint sent for ${threadId} (droppable by contract; workers' ledger scans stay authoritative).`,
         );
       }),
     ),
@@ -253,7 +249,7 @@ const renderObligations = (report: ObligationReport): ReadonlyArray<string> =>
     ? ["No nonterminal Submissions — every accepted obligation is settled."]
     : report.entries.map(
         (entry) =>
-          `${entry.severity.toUpperCase().padEnd(7)} ${entry.blockedOn.padEnd(15)} age=${String(entry.ageSeconds).padStart(6)}s ${entry.submissionId} (${entry.state}) on ${entry.conversationId}`,
+          `${entry.severity.toUpperCase().padEnd(7)} ${entry.blockedOn.padEnd(15)} age=${String(entry.ageSeconds).padStart(6)}s ${entry.submissionId} (${entry.state}) on ${entry.threadId}`,
       );
 
 const obligationsCommand = CliCommand.make(

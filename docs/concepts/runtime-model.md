@@ -26,7 +26,7 @@ tool results feed the next turn.
 ## Prepare context and compact {#context-and-compaction}
 
 The runtime decodes input and evaluates the agent's instructions at run start. Before each model
-request, it transforms the conversation into a prompt, compacts it if needed, then adds the output
+request, it transforms the thread into a prompt, compacts it if needed, then adds the output
 contract and the current run status when enabled.
 
 Two token limits serve different purposes:
@@ -40,7 +40,7 @@ When context is too large, the default compactor first prunes old tool results o
 protected tail. If that is insufficient, it makes one metered summary call. Instructions, protected
 input, and tool call/result pairing survive compaction. The summary call consumes run budget too.
 
-Compaction changes what the model sees. The canonical conversation log retains its evidence.
+Compaction changes what the model sees. The canonical thread log retains its evidence.
 Durable hosts record each applied compaction as `CompactionCreated` before using the new view, so
 recovery restores the same summary and coverage. Durable compaction can cover complete prior-run
 records; it cannot summarize away the current run's canonical records.
@@ -71,7 +71,7 @@ Agent, tenant, and platform limits may further reduce concurrency.
 
 ## Subagents {#subagents}
 
-Delegation starts a child run in a fresh conversation through a tool in the parent's toolkit. The
+Delegation starts a child run in a fresh thread through a tool in the parent's toolkit. The
 child repeats the same model/tool loop under its own policy and a reserved allowance. Its projected
 result returns to the parent as the delegation tool result; its raw transcript stays private.
 
@@ -124,19 +124,19 @@ child results.
 
 ## Store history and recover work {#storage-and-recovery}
 
-Persistent history lets a later run reload a conversation. Durable execution also tracks accepted
+Persistent history lets a later run reload a thread. Durable execution also tracks accepted
 work and owes a terminal settlement even if the process that started it disappears.
 
 | Runtime data                | Responsibility                                                                                          |
 | --------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Conversation log            | Append-only canonical facts: applied input, model responses, tool outcomes, compaction, and settlements |
+| Thread log                  | Append-only canonical facts: applied input, model responses, tool outcomes, compaction, and settlements |
 | Submission ledger           | Accepted work, queue order, attempt ownership, abort intent, and outstanding settlement obligations     |
 | Projections and checkpoints | Rebuildable views and replay optimizations derived from the log                                         |
 
 The Node host uses SQLite; the Cloudflare host uses Durable Objects. The memory adapter supports
 tests and in-process storage. The host and adapter together determine the recovery guarantee.
 
-A durable host acknowledges input with a Receipt only after admission, conversation materialization,
+A durable host acknowledges input with a Receipt only after admission, thread materialization,
 and readiness are committed. Each attempt writes under a fenced ownership token. A replacement
 restores the committed boundary, accounting, and original deadline; it receives no fresh run budget.
 
@@ -168,8 +168,8 @@ failures that the model recovers from.
 | ---------------- | ---------------------------------------------------------------------------- |
 | Agent Definition | Immutable program: Schemas, Toolkit, instructions, and policy                |
 | Agent Binding    | One Definition paired with one Effect AI Model                               |
-| Conversation     | Ordered history shared across runs                                           |
-| Run              | One logical execution request against a conversation                         |
+| Thread           | Ordered history shared across runs                                           |
+| Run              | One logical execution request against a thread                               |
 | Turn             | One model request and response, optionally followed by a complete tool batch |
 | Submission       | Input accepted for durable processing                                        |
 | Attempt          | One durable ownership period advancing a submission                          |

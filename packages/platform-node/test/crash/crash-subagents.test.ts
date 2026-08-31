@@ -1,20 +1,20 @@
 import type { SubmissionId } from "@effect-agent/core";
 import {
   AbortCommand,
-  ConversationStore,
-  ConversationTailRequest,
+  ThreadStore,
+  ThreadTailRequest,
   DurableAgentRuntime,
   RecoverySnapshotRequest,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
-  childConversationIdFor,
+  childThreadIdFor,
   childIdempotencyKeyFor,
   runIdForSubmission,
   toolCallSettledRecordId,
   type DurableRuntimeFailpointLocation,
   type ResolvedBinding,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Option } from "effect";
@@ -31,7 +31,7 @@ import {
   childModelInvocations,
   coordinatorSubmitSlice,
   crashSubmitOptions,
-  decodeConversationId,
+  decodeThreadId,
   decodeToolCallId,
   makeCrashSubagentBindings,
 } from "./fixtures.ts";
@@ -67,21 +67,21 @@ import {
 const DELEGATE_CALL = decodeToolCallId(DELEGATE_CALL_ID);
 const CHILD_MODEL_COUNT_KEY = `${CHILD_MODEL_OP}:${RESEARCH_TOPIC}`;
 
-const submitCoordinator = (conversation: string, key: string) =>
+const submitCoordinator = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     return yield* runtime.submit(
       coordinatorSubmitSlice,
       { mission: CRASH_QUESTION },
-      crashSubmitOptions(conversation, key),
+      crashSubmitOptions(thread, key),
     );
   });
 
-/** Drive one Conversation lane through the S2 multi-binding worker path (SUB-023). */
-const driveWith = (bindings: ReadonlyArray<ResolvedBinding>) => (conversation: string) =>
+/** Drive one Thread lane through the S2 multi-binding worker path (SUB-023). */
+const driveWith = (bindings: ReadonlyArray<ResolvedBinding>) => (thread: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
-    return yield* runtime.processConversationResolved(decodeConversationId(conversation), bindings);
+    return yield* runtime.processThreadResolved(decodeThreadId(thread), bindings);
   });
 
 /** Restart-drive bindings: the parent model always answers final (batch resume, P5 precedent). */
@@ -106,36 +106,34 @@ const submissionSnapshot = (submissionId: SubmissionId) =>
     return snapshot.value;
   });
 
-const startedPayloadOf = (conversation: string) =>
+const startedPayloadOf = (thread: string) =>
   Effect.gen(function* () {
-    const log = yield* readLog(conversation);
+    const log = yield* readLog(thread);
     const payload = payloadsOf(log, "SubagentStarted")[0]?.record.payload;
     if (payload?._tag !== "SubagentStarted") throw new Error("Expected SubagentStarted");
     return payload;
   });
 
-const readTail = (conversation: string) =>
+const readTail = (thread: string) =>
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
-    return yield* store.inspectTail(
-      ConversationTailRequest.make({ conversationId: decodeConversationId(conversation) }),
-    );
+    const store = yield* ThreadStore;
+    return yield* store.inspectTail(ThreadTailRequest.make({ threadId: decodeThreadId(thread) }));
   });
 
-const recordIdsOf = (conversation: string) =>
-  Effect.map(readLog(conversation), (records) =>
+const recordIdsOf = (thread: string) =>
+  Effect.map(readLog(thread), (records) =>
     records.map((envelope) => envelope.record.recordId as string),
   );
 
 /** The delegation call settled exactly once with the given payload expectations. */
 const assertDelegationSettled = (
-  conversation: string,
+  thread: string,
   parentSubmissionId: SubmissionId,
   expected: { readonly isFailure: boolean; readonly result: unknown },
 ) =>
   Effect.gen(function* () {
     const runId = runIdForSubmission(parentSubmissionId);
-    const log = yield* readLog(conversation);
+    const log = yield* readLog(thread);
     const settled = log.filter(
       (envelope) => envelope.record.recordId === toolCallSettledRecordId(runId, 1, DELEGATE_CALL),
     );
@@ -150,19 +148,19 @@ const assertDelegationSettled = (
 
 /**
  * The one-child identity claims common to every converged establishment (SUB-016/SUB-017):
- * exactly one requested/started/joined record, one child Conversation with one lineage record,
+ * exactly one requested/started/joined record, one child Thread with one lineage record,
  * and the recorded Receipt naming the one admitted child.
  */
-const assertOneEstablishedChild = (conversation: string, childConversation: string) =>
+const assertOneEstablishedChild = (thread: string, childThread: string) =>
   Effect.gen(function* () {
-    const log = yield* readLog(conversation);
+    const log = yield* readLog(thread);
     expect(payloadsOf(log, "SubagentRequested")).toHaveLength(1);
     expect(payloadsOf(log, "SubagentStarted")).toHaveLength(1);
     expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
-    const childLog = yield* readLog(childConversation);
-    expect(payloadsOf(childLog, "ConversationCreated")).toHaveLength(1);
+    const childLog = yield* readLog(childThread);
+    expect(payloadsOf(childLog, "ThreadCreated")).toHaveLength(1);
     expect(payloadsOf(childLog, "SubagentLineageRecorded")).toHaveLength(1);
-    const started = yield* startedPayloadOf(conversation);
+    const started = yield* startedPayloadOf(thread);
     const child = yield* submissionSnapshot(started.childSubmissionId);
     expect(child.receiptId).toBe(started.childReceiptId);
     expect(child.state).toBe("settled");
@@ -173,7 +171,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
   "S2 durable Subagent crash matrix (real process kills)",
   (it) => {
     it.effect(
-      "every establishment failpoint kill converges on one child Receipt, Conversation, and join",
+      "every establishment failpoint kill converges on one child Receipt, Thread, and join",
       () =>
         Effect.gen(function* () {
           const rows: ReadonlyArray<{
@@ -218,12 +216,12 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           for (const row of rows) {
             yield* withCrashSite((site) =>
               Effect.gen(function* () {
-                const conversation = `conversation-${row.location.replaceAll(":", "-")}`;
+                const thread = `thread-${row.location.replaceAll(":", "-")}`;
                 const key = `key-${row.location}`;
                 const result = yield* runWorkerToExit({
                   db: site.db,
                   scenario: "subagent-run",
-                  conversation,
+                  thread,
                   key,
                   killAt: row.location,
                   leaseMillis: CHILD_LEASE_MS,
@@ -238,36 +236,30 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   site.db,
                   Effect.gen(function* () {
                     const host = yield* NodeDurableHost;
-                    const parent = yield* lookupByKey(conversation, key);
+                    const parent = yield* lookupByKey(thread, key);
                     const report = host.startupRecovery.find(
                       (entry) => entry.submissionId === parent.submissionId,
                     );
                     expect(report?.decision._tag, row.location).toBe(row.decision);
                     expect(report?.disposition, row.location).toBe(row.disposition);
 
-                    const childConversation = childConversationIdFor(
-                      parent.submissionId,
-                      DELEGATE_CALL,
-                    );
+                    const childThread = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
                     // Worker convergence: the parent (re)establishes and suspends without
                     // settling, the child lane settles, the woken parent joins.
-                    expect(yield* drive(conversation), row.location).toHaveLength(0);
-                    const childSettlements = yield* drive(childConversation);
+                    expect(yield* drive(thread), row.location).toHaveLength(0);
+                    const childSettlements = yield* drive(childThread);
                     expect(
                       childSettlements.map((settlement) => settlement.outcome),
                       row.location,
                     ).toEqual(["completed"]);
-                    const settlements = yield* drive(conversation);
+                    const settlements = yield* drive(thread);
                     expect(
                       settlements.map((settlement) => settlement.outcome),
                       row.location,
                     ).toEqual(["completed"]);
 
-                    const started = yield* assertOneEstablishedChild(
-                      conversation,
-                      childConversation,
-                    );
-                    yield* assertDelegationSettled(conversation, parent.submissionId, {
+                    const started = yield* assertOneEstablishedChild(thread, childThread);
+                    yield* assertDelegationSettled(thread, parent.submissionId, {
                       isFailure: false,
                       result: { summary: PROJECTED_SUMMARY },
                     });
@@ -276,11 +268,11 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     ]);
                     // The one child model invocation across the kill and every replay.
                     expect(childModelInvocations(site.supplier), row.location).toBe(1);
-                    yield* assertConvergence(conversation, [parent.submissionId], {
+                    yield* assertConvergence(thread, [parent.submissionId], {
                       site,
                       counts: { [CHILD_MODEL_COUNT_KEY]: 1 },
                     });
-                    yield* assertConvergence(childConversation, [started.childSubmissionId]);
+                    yield* assertConvergence(childThread, [started.childSubmissionId]);
                   }),
                 );
               }),
@@ -295,12 +287,12 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
-            const conversation = "conversation-s2-orphan";
+            const thread = "thread-s2-orphan";
             const key = "s2-orphan-1";
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "subagent-run",
-              conversation,
+              thread,
               key,
               killAt: "subagent:after-reserve",
               leaseMillis: CHILD_LEASE_MS,
@@ -314,7 +306,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               site.db,
               Effect.gen(function* () {
                 const runtime = yield* DurableAgentRuntime;
-                const parent = yield* lookupByKey(conversation, key);
+                const parent = yield* lookupByKey(thread, key);
                 yield* runtime.abort(
                   AbortCommand.make({
                     submissionId: parent.submissionId,
@@ -352,7 +344,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // No child was ever admitted for the orphaned reservation (SUB-031 evidence).
                 const resolution = yield* ledger.resolveAdmission(
                   SubmissionLookupByKey.make({
-                    conversationId: childConversationIdFor(parentId, DELEGATE_CALL),
+                    threadId: childThreadIdFor(parentId, DELEGATE_CALL),
                     principal: CRASH_PRINCIPAL,
                     idempotencyKey: childIdempotencyKeyFor(
                       runIdForSubmission(parentId),
@@ -361,12 +353,12 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   }),
                 );
                 expect(resolution._tag).toBe("NotAdmitted");
-                const log = yield* readLog(conversation);
+                const log = yield* readLog(thread);
                 expect(payloadsOf(log, "SubagentRequested")).toHaveLength(0);
                 // The delegation call is never marked Unknown (plan §4.3 classifier row 6).
                 expect(payloadsOf(log, "ToolCallUnknown")).toHaveLength(0);
                 expect(childModelInvocations(site.supplier)).toBe(0);
-                yield* assertConvergence(conversation, [parentId], { site, counts: {} });
+                yield* assertConvergence(thread, [parentId], { site, counts: {} });
               }),
             );
           }),
@@ -379,7 +371,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
-            const conversation = "conversation-s2-wake";
+            const thread = "thread-s2-wake";
             const key = "s2-wake-1";
             // The FIRST settlement finalization of the scenario is the child's. The parent wake
             // is now durably committed before this boundary, so the kill cannot strand a
@@ -387,7 +379,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "subagent-run",
-              conversation,
+              thread,
               key,
               killAtStorage: "ledger:finalize-settlement:after",
               leaseMillis: CHILD_LEASE_MS,
@@ -400,9 +392,9 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             const ids = yield* withRuntime(
               site.db,
               Effect.gen(function* () {
-                const parent = yield* lookupByKey(conversation, key);
+                const parent = yield* lookupByKey(thread, key);
                 expect(parent.state).toBe("input-applied");
-                const started = yield* startedPayloadOf(conversation);
+                const started = yield* startedPayloadOf(thread);
                 const child = yield* submissionSnapshot(started.childSubmissionId);
                 expect(child.state).toBe("settled");
                 return { parent: parent.submissionId, child: started.childSubmissionId };
@@ -424,17 +416,17 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(report?.disposition).toBe("repaired");
                 expect((yield* submissionSnapshot(ids.parent)).state).toBe("input-applied");
 
-                const settlements = yield* drive(conversation);
+                const settlements = yield* drive(thread);
                 expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
                 // The settled child was read, verified, and joined — never re-executed.
                 expect(childModelInvocations(site.supplier)).toBe(1);
-                const childConversation = childConversationIdFor(ids.parent, DELEGATE_CALL);
-                yield* assertOneEstablishedChild(conversation, childConversation);
-                yield* assertConvergence(conversation, [ids.parent], {
+                const childThread = childThreadIdFor(ids.parent, DELEGATE_CALL);
+                yield* assertOneEstablishedChild(thread, childThread);
+                yield* assertConvergence(thread, [ids.parent], {
                   site,
                   counts: { [CHILD_MODEL_COUNT_KEY]: 1 },
                 });
-                yield* assertConvergence(childConversation, [ids.child]);
+                yield* assertConvergence(childThread, [ids.child]);
               }),
             );
           }),
@@ -462,12 +454,12 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           for (const row of rows) {
             yield* withCrashSite((site) =>
               Effect.gen(function* () {
-                const conversation = `conversation-${row.location.replaceAll(":", "-")}`;
+                const thread = `thread-${row.location.replaceAll(":", "-")}`;
                 const key = `key-${row.location}`;
                 const result = yield* runWorkerToExit({
                   db: site.db,
                   scenario: "subagent-run",
-                  conversation,
+                  thread,
                   key,
                   killAt: row.location,
                   leaseMillis: CHILD_LEASE_MS,
@@ -484,7 +476,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   site.db,
                   Effect.gen(function* () {
                     const host = yield* NodeDurableHost;
-                    const parent = yield* lookupByKey(conversation, key);
+                    const parent = yield* lookupByKey(thread, key);
                     if (row.decision !== undefined) {
                       const report = host.startupRecovery.find(
                         (entry) => entry.submissionId === parent.submissionId,
@@ -496,32 +488,26 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                       "released",
                     ]);
 
-                    const settlements = yield* drive(conversation);
+                    const settlements = yield* drive(thread);
                     expect(
                       settlements.map((settlement) => settlement.outcome),
                       row.location,
                     ).toEqual(["completed"]);
 
-                    const childConversation = childConversationIdFor(
-                      parent.submissionId,
-                      DELEGATE_CALL,
-                    );
-                    const started = yield* assertOneEstablishedChild(
-                      conversation,
-                      childConversation,
-                    );
-                    yield* assertDelegationSettled(conversation, parent.submissionId, {
+                    const childThread = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
+                    const started = yield* assertOneEstablishedChild(thread, childThread);
+                    yield* assertDelegationSettled(thread, parent.submissionId, {
                       isFailure: false,
                       result: { summary: PROJECTED_SUMMARY },
                     });
                     // §16.4: a completed child is never re-executed merely because the parent
                     // join acknowledgment was lost — the file-backed count stays at ONE.
                     expect(childModelInvocations(site.supplier), row.location).toBe(1);
-                    yield* assertConvergence(conversation, [parent.submissionId], {
+                    yield* assertConvergence(thread, [parent.submissionId], {
                       site,
                       counts: { [CHILD_MODEL_COUNT_KEY]: 1 },
                     });
-                    yield* assertConvergence(childConversation, [started.childSubmissionId]);
+                    yield* assertConvergence(childThread, [started.childSubmissionId]);
                   }),
                 );
               }),
@@ -536,12 +522,12 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
-            const conversation = "conversation-s2-abort";
+            const thread = "thread-s2-abort";
             const key = "s2-abort-1";
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "subagent-abort",
-              conversation,
+              thread,
               key,
               killAt: "abort:after-intent",
               supplierDir: site.supplier,
@@ -555,8 +541,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const host = yield* NodeDurableHost;
                 const runtime = yield* DurableAgentRuntime;
-                const parent = yield* lookupByKey(conversation, key);
-                const started = yield* startedPayloadOf(conversation);
+                const parent = yield* lookupByKey(thread, key);
+                const started = yield* startedPayloadOf(thread);
                 // Recovery emits the ONE idempotent child abort command and keeps the parent
                 // waiting for the join (spec §13.1, request-abort-and-join).
                 const parentReport = host.startupRecovery.find(
@@ -564,8 +550,13 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 );
                 expect(parentReport?.decision._tag).toBe("PropagateChildAbort");
                 expect(parentReport?.disposition).toBe("repaired");
-                const childReport = host.startupRecovery.find(
-                  (entry) => entry.submissionId === started.childSubmissionId,
+                // Recovery scans lanes lexically. Allow the next pass to settle a child
+                // whose lane was visited before its parent's abort propagation.
+                const reports = [...host.startupRecovery, ...(yield* runtime.runRecovery)];
+                const childReport = reports.find(
+                  (entry) =>
+                    entry.submissionId === started.childSubmissionId &&
+                    entry.decision._tag === "SettleAborted",
                 );
                 expect(childReport?.decision._tag).toBe("SettleAborted");
                 const child = yield* submissionSnapshot(started.childSubmissionId);
@@ -581,15 +572,12 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   (entry) => entry.submissionId === parent.submissionId,
                 );
                 expect(wakeReport?.decision._tag).toBe("ResumeWaitingParent");
-                const settlements = yield* drive(conversation);
+                const settlements = yield* drive(thread);
                 expect(settlements.map((settlement) => settlement.outcome)).toEqual(["aborted"]);
 
                 // Exactly one durable child abort command became canonical (DUR-012).
-                const childConversation = childConversationIdFor(
-                  parent.submissionId,
-                  DELEGATE_CALL,
-                );
-                const childLog = yield* readLog(childConversation);
+                const childThread = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
+                const childLog = yield* readLog(childThread);
                 const abortRecords = payloadsOf(childLog, "AbortRequested");
                 expect(abortRecords).toHaveLength(1);
                 const abortPayload = abortRecords[0]?.record.payload;
@@ -598,7 +586,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 }
 
                 // The join committed with the child's ACTUAL outcome, before the settlement.
-                const log = yield* readLog(conversation);
+                const log = yield* readLog(thread);
                 const joined = payloadsOf(log, "SubagentJoined");
                 expect(joined).toHaveLength(1);
                 const joinedPayload = joined[0]?.record.payload;
@@ -611,7 +599,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 if (settledEnvelope !== undefined && joined[0] !== undefined) {
                   expect(Number(joined[0].sequence)).toBeLessThan(Number(settledEnvelope.sequence));
                 }
-                yield* assertDelegationSettled(conversation, parent.submissionId, {
+                yield* assertDelegationSettled(thread, parent.submissionId, {
                   isFailure: true,
                   result: {
                     errorTag: "SubagentParentAborted",
@@ -619,11 +607,11 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   },
                 });
                 expect(yield* reservationStatuses(parent.submissionId)).toEqual(["released"]);
-                yield* assertConvergence(conversation, [parent.submissionId], {
+                yield* assertConvergence(thread, [parent.submissionId], {
                   site,
                   counts: {},
                 });
-                yield* assertConvergence(childConversation, [started.childSubmissionId]);
+                yield* assertConvergence(childThread, [started.childSubmissionId]);
               }),
             );
           }),
@@ -636,7 +624,9 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
-            const conversation = "conversation-s2-abort-marker";
+            // Visit the parent before the `subagent:` lane so startup replays the abort
+            // command while the child remains unsettled, exercising its idempotence.
+            const thread = "parent-thread-s2-abort-marker";
             const key = "s2-abort-marker-1";
             const bindings = yield* makeCrashSubagentBindings({
               supplierDir: site.supplier,
@@ -650,9 +640,9 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               site.db,
               Effect.gen(function* () {
                 const runtime = yield* DurableAgentRuntime;
-                yield* submitCoordinator(conversation, key);
-                expect(yield* drive(conversation)).toHaveLength(0);
-                const parent = yield* lookupByKey(conversation, key);
+                yield* submitCoordinator(thread, key);
+                expect(yield* drive(thread)).toHaveLength(0);
+                const parent = yield* lookupByKey(thread, key);
                 expect(parent.state).toBe("suspended");
                 yield* runtime.abort(
                   AbortCommand.make({
@@ -670,7 +660,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "subagent-recover",
-              conversation,
+              thread,
               key,
               killAt: "subagent:after-child-abort-intent",
             });
@@ -681,7 +671,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const host = yield* NodeDurableHost;
                 const runtime = yield* DurableAgentRuntime;
-                const started = yield* startedPayloadOf(conversation);
+                const started = yield* startedPayloadOf(thread);
                 // The replayed idempotent command returns the recorded intent unchanged
                 // (DUR-012); recovery repairs the marker without a second command.
                 const parentReport = host.startupRecovery.find(
@@ -696,23 +686,23 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const second = yield* runtime.runRecovery;
                 const wakeReport = second.find((entry) => entry.submissionId === parentId);
                 expect(wakeReport?.decision._tag).toBe("ResumeWaitingParent");
-                const settlements = yield* drive(conversation);
+                const settlements = yield* drive(thread);
                 expect(settlements.map((settlement) => settlement.outcome)).toEqual(["aborted"]);
 
                 // One canonical child abort command across the killed pass and every replay.
-                const childConversation = childConversationIdFor(parentId, DELEGATE_CALL);
-                const childLog = yield* readLog(childConversation);
+                const childThread = childThreadIdFor(parentId, DELEGATE_CALL);
+                const childLog = yield* readLog(childThread);
                 const abortRecords = payloadsOf(childLog, "AbortRequested");
                 expect(abortRecords).toHaveLength(1);
                 const abortPayload = abortRecords[0]?.record.payload;
                 if (abortPayload?._tag === "AbortRequested") {
                   expect(abortPayload.author).toBe("subagent-parent-abort");
                 }
-                const joined = payloadsOf(yield* readLog(conversation), "SubagentJoined");
+                const joined = payloadsOf(yield* readLog(thread), "SubagentJoined");
                 expect(joined).toHaveLength(1);
                 expect(childModelInvocations(site.supplier)).toBe(0);
-                yield* assertConvergence(conversation, [parentId], { site, counts: {} });
-                yield* assertConvergence(childConversation, [started.childSubmissionId]);
+                yield* assertConvergence(thread, [parentId], { site, counts: {} });
+                yield* assertConvergence(childThread, [started.childSubmissionId]);
               }),
             );
           }),
@@ -725,7 +715,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
-            const conversation = "conversation-s2-simultaneous";
+            const thread = "thread-s2-simultaneous";
             const key = "s2-simultaneous-1";
             const childMarker = `${site.marker}-child`;
             yield* Effect.scoped(
@@ -735,7 +725,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const parentWorker = yield* startWorker({
                   db: site.db,
                   scenario: "subagent-run",
-                  conversation,
+                  thread,
                   key,
                   blockAt: "subagent:after-start-append",
                   markerFile: site.marker,
@@ -747,7 +737,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const childWorker = yield* startWorker({
                   db: site.db,
                   scenario: "subagent-child",
-                  conversation,
+                  thread,
                   key,
                   childBlockFile: childMarker,
                   leaseMillis: CHILD_LEASE_MS,
@@ -770,8 +760,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               site.db,
               Effect.gen(function* () {
                 const host = yield* NodeDurableHost;
-                const parent = yield* lookupByKey(conversation, key);
-                const started = yield* startedPayloadOf(conversation);
+                const parent = yield* lookupByKey(thread, key);
+                const started = yield* startedPayloadOf(thread);
                 // Independent fenced recovery: the parent restores its waiting checkpoint
                 // under its own fence, the child resumes from its own Turn boundary.
                 const parentReport = host.startupRecovery.find(
@@ -786,30 +776,27 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(childReport?.disposition).toBe("deferred");
                 expect((yield* submissionSnapshot(parent.submissionId)).state).toBe("suspended");
 
-                const childConversation = childConversationIdFor(
-                  parent.submissionId,
-                  DELEGATE_CALL,
-                );
-                const childSettlements = yield* drive(childConversation);
+                const childThread = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
+                const childSettlements = yield* drive(childThread);
                 expect(childSettlements.map((settlement) => settlement.outcome)).toEqual([
                   "completed",
                 ]);
-                const settlements = yield* drive(conversation);
+                const settlements = yield* drive(thread);
                 expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
 
                 // One link, one child Settlement, one join (spec §14 simultaneous row); the
                 // child's interrupted model invocation is honestly visible as count 2 with
                 // exactly ONE committed child response.
-                yield* assertOneEstablishedChild(conversation, childConversation);
-                const childLog = yield* readLog(childConversation);
+                yield* assertOneEstablishedChild(thread, childThread);
+                const childLog = yield* readLog(childThread);
                 expect(payloadsOf(childLog, "ModelResponseRecorded")).toHaveLength(1);
                 expect(payloadsOf(childLog, "SubmissionSettled")).toHaveLength(1);
                 expect(childModelInvocations(site.supplier)).toBe(2);
-                yield* assertConvergence(conversation, [parent.submissionId], {
+                yield* assertConvergence(thread, [parent.submissionId], {
                   site,
                   counts: { [CHILD_MODEL_COUNT_KEY]: 2 },
                 });
-                yield* assertConvergence(childConversation, [started.childSubmissionId]);
+                yield* assertConvergence(childThread, [started.childSubmissionId]);
               }),
             );
           }),
@@ -822,7 +809,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
-            const conversation = "conversation-s2-stale-join";
+            const thread = "thread-s2-stale-join";
             const key = "s2-stale-join-1";
             yield* Effect.scoped(
               Effect.gen(function* () {
@@ -832,7 +819,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const staleWorker = yield* startWorker({
                   db: site.db,
                   scenario: "subagent-run",
-                  conversation,
+                  thread,
                   key,
                   projectMarkerFile: site.marker,
                   projectReleaseFile: site.release,
@@ -850,20 +837,20 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const ids = yield* withHost(
                   site.db,
                   Effect.gen(function* () {
-                    const parent = yield* lookupByKey(conversation, key);
-                    const settlements = yield* drive(conversation);
+                    const parent = yield* lookupByKey(thread, key);
+                    const settlements = yield* drive(thread);
                     expect(settlements.map((settlement) => settlement.outcome)).toEqual([
                       "completed",
                     ]);
-                    const started = yield* startedPayloadOf(conversation);
+                    const started = yield* startedPayloadOf(thread);
                     return {
                       parent: parent.submissionId,
                       child: started.childSubmissionId,
                     };
                   }),
                 );
-                const childConversation = childConversationIdFor(ids.parent, DELEGATE_CALL);
-                const childTailBefore = yield* withRuntime(site.db, readTail(childConversation));
+                const childThread = childThreadIdFor(ids.parent, DELEGATE_CALL);
+                const childTailBefore = yield* withRuntime(site.db, readTail(childThread));
 
                 // Unblock the stale parent: its pending join append MUST be fenced.
                 yield* touchFile(site.release);
@@ -883,25 +870,25 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   Effect.gen(function* () {
                     // Vice-versa independent fencing: fencing the stale PARENT Attempt left
                     // the CHILD lane byte-identical — same tail digest, same epoch.
-                    const childTailAfter = yield* readTail(childConversation);
+                    const childTailAfter = yield* readTail(childThread);
                     expect(childTailAfter.tailDigest).toBe(childTailBefore.tailDigest);
                     expect(Number(childTailAfter.producerEpoch)).toBe(
                       Number(childTailBefore.producerEpoch),
                     );
                     // Exactly one join/result/settlement exists; the recomputed projection
                     // never re-executed the completed child.
-                    yield* assertOneEstablishedChild(conversation, childConversation);
-                    yield* assertDelegationSettled(conversation, ids.parent, {
+                    yield* assertOneEstablishedChild(thread, childThread);
+                    yield* assertDelegationSettled(thread, ids.parent, {
                       isFailure: false,
                       result: { summary: PROJECTED_SUMMARY },
                     });
                     expect(yield* reservationStatuses(ids.parent)).toEqual(["released"]);
                     expect(childModelInvocations(site.supplier)).toBe(1);
-                    yield* assertConvergence(conversation, [ids.parent], {
+                    yield* assertConvergence(thread, [ids.parent], {
                       site,
                       counts: { [CHILD_MODEL_COUNT_KEY]: 1 },
                     });
-                    yield* assertConvergence(childConversation, [ids.child]);
+                    yield* assertConvergence(childThread, [ids.child]);
                   }),
                 );
               }),
@@ -916,7 +903,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
-            const conversation = "conversation-s2-child-fence";
+            const thread = "thread-s2-child-fence";
             const key = "s2-child-fence-1";
             const bindings = yield* makeCrashSubagentBindings({
               supplierDir: site.supplier,
@@ -928,16 +915,16 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             const parentId = yield* withRuntime(
               site.db,
               Effect.gen(function* () {
-                yield* submitCoordinator(conversation, key);
-                expect(yield* drive(conversation)).toHaveLength(0);
-                const parent = yield* lookupByKey(conversation, key);
+                yield* submitCoordinator(thread, key);
+                expect(yield* drive(thread)).toHaveLength(0);
+                const parent = yield* lookupByKey(thread, key);
                 expect(parent.state).toBe("suspended");
                 return parent.submissionId;
               }),
             );
-            const childConversation = childConversationIdFor(parentId, DELEGATE_CALL);
-            const parentTailBefore = yield* withRuntime(site.db, readTail(conversation));
-            const parentIdsBefore = yield* withRuntime(site.db, recordIdsOf(conversation));
+            const childThread = childThreadIdFor(parentId, DELEGATE_CALL);
+            const parentTailBefore = yield* withRuntime(site.db, readTail(thread));
+            const parentIdsBefore = yield* withRuntime(site.db, recordIdsOf(thread));
 
             yield* Effect.scoped(
               Effect.gen(function* () {
@@ -945,7 +932,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const childWorker = yield* startWorker({
                   db: site.db,
                   scenario: "subagent-child",
-                  conversation,
+                  thread,
                   key,
                   childBlockFile: site.marker,
                   childReleaseFile: site.release,
@@ -959,11 +946,11 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const childId = yield* withRuntime(
                   site.db,
                   Effect.gen(function* () {
-                    const settlements = yield* drive(childConversation);
+                    const settlements = yield* drive(childThread);
                     expect(settlements.map((settlement) => settlement.outcome)).toEqual([
                       "completed",
                     ]);
-                    const started = yield* startedPayloadOf(conversation);
+                    const started = yield* startedPayloadOf(thread);
                     return started.childSubmissionId;
                   }),
                 );
@@ -987,31 +974,31 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     // Independent fencing (spec §7 platform row): the child replacement never
                     // touched the parent's log or epoch — the parent's only transition is its
                     // own durable wake (suspended → input-applied).
-                    const parentTailAfter = yield* readTail(conversation);
+                    const parentTailAfter = yield* readTail(thread);
                     expect(parentTailAfter.tailDigest).toBe(parentTailBefore.tailDigest);
                     expect(Number(parentTailAfter.producerEpoch)).toBe(
                       Number(parentTailBefore.producerEpoch),
                     );
-                    expect(yield* recordIdsOf(conversation)).toEqual(parentIdsBefore);
+                    expect(yield* recordIdsOf(thread)).toEqual(parentIdsBefore);
                     expect((yield* submissionSnapshot(parentId)).state).toBe("input-applied");
                     // Exactly one committed child response — the fresh Attempt's.
-                    const childLog = yield* readLog(childConversation);
+                    const childLog = yield* readLog(childThread);
                     expect(payloadsOf(childLog, "ModelResponseRecorded")).toHaveLength(1);
 
                     // The woken parent joins the FRESH child answer, not the fenced stale one.
-                    const settlements = yield* drive(conversation);
+                    const settlements = yield* drive(thread);
                     expect(settlements.map((settlement) => settlement.outcome)).toEqual([
                       "completed",
                     ]);
-                    yield* assertDelegationSettled(conversation, parentId, {
+                    yield* assertDelegationSettled(thread, parentId, {
                       isFailure: false,
                       result: { summary: PROJECTED_SUMMARY },
                     });
-                    yield* assertConvergence(conversation, [parentId], {
+                    yield* assertConvergence(thread, [parentId], {
                       site,
                       counts: { [CHILD_MODEL_COUNT_KEY]: 2 },
                     });
-                    yield* assertConvergence(childConversation, [childId]);
+                    yield* assertConvergence(childThread, [childId]);
                   }),
                 );
               }),
@@ -1026,7 +1013,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
-            const conversation = "conversation-s2-smallest-pool";
+            const thread = "thread-s2-smallest-pool";
             const key = "s2-smallest-pool-1";
             const bindings = yield* makeCrashSubagentBindings({
               supplierDir: site.supplier,
@@ -1039,7 +1026,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const receipt = yield* host.submit(
                   coordinatorSubmitSlice,
                   { mission: CRASH_QUESTION },
-                  crashSubmitOptions(conversation, key),
+                  crashSubmitOptions(thread, key),
                 );
                 // The §12 smallest-pool proof: ONE resolved worker loop serves the parent AND
                 // the child lane. Completion is only possible because waitingForChild released
@@ -1054,22 +1041,19 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 );
                 expect(settlement.outcome).toBe("completed");
 
-                const childConversation = childConversationIdFor(
-                  receipt.submissionId,
-                  DELEGATE_CALL,
-                );
-                const started = yield* assertOneEstablishedChild(conversation, childConversation);
-                yield* assertDelegationSettled(conversation, receipt.submissionId, {
+                const childThread = childThreadIdFor(receipt.submissionId, DELEGATE_CALL);
+                const started = yield* assertOneEstablishedChild(thread, childThread);
+                yield* assertDelegationSettled(thread, receipt.submissionId, {
                   isFailure: false,
                   result: { summary: PROJECTED_SUMMARY },
                 });
                 expect(yield* reservationStatuses(receipt.submissionId)).toEqual(["released"]);
                 expect(childModelInvocations(site.supplier)).toBe(1);
-                yield* assertConvergence(conversation, [receipt.submissionId], {
+                yield* assertConvergence(thread, [receipt.submissionId], {
                   site,
                   counts: { [CHILD_MODEL_COUNT_KEY]: 1 },
                 });
-                yield* assertConvergence(childConversation, [started.childSubmissionId]);
+                yield* assertConvergence(childThread, [started.childSubmissionId]);
               }),
               {
                 workerConcurrency: 1,

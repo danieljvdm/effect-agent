@@ -1,5 +1,5 @@
-import { DEFAULT_OWNERSHIP_LEASE_DURATION, DeploymentId } from "@effect-agent/session";
 import { DEFAULT_MAX_STORED_VALUE_BYTES } from "@effect-agent/storage-cloudflare";
+import { DEFAULT_OWNERSHIP_LEASE_DURATION, DeploymentId } from "@effect-agent/thread";
 import { Context, Duration, Schema } from "effect";
 
 /**
@@ -25,7 +25,7 @@ export class CloudflarePlatformConfigError extends Schema.TaggedError<Cloudflare
  * (deployment spec §8, DEPLOY-007: "Admission has explicit bounded quota and overload
  * behavior... a typed rejection"). This is the DC analogue of `NodeDurableHost`'s
  * `AdmissionClosed` host gate: the port surface stays untouched, the refusal happens in the
- * Conversation Object's submit entry point before `DurableAgentRuntime.submit` runs, and
+ * Thread Object's submit entry point before `DurableAgentRuntime.submit` runs, and
  * nothing was admitted or written.
  */
 export class AdmissionLimitExceeded extends Schema.TaggedError<AdmissionLimitExceeded>()(
@@ -52,13 +52,13 @@ export const CLOUDFLARE_DATABASE_CAP_BYTES = 10_000_000_000;
 export const DEFAULT_MAX_DATABASE_BYTES = 9_000_000_000;
 
 /**
- * Explicit bounded admission quotas checked by the Conversation Object BEFORE admission
+ * Explicit bounded admission quotas checked by the Thread Object BEFORE admission
  * (exit gate "resource limits are checked before admission").
  */
 export class CloudflareAdmissionLimitsValue extends Schema.Class<CloudflareAdmissionLimitsValue>(
   "@effect-agent/platform-cloudflare/CloudflareAdmissionLimitsValue",
 )({
-  /** Maximum nonterminal Submissions per Conversation lane before new admissions refuse. */
+  /** Maximum nonterminal Submissions per Thread lane before new admissions refuse. */
   maxQueueDepthPerLane: Schema.Int.check(
     Schema.isGreaterThan(0),
     Schema.isLessThanOrEqualTo(100_000),
@@ -74,7 +74,7 @@ export class CloudflareAdmissionLimitsValue extends Schema.Class<CloudflareAdmis
 
 /**
  * Validated Cloudflare durable runtime configuration. The producer identity of one
- * Conversation Object is `{producerPrefix}:{conversationId}` — stable across incarnations of
+ * Thread Object is `{producerPrefix}:{threadId}` — stable across incarnations of
  * the same deployment, distinct across deployments — and producer-epoch fencing (not the
  * producer name) remains the correctness authority (DUR-006).
  */
@@ -82,7 +82,7 @@ export class CloudflareDurableRuntimeConfigValue extends Schema.Class<Cloudflare
   "@effect-agent/platform-cloudflare/CloudflareDurableRuntimeConfigValue",
 )({
   deploymentId: DeploymentId,
-  /** Head of the minted producer identity `{producerPrefix}:{conversationId}`. */
+  /** Head of the minted producer identity `{producerPrefix}:{threadId}`. */
   producerPrefix: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
   /** Submission ownership lease duration (D5); fences work across Object incarnations. */
   ownershipLeaseDuration: PositiveMillis,
@@ -119,7 +119,7 @@ export class CloudflareDurableRuntimeConfig extends Context.Service<
   CloudflareDurableRuntimeConfigValue
 >()("@effect-agent/platform-cloudflare/CloudflareDurableRuntimeConfig") {}
 
-/** Documented production defaults applied by `ConversationObject.layer`. */
+/** Documented production defaults applied by `ThreadObject.layer`. */
 export const CLOUDFLARE_RUNTIME_DEFAULTS = {
   ownershipLeaseDuration: Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION),
   alarmBackoffBase: 100,

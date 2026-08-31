@@ -7,7 +7,7 @@ import {
   AgentRunDispositionError,
   AgentPolicy,
   AgentPolicyError,
-  ConversationId,
+  ThreadId,
   IdGenerator,
   ModelProtocolError,
   RunId,
@@ -48,7 +48,6 @@ import {
 } from "effect/unstable/ai";
 
 import { boundedValueFootprint } from "../src/bounded-value-internal.ts";
-import { ConversationHistory } from "../src/conversation-history.ts";
 import { errorMessage, errorTag } from "../src/error-diagnostic-internal.ts";
 import {
   AgentResultSchema,
@@ -61,6 +60,7 @@ import {
   type RunUsageDelta,
 } from "../src/index.ts";
 import { boundedJsonSnapshot } from "../src/provider-result-staging-internal.ts";
+import { ThreadHistory } from "../src/thread-history.ts";
 import { emitThenAfter, isolateToolDerivative } from "../src/tool-derivative-internal.ts";
 import {
   annotateToolSpanTerminalOutcome,
@@ -98,7 +98,7 @@ const usage = {
 };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextConversationId: Effect.succeed(Schema.decodeSync(ConversationId)("conversation-1")),
+  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-1")),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-1")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-1")),
 });
@@ -268,7 +268,7 @@ type ExportedLogObservation = ReturnType<typeof exportedLogObservation>;
 const renderedLogMessage = (message: unknown): string =>
   Array.isArray(message) ? message.join(" ") : String(message);
 
-const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
 
 layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("runs Definitions with composed native Layers and decodes encoded input", () =>
@@ -394,7 +394,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("preserves official prior history as the exact prefix of a new Run", () => {
     const priorHistory = Prompt.fromMessages([
-      Prompt.makeMessage("system", { content: "Original conversation instructions." }),
+      Prompt.makeMessage("system", { content: "Original thread instructions." }),
       Prompt.makeMessage("user", {
         content: [Prompt.makePart("text", { text: "Which city is best?" })],
       }),
@@ -855,11 +855,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         "gen_ai.tool.name": "fail",
         "gen_ai.tool.type": "function",
         "gen_ai.agent.name": "tool-observability",
-        "gen_ai.conversation.id": "conversation-1",
+        "gen_ai.conversation.id": "thread-1",
         "effect_agent.tool.execution_class": "uncertain",
         "effect_agent.tool.outcome": "failure",
         agentId: "tool-observability",
-        conversationId: "conversation-1",
+        threadId: "thread-1",
         runId: "run-1",
         turnId: "turn-1",
         toolCallId: failureToolCallId,
@@ -922,12 +922,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         "execute_tool",
       ]);
       expect(terminalLogs.map(({ annotations }) => annotations["gen_ai.conversation.id"])).toEqual([
-        "conversation-1",
-        "conversation-1",
+        "thread-1",
+        "thread-1",
       ]);
-      expect(terminalLogs.map(({ annotations }) => annotations.conversationId)).toEqual([
-        "conversation-1",
-        "conversation-1",
+      expect(terminalLogs.map(({ annotations }) => annotations.threadId)).toEqual([
+        "thread-1",
+        "thread-1",
       ]);
       const failedLog = terminalLogs.find(({ annotations }) => annotations.toolName === "fail");
       expect(failedLog?.annotations).toMatchObject({
@@ -2660,7 +2660,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         "RunCompleted",
       ]);
       expect(reduced?.output).toEqual(runResult.output);
-      expect(reduced?.conversationId).toBe(runResult.conversationId);
+      expect(reduced?.threadId).toBe(runResult.threadId);
       expect(reduced?.runId).toBe(runResult.runId);
       expect(reduced?.turns).toBe(runResult.turns);
     });
@@ -2670,7 +2670,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     const Result = AgentResultSchema(Schema.Struct({ answer: Schema.String }));
     const ordinary = {
       output: { answer: "done" },
-      conversationId: "conversation-1",
+      threadId: "thread-1",
       runId: "run-1",
       turns: 1,
       finishReason: "completed",
@@ -2683,7 +2683,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     } as const;
     const budgetWithoutDisposition = {
       output: ordinary.output,
-      conversationId: ordinary.conversationId,
+      threadId: ordinary.threadId,
       runId: ordinary.runId,
       turns: ordinary.turns,
       finishReason: budgetExhausted.finishReason,
@@ -5373,13 +5373,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("leaves incremental history caller-owned when later output validation fails", () =>
     Effect.gen(function* () {
-      const conversationId = yield* Schema.decodeEffect(ConversationId)("shared-conversation");
+      const threadId = yield* Schema.decodeEffect(ThreadId)("shared-thread");
       let history = Prompt.empty;
       const first = yield* AgentRuntime.run(
         makeAgent(finalParts("invalid final output")),
         { question: "first" },
         {
-          conversationId,
+          threadId,
           onHistory: (next) =>
             Effect.sync(() => {
               history = next;
@@ -5391,7 +5391,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       let secondPrompt = "";
       const secondModel = Model.make(
         "scripted",
-        "conversation-second-run",
+        "thread-second-run",
         Layer.effect(
           LanguageModel.LanguageModel,
           LanguageModel.make({
@@ -5406,10 +5406,10 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const second = yield* AgentRuntime.run(
         Agent.withModel(runtimeDefinition, secondModel),
         { question: "second" },
-        { conversationId, history },
+        { threadId, history },
       );
 
-      expect(second.conversationId).toBe(conversationId);
+      expect(second.threadId).toBe(threadId);
       expect(secondPrompt).toContain("invalid final output");
       expect(secondPrompt).toContain("second");
     }),
@@ -6766,7 +6766,7 @@ layer(testLayer)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) =>
         expect(previous).toBeDefined();
         if (previous !== undefined) {
           expect(terminal.runId).toBe(previous.runId);
-          expect(terminal.conversationId).toBe(previous.conversationId);
+          expect(terminal.threadId).toBe(previous.threadId);
           expect(terminal.sequence).toBe(previous.sequence + 1);
         }
       }

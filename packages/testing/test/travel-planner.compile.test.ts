@@ -16,8 +16,8 @@ import {
 import {
   type AgentChildPending,
   AgentRuntime,
-  ConversationHistory,
-  type ConversationHistoryError,
+  ThreadHistory,
+  type ThreadHistoryError,
   type CompactionError,
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
@@ -25,7 +25,6 @@ import {
   type DetachedRun,
   type RunOptions,
 } from "@effect-agent/engine";
-import type { DurableWorkerRequirements } from "@effect-agent/session";
 import { ScriptedModel } from "@effect-agent/testing";
 import type {
   ActivityCatalog,
@@ -39,6 +38,7 @@ import type {
   TravelPlannerToolkit,
 } from "@effect-agent/testing/fixtures/travel-planner";
 import { phase1Trip, TravelPlanner } from "@effect-agent/testing/fixtures/travel-planner";
+import type { DurableWorkerRequirements } from "@effect-agent/thread";
 import { Context, Effect, Layer, Schema, SchemaGetter, Scope, type Stream } from "effect";
 import { type AiError, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { describe, expect, it } from "vite-plus/test";
@@ -100,7 +100,7 @@ type ExpectedRequirements =
   | TravelGuidance
   | Tool.HandlersFor<Toolkit.Tools<typeof TravelPlannerToolkit>>
   | IdGenerator
-  | ConversationHistory;
+  | ThreadHistory;
 type ExpectedFailure =
   | FlightUnavailable
   | LodgingUnavailable
@@ -113,7 +113,7 @@ type ExpectedFailure =
   | ContextBudgetError
   | ContextOverflowError
   | CompactionError
-  | ConversationHistoryError
+  | ThreadHistoryError
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentToolAuthorizationDenied
@@ -157,7 +157,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
     };
     const plain = Agent.withModel(Agent.make("scope-free", config), model);
     const selfContained = AgentRuntime.run(plain, "question").pipe(
-      Effect.provide(Layer.merge(IdGenerator.layer, ConversationHistory.layerTransient)),
+      Effect.provide(Layer.merge(IdGenerator.layer, ThreadHistory.layerTransient)),
     );
     const instructionAgent = Agent.withModel(
       Agent.make("scoped-instructions", {
@@ -188,7 +188,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
       model,
     );
     const outputRun = AgentRuntime.run(outputAgent, "question");
-    type ScopedRequirements = IdGenerator | ConversationHistory | CallerService | Scope.Scope;
+    type ScopedRequirements = IdGenerator | ThreadHistory | CallerService | Scope.Scope;
     type BaseFailure = Exclude<
       ExpectedFailure,
       FlightUnavailable | LodgingUnavailable | ActivityUnavailable | GuidanceFailure

@@ -1,24 +1,24 @@
 import {
-  AbortCommand,
-  ChildSettledNotification,
-  type DurableRuntimeFailpointLocation,
-  type Receipt,
-} from "@effect-agent/session";
-import {
   LedgerRecordChildSettledCall,
   decodePortResponse,
   encodePortRequest,
 } from "@effect-agent/storage-cloudflare";
+import {
+  AbortCommand,
+  ChildSettledNotification,
+  type DurableRuntimeFailpointLocation,
+  type Receipt,
+} from "@effect-agent/thread";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { CloudflareConversationClient, ConversationObject } from "../src/index.ts";
+import { CloudflareThreadClient, ThreadObject } from "../src/index.ts";
 import {
   armRuntimeEviction,
   armStorageEviction,
   armedEvictionsRemaining,
-  decodeConversationId,
+  decodeThreadId,
   lostBookReplies,
   supplierCountsFor,
   submitOptions,
@@ -47,7 +47,7 @@ import {
   SUBAGENTS,
   allLanesSettled,
   assertDelegationConverged,
-  childConversationOf,
+  childThreadOf,
   completedDelegation,
   drainDelegationUntil,
   parentOutcomeOf,
@@ -59,7 +59,7 @@ import {
 
 /**
  * Cross-Object subagent crash matrix. Every `subagent:*` coordinator failpoint re-runs with the parent and
- * child Conversations in DIFFERENT Durable Objects (the identity rule maps each Conversation
+ * child Threads in DIFFERENT Durable Objects (the identity rule maps each Thread
  * to its own Object), the kill lever is the platform's real failure mode (`ctx.abort()`), and
  * convergence is proven by alarm delivery alone — `drainDelegationUntil` fires only the two
  * Objects' persisted alarms, never a client entry point. The crash-matrix row names are the
@@ -78,18 +78,18 @@ const lane = (location: string): string =>
 
 const submitCoordinator = (
   fixture: "coordinator" | "sibling",
-  conversation: string,
+  thread: string,
   key: string,
 ): Promise<Receipt> =>
   runClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       return yield* client.submit(
         {
           definition: fixture === "sibling" ? siblingCoordinatorDefinition : coordinatorDefinition,
         },
-        { mission: "cross-Object delegation", ref: conversation },
-        submitOptions(conversation, key),
+        { mission: "cross-Object delegation", ref: thread },
+        submitOptions(thread, key),
       );
     }),
     SUBAGENTS,
@@ -100,16 +100,16 @@ const submitCoordinator = (
  * Object's maintenance pass mid-model-stream, so the delivery promise must never be awaited
  * (the pool also auto-fires due alarms; this only removes the dependence on that cadence).
  */
-const kickWithoutAwaiting = (conversation: string): void => {
-  void runDurableObjectAlarm(stubFor(conversation, SUBAGENTS)).catch(() => {});
+const kickWithoutAwaiting = (thread: string): void => {
+  void runDurableObjectAlarm(stubFor(thread, SUBAGENTS)).catch(() => {});
 };
 
-const abortParent = (conversation: string, receipt: Receipt) =>
+const abortParent = (thread: string, receipt: Receipt) =>
   runClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       return yield* client.abort(
-        decodeConversationId(conversation),
+        decodeThreadId(thread),
         AbortCommand.make({
           submissionId: receipt.submissionId,
           author: "operator",
@@ -133,7 +133,7 @@ const coordinatorEvictionRow = async (
   const key = `${ref}-key`;
   armRuntimeEviction(ref, location);
   const receipt = await submitCoordinator(fixture, ref, key);
-  const child = childConversationOf(receipt, ref);
+  const child = childThreadOf(receipt, ref);
   await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
   expect(armedEvictionsRemaining(ref), `${location} must actually have fired`).toBe(0);
   await assertDelegationConverged(completedDelegation(receipt, ref));
@@ -143,7 +143,7 @@ const coordinatorEvictionRow = async (
 describe("DC cross-Object subagent matrix (parent and child in different Durable Objects)", () => {
   // -------------------------------------------------------------------------
   // Establishment ladder — every step's eviction converges on ONE child
-  // Receipt, Conversation, and join (SUB-016/SUB-017/SUB-031).
+  // Receipt, Thread, and join (SUB-016/SUB-017/SUB-031).
   // -------------------------------------------------------------------------
 
   it("eviction at subagent:after-reserve: the replayed batch re-establishes the one child", async () => {
@@ -175,14 +175,14 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     gateChildModel(ref);
     armRuntimeEviction(ref, location);
     const receipt = await submitCoordinator("coordinator", ref, `${ref}-key`);
-    const child = childConversationOf(receipt, ref);
+    const child = childThreadOf(receipt, ref);
     await drainDelegationUntil([ref], async () => armedEvictionsRemaining(ref) === 0);
     releaseChildModel(ref);
     await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
     await assertDelegationConverged(completedDelegation(receipt, ref));
   }, 40_000);
 
-  it("the chained establishment ladder (five evictions in order) converges on one child Receipt, Conversation, and join", async () => {
+  it("the chained establishment ladder (five evictions in order) converges on one child Receipt, Thread, and join", async () => {
     const ladder: ReadonlyArray<DurableRuntimeFailpointLocation> = [
       "subagent:after-reserve",
       "subagent:after-request-append",
@@ -196,7 +196,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     // recovery pass can run within milliseconds of the previous abort.
     armRuntimeEviction(ref, ...ladder);
     const receipt = await submitCoordinator("coordinator", ref, key);
-    const child = childConversationOf(receipt, ref);
+    const child = childThreadOf(receipt, ref);
     await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
     expect(armedEvictionsRemaining(ref), "every armed ladder step must have fired").toBe(0);
     // Five doomed incarnations later: ONE child, ONE join, one researcher invocation.
@@ -222,7 +222,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     // establishment during the child-side probes.
     armRuntimeEviction(ref, ...Array.from({ length: 64 }, () => location));
     const receipt = await submitCoordinator("coordinator", ref, `${ref}-key`);
-    const child = childConversationOf(receipt, ref);
+    const child = childThreadOf(receipt, ref);
 
     // Drive the parent until the routed admission is durable in the CHILD's Object — the
     // same pass then dies at after-admit, so no lineage record exists there. Then cut the
@@ -263,7 +263,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const explainedRaw: unknown = await Promise.resolve(
       stubFor(child, SUBAGENTS).explainEncoded({}),
     );
-    const explained = await Effect.runPromise(ConversationObject.decodeAdminResponse(explainedRaw));
+    const explained = await Effect.runPromise(ThreadObject.decodeAdminResponse(explainedRaw));
     expect(explained._tag).toBe("ExplainedRecovery");
     if (explained._tag === "ExplainedRecovery") {
       expect(explained.explanations).toHaveLength(1);
@@ -302,7 +302,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     gateChildModel(ref);
     armRuntimeEviction(ref, location);
     const receipt = await submitCoordinator("sibling", ref, `${ref}-key`);
-    const child = childConversationOf(receipt, ref);
+    const child = childThreadOf(receipt, ref);
     await drainDelegationUntil([ref], async () => armedEvictionsRemaining(ref) === 0);
     releaseChildModel(ref);
     await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
@@ -338,7 +338,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
   it("recordChildSettled redelivery answers not-waiting idempotently and mutates nothing", async () => {
     const ref = lane("child-settled-redelivery");
     const receipt = await submitCoordinator("coordinator", ref, `${ref}-key`);
-    const child = childConversationOf(receipt, ref);
+    const child = childThreadOf(receipt, ref);
     await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
     const started = await assertDelegationConverged(completedDelegation(receipt, ref));
 
@@ -409,7 +409,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     // active — no race against the child's own alarm-driven progress.
     gateChildModel(ref);
     const receipt = await submitCoordinator("coordinator", ref, key);
-    const child = childConversationOf(receipt, ref);
+    const child = childThreadOf(receipt, ref);
     await drainDelegationUntil([ref], anyInState(ref, "suspended", SUBAGENTS));
     await waitFor(() => {
       kickWithoutAwaiting(child);
@@ -452,7 +452,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
         lostBookReplies.add(ref);
       }
       const receipt = await submitCoordinator("coordinator", ref, key);
-      const child = childConversationOf(receipt, ref);
+      const child = childThreadOf(receipt, ref);
       await drainDelegationUntil([ref], anyInState(ref, "suspended", SUBAGENTS));
       await waitFor(() => {
         kickWithoutAwaiting(child);
@@ -517,7 +517,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const key = `${ref}-key`;
     gateChildModel(ref);
     const receipt = await submitCoordinator("coordinator", ref, key);
-    const child = childConversationOf(receipt, ref);
+    const child = childThreadOf(receipt, ref);
     await drainDelegationUntil([ref], anyInState(ref, "suspended", SUBAGENTS));
     await waitFor(() => {
       kickWithoutAwaiting(child);
@@ -551,12 +551,12 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const ref = lane("indeterminate-establishment");
     const key = `${ref}-key`;
     const faultSuffix = `:${delegateCallIdFor(ref)}`;
-    // Both levers arm BEFORE the submit: the child Conversation's name is suffix-derivable
+    // Both levers arm BEFORE the submit: the child Thread's name is suffix-derivable
     // from the ref, so the fault covers the child Object before it can ever be reached.
     armTransportFault(faultSuffix);
     armRuntimeEviction(ref, "subagent:after-reserve");
     const receipt = await submitCoordinator("coordinator", ref, key);
-    const child = childConversationOf(receipt, ref);
+    const child = childThreadOf(receipt, ref);
 
     // Let the doomed incarnation die at after-reserve, then let MANY recovery passes retry
     // establishment against the unreachable admission authority.
@@ -606,11 +606,11 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
   it("coordinator→researcher delegation joins across two Durable Objects with no eviction armed", async () => {
     const ref = lane("clean-delegation");
     const receipt = await submitCoordinator("coordinator", ref, `${ref}-key`);
-    const child = childConversationOf(receipt, ref);
+    const child = childThreadOf(receipt, ref);
     await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
     const started = await assertDelegationConverged(completedDelegation(receipt, ref));
-    // The two lanes really are different Durable Objects: distinct Conversations, and the
+    // The two lanes really are different Durable Objects: distinct Threads, and the
     // child's records live in the child Object's OWN storage (probed independently above).
-    expect(started.childConversationId).not.toBe(ref);
+    expect(started.childThreadId).not.toBe(ref);
   }, 40_000);
 });

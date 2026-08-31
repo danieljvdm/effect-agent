@@ -1,29 +1,11 @@
 import { Redactor, StructuralRedactorLive } from "@effect-agent/capabilities";
-import { Agent, ConversationId, ToolCallId, type SubmissionId } from "@effect-agent/core";
+import { Agent, ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
 import type {
   RunApprovalDecision,
   RunApprovalHook,
   RunApprovalRequest,
 } from "@effect-agent/engine";
-import {
-  ApprovalDecisionCommand,
-  CanonicalRecordEnvelope,
-  ConversationRead,
-  ConversationStore,
-  DurableAgentRuntime,
-  DurableApprovalResolver,
-  DurableRuntimeConfig,
-  IdempotencyKey,
-  runIdForSubmission,
-  SubmissionLedger,
-  SubmissionLookupById,
-  WakeScheduler,
-} from "@effect-agent/session";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
+import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
 import {
   ActivityCatalogLayer,
   bookFlightIdempotencyKey,
@@ -41,6 +23,21 @@ import {
   TravelPlannerPhase5ToolkitLayer,
   TravelSupplierReconcilerLayer,
 } from "@effect-agent/testing/fixtures/travel-planner";
+import {
+  ApprovalDecisionCommand,
+  CanonicalRecordEnvelope,
+  ThreadRead,
+  ThreadStore,
+  DurableAgentRuntime,
+  DurableApprovalResolver,
+  DurableRuntimeConfig,
+  IdempotencyKey,
+  runIdForSubmission,
+  SubmissionLedger,
+  SubmissionLookupById,
+  WakeScheduler,
+} from "@effect-agent/thread";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
@@ -68,7 +65,7 @@ import { LanguageModel, Model, type Prompt, type Response } from "effect/unstabl
 // Determinism: scripted model + TestClock via `layer`, no network, no clock.
 // ---------------------------------------------------------------------------
 
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const decodeQuoteId = Schema.decodeSync(QuoteId);
@@ -206,7 +203,7 @@ const reconciledDeskLayer = TravelSupplierReconcilerLayer.pipe(
 
 const infraLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
-  MemoryConversationStoreLive,
+  MemoryThreadStoreLive,
   WakeScheduler.layerNoop,
   DurableRuntimeFailpointTestControl.layer,
   configLayer,
@@ -216,18 +213,16 @@ const testLayer = DurableAgentRuntime.layer.pipe(
   Layer.provideMerge(Layer.mergeAll(infraLayer, approvalDelegateLayer, reconciledDeskLayer)),
 );
 
-const readLog = (conversation: string) =>
+const readLog = (thread: string) =>
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
+    const store = yield* ThreadStore;
     return yield* Stream.runCollect(
-      store.read(
-        ConversationRead.make({ conversationId: decodeConversationId(conversation), limit: 1_024 }),
-      ),
+      store.read(ThreadRead.make({ threadId: decodeThreadId(thread), limit: 1_024 })),
     );
   });
 
-const submitOptions = (conversation: string, key: string) =>
-  phase5TravelPlannerSubmitOptions(decodeConversationId(conversation), decodeIdempotencyKey(key));
+const submitOptions = (thread: string, key: string) =>
+  phase5TravelPlannerSubmitOptions(decodeThreadId(thread), decodeIdempotencyKey(key));
 
 const lookupState = (submissionId: SubmissionId) =>
   Effect.gen(function* () {
@@ -273,19 +268,15 @@ layer(testLayer)("SEC-007 prompt-injected supplier content cannot escalate capab
               : finalParts(JSON.stringify({ summary: "obeyed injection", bookingRefs: [] })),
         );
         const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
-        const conversation = "redteam-injection-approval";
+        const thread = "redteam-injection-approval";
 
-        const receipt = yield* runtime.submit(
-          agent,
-          phase1Trip,
-          submitOptions(conversation, "inj-1"),
-        );
+        const receipt = yield* runtime.submit(agent, phase1Trip, submitOptions(thread, "inj-1"));
 
         // The lane runs the search Turn and the book Turn, then SUSPENDS on the approval gate:
         // the handler for book_flight has not started (SEC-005/§6: high-risk actions require a
         // decision independent of model intent), so the supplier desk shows no call.
         const suspended = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(injectedWorkerLayer));
         expect(suspended).toEqual([]);
         const state = yield* lookupState(receipt.submissionId);
@@ -293,7 +284,7 @@ layer(testLayer)("SEC-007 prompt-injected supplier content cannot escalate capab
         expect(yield* desk.callCount(bookFlightIdempotencyKey("book-injected-1"))).toBe(0);
 
         const runId = runIdForSubmission(receipt.submissionId);
-        const suspendedLog = yield* readLog(conversation);
+        const suspendedLog = yield* readLog(thread);
         expect(recordTags(suspendedLog)).toContain("ToolApprovalRequested");
         // The gate fired BEFORE any prepared record for the mutation.
         expect(
@@ -314,7 +305,7 @@ layer(testLayer)("SEC-007 prompt-injected supplier content cannot escalate capab
           }),
         );
         const settled = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(injectedWorkerLayer));
         expect(settled[0]?.outcome).toBe("failed");
         expect(yield* desk.callCount(bookFlightIdempotencyKey("book-injected-1"))).toBe(0);
@@ -349,17 +340,17 @@ layer(testLayer)("SEC-007 prompt-injected supplier content cannot escalate capab
               ),
         );
         const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
-        const conversation = "redteam-injection-credential";
+        const thread = "redteam-injection-credential";
 
-        yield* runtime.submit(agent, phase1Trip, submitOptions(conversation, "inj-2"));
+        yield* runtime.submit(agent, phase1Trip, submitOptions(thread, "inj-2"));
         const settled = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(injectedWorkerLayer));
         expect(settled[0]?.outcome).toBe("completed");
         // No supplier mutation occurred from untrusted content.
         expect(yield* desk.bookings).toEqual([]);
 
-        const log = yield* readLog(conversation);
+        const log = yield* readLog(thread);
         // The injected credential lives ONLY inside the search Tool result (untrusted output),
         // never inside a settlement or a mutation record.
         const settledCredentialLeak = log.some(

@@ -1,4 +1,4 @@
-import { Agent, AgentPolicy, ConversationId, SubmissionId, ToolCallId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core";
 import {
   DurableStep,
   DurableStepError,
@@ -11,11 +11,12 @@ import {
   type RunToolAuthorizationDecision,
   type RunToolAuthorizationRequest,
 } from "@effect-agent/engine";
+import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
 import {
   type CanonicalRecordEnvelope,
   AbortCommand,
-  ConversationRead,
-  ConversationStore,
+  ThreadRead,
+  ThreadStore,
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -48,12 +49,8 @@ import {
   type SettlementConflict,
   type UnknownResolutionConflict,
   WakeScheduler,
-} from "@effect-agent/session";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
+} from "@effect-agent/thread";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import {
@@ -76,13 +73,13 @@ import { Prompt, LanguageModel, Model, Tool, Toolkit, type Response } from "effe
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-tools");
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const decodeSubmissionId = Schema.decodeSync(SubmissionId);
 
-const submitOptions = (conversationId: string, idempotencyKey: string): DurableSubmitOptions => ({
-  conversationId: decodeConversationId(conversationId),
+const submitOptions = (threadId: string, idempotencyKey: string): DurableSubmitOptions => ({
+  threadId: decodeThreadId(threadId),
   principal: PRINCIPAL,
   idempotencyKey: decodeIdempotencyKey(idempotencyKey),
   definitions: DIGESTS,
@@ -361,7 +358,7 @@ const configLayer = DurableRuntimeConfig.layer({
 
 const baseLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
-  MemoryConversationStoreLive,
+  MemoryThreadStoreLive,
   WakeScheduler.layerNoop,
   DurableRuntimeFailpointTestControl.layer,
   reconcilerTestLayer,
@@ -372,13 +369,13 @@ const baseLayer = Layer.mergeAll(
 
 const testLayer = DurableAgentRuntime.layerWithServices.pipe(Layer.provideMerge(baseLayer));
 
-const readLog = (conversationId: string) =>
+const readLog = (threadId: string) =>
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
+    const store = yield* ThreadStore;
     return yield* Stream.runCollect(
       store.read(
-        ConversationRead.make({
-          conversationId: decodeConversationId(conversationId),
+        ThreadRead.make({
+          threadId: decodeThreadId(threadId),
           limit: 1_024,
         }),
       ),
@@ -467,20 +464,18 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         submitOptions("ordinary-delegate-export", "export"),
       );
       const attempt = yield* Effect.forkChild(
-        runtime.processConversation(agent, receipt.conversationId).pipe(Effect.provide(handlers)),
+        runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(handlers)),
       );
       yield* Deferred.await(acted);
       yield* Fiber.interrupt(attempt);
       expect(yield* Ref.get(starts)).toBe(1);
       yield* runtime.runRecovery;
       expect(
-        yield* runtime
-          .processConversation(agent, receipt.conversationId)
-          .pipe(Effect.provide(handlers)),
+        yield* runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(handlers)),
       ).toEqual([]);
       expect(yield* Ref.get(starts)).toBe(1);
       expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
-      const records = yield* readLog(receipt.conversationId);
+      const records = yield* readLog(receipt.threadId);
       expect(
         records.find(({ record }) => record.payload._tag === "ToolCallPrepared")?.record.payload,
       ).toMatchObject({ executionKind: "ordinary" });
@@ -544,7 +539,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           submitOptions("observer-fresh", "fresh"),
         );
         const completed = yield* runtime
-          .processConversation(fresh, decodeConversationId("observer-fresh"))
+          .processThread(fresh, decodeThreadId("observer-fresh"))
           .pipe(Effect.provide(Layer.merge(handlers, ambientLayer)));
         expect(completed[0]?.outcome).toBe("completed");
         expect(
@@ -562,15 +557,15 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             : finalParts('{"answer":"recovered"}'),
         );
         const replacement = Agent.withModel(definition, replacementModel.model);
-        const conversationId = decodeConversationId("observer-replacement");
+        const threadId = decodeThreadId("observer-replacement");
         const receipt = yield* runtime.submit(
           replacement,
           { question: "lookup both" },
-          submitOptions(conversationId, "replacement"),
+          submitOptions(threadId, "replacement"),
         );
         yield* armFailpoint("tools:after-prepared-append");
         const interrupted = yield* runtime
-          .processConversation(replacement, conversationId)
+          .processThread(replacement, threadId)
           .pipe(Effect.provide(Layer.merge(handlers, ambientLayer)), Effect.exit);
         expect(failureTag(interrupted)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
@@ -597,7 +592,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           }),
         );
         const resumed = yield* runtime
-          .processConversation(replacement, conversationId)
+          .processThread(replacement, threadId)
           .pipe(Effect.provide(Layer.merge(handlers, ambientLayer)));
         expect(resumed[0]?.outcome).toBe("completed");
         expect(starts).toEqual(["fresh", "open"]);
@@ -608,7 +603,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         ).toEqual(["fresh", "open"]);
         expect(ambient).toEqual([]);
         expect(
-          (yield* readLog(conversationId)).filter(
+          (yield* readLog(threadId)).filter(
             (envelope) => envelope.record.payload._tag === "ToolCallSettled",
           ),
         ).toHaveLength(2);
@@ -654,7 +649,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         submitOptions("observer-absent", "absent"),
       );
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId("observer-absent"))
+        .processThread(agent, decodeThreadId("observer-absent"))
         .pipe(
           Effect.provide(
             Layer.merge(
@@ -684,24 +679,24 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           : finalParts('{"answer":"booked"}'),
       );
       const agent = Agent.withModel(bookDefinition, scripted.model);
-      const conversation = "conversation-split-commits";
+      const thread = "thread-split-commits";
 
       const receipt = yield* runtime.submit(
         agent,
         { question: "book it" },
-        submitOptions(conversation, "split-1"),
+        submitOptions(thread, "split-1"),
       );
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
       expect(settlements).toHaveLength(1);
       expect(settlements[0]?.outcome).toBe("completed");
       expect(yield* desk.count("r-1")).toBe(1);
 
       const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       expect(logTags(records)).toEqual([
-        "ConversationCreated",
+        "ThreadCreated",
         "UserInputRecorded",
         "RunStarted",
         "ModelResponseRecorded",
@@ -751,22 +746,22 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           : finalParts('{"answer":"found"}'),
       );
       const agent = Agent.withModel(searchDefinition, scripted.model);
-      const conversation = "conversation-readonly-parity";
+      const thread = "thread-readonly-parity";
 
       const receipt = yield* runtime.submit(
         agent,
         { question: "find it" },
-        submitOptions(conversation, "readonly-1"),
+        submitOptions(thread, "readonly-1"),
       );
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(searchToolLayer));
       expect(settlements[0]?.outcome).toBe("completed");
 
       const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       expect(logTags(records)).toEqual([
-        "ConversationCreated",
+        "ThreadCreated",
         "UserInputRecorded",
         "RunStarted",
         "ModelResponseRecorded",
@@ -798,20 +793,20 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           : finalParts('{"answer":"mixed"}'),
       );
       const agent = Agent.withModel(mixedDefinition, scripted.model);
-      const conversation = "conversation-mixed-batch";
+      const thread = "thread-mixed-batch";
 
       const receipt = yield* runtime.submit(
         agent,
         { question: "search and book" },
-        submitOptions(conversation, "mixed-1"),
+        submitOptions(thread, "mixed-1"),
       );
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(Layer.mergeAll(searchToolLayer, desk.toolLayer)));
       expect(settlements[0]?.outcome).toBe("completed");
 
       const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       const preparedIds = records
         .filter((envelope) => envelope.record.payload._tag === "ToolCallPrepared")
         .map((envelope) => envelope.record.recordId);
@@ -836,18 +831,16 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             : finalParts('{"answer":"resumed"}'),
         );
         const agent = Agent.withModel(bookDefinition, scripted.model);
-        const conversation = "conversation-response-kill";
+        const thread = "thread-response-kill";
 
         const receipt = yield* runtime.submit(
           agent,
           { question: "book it" },
-          submitOptions(conversation, "response-kill-1"),
+          submitOptions(thread, "response-kill-1"),
         );
         yield* armFailpoint("turn:after-response-append");
         const killed = yield* Effect.exit(
-          runtime
-            .processConversation(agent, decodeConversationId(conversation))
-            .pipe(Effect.provide(desk.toolLayer)),
+          runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
@@ -855,9 +848,9 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         // The provably-safe window (durability §15): response canonical, nothing prepared,
         // nothing executed.
         const runId = runIdForSubmission(receipt.submissionId);
-        const committed = yield* readLog(conversation);
+        const committed = yield* readLog(thread);
         expect(logTags(committed)).toEqual([
-          "ConversationCreated",
+          "ThreadCreated",
           "UserInputRecorded",
           "RunStarted",
           "ModelResponseRecorded",
@@ -870,7 +863,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(report?.disposition).toBe("deferred");
 
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(desk.toolLayer));
         expect(settlements[0]?.outcome).toBe("completed");
 
@@ -878,7 +871,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         // the next Turn — and exactly one ModelResponseRecorded exists for Turn 1.
         expect(scripted.prompts).toHaveLength(2);
         expect(yield* desk.count("r-resume")).toBe(1);
-        const records = yield* readLog(conversation);
+        const records = yield* readLog(thread);
         expect(
           records.filter(
             (envelope) => envelope.record.recordId === modelResponseRecordId(runId, 1),
@@ -909,24 +902,18 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             : finalParts('{"answer":"resumed"}'),
         );
         const agent = Agent.withModel(bookIdempotentDefinition, scripted.model);
-        const conversation = "conversation-resume-leading";
+        const thread = "thread-resume-leading";
 
-        yield* runtime.submit(
-          agent,
-          { question: "book it" },
-          submitOptions(conversation, "leading-1"),
-        );
+        yield* runtime.submit(agent, { question: "book it" }, submitOptions(thread, "leading-1"));
         yield* armFailpoint("tools:after-prepared-append");
         const killed = yield* Effect.exit(
-          runtime
-            .processConversation(agent, decodeConversationId(conversation))
-            .pipe(Effect.provide(desk.toolLayer)),
+          runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(desk.toolLayer));
         expect(settlements[0]?.outcome).toBe("completed");
         expect(scripted.prompts).toHaveLength(2);
@@ -987,21 +974,19 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           }
         });
         const agent = Agent.withModel(definition, scripted.model);
-        const conversation = "conversation-tool-authorization-resume";
+        const thread = "thread-tool-authorization-resume";
 
         const receipt = yield* runtime.submit(
           agent,
           { question: "book it", wake: "wake-582" },
-          submitOptions(conversation, "tool-authorization-resume-1"),
+          submitOptions(thread, "tool-authorization-resume-1"),
         );
 
         // Commit Turn 1 and interrupt after its results boundary. No batch remains pending, so the
         // replacement engine really restarts its local Turn counter at 1.
         yield* armFailpoint("turn:after-results-append");
         const turnOneInterrupted = yield* Effect.exit(
-          runtime
-            .processConversation(agent, decodeConversationId(conversation))
-            .pipe(Effect.provide(toolLayer)),
+          runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
         );
         expect(failureTag(turnOneInterrupted)).toBe("DurableRuntimeFailpointError");
         expect(yield* Ref.get(handlerWrites)).toEqual(["r-turn-1"]);
@@ -1012,9 +997,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         // dies after preparation. Its following Attempt resumes that exact durable batch.
         yield* armFailpoint("tools:after-prepared-append");
         const turnTwoInterrupted = yield* Effect.exit(
-          runtime
-            .processConversation(agent, decodeConversationId(conversation))
-            .pipe(Effect.provide(toolLayer)),
+          runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
         );
         expect(failureTag(turnTwoInterrupted)).toBe("DurableRuntimeFailpointError");
         expect(yield* Ref.get(handlerWrites)).toEqual(["r-turn-1"]);
@@ -1028,7 +1011,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           decodeToolCallId("book-582-turn-2"),
         );
         expect(
-          (yield* readLog(conversation)).filter(
+          (yield* readLog(thread)).filter(
             (envelope) => envelope.record.recordId === targetPreparedId,
           ),
         ).toHaveLength(1);
@@ -1038,7 +1021,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         }));
 
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(Layer.merge(toolLayer, RunToolAuthorization.allowAll)));
         expect(settlements).toHaveLength(1);
         expect(settlements[0]).toMatchObject({
@@ -1058,7 +1041,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(freshTurnTwo).toBeDefined();
         expect(resumedTurnTwo).toEqual(freshTurnTwo);
         expect(freshTurnTwo).toMatchObject({
-          conversationId: conversation,
+          threadId: thread,
           turn: 2,
           input: { question: "book it", wake: "admitted:wake-582" },
           call: {
@@ -1077,7 +1060,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           ),
         ).toBe(true);
 
-        const records = yield* readLog(conversation);
+        const records = yield* readLog(thread);
         expect(
           records.filter((envelope) => envelope.record.recordId === targetPreparedId),
         ).toHaveLength(1);
@@ -1086,7 +1069,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         ).toHaveLength(1);
 
         const replay = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(toolLayer));
         expect(replay).toEqual([]);
         expect(yield* Ref.get(handlerWrites)).toEqual(["r-turn-1"]);
@@ -1132,15 +1115,15 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           : finalParts('{"answer":"unreachable"}'),
       );
       const agent = Agent.withModel(bookDefinition, scripted.model);
-      const conversation = "conversation-tool-authorization-denied";
+      const thread = "thread-tool-authorization-denied";
 
       const receipt = yield* runtime.submit(
         agent,
         { question: "book it" },
-        submitOptions(conversation, "tool-authorization-denied-1"),
+        submitOptions(thread, "tool-authorization-denied-1"),
       );
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
       expect(settlements).toHaveLength(1);
       expect(settlements[0]).toMatchObject({
@@ -1161,9 +1144,9 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         executionClass: "uncertain",
         executionKind: "ordinary",
       });
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       expect(logTags(records)).toEqual([
-        "ConversationCreated",
+        "ThreadCreated",
         "UserInputRecorded",
         "RunStarted",
         "ModelResponseRecorded",
@@ -1179,7 +1162,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         failure: { errorTag: "AgentToolAuthorizationDenied" },
       });
       const replay = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
       expect(replay).toEqual([]);
       expect(yield* desk.count("r-denied")).toBe(0);
@@ -1201,18 +1184,16 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             : finalParts('{"answer":"never"}'),
         );
         const agent = Agent.withModel(bookDefinition, scripted.model);
-        const conversation = "conversation-mark-unknown";
+        const thread = "thread-mark-unknown";
 
         const receipt = yield* runtime.submit(
           agent,
           { question: "book it" },
-          submitOptions(conversation, "unknown-1"),
+          submitOptions(thread, "unknown-1"),
         );
         yield* armFailpoint("tools:after-prepared-append");
         const killed = yield* Effect.exit(
-          runtime
-            .processConversation(agent, decodeConversationId(conversation))
-            .pipe(Effect.provide(desk.toolLayer)),
+          runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
@@ -1224,13 +1205,13 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
 
         const runId = runIdForSubmission(receipt.submissionId);
-        const records = yield* readLog(conversation);
+        const records = yield* readLog(thread);
         expect(records.map((envelope) => envelope.record.recordId)).toContain(
           `tool-unknown:${runId}:1:book-1`,
         );
         // The lane is durably blocked: a worker claim grants nothing and no settlement occurs.
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(desk.toolLayer));
         expect(settlements).toEqual([]);
         expect(yield* desk.count("r-unknown")).toBe(0);
@@ -1250,13 +1231,13 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(yield* lookupState(receipt.submissionId)).toBe("input-applied");
 
         const resumed = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(desk.toolLayer));
         expect(resumed[0]?.outcome).toBe("completed");
         expect(yield* desk.count("r-unknown")).toBe(1);
         expect(scripted.prompts).toHaveLength(2);
 
-        const finalRecords = yield* readLog(conversation);
+        const finalRecords = yield* readLog(thread);
         const resolved = finalRecords.find(
           (envelope) => envelope.record.recordId === `tool-resolved:${runId}:1:book-1`,
         )?.record.payload;
@@ -1289,18 +1270,16 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             : finalParts('{"answer":"resolved"}'),
         );
         const agent = Agent.withModel(bookDefinition, scripted.model);
-        const conversation = "conversation-resolve-two";
+        const thread = "thread-resolve-two";
 
         const receipt = yield* runtime.submit(
           agent,
           { question: "book both" },
-          submitOptions(conversation, "resolve-two-1"),
+          submitOptions(thread, "resolve-two-1"),
         );
         yield* armFailpoint("tools:after-prepared-append");
         const killed = yield* Effect.exit(
-          runtime
-            .processConversation(agent, decodeConversationId(conversation))
-            .pipe(Effect.provide(desk.toolLayer)),
+          runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
@@ -1332,7 +1311,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(yield* lookupState(receipt.submissionId)).toBe("input-applied");
 
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(desk.toolLayer));
         expect(settlements[0]?.outcome).toBe("completed");
         // Only the open call executed; the resolved result was injected without execution.
@@ -1340,7 +1319,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(yield* desk.count("r-b")).toBe(1);
 
         const runId = runIdForSubmission(receipt.submissionId);
-        const records = yield* readLog(conversation);
+        const records = yield* readLog(thread);
         const settledA = records.find(
           (envelope) => envelope.record.recordId === `tool-settled:${runId}:1:book-1`,
         )?.record.payload;
@@ -1380,18 +1359,16 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           : finalParts('{"answer":"recovered"}'),
       );
       const agent = Agent.withModel(bookDefinition, scripted.model);
-      const conversation = "conversation-reconciled";
+      const thread = "thread-reconciled";
 
       const receipt = yield* runtime.submit(
         agent,
         { question: "book it" },
-        submitOptions(conversation, "reconciled-1"),
+        submitOptions(thread, "reconciled-1"),
       );
       yield* armFailpoint("tools:after-prepared-append");
       const killed = yield* Effect.exit(
-        runtime
-          .processConversation(agent, decodeConversationId(conversation))
-          .pipe(Effect.provide(desk.toolLayer)),
+        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
@@ -1408,7 +1385,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(report?.disposition).toBe("repaired");
 
       const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       const settled = records.find(
         (envelope) => envelope.record.recordId === `tool-settled:${runId}:1:book-1`,
       )?.record.payload;
@@ -1426,7 +1403,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(yield* desk.count("r-rec")).toBe(0);
 
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
       expect(settlements[0]?.outcome).toBe("completed");
       expect(yield* desk.count("r-rec")).toBe(0);
@@ -1452,30 +1429,28 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             : finalParts('{"answer":"idem"}'),
         );
         const agent = Agent.withModel(bookIdempotentDefinition, scripted.model);
-        const conversation = "conversation-idempotent-retry";
+        const thread = "thread-idempotent-retry";
 
         const receipt = yield* runtime.submit(
           agent,
           { question: "book it" },
-          submitOptions(conversation, "idem-1"),
+          submitOptions(thread, "idem-1"),
         );
         yield* armFailpoint("tools:after-prepared-append");
         const killed = yield* Effect.exit(
-          runtime
-            .processConversation(agent, decodeConversationId(conversation))
-            .pipe(Effect.provide(desk.toolLayer)),
+          runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
         // The worker resumes directly: the declared idempotency contract needs no reconciler.
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(desk.toolLayer));
         expect(settlements[0]?.outcome).toBe("completed");
         expect(yield* desk.count("r-idem")).toBe(1);
         expect(yield* control.consultations).toBe(0);
-        const records = yield* readLog(conversation);
+        const records = yield* readLog(thread);
         expect(logTags(records)).not.toContain("ToolCallUnknown");
         expect(yield* lookupState(receipt.submissionId)).toBe("settled");
       }),
@@ -1492,18 +1467,16 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           : finalParts('{"answer":"never"}'),
       );
       const agent = Agent.withModel(bookDefinition, scripted.model);
-      const conversation = "conversation-abort-open";
+      const thread = "thread-abort-open";
 
       const receipt = yield* runtime.submit(
         agent,
         { question: "book it" },
-        submitOptions(conversation, "abort-open-1"),
+        submitOptions(thread, "abort-open-1"),
       );
       yield* armFailpoint("tools:after-prepared-append");
       const killed = yield* Effect.exit(
-        runtime
-          .processConversation(agent, decodeConversationId(conversation))
-          .pipe(Effect.provide(desk.toolLayer)),
+        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
@@ -1534,7 +1507,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(yield* desk.count("r-abort")).toBe(0);
 
       const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       const tags = logTags(records);
       // The open call became a canonical Unknown Outcome audit — abort never asserts rollback.
       expect(records.map((envelope) => envelope.record.recordId)).toContain(
@@ -1561,18 +1534,16 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           : finalParts('{"answer":"never"}'),
       );
       const agent = Agent.withModel(bookDefinition, scripted.model);
-      const conversation = "conversation-resolve-abort";
+      const thread = "thread-resolve-abort";
 
       const receipt = yield* runtime.submit(
         agent,
         { question: "book it" },
-        submitOptions(conversation, "resolve-abort-1"),
+        submitOptions(thread, "resolve-abort-1"),
       );
       yield* armFailpoint("tools:after-prepared-append");
       yield* Effect.exit(
-        runtime
-          .processConversation(agent, decodeConversationId(conversation))
-          .pipe(Effect.provide(desk.toolLayer)),
+        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
       );
       yield* clearFailpoint;
       yield* runtime.runRecovery;
@@ -1589,12 +1560,12 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       );
 
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
       expect(settlements[0]?.outcome).toBe("aborted");
       expect(yield* desk.count("r-resabort")).toBe(0);
       const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       // The unknown call stays recorded ToolCallUnknown; nothing settles it (durability §13).
       expect(records.map((envelope) => envelope.record.recordId)).toContain(
         `tool-unknown:${runId}:1:book-1`,
@@ -1618,18 +1589,16 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             : finalParts('{"answer":"resolved"}'),
         );
         const agent = Agent.withModel(bookDefinition, scripted.model);
-        const conversation = "conversation-resolve-idempotent";
+        const thread = "thread-resolve-idempotent";
 
         const receipt = yield* runtime.submit(
           agent,
           { question: "book it" },
-          submitOptions(conversation, "resolve-idem-1"),
+          submitOptions(thread, "resolve-idem-1"),
         );
         yield* armFailpoint("tools:after-prepared-append");
         yield* Effect.exit(
-          runtime
-            .processConversation(agent, decodeConversationId(conversation))
-            .pipe(Effect.provide(desk.toolLayer)),
+          runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
         );
         yield* clearFailpoint;
         yield* runtime.runRecovery;
@@ -1669,7 +1638,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(failureTag(divergent)).toBe("UnknownResolutionConflict");
 
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(desk.toolLayer));
         expect(settlements[0]?.outcome).toBe("completed");
         expect(yield* desk.count("r-idemres")).toBe(1);
@@ -1687,32 +1656,30 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           : finalParts('{"answer":"done"}'),
       );
       const agent = Agent.withModel(bookDefinition, scripted.model);
-      const conversation = "conversation-results-kill";
+      const thread = "thread-results-kill";
 
       const receipt = yield* runtime.submit(
         agent,
         { question: "book it" },
-        submitOptions(conversation, "results-kill-1"),
+        submitOptions(thread, "results-kill-1"),
       );
       yield* armFailpoint("turn:after-results-append");
       const killed = yield* Effect.exit(
-        runtime
-          .processConversation(agent, decodeConversationId(conversation))
-          .pipe(Effect.provide(desk.toolLayer)),
+        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
       expect(yield* desk.count("r-results")).toBe(1);
 
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
       expect(settlements[0]?.outcome).toBe("completed");
       // The recorded outcome did not rerun (exit gate).
       expect(yield* desk.count("r-results")).toBe(1);
 
       const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       expect(
         records.filter((envelope) => envelope.record.recordId === `tool-settled:${runId}:1:book-1`),
       ).toHaveLength(1);
@@ -1744,20 +1711,18 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           : finalParts('{"answer":"reserved"}'),
       );
       const agent = Agent.withModel(itineraryDefinition, scripted.model);
-      const conversation = "conversation-durable-steps";
+      const thread = "thread-durable-steps";
 
       const receipt = yield* runtime.submit(
         agent,
         { question: "reserve it" },
-        submitOptions(conversation, "steps-1"),
+        submitOptions(thread, "steps-1"),
       );
       // Kill right after the FIRST Step commit: reserve-flight is exactly-once-recorded,
       // reserve-lodging never ran, the Attempt aborts without settling.
       yield* armFailpoint("step:after-step-append");
       const killed = yield* Effect.exit(
-        runtime
-          .processConversation(agent, decodeConversationId(conversation))
-          .pipe(Effect.provide(desk.toolLayer)),
+        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
@@ -1768,7 +1733,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
 
       const runId = runIdForSubmission(receipt.submissionId);
       const callId = decodeToolCallId("itinerary-1");
-      const committed = yield* readLog(conversation);
+      const committed = yield* readLog(thread);
       expect(committed.map((envelope) => envelope.record.recordId)).toContain(
         toolStepSettledRecordId(runId, callId, "reserve-flight"),
       );
@@ -1777,14 +1742,14 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       // replays Step 1 from its record, and executes only Step 2.
       yield* control.set(() => ReconciliationSafeToRetry.make());
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
       expect(settlements[0]?.outcome).toBe("completed");
       expect(yield* desk.entries).toBe(2);
       expect(yield* desk.flightRuns).toBe(1);
       expect(yield* desk.lodgingRuns).toBe(1);
 
-      const records = yield* readLog(conversation);
+      const records = yield* readLog(thread);
       expect(
         records.filter(
           (envelope) =>

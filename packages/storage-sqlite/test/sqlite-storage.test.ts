@@ -1,14 +1,15 @@
+import { SqliteStorageFailpointTestControl } from "@effect-agent/storage-sqlite/testing";
 import {
   CanonicalBatch,
   CanonicalRecord,
   CanonicalSequence,
-  ConversationCheckpoint,
-  ConversationExportRequest,
-  ConversationMaterialization,
-  ConversationObservation,
-  ConversationRead,
-  ConversationStore,
-  ConversationStoreError,
+  ThreadCheckpoint,
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadObservation,
+  ThreadRead,
+  ThreadStore,
+  ThreadStoreError,
   EMPTY_TAIL_DIGEST,
   FencedAppendRequest,
   LoadCheckpointRequest,
@@ -19,12 +20,11 @@ import {
   UserInputRecorded,
   type AppendResult,
   type CanonicalRecordPayload,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import {
-  conversationStoreConformanceCases,
-  conversationCheckpointConformanceCases,
-} from "@effect-agent/session/testing";
-import { SqliteStorageFailpointTestControl } from "@effect-agent/storage-sqlite/testing";
+  threadStoreConformanceCases,
+  threadCheckpointConformanceCases,
+} from "@effect-agent/thread/testing";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, describe, it } from "@effect/vitest";
@@ -48,7 +48,8 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import {
   type SqliteStorageFailpoint,
-  conversationStoreLayer,
+  CurrentSqliteStorageVersion,
+  threadStoreLayer,
   layer,
   observationOffsetAt,
   SqliteStorageConfig,
@@ -69,22 +70,18 @@ type Equal<Left, Right> =
       : false
     : false;
 type Assert<Value extends true> = Value;
-type ConversationStoreLayerRequirementsProof = Assert<
+type ThreadStoreLayerRequirementsProof = Assert<
   Equal<
-    Layer.Services<typeof conversationStoreLayer>,
+    Layer.Services<typeof threadStoreLayer>,
     SqliteStorageConfig | SqliteStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
   >
 >;
-type ConversationStoreLayerErrorProof = Assert<
-  Equal<Layer.Error<typeof conversationStoreLayer>, SqliteStorageInitializationError>
+type ThreadStoreLayerErrorProof = Assert<
+  Equal<Layer.Error<typeof threadStoreLayer>, SqliteStorageInitializationError>
 >;
 
-const conversationId = Schema.decodeSync(ConversationMaterialization.fields.conversationId)(
-  "conversation-sqlite-1",
-);
-const secondConversationId = Schema.decodeSync(ConversationMaterialization.fields.conversationId)(
-  "conversation-sqlite-2",
-);
+const threadId = Schema.decodeSync(ThreadMaterialization.fields.threadId)("thread-sqlite-1");
+const secondThreadId = Schema.decodeSync(ThreadMaterialization.fields.threadId)("thread-sqlite-2");
 const runId = Schema.decodeSync(RunCompleted.fields.runId)("run-sqlite-1");
 const submissionId = Schema.decodeSync(SubmissionId)("submission-sqlite-1");
 
@@ -94,21 +91,22 @@ const id = <A>(schema: Schema.Codec<A, string>, value: string): A =>
 const sequence = (value: number) => Schema.decodeSync(CanonicalSequence)(value);
 const epoch = (value: number) => Schema.decodeSync(ProducerEpoch)(value);
 const isSqliteStorageError = Schema.is(SqliteStorageError);
-const isConversationStoreError = Schema.is(ConversationStoreError);
+const isSqliteStorageCompatibilityError = Schema.is(SqliteStorageCompatibilityError);
+const isThreadStoreError = Schema.is(ThreadStoreError);
 
 const at = (millis: number) => DateTime.toUtc(DateTime.makeUnsafe(millis));
 
 const canonicalRecord = (recordId: string, payload: CanonicalRecordPayload): CanonicalRecord =>
   CanonicalRecord.make({
     recordId: id(
-      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/RecordId")),
+      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/RecordId")),
       recordId,
     ),
-    family: "conversation",
+    family: "thread",
     schemaVersion: 1,
     createdAt: at(1),
     deploymentId: id(
-      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/DeploymentId")),
+      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/DeploymentId")),
       "deployment-sqlite",
     ),
     payload,
@@ -119,9 +117,9 @@ const batch = (
   records: readonly [CanonicalRecord, ...Array<CanonicalRecord>],
 ): CanonicalBatch =>
   CanonicalBatch.make({
-    batchId: id(Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/BatchId")), batchId),
+    batchId: id(Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/BatchId")), batchId),
     producerId: id(
-      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/ProducerId")),
+      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/ProducerId")),
       "producer-sqlite",
     ),
     records,
@@ -139,7 +137,7 @@ const inputRecord = (recordId: string, input: string): CanonicalRecord =>
   );
 
 const append = (
-  store: ConversationStore["Service"],
+  store: ThreadStore["Service"],
   canonicalBatch: CanonicalBatch,
   tail: Pick<AppendResult, "lastSequence" | "tailDigest"> = {
     lastSequence: sequence(0),
@@ -149,7 +147,7 @@ const append = (
 ) =>
   store.append(
     FencedAppendRequest.make({
-      conversationId,
+      threadId,
       batch: canonicalBatch,
       expectedTailSequence: tail.lastSequence,
       expectedTailDigest: tail.tailDigest,
@@ -157,19 +155,17 @@ const append = (
     }),
   );
 
-const withStorage = <A, E>(filename: string, effect: Effect.Effect<A, E, ConversationStore>) =>
+const withStorage = <A, E>(filename: string, effect: Effect.Effect<A, E, ThreadStore>) =>
   Effect.provide(effect, layer({ filename, observationPollInterval: 1 }));
 
-const withVerifiedStorage = <A, E>(
-  filename: string,
-  effect: Effect.Effect<A, E, ConversationStore>,
-) => Effect.provide(effect, layer({ filename, observationPollInterval: 1, verifyOnOpen: true }));
+const withVerifiedStorage = <A, E>(filename: string, effect: Effect.Effect<A, E, ThreadStore>) =>
+  Effect.provide(effect, layer({ filename, observationPollInterval: 1, verifyOnOpen: true }));
 
 const withSql = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientService.SqlClient>) =>
   Effect.provide(effect, SqliteClient.layer({ filename }));
 
 const explicitTestStorageLayer = (filename: string) =>
-  conversationStoreLayer.pipe(
+  threadStoreLayer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
         Layer.succeed(SqliteStorageConfig)(
@@ -196,15 +192,15 @@ const withTemporaryDatabase = <A, E>(
       const directory = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-storage-sqlite-",
       });
-      return yield* use(`${directory}/conversation.sqlite`);
+      return yield* use(`${directory}/thread.sqlite`);
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
 
-describe("SqliteConversationStore", () => {
-  describe("shared ConversationStore conformance", () => {
+describe("SqliteThreadStore", () => {
+  describe("shared ThreadStore conformance", () => {
     for (const conformanceCase of [
-      ...conversationStoreConformanceCases,
-      ...conversationCheckpointConformanceCases,
+      ...threadStoreConformanceCases,
+      ...threadCheckpointConformanceCases,
     ]) {
       it.effect(conformanceCase.name, () =>
         withTemporaryDatabase((filename) => withStorage(filename, conformanceCase.run)),
@@ -213,8 +209,8 @@ describe("SqliteConversationStore", () => {
   });
 
   it("keeps configuration and failpoint authority in the named Layer input", () => {
-    const requirementsProof: ConversationStoreLayerRequirementsProof = true;
-    const errorProof: ConversationStoreLayerErrorProof = true;
+    const requirementsProof: ThreadStoreLayerRequirementsProof = true;
+    const errorProof: ThreadStoreLayerErrorProof = true;
 
     expect(requirementsProof).toBe(true);
     expect(errorProof).toBe(true);
@@ -225,7 +221,7 @@ describe("SqliteConversationStore", () => {
       Effect.gen(function* () {
         const config = yield* SqliteStorageConfig;
         const failpoints = yield* SqliteStorageFailpointTestControl;
-        const store = yield* ConversationStore;
+        const store = yield* ThreadStore;
 
         expect(config).toMatchObject({
           observationPollInterval: 1,
@@ -239,8 +235,8 @@ describe("SqliteConversationStore", () => {
         );
         const injected = yield* store
           .materialize(
-            ConversationMaterialization.make({
-              conversationId,
+            ThreadMaterialization.make({
+              threadId,
               producerEpoch: epoch(1),
             }),
           )
@@ -249,8 +245,8 @@ describe("SqliteConversationStore", () => {
 
         yield* failpoints.clear;
         yield* store.materialize(
-          ConversationMaterialization.make({
-            conversationId,
+          ThreadMaterialization.make({
+            threadId,
             producerEpoch: epoch(1),
           }),
         );
@@ -261,7 +257,7 @@ describe("SqliteConversationStore", () => {
   it.effect("validates convenience-layer configuration before constructing the store", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
-        const opened = yield* ConversationStore.pipe(
+        const opened = yield* ThreadStore.pipe(
           Effect.provide(layer({ filename, observationPollInterval: -1 })),
           Effect.exit,
         );
@@ -291,17 +287,17 @@ describe("SqliteConversationStore", () => {
           const first = yield* withStorage(
             filename,
             Effect.gen(function* () {
-              const store = yield* ConversationStore;
+              const store = yield* ThreadStore;
               yield* store.materialize(
-                ConversationMaterialization.make({ conversationId, producerEpoch: epoch(1) }),
+                ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
               );
               const appended = yield* append(
                 store,
                 batch("persist-1", [inputRecord("persist-record-1", "Kyoto")]),
               );
-              const checkpoint = ConversationCheckpoint.make({
+              const checkpoint = ThreadCheckpoint.make({
                 schemaVersion: 1,
-                conversationId,
+                threadId,
                 throughSequence: appended.lastSequence,
                 tailDigest: appended.tailDigest,
                 engineVersion: "phase-3",
@@ -319,12 +315,10 @@ describe("SqliteConversationStore", () => {
           yield* withStorage(
             filename,
             Effect.gen(function* () {
-              const store = yield* ConversationStore;
-              const exported = yield* store.export(
-                ConversationExportRequest.make({ conversationId }),
-              );
+              const store = yield* ThreadStore;
+              const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
               const checkpoint = yield* store.checkpoints!.load(
-                LoadCheckpointRequest.make({ conversationId }),
+                LoadCheckpointRequest.make({ threadId }),
               );
 
               expect(exported.records).toHaveLength(1);
@@ -332,11 +326,11 @@ describe("SqliteConversationStore", () => {
               expect(exported.tailDigest).toBe(first.tailDigest);
               expect(Option.isSome(checkpoint)).toBe(true);
               const reread = yield* store
-                .read(ConversationRead.make({ conversationId, limit: 1_024 }))
+                .read(ThreadRead.make({ threadId, limit: 1_024 }))
                 .pipe(Stream.runCollect);
               expect(reread).toHaveLength(1);
               const reobserved = yield* store
-                .observe(ConversationObservation.make({ conversationId }))
+                .observe(ThreadObservation.make({ threadId }))
                 .pipe(Stream.take(1), Stream.runCollect);
               expect(reobserved).toHaveLength(1);
             }),
@@ -350,9 +344,9 @@ describe("SqliteConversationStore", () => {
       withStorage(
         filename,
         Effect.gen(function* () {
-          const store = yield* ConversationStore;
+          const store = yield* ThreadStore;
           yield* store.materialize(
-            ConversationMaterialization.make({ conversationId, producerEpoch: epoch(1) }),
+            ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
           );
           const first = yield* append(
             store,
@@ -364,7 +358,7 @@ describe("SqliteConversationStore", () => {
             first,
           );
           const existing = yield* store
-            .read(ConversationRead.make({ conversationId, limit: 1_024 }))
+            .read(ThreadRead.make({ threadId, limit: 1_024 }))
             .pipe(Stream.runCollect);
           const [firstExisting, secondExisting] = existing;
           if (firstExisting === undefined || secondExisting === undefined) {
@@ -374,8 +368,8 @@ describe("SqliteConversationStore", () => {
           }
           const resumed = yield* store
             .observe(
-              ConversationObservation.make({
-                conversationId,
+              ThreadObservation.make({
+                threadId,
                 afterOffset: firstExisting.offset,
               }),
             )
@@ -385,14 +379,14 @@ describe("SqliteConversationStore", () => {
           ]);
 
           yield* store.materialize(
-            ConversationMaterialization.make({
-              conversationId: secondConversationId,
+            ThreadMaterialization.make({
+              threadId: secondThreadId,
               producerEpoch: epoch(1),
             }),
           );
           yield* store.append(
             FencedAppendRequest.make({
-              conversationId: secondConversationId,
+              threadId: secondThreadId,
               batch: batch("observe-foreign", [inputRecord("observe-foreign-record", "foreign")]),
               expectedTailSequence: sequence(0),
               expectedTailDigest: EMPTY_TAIL_DIGEST,
@@ -401,8 +395,8 @@ describe("SqliteConversationStore", () => {
           );
           const foreign = yield* store
             .read(
-              ConversationRead.make({
-                conversationId: secondConversationId,
+              ThreadRead.make({
+                threadId: secondThreadId,
                 limit: 1,
               }),
             )
@@ -410,13 +404,13 @@ describe("SqliteConversationStore", () => {
           const [foreignRecord] = foreign;
           if (foreignRecord === undefined) {
             return yield* Effect.die(
-              new Error("Expected the foreign Conversation to contain one canonical record"),
+              new Error("Expected the foreign Thread to contain one canonical record"),
             );
           }
           const foreignExit = yield* store
             .observe(
-              ConversationObservation.make({
-                conversationId,
+              ThreadObservation.make({
+                threadId,
                 afterOffset: foreignRecord.offset,
               }),
             )
@@ -427,8 +421,8 @@ describe("SqliteConversationStore", () => {
             yield* Schema.decodeUnknownEffect(ObservationOffset)("foreign-adapter:1");
           const malformedExit = yield* store
             .observe(
-              ConversationObservation.make({
-                conversationId,
+              ThreadObservation.make({
+                threadId,
                 afterOffset: malformedOffset,
               }),
             )
@@ -442,12 +436,12 @@ describe("SqliteConversationStore", () => {
   it.effect("rejects invalid canonical sequences when constructing observation offsets", () =>
     Effect.forEach([-1, 1.5, Number.NaN], (sequence) =>
       Effect.gen(function* () {
-        const exit = yield* observationOffsetAt(conversationId, sequence).pipe(Effect.exit);
+        const exit = yield* observationOffsetAt(threadId, sequence).pipe(Effect.exit);
         expect(Exit.isFailure(exit)).toBe(true);
         if (Exit.isFailure(exit)) {
           const error = Cause.squash(exit.cause);
-          expect(error).toBeInstanceOf(ConversationStoreError);
-          if (isConversationStoreError(error)) {
+          expect(error).toBeInstanceOf(ThreadStoreError);
+          if (isThreadStoreError(error)) {
             expect(error.operation).toBe("encode observation offset");
           }
         }
@@ -466,7 +460,7 @@ describe("SqliteConversationStore", () => {
           }),
         );
 
-        const opened = yield* withStorage(filename, ConversationStore).pipe(Effect.exit);
+        const opened = yield* withStorage(filename, ThreadStore).pipe(Effect.exit);
         expect(Exit.isFailure(opened)).toBe(true);
         if (Exit.isFailure(opened)) {
           expect(Cause.squash(opened.cause)).toBeInstanceOf(SqliteStorageCompatibilityError);
@@ -489,15 +483,63 @@ describe("SqliteConversationStore", () => {
     ),
   );
 
+  it.effect("rejects the Conversation-era storage version without mutating its tables", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const previousVersion = CurrentSqliteStorageVersion - 1;
+        yield* withSql(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            yield* sql.unsafe(`PRAGMA user_version = ${previousVersion}`);
+            yield* sql`
+              CREATE TABLE effect_agent_conversations (
+                conversation_id TEXT PRIMARY KEY NOT NULL
+              )
+            `;
+            yield* sql`
+              INSERT INTO effect_agent_conversations (conversation_id)
+              VALUES ('legacy-conversation')
+            `;
+          }),
+        );
+
+        const opened = yield* withStorage(filename, ThreadStore).pipe(Effect.exit);
+        expect(Exit.isFailure(opened)).toBe(true);
+        if (Exit.isFailure(opened)) {
+          const error = Cause.squash(opened.cause);
+          expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
+          if (isSqliteStorageCompatibilityError(error)) {
+            expect(error.actualVersion).toBe(previousVersion);
+            expect(error.supportedVersion).toBe(CurrentSqliteStorageVersion);
+            expect(error.message).toContain("Reset the database file explicitly");
+          }
+        }
+
+        const rows = yield* withSql(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            return yield* sql<Record<string, unknown>>`
+              SELECT conversation_id
+              FROM effect_agent_conversations
+            `;
+          }),
+        );
+        expect(rows).toEqual([{ conversation_id: "legacy-conversation" }]);
+      }),
+    ),
+  );
+
   it.effect("fails clearly on corrupt current-version rows without mutating the log", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         yield* withStorage(
           filename,
           Effect.gen(function* () {
-            const store = yield* ConversationStore;
+            const store = yield* ThreadStore;
             yield* store.materialize(
-              ConversationMaterialization.make({ conversationId, producerEpoch: epoch(1) }),
+              ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
             );
             yield* append(store, batch("corrupt-1", [inputRecord("corrupt-record-1", "Osaka")]));
           }),
@@ -509,14 +551,14 @@ describe("SqliteConversationStore", () => {
             yield* sql`
               UPDATE effect_agent_canonical_records
               SET record_json = '{"schemaVersion":2}'
-              WHERE conversation_id = ${conversationId}
+              WHERE thread_id = ${threadId}
                 AND sequence = 1
             `;
           }),
         );
 
         // The opt-in integrity scan refuses to open the corrupt database.
-        const verified = yield* ConversationStore.pipe(
+        const verified = yield* ThreadStore.pipe(
           Effect.provide(layer({ filename, observationPollInterval: 1, verifyOnOpen: true })),
           Effect.exit,
         );
@@ -529,17 +571,17 @@ describe("SqliteConversationStore", () => {
         const lazyRead = yield* withStorage(
           filename,
           Effect.gen(function* () {
-            const store = yield* ConversationStore;
+            const store = yield* ThreadStore;
             return yield* store
-              .read(ConversationRead.make({ conversationId, limit: 1_024 }))
+              .read(ThreadRead.make({ threadId, limit: 1_024 }))
               .pipe(Stream.runCollect);
           }),
         ).pipe(Effect.exit);
         expect(Exit.isFailure(lazyRead)).toBe(true);
         if (Exit.isFailure(lazyRead)) {
           const error = Cause.squash(lazyRead.cause);
-          expect(error).toBeInstanceOf(ConversationStoreError);
-          if (isConversationStoreError(error)) {
+          expect(error).toBeInstanceOf(ThreadStoreError);
+          if (isThreadStoreError(error)) {
             expect(error.operation).toBe("decode canonical record");
           }
         }
@@ -551,7 +593,7 @@ describe("SqliteConversationStore", () => {
             return yield* sql<Record<string, unknown>>`
               SELECT sequence, record_json
               FROM effect_agent_canonical_records
-              WHERE conversation_id = ${conversationId}
+              WHERE thread_id = ${threadId}
             `;
           }),
         );
@@ -566,9 +608,9 @@ describe("SqliteConversationStore", () => {
         const expected = yield* withStorage(
           filename,
           Effect.gen(function* () {
-            const store = yield* ConversationStore;
+            const store = yield* ThreadStore;
             yield* store.materialize(
-              ConversationMaterialization.make({ conversationId, producerEpoch: epoch(1) }),
+              ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
             );
             const first = yield* append(
               store,
@@ -579,7 +621,7 @@ describe("SqliteConversationStore", () => {
               RunCompleted.make({ runId, output: { itinerary: "Nara" } }),
             );
             yield* append(store, batch("restart-2", [completed]), first);
-            return yield* store.export(ConversationExportRequest.make({ conversationId }));
+            return yield* store.export(ThreadExportRequest.make({ threadId }));
           }),
         );
 
@@ -587,8 +629,8 @@ describe("SqliteConversationStore", () => {
         const reopened = yield* withVerifiedStorage(
           filename,
           Effect.gen(function* () {
-            const store = yield* ConversationStore;
-            return yield* store.export(ConversationExportRequest.make({ conversationId }));
+            const store = yield* ThreadStore;
+            return yield* store.export(ThreadExportRequest.make({ threadId }));
           }),
         );
         expect(reopened).toEqual(expected);
@@ -602,9 +644,9 @@ describe("SqliteConversationStore", () => {
         const first = yield* withStorage(
           filename,
           Effect.gen(function* () {
-            const store = yield* ConversationStore;
+            const store = yield* ThreadStore;
             yield* store.materialize(
-              ConversationMaterialization.make({ conversationId, producerEpoch: epoch(1) }),
+              ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
             );
             return yield* append(
               store,
@@ -616,14 +658,14 @@ describe("SqliteConversationStore", () => {
         const releaseExport = yield* Deferred.make<void>();
         const exportFiber = yield* Effect.provide(
           Effect.gen(function* () {
-            const store = yield* ConversationStore;
-            return yield* store.export(ConversationExportRequest.make({ conversationId }));
+            const store = yield* ThreadStore;
+            return yield* store.export(ThreadExportRequest.make({ threadId }));
           }),
           layer({
             filename,
             observationPollInterval: 1,
             failpoint: (location) =>
-              location === "export:after-conversation-read"
+              location === "export:after-thread-read"
                 ? Deferred.succeed(exportStarted, undefined).pipe(
                     Effect.andThen(Deferred.await(releaseExport)),
                     Effect.asVoid,
@@ -636,7 +678,7 @@ describe("SqliteConversationStore", () => {
         yield* withStorage(
           filename,
           Effect.gen(function* () {
-            const store = yield* ConversationStore;
+            const store = yield* ThreadStore;
             yield* append(
               store,
               batch("snapshot-2", [inputRecord("snapshot-record-2", "after")]),
@@ -654,8 +696,8 @@ describe("SqliteConversationStore", () => {
         const current = yield* withStorage(
           filename,
           Effect.gen(function* () {
-            const store = yield* ConversationStore;
-            return yield* store.export(ConversationExportRequest.make({ conversationId }));
+            const store = yield* ThreadStore;
+            return yield* store.export(ThreadExportRequest.make({ threadId }));
           }),
         );
         expect(current.records).toHaveLength(2);
@@ -668,13 +710,13 @@ describe("SqliteConversationStore", () => {
       withStorage(
         filename,
         Effect.gen(function* () {
-          const store = yield* ConversationStore;
+          const store = yield* ThreadStore;
           yield* store.materialize(
-            ConversationMaterialization.make({ conversationId, producerEpoch: epoch(1) }),
+            ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
           );
 
           const observerFiber = yield* store
-            .observe(ConversationObservation.make({ conversationId }))
+            .observe(ThreadObservation.make({ threadId }))
             .pipe(Stream.take(1), Stream.runCollect, Effect.forkChild);
           // Let the observer reach its first empty poll before anything is committed.
           yield* Effect.yieldNow;
@@ -700,9 +742,9 @@ describe("SqliteConversationStore", () => {
         const first = yield* withStorage(
           filename,
           Effect.gen(function* () {
-            const store = yield* ConversationStore;
+            const store = yield* ThreadStore;
             yield* store.materialize(
-              ConversationMaterialization.make({ conversationId, producerEpoch: epoch(1) }),
+              ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
             );
             return yield* append(store, batch("busy-1", [inputRecord("busy-record-1", "before")]));
           }),
@@ -718,7 +760,7 @@ describe("SqliteConversationStore", () => {
             yield* sql`BEGIN IMMEDIATE`;
             const contended = yield* Effect.provide(
               Effect.gen(function* () {
-                const store = yield* ConversationStore;
+                const store = yield* ThreadStore;
                 return yield* append(store, contendedBatch, first);
               }),
               layer({ filename, observationPollInterval: 1, busyTimeout: 0 }),
@@ -728,8 +770,8 @@ describe("SqliteConversationStore", () => {
             expect(Exit.isFailure(contended)).toBe(true);
             if (Exit.isFailure(contended)) {
               const error = Cause.squash(contended.cause);
-              expect(error).toBeInstanceOf(ConversationStoreError);
-              if (isConversationStoreError(error)) {
+              expect(error).toBeInstanceOf(ThreadStoreError);
+              if (isThreadStoreError(error)) {
                 expect(error.cause).toBeInstanceOf(SqliteWriteContention);
               }
             }
@@ -740,7 +782,7 @@ describe("SqliteConversationStore", () => {
         const recovered = yield* withStorage(
           filename,
           Effect.gen(function* () {
-            const store = yield* ConversationStore;
+            const store = yield* ThreadStore;
             return yield* append(store, contendedBatch, first);
           }),
         );
@@ -754,7 +796,7 @@ describe("SqliteConversationStore", () => {
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         const active = yield* Ref.make<SqliteStorageFailpointLocation | undefined>(undefined);
-        const withFailpoints = <A, E>(effect: Effect.Effect<A, E, ConversationStore>) =>
+        const withFailpoints = <A, E>(effect: Effect.Effect<A, E, ThreadStore>) =>
           Effect.provide(
             effect,
             layer({
@@ -778,10 +820,10 @@ describe("SqliteConversationStore", () => {
           Exit.isFailure(
             yield* withFailpoints(
               Effect.gen(function* () {
-                const store = yield* ConversationStore;
+                const store = yield* ThreadStore;
                 yield* store.materialize(
-                  ConversationMaterialization.make({
-                    conversationId,
+                  ThreadMaterialization.make({
+                    threadId,
                     producerEpoch: epoch(1),
                   }),
                 );
@@ -795,8 +837,8 @@ describe("SqliteConversationStore", () => {
           Exit.isFailure(
             yield* withFailpoints(
               Effect.gen(function* () {
-                const store = yield* ConversationStore;
-                yield* store.export(ConversationExportRequest.make({ conversationId }));
+                const store = yield* ThreadStore;
+                yield* store.export(ThreadExportRequest.make({ threadId }));
               }),
             ).pipe(Effect.exit),
           ),
@@ -806,10 +848,10 @@ describe("SqliteConversationStore", () => {
           Exit.isFailure(
             yield* withFailpoints(
               Effect.gen(function* () {
-                const store = yield* ConversationStore;
+                const store = yield* ThreadStore;
                 yield* store.materialize(
-                  ConversationMaterialization.make({
-                    conversationId,
+                  ThreadMaterialization.make({
+                    threadId,
                     producerEpoch: epoch(1),
                   }),
                 );
@@ -821,8 +863,8 @@ describe("SqliteConversationStore", () => {
         expect(
           (yield* withFailpoints(
             Effect.gen(function* () {
-              const store = yield* ConversationStore;
-              return yield* store.export(ConversationExportRequest.make({ conversationId }));
+              const store = yield* ThreadStore;
+              return yield* store.export(ThreadExportRequest.make({ threadId }));
             }),
           )).records,
         ).toEqual([]);
@@ -833,7 +875,7 @@ describe("SqliteConversationStore", () => {
           Exit.isFailure(
             yield* withFailpoints(
               Effect.gen(function* () {
-                const store = yield* ConversationStore;
+                const store = yield* ThreadStore;
                 yield* append(store, firstBatch);
               }),
             ).pipe(Effect.exit),
@@ -843,8 +885,8 @@ describe("SqliteConversationStore", () => {
         expect(
           (yield* withFailpoints(
             Effect.gen(function* () {
-              const store = yield* ConversationStore;
-              return yield* store.export(ConversationExportRequest.make({ conversationId }));
+              const store = yield* ThreadStore;
+              return yield* store.export(ThreadExportRequest.make({ threadId }));
             }),
           )).records,
         ).toEqual([]);
@@ -860,15 +902,15 @@ describe("SqliteConversationStore", () => {
               yield* select(location);
               const exit = yield* withFailpoints(
                 Effect.gen(function* () {
-                  const store = yield* ConversationStore;
+                  const store = yield* ThreadStore;
                   yield* append(store, firstBatch);
                 }),
               ).pipe(Effect.exit);
               expect(Exit.isFailure(exit)).toBe(true);
               if (Exit.isFailure(exit)) {
                 const error = Cause.squash(exit.cause);
-                expect(error).toBeInstanceOf(ConversationStoreError);
-                if (isConversationStoreError(error)) {
+                expect(error).toBeInstanceOf(ThreadStoreError);
+                if (isThreadStoreError(error)) {
                   expect(error.operation).toBe("append canonical batch");
                   expect(error.message).toContain(location);
                 }
@@ -876,8 +918,8 @@ describe("SqliteConversationStore", () => {
               yield* select(undefined);
               const exported = yield* withFailpoints(
                 Effect.gen(function* () {
-                  const store = yield* ConversationStore;
-                  return yield* store.export(ConversationExportRequest.make({ conversationId }));
+                  const store = yield* ThreadStore;
+                  return yield* store.export(ThreadExportRequest.make({ threadId }));
                 }),
               );
               expect(exported.records).toEqual([]);
@@ -891,7 +933,7 @@ describe("SqliteConversationStore", () => {
           Exit.isFailure(
             yield* withFailpoints(
               Effect.gen(function* () {
-                const store = yield* ConversationStore;
+                const store = yield* ThreadStore;
                 yield* append(store, firstBatch);
               }),
             ).pipe(Effect.exit),
@@ -900,15 +942,15 @@ describe("SqliteConversationStore", () => {
         yield* select(undefined);
         const recoveredAppend = yield* withFailpoints(
           Effect.gen(function* () {
-            const store = yield* ConversationStore;
+            const store = yield* ThreadStore;
             return yield* append(store, firstBatch);
           }),
         );
         expect(recoveredAppend.replayed).toBe(true);
 
-        const checkpoint = ConversationCheckpoint.make({
+        const checkpoint = ThreadCheckpoint.make({
           schemaVersion: 1,
-          conversationId,
+          threadId,
           throughSequence: recoveredAppend.lastSequence,
           tailDigest: recoveredAppend.tailDigest,
           engineVersion: "phase-3",
@@ -919,7 +961,7 @@ describe("SqliteConversationStore", () => {
           createdAt: at(3),
         });
         const save = Effect.gen(function* () {
-          const store = yield* ConversationStore;
+          const store = yield* ThreadStore;
           yield* store.checkpoints!.save(SaveCheckpointRequest.make({ checkpoint }));
         });
 
@@ -930,10 +972,8 @@ describe("SqliteConversationStore", () => {
           Option.isNone(
             yield* withFailpoints(
               Effect.gen(function* () {
-                const store = yield* ConversationStore;
-                return yield* store.checkpoints!.load(
-                  LoadCheckpointRequest.make({ conversationId }),
-                );
+                const store = yield* ThreadStore;
+                return yield* store.checkpoints!.load(LoadCheckpointRequest.make({ threadId }));
               }),
             ),
           ),
@@ -946,10 +986,8 @@ describe("SqliteConversationStore", () => {
           Option.isSome(
             yield* withFailpoints(
               Effect.gen(function* () {
-                const store = yield* ConversationStore;
-                return yield* store.checkpoints!.load(
-                  LoadCheckpointRequest.make({ conversationId }),
-                );
+                const store = yield* ThreadStore;
+                return yield* store.checkpoints!.load(LoadCheckpointRequest.make({ threadId }));
               }),
             ),
           ),

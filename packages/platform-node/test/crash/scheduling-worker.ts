@@ -7,7 +7,7 @@ import {
   ScheduleFailpoint,
   ScheduleId,
   Scheduling,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Config, Console, Effect, Layer, Ref, Schema } from "effect";
 
 import { NodeDurableHost, NodeScheduling } from "../../src/index.ts";
@@ -57,7 +57,7 @@ export const schedulingCrashCreateOptions = {
   scope: schedulingCrashScope,
   scheduleId: schedulingCrashScheduleId,
   timing: { _tag: "At" as const, atMillis: 0 },
-  destination: { _tag: "FreshConversation" as const },
+  destination: { _tag: "FreshThread" as const },
   deliveryPrincipal: schedulingCrashPrincipal,
   definitions: schedulingCrashDefinitions,
 };

@@ -15,7 +15,7 @@ import {
   runIdForSubmission,
   toolCallPreparedRecordId,
   toolCallSettledRecordId,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
@@ -29,7 +29,7 @@ import {
   bookDefinition,
   bookTools,
   crashSubmitOptions,
-  decodeConversationId,
+  decodeThreadId,
   decodeToolCallId,
   finalParts,
   makeBookToolLayer,
@@ -72,11 +72,11 @@ const POST_BACKUP_PRODUCER = Schema.decodeSync(ProducerId)("producer-post-backup
  * docs/guides/operations.md — recorded as scoped, never silently claimed.
  */
 
-const SETTLED_LANE = "conversation-restore-settled";
+const SETTLED_LANE = "thread-restore-settled";
 const SETTLED_KEY = "restore-settled-1";
-const UNCERTAIN_LANE = "conversation-restore-uncertain";
+const UNCERTAIN_LANE = "thread-restore-uncertain";
 const UNCERTAIN_KEY = "restore-uncertain-1";
-const POST_BACKUP_LANE = "conversation-restore-post-backup";
+const POST_BACKUP_LANE = "thread-restore-post-backup";
 const POST_BACKUP_KEY = "restore-post-backup-1";
 
 const SQLITE_SUFFIXES = ["", "-wal", "-shm"] as const;
@@ -91,21 +91,21 @@ const copyDatabase = (from: string, to: string): void => {
   }
 };
 
-const drainPlanner = (conversation: string) =>
+const drainPlanner = (thread: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(CHILD_ANSWER));
     const agent = Agent.withModel(plannerDefinition, model);
-    return yield* runtime.processConversation(agent, decodeConversationId(conversation));
+    return yield* runtime.processThread(agent, decodeThreadId(thread));
   });
 
-const drainBook = (site: CrashSite, conversation: string) =>
+const drainBook = (site: CrashSite, thread: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(FRESH_ANSWER));
     const agent = Agent.withModel(bookDefinition, model);
     return yield* runtime
-      .processConversation(agent, decodeConversationId(conversation))
+      .processThread(agent, decodeThreadId(thread))
       .pipe(Effect.provide(makeBookToolLayer(site.supplier, bookTools)));
   });
 
@@ -144,7 +144,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             const killed = yield* runWorkerToExit({
               db: site.db,
               scenario: "run-uncertain",
-              conversation: UNCERTAIN_LANE,
+              thread: UNCERTAIN_LANE,
               key: UNCERTAIN_KEY,
               killAtStorage: "append:before",
               killRequiresSupplier: `book:${BOOK_REF}`,
@@ -198,7 +198,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // lane still drains; the restored store must fence this exact token later.
                 const claim = yield* ledger.claim(
                   ClaimRequest.make({
-                    conversationId: decodeConversationId(UNCERTAIN_LANE),
+                    threadId: decodeThreadId(UNCERTAIN_LANE),
                     producerId: POST_BACKUP_PRODUCER,
                   }),
                 );
@@ -246,7 +246,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const runId = runIdForSubmission(snapshot.submissionId);
 
                 // (1) Pre-backup history survived intact.
-                const settledLane = yield* runtime.verify(decodeConversationId(SETTLED_LANE));
+                const settledLane = yield* runtime.verify(decodeThreadId(SETTLED_LANE));
                 expect(settledLane.ok).toBe(true);
 
                 // (3) The post-backup outcome is GONE; the external effect is not: startup
@@ -284,7 +284,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // reconciliation duty (Receipts issued after the backup point).
                 const postBackupRow = yield* ledger.lookup(
                   SubmissionLookupByKey.make({
-                    conversationId: decodeConversationId(POST_BACKUP_LANE),
+                    threadId: decodeThreadId(POST_BACKUP_LANE),
                     principal: crashSubmitOptions(POST_BACKUP_LANE, POST_BACKUP_KEY).principal,
                     idempotencyKey: crashSubmitOptions(POST_BACKUP_LANE, POST_BACKUP_KEY)
                       .idempotencyKey,
@@ -311,7 +311,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
                 // The restored lane's canonical history carries the full prepared → resolved →
                 // settled trail and passes the shared integrity checks.
-                const verifyReport = yield* runtime.verify(decodeConversationId(UNCERTAIN_LANE));
+                const verifyReport = yield* runtime.verify(decodeThreadId(UNCERTAIN_LANE));
                 expect(
                   verifyReport.ok,
                   `restored integrity report: ${JSON.stringify(verifyReport.checks)}`,

@@ -1,7 +1,7 @@
 ---
 "@effect-agent/core": minor
 "@effect-agent/engine": minor
-"@effect-agent/session": minor
+"@effect-agent/thread": minor
 ---
 
 Budget soft landing (D-037, ADR-0019, RUN-018/019/020): `AgentPolicy` gains

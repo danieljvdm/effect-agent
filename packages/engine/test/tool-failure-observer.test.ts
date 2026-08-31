@@ -1,7 +1,7 @@
 import {
   Agent,
   AgentPolicy,
-  ConversationId,
+  ThreadId,
   IdGenerator,
   RunId,
   ReceiptId,
@@ -31,7 +31,6 @@ import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import { expectTypeOf } from "vite-plus/test";
 
-import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentRuntime,
   CurrentToolFailureObserver,
@@ -47,6 +46,7 @@ import {
   type ToolBrokerService,
   type ToolFailureObservation,
 } from "../src/index.ts";
+import { ThreadHistory } from "../src/thread-history.ts";
 import { deliverToolFailure } from "../src/tool-derivative-internal.ts";
 
 class QueryFailure extends Schema.TaggedError<QueryFailure>()("QueryFailure", {
@@ -59,7 +59,7 @@ class DiagnosticSource extends Context.Service<DiagnosticSource, string>()(
 ) {}
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextConversationId: Effect.succeed(ConversationId.make("conversation-observer")),
+  nextThreadId: Effect.succeed(ThreadId.make("thread-observer")),
   nextRunId: Effect.succeed(RunId.make("run-observer")),
   nextTurnId: Effect.succeed(TurnId.make("turn-observer")),
 });
@@ -207,14 +207,14 @@ const collect = (observations: Array<ToolFailureObservation>): RunToolFailureObs
 });
 const identity = {
   agentId: "observer-test",
-  conversationId: "conversation-observer",
+  threadId: "thread-observer",
   runId: "run-observer",
   turnId: "turn-observer",
 };
 const invoke = (pass: ToolBrokerPass) =>
   pass.invoke({ toolName: "query", encodedArguments: { value: 1 } });
 
-const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
 
 layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
   it.effect(
@@ -1066,7 +1066,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
               Effect.fail(
                 ToolCallWaiting.make({
                   toolCallId: ToolCallId.make(outerId),
-                  childConversationId: ConversationId.make("child"),
+                  childThreadId: ThreadId.make("child"),
                   childSubmissionId: SubmissionId.make("child"),
                   childRunId: RunId.make("child"),
                   receiptId: ReceiptId.make("child"),

@@ -1,5 +1,5 @@
 import { ContextCompactor, contextCompactorRunContextLayer } from "@effect-agent/capabilities";
-import { Agent, AgentPolicy, ConversationId, ToolCallId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId, ToolCallId } from "@effect-agent/core";
 import {
   CompactionError,
   estimatePromptTokens,
@@ -8,6 +8,11 @@ import {
   RunToolAuthorization,
   ToolExecutionClass,
 } from "@effect-agent/engine";
+import {
+  type DoStorageFailpointHandler,
+  type DoStorageFailpointLocation,
+} from "@effect-agent/storage-cloudflare";
+import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing";
 import {
   DefinitionDigestInput,
   DefinitionDigests,
@@ -28,18 +33,13 @@ import {
   type DurableRuntimeFailpointLocation,
   type DurableSubmitOptions,
   type ResolvedBinding,
-} from "@effect-agent/session";
-import {
-  type DoStorageFailpointHandler,
-  type DoStorageFailpointLocation,
-} from "@effect-agent/storage-cloudflare";
-import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing";
+} from "@effect-agent/thread";
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import type {
-  ConversationMaintenanceFailpointHandler,
-  ConversationMaintenanceFailpointLocation,
+  ThreadMaintenanceFailpointHandler,
+  ThreadMaintenanceFailpointLocation,
 } from "../src/index.ts";
 import { layerFromBindings } from "../src/layers.ts";
 
@@ -50,11 +50,11 @@ import { layerFromBindings } from "../src/layers.ts";
  * incarnation (a fresh incarnation starts unarmed and converges), the release gates unblock
  * hanging scripted models, and the in-memory supplier store plays the crash harness's
  * file-backed external-truth role — it survives `ctx.abort()` exactly like a real supplier's
- * ledger survives a process kill, keyed per test by the Conversation-unique `ref`.
+ * ledger survives a process kill, keyed per test by the Thread-unique `ref`.
  */
 
 // ---------------------------------------------------------------------------
-// Armed failpoints (consumed exactly once, keyed by Conversation name)
+// Armed failpoints (consumed exactly once, keyed by Thread name)
 // ---------------------------------------------------------------------------
 
 const armedStorageEvictions = new Map<string, Array<DoStorageFailpointLocation>>();
@@ -63,7 +63,7 @@ const armedRuntimeEvictions = new Map<string, Array<DurableRuntimeFailpointLocat
 export const armedRuntimeFailures = new Map<string, DurableRuntimeFailpointLocation>();
 
 /**
- * Arm an ORDERED queue of eviction locations for one Conversation. Chained rows (a location
+ * Arm an ORDERED queue of eviction locations for one Thread. Chained rows (a location
  * only reachable through the recovery of an earlier abort) must arm the whole chain UP
  * FRONT: due alarms auto-fire in the pool, so the recovery pass after an abort can run
  * within milliseconds — long before a test observing the first abort could arm the next
@@ -71,29 +71,29 @@ export const armedRuntimeFailures = new Map<string, DurableRuntimeFailpointLocat
  * order and the final one converges unarmed.
  */
 export const armStorageEviction = (
-  conversation: string,
+  thread: string,
   ...locations: ReadonlyArray<DoStorageFailpointLocation>
 ): void => {
-  const queue = armedStorageEvictions.get(conversation) ?? [];
+  const queue = armedStorageEvictions.get(thread) ?? [];
   queue.push(...locations);
-  armedStorageEvictions.set(conversation, queue);
+  armedStorageEvictions.set(thread, queue);
 };
 
 export const armRuntimeEviction = (
-  conversation: string,
+  thread: string,
   ...locations: ReadonlyArray<DurableRuntimeFailpointLocation>
 ): void => {
-  const queue = armedRuntimeEvictions.get(conversation) ?? [];
+  const queue = armedRuntimeEvictions.get(thread) ?? [];
   queue.push(...locations);
-  armedRuntimeEvictions.set(conversation, queue);
+  armedRuntimeEvictions.set(thread, queue);
 };
 
 /** Locations still armed (either kind); zero means every armed eviction actually fired. */
-export const armedEvictionsRemaining = (conversation: string): number =>
-  (armedStorageEvictions.get(conversation)?.length ?? 0) +
-  (armedRuntimeEvictions.get(conversation)?.length ?? 0);
+export const armedEvictionsRemaining = (thread: string): number =>
+  (armedStorageEvictions.get(thread)?.length ?? 0) +
+  (armedRuntimeEvictions.get(thread)?.length ?? 0);
 
-/** Storage failpoint factory for `ConversationObject.make`: armed hit → `ctx.abort()`. */
+/** Storage failpoint factory for `ThreadObject.make`: armed hit → `ctx.abort()`. */
 export const storageEvictionFailpoint = (ctx: DurableObjectState): DoStorageFailpointHandler =>
   evictionFailpointHandler({
     isArmed: (location) =>
@@ -138,10 +138,10 @@ export const runtimeEvictionFailpoint =
     });
 
 // ---------------------------------------------------------------------------
-// Conversation-maintenance race gate (issue #93)
+// Thread-maintenance race gate (issue #93)
 // ---------------------------------------------------------------------------
 
-const maintenancePauses = new Map<string, Array<ConversationMaintenanceFailpointLocation>>();
+const maintenancePauses = new Map<string, Array<ThreadMaintenanceFailpointLocation>>();
 
 interface MaintenancePauseGate {
   readonly reached: Promise<void>;
@@ -154,17 +154,17 @@ interface MaintenancePauseGate {
 const maintenancePauseGates = new Map<string, MaintenancePauseGate>();
 
 const maintenancePauseKey = (
-  conversation: string,
-  location: ConversationMaintenanceFailpointLocation,
-): string => `${conversation}:${location}`;
+  thread: string,
+  location: ThreadMaintenanceFailpointLocation,
+): string => `${thread}:${location}`;
 
 export const armMaintenancePause = (
-  conversation: string,
-  ...locations: ReadonlyArray<ConversationMaintenanceFailpointLocation>
+  thread: string,
+  ...locations: ReadonlyArray<ThreadMaintenanceFailpointLocation>
 ): void => {
-  maintenancePauses.set(conversation, [...locations]);
+  maintenancePauses.set(thread, [...locations]);
   for (const location of locations) {
-    const key = maintenancePauseKey(conversation, location);
+    const key = maintenancePauseKey(thread, location);
     let resolveReached!: () => void;
     let resolveReleased!: () => void;
     maintenancePauseGates.set(key, {
@@ -182,42 +182,40 @@ export const armMaintenancePause = (
 };
 
 export const awaitMaintenancePause = (
-  conversation: string,
-  location: ConversationMaintenanceFailpointLocation,
+  thread: string,
+  location: ThreadMaintenanceFailpointLocation,
 ): Promise<void> => {
-  const gate = maintenancePauseGates.get(maintenancePauseKey(conversation, location));
+  const gate = maintenancePauseGates.get(maintenancePauseKey(thread, location));
   if (gate === undefined) {
-    return Promise.reject(
-      new Error(`Maintenance pause ${location} is not armed for ${conversation}.`),
-    );
+    return Promise.reject(new Error(`Maintenance pause ${location} is not armed for ${thread}.`));
   }
   return gate.reached;
 };
 
 export const releaseMaintenancePause = (
-  conversation: string,
-  location?: ConversationMaintenanceFailpointLocation,
+  thread: string,
+  location?: ThreadMaintenanceFailpointLocation,
 ): void => {
   if (location === undefined) {
     for (const [key, gate] of maintenancePauseGates) {
-      if (key.startsWith(`${conversation}:`) && gate.reachedFlag) gate.resolveReleased();
+      if (key.startsWith(`${thread}:`) && gate.reachedFlag) gate.resolveReleased();
     }
     return;
   }
-  maintenancePauseGates.get(maintenancePauseKey(conversation, location))?.resolveReleased();
+  maintenancePauseGates.get(maintenancePauseKey(thread, location))?.resolveReleased();
 };
 
 export const maintenanceRaceFailpoint =
-  (ctx: DurableObjectState): ConversationMaintenanceFailpointHandler =>
+  (ctx: DurableObjectState): ThreadMaintenanceFailpointHandler =>
   (location) =>
     Effect.gen(function* () {
-      const conversation = ctx.id.name;
-      if (conversation === undefined) return;
-      const queue = maintenancePauses.get(conversation);
+      const thread = ctx.id.name;
+      if (thread === undefined) return;
+      const queue = maintenancePauses.get(thread);
       if (queue?.[0] !== location) return;
       queue.shift();
-      if (queue.length === 0) maintenancePauses.delete(conversation);
-      const key = maintenancePauseKey(conversation, location);
+      if (queue.length === 0) maintenancePauses.delete(thread);
+      const key = maintenancePauseKey(thread, location);
       const gate = maintenancePauseGates.get(key);
       if (gate === undefined) return;
       gate.reachedFlag = true;
@@ -281,7 +279,7 @@ export const supplierValuesFor = (ref: string): ReadonlySet<string> =>
 // Identities
 // ---------------------------------------------------------------------------
 
-export const decodeConversationId = Schema.decodeSync(ConversationId);
+export const decodeThreadId = Schema.decodeSync(ThreadId);
 export const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 
 export const TEST_PRINCIPAL = Schema.decodeSync(Principal)("principal-cf-eviction");
@@ -290,7 +288,7 @@ export const TEST_DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A,
 
 export const DEPLOYMENT_ID = "cf-test-deployment";
 export const PRODUCER_PREFIX = "cf-test-producer";
-export const CONVERSATIONS_BINDING = "CONVERSATIONS";
+export const THREADS_BINDING = "THREADS";
 
 // ---------------------------------------------------------------------------
 // Schedule Owner recovery controls
@@ -493,11 +491,8 @@ export const scheduleAuthorizer = (owner: ScheduleOwner) => {
   };
 };
 
-export const submitOptions = (
-  conversation: string,
-  idempotencyKey: string,
-): DurableSubmitOptions => ({
-  conversationId: decodeConversationId(conversation),
+export const submitOptions = (thread: string, idempotencyKey: string): DurableSubmitOptions => ({
+  threadId: decodeThreadId(thread),
   principal: TEST_PRINCIPAL,
   idempotencyKey: decodeIdempotencyKey(idempotencyKey),
   definitions: TEST_DIGESTS,
@@ -520,13 +515,13 @@ export interface ContextCompactorProbe {
 const contextCompactorProbes = new Map<string, ContextCompactorProbe>();
 
 const updateContextCompactorProbe = (
-  conversationId: string,
+  threadId: string,
   update: (probe: ContextCompactorProbe) => ContextCompactorProbe,
 ): void => {
   contextCompactorProbes.set(
-    conversationId,
+    threadId,
     update(
-      contextCompactorProbes.get(conversationId) ?? {
+      contextCompactorProbes.get(threadId) ?? {
         acquisitions: 0,
         releases: 0,
         invocations: 0,
@@ -536,21 +531,21 @@ const updateContextCompactorProbe = (
   );
 };
 
-export const contextCompactorProbe = (conversationId: string): ContextCompactorProbe =>
-  contextCompactorProbes.get(conversationId) ?? {
+export const contextCompactorProbe = (threadId: string): ContextCompactorProbe =>
+  contextCompactorProbes.get(threadId) ?? {
     acquisitions: 0,
     releases: 0,
     invocations: 0,
     sourceMessageCounts: [],
   };
 
-const contextCompactorLayer = (conversationId: string) =>
+const contextCompactorLayer = (threadId: string) =>
   Layer.effect(
     ContextCompactor,
     Effect.acquireRelease(
       Effect.gen(function* () {
         yield* Effect.sync(() =>
-          updateContextCompactorProbe(conversationId, (probe) => ({
+          updateContextCompactorProbe(threadId, (probe) => ({
             ...probe,
             acquisitions: probe.acquisitions + 1,
           })),
@@ -564,7 +559,7 @@ const contextCompactorLayer = (conversationId: string) =>
             Stream.fromEffect(
               Effect.gen(function* () {
                 yield* Effect.sync(() =>
-                  updateContextCompactorProbe(conversationId, (probe) => ({
+                  updateContextCompactorProbe(threadId, (probe) => ({
                     ...probe,
                     invocations: probe.invocations + 1,
                     sourceMessageCounts: [
@@ -594,7 +589,7 @@ const contextCompactorLayer = (conversationId: string) =>
       }),
       () =>
         Effect.sync(() =>
-          updateContextCompactorProbe(conversationId, (probe) => ({
+          updateContextCompactorProbe(threadId, (probe) => ({
             ...probe,
             releases: probe.releases + 1,
           })),
@@ -603,21 +598,21 @@ const contextCompactorLayer = (conversationId: string) =>
   );
 
 /** A closed generic run-context Layer; BrowserCrypto remains owned by the platform assembly. */
-export const makeContextCompactorRunContextLayer = (conversationId: string) =>
-  contextCompactorRunContextLayer.pipe(Layer.provide(contextCompactorLayer(conversationId)));
+export const makeContextCompactorRunContextLayer = (threadId: string) =>
+  contextCompactorRunContextLayer.pipe(Layer.provide(contextCompactorLayer(threadId)));
 
 const contextAuthorizationProbes = new Map<string, { acquisitions: number; calls: number }>();
-export const contextAuthorizationProbe = (conversationId: string) =>
-  contextAuthorizationProbes.get(conversationId);
+export const contextAuthorizationProbe = (threadId: string) =>
+  contextAuthorizationProbes.get(threadId);
 
 /** Independent policy: the compactor fixture may prepare prompts but cannot authorize Tools. */
-export const makeContextAuthorizationLayer = (conversationId: string) =>
+export const makeContextAuthorizationLayer = (threadId: string) =>
   Layer.effect(
     RunToolAuthorization,
     Effect.sync(() => {
-      const probe = contextAuthorizationProbes.get(conversationId) ?? { acquisitions: 0, calls: 0 };
+      const probe = contextAuthorizationProbes.get(threadId) ?? { acquisitions: 0, calls: 0 };
       probe.acquisitions += 1;
-      contextAuthorizationProbes.set(conversationId, probe);
+      contextAuthorizationProbes.set(threadId, probe);
       return RunToolAuthorization.of({
         authorize: () =>
           Effect.sync(() => {
@@ -682,7 +677,7 @@ const itineraryToolCallParts = (ref: string): ReadonlyArray<Response.StreamPartE
   { type: "finish", reason: "tool-calls", usage },
 ];
 
-/** Extract the Conversation-unique `ref` the instructions embed as `[ref:...]`. */
+/** Extract the Thread-unique `ref` the instructions embed as `[ref:...]`. */
 const refFromPrompt = (promptJson: string): string => {
   const match = /\[ref:([^\]]+)\]/.exec(promptJson);
   return match?.[1] ?? "unknown-ref";
@@ -938,7 +933,7 @@ export const fixtureReconcilerLayer: Layer.Layer<ToolReconciler> = Layer.succeed
 
 /**
  * Every fixture Binding, captured with its tool layers: the
- * Conversation Object resolves each claimed head's stored `(agentId, digests)` to exactly
+ * Thread Object resolves each claimed head's stored `(agentId, digests)` to exactly
  * one of these before any code runs (SUB-023).
  */
 export const makeTestBindings: Effect.Effect<ReadonlyArray<ResolvedBinding>> = Effect.gen(

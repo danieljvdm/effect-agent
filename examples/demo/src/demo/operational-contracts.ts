@@ -1,5 +1,5 @@
 import { ApprovalRequest, UsageBudgetLimits, UsageTotals } from "@effect-agent/capabilities";
-import { ConversationId, RunEvent, RunId, ToolCallId } from "@effect-agent/core";
+import { ThreadId, RunEvent, RunId, ToolCallId } from "@effect-agent/core";
 import { SandboxEvent } from "@effect-agent/sandbox";
 import { Schema } from "effect";
 
@@ -110,7 +110,7 @@ const DemoEventBase = {
 export class DemoRunOpened extends Schema.TaggedClass<DemoRunOpened>()("DemoRunOpened", {
   ...DemoEventBase,
   runId: RunId,
-  conversationId: ConversationId,
+  threadId: ThreadId,
   scenario: DemoScenario,
   executionClass: Schema.Literal("ephemeral"),
   schedulerConcurrency: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -141,7 +141,7 @@ export class DemoBudgetChanged extends Schema.TaggedClass<DemoBudgetChanged>()(
   "DemoBudgetChanged",
   {
     ...DemoEventBase,
-    scopeLevel: Schema.Literals(["global", "tenant", "agent", "conversation", "run"]),
+    scopeLevel: Schema.Literals(["global", "tenant", "agent", "thread", "run"]),
     scopeId: Schema.NonEmptyString,
     limits: UsageBudgetLimits,
     totals: UsageTotals,
@@ -152,7 +152,7 @@ export class DemoBudgetRejected extends Schema.TaggedClass<DemoBudgetRejected>()
   "DemoBudgetRejected",
   {
     ...DemoEventBase,
-    scopeLevel: Schema.Literals(["global", "tenant", "agent", "conversation", "run"]),
+    scopeLevel: Schema.Literals(["global", "tenant", "agent", "thread", "run"]),
     scopeId: Schema.NonEmptyString,
     limit: Schema.Literals(["input-tokens", "output-tokens", "tool-calls", "cost", "duration"]),
     limitValue: Schema.Natural,

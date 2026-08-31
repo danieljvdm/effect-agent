@@ -29,7 +29,7 @@ import {
   WaitingChild,
   WaitingForChildSuspension,
   submissionInputRecordId,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Cause, Effect, Exit, Option, Ref, Schema, type Crypto } from "effect";
@@ -44,13 +44,13 @@ import {
 } from "../src/index.ts";
 import {
   admission,
-  conversation,
+  thread,
   OTHER_PRODUCER,
   sequence,
   settlementReservation,
   TEST_PRODUCER,
   toolCall,
-  withConversationStorage,
+  withThreadStorage,
 } from "./harness.ts";
 
 /**
@@ -111,7 +111,7 @@ const makeFailpointHarness = (storage: DurableObjectStorage) =>
 
 describe("DoSubmissionLedger failpoints", () => {
   it("leaves a recovery-classifiable state at every ledger failpoint", () =>
-    withConversationStorage("wp1-failpoints-base", (storage) =>
+    withThreadStorage("wp1-failpoints-base", (storage) =>
       Effect.gen(function* () {
         const { select, failingLedger, withSql } = yield* makeFailpointHarness(storage);
         const submissionStates = withSql(
@@ -120,7 +120,7 @@ describe("DoSubmissionLedger failpoints", () => {
             return yield* sql<Record<string, unknown>>`
               SELECT submission_id, state, receipt_id, input_applied_record_id
               FROM effect_agent_submissions
-              ORDER BY conversation_id, queue_sequence
+              ORDER BY thread_id, queue_sequence
             `;
           }),
         );
@@ -161,17 +161,17 @@ describe("DoSubmissionLedger failpoints", () => {
             `;
           }),
         );
-        const conversationRows = withSql(
+        const threadRows = withSql(
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
             return yield* sql<Record<string, unknown>>`
-              SELECT conversation_id, producer_epoch
-              FROM effect_agent_conversations
+              SELECT thread_id, producer_epoch
+              FROM effect_agent_threads
             `;
           }),
         );
 
-        const lane = "conversation-failpoints";
+        const lane = "thread-failpoints";
         const admitOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -210,26 +210,26 @@ describe("DoSubmissionLedger failpoints", () => {
         yield* select(undefined);
         yield* markReadyOnce;
 
-        // claim: before → no ownership, no conversation row, no epoch consumed; after → the
+        // claim: before → no ownership, no thread row, no epoch consumed; after → the
         // claim is durable (ownership + audit + epoch bump) even though the caller never saw it.
         const claimOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
             return yield* ledger.claim(
-              ClaimRequest.make({ conversationId: conversation(lane), producerId: TEST_PRODUCER }),
+              ClaimRequest.make({ threadId: thread(lane), producerId: TEST_PRODUCER }),
             );
           }),
         );
         yield* select("ledger:claim:before");
         expectInjectedFailure(yield* claimOnce.pipe(Effect.exit), "ledger:claim:before");
         expect(yield* ownershipRows).toEqual([]);
-        expect(yield* conversationRows).toEqual([]);
+        expect(yield* threadRows).toEqual([]);
         yield* select("ledger:claim:after");
         expectInjectedFailure(yield* claimOnce.pipe(Effect.exit), "ledger:claim:after");
         const orphanedOwnership = yield* ownershipRows;
         expect(orphanedOwnership).toHaveLength(1);
         expect(orphanedOwnership[0]?.producer_epoch).toBe(1);
-        expect(yield* conversationRows).toEqual([{ conversation_id: lane, producer_epoch: 1 }]);
+        expect(yield* threadRows).toEqual([{ thread_id: lane, producer_epoch: 1 }]);
         expect((yield* submissionStates)[0]?.state).toBe("running");
         expect(yield* attemptRows).toHaveLength(1);
         // The orphaned lease blocks until expiry; a later Attempt (in DC: the next
@@ -366,7 +366,7 @@ describe("DoSubmissionLedger failpoints", () => {
         expect(settlement.outcome).toBe("completed");
 
         // requestAbort: before → no intent; after → intent durable, retry returns it unchanged.
-        const abortLane = "conversation-failpoints-abort";
+        const abortLane = "thread-failpoints-abort";
         yield* select(undefined);
         const abortAdmitted = yield* failingLedger(
           Effect.gen(function* () {
@@ -408,7 +408,7 @@ describe("DoSubmissionLedger failpoints", () => {
             const ledger = yield* SubmissionLedger;
             return yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation(abortLane),
+                threadId: thread(abortLane),
                 producerId: OTHER_PRODUCER,
               }),
             );
@@ -447,7 +447,7 @@ describe("DoSubmissionLedger failpoints", () => {
     ));
 
   it("leaves a recovery-classifiable state at every Phase 5 ledger failpoint", () =>
-    withConversationStorage("wp1-failpoints-p5", (storage) =>
+    withThreadStorage("wp1-failpoints-p5", (storage) =>
       Effect.gen(function* () {
         const { select, failingLedger, withSql } = yield* makeFailpointHarness(storage);
         const submissionMarkers = withSql(
@@ -463,7 +463,7 @@ describe("DoSubmissionLedger failpoints", () => {
                 unknown_reason,
                 unknown_tool_call_ids_json
               FROM effect_agent_submissions
-              ORDER BY conversation_id, queue_sequence
+              ORDER BY thread_id, queue_sequence
             `;
           }),
         );
@@ -499,7 +499,7 @@ describe("DoSubmissionLedger failpoints", () => {
         const markerFor = (rows: ReadonlyArray<Record<string, unknown>>, submissionId: string) =>
           rows.find((row) => row.submission_id === submissionId);
 
-        const lane = "conversation-p5-failpoints";
+        const lane = "thread-p5-failpoints";
         const { host, hostClaim, queued, queuedSecond } = yield* failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -518,7 +518,7 @@ describe("DoSubmissionLedger failpoints", () => {
               MarkReadyRequest.make({ submissionId: queuedSecond.submissionId }),
             );
             const claim = yield* ledger.claim(
-              ClaimRequest.make({ conversationId: conversation(lane), producerId: TEST_PRODUCER }),
+              ClaimRequest.make({ threadId: thread(lane), producerId: TEST_PRODUCER }),
             );
             if (Option.isNone(claim)) return yield* Effect.die("missing host claim");
             return { host, hostClaim: claim.value, queued, queuedSecond };
@@ -533,7 +533,7 @@ describe("DoSubmissionLedger failpoints", () => {
             const ledger = yield* SubmissionLedger;
             return yield* ledger.claimJoining(
               ClaimJoiningRequest.make({
-                conversationId: conversation(lane),
+                threadId: thread(lane),
                 hostSubmissionId: host.submissionId,
                 ownershipToken: hostClaim.ownershipToken,
                 maxCount: 1,
@@ -789,7 +789,7 @@ describe("DoSubmissionLedger failpoints", () => {
     ));
 
   it("leaves a recovery-classifiable state at every S2 ledger failpoint", () =>
-    withConversationStorage("wp1-failpoints-s2", (storage) =>
+    withThreadStorage("wp1-failpoints-s2", (storage) =>
       Effect.gen(function* () {
         const { select, failingLedger, withSql } = yield* makeFailpointHarness(storage);
         const reservationRows = withSql(
@@ -828,8 +828,8 @@ describe("DoSubmissionLedger failpoints", () => {
             }),
           );
 
-        const parentLane = "conversation-s2-failpoints";
-        const childLane = "conversation-s2-failpoints-child";
+        const parentLane = "thread-s2-failpoints";
+        const childLane = "thread-s2-failpoints-child";
         const reservationId = S2_FAILPOINT_RESERVATION;
         const delegationCall = toolCall("call-s2-fp");
         const { child, parent, parentClaim } = yield* failingLedger(
@@ -845,7 +845,7 @@ describe("DoSubmissionLedger failpoints", () => {
             yield* ledger.markReady(MarkReadyRequest.make({ submissionId: child.submissionId }));
             const claim = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation(parentLane),
+                threadId: thread(parentLane),
                 producerId: TEST_PRODUCER,
               }),
             );
@@ -994,7 +994,7 @@ describe("DoSubmissionLedger failpoints", () => {
             expect(suspended).toBe("suspended");
             const childClaim = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation(childLane),
+                threadId: thread(childLane),
                 producerId: TEST_PRODUCER,
               }),
             );

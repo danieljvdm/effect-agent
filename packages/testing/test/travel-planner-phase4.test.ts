@@ -1,28 +1,6 @@
-import { ConversationId, type SubmissionId } from "@effect-agent/core";
+import { ThreadId, type SubmissionId } from "@effect-agent/core";
 import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
-import {
-  AbortCommand,
-  ClaimRequest,
-  ConversationRead,
-  ConversationStore,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
-  DurableRuntimeFailpointError,
-  IdempotencyKey,
-  ProducerId,
-  RecoverySnapshotRequest,
-  ReleaseOwnershipRequest,
-  SubmissionLedger,
-  SubmissionLookupById,
-  ToolReconciler,
-  WakeScheduler,
-  type CanonicalRecordEnvelope,
-} from "@effect-agent/session";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
+import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
 import {
   expectedTravelPlan,
   makePhase4TravelPlannerAgent,
@@ -36,17 +14,36 @@ import {
   travelPlanFromDurableSettlement,
   TravelPlannerDurabilityProfile,
 } from "@effect-agent/testing/fixtures/travel-planner";
+import {
+  AbortCommand,
+  ClaimRequest,
+  ThreadRead,
+  ThreadStore,
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  DurableRuntimeFailpoint,
+  DurableRuntimeFailpointError,
+  IdempotencyKey,
+  ProducerId,
+  RecoverySnapshotRequest,
+  ReleaseOwnershipRequest,
+  SubmissionLedger,
+  SubmissionLookupById,
+  ToolReconciler,
+  WakeScheduler,
+  type CanonicalRecordEnvelope,
+} from "@effect-agent/thread";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeProducerId = Schema.decodeSync(ProducerId);
 
-const submitOptions = (conversationId: ConversationId, idempotencyKey: string) =>
-  phase4TravelPlannerSubmitOptions(conversationId, decodeIdempotencyKey(idempotencyKey));
+const submitOptions = (threadId: ThreadId, idempotencyKey: string) =>
+  phase4TravelPlannerSubmitOptions(threadId, decodeIdempotencyKey(idempotencyKey));
 
 const runtimeOptions = (
   filename: string,
@@ -77,7 +74,7 @@ const memoryRuntimeLayer = DurableAgentRuntime.layer.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
       MemorySubmissionLedgerLive,
-      MemoryConversationStoreLive,
+      MemoryThreadStoreLive,
       WakeScheduler.layerNoop,
       DurableRuntimeFailpoint.layer,
       ToolReconciler.uncertain,
@@ -89,12 +86,10 @@ const memoryRuntimeLayer = DurableAgentRuntime.layer.pipe(
   ),
 );
 
-const readLog = (conversationId: ConversationId) =>
+const readLog = (threadId: ThreadId) =>
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
-    return yield* Stream.runCollect(
-      store.read(ConversationRead.make({ conversationId, limit: 1_024 })),
-    );
+    const store = yield* ThreadStore;
+    return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1_024 })));
   });
 
 const logTags = (records: ReadonlyArray<CanonicalRecordEnvelope>): ReadonlyArray<string> =>
@@ -157,22 +152,22 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
-        const conversationId = decodeConversationId("travel-planner-p4-receipt");
+        const threadId = decodeThreadId("travel-planner-p4-receipt");
         const agent = makePhase4TravelPlannerAgent();
 
         const receipt = yield* runtime.submit(
           agent,
           phase1Trip,
-          submitOptions(conversationId, "p4-receipt-1"),
+          submitOptions(threadId, "p4-receipt-1"),
         );
-        expect(receipt.conversationId).toBe(conversationId);
+        expect(receipt.threadId).toBe(threadId);
         expect(receipt.queueSequence).toBe(1);
         expect(yield* lookupState(receipt.submissionId)).toBe("ready");
 
         const replayed = yield* runtime.submit(
           agent,
           phase1Trip,
-          submitOptions(conversationId, "p4-receipt-1"),
+          submitOptions(threadId, "p4-receipt-1"),
         );
         expect(replayed).toEqual(receipt);
       }).pipe(Effect.provide(memoryRuntimeLayer)),
@@ -184,15 +179,15 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
-          const conversationId = decodeConversationId("travel-planner-p4-settlement");
+          const threadId = decodeThreadId("travel-planner-p4-settlement");
           const agent = makePhase4TravelPlannerAgent();
 
           const receipt = yield* runtime.submit(
             agent,
             phase1Trip,
-            submitOptions(conversationId, "p4-settlement-1"),
+            submitOptions(threadId, "p4-settlement-1"),
           );
-          const settlements = yield* runtime.processConversation(agent, conversationId);
+          const settlements = yield* runtime.processThread(agent, threadId);
           expect(settlements).toHaveLength(1);
           expect(settlements[0]?.submissionId).toBe(receipt.submissionId);
 
@@ -201,9 +196,9 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
           expect(settlement.receiptId).toBe(receipt.receiptId);
           expect(yield* lookupState(receipt.submissionId)).toBe("settled");
 
-          const records = yield* readLog(conversationId);
+          const records = yield* readLog(threadId);
           expect(logTags(records)).toEqual([
-            "ConversationCreated",
+            "ThreadCreated",
             "UserInputRecorded",
             "RunStarted",
             ...RUN_TAGS,
@@ -222,18 +217,18 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
           const ledger = yield* SubmissionLedger;
-          const conversationId = decodeConversationId("travel-planner-p4-fifo");
+          const threadId = decodeThreadId("travel-planner-p4-fifo");
           const agent = makePhase4TravelPlannerAgent();
 
           const first = yield* runtime.submit(
             agent,
             phase1Trip,
-            submitOptions(conversationId, "p4-fifo-1"),
+            submitOptions(threadId, "p4-fifo-1"),
           );
           const second = yield* runtime.submit(
             agent,
             phase1Trip,
-            submitOptions(conversationId, "p4-fifo-2"),
+            submitOptions(threadId, "p4-fifo-2"),
           );
           expect(first.queueSequence).toBe(1);
           expect(second.queueSequence).toBe(2);
@@ -242,7 +237,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
           // owned and unsettled, a competing claim gets nothing — never the second Submission.
           const head = yield* ledger.claim(
             ClaimRequest.make({
-              conversationId,
+              threadId,
               producerId: decodeProducerId("travel-planner-p4-probe"),
             }),
           );
@@ -251,7 +246,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
           expect(head.value.submissionId).toBe(first.submissionId);
           const blocked = yield* ledger.claim(
             ClaimRequest.make({
-              conversationId,
+              threadId,
               producerId: decodeProducerId("travel-planner-p4-probe-2"),
             }),
           );
@@ -263,7 +258,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
             }),
           );
 
-          const settlements = yield* runtime.processConversation(agent, conversationId);
+          const settlements = yield* runtime.processThread(agent, threadId);
           // P5 (plan §2.5): the active host Run claims the contiguous ready prefix, so the
           // second Submission JOINS the first Run — one head settlement, and the joined
           // Submission settles with the host (DUR-002) in admitted FIFO order (DUR-004).
@@ -277,9 +272,9 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
           // Canonical order keeps the admitted FIFO order: both inputs are canonical before
           // the host Run's Turns (the joined input joins BEFORE the next model request), and
           // the settlement records commit host-first.
-          const records = yield* readLog(conversationId);
+          const records = yield* readLog(threadId);
           expect(logTags(records)).toEqual([
-            "ConversationCreated",
+            "ThreadCreated",
             "UserInputRecorded",
             "RunStarted",
             "UserInputRecorded",
@@ -297,7 +292,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
     () =>
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
-          const conversationId = decodeConversationId("travel-planner-p4-restart");
+          const threadId = decodeThreadId("travel-planner-p4-restart");
           const restartFile = `${directory}/restart.sqlite`;
           const agent = makePhase4TravelPlannerAgent();
 
@@ -309,9 +304,9 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
             const receipt = yield* runtime.submit(
               agent,
               phase1Trip,
-              submitOptions(conversationId, "p4-restart-1"),
+              submitOptions(threadId, "p4-restart-1"),
             );
-            const exit = yield* Effect.exit(runtime.processConversation(agent, conversationId));
+            const exit = yield* Effect.exit(runtime.processThread(agent, threadId));
             const failure = failureOf(exit);
             expect(failure).toHaveProperty("_tag", "DurableRuntimeFailpointError");
             expect(failure).toHaveProperty("location", "terminalize:after-reserve");
@@ -321,7 +316,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
               RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
             );
             expect(snapshot.reservation?.finalized).toBe(false);
-            expect(logTags(yield* readLog(conversationId))).not.toContain("SubmissionSettled");
+            expect(logTags(yield* readLog(threadId))).not.toContain("SubmissionSettled");
             return { receipt, reservation: snapshot.reservation };
           }).pipe(
             Effect.provide(
@@ -350,7 +345,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
             const settlement = yield* runtime.awaitSettlement(crashed.receipt);
             expect(settlement.outcome).toBe("completed");
             expect(yield* lookupState(crashed.receipt.submissionId)).toBe("settled");
-            return yield* readLog(conversationId);
+            return yield* readLog(threadId);
           }).pipe(Effect.provide(NodeDurableRuntime.layer(runtimeOptions(restartFile))));
 
           const settledEnvelope = recovered.find(
@@ -365,17 +360,17 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
 
           // Control: the same Submission runs uninterrupted on a separate database. Modulo the
           // ledger-minted Submission identity and the trailing recovery audit record, the
-          // recovered Conversation projects to the same canonical evidence.
+          // recovered Thread projects to the same canonical evidence.
           const control = yield* Effect.gen(function* () {
             const runtime = yield* DurableAgentRuntime;
             const receipt = yield* runtime.submit(
               agent,
               phase1Trip,
-              submitOptions(conversationId, "p4-restart-1"),
+              submitOptions(threadId, "p4-restart-1"),
             );
-            const settlements = yield* runtime.processConversation(agent, conversationId);
+            const settlements = yield* runtime.processThread(agent, threadId);
             expect(settlements).toHaveLength(1);
-            return { receipt, records: yield* readLog(conversationId) };
+            return { receipt, records: yield* readLog(threadId) };
           }).pipe(Effect.provide(dnLayer(runtimeOptions(`${directory}/control.sqlite`))));
 
           const normalizedRecovered = yield* normalizeDurableTravelPlannerEvidence(
@@ -400,14 +395,14 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
-          const conversationId = decodeConversationId("travel-planner-p4-abort");
+          const threadId = decodeThreadId("travel-planner-p4-abort");
           // An empty script: any model invocation would fail the Run instead of settling aborted.
           const agent = makePhase4TravelPlannerAgent([]);
 
           const receipt = yield* runtime.submit(
             agent,
             phase1Trip,
-            submitOptions(conversationId, "p4-abort-1"),
+            submitOptions(threadId, "p4-abort-1"),
           );
           expect(yield* lookupState(receipt.submissionId)).toBe("ready");
 
@@ -432,9 +427,9 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
 
           // No Attempt ran: the abort command and settlement are canonical, but no input was
           // applied and no model Turn was committed.
-          const records = yield* readLog(conversationId);
+          const records = yield* readLog(threadId);
           expect(logTags(records)).toEqual([
-            "ConversationCreated",
+            "ThreadCreated",
             "AbortRequested",
             "SubmissionSettled",
             "RepairAnnotated",

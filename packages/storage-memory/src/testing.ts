@@ -1,17 +1,17 @@
 export {
-  conversationStoreConformanceCases,
-  conversationCheckpointConformanceCases,
-  ConversationStoreConformanceViolation,
+  threadStoreConformanceCases,
+  threadCheckpointConformanceCases,
+  ThreadStoreConformanceViolation,
   submissionLedgerConformanceCases,
   SubmissionLedgerConformanceViolation,
-  type ConversationStoreConformanceCase,
-  type ConversationStoreConformanceFailure,
+  type ThreadStoreConformanceCase,
+  type ThreadStoreConformanceFailure,
   type SubmissionLedgerConformanceCase,
   type SubmissionLedgerConformanceFailure,
-} from "@effect-agent/session/testing";
+} from "@effect-agent/thread/testing";
 export {
   scheduleStoreConformanceCases,
   ScheduleStoreConformanceViolation,
   type ScheduleStoreConformanceCase,
   type ScheduleStoreConformanceFailure,
-} from "@effect-agent/session/testing";
+} from "@effect-agent/thread/testing";

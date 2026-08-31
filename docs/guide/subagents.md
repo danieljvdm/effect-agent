@@ -18,7 +18,7 @@ Coordinator
   return itinerary
 ```
 
-The parent sees the shortlist. The child's tool history and research notes stay in its conversation.
+The parent sees the shortlist. The child's tool history and research notes stay in its thread.
 
 ## Define the child
 
@@ -86,7 +86,7 @@ and receives the child's tool handlers through `Layer.provide`.
 The model Layer on `AgentRuntime.run` supplies the parent. The model in `ChildBinding` supplies the
 child. They use the same model here; change either binding independently.
 
-`SubagentReservationsMemoryLive` tracks the parent's child reservations. `ConversationHistory.layerTransient`
+`SubagentReservationsMemoryLive` tracks the parent's child reservations. `ThreadHistory.layerTransient`
 keeps this example ephemeral. The provider client and HTTP Layer serve both model bindings.
 
 ## Bound child work
@@ -118,7 +118,7 @@ To let the parent request a smaller allowance, change `delegation.ts`:
 
 A request for two calls gets two. A request for twenty gets four, the reservation ceiling in this
 example. If the child returns `partial: true`, the parent can delegate again with a larger request
-and forward its findings through the input. That starts a new child conversation; it does not top
+and forward its findings through the input. That starts a new child thread; it does not top
 up the first child. See [delegation budgets](../concepts/budgets#delegation-budgets).
 
 ## Let the parent handle a failed child {#handle-failures}
@@ -164,7 +164,7 @@ toolkit exceeds it. Define a smaller child toolkit to reduce authority.
 parent invokes child → reserve allowance → run child → project result → settle parent tool
 ```
 
-Ephemeral children share the parent's Scope. Durable children have separate conversations and
+Ephemeral children share the parent's Scope. Durable children have separate threads and
 attempts; a waiting parent releases its worker permit.
 
 For durable execution, the handler Layer also needs the registered child's exact digests:

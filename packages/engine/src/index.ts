@@ -17,7 +17,7 @@ import {
   ContextBudgetError,
   ContextOverflowError,
   type CompletionToolDeclaration,
-  ConversationId,
+  ThreadId,
   type Definition,
   DelegationDepth,
   DelegationTool,
@@ -90,9 +90,9 @@ import {
 } from "effect/unstable/ai";
 
 import { boundedValueFootprint, utf8ByteLength } from "./bounded-value-internal.ts";
-import { ConversationHistory, ConversationHistoryError } from "./conversation-history.ts";
-export { ConversationHistory, ConversationHistoryError } from "./conversation-history.ts";
-export type { ConversationHistoryRun } from "./conversation-history.ts";
+import { ThreadHistory, ThreadHistoryError } from "./thread-history.ts";
+export { ThreadHistory, ThreadHistoryError } from "./thread-history.ts";
+export type { ThreadHistoryRun } from "./thread-history.ts";
 import { insertOutputContract, outputSchemaContract } from "./output-contract-internal.ts";
 import {
   boundedCanonicalJsonSnapshot,
@@ -303,7 +303,7 @@ import {
 export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
   Schema.Struct({
     output,
-    conversationId: ConversationId,
+    threadId: ThreadId,
     runId: RunId,
     turns: Schema.Int.check(Schema.isGreaterThan(0)),
     finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
@@ -345,7 +345,7 @@ export type AgentRuntimeFailure<
   | AgentToolAuthorizationDenied
   | AgentApprovalPending
   | AgentChildPending
-  | ConversationHistoryError
+  | ThreadHistoryError
   | HookError
   | InstructionError;
 
@@ -375,7 +375,7 @@ export type AgentCompletionProjectionRequirements<
   | Tool.SuccessSchema<Agent.ToolUnion<AgentValue>>["DecodingServices"];
 
 /**
- * Inferred agent services plus the runtime's identity and Conversation history authorities.
+ * Inferred agent services plus the runtime's identity and Thread history authorities.
  * Engine-provided Tool handler services are excluded because the interpreter
  * supplies them itself, bound to the current Run's identity. Output decoding
  * and completion-projection Schema services stay listed unexcluded:
@@ -391,7 +391,7 @@ export type AgentRuntimeRequirements<
   | AgentCompletionProjectionRequirements<AgentValue>
   | Agent.OutputSchema<AgentValue>["DecodingServices"]
   | IdGenerator
-  | ConversationHistory
+  | ThreadHistory
   | HookRequirements
   | InstructionRequirements;
 
@@ -406,13 +406,13 @@ type InterpreterRequirements<
 > =
   | Agent.Requirements<AgentValue>
   | IdGenerator
-  | ConversationHistory
+  | ThreadHistory
   | HookRequirements
   | InstructionRequirements;
 
 interface RunContext {
   readonly agentId: Agent.AnyDefinition["id"];
-  readonly conversationId: ConversationId;
+  readonly threadId: ThreadId;
   readonly runId: RunId;
   /** Captured once at the Run boundary, never reconstructed from events or durable data. */
   readonly toolFailureObserver: RunToolFailureObserver | undefined;
@@ -1239,7 +1239,7 @@ const stampSubagentEvent = Effect.fn("AgentRuntime.stampSubagentEvent")(function
     turnId,
     toolCallId: payload.toolCallId,
     delegationId: payload.delegationId,
-    childConversationId: payload.childConversationId,
+    childThreadId: payload.childThreadId,
     childRunId: payload.childRunId,
     targetAgentId: payload.targetAgentId,
     depth: payload.depth,
@@ -1331,7 +1331,7 @@ const approvalDecision = <Tools extends Record<string, Tool.Any>, Error, Require
     const toolCallId = yield* decodeToolCallId(prepared.call.id);
     const decision = yield* options.approval.request({
       request,
-      conversationId: context.conversationId,
+      threadId: context.threadId,
       runId: context.runId,
       turnId,
       toolCallId,
@@ -1442,7 +1442,7 @@ const preflightToolAuthorization = <HookError, HookRequirements>(
   return Stream.unwrap(
     authorization
       .authorize({
-        conversationId: context.conversationId,
+        threadId: context.threadId,
         runId: context.runId,
         turnId,
         turn,
@@ -1510,7 +1510,8 @@ const toolTelemetryAttributes = (descriptor: ToolTelemetryDescriptor) => ({
         toolCallId: descriptor.toolCallId,
       }),
   "gen_ai.agent.name": descriptor.context.agentId,
-  "gen_ai.conversation.id": descriptor.context.conversationId,
+  // OpenTelemetry calls this attribute conversation.id, including for Threads.
+  "gen_ai.conversation.id": descriptor.context.threadId,
   "effect_agent.tool.execution_class": descriptor.executionClass,
   "effect_agent.tool.invocation_kind": descriptor.invocationKind,
   ...(descriptor.parentToolCallId === undefined
@@ -1526,7 +1527,7 @@ const toolTelemetryAttributes = (descriptor: ToolTelemetryDescriptor) => ({
         sequenceIndex: descriptor.sequenceIndex,
       }),
   agentId: descriptor.context.agentId,
-  conversationId: descriptor.context.conversationId,
+  threadId: descriptor.context.threadId,
   runId: descriptor.context.runId,
   turnId: descriptor.turnId,
   toolName: descriptor.toolName,
@@ -1777,7 +1778,7 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
             _tag: "ModelToolFailure",
             kind: "declared-failure",
             agentId: context.agentId,
-            conversationId: context.conversationId,
+            threadId: context.threadId,
             runId: context.runId,
             turnId,
             toolCallId,
@@ -2196,7 +2197,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                 // via the AgentApprovalPending-mirroring typed error below.
                 const child = (signal: ToolCallWaiting) => ({
                   toolCallId: signal.toolCallId,
-                  childConversationId: signal.childConversationId,
+                  childThreadId: signal.childThreadId,
                   childSubmissionId: signal.childSubmissionId,
                   childRunId: signal.childRunId,
                 });
@@ -2780,7 +2781,7 @@ const eventBaseFor = Effect.fnUntraced(function* (context: RunContext, terminal:
   return {
     eventVersion: 1 as const,
     runId: context.runId,
-    conversationId: context.conversationId,
+    threadId: context.threadId,
     agentId: context.agentId,
     sequence,
     timestamp,
@@ -4039,7 +4040,7 @@ const makeTurn = <
         options.context === undefined
           ? { prompt }
           : yield* options.context.prepare({
-              conversationId: context.conversationId,
+              threadId: context.threadId,
               runId: context.runId,
               turnId,
               turn,
@@ -5512,14 +5513,14 @@ function streamWithCompletion<
         | CompletionRequirements
         | ModelRequires
       >,
-      ConversationHistoryError,
-      ConversationHistory | IdGenerator
+      ThreadHistoryError,
+      ThreadHistory | IdGenerator
     > {
-      const history = yield* ConversationHistory;
+      const history = yield* ThreadHistory;
       const ids = yield* IdGenerator;
-      const conversationId = runOptions.conversationId ?? (yield* ids.nextConversationId);
+      const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
       const runId = runOptions.runId ?? (yield* ids.nextRunId);
-      const retained = yield* history.open({ conversationId, runId });
+      const retained = yield* history.open({ threadId, runId });
       if (
         retained !== undefined &&
         (runOptions.history !== undefined ||
@@ -5530,16 +5531,16 @@ function streamWithCompletion<
           runOptions.resume !== undefined ||
           runOptions.resumeUsage !== undefined)
       ) {
-        return yield* ConversationHistoryError.make({
-          conversationId,
+        return yield* ThreadHistoryError.make({
+          threadId,
           reason: "incompatible",
           message:
             "Provided history cannot share ownership with explicit history, input queues, or durable recovery hooks",
         });
       }
-      const options: RunOptions<HookError | ConversationHistoryError, HookRequirements> = {
+      const options: RunOptions<HookError | ThreadHistoryError, HookRequirements> = {
         ...runOptions,
-        conversationId,
+        threadId,
         runId,
         ...(retained === undefined
           ? {}
@@ -5597,7 +5598,7 @@ function streamWithCompletion<
           );
           const context: RunContext = {
             agentId: agent.definition.id,
-            conversationId,
+            threadId,
             runId,
             toolFailureObserver: yield* CurrentToolFailureObserver,
             input: undefined,
@@ -5780,7 +5781,7 @@ function streamWithCompletion<
             makeAgentSpawner(
               {
                 agentId: context.agentId,
-                conversationId: context.conversationId,
+                threadId: context.threadId,
                 runId: context.runId,
               },
               options.parentLink?.depth ?? 0,
@@ -5872,7 +5873,7 @@ function streamWithCompletion<
                   Stream.make(
                     RunFailed.make({
                       eventVersion: terminal.eventVersion,
-                      conversationId: terminal.conversationId,
+                      threadId: terminal.threadId,
                       runId: terminal.runId,
                       agentId: terminal.agentId,
                       sequence: terminal.sequence,
@@ -5951,7 +5952,7 @@ const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
                   : yield* decodeRunDisposition(agent, completed.runDisposition);
           result = {
             output,
-            conversationId: completed.conversationId,
+            threadId: completed.threadId,
             runId: completed.runId,
             turns: completed.turns,
             finishReason: completed.finishReason,
@@ -6155,7 +6156,7 @@ const start = <A extends ExecutableAgent, H = never, R = never>(
  */
 export interface AgentSpawnerParent {
   readonly agentId: AgentId;
-  readonly conversationId: ConversationId;
+  readonly threadId: ThreadId;
   readonly runId: RunId;
 }
 
@@ -6412,7 +6413,7 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
           return deliverToolFailure(preflightObserver.observer, {
             _tag: "ProgrammaticPreflightFailure",
             agentId: binding.context.agentId,
-            conversationId: binding.context.conversationId,
+            threadId: binding.context.threadId,
             runId: binding.context.runId,
             turnId: binding.turnId,
             parentToolCallId: binding.outerToolCallId,
@@ -6552,7 +6553,7 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
               failureObservation = {
                 _tag: "ProgrammaticToolFailure",
                 agentId: binding.context.agentId,
-                conversationId: binding.context.conversationId,
+                threadId: binding.context.threadId,
                 runId: binding.context.runId,
                 turnId: binding.turnId,
                 toolCallId: handleId,
@@ -6648,7 +6649,7 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                     failureObservation = {
                       _tag: "ProgrammaticToolFailure",
                       agentId: binding.context.agentId,
-                      conversationId: binding.context.conversationId,
+                      threadId: binding.context.threadId,
                       runId: binding.context.runId,
                       turnId: binding.turnId,
                       toolCallId: handleId,
@@ -6682,7 +6683,7 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                     failureObservation = {
                       _tag: "ProgrammaticToolFailure",
                       agentId: binding.context.agentId,
-                      conversationId: binding.context.conversationId,
+                      threadId: binding.context.threadId,
                       runId: binding.context.runId,
                       turnId: binding.turnId,
                       toolCallId: handleId,
@@ -6941,7 +6942,7 @@ const makeDurableStepService = <HookError, HookRequirements>(
  */
 export class ToolCallWaiting extends Schema.TaggedError<ToolCallWaiting>()("ToolCallWaiting", {
   toolCallId: ToolCallId,
-  childConversationId: ConversationId,
+  childThreadId: ThreadId,
   childSubmissionId: SubmissionId,
   childRunId: RunId,
   receiptId: ReceiptId,
@@ -6962,7 +6963,7 @@ export class AgentChildPending extends Schema.TaggedError<AgentChildPending>()(
     children: Schema.NonEmptyArray(
       Schema.Struct({
         toolCallId: ToolCallId,
-        childConversationId: ConversationId,
+        childThreadId: ThreadId,
         childSubmissionId: SubmissionId,
         childRunId: RunId,
       }),
@@ -7114,7 +7115,7 @@ const makeSubagentDurabilityService = <HookError, HookRequirements>(
     Effect.fail(
       ToolCallWaiting.make({
         toolCallId,
-        childConversationId: child.childConversationId,
+        childThreadId: child.childThreadId,
         childSubmissionId: child.childSubmissionId,
         childRunId: child.childRunId,
         receiptId: child.receiptId,
@@ -7145,12 +7146,12 @@ export interface SpawnDelegation {
 }
 
 /**
- * Child Run options accepted by `AgentSpawner.spawn`. Child Conversation/Run
+ * Child Run options accepted by `AgentSpawner.spawn`. Child Thread/Run
  * identity and the Parent Link are spawner-owned and cannot be overridden.
  */
 export interface SpawnRunOptions<HookError = never, HookRequirements = never> extends Omit<
   RunOptions<HookError, HookRequirements>,
-  "conversationId" | "runId" | "parentLink"
+  "threadId" | "runId" | "parentLink"
 > {}
 
 /**
@@ -7159,7 +7160,7 @@ export interface SpawnRunOptions<HookError = never, HookRequirements = never> ex
  * The child fiber belongs to the Scope the caller provided to `spawn`.
  */
 export interface SpawnedChildRun<Output, Error> extends DetachedRun<Output, Error> {
-  readonly conversationId: ConversationId;
+  readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly parentLink: SubagentParentLink;
 }
@@ -7168,9 +7169,9 @@ export interface SpawnedChildRun<Output, Error> extends DetachedRun<Output, Erro
  * Run one child Agent Binding through the same interpreter as a top-level
  * Run.
  *
- * The spawner allocates a fresh child `ConversationId` and `RunId` through
- * `IdGenerator` (guaranteeing a fresh child Conversation per invocation, with
- * no Conversation reuse), constructs the immutable Parent Link at
+ * The spawner allocates a fresh child `ThreadId` and `RunId` through
+ * `IdGenerator` (guaranteeing a fresh child Thread per invocation, with
+ * no Thread reuse), constructs the immutable Parent Link at
  * `depth + 1`, and starts the child eagerly with `AgentRuntime.start` inside
  * the caller-provided Scope, so parent interruption always reaches the child
  * and its finalizers. Preflight policy (including S1's normative
@@ -7181,7 +7182,7 @@ export interface SpawnedChildRun<Output, Error> extends DetachedRun<Output, Erro
 const spawnWithParent = (
   parent: AgentSpawnerParent,
   depth: number,
-  history: ConversationHistory["Service"],
+  history: ThreadHistory["Service"],
 ) =>
   Effect.fn("AgentSpawner.spawn")(function* <
     InputSchema extends Schema.Top,
@@ -7226,31 +7227,31 @@ const spawnWithParent = (
     | Scope.Scope
     | Exclude<
         AgentRuntimeRequirements<typeof binding, HookRequirements, InstructionRequirements>,
-        ConversationHistory
+        ThreadHistory
       >
   > {
     const ids = yield* IdGenerator;
-    const conversationId = yield* ids.nextConversationId;
+    const threadId = yield* ids.nextThreadId;
     const runId = yield* ids.nextRunId;
     // `depth + 1` is always an integer >= 1, so a decode failure is a defect.
     const childDepth = yield* Schema.decodeEffect(DelegationDepth)(depth + 1).pipe(Effect.orDie);
     const parentLink = SubagentParentLink.make({
       delegationId: delegation.delegationId,
       parentAgentId: parent.agentId,
-      parentConversationId: parent.conversationId,
+      parentThreadId: parent.threadId,
       parentRunId: parent.runId,
       parentToolCallId: delegation.parentToolCallId,
       depth: childDepth,
     });
     const child = yield* startUnknown(binding, input, {
       ...options,
-      conversationId,
+      threadId,
       runId,
       parentLink,
-    }).pipe(Effect.provideService(ConversationHistory, history));
+    }).pipe(Effect.provideService(ThreadHistory, history));
     return {
       ...child,
-      conversationId,
+      threadId,
       runId,
       parentLink,
     };
@@ -7340,7 +7341,7 @@ export interface AgentSpawnerService {
           HookRequirements,
           InstructionRequirements
         >,
-        ConversationHistory
+        ThreadHistory
       >
   >;
 }
@@ -7361,7 +7362,7 @@ export class AgentSpawner extends Context.Service<AgentSpawner, AgentSpawnerServ
 const makeAgentSpawner = (
   parent: AgentSpawnerParent,
   depth: number,
-  history: ConversationHistory["Service"],
+  history: ThreadHistory["Service"],
 ): AgentSpawnerService => ({
   depth,
   parent,
@@ -7413,7 +7414,7 @@ export const withTerminalDefectEvent = <E, R>(
             return RunFailed.make({
               eventVersion: 1,
               runId: base.runId,
-              conversationId: base.conversationId,
+              threadId: base.threadId,
               agentId: base.agentId,
               sequence: base.sequence + 1,
               timestamp,
@@ -7435,7 +7436,7 @@ export const withTerminalDefectEvent = <E, R>(
  * provide their model Layer locally; all remaining requirements stay visible
  * in the returned Effect or Stream. The interpreter owns no shared service or
  * Layer state. The two output helpers are the canonical revalidation seams for
- * durable session adapters; they apply the same Schemas and projector as live
+ * durable thread adapters; they apply the same Schemas and projector as live
  * execution without invoking a Model or Tool Handler. The disposition helper
  * likewise reapplies the Definition selector and Schema.
  */

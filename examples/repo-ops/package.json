@@ -14,8 +14,8 @@
     "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/sandbox": "workspace:*",
     "@effect-agent/sandbox-local": "workspace:*",
-    "@effect-agent/session": "workspace:*",
     "@effect-agent/testing": "workspace:*",
+    "@effect-agent/thread": "workspace:*",
     "@effect/ai-openai": "catalog:",
     "effect": "catalog:"
   },

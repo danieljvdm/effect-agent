@@ -11,10 +11,10 @@ import {
   Agent,
   AgentApprovalDenied,
   AgentApprovalPending,
-  ConversationId,
+  ThreadId,
   RunId,
 } from "@effect-agent/core";
-import { ConversationHistory, AgentRuntime } from "@effect-agent/engine";
+import { ThreadHistory, AgentRuntime } from "@effect-agent/engine";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
 import {
   ActivityCatalogLayer,
@@ -68,7 +68,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
       Effect.gen(function* () {
         const controlled = yield* ReverseCompletionToolkitLayer;
         const runId = yield* Schema.decodeEffect(RunId)("run-1");
-        const conversationId = yield* Schema.decodeEffect(ConversationId)("conversation-1");
+        const threadId = yield* Schema.decodeEffect(ThreadId)("thread-1");
         const queue = yield* makeRunCommandQueue(
           runId,
           RunCommandQueueConfig.make({ capacity: 4 }),
@@ -84,7 +84,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
           },
         ];
         const layer = Layer.mergeAll(
-          ConversationHistory.layerTransient,
+          ThreadHistory.layerTransient,
           controlled.layer,
           FlightCatalogLayer,
           LodgingCatalogLayer,
@@ -108,7 +108,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
           SteeringCommand.make({
             id: "date-change-1",
             runId,
-            conversationId,
+            threadId,
             author: "traveler",
             content: "Change the departure date to 2026-09-21.",
             createdAt: DateTime.makeUnsafe(0),
@@ -147,7 +147,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const runId = yield* Schema.decodeEffect(RunId)("run-1");
-        const conversationId = yield* Schema.decodeEffect(ConversationId)("conversation-1");
+        const threadId = yield* Schema.decodeEffect(ThreadId)("thread-1");
         const queue = yield* makeRunCommandQueue(
           runId,
           RunCommandQueueConfig.make({ capacity: 2 }),
@@ -156,7 +156,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
           FollowUpCommand.make({
             id: "preference-1",
             runId,
-            conversationId,
+            threadId,
             author: "traveler",
             content: "Prefer a quiet room away from the lift.",
             createdAt: DateTime.makeUnsafe(0),
@@ -267,7 +267,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
         }),
       );
       const runtimeLayer = Layer.mergeAll(
-        ConversationHistory.layerTransient,
+        ThreadHistory.layerTransient,
         TravelPlannerPhase2ToolkitLayer,
         FlightCatalogLayer,
         LodgingCatalogLayer,

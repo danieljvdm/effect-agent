@@ -13,10 +13,10 @@ import {
   ApprovalAuditMemoryLive,
   type BudgetAdapterError,
   BudgetExceeded,
-  type ConversationAdapterError,
+  type ThreadAdapterError,
   connectMcp,
-  EphemeralConversations,
-  EphemeralConversationsLive,
+  EphemeralThreads,
+  EphemeralThreadsLive,
   FollowUpCommand,
   makeRunCommandQueue,
   makeUsageBudget,
@@ -29,20 +29,13 @@ import {
   StructuralRedactorLive,
   toRunApprovalHook,
   toRunBudgetHook,
-  toRunConversationOptions,
+  toRunThreadOptions,
   UsageBudgetLimits,
 } from "@effect-agent/capabilities";
-import {
-  Agent,
-  ConversationId,
-  IdGenerator,
-  RunId,
-  TurnId,
-  type RunEvent,
-} from "@effect-agent/core";
+import { Agent, ThreadId, IdGenerator, RunId, TurnId, type RunEvent } from "@effect-agent/core";
 import {
   AgentRuntime,
-  ConversationHistory,
+  ThreadHistory,
   type RunInputHook,
   type RunOptions,
 } from "@effect-agent/engine";
@@ -398,7 +391,7 @@ interface PendingApproval {
 interface ActiveRun {
   readonly handle: DemoRunHandle;
   readonly runId: RunId;
-  readonly conversationId: ConversationId;
+  readonly threadId: ThreadId;
   readonly commandQueue: import("@effect-agent/capabilities").RunCommandQueue;
   readonly output: Queue.Queue<DemoOperationalEvent, DemoRunFailure | Cause.Done>;
   readonly pendingApprovals: Ref.Ref<ReadonlyMap<string, PendingApproval>>;
@@ -414,7 +407,7 @@ type DemoHookError =
   | ApprovalResolverError
   | BudgetAdapterError
   | BudgetExceeded
-  | ConversationAdapterError
+  | ThreadAdapterError
   | RedactionError;
 
 export class DemoInteractiveRuntime extends Context.Service<
@@ -523,13 +516,13 @@ const operationalPlanAgent = (turns: ReadonlyArray<ScriptedTurnInput>) =>
     Model.make("scripted", "travel-planner-phase-2-demo", ScriptedModel.layer(turns)),
   );
 
-const makeIdLayer = (conversationId: ConversationId, runId: RunId): Layer.Layer<IdGenerator> =>
+const makeIdLayer = (threadId: ThreadId, runId: RunId): Layer.Layer<IdGenerator> =>
   Layer.effect(
     IdGenerator,
     Effect.gen(function* () {
       const turn = yield* Ref.make(0);
       return IdGenerator.of({
-        nextConversationId: Effect.succeed(conversationId),
+        nextThreadId: Effect.succeed(threadId),
         nextRunId: Effect.succeed(runId),
         nextTurnId: Ref.updateAndGet(turn, (value) => value + 1).pipe(
           Effect.map((value) => Schema.decodeSync(TurnId)(`${runId}-turn-${value}`)),
@@ -541,7 +534,7 @@ const makeIdLayer = (conversationId: ConversationId, runId: RunId): Layer.Layer<
 const InteractiveRuntimeLive = Layer.effect(
   DemoInteractiveRuntime,
   Effect.gen(function* () {
-    const conversations = yield* EphemeralConversations;
+    const threads = yield* EphemeralThreads;
     const sandbox = yield* Sandbox;
     const connector = yield* McpConnector;
     const crypto = yield* Crypto.Crypto;
@@ -568,7 +561,7 @@ const InteractiveRuntimeLive = Layer.effect(
               ? SteeringCommand.make({
                   id: commandId,
                   runId: active.runId,
-                  conversationId: active.conversationId,
+                  threadId: active.threadId,
                   author: "traveler",
                   content: request.content,
                   createdAt,
@@ -576,7 +569,7 @@ const InteractiveRuntimeLive = Layer.effect(
               : FollowUpCommand.make({
                   id: commandId,
                   runId: active.runId,
-                  conversationId: active.conversationId,
+                  threadId: active.threadId,
                   author: "traveler",
                   content: request.content,
                   createdAt,
@@ -672,10 +665,10 @@ const InteractiveRuntimeLive = Layer.effect(
             `demo-handle-${identity}`,
           );
           const runId = yield* Schema.decodeUnknownEffect(RunId)(`demo-run-${identity}`);
-          const conversationId = yield* Schema.decodeUnknownEffect(ConversationId)(
-            live ? "demo-conversation-live-travel" : "demo-conversation-phase-2",
+          const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(
+            live ? "demo-thread-live-travel" : "demo-thread-phase-2",
           );
-          yield* conversations.create(conversationId);
+          yield* threads.create(threadId);
           const output = yield* Queue.bounded<DemoOperationalEvent, DemoRunFailure | Cause.Done>(
             256,
           );
@@ -690,7 +683,7 @@ const InteractiveRuntimeLive = Layer.effect(
           const active: ActiveRun = {
             handle,
             runId,
-            conversationId,
+            threadId,
             commandQueue,
             output,
             pendingApprovals,
@@ -744,7 +737,7 @@ const InteractiveRuntimeLive = Layer.effect(
             DemoRunOpened.make({
               ...(yield* eventBase),
               runId,
-              conversationId,
+              threadId,
               scenario: request.scenario,
               executionClass: "ephemeral",
               schedulerConcurrency: 3,
@@ -855,12 +848,8 @@ const InteractiveRuntimeLive = Layer.effect(
           };
 
           // Interactive snapshots include incremental updates even if execution later fails.
-          // Successful-run retention through ConversationHistory would change that behavior.
-          const conversationOptions = yield* toRunConversationOptions(
-            conversations,
-            conversationId,
-            runId,
-          );
+          // Successful-run retention through ThreadHistory would change that behavior.
+          const threadOptions = yield* toRunThreadOptions(threads, threadId, runId);
 
           const contextHook = {
             prepare: ({
@@ -957,10 +946,10 @@ const InteractiveRuntimeLive = Layer.effect(
 
           const controlsLayer = Layer.succeed(DemoRunControls)(controls);
           const commonRuntimeLayers = Layer.mergeAll(
-            ConversationHistory.layerTransient,
+            ThreadHistory.layerTransient,
             DemoTravelToolkitLayer,
             DemoHoldGatewayLayer,
-            makeIdLayer(conversationId, runId),
+            makeIdLayer(threadId, runId),
             approvalResolver,
             ApprovalAuditMemoryLive,
             StructuralRedactorLive,
@@ -971,10 +960,10 @@ const InteractiveRuntimeLive = Layer.effect(
             TravelGuidanceLayer,
           ).pipe(Layer.provide(controlsLayer));
           const liveRuntimeLayer = Layer.mergeAll(
-            ConversationHistory.layerTransient,
+            ThreadHistory.layerTransient,
             RealTravelToolkitLayer,
             DemoHoldGatewayLayer,
-            makeIdLayer(conversationId, runId),
+            makeIdLayer(threadId, runId),
             approvalResolver,
             ApprovalAuditMemoryLive,
             StructuralRedactorLive,
@@ -1081,7 +1070,7 @@ const InteractiveRuntimeLive = Layer.effect(
 
           const runOptions: RunOptions<DemoHookError, ApprovalResolver | ApprovalAudit | Redactor> =
             {
-              ...conversationOptions,
+              ...threadOptions,
               input: inputHook,
               context: contextHook,
               budget: budgetHook,
@@ -1223,7 +1212,7 @@ const InteractiveRuntimeLive = Layer.effect(
 );
 
 const DemoInteractiveRuntimeDependencies = Layer.mergeAll(
-  EphemeralConversationsLive,
+  EphemeralThreadsLive,
   LocalSandboxLayer,
   DemoMcpConnectorLayer,
   NodeCrypto.layer,

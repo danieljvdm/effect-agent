@@ -19,11 +19,11 @@ import {
   ScheduleRecord,
   ScheduleStorageError,
   ScheduleStore,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Context, Effect, Layer, Result, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
-const CURRENT_SCHEDULE_STORE_VERSION = 1;
+const CURRENT_SCHEDULE_STORE_VERSION = 2;
 const MAX_STORED_SCHEDULE_BYTES = 1_900_000;
 
 const StoredScheduleJson = Schema.String.check(Schema.isMaxLength(MAX_STORED_SCHEDULE_BYTES));
@@ -226,7 +226,11 @@ const initializeScheduleStore = Effect.fn("DoScheduleStore.initialize")(function
   `.pipe(Effect.mapError(() => unavailable(operation)));
   const state = yield* decodeRows(Schema.Array(ScheduleStoreStateRow), rawState, operation);
   if (state.length !== 1 || state[0].storage_version !== CURRENT_SCHEDULE_STORE_VERSION) {
-    return yield* corrupt(operation);
+    return yield* corrupt(
+      state.length === 1
+        ? `${operation}: incompatible storage version ${state[0].storage_version}; expected ${CURRENT_SCHEDULE_STORE_VERSION}`
+        : `${operation}: invalid storage version row`,
+    );
   }
 });
 

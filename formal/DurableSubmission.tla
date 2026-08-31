@@ -1,7 +1,7 @@
 --------------------------- MODULE DurableSubmission ---------------------------
 (***************************************************************************)
 (* Bounded model of the durable Submission protocol of                    *)
-(* `@effect-agent/session`: one Conversation                            *)
+(* `@effect-agent/thread`: one Thread                            *)
 (* lane, FIFO Submissions, worker Attempts with ownership + producer-     *)
 (* epoch fencing, canonical-history-first recovery classification, tool   *)
 (* uncertainty (DUR-009/DUR-017), approval suspension, joined input       *)
@@ -37,8 +37,8 @@ variables
   hostOf = [s \in Subs |-> NoSub],           \* claimJoining host linkage
   apprDecided = [s \in Subs |-> FALSE],      \* recordApprovalDecision intent
   unknownRes = [s \in Subs |-> "none"],      \* recordUnknownResolution intent: none|completed|never
-  \* -- ConversationStore canonical records (per Submission, digest chain abstracted) --
-  convMat = FALSE,                           \* materialize + ConversationCreated
+  \* -- ThreadStore canonical records (per Submission, digest chain abstracted) --
+  convMat = FALSE,                           \* materialize + ThreadCreated
   inputRec = [s \in Subs |-> FALSE],         \* UserInputRecorded input:{sid}
   respKind = [s \in Subs |-> "none"],        \* committed complete model response: none|finish|tool|approval
   prepared = [s \in Subs |-> FALSE],         \* ToolCallPrepared without outcome
@@ -73,7 +73,7 @@ define
   LaneQuiet == laneOwner = "none" \/ ~leaseLive
   CapInc(n) == IF n < 2 THEN n + 1 ELSE n
 
-  \* Pure recovery classifier: packages/session/src/recovery.ts classifyRecovery,
+  \* Pure recovery classifier: packages/thread/src/recovery.ts classifyRecovery,
   \* restricted to the non-Subagent rows (rows 1-8 and 10-12 of its precedence doc).
   Classify(s) ==
     IF lstate[s] = "settled" THEN "NoAction"
@@ -118,7 +118,7 @@ define
 end define;
 
 \* =========================== worker processes ===========================
-\* One durable worker (DurableAgentRuntime.runWorker / drainConversation).
+\* One durable worker (DurableAgentRuntime.runWorker / drainThread).
 \* Every label is one durable step; the `either` crash branch at each label
 \* models process loss between two durable mutations.
 fair process worker \in Workers
@@ -132,7 +132,7 @@ WIdle:
   ep := laneEpoch;
   sub := Head;
 WResume:
-  \* drainConversation resume dispatch over canonical evidence + ledger row
+  \* drainThread resume dispatch over canonical evidence + ledger row
   either
     await faults < MaxFaults;
     faults := faults + 1;
@@ -619,7 +619,7 @@ RScan:
         \* recordApprovalDecision wake replay: suspended -> input-applied
         lstate[s] := "input-applied";
       elsif Classify(s) = "CompleteMaterialization" then
-        \* store.materialize + ConversationCreated (idempotent)
+        \* store.materialize + ThreadCreated (idempotent)
         convMat := TRUE;
       else
         \* RepairReadiness: ledger.markReady replay
@@ -679,7 +679,7 @@ CMat:
       faults := faults + 1;
       goto CNext;                 \* submit crashed after admit (DUR-001 window)
     or
-      convMat := TRUE;            \* materialize + ConversationCreated
+      convMat := TRUE;            \* materialize + ThreadCreated
     end either;
 CReady:
     either

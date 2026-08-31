@@ -6,7 +6,7 @@ Use these terms consistently in code, telemetry, and user documentation.
 
 **Agent Definition**  
 An immutable, schema-defined description of an agent: identity, input and output schemas,
-instructions, optional model-visible input projection, toolkit, and execution policy. It contains no mutable conversation state, owns no
+instructions, optional model-visible input projection, toolkit, and execution policy. It contains no mutable thread state, owns no
 live resources. Execution requires native model services supplied through Effect Layers.
 
 **Agent Binding**
@@ -26,7 +26,7 @@ The Effect module that interprets an Agent Definition or Binding. The ephemeral 
 the durable runtime admits a Submission and coordinates Attempts until Settlement.
 
 **Run**  
-One logical request to execute an Agent Binding against a Conversation. In ephemeral mode the Run
+One logical request to execute an Agent Binding against a Thread. In ephemeral mode the Run
 lives for one Scope. In durable mode the logical Run may span multiple process Attempts.
 
 **Run Disposition**<br>
@@ -42,20 +42,17 @@ lost ownership, eviction, or redeploy may end an Attempt without ending the Run.
 One model request and its assistant response, optionally followed by one tool-call batch. A Turn
 begins only after the preceding canonical state is committed.
 
-**Conversation**  
-A durable or ephemeral ordered history shared across Runs. A Conversation has exactly one
-canonical transcript projection, derived from its records.
-
-**Session**  
-An addressable interaction handle for a Conversation. Avoid using Session as a synonym for process,
-Run, Attempt, or model request.
+**Thread**
+An addressable durable or ephemeral ordered history shared across Runs. An Agent executes Runs
+within a Thread and retains their history there. A Thread has exactly one canonical transcript
+projection, derived from its records.
 
 **Submission**  
-An immutable input accepted for durable processing in one Conversation lane. Acknowledged
+An immutable input accepted for durable processing in one Thread lane. Acknowledged
 Submissions create an accepted-work obligation.
 
 **Receipt**  
-The durable identity returned after ledger admission, Conversation materialization, durable
+The durable identity returned after ledger admission, Thread materialization, durable
 attachment storage, and readiness are committed. It is an identifier, not an authorization
 capability.
 
@@ -85,7 +82,7 @@ A continuous registration creates a separate delivery obligation for each select
 **Source Partition**
 A tenant-qualified, host-defined source address with one storage owner. It contains registrations,
 accepted events, routing cursors, and delivery obligations. Its identity is independent of payload,
-source version, and deployment. Admission to a destination Conversation is a separate operation.
+source version, and deployment. Admission to a destination Thread is a separate operation.
 
 **Accepted Event**
 A normalized event whose identity, payload digest, registration eligibility cutoff, and remaining
@@ -162,18 +159,18 @@ could be activated for future Turns. No runtime Skill API is implemented. Contri
 
 **Subagent**  
 An Agent Definition invoked by another agent through a declared delegation capability. A durable
-Subagent owns a child Conversation with explicit parent linkage.
+Subagent owns a child Thread with explicit parent linkage.
 
 **Delegation Definition**
 An immutable declaration that exposes one target Agent Definition to a parent as an Effect AI
 Tool, with explicit input/result projections, authority, budget, and policy bounds.
 
 **Subagent Invocation**
-One parent Tool Call that runs one declared Subagent. Its child Conversation is fresh and distinct;
+One parent Tool Call that runs one declared Subagent. Its child Thread is fresh and distinct;
 its stable parent-side identity is the parent Run and Tool Call pair.
 
 **Parent Link**
-The immutable lineage from a child Conversation to the parent Conversation, Run, Tool Call, Agent,
+The immutable lineage from a child Thread to the parent Thread, Run, Tool Call, Agent,
 delegation, and depth that established it.
 
 **Attached Child**
@@ -250,7 +247,7 @@ each compaction in the DN and DC assemblies as a canonical `CompactionCreated` r
 projections fold
 (RUN-026). The engine-owned `ContextCompactor` service selects the strategy, token estimator,
 summary prompt, and Model. `ContextCompactor.layer` supplies the bounded default. Cloudflare
-Conversation Objects install the same service through a scoped `RunContextPreparation` Layer,
+Thread Objects install the same service through a scoped `RunContextPreparation` Layer,
 rebuilt after eviction. The interpreter owns metering, protected messages, events, and commits;
 the durable coordinator maps actual covered messages to complete prior-Run records.
 
@@ -285,11 +282,11 @@ Run directly, and otherwise the Run takes at most one constrained grace Turn
 ## Persistence concepts
 
 **Canonical Record**  
-An immutable, schema-versioned fact in the Conversation Log. Canonical Records are the only
+An immutable, schema-versioned fact in the Thread Log. Canonical Records are the only
 recovery truth.
 
-**Conversation Log**  
-The ordered, append-only sequence of Canonical Records for one Conversation.
+**Thread Log**
+The ordered, append-only sequence of Canonical Records for one Thread.
 
 **Submission Ledger**  
 Operational durable state for admission, FIFO readiness, ownership, Attempts, optional leases,

@@ -5,7 +5,7 @@ description: Run durable agents on Node.js with SQLite.
 
 # Node.js
 
-`@effect-agent/platform-node` stores conversation history and pending work in SQLite.
+`@effect-agent/platform-node` stores thread history and pending work in SQLite.
 A bounded worker pool executes registered agents and recovers work after a restart.
 
 ## Install
@@ -14,7 +14,7 @@ A bounded worker pool executes registered agents and recovers work after a resta
 bun add @effect-agent/platform-node@beta
 ```
 
-For the examples below, also install `effect@4.0.0-rc.111`, `@effect-agent/session@beta`, and
+For the examples below, also install `effect@4.0.0-rc.111`, `@effect-agent/thread@beta`, and
 `@effect/platform-node@4.0.0-rc.111`.
 Keep framework packages at one release and use compatible [Effect and provider packages](../guide/getting-started#installation-and-compatibility).
 
@@ -25,7 +25,7 @@ incarnation a distinct `producerId`.
 `workerConcurrency` limits worker loops and defaults to one.
 `NodeDurableHost.layerStack` checks storage and runs recovery before accepting work.
 
-Create the `ResolvedBinding` values with `compileRegistrations` from `@effect-agent/session`.
+Create the `ResolvedBinding` values with `compileRegistrations` from `@effect-agent/thread`.
 Supply Crypto, provider clients, and tool handlers while compiling. Keep those Layers alive
 in the host's application Scope.
 
@@ -41,7 +41,7 @@ Use `digestDefinitions` to compute submission digests.
 
 ```ts twoslash
 import { NodeDurableHost } from "@effect-agent/platform-node";
-import type { ResolvedBinding } from "@effect-agent/session";
+import type { ResolvedBinding } from "@effect-agent/thread";
 import { NodeRuntime } from "@effect/platform-node";
 import { Effect } from "effect";
 
@@ -98,7 +98,7 @@ its Scope. Providing replacements around a later worker call does not change the
 ## Submit and follow work
 
 1. Authenticate the caller and call `host.submit(agent, input, options)`.
-   Supply the conversation ID, principal, idempotency key, and definition digests.
+   Supply the thread ID, principal, idempotency key, and definition digests.
 2. Return the receipt after admission.
 3. Await completion with `host.awaitSettlement(receipt)`, or stream records with `host.observe(receipt)`.
 

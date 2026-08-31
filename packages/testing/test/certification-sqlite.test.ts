@@ -1,12 +1,6 @@
 import {
-  CertificationCaseResult,
-  CertificationReport,
-  conversationStoreConformanceCases,
-  submissionLedgerConformanceCases,
-} from "@effect-agent/session/testing";
-import {
   SqliteStorageFailpoint,
-  conversationStoreLayer,
+  threadStoreLayer,
   storageConfigLayer,
   submissionLedgerLayer,
 } from "@effect-agent/storage-sqlite";
@@ -16,6 +10,12 @@ import {
   certifyDurableAdapters,
   tier2NeverFiredLocations,
 } from "@effect-agent/testing/certification";
+import {
+  CertificationCaseResult,
+  CertificationReport,
+  threadStoreConformanceCases,
+  submissionLedgerConformanceCases,
+} from "@effect-agent/thread/testing";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -38,9 +38,9 @@ import { maybeWriteReport } from "./certification-report-io.ts";
 // worker kills at every durable boundary.
 // ---------------------------------------------------------------------------
 
-/** ConversationStore and SubmissionLedger sharing ONE SqlClient over one database file. */
+/** ThreadStore and SubmissionLedger sharing ONE SqlClient over one database file. */
 const combinedAdapters = (filename: string) =>
-  Layer.mergeAll(conversationStoreLayer, submissionLedgerLayer).pipe(
+  Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
         storageConfigLayer({ filename, observationPollInterval: 1 }),
@@ -72,7 +72,7 @@ const certified = Effect.gen(function* () {
       return yield* certifyDurableAdapters({
         adapter: { name: "@effect-agent/storage-sqlite" },
         submissionLedger: adapters,
-        conversationStore: adapters,
+        threadStore: adapters,
         tierThreeEvidence: TIER3_EVIDENCE,
       });
     }),
@@ -140,7 +140,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () 
               return yield* certifyDurableAdapters({
                 adapter: { name: row.name },
                 submissionLedger: adapters,
-                conversationStore: adapters,
+                threadStore: adapters,
                 crashLever: row.crashLever,
               });
             }),
@@ -156,14 +156,14 @@ describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () 
   );
 
   it.effect(
-    "TIER1: all SubmissionLedger and ConversationStore contract cases pass",
+    "TIER1: all SubmissionLedger and ThreadStore contract cases pass",
     () =>
       Effect.gen(function* () {
         const report = yield* certified;
         const ledgerCases = report.tier1.filter((result) => result.suite === "submission-ledger");
-        const storeCases = report.tier1.filter((result) => result.suite === "conversation-store");
+        const storeCases = report.tier1.filter((result) => result.suite === "thread-store");
         expect(ledgerCases).toHaveLength(submissionLedgerConformanceCases.length);
-        expect(storeCases).toHaveLength(conversationStoreConformanceCases.length);
+        expect(storeCases).toHaveLength(threadStoreConformanceCases.length);
         expect(report.tier1.filter((result) => result.status !== "passed")).toEqual([]);
       }),
     300_000,

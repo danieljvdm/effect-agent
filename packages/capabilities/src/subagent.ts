@@ -1,6 +1,6 @@
 import {
   AgentId,
-  ConversationId,
+  ThreadId,
   type Definition,
   DelegationId,
   DelegationTool,
@@ -15,7 +15,7 @@ import {
 import {
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
-  type ConversationHistory,
+  type ThreadHistory,
   AgentSpawner,
   type AgentSpawnerParent,
   type RunBudgetHook,
@@ -188,7 +188,7 @@ export class SubagentExecutionFailure extends Schema.TaggedError<SubagentExecuti
     targetAgentId: AgentId,
     classification: SubagentExecutionFailureClassification,
     /** Child references, present once establishment reached a child identity. */
-    childConversationId: Schema.optionalKey(ConversationId),
+    childThreadId: Schema.optionalKey(ThreadId),
     childSubmissionId: Schema.optionalKey(SubmissionId),
     childRunId: Schema.optionalKey(RunId),
     errorTag: BoundedErrorTag,
@@ -309,7 +309,7 @@ export type SubagentReturnModeFailure = Schema.Union<
  * The native Effect AI Tool created by `Subagent.define` (SUB-001, SUB-003).
  * Its per-call dependencies are exactly the engine-provided `AgentSpawner`,
  * `RunEventSink`, and `SubagentDurability` plus `IdGenerator`; every child
- * requirement except the inherited Conversation history policy is a construction requirement
+ * requirement except the inherited Thread history policy is a construction requirement
  * of `SubagentRuntime.layer`. The engine excludes its own per-batch services from the runtime's
  * public requirements, so the visible per-call surface stays `IdGenerator`.
  */
@@ -821,7 +821,7 @@ export type SubagentChildRunFailure<
  * Binding's full runtime requirements (Model Layer requirements, child Tool
  * handlers and their services, Schema services), both projection
  * requirements, and the parent-owned reservation service. Nothing here leaks
- * into the per-call Tool handler requirements. ConversationHistory belongs to the parent Run's
+ * into the per-call Tool handler requirements. ThreadHistory belongs to the parent Run's
  * AgentSpawner and is inherited at invocation rather than captured when this Layer is built.
  */
 export type SubagentLayerRequirements<
@@ -858,7 +858,7 @@ export type SubagentLayerRequirements<
         HookRequirements,
         InstructionRequirements
       >,
-      ConversationHistory
+      ThreadHistory
     >
   | TargetInput["EncodingServices"]
   | PrepareRequirements
@@ -1271,7 +1271,7 @@ const layer = <
       ...(child === undefined
         ? {}
         : {
-            childConversationId: child.childConversationId,
+            childThreadId: child.childThreadId,
             childSubmissionId: child.childSubmissionId,
             childRunId: child.childRunId,
           }),
@@ -1472,7 +1472,7 @@ const layer = <
       const payload: SubagentEventBasePayload = {
         toolCallId,
         delegationId: delegation.delegationId,
-        childConversationId: child.conversationId,
+        childThreadId: child.threadId,
         childRunId: child.runId,
         targetAgentId: delegation.target.id,
         depth: child.parentLink.depth,
@@ -1687,7 +1687,7 @@ const layer = <
           const payload: SubagentEventBasePayload = {
             toolCallId,
             delegationId: delegation.delegationId,
-            childConversationId: status.childConversationId,
+            childThreadId: status.childThreadId,
             childRunId: status.childRunId,
             targetAgentId: delegation.target.id,
             depth,
@@ -1704,7 +1704,7 @@ const layer = <
           const payload: SubagentEventBasePayload = {
             toolCallId,
             delegationId: delegation.delegationId,
-            childConversationId: status.childConversationId,
+            childThreadId: status.childThreadId,
             childRunId: status.childRunId,
             targetAgentId: delegation.target.id,
             depth,

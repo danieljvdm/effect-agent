@@ -1,4 +1,4 @@
-import { Agent, AgentPolicy, type ConversationId } from "@effect-agent/core";
+import { Agent, AgentPolicy, type ThreadId } from "@effect-agent/core";
 import { DurableStep, DurableStepError, ToolExecutionClass } from "@effect-agent/engine";
 import {
   DefinitionDigests,
@@ -15,7 +15,7 @@ import {
   type CanonicalRecordEnvelope,
   type DurableSubmitOptions,
   type IdempotencyKey,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Layer, Option, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
@@ -93,10 +93,10 @@ export const phase5TravelPlannerDefinitionDigests = DefinitionDigests.make({
 
 /** Durable admission options for one Travel Planner Submission on one trip lane. */
 export const phase5TravelPlannerSubmitOptions = (
-  conversationId: ConversationId,
+  threadId: ThreadId,
   idempotencyKey: IdempotencyKey,
 ): DurableSubmitOptions => ({
-  conversationId,
+  threadId,
   principal: phase5TravelPlannerPrincipal,
   idempotencyKey,
   definitions: phase5TravelPlannerDefinitionDigests,

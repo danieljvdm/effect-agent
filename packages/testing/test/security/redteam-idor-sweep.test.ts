@@ -1,4 +1,5 @@
-import { Agent, AgentPolicy, ConversationId, ToolCallId } from "@effect-agent/core";
+import { Agent, AgentPolicy, ThreadId, ToolCallId } from "@effect-agent/core";
+import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
 import {
   ApprovalDecisionCommand,
   DefinitionDigests,
@@ -21,12 +22,8 @@ import {
   type DurableSubmitOptions,
   type OperationAuthorizationRequest,
   type OperationAuthorizerService,
-} from "@effect-agent/session";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/session/testing";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
+} from "@effect-agent/thread";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
@@ -37,12 +34,12 @@ import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai
 // security-operations §2/§3, testing.md §10 "tenant isolation and IDOR
 // attempts"; SEC-002/SEC-003, DUR-017).
 //
-// The threat: a caller holding a legitimate identity for conversation A tries
-// to read or mutate conversation B (or a foreign Submission) through the
-// administrative surface — observe, explain, explainConversation, verify,
+// The threat: a caller holding a legitimate identity for thread A tries
+// to read or mutate thread B (or a foreign Submission) through the
+// administrative surface — observe, explain, explainThread, verify,
 // retry, wake, scanObligations, resolveUnknown, resolveApproval. Identifier
 // knowledge is never a capability (D10): a non-default `OperationAuthorizer`
-// that binds each request to the CALLER's own conversation must deny every
+// that binds each request to the CALLER's own thread must deny every
 // cross-tenant request fail-closed (typed `OperationDenied` before any read or
 // write), and every admin operation must consult it.
 //
@@ -51,7 +48,7 @@ import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai
 // target, which is the actual IDOR decision a tenant-scoped host enforces.
 // ---------------------------------------------------------------------------
 
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
@@ -59,13 +56,13 @@ const PRINCIPAL = Schema.decodeSync(Principal)("principal-idor-sweep");
 const PRODUCER_ID = Schema.decodeSync(ProducerId)("producer-idor-sweep");
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 
-/** The tenant boundary the authorizer enforces: only this Conversation is the caller's own. */
-const OWNED_CONVERSATION = "idor-owned-conversation";
-/** A foreign Conversation the caller must never reach through any admin operation. */
-const FOREIGN_CONVERSATION = "idor-foreign-conversation";
+/** The tenant boundary the authorizer enforces: only this Thread is the caller's own. */
+const OWNED_THREAD = "idor-owned-thread";
+/** A foreign Thread the caller must never reach through any admin operation. */
+const FOREIGN_THREAD = "idor-foreign-thread";
 
-const submitOptions = (conversation: string, key: string): DurableSubmitOptions => ({
-  conversationId: decodeConversationId(conversation),
+const submitOptions = (thread: string, key: string): DurableSubmitOptions => ({
+  threadId: decodeThreadId(thread),
   principal: PRINCIPAL,
   idempotencyKey: decodeIdempotencyKey(key),
   definitions: DIGESTS,
@@ -128,13 +125,13 @@ const configLayer = DurableRuntimeConfig.layer({
 /**
  * A tenant-scoped authorizer modelling the IDOR decision a real host enforces. It denies:
  *
- *  - any request naming a Conversation other than the caller's own (explain/explainConversation/
- *    verify/wake/observe carry `conversationId`); and
+ *  - any request naming a Thread other than the caller's own (explain/explainThread/
+ *    verify/wake/observe carry `threadId`); and
  *  - any request naming a Submission the host has resolved to a foreign tenant.
  *
  * The second clause matters because `retry`, `resolveUnknown`, and `resolveApproval` authorize
- * by `submissionId` WITHOUT a `conversationId` (durable-runtime.ts): the framework gives the
- * authorizer no conversation context for those, so a tenant-scoped host must resolve the
+ * by `submissionId` WITHOUT a `threadId` (durable-runtime.ts): the framework gives the
+ * authorizer no thread context for those, so a tenant-scoped host must resolve the
  * Submission→tenant mapping itself. The test models that host-side resolution with an explicit
  * foreign-Submission set (see FINDINGS SEC-P7-002).
  */
@@ -148,7 +145,7 @@ class AuthorizerControl extends Context.Service<
 
 const tenantScopedAuthorizerLayer = Layer.effectContext(
   Effect.gen(function* () {
-    const owned = decodeConversationId(OWNED_CONVERSATION);
+    const owned = decodeThreadId(OWNED_THREAD);
     const seen = yield* Ref.make<ReadonlyArray<OperationAuthorizationRequest>>([]);
     const foreignSubmissions = yield* Ref.make<ReadonlySet<string>>(new Set());
     const service: OperationAuthorizerService = {
@@ -156,17 +153,14 @@ const tenantScopedAuthorizerLayer = Layer.effectContext(
         Effect.gen(function* () {
           yield* Ref.update(seen, (all) => [...all, request]);
           const deniedSubmissions = yield* Ref.get(foreignSubmissions);
-          const foreignConversation =
-            request.conversationId !== undefined && request.conversationId !== owned;
+          const foreignThread = request.threadId !== undefined && request.threadId !== owned;
           const foreignSubmission =
             request.submissionId !== undefined && deniedSubmissions.has(request.submissionId);
-          if (foreignConversation || foreignSubmission) {
+          if (foreignThread || foreignSubmission) {
             return yield* OperationDenied.make({
               operation: request.operation,
               reason: "cross-tenant access denied by the tenant-scoped authorization policy",
-              ...(request.conversationId === undefined
-                ? {}
-                : { conversationId: request.conversationId }),
+              ...(request.threadId === undefined ? {} : { threadId: request.threadId }),
               ...(request.submissionId === undefined ? {} : { submissionId: request.submissionId }),
             });
           }
@@ -187,7 +181,7 @@ const tenantScopedAuthorizerLayer = Layer.effectContext(
 
 const baseLayer = Layer.mergeAll(
   MemorySubmissionLedgerLive,
-  MemoryConversationStoreLive,
+  MemoryThreadStoreLive,
   WakeScheduler.layerNoop,
   DurableRuntimeFailpointTestControl.layer,
   ToolReconciler.uncertain,
@@ -208,8 +202,8 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
     : "unknown";
 };
 
-/** Run one plain lane on the given Conversation to a completed settlement, return its Receipt. */
-const runSettledLane = (conversation: string, key: string) =>
+/** Run one plain lane on the given Thread to a completed settlement, return its Receipt. */
+const runSettledLane = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"done"}'));
@@ -217,29 +211,26 @@ const runSettledLane = (conversation: string, key: string) =>
     const receipt = yield* runtime.submit(
       agent,
       { question: "answer" },
-      submitOptions(conversation, key),
+      submitOptions(thread, key),
     );
-    const settlements = yield* runtime.processConversation(
-      agent,
-      decodeConversationId(conversation),
-    );
+    const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
     expect(settlements[0]?.outcome).toBe("completed");
     return receipt;
   });
 
 layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped authorizer", (it) => {
   it.effect(
-    "every targeted admin operation denies a foreign Conversation or Submission fail-closed, and permits the caller's own",
+    "every targeted admin operation denies a foreign Thread or Submission fail-closed, and permits the caller's own",
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const control = yield* AuthorizerControl;
 
         // Two lanes exist: the caller's own and a foreign tenant's.
-        const ownReceipt = yield* runSettledLane(OWNED_CONVERSATION, "idor-own-1");
-        const foreignReceipt = yield* runSettledLane(FOREIGN_CONVERSATION, "idor-foreign-1");
-        const foreignConversationId = decodeConversationId(FOREIGN_CONVERSATION);
-        const ownConversationId = decodeConversationId(OWNED_CONVERSATION);
+        const ownReceipt = yield* runSettledLane(OWNED_THREAD, "idor-own-1");
+        const foreignReceipt = yield* runSettledLane(FOREIGN_THREAD, "idor-foreign-1");
+        const foreignThreadId = decodeThreadId(FOREIGN_THREAD);
+        const ownThreadId = decodeThreadId(OWNED_THREAD);
 
         // The host resolves the foreign Submission to its (foreign) tenant — the mapping the
         // framework does not supply to the submission-only resolution operations.
@@ -249,12 +240,10 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         const explainForeign = yield* Effect.exit(runtime.explain(foreignReceipt.submissionId));
         expect(failureTag(explainForeign)).toBe("OperationDenied");
 
-        const explainConvForeign = yield* Effect.exit(
-          runtime.explainConversation(foreignConversationId),
-        );
+        const explainConvForeign = yield* Effect.exit(runtime.explainThread(foreignThreadId));
         expect(failureTag(explainConvForeign)).toBe("OperationDenied");
 
-        const verifyForeign = yield* Effect.exit(runtime.verify(foreignConversationId));
+        const verifyForeign = yield* Effect.exit(runtime.verify(foreignThreadId));
         expect(failureTag(verifyForeign)).toBe("OperationDenied");
 
         const retryForeign = yield* Effect.exit(
@@ -268,7 +257,7 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         );
         expect(failureTag(retryForeign)).toBe("OperationDenied");
 
-        const wakeForeign = yield* Effect.exit(runtime.wake(foreignConversationId));
+        const wakeForeign = yield* Effect.exit(runtime.wake(foreignThreadId));
         expect(failureTag(wakeForeign)).toBe("OperationDenied");
 
         const observeForeign = yield* Effect.exit(
@@ -302,24 +291,24 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         );
         expect(failureTag(resolveApprovalForeign)).toBe("OperationDenied");
 
-        // --- Own target: the caller's own Conversation is permitted (default-behavior allow). ---
+        // --- Own target: the caller's own Thread is permitted (default-behavior allow). ---
         const explainOwn = yield* runtime.explain(ownReceipt.submissionId);
         expect(explainOwn.submission.submissionId).toBe(ownReceipt.submissionId);
 
-        const explainConvOwn = yield* runtime.explainConversation(ownConversationId);
+        const explainConvOwn = yield* runtime.explainThread(ownThreadId);
         expect(explainConvOwn).toEqual([]); // settled lane: no nonterminal explanations
 
-        const verifyOwn = yield* runtime.verify(ownConversationId);
+        const verifyOwn = yield* runtime.verify(ownThreadId);
         expect(verifyOwn.ok).toBe(true);
 
-        yield* runtime.wake(ownConversationId);
+        yield* runtime.wake(ownThreadId);
 
         const observeOwn = yield* Stream.runCollect(
           runtime.observe(ownReceipt).pipe(Stream.take(1)),
         );
         expect(observeOwn.length).toBeGreaterThan(0);
 
-        // scanObligations carries no Conversation target, so a tenant-scoped host allows it and
+        // scanObligations carries no Thread target, so a tenant-scoped host allows it and
         // scopes its own rows; here it is permitted and returns rows for both lanes' (settled →
         // none). This documents that untargeted scans are the host's responsibility to scope.
         const obligations = yield* runtime.scanObligations(

@@ -88,7 +88,7 @@ export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputCon
  * top-level `system` parameter per contiguous system group, so only the last
  * block survives there — an isolated trailing contract message would discard
  * the author's instructions, and a contract inside an earlier block (for
- * example a resumed Conversation's original instructions ahead of this Run's
+ * example a resumed Thread's original instructions ahead of this Run's
  * evaluated instructions) would itself be discarded. Extending the last
  * block keeps author content and contract together on every provider and
  * preserves the author's per-message cache-control annotations.

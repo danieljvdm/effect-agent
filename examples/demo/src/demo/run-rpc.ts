@@ -14,7 +14,7 @@ import {
   StartOperationalRunRequest,
 } from "./operational-contracts";
 
-/** Streams one general-chat turn with bounded prior conversation context. */
+/** Streams one general-chat turn with bounded prior thread context. */
 export class StreamChatRun extends Rpc.make("StreamChatRun", {
   payload: DemoRunSelection,
   success: RunEvent,

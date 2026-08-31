@@ -12,8 +12,8 @@ import type {
 } from "@effect-agent/core";
 import {
   AgentRuntime,
-  type ConversationHistory,
-  type ConversationHistoryError,
+  type ThreadHistory,
+  type ThreadHistoryError,
   type CompactionError,
   type AgentChildPending,
   type AgentRuntimeFailure,
@@ -48,7 +48,7 @@ type ExpectedRequirements =
   | FixtureKnowledge
   | Tool.HandlersFor<Toolkit.Tools<typeof FixtureChatToolkit>>
   | IdGenerator
-  | ConversationHistory;
+  | ThreadHistory;
 type ExpectedFailure =
   | CalculationFailure
   | AiError.AiError
@@ -58,7 +58,7 @@ type ExpectedFailure =
   | ContextBudgetError
   | ContextOverflowError
   | CompactionError
-  | ConversationHistoryError
+  | ThreadHistoryError
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentToolAuthorizationDenied

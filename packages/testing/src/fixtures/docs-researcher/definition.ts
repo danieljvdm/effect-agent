@@ -73,11 +73,11 @@ export const docContentToolkitLayer = DocContentToolkit.toLayer({
 // ---------------------------------------------------------------------------
 // Deterministic corpus. Every body deliberately embeds BOTH a secret marker
 // and a distinctive body phrase: the tests assert that neither ever reaches
-// the parent Conversation, the parent prompts, or a redacted preview — only
+// the parent Thread, the parent prompts, or a redacted preview — only
 // the bounded summary crosses the delegation boundary (SUB-015, SEC-008).
 // ---------------------------------------------------------------------------
 
-/** Never allowed outside a child Conversation or an unredacted fixture value. */
+/** Never allowed outside a child Thread or an unredacted fixture value. */
 export const docsDocumentBodySecret = "docs-vault-secret-771";
 
 const decodeDocumentId = Schema.decodeSync(ResearchDocumentId);
@@ -109,7 +109,7 @@ const corpusEntries = new Map<string, CorpusEntry>(
       document: ResearchDocument.make({
         documentId: decodeDocumentId(entry.documentId),
         title: entry.title,
-        body: `${entry.bodyPhrase}: internal working notes. ${docsDocumentBodySecret}. ${entry.summary} Raw notes stay inside the child Conversation.`,
+        body: `${entry.bodyPhrase}: internal working notes. ${docsDocumentBodySecret}. ${entry.summary} Raw notes stay inside the child Thread.`,
       }),
       bodyPhrase: entry.bodyPhrase,
       summary: entry.summary,
@@ -200,7 +200,7 @@ export const DocSummarizer = Agent.make("doc-summarizer", {
 // Delegation Definition: the coordinator sees exactly one Tool with explicit
 // projections and finite bounds. `projectResult` is the declassification
 // boundary (SUB-015): only the bounded summary crosses; the fetched body —
-// secret marker included — stays in the child Conversation.
+// secret marker included — stays in the child Thread.
 // ---------------------------------------------------------------------------
 
 export class SummaryRequest extends Schema.Class<SummaryRequest>("SummaryRequest")({
@@ -322,7 +322,7 @@ export const DocsResearcher = Agent.make("docs-researcher", {
 
 /** The default two-document research mission. */
 export const researchMissionRequest = ResearchRequest.make({
-  question: `Summarize the durability and subagent notes; keep ${docsMissionConfidentialMarker} inside the coordinator conversation.`,
+  question: `Summarize the durability and subagent notes; keep ${docsMissionConfidentialMarker} inside the coordinator thread.`,
   documentIds: researchCorpusDocumentIds,
 });
 

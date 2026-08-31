@@ -1,6 +1,6 @@
 ---
 "@effect-agent/engine": patch
-"@effect-agent/session": patch
+"@effect-agent/thread": patch
 "@effect-agent/testing": patch
 ---
 

@@ -4,7 +4,7 @@
 "@effect-agent/capabilities": patch
 "@effect-agent/sandbox": patch
 "@effect-agent/sandbox-local": patch
-"@effect-agent/session": patch
+"@effect-agent/thread": patch
 "@effect-agent/storage-memory": patch
 "@effect-agent/storage-sqlite": patch
 "@effect-agent/platform-node": patch

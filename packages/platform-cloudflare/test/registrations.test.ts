@@ -1,4 +1,4 @@
-import { digestDefinitions } from "@effect-agent/session";
+import { digestDefinitions } from "@effect-agent/thread";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Cause, Context, Crypto, Effect, Exit, Layer, Schema } from "effect";
@@ -6,10 +6,10 @@ import { DurableObjectState, WorkerEnvironment } from "effect-cf";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
 import {
-  CloudflareConversationClient,
-  ConversationObject,
-  ConversationObjectIdentity,
-  ConversationObjectNamespace,
+  CloudflareThreadClient,
+  ThreadObject,
+  ThreadObjectIdentity,
+  ThreadObjectNamespace,
   DurableObjectContext,
 } from "../src/index.ts";
 import {
@@ -28,22 +28,22 @@ class ApplicationConfig extends Context.Service<ApplicationConfig, { readonly en
 
 const options = { deploymentId: "binding-layer", producerPrefix: "binding-layer" };
 
-const dynamicStub = (conversation: string) =>
-  env.DYNAMIC_BINDINGS.get(env.DYNAMIC_BINDINGS.idFromName(conversation));
+const dynamicStub = (thread: string) =>
+  env.DYNAMIC_BINDINGS.get(env.DYNAMIC_BINDINGS.idFromName(thread));
 
 describe("Cloudflare Agent registrations", () => {
   it("acquires once with each incarnation's yielded host services and identities", async () => {
-    const firstConversation = `binding-source-first-${crypto.randomUUID()}`;
-    const secondConversation = `binding-source-second-${crypto.randomUUID()}`;
-    const first = dynamicStub(firstConversation);
-    const second = dynamicStub(secondConversation);
+    const firstThread = `binding-source-first-${crypto.randomUUID()}`;
+    const secondThread = `binding-source-second-${crypto.randomUUID()}`;
+    const first = dynamicStub(firstThread);
+    const second = dynamicStub(secondThread);
 
     const firstProbe = await first.bindingSourceProbe();
     expect(await first.bindingSourceProbe()).toEqual(firstProbe);
     expect(firstProbe).toMatchObject({
       evaluationCount: 1,
-      conversationId: firstConversation,
-      producerId: `${PRODUCER_PREFIX}:${firstConversation}`,
+      threadId: firstThread,
+      producerId: `${PRODUCER_PREFIX}:${firstThread}`,
       rawEnvHasNamespace: true,
       stateMatches: true,
     });
@@ -51,31 +51,31 @@ describe("Cloudflare Agent registrations", () => {
     const secondProbe = await second.bindingSourceProbe();
     expect(secondProbe).toMatchObject({
       evaluationCount: 1,
-      conversationId: secondConversation,
-      producerId: `${PRODUCER_PREFIX}:${secondConversation}`,
+      threadId: secondThread,
+      producerId: `${PRODUCER_PREFIX}:${secondThread}`,
       rawEnvHasNamespace: true,
       stateMatches: true,
     });
     expect(secondProbe.incarnation).not.toBe(firstProbe.incarnation);
 
     const receipt = await runClient(
-      CloudflareConversationClient.use((client) =>
+      CloudflareThreadClient.use((client) =>
         Effect.gen(function* () {
           const definitions = yield* digestDefinitions(registrationDefinitions);
           return yield* client.submit(
             { definition: plannerDefinition },
-            { question: "plan", ref: firstConversation },
-            { ...submitOptions(firstConversation, "binding-layer"), definitions },
+            { question: "plan", ref: firstThread },
+            { ...submitOptions(firstThread, "binding-layer"), definitions },
           );
         }),
       ).pipe(Effect.provide(BrowserCrypto.layer)),
       "DYNAMIC_BINDINGS",
     );
-    await drainAlarmsUntil(firstConversation, allSettled(firstConversation, "DYNAMIC_BINDINGS"), {
+    await drainAlarmsUntil(firstThread, allSettled(firstThread, "DYNAMIC_BINDINGS"), {
       namespace: "DYNAMIC_BINDINGS",
     });
     const settlement = await runClient(
-      CloudflareConversationClient.use((client) => client.awaitSettlement(receipt)),
+      CloudflareThreadClient.use((client) => client.awaitSettlement(receipt)),
       "DYNAMIC_BINDINGS",
     );
     expect(settlement.outcome).toBe("completed");
@@ -88,38 +88,38 @@ describe("Cloudflare Agent registrations", () => {
         const config = yield* ApplicationConfig;
         yield* WorkerEnvironment;
         yield* DurableObjectState.DurableObjectState;
-        yield* ConversationObjectIdentity;
+        yield* ThreadObjectIdentity;
         yield* Crypto.Crypto;
         yield* Effect.scope;
         if (!config.enabled) return yield* BindingSetupError.make({});
-        return ConversationObject.layer([]);
+        return ThreadObject.layer([]);
       }),
     );
-    const runtime = registrations.pipe(Layer.provide(ConversationObject.layerConfig(options)));
+    const runtime = registrations.pipe(Layer.provide(ThreadObject.layerConfig(options)));
     expectTypeOf<Layer.Error<typeof runtime>>().toEqualTypeOf<
-      BindingSetupError | ConversationObject.InitializationError
+      BindingSetupError | ThreadObject.InitializationError
     >();
     expectTypeOf<Layer.Services<typeof runtime>>().toEqualTypeOf<
       | ApplicationConfig
       | WorkerEnvironment
       | DurableObjectState.DurableObjectState
       | DurableObjectContext
-      | ConversationObjectNamespace
+      | ThreadObjectNamespace
     >();
 
-    const objectOptions = { ...options, namespaceBinding: "CONVERSATIONS" };
-    type FactoryLayer = Parameters<typeof ConversationObject.make>[0];
+    const objectOptions = { ...options, namespaceBinding: "THREADS" };
+    type FactoryLayer = Parameters<typeof ThreadObject.make>[0];
     expectTypeOf<typeof registrations>().not.toExtend<FactoryLayer>();
     const provided = registrations.pipe(
       Layer.provide(Layer.succeed(ApplicationConfig, { enabled: true })),
     );
-    ConversationObject.make(provided, objectOptions);
+    ThreadObject.make(provided, objectOptions);
     expectTypeOf<typeof Effect.void>().not.toExtend<FactoryLayer>();
     expectTypeOf<typeof Layer.empty>().not.toExtend<FactoryLayer>();
 
     // ApplicationConfig was consumed by Layer.provide, so an event cannot require it.
     // @ts-expect-error The application must expose event dependencies with Layer.provideMerge.
-    ConversationObject.make(provided, {
+    ThreadObject.make(provided, {
       ...objectOptions,
       eventLayer: Layer.effectDiscard(ApplicationConfig),
     });
@@ -133,9 +133,9 @@ describe("Cloudflare Agent registrations", () => {
           const application = Layer.effect(
             ApplicationConfig,
             Effect.gen(function* () {
-              const identity = yield* ConversationObjectIdentity;
+              const identity = yield* ThreadObjectIdentity;
               yield* Crypto.Crypto;
-              expect(identity.conversationId).toBe("registration-scope");
+              expect(identity.threadId).toBe("registration-scope");
               return yield* Effect.acquireRelease(
                 Effect.sync(() => {
                   lifecycle.push("acquired");
@@ -148,14 +148,14 @@ describe("Cloudflare Agent registrations", () => {
           const runtime = Layer.unwrap(
             Effect.map(ApplicationConfig, (config) => {
               expect(config.enabled).toBe(true);
-              return ConversationObject.layer([]);
+              return ThreadObject.layer([]);
             }),
           ).pipe(
             Layer.provide(application),
-            Layer.provide(ConversationObject.layerConfig(options)),
+            Layer.provide(ThreadObject.layerConfig(options)),
             Layer.provide([
               DurableObjectContext.layer(state, env),
-              ConversationObjectNamespace.layer(env.CONVERSATIONS),
+              ThreadObjectNamespace.layer(env.THREADS),
             ]),
           );
           yield* Effect.gen(function* () {
@@ -188,14 +188,12 @@ describe("Cloudflare Agent registrations", () => {
                 return yield* Effect.interrupt;
               }),
             );
-            const runtime = Layer.unwrap(
-              Effect.as(ApplicationConfig, ConversationObject.layer([])),
-            ).pipe(
+            const runtime = Layer.unwrap(Effect.as(ApplicationConfig, ThreadObject.layer([]))).pipe(
               Layer.provide(application),
-              Layer.provide(ConversationObject.layerConfig(options)),
+              Layer.provide(ThreadObject.layerConfig(options)),
               Layer.provide([
                 DurableObjectContext.layer(state, env),
-                ConversationObjectNamespace.layer(env.CONVERSATIONS),
+                ThreadObjectNamespace.layer(env.THREADS),
               ]),
             );
             const exit = yield* Layer.build(runtime).pipe(Effect.scoped, Effect.exit);

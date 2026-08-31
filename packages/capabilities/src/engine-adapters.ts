@@ -27,15 +27,15 @@ import {
 } from "./approval.ts";
 import { type BudgetExceeded, UsageDelta, type UsageBudgetNode } from "./budget.ts";
 import type { RunCommandQueue } from "./commands.ts";
-import {
-  type ConversationEncodingError,
-  type ConversationHistoryDiverged,
-  type ConversationLimitExceeded,
-  type ConversationNotFound,
-  conversationPrompt,
-  type EphemeralConversations,
-} from "./conversation.ts";
 import type { RedactionError, Redactor } from "./redaction.ts";
+import {
+  type ThreadEncodingError,
+  type ThreadHistoryDiverged,
+  type ThreadLimitExceeded,
+  type ThreadNotFound,
+  threadPrompt,
+  type EphemeralThreads,
+} from "./thread.ts";
 
 /** Capability policy could not be normalized into the bounded approval request Schema. */
 export class ApprovalAdapterError extends Schema.TaggedError<ApprovalAdapterError>()(
@@ -108,7 +108,7 @@ export const toRunApprovalHook = (
       const draft = yield* Schema.decodeUnknownEffect(ApprovalRequestDraft)({
         requestId: engineRequest.request.approvalId,
         runId: engineRequest.runId,
-        conversationId: engineRequest.conversationId,
+        threadId: engineRequest.threadId,
         toolCallId: engineRequest.toolCallId,
         toolName: engineRequest.toolName,
         actionSummary: metadata.actionSummary,
@@ -206,37 +206,36 @@ export const toRunBudgetHook = (
     ),
 });
 
-export type ConversationAdapterError =
-  | ConversationNotFound
-  | ConversationLimitExceeded
-  | ConversationEncodingError
-  | ConversationHistoryDiverged;
+export type ThreadAdapterError =
+  | ThreadNotFound
+  | ThreadLimitExceeded
+  | ThreadEncodingError
+  | ThreadHistoryDiverged;
 
 /**
- * Advanced incremental integration for a process-local EphemeralConversations owner. Supply
- * ConversationHistory.layerTransient; a retaining history adapter rejects these competing hooks.
+ * Advanced incremental integration for a process-local EphemeralThreads owner. Supply
+ * ThreadHistory.layerTransient; a retaining history adapter rejects these competing hooks.
  * The snapshot is explicit initial Prompt data. Each inline onHistory call immediately records
  * its append-only suffix, including updates from Runs that later fail or are interrupted. Writes
- * already made remain in the snapshot. Callback errors stop the Run as ConversationAdapterError;
- * snapshot lookup can fail with ConversationNotFound before execution.
+ * already made remain in the snapshot. Callback errors stop the Run as ThreadAdapterError;
+ * snapshot lookup can fail with ThreadNotFound before execution.
  * Native Effect AI parts and provider options are preserved without a role/text projection.
- * For retaining only successful Runs, provide ConversationHistory through PersistentHistory.layer
+ * For retaining only successful Runs, provide ThreadHistory through PersistentHistory.layer
  * with a memory or SQLite store instead. This adapter does not provide durable recovery.
  */
-export const toRunConversationOptions = Effect.fn("toRunConversationOptions")(function* (
-  conversations: EphemeralConversations["Service"],
-  conversationId: import("@effect-agent/core").ConversationId,
+export const toRunThreadOptions = Effect.fn("toRunThreadOptions")(function* (
+  threads: EphemeralThreads["Service"],
+  threadId: import("@effect-agent/core").ThreadId,
   runId: import("@effect-agent/core").RunId,
 ): Effect.fn.Return<
-  Pick<RunOptions<ConversationAdapterError>, "conversationId" | "history" | "onHistory">,
-  ConversationNotFound
+  Pick<RunOptions<ThreadAdapterError>, "threadId" | "history" | "onHistory">,
+  ThreadNotFound
 > {
-  const snapshot = yield* conversations.snapshot(conversationId);
+  const snapshot = yield* threads.snapshot(threadId);
   return {
-    conversationId,
-    history: conversationPrompt(snapshot),
-    onHistory: (history) =>
-      conversations.recordHistory(conversationId, runId, history).pipe(Effect.asVoid),
+    threadId,
+    history: threadPrompt(snapshot),
+    onHistory: (history) => threads.recordHistory(threadId, runId, history).pipe(Effect.asVoid),
   };
 });
 

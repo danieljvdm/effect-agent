@@ -116,7 +116,7 @@ and closes resources without reporting false success.
 
 Effect Agent uses Effect AI's `Tool`, `Toolkit`, `LanguageModel`, `Model`, `Prompt`, and `Response`
 directly. Provider integrations remain Effect AI Layers. The engine adds agent loops,
-conversation history, and durable execution around those values.
+thread history, and durable execution around those values.
 
 ```ts twoslash
 import { Schema } from "effect";

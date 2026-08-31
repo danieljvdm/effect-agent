@@ -31,8 +31,8 @@
     "@effect-agent/core": "workspace:*",
     "@effect-agent/engine": "workspace:*",
     "@effect-agent/sandbox": "workspace:*",
-    "@effect-agent/session": "workspace:*",
     "@effect-agent/storage-cloudflare": "workspace:*",
+    "@effect-agent/thread": "workspace:*",
     "@effect/platform-browser": "catalog:",
     "@effect/sql-sqlite-do": "catalog:"
   },

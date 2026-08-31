@@ -1,14 +1,14 @@
 import {
-  CertificationReport,
-  conversationStoreConformanceCases,
-  submissionLedgerConformanceCases,
-} from "@effect-agent/session/testing";
-import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,
   certifyDurableAdapters,
   tier2NeverFiredLocations,
 } from "@effect-agent/testing/certification";
+import {
+  CertificationReport,
+  threadStoreConformanceCases,
+  submissionLedgerConformanceCases,
+} from "@effect-agent/thread/testing";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer, Schema } from "effect";
@@ -16,11 +16,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   DoStorageFailpoint,
-  conversationStoreLayer,
+  threadStoreLayer,
   storageConfigLayer,
   submissionLedgerLayer,
 } from "../src/index.ts";
-import { withConversationStorage } from "./harness.ts";
+import { withThreadStorage } from "./harness.ts";
 
 // ---------------------------------------------------------------------------
 // P7 WP2 — certification runner for the Cloudflare Durable Object adapter pair (DC storage),
@@ -39,9 +39,9 @@ import { withConversationStorage } from "./harness.ts";
 /** Flip to true to log the Schema-encoded certificate (workerd cannot write files). */
 const PRINT_REPORT = false;
 
-/** ConversationStore and SubmissionLedger sharing ONE SqlClient over one DO's storage. */
+/** ThreadStore and SubmissionLedger sharing ONE SqlClient over one DO's storage. */
 const combinedAdapters = (storage: DurableObjectStorage) =>
-  Layer.mergeAll(conversationStoreLayer, submissionLedgerLayer).pipe(
+  Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
         storageConfigLayer({ storage, observationPollInterval: 1 }),
@@ -61,7 +61,7 @@ const TIER3_EVIDENCE = [
 let cachedPromise: Promise<CertificationReport> | undefined;
 
 const certified = (): Promise<CertificationReport> => {
-  cachedPromise ??= withConversationStorage("wp2-certification", (storage) =>
+  cachedPromise ??= withThreadStorage("wp2-certification", (storage) =>
     Effect.gen(function* () {
       // The same combined Layer instance is passed for BOTH ports: Layer memoization builds
       // it once, so ledger and store share one SqlClient over one Durable Object database.
@@ -69,7 +69,7 @@ const certified = (): Promise<CertificationReport> => {
       const report = yield* certifyDurableAdapters({
         adapter: { name: "@effect-agent/storage-cloudflare" },
         submissionLedger: adapters,
-        conversationStore: adapters,
+        threadStore: adapters,
         tierThreeEvidence: TIER3_EVIDENCE,
       });
       if (PRINT_REPORT) {
@@ -86,13 +86,13 @@ const CERTIFICATION_TIMEOUT = 240_000;
 
 describe("TEST-004 STORE-010 STORE-013 adapter certification — storage-cloudflare (DC, in-workerd)", () => {
   it(
-    "TIER1: all SubmissionLedger and ConversationStore contract cases pass",
+    "TIER1: all SubmissionLedger and ThreadStore contract cases pass",
     async () => {
       const report = await certified();
       const ledgerCases = report.tier1.filter((result) => result.suite === "submission-ledger");
-      const storeCases = report.tier1.filter((result) => result.suite === "conversation-store");
+      const storeCases = report.tier1.filter((result) => result.suite === "thread-store");
       expect(ledgerCases).toHaveLength(submissionLedgerConformanceCases.length);
-      expect(storeCases).toHaveLength(conversationStoreConformanceCases.length);
+      expect(storeCases).toHaveLength(threadStoreConformanceCases.length);
       expect(report.tier1.filter((result) => result.status !== "passed")).toEqual([]);
     },
     CERTIFICATION_TIMEOUT,

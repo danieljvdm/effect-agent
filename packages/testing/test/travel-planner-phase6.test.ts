@@ -1,11 +1,5 @@
-import { ConversationId } from "@effect-agent/core";
+import { ThreadId } from "@effect-agent/core";
 import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
-import {
-  ConversationRead,
-  ConversationStore,
-  DurableAgentRuntime,
-  IdempotencyKey,
-} from "@effect-agent/session";
 import {
   TravelPlannerCloudflareProfile,
   expectedTravelPlan,
@@ -20,12 +14,13 @@ import {
   phase6TravelPlannerProfile,
   travelPlanFromDurableSettlement,
 } from "@effect-agent/testing/fixtures/travel-planner";
+import { ThreadRead, ThreadStore, DurableAgentRuntime, IdempotencyKey } from "@effect-agent/thread";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import { Effect, FileSystem, Layer, Schema, Stream } from "effect";
 
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 
 const withTemporaryDirectory = <A, E>(
@@ -83,29 +78,26 @@ describe("TEST-014 P6 Travel Planner DN/DC equivalence — the DN half", () => {
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
-          const store = yield* ConversationStore;
-          const conversationId = decodeConversationId("travel-planner-p6-golden-dn");
+          const store = yield* ThreadStore;
+          const threadId = decodeThreadId("travel-planner-p6-golden-dn");
           const agent = makePhase4TravelPlannerAgent();
 
           const receipt = yield* runtime.submit(
             agent,
             phase1Trip,
-            phase4TravelPlannerSubmitOptions(
-              conversationId,
-              decodeIdempotencyKey("p6-golden-dn-1"),
-            ),
+            phase4TravelPlannerSubmitOptions(threadId, decodeIdempotencyKey("p6-golden-dn-1")),
           );
-          const settlements = yield* runtime.processConversation(agent, conversationId);
+          const settlements = yield* runtime.processThread(agent, threadId);
           expect(settlements).toHaveLength(1);
           expect(settlements[0]?.outcome).toBe("completed");
 
           const records = yield* Stream.runCollect(
-            store.read(ConversationRead.make({ conversationId, limit: 1_024 })),
+            store.read(ThreadRead.make({ threadId, limit: 1_024 })),
           );
           expect(yield* travelPlanFromDurableSettlement(records)).toEqual(expectedTravelPlan);
 
           const normalized = yield* normalizeCrossPlatformTravelPlannerEvidence(records, receipt, {
-            conversationId,
+            threadId,
             deploymentId: phase4TravelPlannerDeploymentId,
             producerId: phase4TravelPlannerProducerId,
           });

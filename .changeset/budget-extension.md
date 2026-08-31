@@ -1,7 +1,7 @@
 ---
 "@effect-agent/engine": minor
 "@effect-agent/capabilities": minor
-"@effect-agent/session": patch
+"@effect-agent/thread": patch
 ---
 
 Budget extension (D-037, ADR-0019 S3, RUN-021/SUB-034): `RunOptions` gains tightening-only
@@ -14,7 +14,7 @@ orchestrator model grants a scout more budget by re-delegating with a raised all
 child; never a mid-flight top-up). `projectResult` now receives a bounded
 `SubagentResultContext` whose `budgetExhausted` marker is honest on both paths — from the
 ephemeral child result's `finishReason`, or from the child Settlement's durable marker carried
-through the new optional `ChildEstablishSettled.finishReason` (threaded by the session
+through the new optional `ChildEstablishSettled.finishReason` (threaded by the thread
 coordinator shared by the DN and DC assemblies; exercised in the DN-profile durable-subagent
 suites) — so a budget-truncated partial can be surfaced in the declared success Schema. Existing one-argument `projectResult` functions keep
 compiling unchanged. Also hardens S2 containment per its autoreviewer findings: `Subagent.define`

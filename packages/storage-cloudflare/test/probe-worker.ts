@@ -5,7 +5,7 @@ import { DurableObject } from "cloudflare:workers";
  *
  * Tests use `runInDurableObject` to execute Effect programs directly against
  * `ctx.storage`, so the class only needs to exist as an alarm-counting shell.
- * The real Conversation Object class factory arrives with WP3 in
+ * The real Thread Object class factory arrives with WP3 in
  * `@effect-agent/platform-cloudflare`.
  */
 export class ProbeDurableObject extends DurableObject {

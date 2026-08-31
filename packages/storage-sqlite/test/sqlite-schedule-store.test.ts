@@ -1,4 +1,4 @@
-import { scheduleStoreConformanceCases } from "@effect-agent/session/testing";
+import { scheduleStoreConformanceCases } from "@effect-agent/thread/testing";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, it } from "@effect/vitest";

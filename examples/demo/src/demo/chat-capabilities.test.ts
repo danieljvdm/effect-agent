@@ -27,7 +27,7 @@ describe("chat-native Phase 2 recipes", () => {
     ]);
   });
 
-  it("renders the structured TravelPlan as a conversational answer", () => {
+  it("renders the structured TravelPlan as a natural-language answer", () => {
     const answer = formatTravelPlanForChat(expectedTravelPlan);
 
     expect(answer).toContain("###");

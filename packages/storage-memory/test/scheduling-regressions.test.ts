@@ -1,4 +1,4 @@
-import { AgentId, ConversationId, ReceiptId, SubmissionId } from "@effect-agent/core";
+import { AgentId, ThreadId, ReceiptId, SubmissionId } from "@effect-agent/core";
 import {
   defaultSchedulingLimits,
   DefinitionDigests,
@@ -21,7 +21,7 @@ import {
   ScheduleStorageError,
   type ScheduleTimingRequest,
   ScheduleWakeNoop,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Tracer } from "effect";
@@ -45,7 +45,7 @@ const options = (
   scope,
   scheduleId: Schema.decodeSync(ScheduleId)(id),
   timing,
-  destination: { _tag: "FreshConversation" },
+  destination: { _tag: "FreshThread" },
   deliveryPrincipal,
   definitions,
 });
@@ -55,7 +55,7 @@ const keyOf = (request: ScheduleCreateOptions) => ({
 });
 const receiptFor = (envelope: ScheduledEnvelope): Receipt =>
   Receipt.make({
-    conversationId: envelope.conversationId,
+    threadId: envelope.threadId,
     receiptId: Schema.decodeSync(ReceiptId)(`receipt:${envelope.occurrenceId}`),
     submissionId: Schema.decodeSync(SubmissionId)(`submission:${envelope.occurrenceId}`),
     queueSequence: Schema.decodeSync(QueueSequence)(1),
@@ -444,8 +444,8 @@ describe("Scheduling public recovery contract", () => {
             ...request,
             expectedRevision: 1,
             destination: {
-              _tag: "ExistingConversation",
-              conversationId: Schema.decodeSync(ConversationId)("other-conversation"),
+              _tag: "ExistingThread",
+              threadId: Schema.decodeSync(ThreadId)("other-thread"),
             },
             timing: { _tag: "At", atMillis: 50_000 },
           },
@@ -500,12 +500,12 @@ describe("Scheduling public recovery contract", () => {
     }).pipe(Effect.provide(layer(submit)));
   });
 
-  it.effect("a Receipt for a different Conversation does not clear the pending obligation", () => {
+  it.effect("a Receipt for a different Thread does not clear the pending obligation", () => {
     const submit: ScheduledInputAdmission["Service"]["submit"] = (envelope) =>
       Effect.succeed(
         Receipt.make({
           ...receiptFor(envelope),
-          conversationId: Schema.decodeSync(ConversationId)("wrong-conversation"),
+          threadId: Schema.decodeSync(ThreadId)("wrong-thread"),
         }),
       );
     return Effect.gen(function* () {

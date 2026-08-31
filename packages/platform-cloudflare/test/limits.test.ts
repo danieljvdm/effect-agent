@@ -1,12 +1,12 @@
-import { ApprovalDecisionCommand } from "@effect-agent/session";
+import { ApprovalDecisionCommand } from "@effect-agent/thread";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { AdmissionLimitExceeded, CloudflareConversationClient } from "../src/index.ts";
+import { AdmissionLimitExceeded, CloudflareThreadClient } from "../src/index.ts";
 import {
   BOOK_TOOL_CALL_ID,
   approvalDefinition,
-  decodeConversationId,
+  decodeThreadId,
   plannerDefinition,
   submitOptions,
 } from "./fixtures.ts";
@@ -20,7 +20,7 @@ import {
 } from "./harness.ts";
 
 /**
- * Resource limits are checked BEFORE admission (exit gate; DEPLOY-007): the Conversation
+ * Resource limits are checked BEFORE admission (exit gate; DEPLOY-007): the Thread
  * Object's submit entry point refuses over-limit work with the typed
  * `AdmissionLimitExceeded` and writes NOTHING — no ledger row ever exists for a refused
  * admission. The `LIMITED` class binds tight queue/input quotas; `TINYDB` binds a database
@@ -33,17 +33,17 @@ const lane = (label: string): string => `cf-limits-${label}-${laneCounter++}`;
 const submitTo = (
   namespace: TestNamespace,
   definition: typeof plannerDefinition | typeof approvalDefinition,
-  conversation: string,
+  thread: string,
   key: string,
   question = "respect the quota",
 ) =>
   runClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       return yield* client.submit(
         { definition },
-        { question, ref: conversation },
-        submitOptions(conversation, key),
+        { question, ref: thread },
+        submitOptions(thread, key),
       );
     }),
     namespace,
@@ -52,17 +52,17 @@ const submitTo = (
 const submitRefusal = (
   namespace: TestNamespace,
   definition: typeof plannerDefinition | typeof approvalDefinition,
-  conversation: string,
+  thread: string,
   key: string,
   question?: string,
 ): Promise<unknown> =>
   runClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       return yield* client.submit(
         { definition },
-        { question: question ?? "respect the quota", ref: conversation },
-        submitOptions(conversation, key),
+        { question: question ?? "respect the quota", ref: thread },
+        submitOptions(thread, key),
       );
     }).pipe(Effect.flip),
     namespace,
@@ -70,15 +70,15 @@ const submitRefusal = (
 
 describe("DC admission limits (before any ledger row exists)", () => {
   it("refuses the over-depth admission typed and admits again once the lane drains", async () => {
-    const conversation = lane("queue-depth");
+    const thread = lane("queue-depth");
     // S1 suspends durably on approval, S2 queues behind it: depth 2 = the configured max.
-    const receipt1 = await submitTo("LIMITED", approvalDefinition, conversation, "k1");
-    await drainAlarmsUntil(conversation, anyInState(conversation, "suspended", "LIMITED"), {
+    const receipt1 = await submitTo("LIMITED", approvalDefinition, thread, "k1");
+    await drainAlarmsUntil(thread, anyInState(thread, "suspended", "LIMITED"), {
       namespace: "LIMITED",
     });
-    await submitTo("LIMITED", approvalDefinition, conversation, "k2");
+    await submitTo("LIMITED", approvalDefinition, thread, "k2");
 
-    const refusal = await submitRefusal("LIMITED", approvalDefinition, conversation, "k3");
+    const refusal = await submitRefusal("LIMITED", approvalDefinition, thread, "k3");
     expect(refusal).toBeInstanceOf(AdmissionLimitExceeded);
     if (refusal instanceof AdmissionLimitExceeded) {
       expect(refusal.limit).toBe("queue-depth");
@@ -86,19 +86,19 @@ describe("DC admission limits (before any ledger row exists)", () => {
       expect(refusal.maximum).toBe(2);
     }
     // NOTHING was admitted for the refused key: the lane still holds exactly two rows.
-    expect(await laneRows(conversation, "LIMITED")).toHaveLength(2);
+    expect(await laneRows(thread, "LIMITED")).toHaveLength(2);
 
     // A REPLAYED key is exempt: the accepted-work obligation already exists, and refusing
     // the replay would strand a client that merely lost the first Receipt.
-    const replayed = await submitTo("LIMITED", approvalDefinition, conversation, "k1");
+    const replayed = await submitTo("LIMITED", approvalDefinition, thread, "k1");
     expect(replayed.submissionId).toBe(receipt1.submissionId);
 
     // Once the suspended head resolves and settles, the quota reopens.
     await runClient(
       Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
+        const client = yield* CloudflareThreadClient;
         return yield* client.resolveApproval(
-          decodeConversationId(conversation),
+          decodeThreadId(thread),
           ApprovalDecisionCommand.make({
             submissionId: receipt1.submissionId,
             toolCallId: BOOK_TOOL_CALL_ID,
@@ -111,23 +111,23 @@ describe("DC admission limits (before any ledger row exists)", () => {
       "LIMITED",
     );
     await drainAlarmsUntil(
-      conversation,
+      thread,
       async () => {
-        const rows = await laneRows(conversation, "LIMITED");
+        const rows = await laneRows(thread, "LIMITED");
         return rows.some((row) => row.state === "settled");
       },
       { namespace: "LIMITED" },
     );
-    const receipt3 = await submitTo("LIMITED", approvalDefinition, conversation, "k3");
-    expect(receipt3.conversationId).toBe(decodeConversationId(conversation));
+    const receipt3 = await submitTo("LIMITED", approvalDefinition, thread, "k3");
+    expect(receipt3.threadId).toBe(decodeThreadId(thread));
   }, 60_000);
 
   it("refuses over-limit input bytes typed before any ledger row exists", async () => {
-    const conversation = lane("input-bytes");
+    const thread = lane("input-bytes");
     const refusal = await submitRefusal(
       "LIMITED",
       plannerDefinition,
-      conversation,
+      thread,
       "k1",
       "x".repeat(2_000),
     );
@@ -137,24 +137,24 @@ describe("DC admission limits (before any ledger row exists)", () => {
       expect(refusal.maximum).toBe(512);
       expect(refusal.actual).toBeGreaterThan(512);
     }
-    expect(await laneRows(conversation, "LIMITED")).toHaveLength(0);
+    expect(await laneRows(thread, "LIMITED")).toHaveLength(0);
 
     // The same lane still admits a bounded input afterwards: the refusal wrote nothing.
-    await submitTo("LIMITED", plannerDefinition, conversation, "k1");
-    await drainAlarmsUntil(conversation, allSettled(conversation, "LIMITED"), {
+    await submitTo("LIMITED", plannerDefinition, thread, "k1");
+    await drainAlarmsUntil(thread, allSettled(thread, "LIMITED"), {
       namespace: "LIMITED",
     });
   }, 30_000);
 
   it("refuses admissions typed when the database exceeds its configured ceiling", async () => {
-    const conversation = lane("database-bytes");
-    const refusal = await submitRefusal("TINYDB", plannerDefinition, conversation, "k1");
+    const thread = lane("database-bytes");
+    const refusal = await submitRefusal("TINYDB", plannerDefinition, thread, "k1");
     expect(refusal).toBeInstanceOf(AdmissionLimitExceeded);
     if (refusal instanceof AdmissionLimitExceeded) {
       expect(refusal.limit).toBe("database-bytes");
       expect(refusal.maximum).toBe(1);
       expect(refusal.actual).toBeGreaterThan(1);
     }
-    expect(await laneRows(conversation, "TINYDB")).toHaveLength(0);
+    expect(await laneRows(thread, "TINYDB")).toHaveLength(0);
   }, 30_000);
 });

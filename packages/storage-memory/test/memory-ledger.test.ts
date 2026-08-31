@@ -1,4 +1,4 @@
-import { AgentId, ConversationId, SubmissionId, ToolCallId } from "@effect-agent/core";
+import { AgentId, ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core";
 import {
   AdmissionRequest,
   ApprovalDecisionCommand,
@@ -39,8 +39,8 @@ import {
   WaitingForChildSuspension,
   submissionInputRecordId,
   submissionSettlementId,
-} from "@effect-agent/session";
-import { submissionLedgerConformanceCases } from "@effect-agent/session/testing";
+} from "@effect-agent/thread";
+import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Option, Ref, Schema, Stream } from "effect";
@@ -49,7 +49,7 @@ import { MemorySubmissionLedgerLive, memorySubmissionLedgerLayer } from "../src/
 
 const testLayer = Layer.mergeAll(MemorySubmissionLedgerLive, NodeCrypto.layer);
 
-const conversationId = Schema.decodeSync(ConversationId)("conversation-memory-ledger-1");
+const threadId = Schema.decodeSync(ThreadId)("thread-memory-ledger-1");
 const principal = Schema.decodeSync(Principal)("principal-memory-ledger");
 const agentId = Schema.decodeSync(AgentId)("agent-memory-ledger");
 const deploymentId = Schema.decodeSync(DeploymentId)("deployment-memory-ledger");
@@ -64,8 +64,8 @@ const semanticReservation = Schema.decodeSync(ChildReservationId)(
 );
 const isLedgerError = Schema.is(LedgerError);
 const sequenceOne = Schema.decodeSync(CanonicalSequence)(1);
-const waitingParentLane = Schema.decodeSync(ConversationId)("conversation-memory-waiting");
-const waitingChildLane = Schema.decodeSync(ConversationId)("conversation-memory-waiting-child");
+const waitingParentLane = Schema.decodeSync(ThreadId)("thread-memory-waiting");
+const waitingChildLane = Schema.decodeSync(ThreadId)("thread-memory-waiting-child");
 const indeterminateKey = Schema.decodeSync(IdempotencyKey)("indeterminate-key");
 const waitingParentKey = Schema.decodeSync(IdempotencyKey)("waiting-parent");
 const waitingChildKey = Schema.decodeSync(IdempotencyKey)("waiting-child");
@@ -79,7 +79,7 @@ const agentDigests = DefinitionDigests.make({
 
 const admissionRequest = (idempotencyKey: string, digestSeed: string): AdmissionRequest =>
   AdmissionRequest.make({
-    conversationId,
+    threadId,
     principal,
     idempotencyKey: Schema.decodeSync(IdempotencyKey)(idempotencyKey),
     agentId,
@@ -102,9 +102,7 @@ describe("MemorySubmissionLedger", () => {
         const ledger = yield* SubmissionLedger;
         const admitted = yield* ledger.admit(admissionRequest("semantic-json-key", "af"));
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
-        const claim = yield* ledger.claim(
-          ClaimRequest.make({ conversationId, producerId: producerA }),
-        );
+        const claim = yield* ledger.claim(ClaimRequest.make({ threadId, producerId: producerA }));
         if (Option.isNone(claim)) return yield* Effect.die("missing semantic JSON claim");
 
         const allocation = { turns: 4, toolCalls: 8 };
@@ -220,14 +218,12 @@ describe("MemorySubmissionLedger", () => {
         const admitted = yield* ledger.admit(admissionRequest("same-producer-key", "ac"));
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
 
-        const first = yield* ledger.claim(
-          ClaimRequest.make({ conversationId, producerId: producerA }),
-        );
+        const first = yield* ledger.claim(ClaimRequest.make({ threadId, producerId: producerA }));
         expect(Option.isSome(first)).toBe(true);
         if (Option.isNone(first)) return;
 
         const reclaimed = yield* ledger.claim(
-          ClaimRequest.make({ conversationId, producerId: producerA }),
+          ClaimRequest.make({ threadId, producerId: producerA }),
         );
         expect(Option.isSome(reclaimed)).toBe(true);
         if (Option.isNone(reclaimed)) return;
@@ -266,7 +262,7 @@ describe("MemorySubmissionLedger", () => {
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const invalid = {
-          conversationId: "conversation-memory-ledger-invalid",
+          threadId: "thread-memory-ledger-invalid",
           principal: "principal-memory-ledger",
           idempotencyKey: "invalid-key",
           agentId: "agent-memory-ledger",
@@ -344,7 +340,7 @@ describe("MemorySubmissionLedger", () => {
         const claimJoiningFailure = yield* ledger
           .claimJoining(
             ClaimJoiningRequest.make({
-              conversationId,
+              threadId,
               hostSubmissionId: unknownSubmission,
               ownershipToken: unknownToken,
               maxCount: 1,
@@ -533,7 +529,7 @@ describe("MemorySubmissionLedger", () => {
       yield* Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const key = SubmissionLookupByKey.make({
-          conversationId,
+          threadId,
           principal,
           idempotencyKey: indeterminateKey,
         });
@@ -572,7 +568,7 @@ describe("MemorySubmissionLedger", () => {
 
         const parent = yield* ledger.admit(
           AdmissionRequest.make({
-            conversationId: waitingParentLane,
+            threadId: waitingParentLane,
             principal,
             idempotencyKey: waitingParentKey,
             agentId,
@@ -585,7 +581,7 @@ describe("MemorySubmissionLedger", () => {
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: parent.submissionId }));
         const child = yield* ledger.admit(
           AdmissionRequest.make({
-            conversationId: waitingChildLane,
+            threadId: waitingChildLane,
             principal,
             idempotencyKey: waitingChildKey,
             agentId,
@@ -602,7 +598,7 @@ describe("MemorySubmissionLedger", () => {
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: child.submissionId }));
 
         const parentClaim = yield* ledger.claim(
-          ClaimRequest.make({ conversationId: waitingParentLane, producerId: producerA }),
+          ClaimRequest.make({ threadId: waitingParentLane, producerId: producerA }),
         );
         expect(Option.isSome(parentClaim)).toBe(true);
         if (Option.isNone(parentClaim)) return;
@@ -625,11 +621,11 @@ describe("MemorySubmissionLedger", () => {
         // Independent fencing (SUB-020): the child lane claims under its OWN epoch while the
         // suspended parent lane produces no claim at all.
         const childClaim = yield* ledger.claim(
-          ClaimRequest.make({ conversationId: waitingChildLane, producerId: producerA }),
+          ClaimRequest.make({ threadId: waitingChildLane, producerId: producerA }),
         );
         expect(Option.isSome(childClaim)).toBe(true);
         const blockedParent = yield* ledger.claim(
-          ClaimRequest.make({ conversationId: waitingParentLane, producerId: producerA }),
+          ClaimRequest.make({ threadId: waitingParentLane, producerId: producerA }),
         );
         expect(Option.isNone(blockedParent)).toBe(true);
       }),

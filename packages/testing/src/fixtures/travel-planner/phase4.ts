@@ -1,4 +1,4 @@
-import { Agent, AgentPolicy, type ConversationId } from "@effect-agent/core";
+import { Agent, AgentPolicy, type ThreadId } from "@effect-agent/core";
 import { ToolExecutionClass } from "@effect-agent/engine";
 import {
   CanonicalRecordEnvelope,
@@ -10,7 +10,7 @@ import {
   type DurableSubmitOptions,
   type IdempotencyKey,
   type Receipt,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Layer, Schema } from "effect";
 import { Model, Tool, Toolkit } from "effect/unstable/ai";
 
@@ -85,10 +85,10 @@ export const phase4TravelPlannerDefinitionDigests = DefinitionDigests.make({
 
 /** Durable admission options for one Travel Planner Submission on one trip lane. */
 export const phase4TravelPlannerSubmitOptions = (
-  conversationId: ConversationId,
+  threadId: ThreadId,
   idempotencyKey: IdempotencyKey,
 ): DurableSubmitOptions => ({
-  conversationId,
+  threadId,
   principal: phase4TravelPlannerPrincipal,
   idempotencyKey,
   definitions: phase4TravelPlannerDefinitionDigests,
@@ -211,7 +211,7 @@ export const travelPlanFromDurableSettlement = Effect.fn(
   const settled = settlements.at(0);
   if (settled === undefined) {
     return yield* TravelPlannerDurableEvidenceError.make({
-      message: "The canonical Conversation Log has no SubmissionSettled record.",
+      message: "The canonical Thread Log has no SubmissionSettled record.",
     });
   }
   if (settled.outcome !== "completed" || settled.result === undefined) {
@@ -235,7 +235,7 @@ const decodeComparableJson = Schema.decodeUnknownEffect(Schema.Json);
  * Project canonical evidence into a Submission-identity-independent comparable form: batch
  * identity, canonical sequence, and the full encoded record, with the ledger-minted
  * `submissionId`/`receiptId` (and every identity derived from them: run, turn, batch, record,
- * and settlement ids) replaced by stable placeholders. Two Conversations whose normalized
+ * and settlement ids) replaced by stable placeholders. Two Threads whose normalized
  * evidence is equal took byte-equivalent canonical histories, so restart-equivalence can compare
  * a recovered run against an uninterrupted control run on a separate database.
  */

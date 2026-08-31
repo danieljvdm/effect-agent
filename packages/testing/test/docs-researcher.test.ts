@@ -1,20 +1,6 @@
 import { connectMcp, StructuralRedactorLive } from "@effect-agent/capabilities";
-import { ConversationId, ToolCallId, type SubmissionId } from "@effect-agent/core";
+import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
 import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
-import {
-  ClaimRequest,
-  ConversationRead,
-  ConversationStore,
-  DurableAgentRuntime,
-  IdempotencyKey,
-  ProducerId,
-  SubmissionLedger,
-  SubmissionLookupById,
-  childConversationIdFor,
-  runIdForSubmission,
-  type CanonicalRecordEnvelope,
-  type ResolvedBinding,
-} from "@effect-agent/session";
 import {
   assertDiscoveryMatchesAuthoredToolkit,
   docsCoordinatorConfidentialMarker,
@@ -39,12 +25,26 @@ import {
   researchMissionRequest,
   summarizeCallId,
 } from "@effect-agent/testing/fixtures/docs-researcher";
+import {
+  ClaimRequest,
+  ThreadRead,
+  ThreadStore,
+  DurableAgentRuntime,
+  IdempotencyKey,
+  ProducerId,
+  SubmissionLedger,
+  SubmissionLookupById,
+  childThreadIdFor,
+  runIdForSubmission,
+  type CanonicalRecordEnvelope,
+  type ResolvedBinding,
+} from "@effect-agent/thread";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import { Effect, FileSystem, Option, Schema, Stream } from "effect";
 
-const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const decodeProducerId = Schema.decodeSync(ProducerId);
@@ -74,29 +74,27 @@ const withTemporaryDirectory = <A, E>(
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
 
-const submitMission = (conversation: string, key: string) =>
+const submitMission = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     return yield* runtime.submit(
       docsResearcherSubmitAgent,
       researchMissionRequest,
-      docsResearcherSubmitOptions(decodeConversationId(conversation), decodeIdempotencyKey(key)),
+      docsResearcherSubmitOptions(decodeThreadId(thread), decodeIdempotencyKey(key)),
     );
   });
 
-/** Drive one Conversation lane through the S2 multi-binding worker entry point. */
-const drive = (bindings: ReadonlyArray<ResolvedBinding>, conversationId: ConversationId) =>
+/** Drive one Thread lane through the S2 multi-binding worker entry point. */
+const drive = (bindings: ReadonlyArray<ResolvedBinding>, threadId: ThreadId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
-    return yield* runtime.processConversationResolved(conversationId, bindings);
+    return yield* runtime.processThreadResolved(threadId, bindings);
   });
 
-const readLog = (conversationId: ConversationId) =>
+const readLog = (threadId: ThreadId) =>
   Effect.gen(function* () {
-    const store = yield* ConversationStore;
-    return yield* Stream.runCollect(
-      store.read(ConversationRead.make({ conversationId, limit: 1_024 })),
-    );
+    const store = yield* ThreadStore;
+    return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1_024 })));
   });
 
 const payloadsOf = <Tag extends string>(
@@ -170,36 +168,33 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             const receipt = yield* submitMission("docs-researcher-happy", "docs-happy-1");
             const parentRunId = runIdForSubmission(receipt.submissionId);
             const documents = researchCorpusDocumentIds;
-            const childConversations = documents.map((documentId) =>
-              childConversationIdFor(
-                receipt.submissionId,
-                decodeToolCallId(summarizeCallId(documentId)),
-              ),
+            const childThreads = documents.map((documentId) =>
+              childThreadIdFor(receipt.submissionId, decodeToolCallId(summarizeCallId(documentId))),
             );
 
             // Phase 1: one coordinator Turn declares BOTH delegation calls; the
             // parent suspends waitingForChild, holds no worker permit, and no
             // child model ran (spec §12 step 10, SUB-030).
-            const first = yield* drive(harness.bindings, receipt.conversationId);
+            const first = yield* drive(harness.bindings, receipt.threadId);
             expect(first).toHaveLength(0);
             expect((yield* submissionState(receipt.submissionId)).state).toBe("suspended");
             const ledger = yield* SubmissionLedger;
             const claimed = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: receipt.conversationId,
+                threadId: receipt.threadId,
                 producerId: decodeProducerId("docs-researcher-probe"),
               }),
             );
             expect(Option.isNone(claimed)).toBe(true);
             expect(yield* harness.childModelCalls).toBe(0);
-            const afterEstablish = yield* readLog(receipt.conversationId);
+            const afterEstablish = yield* readLog(receipt.threadId);
             expect(payloadsOf(afterEstablish, "SubagentRequested")).toHaveLength(documents.length);
             expect(payloadsOf(afterEstablish, "SubagentStarted")).toHaveLength(documents.length);
 
             // Phase 2: each child lane runs to Settlement under its own Attempt.
             // Every summarizer consulted the MCP content tool exactly once.
-            for (const childConversationId of childConversations) {
-              const settlements = yield* drive(harness.bindings, childConversationId);
+            for (const childThreadId of childThreads) {
+              const settlements = yield* drive(harness.bindings, childThreadId);
               expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             }
             for (const documentId of documents) {
@@ -217,9 +212,9 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
 
             // Phase 3: the woken parent joins BOTH verified settlements and
             // settles completed with the digest of bounded findings.
-            const settlements = yield* drive(harness.bindings, receipt.conversationId);
+            const settlements = yield* drive(harness.bindings, receipt.threadId);
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
-            const log = yield* readLog(receipt.conversationId);
+            const log = yield* readLog(receipt.threadId);
             expect(payloadsOf(log, "SubagentJoined")).toHaveLength(documents.length);
             const settled = payloadsOf(log, "SubmissionSettled")[0]?.record.payload;
             if (settled?._tag !== "SubmissionSettled")
@@ -240,7 +235,7 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             }
 
             // Redaction and declassification (SEC-008, SUB-015): the parent
-            // Conversation and coordinator prompts carry the bounded summary
+            // Thread and coordinator prompts carry the bounded summary
             // but never the body secret or the raw body phrases; each child's
             // own log holds the fetched body — with the secret — exactly once;
             // and the audit-surface preview of a raw document is structurally
@@ -255,9 +250,9 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
               expect(finalPrompt).not.toContain(documentBodyPhrase(documentId));
             }
             expect(finalPrompt).not.toContain(docsDocumentBodySecret);
-            for (const [index, childConversationId] of childConversations.entries()) {
+            for (const [index, childThreadId] of childThreads.entries()) {
               const documentId = documents[index] ?? "";
-              const childLog = yield* readLog(childConversationId);
+              const childLog = yield* readLog(childThreadId);
               const childLogJson = JSON.stringify(
                 childLog.map((envelope) => envelope.record.payload),
               );

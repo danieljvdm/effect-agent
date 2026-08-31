@@ -1,5 +1,5 @@
-import type { ConversationId } from "@effect-agent/core";
-import { DurableAgentRuntime, SubmissionLedger } from "@effect-agent/session";
+import type { ThreadId } from "@effect-agent/core";
+import { DurableAgentRuntime, SubmissionLedger } from "@effect-agent/thread";
 import { NodeRuntime } from "@effect/platform-node";
 import { Cause, Duration, Effect, Exit, Option, Schema, Stream } from "effect";
 
@@ -55,8 +55,7 @@ const workerLoop = Effect.gen(function* () {
   const runtime = yield* DurableAgentRuntime;
   const ledger = yield* SubmissionLedger;
   const bindings = yield* makeSoakBindings();
-  const driveResolved = (conversation: ConversationId) =>
-    runtime.processConversationResolved(conversation, bindings);
+  const driveResolved = (thread: ThreadId) => runtime.processThreadResolved(thread, bindings);
   while (true) {
     // Heal what a killed sibling left behind, then drive every discovered lane once.
     yield* tolerateTyped(runtime.runRecovery);
@@ -64,11 +63,11 @@ const workerLoop = Effect.gen(function* () {
       Effect.exit,
       Effect.map((exit) => (Exit.isSuccess(exit) ? Array.from(exit.value) : [])),
     );
-    const seen = new Set<ConversationId>();
+    const seen = new Set<ThreadId>();
     for (const submission of nonterminal) {
-      if (seen.has(submission.conversationId)) continue;
-      seen.add(submission.conversationId);
-      yield* tolerateTyped(driveResolved(submission.conversationId));
+      if (seen.has(submission.threadId)) continue;
+      seen.add(submission.threadId);
+      yield* tolerateTyped(driveResolved(submission.threadId));
     }
     yield* Effect.sleep(Duration.millis(25));
   }

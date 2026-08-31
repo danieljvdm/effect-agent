@@ -33,7 +33,7 @@ const openRuntime = (persistDirectory: string): Miniflare =>
       compatibilityDate: "2025-05-01",
       compatibilityFlags: ["nodejs_compat"],
       durableObjects: {
-        CONVERSATIONS: { className: "TravelPlannerRestartObject", useSQLite: true },
+        THREADS: { className: "TravelPlannerRestartObject", useSQLite: true },
       },
       resourcePersistencePath: persistDirectory,
     }),
@@ -142,7 +142,7 @@ describe("Miniflare restart lane — Travel Planner armed-failpoint convergence"
 
   for (const [index, row] of rows.entries()) {
     it(`a Miniflare runtime restart over persisted DO storage converges the armed failpoint scenario: ${row.name}`, async () => {
-      const conversation = `tp-restart-${index}`;
+      const thread = `tp-restart-${index}`;
       const persistDirectory = await mkdtemp(join(tmpdir(), "tp-restart-"));
       cleanups.push(() => rm(persistDirectory, { recursive: true, force: true }));
       const armedTotal = row.arms.reduce((total, arm) => total + arm.count, 0);
@@ -151,16 +151,16 @@ describe("Miniflare restart lane — Travel Planner armed-failpoint convergence"
       // least once AND a retry hit it again — runtime 1 cannot finish this Submission).
       const first = openRuntime(persistDirectory);
       for (const arm of row.arms) {
-        await call(first, "/arm", { _tag: arm.kind, conversation, ...arm });
+        await call(first, "/arm", { _tag: arm.kind, thread, ...arm });
       }
       const { receipt } = await call<{ receipt: unknown }>(first, "/submit", {
-        conversation,
-        key: `${conversation}-key`,
+        thread,
+        key: `${thread}-key`,
       });
       await pollUntil(async () => {
         const armed = await call<{ remaining: number }>(
           first,
-          `/armed?conversation=${encodeURIComponent(conversation)}`,
+          `/armed?thread=${encodeURIComponent(thread)}`,
         );
         return armed.remaining <= row.blockedAtRemaining;
       }, `runtime 1 to hit ${row.name} repeatedly (started at ${armedTotal})`);
@@ -185,7 +185,7 @@ describe("Miniflare restart lane — Travel Planner armed-failpoint convergence"
       const settled = await call<{ outcome: string }>(second, "/await", { receipt });
       expect(settled.outcome).toBe("completed");
       const { tags } = await call<{ tags: ReadonlyArray<string> }>(second, "/records", {
-        conversation,
+        thread,
       });
       expect(tags.filter((tag) => tag === "SubmissionSettled")).toHaveLength(1);
       expect(tags).toContain("ModelResponseRecorded");

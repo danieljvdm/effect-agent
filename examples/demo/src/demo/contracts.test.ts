@@ -91,7 +91,7 @@ describe("Phase 2 demo transport contracts", () => {
       handle: "demo-handle-contract",
       emittedAt: "2026-07-30T12:00:00.000Z",
       runId: "demo-run-contract",
-      conversationId: "demo-conversation-contract",
+      threadId: "demo-thread-contract",
       scenario: "guided",
       executionClass: "ephemeral",
       schedulerConcurrency: 3,

@@ -17,7 +17,7 @@ Before 1.0, APIs and stored data may change without a migration path.
 | Need                                   | Guide                                                    | Your application supplies                          |
 | -------------------------------------- | -------------------------------------------------------- | -------------------------------------------------- |
 | Run or stream an agent                 | [Execution](../guide/run-agents)                         | Model, tool handlers, history policy               |
-| Retain completed conversations         | [History](../guide/conversations#retain-completed-runs)  | Store and conversation IDs                         |
+| Retain completed threads               | [History](../guide/threads#retain-completed-runs)        | Store and thread IDs                               |
 | Recover work after a crash             | [Durability](../concepts/durability)                     | Registered agents, workers, storage, authorization |
 | Prune or summarize context             | [Context management](../guide/context-management)        | Context limits and compaction policy               |
 | Require approval or limit spending     | [Run hooks](../guide/run-agents#operational-hooks)       | Approval policy, budget hooks, cost estimates      |
@@ -34,14 +34,14 @@ MCP validates connections and tool discovery through `McpConnector` and `connect
 Your application implements the transport and remote handlers; no stdio or HTTP client is bundled.
 
 Nested delegation, handoff, detached subagents, runtime Skills, a persistent agent memory service,
-`SessionStore` metadata, and dynamic Turn Plans have no public APIs.
-Applications own domain state. Conversation history and compaction summaries do not replace it.
+arbitrary Thread metadata, and dynamic Turn Plans have no public APIs.
+Applications own domain state. Thread history and compaction summaries do not replace it.
 
 Automatic compaction uses `ContextCompactor`. The separate
 [artifact utilities](../guide/context-management#explicit-compaction-artifacts) validate and apply
 application-managed summaries; they do not run or persist automatically.
 
-Scheduling and subscription ownership does not isolate conversation storage.
+Scheduling and subscription ownership does not isolate thread storage.
 Enforce [storage separation and authorization](../guide/operations#authorization-and-isolation)
 in your host.
 
@@ -60,16 +60,16 @@ Start with `Agent`, `AgentPolicy`, and `IdGenerator`.
 ### `@effect-agent/engine`
 
 Runs the agent loop, schedules tool calls, enforces policy, and emits events.
-Exports `AgentRuntime`, `DetachedRun`, `RunOptions`, and `ConversationHistory`.
+Exports `AgentRuntime`, `DetachedRun`, `RunOptions`, and `ThreadHistory`.
 
-Every entry point needs a history policy. Use `ConversationHistory.layerTransient` to retain
-nothing or `PersistentHistory.layer` from session to retain successful runs.
+Every entry point needs a history policy. Use `ThreadHistory.layerTransient` to retain
+nothing or `PersistentHistory.layer` from `@effect-agent/thread` to retain successful runs.
 Use [`toolFailureObserverLayer`](../guide/run-agents#observe-recovered-tool-failures) to observe
 recovered tool failures locally. Observations are not stored or exported automatically.
 
 ### `@effect-agent/capabilities`
 
-Adds conversation queues, approval, audit, budgets, context utilities, scheduling overrides,
+Adds thread queues, approval, audit, budgets, context utilities, scheduling overrides,
 MCP, redaction, and subagents to the engine. [`CodeMode.make`](../guide/code-mode) exposes generated
 JavaScript execution over an explicit read-only Tool allowlist. `WebCapture.make`,
 `WebCapture.makeScrape`, and `WebCapture.makeExtract` expose a supplied `PageCapture` service as tools.
@@ -91,25 +91,25 @@ requiring isolation it cannot enforce.
 
 Follow the [local process walkthrough](../guide/sandbox#run-a-trusted-local-process).
 
-### `@effect-agent/session`
+### `@effect-agent/thread`
 
-Conversation records, storage contracts, recovery, durable execution, scheduling, and subscriptions.
+Thread records, storage contracts, recovery, durable execution, scheduling, and subscriptions.
 `compileRegistrations` hashes version declarations and captures agent services for workers.
 
-| Import                             | Use                                                    |
-| ---------------------------------- | ------------------------------------------------------ |
-| `@effect-agent/session/history`    | `PersistentHistory` and history contracts              |
-| `@effect-agent/session/durability` | Durable runtime and accepted-work contracts            |
-| `@effect-agent/session/github`     | GitHub event source                                    |
-| `@effect-agent/session/testing`    | Certification, conformance runners, failpoint controls |
+| Import                            | Use                                                    |
+| --------------------------------- | ------------------------------------------------------ |
+| `@effect-agent/thread/history`    | `PersistentHistory` and history contracts              |
+| `@effect-agent/thread/durability` | Durable runtime and accepted-work contracts            |
+| `@effect-agent/thread/github`     | GitHub event source                                    |
+| `@effect-agent/thread/testing`    | Certification, conformance runners, failpoint controls |
 
 ### `@effect-agent/storage-memory`
 
-Scoped in-memory conversation and submission stores for tests. The ledger is non-durable.
+Scoped in-memory thread and submission stores for tests. The ledger is non-durable.
 
 ### `@effect-agent/storage-sqlite`
 
-Stores conversation history and pending work in one Node SQLite database.
+Stores thread history and pending work in one Node SQLite database.
 Rejects incompatible stored versions; no migration path is promised.
 `CurrentSqliteStorageVersion` identifies the supported version.
 Test failpoints are in `@effect-agent/storage-sqlite/testing`.
@@ -135,7 +135,7 @@ Assembles the durable host, RPC client, alarms, and Code Mode executor.
 See the [Cloudflare guide](../platforms/cloudflare) for bindings, service lifetimes, and admission limits.
 The [Code Mode guide](../guide/code-mode#run-generated-code-on-cloudflare) covers the independent
 Dynamic Worker executor and Worker Loader binding.
-`ConversationObject.Options.toolFailureObserver` installs a local tool-failure observer.
+`ThreadObject.Options.toolFailureObserver` installs a local tool-failure observer.
 
 Browser adapters use separate imports:
 

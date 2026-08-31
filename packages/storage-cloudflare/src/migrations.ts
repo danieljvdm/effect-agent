@@ -8,10 +8,10 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
  * v1→v4 history to replay (deployment spec §9: no rolling data-version promise during
  * private development).
  */
-export const CurrentDoStorageVersion = 1;
+export const CurrentDoStorageVersion = 2;
 
 /**
- * The Conversation Durable Object schema. Table names and columns mirror the Node/SQLite v4
+ * The Thread Durable Object schema. Table names and columns mirror the Node/SQLite v4
  * schema byte-for-byte (`packages/storage-sqlite/src/migrations.ts`, migrations 1–4 collapsed
  * into their final shape) so the shared conformance suites and crash-matrix rows address
  * identical durable state. Two DC-specific additions:
@@ -20,17 +20,17 @@ export const CurrentDoStorageVersion = 1;
  *    a meta table is portable regardless of which PRAGMAs Durable Object SQL storage allows.
  * 2. `effect_agent_child_settlements` is the durable cross-store notification marker the
  *    SubmissionLedger port contract mandates for cross-store adapters (`suspend`'s covering
- *    check and `recordChildSettled`'s wake both consult it): parent and child Conversations
+ *    check and `recordChildSettled`'s wake both consult it): parent and child Threads
  *    live in different Durable Objects, so a child settlement reported before the parent's
  *    suspend commits must be observable from the PARENT's own storage.
  */
 export const doMigrations = SqliteMigrator.fromRecord({
-  "1_current_cloudflare_conversation_object": Effect.gen(function* () {
+  "1_current_cloudflare_thread_object": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
     yield* sql`
-      CREATE TABLE effect_agent_conversations (
-        conversation_id TEXT PRIMARY KEY NOT NULL,
+      CREATE TABLE effect_agent_threads (
+        thread_id TEXT PRIMARY KEY NOT NULL,
         created_at TEXT NOT NULL,
         tail_sequence INTEGER NOT NULL,
         tail_digest TEXT NOT NULL,
@@ -40,59 +40,59 @@ export const doMigrations = SqliteMigrator.fromRecord({
 
     yield* sql`
       CREATE TABLE effect_agent_canonical_batches (
-        conversation_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
         batch_id TEXT NOT NULL,
         first_sequence INTEGER NOT NULL,
         last_sequence INTEGER NOT NULL,
         batch_digest TEXT NOT NULL,
         tail_digest TEXT NOT NULL,
         batch_json TEXT NOT NULL,
-        PRIMARY KEY (conversation_id, batch_id),
-        FOREIGN KEY (conversation_id)
-          REFERENCES effect_agent_conversations(conversation_id)
+        PRIMARY KEY (thread_id, batch_id),
+        FOREIGN KEY (thread_id)
+          REFERENCES effect_agent_threads(thread_id)
           ON DELETE RESTRICT
       )
     `.withoutTransform;
 
     yield* sql`
       CREATE TABLE effect_agent_canonical_records (
-        conversation_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
         sequence INTEGER NOT NULL,
         record_id TEXT NOT NULL,
         batch_id TEXT NOT NULL,
         record_json TEXT NOT NULL,
-        PRIMARY KEY (conversation_id, sequence),
-        UNIQUE (conversation_id, record_id),
-        FOREIGN KEY (conversation_id, batch_id)
-          REFERENCES effect_agent_canonical_batches(conversation_id, batch_id)
+        PRIMARY KEY (thread_id, sequence),
+        UNIQUE (thread_id, record_id),
+        FOREIGN KEY (thread_id, batch_id)
+          REFERENCES effect_agent_canonical_batches(thread_id, batch_id)
           ON DELETE RESTRICT
       )
     `.withoutTransform;
 
     yield* sql`
       CREATE INDEX effect_agent_canonical_records_batch
-        ON effect_agent_canonical_records (conversation_id, batch_id, sequence)
+        ON effect_agent_canonical_records (thread_id, batch_id, sequence)
     `.withoutTransform;
 
     yield* sql`
       CREATE TABLE effect_agent_checkpoints (
-        conversation_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
         through_sequence INTEGER NOT NULL,
         tail_digest TEXT NOT NULL,
         checkpoint_json TEXT NOT NULL,
-        PRIMARY KEY (conversation_id, through_sequence),
-        FOREIGN KEY (conversation_id)
-          REFERENCES effect_agent_conversations(conversation_id)
+        PRIMARY KEY (thread_id, through_sequence),
+        FOREIGN KEY (thread_id)
+          REFERENCES effect_agent_threads(thread_id)
           ON DELETE RESTRICT
       )
     `.withoutTransform;
 
-    // Admission rows exist before Conversation materialization (durability §4), so
-    // conversation_id intentionally carries no foreign key into effect_agent_conversations.
+    // Admission rows exist before Thread materialization (durability §4), so
+    // thread_id intentionally carries no foreign key into effect_agent_threads.
     yield* sql`
       CREATE TABLE effect_agent_submissions (
         submission_id TEXT PRIMARY KEY NOT NULL,
-        conversation_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
         queue_sequence INTEGER NOT NULL,
         principal TEXT NOT NULL,
         idempotency_key TEXT NOT NULL,
@@ -115,8 +115,8 @@ export const doMigrations = SqliteMigrator.fromRecord({
         unknown_tool_call_ids_json TEXT,
         parent_submission_id TEXT,
         parent_tool_call_id TEXT,
-        UNIQUE (conversation_id, principal, idempotency_key),
-        UNIQUE (conversation_id, queue_sequence)
+        UNIQUE (thread_id, principal, idempotency_key),
+        UNIQUE (thread_id, queue_sequence)
       )
     `.withoutTransform;
 
@@ -148,7 +148,7 @@ export const doMigrations = SqliteMigrator.fromRecord({
       CREATE TABLE effect_agent_attempts (
         attempt_id TEXT PRIMARY KEY NOT NULL,
         submission_id TEXT NOT NULL,
-        conversation_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
         owner_producer_id TEXT NOT NULL,
         producer_epoch INTEGER NOT NULL,
         claimed_at TEXT NOT NULL,

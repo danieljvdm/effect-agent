@@ -1,5 +1,5 @@
 ---
-"@effect-agent/session": patch
+"@effect-agent/thread": patch
 "@effect-agent/platform-node": patch
 ---
 

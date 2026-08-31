@@ -31783,7 +31783,7 @@ var layer15 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch)
 // packages/core/src/identifiers.ts
 var identifier2 = (name) => exports_Schema.NonEmptyString.pipe(exports_Schema.brand(`@effect-agent/core/${name}`));
 var AgentId = identifier2("AgentId");
-var ConversationId = identifier2("ConversationId");
+var ThreadId = identifier2("ThreadId");
 var SubmissionId = identifier2("SubmissionId");
 var ReceiptId = identifier2("ReceiptId");
 var SettlementId = identifier2("SettlementId");
@@ -31925,7 +31925,7 @@ var ToolExecutionKind = exports_Schema.Literals(["ordinary", "delegation"]);
 class SubagentParentLink extends exports_Schema.Class("SubagentParentLink")({
   delegationId: DelegationId,
   parentAgentId: AgentId,
-  parentConversationId: ConversationId,
+  parentThreadId: ThreadId,
   parentRunId: RunId,
   parentToolCallId: ToolCallId,
   depth: DelegationDepth
@@ -31936,7 +31936,7 @@ class SubagentParentLink extends exports_Schema.Class("SubagentParentLink")({
 var RunEventBase = {
   eventVersion: exports_Schema.Literal(1),
   runId: RunId,
-  conversationId: ConversationId,
+  threadId: ThreadId,
   agentId: AgentId,
   sequence: exports_Schema.Natural,
   timestamp: exports_Schema.DateTimeUtcFromString,
@@ -32103,7 +32103,7 @@ var SubagentEventBase = {
   turnId: TurnId,
   toolCallId: ToolCallId,
   delegationId: DelegationId,
-  childConversationId: ConversationId,
+  childThreadId: ThreadId,
   childRunId: RunId,
   targetAgentId: AgentId,
   depth: DelegationDepth
@@ -35138,7 +35138,7 @@ function isEmptyParamsRecord(indexSignature) {
 // packages/core/src/services.ts
 class IdGenerator2 extends exports_Context.Service()("@effect-agent/core/IdGenerator") {
   static layer = exports_Layer.succeed(IdGenerator2, {
-    nextConversationId: exports_IdGenerator.defaultIdGenerator.generateId().pipe(exports_Effect.map((id2) => exports_Schema.decodeSync(ConversationId)(`conversation-${id2}`))),
+    nextThreadId: exports_IdGenerator.defaultIdGenerator.generateId().pipe(exports_Effect.map((id2) => exports_Schema.decodeSync(ThreadId)(`thread-${id2}`))),
     nextRunId: exports_IdGenerator.defaultIdGenerator.generateId().pipe(exports_Effect.map((id2) => exports_Schema.decodeSync(RunId)(`run-${id2}`))),
     nextTurnId: exports_IdGenerator.defaultIdGenerator.generateId().pipe(exports_Effect.map((id2) => exports_Schema.decodeSync(TurnId)(`turn-${id2}`)))
   });
@@ -35390,7 +35390,7 @@ var ApprovalTargets = exports_Schema.Array(exports_Schema.String.check(exports_S
 var ApprovalRequestFields = {
   requestId: exports_Schema.NonEmptyString,
   runId: RunId,
-  conversationId: ConversationId,
+  threadId: ThreadId,
   toolCallId: ToolCallId,
   toolName: exports_Schema.NonEmptyString,
   actionSummary: exports_Schema.String.check(exports_Schema.isMaxLength(2 * 1024)),
@@ -35538,7 +35538,7 @@ var makeApprovalRequest = exports_Effect.fn("makeApprovalRequest")(function* (dr
   return ApprovalRequest.make({
     requestId: draft.requestId,
     runId: draft.runId,
-    conversationId: draft.conversationId,
+    threadId: draft.threadId,
     toolCallId: draft.toolCallId,
     toolName: draft.toolName,
     actionSummary: draft.actionSummary,
@@ -35607,7 +35607,7 @@ var ApprovalDenyAll = exports_Layer.succeed(ApprovalResolver)({
 });
 // packages/capabilities/src/budget.ts
 var Natural2 = exports_Schema.Natural;
-var BudgetLevel = exports_Schema.Literals(["global", "tenant", "agent", "conversation", "run"]);
+var BudgetLevel = exports_Schema.Literals(["global", "tenant", "agent", "thread", "run"]);
 
 class UsageTotals extends exports_Schema.Class("@effect-agent/capabilities/UsageTotals")({
   inputTokens: Natural2,
@@ -35673,7 +35673,7 @@ var levelOrder = {
   global: 0,
   tenant: 1,
   agent: 2,
-  conversation: 3,
+  thread: 3,
   run: 4
 };
 var emptyTotals = (elapsedMillis = 0) => UsageTotals.make({
@@ -36191,9 +36191,9 @@ var boundedValueFootprint = (root, maxBytes, knownSafePrototypes = new Set, maxD
   }
 };
 
-// packages/engine/src/conversation-history.ts
-class ConversationHistoryError extends exports_Schema.TaggedError()("ConversationHistoryError", {
-  conversationId: ConversationId,
+// packages/engine/src/thread-history.ts
+class ThreadHistoryError extends exports_Schema.TaggedError()("ThreadHistoryError", {
+  threadId: ThreadId,
   reason: exports_Schema.Literals([
     "not-found",
     "conflict",
@@ -36208,13 +36208,13 @@ class ConversationHistoryError extends exports_Schema.TaggedError()("Conversatio
 }) {
 }
 
-class ConversationHistory extends exports_Context.Service()("@effect-agent/engine/ConversationHistory") {
-  static layerTransient = exports_Layer.succeed(ConversationHistory, {
+class ThreadHistory extends exports_Context.Service()("@effect-agent/engine/ThreadHistory") {
+  static layerTransient = exports_Layer.succeed(ThreadHistory, {
     open: () => exports_Effect.succeed(undefined),
-    load: (conversationId) => exports_Effect.fail(ConversationHistoryError.make({
-      conversationId,
+    load: (threadId) => exports_Effect.fail(ThreadHistoryError.make({
+      threadId,
       reason: "not-found",
-      message: "Transient execution does not retain Conversation history"
+      message: "Transient execution does not retain Thread history"
     }))
   });
 }
@@ -36729,11 +36729,11 @@ class ToolSpanTelemetry extends exports_Context.Service()("@effect-agent/engine/
 
 // packages/engine/src/compaction.ts
 var CLEARED_TOOL_RESULT = "[tool result cleared by compaction]";
-var COMPACTION_SUMMARY_PREFIX = `The prior conversation was compacted into this summary:
+var COMPACTION_SUMMARY_PREFIX = `The prior thread was compacted into this summary:
 
 `;
 var COMPACTION_INSTRUCTION = [
-  "You are compacting an agent conversation to reclaim context space.",
+  "You are compacting an agent thread to reclaim context space.",
   "Summarize the transcript below for the SAME agent to continue working:",
   "it will see only this summary plus the most recent messages.",
   "Structure the summary exactly as:",
@@ -36744,7 +36744,7 @@ var COMPACTION_INSTRUCTION = [
   "Next steps:",
   "Critical context:",
   "Be terse. Preserve exact file paths, identifiers, and values needed to",
-  "continue. Do not continue the conversation; output only the summary."
+  "continue. Do not continue the thread; output only the summary."
 ].join(`
 `);
 var CONTEXT_OVERFLOW_PATTERN = /context[\s_-]?length|prompt is too long|maximum context (?:length|window)|input .{0,24}too long|exceeds .{0,24}context|too many (?:input )?tokens|context[\s_-]?window[\s_-]?exceeded|context overflow/i;
@@ -37514,7 +37514,7 @@ var stampSubagentEvent = exports_Effect.fn("AgentRuntime.stampSubagentEvent")(fu
     turnId,
     toolCallId: payload.toolCallId,
     delegationId: payload.delegationId,
-    childConversationId: payload.childConversationId,
+    childThreadId: payload.childThreadId,
     childRunId: payload.childRunId,
     targetAgentId: payload.targetAgentId,
     depth: payload.depth
@@ -37584,7 +37584,7 @@ var approvalDecision = (context3, turnId, prepared, options3) => exports_Effect.
   const toolCallId = yield* decodeToolCallId(prepared.call.id);
   const decision = yield* options3.approval.request({
     request: request3,
-    conversationId: context3.conversationId,
+    threadId: context3.threadId,
     runId: context3.runId,
     turnId,
     toolCallId,
@@ -37647,7 +37647,7 @@ var preflightToolAuthorization = (context3, turnId, turn, call, options3) => {
   if (authorization === undefined)
     return exports_Stream.empty;
   return exports_Stream.unwrap(authorization.authorize({
-    conversationId: context3.conversationId,
+    threadId: context3.threadId,
     runId: context3.runId,
     turnId,
     turn,
@@ -37684,7 +37684,7 @@ var toolTelemetryAttributes = (descriptor) => ({
     toolCallId: descriptor.toolCallId
   },
   "gen_ai.agent.name": descriptor.context.agentId,
-  "gen_ai.conversation.id": descriptor.context.conversationId,
+  "gen_ai.conversation.id": descriptor.context.threadId,
   "effect_agent.tool.execution_class": descriptor.executionClass,
   "effect_agent.tool.invocation_kind": descriptor.invocationKind,
   ...descriptor.parentToolCallId === undefined ? {} : {
@@ -37696,7 +37696,7 @@ var toolTelemetryAttributes = (descriptor) => ({
     sequenceIndex: descriptor.sequenceIndex
   },
   agentId: descriptor.context.agentId,
-  conversationId: descriptor.context.conversationId,
+  threadId: descriptor.context.threadId,
   runId: descriptor.context.runId,
   turnId: descriptor.turnId,
   toolName: descriptor.toolName
@@ -37829,7 +37829,7 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace3, resu
           _tag: "ModelToolFailure",
           kind: "declared-failure",
           agentId: context3.agentId,
-          conversationId: context3.conversationId,
+          threadId: context3.threadId,
           runId: context3.runId,
           turnId,
           toolCallId,
@@ -37972,7 +37972,7 @@ var executeToolBatch = (context3, turnId, turn, toolkit, calls, trace3, concurre
     }
     const child = (signal) => ({
       toolCallId: signal.toolCallId,
-      childConversationId: signal.childConversationId,
+      childThreadId: signal.childThreadId,
       childSubmissionId: signal.childSubmissionId,
       childRunId: signal.childRunId
     });
@@ -38306,7 +38306,7 @@ var eventBaseFor = exports_Effect.fnUntraced(function* (context3, terminal) {
   return {
     eventVersion: 1,
     runId: context3.runId,
-    conversationId: context3.conversationId,
+    threadId: context3.threadId,
     agentId: context3.agentId,
     sequence,
     timestamp
@@ -39051,7 +39051,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
   const outputContract = outputSchemaContract(agent2.definition);
   const outputContractMessage = outputContract._tag === "rendered" ? outputContract.message : undefined;
   const modelContext = options3.context === undefined ? { prompt } : yield* options3.context.prepare({
-    conversationId: context3.conversationId,
+    threadId: context3.threadId,
     runId: context3.runId,
     turnId,
     turn,
@@ -39701,21 +39701,21 @@ function streamWithCompletion(agentValue, input, runOptions = {}, onCompleted) {
   const agent2 = { definition: "definition" in agentValue ? agentValue.definition : agentValue };
   const model = "definition" in agentValue ? agentValue.model : undefined;
   return exports_Stream.unwrap(exports_Effect.gen(function* () {
-    const history = yield* ConversationHistory;
+    const history = yield* ThreadHistory;
     const ids = yield* IdGenerator2;
-    const conversationId = runOptions.conversationId ?? (yield* ids.nextConversationId);
+    const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
     const runId = runOptions.runId ?? (yield* ids.nextRunId);
-    const retained = yield* history.open({ conversationId, runId });
+    const retained = yield* history.open({ threadId, runId });
     if (retained !== undefined && (runOptions.history !== undefined || runOptions.onHistory !== undefined || runOptions.input !== undefined || runOptions.durability !== undefined || runOptions.subagent !== undefined || runOptions.resume !== undefined || runOptions.resumeUsage !== undefined)) {
-      return yield* ConversationHistoryError.make({
-        conversationId,
+      return yield* ThreadHistoryError.make({
+        threadId,
         reason: "incompatible",
         message: "Provided history cannot share ownership with explicit history, input queues, or durable recovery hooks"
       });
     }
     const options3 = {
       ...runOptions,
-      conversationId,
+      threadId,
       runId,
       ...retained === undefined ? {} : { history: retained.prompt, onHistory: retained.stageHistory }
     };
@@ -39741,7 +39741,7 @@ function streamWithCompletion(agentValue, input, runOptions = {}, onCompleted) {
       })));
       const context3 = {
         agentId: agent2.definition.id,
-        conversationId,
+        threadId,
         runId,
         toolFailureObserver: yield* CurrentToolFailureObserver,
         input: undefined,
@@ -39844,7 +39844,7 @@ function streamWithCompletion(agentValue, input, runOptions = {}, onCompleted) {
       const deadline = enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
       const engineToolServices = exports_Context.make(AgentSpawner, makeAgentSpawner({
         agentId: context3.agentId,
-        conversationId: context3.conversationId,
+        threadId: context3.threadId,
         runId: context3.runId
       }, options3.parentLink?.depth ?? 0, history)).pipe(exports_Context.add(RunEventSink, closedRunEventSink), exports_Context.add(DurableStep, closedDurableStep), exports_Context.add(SubagentDurability, closedSubagentDurability), exports_Context.add(ToolBroker, closedToolBroker));
       return started.pipe(exports_Stream.concat(deadline), exports_Stream.catch((error2) => {
@@ -39895,7 +39895,7 @@ function streamWithCompletion(agentValue, input, runOptions = {}, onCompleted) {
         return terminal;
       })).pipe(exports_Stream.catch((error2) => exports_Stream.make(RunFailed.make({
         eventVersion: terminal.eventVersion,
-        conversationId: terminal.conversationId,
+        threadId: terminal.threadId,
         runId: terminal.runId,
         agentId: terminal.agentId,
         sequence: terminal.sequence,
@@ -39921,7 +39921,7 @@ var reduceRunEvents = (agent2, events2) => exports_Effect.gen(function* () {
     }) : yield* decodeRunDisposition(agent2, completed.runDisposition);
     result4 = {
       output,
-      conversationId: completed.conversationId,
+      threadId: completed.threadId,
       runId: completed.runId,
       turns: completed.turns,
       finishReason: completed.finishReason,
@@ -40099,7 +40099,7 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
         return deliverToolFailure(preflightObserver.observer, {
           _tag: "ProgrammaticPreflightFailure",
           agentId: binding.context.agentId,
-          conversationId: binding.context.conversationId,
+          threadId: binding.context.threadId,
           runId: binding.context.runId,
           turnId: binding.turnId,
           parentToolCallId: binding.outerToolCallId,
@@ -40170,7 +40170,7 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
           failureObservation = {
             _tag: "ProgrammaticToolFailure",
             agentId: binding.context.agentId,
-            conversationId: binding.context.conversationId,
+            threadId: binding.context.threadId,
             runId: binding.context.runId,
             turnId: binding.turnId,
             toolCallId: handleId,
@@ -40228,7 +40228,7 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
               failureObservation = {
                 _tag: "ProgrammaticToolFailure",
                 agentId: binding.context.agentId,
-                conversationId: binding.context.conversationId,
+                threadId: binding.context.threadId,
                 runId: binding.context.runId,
                 turnId: binding.turnId,
                 toolCallId: handleId,
@@ -40254,7 +40254,7 @@ var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
               failureObservation = {
                 _tag: "ProgrammaticToolFailure",
                 agentId: binding.context.agentId,
-                conversationId: binding.context.conversationId,
+                threadId: binding.context.threadId,
                 runId: binding.context.runId,
                 turnId: binding.turnId,
                 toolCallId: handleId,
@@ -40382,7 +40382,7 @@ var makeDurableStepService = (toolCallId, hook, hookServices) => {
 
 class ToolCallWaiting extends exports_Schema.TaggedError()("ToolCallWaiting", {
   toolCallId: ToolCallId,
-  childConversationId: ConversationId,
+  childThreadId: ThreadId,
   childSubmissionId: SubmissionId,
   childRunId: RunId,
   receiptId: ReceiptId,
@@ -40393,7 +40393,7 @@ class ToolCallWaiting extends exports_Schema.TaggedError()("ToolCallWaiting", {
 class AgentChildPending extends exports_Schema.TaggedError()("AgentChildPending", {
   children: exports_Schema.NonEmptyArray(exports_Schema.Struct({
     toolCallId: ToolCallId,
-    childConversationId: ConversationId,
+    childThreadId: ThreadId,
     childSubmissionId: SubmissionId,
     childRunId: RunId
   })),
@@ -40443,7 +40443,7 @@ var makeSubagentDurabilityService = (hook, hookServices) => ({
   }))),
   waiting: (toolCallId, child) => exports_Effect.fail(ToolCallWaiting.make({
     toolCallId,
-    childConversationId: child.childConversationId,
+    childThreadId: child.childThreadId,
     childSubmissionId: child.childSubmissionId,
     childRunId: child.childRunId,
     receiptId: child.receiptId,
@@ -40460,26 +40460,26 @@ var waitingFromCause = (cause) => {
 };
 var spawnWithParent = (parent, depth, history) => exports_Effect.fn("AgentSpawner.spawn")(function* (binding, input, delegation, options3) {
   const ids = yield* IdGenerator2;
-  const conversationId = yield* ids.nextConversationId;
+  const threadId = yield* ids.nextThreadId;
   const runId = yield* ids.nextRunId;
   const childDepth = yield* exports_Schema.decodeEffect(DelegationDepth)(depth + 1).pipe(exports_Effect.orDie);
   const parentLink = SubagentParentLink.make({
     delegationId: delegation.delegationId,
     parentAgentId: parent.agentId,
-    parentConversationId: parent.conversationId,
+    parentThreadId: parent.threadId,
     parentRunId: parent.runId,
     parentToolCallId: delegation.parentToolCallId,
     depth: childDepth
   });
   const child = yield* startUnknown(binding, input, {
     ...options3,
-    conversationId,
+    threadId,
     runId,
     parentLink
-  }).pipe(exports_Effect.provideService(ConversationHistory, history));
+  }).pipe(exports_Effect.provideService(ThreadHistory, history));
   return {
     ...child,
-    conversationId,
+    threadId,
     runId,
     parentLink
   };
@@ -41649,218 +41649,214 @@ var defaultLimits = CodeExecutionLimits.make({
 });
 var defaultMaxEgressBytes = 64 * 1024;
 var decodeIdentifier = exports_Schema.decodeUnknownOption(JsIdentifier);
-// packages/capabilities/src/conversation.ts
-var ConversationText = exports_Schema.String.check(exports_Schema.isMaxLength(64 * 1024));
-var MAX_CONVERSATION_MESSAGES = 1024;
-var MAX_CONVERSATION_CONTENT_BYTES = 4 * 1024 * 1024;
-var MAX_EPHEMERAL_CONVERSATIONS = 256;
+// packages/capabilities/src/thread.ts
+var ThreadText = exports_Schema.String.check(exports_Schema.isMaxLength(64 * 1024));
+var MAX_THREAD_MESSAGES = 1024;
+var MAX_THREAD_CONTENT_BYTES = 4 * 1024 * 1024;
+var MAX_EPHEMERAL_THREADS = 256;
 var MAX_EPHEMERAL_CONTENT_BYTES = 64 * 1024 * 1024;
 
-class ConversationMessage extends exports_Schema.Class("@effect-agent/capabilities/ConversationMessage")({
-  conversationId: ConversationId,
+class ThreadMessage extends exports_Schema.Class("@effect-agent/capabilities/ThreadMessage")({
+  threadId: ThreadId,
   sequence: exports_Schema.Natural,
   runId: exports_Schema.optionalKey(RunId),
   message: exports_Prompt.Message,
-  encodedBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_CONVERSATION_CONTENT_BYTES)),
+  encodedBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_THREAD_CONTENT_BYTES)),
   timestamp: exports_Schema.DateTimeUtcFromString
 }) {
 }
 
-class ConversationSnapshot extends exports_Schema.Class("@effect-agent/capabilities/ConversationSnapshot")({
+class ThreadSnapshot extends exports_Schema.Class("@effect-agent/capabilities/ThreadSnapshot")({
   version: exports_Schema.Literal(1),
-  conversationId: ConversationId,
+  threadId: ThreadId,
   nextSequence: exports_Schema.Natural,
-  contentBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_CONVERSATION_CONTENT_BYTES)),
-  messages: exports_Schema.Array(ConversationMessage).check(exports_Schema.isMaxLength(MAX_CONVERSATION_MESSAGES))
+  contentBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_THREAD_CONTENT_BYTES)),
+  messages: exports_Schema.Array(ThreadMessage).check(exports_Schema.isMaxLength(MAX_THREAD_MESSAGES))
 }) {
 }
 
-class ConversationExport extends exports_Schema.Class("@effect-agent/capabilities/ConversationExport")({
-  format: exports_Schema.Literal("effect-agent/ephemeral-conversation@1"),
+class ThreadExport extends exports_Schema.Class("@effect-agent/capabilities/ThreadExport")({
+  format: exports_Schema.Literal("effect-agent/ephemeral-thread@1"),
   exportedAt: exports_Schema.DateTimeUtcFromString,
-  snapshot: ConversationSnapshot
+  snapshot: ThreadSnapshot
 }) {
 }
 
-class ConversationAppend extends exports_Schema.Class("@effect-agent/capabilities/ConversationAppend")({
+class ThreadAppend extends exports_Schema.Class("@effect-agent/capabilities/ThreadAppend")({
   runId: exports_Schema.optionalKey(RunId),
   message: exports_Prompt.Message
 }) {
 }
 
-class ConversationNotFound extends exports_Schema.TaggedError()("ConversationNotFound", { conversationId: ConversationId }) {
+class ThreadNotFound extends exports_Schema.TaggedError()("ThreadNotFound", {
+  threadId: ThreadId
+}) {
 }
 
-class ConversationLimitExceeded extends exports_Schema.TaggedError()("ConversationLimitExceeded", {
-  conversationId: ConversationId,
-  limit: exports_Schema.Literals(["messages", "content-bytes", "conversations", "store-content-bytes"]),
+class ThreadLimitExceeded extends exports_Schema.TaggedError()("ThreadLimitExceeded", {
+  threadId: ThreadId,
+  limit: exports_Schema.Literals(["messages", "content-bytes", "threads", "store-content-bytes"]),
   limitValue: exports_Schema.Natural,
   observedValue: exports_Schema.Natural
 }) {
 }
 
-class ConversationHistoryDiverged extends exports_Schema.TaggedError()("ConversationHistoryDiverged", { conversationId: ConversationId, message: exports_Schema.String }) {
+class ThreadHistoryDiverged extends exports_Schema.TaggedError()("ThreadHistoryDiverged", { threadId: ThreadId, message: exports_Schema.String }) {
 }
 
-class ConversationEncodingError extends exports_Schema.TaggedError()("ConversationEncodingError", { conversationId: ConversationId, message: exports_Schema.String }) {
+class ThreadEncodingError extends exports_Schema.TaggedError()("ThreadEncodingError", { threadId: ThreadId, message: exports_Schema.String }) {
 }
-var conversationPrompt = (snapshot3) => exports_Prompt.fromMessages(snapshot3.messages.map((entry) => entry.message));
+var threadPrompt = (snapshot3) => exports_Prompt.fromMessages(snapshot3.messages.map((entry) => entry.message));
 
-class EphemeralConversations extends exports_Context.Service()("@effect-agent/capabilities/EphemeralConversations") {
+class EphemeralThreads extends exports_Context.Service()("@effect-agent/capabilities/EphemeralThreads") {
 }
 var utf8Bytes2 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
-var encodeMessage = (conversationId, message) => exports_Schema.encodeEffect(exports_Prompt.Message)(message).pipe(exports_Effect.map((encoded) => JSON.stringify(encoded)), exports_Effect.mapError((error2) => ConversationEncodingError.make({
-  conversationId,
+var encodeMessage = (threadId, message) => exports_Schema.encodeEffect(exports_Prompt.Message)(message).pipe(exports_Effect.map((encoded) => JSON.stringify(encoded)), exports_Effect.mapError((error2) => ThreadEncodingError.make({
+  threadId,
   message: `Could not encode native Effect AI message: ${error2.message}`
 })));
-var findSnapshot = (state, conversationId) => {
-  const snapshot3 = state.get(conversationId);
-  return snapshot3 === undefined ? exports_Effect.fail(ConversationNotFound.make({ conversationId })) : exports_Effect.succeed(snapshot3);
+var findSnapshot = (state, threadId) => {
+  const snapshot3 = state.get(threadId);
+  return snapshot3 === undefined ? exports_Effect.fail(ThreadNotFound.make({ threadId })) : exports_Effect.succeed(snapshot3);
 };
-var totalStoreBytes = (conversations) => {
+var totalStoreBytes = (threads) => {
   let total = 0;
-  for (const snapshot3 of conversations.values())
+  for (const snapshot3 of threads.values())
     total += snapshot3.contentBytes;
   return total;
 };
-var appendEncoded = (conversations, conversationId, append4, encoded, timestamp) => {
-  const current = conversations.get(conversationId);
+var appendEncoded = (threads, threadId, append4, encoded, timestamp) => {
+  const current = threads.get(threadId);
   if (current === undefined)
-    return [{ _tag: "not-found" }, conversations];
-  if (current.messages.length >= MAX_CONVERSATION_MESSAGES) {
+    return [{ _tag: "not-found" }, threads];
+  if (current.messages.length >= MAX_THREAD_MESSAGES) {
     return [
       {
         _tag: "failure",
-        error: ConversationLimitExceeded.make({
-          conversationId,
+        error: ThreadLimitExceeded.make({
+          threadId,
           limit: "messages",
-          limitValue: MAX_CONVERSATION_MESSAGES,
+          limitValue: MAX_THREAD_MESSAGES,
           observedValue: current.messages.length + 1
         })
       },
-      conversations
+      threads
     ];
   }
   const messageBytes = utf8Bytes2(encoded);
   const contentBytes = current.contentBytes + messageBytes;
-  if (contentBytes > MAX_CONVERSATION_CONTENT_BYTES) {
+  if (contentBytes > MAX_THREAD_CONTENT_BYTES) {
     return [
       {
         _tag: "failure",
-        error: ConversationLimitExceeded.make({
-          conversationId,
+        error: ThreadLimitExceeded.make({
+          threadId,
           limit: "content-bytes",
-          limitValue: MAX_CONVERSATION_CONTENT_BYTES,
+          limitValue: MAX_THREAD_CONTENT_BYTES,
           observedValue: contentBytes
         })
       },
-      conversations
+      threads
     ];
   }
-  const storeBytes = totalStoreBytes(conversations) + messageBytes;
+  const storeBytes = totalStoreBytes(threads) + messageBytes;
   if (storeBytes > MAX_EPHEMERAL_CONTENT_BYTES) {
     return [
       {
         _tag: "failure",
-        error: ConversationLimitExceeded.make({
-          conversationId,
+        error: ThreadLimitExceeded.make({
+          threadId,
           limit: "store-content-bytes",
           limitValue: MAX_EPHEMERAL_CONTENT_BYTES,
           observedValue: storeBytes
         })
       },
-      conversations
+      threads
     ];
   }
-  const message = ConversationMessage.make({
-    conversationId,
+  const message = ThreadMessage.make({
+    threadId,
     sequence: current.nextSequence,
     ...append4.runId === undefined ? {} : { runId: append4.runId },
     message: append4.message,
     encodedBytes: messageBytes,
     timestamp
   });
-  const next2 = ConversationSnapshot.make({
+  const next2 = ThreadSnapshot.make({
     version: current.version,
-    conversationId: current.conversationId,
+    threadId: current.threadId,
     nextSequence: current.nextSequence + 1,
     contentBytes,
     messages: [...current.messages, message]
   });
-  return [{ _tag: "success", value: next2 }, new Map(conversations).set(conversationId, next2)];
+  return [{ _tag: "success", value: next2 }, new Map(threads).set(threadId, next2)];
 };
-var commitHistorySuffix = (conversations, conversationId, base2, suffix, timestamp) => {
-  const current = conversations.get(conversationId);
+var commitHistorySuffix = (threads, threadId, base2, suffix, timestamp) => {
+  const current = threads.get(threadId);
   if (current === undefined) {
-    return [
-      { _tag: "failure", error: ConversationNotFound.make({ conversationId }) },
-      conversations
-    ];
+    return [{ _tag: "failure", error: ThreadNotFound.make({ threadId }) }, threads];
   }
   if (current !== base2)
-    return [{ _tag: "stale" }, conversations];
-  let next2 = conversations;
+    return [{ _tag: "stale" }, threads];
+  let next2 = threads;
   let snapshot3 = current;
   for (const entry of suffix) {
-    const [result4, updated] = appendEncoded(next2, conversationId, entry.append, entry.encoded, timestamp);
+    const [result4, updated] = appendEncoded(next2, threadId, entry.append, entry.encoded, timestamp);
     if (result4._tag === "not-found") {
-      return [
-        { _tag: "failure", error: ConversationNotFound.make({ conversationId }) },
-        conversations
-      ];
+      return [{ _tag: "failure", error: ThreadNotFound.make({ threadId }) }, threads];
     }
     if (result4._tag === "failure") {
-      return [{ _tag: "failure", error: result4.error }, conversations];
+      return [{ _tag: "failure", error: result4.error }, threads];
     }
     snapshot3 = result4.value;
     next2 = updated;
   }
   return [{ _tag: "success", value: snapshot3 }, next2];
 };
-var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, exports_Effect.gen(function* () {
+var EphemeralThreadsLive = exports_Layer.effect(EphemeralThreads, exports_Effect.gen(function* () {
   const state = yield* exports_Ref.make(new Map);
-  const append4 = (conversationId, message) => exports_Effect.gen(function* () {
-    const encoded = yield* encodeMessage(conversationId, message.message);
+  const append4 = (threadId, message) => exports_Effect.gen(function* () {
+    const encoded = yield* encodeMessage(threadId, message.message);
     const timestamp = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis));
-    const result4 = yield* exports_Ref.modify(state, (conversations) => appendEncoded(conversations, conversationId, message, encoded, timestamp));
+    const result4 = yield* exports_Ref.modify(state, (threads) => appendEncoded(threads, threadId, message, encoded, timestamp));
     if (result4._tag === "not-found") {
-      return yield* ConversationNotFound.make({ conversationId });
+      return yield* ThreadNotFound.make({ threadId });
     }
     if (result4._tag === "failure")
       return yield* result4.error;
     return result4.value;
   });
-  return EphemeralConversations.of({
-    create: (conversationId) => exports_Effect.gen(function* () {
-      const result4 = yield* exports_Ref.modify(state, (conversations) => {
-        const existing = conversations.get(conversationId);
+  return EphemeralThreads.of({
+    create: (threadId) => exports_Effect.gen(function* () {
+      const result4 = yield* exports_Ref.modify(state, (threads) => {
+        const existing = threads.get(threadId);
         if (existing !== undefined) {
-          return [{ _tag: "success", value: existing }, conversations];
+          return [{ _tag: "success", value: existing }, threads];
         }
-        if (conversations.size >= MAX_EPHEMERAL_CONVERSATIONS) {
+        if (threads.size >= MAX_EPHEMERAL_THREADS) {
           return [
             {
               _tag: "failure",
-              error: ConversationLimitExceeded.make({
-                conversationId,
-                limit: "conversations",
-                limitValue: MAX_EPHEMERAL_CONVERSATIONS,
-                observedValue: conversations.size + 1
+              error: ThreadLimitExceeded.make({
+                threadId,
+                limit: "threads",
+                limitValue: MAX_EPHEMERAL_THREADS,
+                observedValue: threads.size + 1
               })
             },
-            conversations
+            threads
           ];
         }
-        const created = ConversationSnapshot.make({
+        const created = ThreadSnapshot.make({
           version: 1,
-          conversationId,
+          threadId,
           nextSequence: 0,
           contentBytes: 0,
           messages: []
         });
         return [
           { _tag: "success", value: created },
-          new Map(conversations).set(conversationId, created)
+          new Map(threads).set(threadId, created)
         ];
       });
       if (result4._tag === "failure")
@@ -41868,23 +41864,23 @@ var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, ex
       return result4.value;
     }),
     append: append4,
-    recordHistory: (conversationId, historyRunId, history) => exports_Effect.gen(function* () {
-      const incoming = yield* exports_Effect.forEach(history.content, (message) => encodeMessage(conversationId, message).pipe(exports_Effect.map((encoded) => ({ message, encoded }))));
+    recordHistory: (threadId, historyRunId, history) => exports_Effect.gen(function* () {
+      const incoming = yield* exports_Effect.forEach(history.content, (message) => encodeMessage(threadId, message).pipe(exports_Effect.map((encoded) => ({ message, encoded }))));
       const attempt = exports_Effect.gen(function* () {
-        const current = yield* exports_Ref.get(state).pipe(exports_Effect.flatMap((all6) => findSnapshot(all6, conversationId)));
-        const currentEncoded = yield* exports_Effect.forEach(current.messages, (entry) => encodeMessage(conversationId, entry.message));
+        const current = yield* exports_Ref.get(state).pipe(exports_Effect.flatMap((all6) => findSnapshot(all6, threadId)));
+        const currentEncoded = yield* exports_Effect.forEach(current.messages, (entry) => encodeMessage(threadId, entry.message));
         if (incoming.length < currentEncoded.length || currentEncoded.some((encoded, index2) => encoded !== incoming[index2]?.encoded)) {
-          return yield* ConversationHistoryDiverged.make({
-            conversationId,
+          return yield* ThreadHistoryDiverged.make({
+            threadId,
             message: "Engine history is not an append-only extension of official history"
           });
         }
         const timestamp = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis));
         const suffix = incoming.slice(currentEncoded.length).map((entry) => ({
-          append: ConversationAppend.make({ runId: historyRunId, message: entry.message }),
+          append: ThreadAppend.make({ runId: historyRunId, message: entry.message }),
           encoded: entry.encoded
         }));
-        const result4 = yield* exports_Ref.modify(state, (conversations) => commitHistorySuffix(conversations, conversationId, current, suffix, timestamp));
+        const result4 = yield* exports_Ref.modify(state, (threads) => commitHistorySuffix(threads, threadId, current, suffix, timestamp));
         if (result4._tag === "stale")
           return yield* attempt;
         if (result4._tag === "failure")
@@ -41893,11 +41889,11 @@ var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, ex
       });
       return yield* attempt;
     }),
-    snapshot: (conversationId) => exports_Ref.get(state).pipe(exports_Effect.flatMap((all6) => findSnapshot(all6, conversationId))),
-    export: (conversationId) => exports_Effect.gen(function* () {
-      const snapshot3 = yield* findSnapshot(yield* exports_Ref.get(state), conversationId);
-      return ConversationExport.make({
-        format: "effect-agent/ephemeral-conversation@1",
+    snapshot: (threadId) => exports_Ref.get(state).pipe(exports_Effect.flatMap((all6) => findSnapshot(all6, threadId))),
+    export: (threadId) => exports_Effect.gen(function* () {
+      const snapshot3 = yield* findSnapshot(yield* exports_Ref.get(state), threadId);
+      return ThreadExport.make({
+        format: "effect-agent/ephemeral-thread@1",
         exportedAt: exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis)),
         snapshot: snapshot3
       });
@@ -41911,9 +41907,9 @@ var PositiveInt8 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 class SteeringCommand extends exports_Schema.TaggedClass()("SteeringCommand", {
   id: exports_Schema.NonEmptyString,
   runId: RunId,
-  conversationId: ConversationId,
+  threadId: ThreadId,
   author: exports_Schema.NonEmptyString,
-  content: ConversationText,
+  content: ThreadText,
   createdAt: exports_Schema.DateTimeUtcFromString
 }) {
 }
@@ -41921,9 +41917,9 @@ class SteeringCommand extends exports_Schema.TaggedClass()("SteeringCommand", {
 class FollowUpCommand extends exports_Schema.TaggedClass()("FollowUpCommand", {
   id: exports_Schema.NonEmptyString,
   runId: RunId,
-  conversationId: ConversationId,
+  threadId: ThreadId,
   author: exports_Schema.NonEmptyString,
-  content: ConversationText,
+  content: ThreadText,
   createdAt: exports_Schema.DateTimeUtcFromString
 }) {
 }
@@ -41958,7 +41954,7 @@ var SourceSequences = exports_Schema.Array(exports_Schema.Natural).check(exports
 
 class ModelContextMessage extends exports_Schema.Class("@effect-agent/capabilities/ModelContextMessage")({
   role: exports_Schema.Literals(["system", "user", "assistant", "tool"]),
-  content: ConversationText,
+  content: ThreadText,
   sourceSequences: SourceSequences
 }) {
 }
@@ -41975,7 +41971,7 @@ var SourceDigest = exports_Schema.String.check(exports_Schema.isPattern(/^sha256
 
 class CompactionArtifact extends exports_Schema.Class("@effect-agent/capabilities/CompactionArtifact")({
   version: exports_Schema.Literal(1),
-  conversationId: ConversationId,
+  threadId: ThreadId,
   coversFrom: exports_Schema.Natural,
   coversThrough: exports_Schema.Natural,
   summary: ModelContextMessage,
@@ -41987,7 +41983,7 @@ class CompactionArtifact extends exports_Schema.Class("@effect-agent/capabilitie
 }
 
 class PreparedModelContext extends exports_Schema.Class("@effect-agent/capabilities/PreparedModelContext")({
-  source: ConversationSnapshot,
+  source: ThreadSnapshot,
   messages: ModelContextMessages,
   compactions: exports_Schema.Array(CompactionArtifact).check(exports_Schema.isMaxLength(MAX_COMPACTIONS))
 }) {
@@ -42046,7 +42042,7 @@ var utf8Bytes3 = (value4) => {
 };
 var digestCompactionSource = exports_Effect.fn("digestCompactionSource")(function* (snapshot3, coversFrom, coversThrough) {
   const selected = yield* exactSourceRange(snapshot3, coversFrom, coversThrough);
-  const encoded = yield* exports_Schema.encodeEffect(exports_Schema.Array(ConversationMessage))(selected).pipe(exports_Effect.mapError((error2) => CompactionDigestError.make({
+  const encoded = yield* exports_Schema.encodeEffect(exports_Schema.Array(ThreadMessage))(selected).pipe(exports_Effect.mapError((error2) => CompactionDigestError.make({
     message: `Could not encode compaction source: ${error2.message}`
   })));
   const crypto2 = yield* exports_Crypto.Crypto;
@@ -42056,9 +42052,9 @@ var digestCompactionSource = exports_Effect.fn("digestCompactionSource")(functio
   return `sha256:${exports_Encoding.encodeHex(digest2)}`;
 });
 var applyCompaction = exports_Effect.fn("applyCompaction")(function* (context3, artifact) {
-  if (artifact.conversationId !== context3.source.conversationId) {
+  if (artifact.threadId !== context3.source.threadId) {
     return yield* InvalidCompactionArtifact.make({
-      message: "Compaction artifact belongs to another Conversation"
+      message: "Compaction artifact belongs to another Thread"
     });
   }
   const actualDigest = yield* digestCompactionSource(context3.source, artifact.coversFrom, artifact.coversThrough);
@@ -42114,7 +42110,7 @@ var toRunApprovalHook = (policy2) => ({
     const draft = yield* exports_Schema.decodeUnknownEffect(ApprovalRequestDraft)({
       requestId: engineRequest.request.approvalId,
       runId: engineRequest.runId,
-      conversationId: engineRequest.conversationId,
+      threadId: engineRequest.threadId,
       toolCallId: engineRequest.toolCallId,
       toolName: engineRequest.toolName,
       actionSummary: metadata.actionSummary,
@@ -42166,12 +42162,12 @@ var toRunBudgetHook = (budget) => ({
     message: `Engine usage delta is invalid: ${error2.message}`
   })), exports_Effect.flatMap((usage2) => budget.consume(usage2)), exports_Effect.asVoid)
 });
-var toRunConversationOptions = exports_Effect.fn("toRunConversationOptions")(function* (conversations, conversationId, runId) {
-  const snapshot3 = yield* conversations.snapshot(conversationId);
+var toRunThreadOptions = exports_Effect.fn("toRunThreadOptions")(function* (threads, threadId, runId) {
+  const snapshot3 = yield* threads.snapshot(threadId);
   return {
-    conversationId,
-    history: conversationPrompt(snapshot3),
-    onHistory: (history) => conversations.recordHistory(conversationId, runId, history).pipe(exports_Effect.asVoid)
+    threadId,
+    history: threadPrompt(snapshot3),
+    onHistory: (history) => threads.recordHistory(threadId, runId, history).pipe(exports_Effect.asVoid)
   };
 });
 var contextCompactorRunContextLayer = exports_Layer.effect(RunContextPreparation, exports_Effect.map(ContextCompactor, (compactor) => RunContextPreparation.of({ compactor })));
@@ -43778,7 +43774,7 @@ class SubagentExecutionFailure extends exports_Schema.TaggedError()("SubagentExe
   delegationId: DelegationId,
   targetAgentId: AgentId,
   classification: SubagentExecutionFailureClassification,
-  childConversationId: exports_Schema.optionalKey(ConversationId),
+  childThreadId: exports_Schema.optionalKey(ThreadId),
   childSubmissionId: exports_Schema.optionalKey(SubmissionId),
   childRunId: exports_Schema.optionalKey(RunId),
   errorTag: BoundedErrorTag2,
@@ -44280,7 +44276,7 @@ var makeReviewer = (options3) => {
     });
   }, exports_Effect.provide([
     IdGenerator2.layer,
-    ConversationHistory.layerTransient,
+    ThreadHistory.layerTransient,
     reviewToolkitLayer,
     reviewCompletion.toLayer({ submit_review: () => exports_Effect.succeed(null) })
   ]), exports_Effect.scoped);

@@ -1,9 +1,9 @@
-import type { ConversationId } from "@effect-agent/core";
-import { makeWakeSubscriptionHub, WakeScheduler } from "@effect-agent/session";
+import type { ThreadId } from "@effect-agent/core";
+import { makeWakeSubscriptionHub, WakeScheduler } from "@effect-agent/thread";
 import { Effect, Layer, PubSub, Schema, Stream } from "effect";
 
 import { DurableAlarmService } from "./alarm.ts";
-import { ConversationObjectIdentity, ConversationObjectNamespace } from "./bindings.ts";
+import { ThreadObjectIdentity, ThreadObjectNamespace } from "./bindings.ts";
 import { safeCauseMessage } from "./boundary.ts";
 
 /**
@@ -16,7 +16,7 @@ const WAKE_BUFFER_CAPACITY = 1_024;
 
 /** A remote wake stub call failed; always swallowed and logged (hints are droppable). */
 class RemoteWakeDropped extends Schema.TaggedError<RemoteWakeDropped>()("RemoteWakeDropped", {
-  conversationId: Schema.String,
+  threadId: Schema.String,
   message: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}
@@ -36,19 +36,19 @@ class RemoteWakeDropped extends Schema.TaggedError<RemoteWakeDropped>()("RemoteW
 export const cloudflareWakeSchedulerLayer: Layer.Layer<
   WakeScheduler,
   never,
-  DurableAlarmService | ConversationObjectIdentity | ConversationObjectNamespace
+  DurableAlarmService | ThreadObjectIdentity | ThreadObjectNamespace
 > = Layer.effect(WakeScheduler)(
   Effect.gen(function* () {
     const alarm = yield* DurableAlarmService;
-    const identity = yield* ConversationObjectIdentity;
-    const { namespace } = yield* ConversationObjectNamespace;
-    const hints = yield* PubSub.sliding<ConversationId>(WAKE_BUFFER_CAPACITY);
+    const identity = yield* ThreadObjectIdentity;
+    const { namespace } = yield* ThreadObjectNamespace;
+    const hints = yield* PubSub.sliding<ThreadId>(WAKE_BUFFER_CAPACITY);
     const progress = yield* makeWakeSubscriptionHub;
     yield* Effect.addFinalizer(() => PubSub.shutdown(hints));
 
-    const notifyLocal = (conversationId: ConversationId) =>
-      progress.notify(conversationId).pipe(
-        Effect.andThen(PubSub.publish(hints, conversationId)),
+    const notifyLocal = (threadId: ThreadId) =>
+      progress.notify(threadId).pipe(
+        Effect.andThen(PubSub.publish(hints, threadId)),
         Effect.andThen(alarm.scheduleNow),
         Effect.catch((error) =>
           // `notify` never fails by contract; a failed alarm write degrades to "hint lost"
@@ -58,30 +58,25 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
         Effect.asVoid,
       );
 
-    const notifyRemote = (conversationId: ConversationId) =>
+    const notifyRemote = (threadId: ThreadId) =>
       Effect.tryPromise({
-        try: () => namespace.get(namespace.idFromName(conversationId)).wake(),
+        try: () => namespace.get(namespace.idFromName(threadId)).wake(),
         catch: (cause) =>
           RemoteWakeDropped.make({
-            conversationId,
+            threadId,
             message: safeCauseMessage(cause, "The remote wake failed without a diagnostic"),
             cause,
           }),
       }).pipe(
         Effect.catch((error) =>
-          Effect.logWarning(
-            `CloudflareWakeScheduler: remote wake of ${conversationId} dropped`,
-            error,
-          ),
+          Effect.logWarning(`CloudflareWakeScheduler: remote wake of ${threadId} dropped`, error),
         ),
         Effect.asVoid,
       );
 
     return WakeScheduler.of({
-      notify: (conversationId) =>
-        conversationId === identity.conversationId
-          ? notifyLocal(conversationId)
-          : notifyRemote(conversationId),
+      notify: (threadId) =>
+        threadId === identity.threadId ? notifyLocal(threadId) : notifyRemote(threadId),
       subscribe: progress.subscribe,
       wakes: Stream.fromPubSub(hints),
     });

@@ -1,4 +1,4 @@
-import type { SubscriptionFailpointError } from "@effect-agent/session";
+import type { SubscriptionFailpointError } from "@effect-agent/thread";
 import {
   AcceptedEvent,
   applySubscriptionDeliveryChange,
@@ -20,12 +20,12 @@ import {
   SubscriptionScanCursors,
   SubscriptionStore,
   subscriptionDeliveryKeyString,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Clock, Context, Effect, Layer, Result, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
-const CURRENT_SUBSCRIPTION_STORE_VERSION = 1;
+const CURRENT_SUBSCRIPTION_STORE_VERSION = 2;
 const StoredJson = Schema.String.check(Schema.isMaxLength(1_900_000));
 const CountRow = Schema.Struct({ count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) });
 const SequenceRow = Schema.Struct({ sequence: Schema.Natural });
@@ -128,7 +128,7 @@ const sameDeliveryIdentity = (left: SubscriptionDelivery, right: SubscriptionDel
   left.deliveryId === right.deliveryId &&
   left.source.name === right.source.name &&
   left.source.version === right.source.version &&
-  left.conversationId === right.conversationId &&
+  left.threadId === right.threadId &&
   left.admissionKey === right.admissionKey &&
   left.subscriptionFingerprint === right.subscriptionFingerprint &&
   left.eventDigest === right.eventDigest;
@@ -212,7 +212,11 @@ const initializeDoSubscriptionStore = Effect.fn("DoSubscriptionStore.initialize"
   );
   const state = yield* decodeRows(StoreStateRow, rows, "read subscription storage version");
   if (state.length !== 1 || state[0].storage_version !== CURRENT_SUBSCRIPTION_STORE_VERSION)
-    return yield* corrupt("subscription storage version");
+    return yield* corrupt(
+      state.length === 1
+        ? `incompatible subscription storage version ${state[0].storage_version}; expected ${CURRENT_SUBSCRIPTION_STORE_VERSION}`
+        : "invalid subscription storage version row",
+    );
 });
 
 const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function* (

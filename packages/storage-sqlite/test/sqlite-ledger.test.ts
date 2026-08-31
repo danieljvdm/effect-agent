@@ -13,9 +13,9 @@ import {
   ChildSettledNotification,
   ClaimJoiningRequest,
   ClaimRequest,
-  ConversationMaterialization,
-  ConversationStore,
-  ConversationTailRequest,
+  ThreadMaterialization,
+  ThreadStore,
+  ThreadTailRequest,
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -62,8 +62,8 @@ import {
   type OwnershipToken,
   type PersistedJson,
   type SettlementOutcome,
-} from "@effect-agent/session";
-import { submissionLedgerConformanceCases } from "@effect-agent/session/testing";
+} from "@effect-agent/thread";
+import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -85,7 +85,7 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import {
   type SqliteStorageConfig,
-  conversationStoreLayer,
+  threadStoreLayer,
   CurrentSqliteStorageVersion,
   ledgerLayer,
   storageConfigLayer,
@@ -118,8 +118,7 @@ type SubmissionLedgerLayerErrorProof = Assert<
 const id = <A>(schema: Schema.Codec<A, string>, value: string): A =>
   Schema.decodeSync(schema)(value);
 
-const conversation = (value: string) =>
-  id(ConversationMaterialization.fields.conversationId, value);
+const thread = (value: string) => id(ThreadMaterialization.fields.threadId, value);
 const epoch = (value: number) => Schema.decodeSync(ProducerEpoch)(value);
 const sequence = (value: number) => Schema.decodeSync(CanonicalSequence)(value);
 const at = (millis: number) => DateTime.toUtc(DateTime.makeUnsafe(millis));
@@ -149,14 +148,14 @@ const TEST_DIGESTS = DefinitionDigests.make({
 });
 
 const admission = Effect.fn("SqliteLedgerTest.admission")(function* (
-  conversationId: string,
+  threadId: string,
   idempotencyKey: string,
   input: PersistedJson,
   parentLinkage?: ParentLinkage,
 ) {
   const inputDigest = yield* digestJson(input);
   return AdmissionRequest.make({
-    conversationId: conversation(conversationId),
+    threadId: thread(threadId),
     principal: TEST_PRINCIPAL,
     idempotencyKey: id(IdempotencyKey, idempotencyKey),
     agentId: TEST_AGENT,
@@ -192,7 +191,7 @@ const settlementReservation = Effect.fn("SqliteLedgerTest.settlementReservation"
   ).pipe(Effect.orDie);
   const record = RecordEnvelope.make({
     recordId: submissionSettlementRecordId(admitted.submissionId),
-    family: "conversation",
+    family: "thread",
     schemaVersion: 1,
     createdAt: at(1),
     deploymentId: TEST_DEPLOYMENT,
@@ -213,10 +212,10 @@ const settlementReservation = Effect.fn("SqliteLedgerTest.settlementReservation"
 const inputRecord = (recordId: string, input: string): CanonicalRecord =>
   CanonicalRecord.make({
     recordId: id(
-      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/RecordId")),
+      Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/RecordId")),
       recordId,
     ),
-    family: "conversation",
+    family: "thread",
     schemaVersion: 1,
     createdAt: at(1),
     deploymentId: TEST_DEPLOYMENT,
@@ -232,14 +231,14 @@ const batch = (
   records: readonly [CanonicalRecord, ...Array<CanonicalRecord>],
 ): CanonicalBatch =>
   CanonicalBatch.make({
-    batchId: id(Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/BatchId")), batchId),
+    batchId: id(Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/BatchId")), batchId),
     producerId: TEST_PRODUCER,
     records,
   });
 
 const append = (
-  store: ConversationStore["Service"],
-  conversationId: string,
+  store: ThreadStore["Service"],
+  threadId: string,
   canonicalBatch: CanonicalBatch,
   tail: Pick<AppendResult, "lastSequence" | "tailDigest"> = {
     lastSequence: sequence(0),
@@ -249,7 +248,7 @@ const append = (
 ) =>
   store.append(
     FencedAppendRequest.make({
-      conversationId: conversation(conversationId),
+      threadId: thread(threadId),
       batch: canonicalBatch,
       expectedTailSequence: tail.lastSequence,
       expectedTailDigest: tail.tailDigest,
@@ -278,9 +277,9 @@ const withLedger = <A, E>(
 const withSql = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientService.SqlClient>) =>
   Effect.provide(effect, SqliteClient.layer({ filename }));
 
-/** ConversationStore and SubmissionLedger sharing one SqlClient over one database file. */
+/** ThreadStore and SubmissionLedger sharing one SqlClient over one database file. */
 const combinedLayer = (filename: string) =>
-  Layer.mergeAll(conversationStoreLayer, submissionLedgerLayer).pipe(
+  Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
         storageConfigLayer({ filename, observationPollInterval: 1 }),
@@ -334,15 +333,15 @@ describe("SqliteSubmissionLedger", () => {
         filename,
         Effect.gen(function* () {
           const ledger = yield* SubmissionLedger;
-          const lane = conversation("conversation-semantic-json");
+          const lane = thread("thread-semantic-json");
           const admitted = yield* ledger.admit(
-            yield* admission("conversation-semantic-json", "semantic-json-key", {
+            yield* admission("thread-semantic-json", "semantic-json-key", {
               work: "semantic JSON",
             }),
           );
           yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
           const claim = yield* ledger.claim(
-            ClaimRequest.make({ conversationId: lane, producerId: TEST_PRODUCER }),
+            ClaimRequest.make({ threadId: lane, producerId: TEST_PRODUCER }),
           );
           if (Option.isNone(claim)) return yield* Effect.die("missing semantic JSON claim");
 
@@ -435,7 +434,7 @@ describe("SqliteSubmissionLedger", () => {
             const capabilities = yield* ledger.capabilities;
             expect(capabilities.durability).toBe("durable-node");
             const admitted = yield* ledger.admit(
-              yield* admission("conversation-reopen", "reopen-key", { city: "Kyoto" }),
+              yield* admission("thread-reopen", "reopen-key", { city: "Kyoto" }),
             );
             yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
             return admitted;
@@ -447,7 +446,7 @@ describe("SqliteSubmissionLedger", () => {
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
             const replayed = yield* ledger.admit(
-              yield* admission("conversation-reopen", "reopen-key", { city: "Kyoto" }),
+              yield* admission("thread-reopen", "reopen-key", { city: "Kyoto" }),
             );
             expect(replayed.replayed).toBe(true);
             expect(replayed.submissionId).toBe(first.submissionId);
@@ -455,7 +454,7 @@ describe("SqliteSubmissionLedger", () => {
 
             const byKey = yield* ledger.lookup(
               SubmissionLookupByKey.make({
-                conversationId: conversation("conversation-reopen"),
+                threadId: thread("thread-reopen"),
                 principal: TEST_PRINCIPAL,
                 idempotencyKey: id(IdempotencyKey, "reopen-key"),
               }),
@@ -475,32 +474,32 @@ describe("SqliteSubmissionLedger", () => {
     ),
   );
 
-  it.effect("bumps the conversation producer epoch atomically with a claim", () =>
+  it.effect("bumps the thread producer epoch atomically with a claim", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
-        const store = yield* ConversationStore;
+        const store = yield* ThreadStore;
         const ledger = yield* SubmissionLedger;
-        const conversationId = "conversation-epoch";
+        const threadId = "thread-epoch";
 
         yield* store.materialize(
-          ConversationMaterialization.make({
-            conversationId: conversation(conversationId),
+          ThreadMaterialization.make({
+            threadId: thread(threadId),
             producerEpoch: epoch(1),
           }),
         );
         const first = yield* append(
           store,
-          conversationId,
+          threadId,
           batch("epoch-batch-1", [inputRecord("epoch-record-1", "before claim")]),
         );
 
         const admitted = yield* ledger.admit(
-          yield* admission(conversationId, "epoch-key", { work: "epoch" }),
+          yield* admission(threadId, "epoch-key", { work: "epoch" }),
         );
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
         const claim = yield* ledger.claim(
           ClaimRequest.make({
-            conversationId: conversation(conversationId),
+            threadId: thread(threadId),
             producerId: TEST_PRODUCER,
           }),
         );
@@ -512,7 +511,7 @@ describe("SqliteSubmissionLedger", () => {
         // domain the claim mutated.
         const stale = yield* append(
           store,
-          conversationId,
+          threadId,
           batch("epoch-batch-2", [inputRecord("epoch-record-2", "stale append")]),
           first,
           epoch(1),
@@ -529,7 +528,7 @@ describe("SqliteSubmissionLedger", () => {
 
         const fenced = yield* append(
           store,
-          conversationId,
+          threadId,
           batch("epoch-batch-2", [inputRecord("epoch-record-2", "stale append")]),
           first,
           claim.value.producerEpoch,
@@ -539,20 +538,20 @@ describe("SqliteSubmissionLedger", () => {
     ),
   );
 
-  it.effect("creates the conversation fencing row when claiming pre-materialization work", () =>
+  it.effect("creates the thread fencing row when claiming pre-materialization work", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
-        const store = yield* ConversationStore;
+        const store = yield* ThreadStore;
         const ledger = yield* SubmissionLedger;
-        const conversationId = "conversation-unmaterialized";
+        const threadId = "thread-unmaterialized";
 
         const admitted = yield* ledger.admit(
-          yield* admission(conversationId, "unmaterialized-key", { work: "recover" }),
+          yield* admission(threadId, "unmaterialized-key", { work: "recover" }),
         );
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
         const claim = yield* ledger.claim(
           ClaimRequest.make({
-            conversationId: conversation(conversationId),
+            threadId: thread(threadId),
             producerId: TEST_PRODUCER,
           }),
         );
@@ -562,13 +561,13 @@ describe("SqliteSubmissionLedger", () => {
 
         // Recovery re-materializes idempotently at the claim's epoch.
         yield* store.materialize(
-          ConversationMaterialization.make({
-            conversationId: conversation(conversationId),
+          ThreadMaterialization.make({
+            threadId: thread(threadId),
             producerEpoch: claim.value.producerEpoch,
           }),
         );
         const tail = yield* store.inspectTail(
-          ConversationTailRequest.make({ conversationId: conversation(conversationId) }),
+          ThreadTailRequest.make({ threadId: thread(threadId) }),
         );
         expect(tail.producerEpoch).toBe(claim.value.producerEpoch);
         expect(tail.tailSequence).toBe(0);
@@ -584,7 +583,7 @@ describe("SqliteSubmissionLedger", () => {
           filename,
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
-            yield* ledger.admit(yield* admission("conversation-busy", "busy-key-1", { step: 1 }));
+            yield* ledger.admit(yield* admission("thread-busy", "busy-key-1", { step: 1 }));
           }),
         );
 
@@ -599,7 +598,7 @@ describe("SqliteSubmissionLedger", () => {
               Effect.gen(function* () {
                 const ledger = yield* SubmissionLedger;
                 return yield* ledger.admit(
-                  yield* admission("conversation-busy", "busy-key-2", { step: 2 }),
+                  yield* admission("thread-busy", "busy-key-2", { step: 2 }),
                 );
               }),
               [ledgerLayer({ filename, busyTimeout: 0 }), NodeCrypto.layer],
@@ -622,9 +621,7 @@ describe("SqliteSubmissionLedger", () => {
           filename,
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
-            return yield* ledger.admit(
-              yield* admission("conversation-busy", "busy-key-2", { step: 2 }),
-            );
+            return yield* ledger.admit(yield* admission("thread-busy", "busy-key-2", { step: 2 }));
           }),
         );
         expect(recovered.replayed).toBe(false);
@@ -635,45 +632,47 @@ describe("SqliteSubmissionLedger", () => {
   it.effect(
     "rejects older files exactly with reset guidance and still rejects newer versions",
     () =>
-      Effect.forEach([1, 2, 3, 4, CurrentSqliteStorageVersion + 1, 99], (storedVersion) =>
-        withTemporaryDatabase((filename) =>
-          Effect.gen(function* () {
-            yield* withSql(
-              filename,
-              Effect.gen(function* () {
-                const sql = yield* SqlClientService.SqlClient;
-                yield* sql.unsafe(`PRAGMA user_version = ${storedVersion}`);
-              }),
-            );
+      Effect.forEach(
+        [1, 2, 3, 4, 5, CurrentSqliteStorageVersion - 1, CurrentSqliteStorageVersion + 1, 99],
+        (storedVersion) =>
+          withTemporaryDatabase((filename) =>
+            Effect.gen(function* () {
+              yield* withSql(
+                filename,
+                Effect.gen(function* () {
+                  const sql = yield* SqlClientService.SqlClient;
+                  yield* sql.unsafe(`PRAGMA user_version = ${storedVersion}`);
+                }),
+              );
 
-            const opened = yield* withLedger(filename, SubmissionLedger).pipe(Effect.exit);
-            expect(Exit.isFailure(opened)).toBe(true);
-            if (Exit.isFailure(opened)) {
-              const error = Cause.squash(opened.cause);
-              expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
-              if (isSqliteStorageCompatibilityError(error)) {
-                expect(error.actualVersion).toBe(storedVersion);
-                expect(error.supportedVersion).toBe(CurrentSqliteStorageVersion);
-                expect(error.message).toContain("Reset the database file explicitly");
+              const opened = yield* withLedger(filename, SubmissionLedger).pipe(Effect.exit);
+              expect(Exit.isFailure(opened)).toBe(true);
+              if (Exit.isFailure(opened)) {
+                const error = Cause.squash(opened.cause);
+                expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
+                if (isSqliteStorageCompatibilityError(error)) {
+                  expect(error.actualVersion).toBe(storedVersion);
+                  expect(error.supportedVersion).toBe(CurrentSqliteStorageVersion);
+                  expect(error.message).toContain("Reset the database file explicitly");
+                }
               }
-            }
 
-            // Failing closed must not mutate the incompatible file.
-            const tables = yield* withSql(
-              filename,
-              Effect.gen(function* () {
-                const sql = yield* SqlClientService.SqlClient;
-                return yield* sql<Record<string, unknown>>`
+              // Failing closed must not mutate the incompatible file.
+              const tables = yield* withSql(
+                filename,
+                Effect.gen(function* () {
+                  const sql = yield* SqlClientService.SqlClient;
+                  return yield* sql<Record<string, unknown>>`
                 SELECT name
                 FROM sqlite_master
                 WHERE type = 'table'
                   AND name LIKE 'effect_agent_%'
               `;
-              }),
-            );
-            expect(tables).toEqual([]);
-          }),
-        ),
+                }),
+              );
+              expect(tables).toEqual([]);
+            }),
+          ),
       ),
   );
 
@@ -723,7 +722,7 @@ describe("SqliteSubmissionLedger", () => {
             return yield* sql<Record<string, unknown>>`
               SELECT submission_id, state, receipt_id, input_applied_record_id
               FROM effect_agent_submissions
-              ORDER BY conversation_id, queue_sequence
+              ORDER BY thread_id, queue_sequence
             `;
           }),
         );
@@ -768,18 +767,18 @@ describe("SqliteSubmissionLedger", () => {
             `;
           }),
         );
-        const conversationRows = withSql(
+        const threadRows = withSql(
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
             return yield* sql<Record<string, unknown>>`
-              SELECT conversation_id, producer_epoch
-              FROM effect_agent_conversations
+              SELECT thread_id, producer_epoch
+              FROM effect_agent_threads
             `;
           }),
         );
 
-        const lane = "conversation-failpoints";
+        const lane = "thread-failpoints";
         const admitOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -818,26 +817,26 @@ describe("SqliteSubmissionLedger", () => {
         yield* select(undefined);
         yield* markReadyOnce;
 
-        // claim: before → no ownership, no conversation row, no epoch consumed; after → the
+        // claim: before → no ownership, no thread row, no epoch consumed; after → the
         // claim is durable (ownership + audit + epoch bump) even though the caller never saw it.
         const claimOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
             return yield* ledger.claim(
-              ClaimRequest.make({ conversationId: conversation(lane), producerId: TEST_PRODUCER }),
+              ClaimRequest.make({ threadId: thread(lane), producerId: TEST_PRODUCER }),
             );
           }),
         );
         yield* select("ledger:claim:before");
         expectInjectedFailure(yield* claimOnce.pipe(Effect.exit), "ledger:claim:before");
         expect(yield* ownershipRows).toEqual([]);
-        expect(yield* conversationRows).toEqual([]);
+        expect(yield* threadRows).toEqual([]);
         yield* select("ledger:claim:after");
         expectInjectedFailure(yield* claimOnce.pipe(Effect.exit), "ledger:claim:after");
         const orphanedOwnership = yield* ownershipRows;
         expect(orphanedOwnership).toHaveLength(1);
         expect(orphanedOwnership[0]?.producer_epoch).toBe(1);
-        expect(yield* conversationRows).toEqual([{ conversation_id: lane, producer_epoch: 1 }]);
+        expect(yield* threadRows).toEqual([{ thread_id: lane, producer_epoch: 1 }]);
         expect((yield* submissionStates)[0]?.state).toBe("running");
         expect(yield* attemptRows).toHaveLength(1);
         // The orphaned lease blocks until expiry; a later Attempt reclaims at a higher epoch.
@@ -973,7 +972,7 @@ describe("SqliteSubmissionLedger", () => {
         expect(settlement.outcome).toBe("completed");
 
         // requestAbort: before → no intent; after → intent durable, retry returns it unchanged.
-        const abortLane = "conversation-failpoints-abort";
+        const abortLane = "thread-failpoints-abort";
         yield* select(undefined);
         const abortAdmitted = yield* failingLedger(
           Effect.gen(function* () {
@@ -1015,7 +1014,7 @@ describe("SqliteSubmissionLedger", () => {
             const ledger = yield* SubmissionLedger;
             return yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation(abortLane),
+                threadId: thread(abortLane),
                 producerId: OTHER_PRODUCER,
               }),
             );
@@ -1064,16 +1063,16 @@ describe("SqliteSubmissionLedger", () => {
 
             // Joined queued input.
             const host = yield* ledger.admit(
-              yield* admission("conversation-reopen-join", "reopen-host-key", { work: "host" }),
+              yield* admission("thread-reopen-join", "reopen-host-key", { work: "host" }),
             );
             yield* ledger.markReady(MarkReadyRequest.make({ submissionId: host.submissionId }));
             const queued = yield* ledger.admit(
-              yield* admission("conversation-reopen-join", "reopen-queued-key", { queued: 2 }),
+              yield* admission("thread-reopen-join", "reopen-queued-key", { queued: 2 }),
             );
             yield* ledger.markReady(MarkReadyRequest.make({ submissionId: queued.submissionId }));
             const hostClaim = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation("conversation-reopen-join"),
+                threadId: thread("thread-reopen-join"),
                 producerId: TEST_PRODUCER,
               }),
             );
@@ -1081,7 +1080,7 @@ describe("SqliteSubmissionLedger", () => {
             if (Option.isNone(hostClaim)) return yield* Effect.die("missing host claim");
             const claims = yield* ledger.claimJoining(
               ClaimJoiningRequest.make({
-                conversationId: conversation("conversation-reopen-join"),
+                threadId: thread("thread-reopen-join"),
                 hostSubmissionId: host.submissionId,
                 ownershipToken: hostClaim.value.ownershipToken,
                 maxCount: 4,
@@ -1099,14 +1098,14 @@ describe("SqliteSubmissionLedger", () => {
 
             // Durable approval suspension with one of two calls decided.
             const gated = yield* ledger.admit(
-              yield* admission("conversation-reopen-suspend", "reopen-gated-key", {
+              yield* admission("thread-reopen-suspend", "reopen-gated-key", {
                 work: "gated",
               }),
             );
             yield* ledger.markReady(MarkReadyRequest.make({ submissionId: gated.submissionId }));
             const gatedClaim = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation("conversation-reopen-suspend"),
+                threadId: thread("thread-reopen-suspend"),
                 producerId: TEST_PRODUCER,
               }),
             );
@@ -1134,7 +1133,7 @@ describe("SqliteSubmissionLedger", () => {
 
             // Unknown Outcome with one of two calls resolved.
             const uncertain = yield* ledger.admit(
-              yield* admission("conversation-reopen-unknown", "reopen-uncertain-key", {
+              yield* admission("thread-reopen-unknown", "reopen-uncertain-key", {
                 work: "uncertain",
               }),
             );
@@ -1210,7 +1209,7 @@ describe("SqliteSubmissionLedger", () => {
             expect(gatedSnapshot.approvalDecisions[0]?.decision).toBe("approved");
             const blockedSuspended = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation("conversation-reopen-suspend"),
+                threadId: thread("thread-reopen-suspend"),
                 producerId: OTHER_PRODUCER,
               }),
             );
@@ -1320,7 +1319,7 @@ describe("SqliteSubmissionLedger", () => {
                 unknown_reason,
                 unknown_tool_call_ids_json
               FROM effect_agent_submissions
-              ORDER BY conversation_id, queue_sequence
+              ORDER BY thread_id, queue_sequence
             `;
           }),
         );
@@ -1359,7 +1358,7 @@ describe("SqliteSubmissionLedger", () => {
         const markerFor = (rows: ReadonlyArray<Record<string, unknown>>, submissionId: string) =>
           rows.find((row) => row.submission_id === submissionId);
 
-        const lane = "conversation-p5-failpoints";
+        const lane = "thread-p5-failpoints";
         const { host, hostClaim, queued, queuedSecond } = yield* failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -1378,7 +1377,7 @@ describe("SqliteSubmissionLedger", () => {
               MarkReadyRequest.make({ submissionId: queuedSecond.submissionId }),
             );
             const claim = yield* ledger.claim(
-              ClaimRequest.make({ conversationId: conversation(lane), producerId: TEST_PRODUCER }),
+              ClaimRequest.make({ threadId: thread(lane), producerId: TEST_PRODUCER }),
             );
             if (Option.isNone(claim)) return yield* Effect.die("missing host claim");
             return { host, hostClaim: claim.value, queued, queuedSecond };
@@ -1393,7 +1392,7 @@ describe("SqliteSubmissionLedger", () => {
             const ledger = yield* SubmissionLedger;
             return yield* ledger.claimJoining(
               ClaimJoiningRequest.make({
-                conversationId: conversation(lane),
+                threadId: thread(lane),
                 hostSubmissionId: host.submissionId,
                 ownershipToken: hostClaim.ownershipToken,
                 maxCount: 1,
@@ -1652,8 +1651,8 @@ describe("SqliteSubmissionLedger", () => {
   it.effect("persists child reservations and parent linkage across reopen", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
-        const parentLane = "conversation-s2-reopen-parent";
-        const childLane = "conversation-s2-reopen-child";
+        const parentLane = "thread-s2-reopen-parent";
+        const childLane = "thread-s2-reopen-child";
         const reservationId = S2_REOPEN_RESERVATION;
         const delegationCall = toolCall("call-s2");
 
@@ -1667,7 +1666,7 @@ describe("SqliteSubmissionLedger", () => {
             yield* ledger.markReady(MarkReadyRequest.make({ submissionId: parent.submissionId }));
             const parentClaim = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation(parentLane),
+                threadId: thread(parentLane),
                 producerId: TEST_PRODUCER,
               }),
             );
@@ -1766,7 +1765,7 @@ describe("SqliteSubmissionLedger", () => {
 
             const resolved = yield* ledger.resolveAdmission(
               SubmissionLookupByKey.make({
-                conversationId: conversation(childLane),
+                threadId: thread(childLane),
                 principal: TEST_PRINCIPAL,
                 idempotencyKey: id(IdempotencyKey, "s2-child-key"),
               }),
@@ -1781,14 +1780,14 @@ describe("SqliteSubmissionLedger", () => {
             // recorded settlement durably wakes the parent (spec §12 step 10).
             const blocked = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation(parentLane),
+                threadId: thread(parentLane),
                 producerId: OTHER_PRODUCER,
               }),
             );
             expect(Option.isNone(blocked)).toBe(true);
             const childClaim = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation(childLane),
+                threadId: thread(childLane),
                 producerId: TEST_PRODUCER,
               }),
             );
@@ -1815,7 +1814,7 @@ describe("SqliteSubmissionLedger", () => {
             expect(woken).toBe("woken");
             const parentClaim = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation(parentLane),
+                threadId: thread(parentLane),
                 producerId: OTHER_PRODUCER,
               }),
             );
@@ -1907,8 +1906,8 @@ describe("SqliteSubmissionLedger", () => {
             }),
           );
 
-        const parentLane = "conversation-s2-failpoints";
-        const childLane = "conversation-s2-failpoints-child";
+        const parentLane = "thread-s2-failpoints";
+        const childLane = "thread-s2-failpoints-child";
         const reservationId = S2_FAILPOINT_RESERVATION;
         const delegationCall = toolCall("call-s2-fp");
         const { child, parent, parentClaim } = yield* failingLedger(
@@ -1924,7 +1923,7 @@ describe("SqliteSubmissionLedger", () => {
             yield* ledger.markReady(MarkReadyRequest.make({ submissionId: child.submissionId }));
             const claim = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation(parentLane),
+                threadId: thread(parentLane),
                 producerId: TEST_PRODUCER,
               }),
             );
@@ -2071,7 +2070,7 @@ describe("SqliteSubmissionLedger", () => {
             expect(suspended).toBe("suspended");
             const childClaim = yield* ledger.claim(
               ClaimRequest.make({
-                conversationId: conversation(childLane),
+                threadId: thread(childLane),
                 producerId: TEST_PRODUCER,
               }),
             );

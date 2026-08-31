@@ -48,7 +48,7 @@ export default defineConfig({
         compatibilityFlags: ["nodejs_compat"],
         durableObjects: {
           PROBE: { className: "ProbeDurableObject", useSQLite: true },
-          CONVERSATIONS: { className: "ConversationStorageObject", useSQLite: true },
+          THREADS: { className: "ThreadStorageObject", useSQLite: true },
           SCHEDULES: { className: "ScheduleStorageObject", useSQLite: true },
         },
       },

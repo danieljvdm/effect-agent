@@ -3,7 +3,7 @@ import {
   AgentApprovalDenied,
   AgentPolicy,
   AgentPolicyError,
-  ConversationId,
+  ThreadId,
   DelegationTool,
   IdGenerator,
   ModelProtocolError,
@@ -31,7 +31,6 @@ import {
 import { TestClock } from "effect/testing";
 import { Prompt, LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
-import { ConversationHistory } from "../src/conversation-history.ts";
 import {
   AgentRuntime,
   RunContextPreparation,
@@ -46,6 +45,7 @@ import {
   type RunTurnResponseCommit,
   type RunTurnResume,
 } from "../src/index.ts";
+import { ThreadHistory } from "../src/thread-history.ts";
 
 class HookFailure extends Schema.TaggedError<HookFailure>()("HookFailure", {
   message: Schema.String,
@@ -79,7 +79,7 @@ const oneCallResumeUsage = {
 };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextConversationId: Effect.succeed(Schema.decodeSync(ConversationId)("conversation-1")),
+  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-1")),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-1")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-1")),
 });
@@ -167,7 +167,7 @@ const policy = (overrides?: Partial<Parameters<typeof AgentPolicy.make>[0]>) =>
     ...overrides,
   });
 
-const testLayer = Layer.merge(identifiers, ConversationHistory.layerTransient);
+const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
 
 layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
   for (const outcome of ["allowed", "denied", "preparation-failed"] as const) {
@@ -655,8 +655,8 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       const requests = yield* Ref.get(authorizationRequests);
       expect(requests).toHaveLength(2);
       expect(
-        requests.map(({ conversationId, runId, turnId, turn, input, call }) => ({
-          conversationId,
+        requests.map(({ threadId, runId, turnId, turn, input, call }) => ({
+          threadId,
           runId,
           turnId,
           turn,
@@ -665,7 +665,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         })),
       ).toEqual([
         {
-          conversationId: "conversation-1",
+          threadId: "thread-1",
           runId: "run-1",
           turnId: "turn-1",
           turn: 1,
@@ -679,7 +679,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           },
         },
         {
-          conversationId: "conversation-1",
+          threadId: "thread-1",
           runId: "run-1",
           turnId: "turn-1",
           turn: 1,

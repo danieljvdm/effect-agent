@@ -7,15 +7,15 @@ const identifier = <const Name extends string>(name: Name) =>
 export const AgentId = identifier("AgentId");
 export type AgentId = typeof AgentId.Type;
 
-/** Identity shared by runs that participate in one conversation history. */
-export const ConversationId = identifier("ConversationId");
-export type ConversationId = typeof ConversationId.Type;
+/** Identity shared by runs that participate in one thread history. */
+export const ThreadId = identifier("ThreadId");
+export type ThreadId = typeof ThreadId.Type;
 
 /** Identity of one accepted input submission. */
 export const SubmissionId = identifier("SubmissionId");
 export type SubmissionId = typeof SubmissionId.Type;
 
-/** Durable identity returned once ledger admission and Conversation readiness are committed. */
+/** Durable identity returned once ledger admission and Thread readiness are committed. */
 export const ReceiptId = identifier("ReceiptId");
 export type ReceiptId = typeof ReceiptId.Type;
 

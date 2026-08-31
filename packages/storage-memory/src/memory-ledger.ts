@@ -4,7 +4,7 @@ import {
   ReceiptId,
   SubmissionId,
   type AgentId,
-  type ConversationId,
+  type ThreadId,
   type SettlementId,
 } from "@effect-agent/core";
 import {
@@ -86,7 +86,7 @@ import {
   type SubmissionState,
   type SuspensionOutcome,
   type SuspensionReason,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Clock, DateTime, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 
 const MAX_SUBMISSIONS = 65_536;
@@ -111,7 +111,7 @@ const STATE_RANK: Record<SubmissionState, number> = {
 
 interface SubmissionRow {
   readonly submissionId: SubmissionId;
-  readonly conversationId: ConversationId;
+  readonly threadId: ThreadId;
   readonly queueSequence: QueueSequence;
   readonly principal: Principal;
   readonly idempotencyKey: IdempotencyKey;
@@ -207,7 +207,7 @@ interface StoredChildReservation {
 interface LedgerState {
   readonly submissions: ReadonlyMap<SubmissionId, StoredSubmission>;
   readonly admissionIndex: ReadonlyMap<string, SubmissionId>;
-  readonly lanes: ReadonlyMap<ConversationId, LaneState>;
+  readonly lanes: ReadonlyMap<ThreadId, LaneState>;
   readonly childReservations: ReadonlyMap<ChildReservationId, StoredChildReservation>;
   readonly mintCounter: number;
 }
@@ -248,15 +248,15 @@ const equivalentUnknownResolution = Schema.toEquivalence(UnknownResolution);
 const utc = (millis: number): DateTime.Utc => DateTime.toUtc(DateTime.makeUnsafe(millis));
 
 const admissionKey = (
-  conversationId: ConversationId,
+  threadId: ThreadId,
   principal: Principal,
   idempotencyKey: IdempotencyKey,
-): string => `${conversationId}\u001f${principal}\u001f${idempotencyKey}`;
+): string => `${threadId}\u001f${principal}\u001f${idempotencyKey}`;
 
 const toSnapshot = (row: SubmissionRow): SubmissionSnapshot =>
   SubmissionSnapshot.make({
     submissionId: row.submissionId,
-    conversationId: row.conversationId,
+    threadId: row.threadId,
     queueSequence: row.queueSequence,
     principal: row.principal,
     idempotencyKey: row.idempotencyKey,
@@ -301,13 +301,13 @@ const sameParentLinkage = (
       left.parentSubmissionId === right.parentSubmissionId &&
       left.parentToolCallId === right.parentToolCallId;
 
-const laneEpoch = (state: LedgerState, conversationId: ConversationId): number =>
-  state.lanes.get(conversationId)?.producerEpoch ?? 0;
+const laneEpoch = (state: LedgerState, threadId: ThreadId): number =>
+  state.lanes.get(threadId)?.producerEpoch ?? 0;
 
 const ownershipLost = (state: LedgerState, stored: StoredSubmission): OwnershipLost =>
   OwnershipLost.make({
     submissionId: stored.row.submissionId,
-    actualEpoch: decodeProducerEpoch(laneEpoch(state, stored.row.conversationId)),
+    actualEpoch: decodeProducerEpoch(laneEpoch(state, stored.row.threadId)),
   });
 
 /** The presented token owns the lane only while it matches the live ownership record. */
@@ -327,13 +327,10 @@ const withChildReservation = (
   childReservations: new Map(state.childReservations).set(reservation.reservationId, reservation),
 });
 
-const findHead = (
-  state: LedgerState,
-  conversationId: ConversationId,
-): StoredSubmission | undefined => {
+const findHead = (state: LedgerState, threadId: ThreadId): StoredSubmission | undefined => {
   let head: StoredSubmission | undefined;
   for (const stored of state.submissions.values()) {
-    if (stored.row.conversationId !== conversationId || stored.row.state === "settled") continue;
+    if (stored.row.threadId !== threadId || stored.row.state === "settled") continue;
     if (head === undefined || stored.row.queueSequence < head.row.queueSequence) head = stored;
   }
   return head;
@@ -399,11 +396,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               Decision<AdmissionResult, AdmissionConflict | LedgerError>,
               LedgerState,
             ] => {
-              const key = admissionKey(
-                request.conversationId,
-                request.principal,
-                request.idempotencyKey,
-              );
+              const key = admissionKey(request.threadId, request.principal, request.idempotencyKey);
               const existingId = current.admissionIndex.get(key);
               if (existingId !== undefined) {
                 const existing = current.submissions.get(existingId);
@@ -424,7 +417,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   return [
                     failure(
                       AdmissionConflict.make({
-                        conversationId: request.conversationId,
+                        threadId: request.threadId,
                         principal: request.principal,
                         idempotencyKey: request.idempotencyKey,
                         existingInputDigest: existing.row.inputDigest,
@@ -455,14 +448,14 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
-              const lane = current.lanes.get(request.conversationId) ?? {
+              const lane = current.lanes.get(request.threadId) ?? {
                 nextQueueSequence: 1,
                 producerEpoch: 0,
               };
               const mintCounter = current.mintCounter + 1;
               const row: SubmissionRow = {
                 submissionId: decodeSubmissionId(`submission-memory-${mintCounter}`),
-                conversationId: request.conversationId,
+                threadId: request.threadId,
                 queueSequence: decodeQueueSequence(lane.nextQueueSequence),
                 principal: request.principal,
                 idempotencyKey: request.idempotencyKey,
@@ -491,7 +484,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 unknownResolutions: new Map<ToolCallId, StoredUnknownResolution>(),
               });
               const admissionIndex = new Map(current.admissionIndex).set(key, row.submissionId);
-              const lanes = new Map(current.lanes).set(request.conversationId, {
+              const lanes = new Map(current.lanes).set(request.threadId, {
                 nextQueueSequence: lane.nextQueueSequence + 1,
                 producerEpoch: lane.producerEpoch,
               });
@@ -554,7 +547,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           request._tag === "SubmissionLookupById"
             ? request.submissionId
             : current.admissionIndex.get(
-                admissionKey(request.conversationId, request.principal, request.idempotencyKey),
+                admissionKey(request.threadId, request.principal, request.idempotencyKey),
               );
         const stored =
           submissionId === undefined ? undefined : current.submissions.get(submissionId);
@@ -577,7 +570,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
         }
         const current = yield* Ref.get(state);
         const submissionId = current.admissionIndex.get(
-          admissionKey(request.conversationId, request.principal, request.idempotencyKey),
+          admissionKey(request.threadId, request.principal, request.idempotencyKey),
         );
         const stored =
           submissionId === undefined ? undefined : current.submissions.get(submissionId);
@@ -595,7 +588,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           const decision = yield* Ref.modify(
             state,
             (current): readonly [Decision<Option.Option<Claim>, LedgerError>, LedgerState] => {
-              const head = findHead(current, request.conversationId);
+              const head = findHead(current, request.threadId);
               if (head === undefined) return [success(Option.none()), current];
               if (
                 BLOCKED_HEAD_STATES.has(head.row.state) ||
@@ -609,10 +602,10 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ) {
                 return [success(Option.none()), current];
               }
-              const lane = current.lanes.get(request.conversationId);
+              const lane = current.lanes.get(request.threadId);
               if (lane === undefined) {
                 return [
-                  failure(ledgerError("claim", "Claimable head without a Conversation lane")),
+                  failure(ledgerError("claim", "Claimable head without a Thread lane")),
                   current,
                 ];
               }
@@ -628,7 +621,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               const row: SubmissionRow =
                 head.row.state === "ready" ? { ...head.row, state: "running" } : head.row;
               const next = withSubmission(current, { ...head, row, ownership });
-              const lanes = new Map(next.lanes).set(request.conversationId, {
+              const lanes = new Map(next.lanes).set(request.threadId, {
                 nextQueueSequence: lane.nextQueueSequence,
                 producerEpoch: lane.producerEpoch + 1,
               });
@@ -1071,12 +1064,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
-            if (host.row.conversationId !== request.conversationId) {
+            if (host.row.threadId !== request.threadId) {
               return [
                 failure(
                   ledgerError(
                     "claimJoining",
-                    `Host Submission ${request.hostSubmissionId} does not belong to Conversation ${request.conversationId}`,
+                    `Host Submission ${request.hostSubmissionId} does not belong to Thread ${request.threadId}`,
                   ),
                 ),
                 current,
@@ -1088,7 +1081,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             const later = [...current.submissions.values()]
               .filter(
                 (stored) =>
-                  stored.row.conversationId === request.conversationId &&
+                  stored.row.threadId === request.threadId &&
                   stored.row.queueSequence > host.row.queueSequence,
               )
               .sort((left, right) => left.row.queueSequence - right.row.queueSequence);
@@ -2066,9 +2059,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           const snapshots = [...current.submissions.values()]
             .filter((stored) => stored.row.state !== "settled")
             .sort((left, right) =>
-              left.row.conversationId < right.row.conversationId
+              left.row.threadId < right.row.threadId
                 ? -1
-                : left.row.conversationId > right.row.conversationId
+                : left.row.threadId > right.row.threadId
                   ? 1
                   : left.row.queueSequence - right.row.queueSequence,
             )

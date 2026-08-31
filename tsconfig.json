@@ -20,7 +20,7 @@
       "path": "./packages/sandbox-local"
     },
     {
-      "path": "./packages/session"
+      "path": "./packages/thread"
     },
     {
       "path": "./packages/storage-memory"

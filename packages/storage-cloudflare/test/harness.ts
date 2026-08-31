@@ -21,40 +21,39 @@ import {
   type ParentLinkage,
   type PersistedJson,
   type SettlementOutcome,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { env, runInDurableObject } from "cloudflare:test";
 import { DateTime, Effect, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
-import type { ConversationStorageObject, ScheduleStorageObject } from "./worker.ts";
+import type { ThreadStorageObject, ScheduleStorageObject } from "./worker.ts";
 
 declare global {
   namespace Cloudflare {
     interface Env {
-      CONVERSATIONS: DurableObjectNamespace<ConversationStorageObject>;
+      THREADS: DurableObjectNamespace<ThreadStorageObject>;
       SCHEDULES: DurableObjectNamespace<ScheduleStorageObject>;
     }
   }
 }
 
-export const conversationStub = (name: string) =>
-  env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(name));
+export const threadStub = (name: string) => env.THREADS.get(env.THREADS.idFromName(name));
 
 export const scheduleStub = (name: string) => env.SCHEDULES.get(env.SCHEDULES.idFromName(name));
 
 /**
- * Run one Effect program against a named Conversation Durable Object's real SQLite storage
+ * Run one Effect program against a named Thread Durable Object's real SQLite storage
  * inside workerd. The 0.21.x pool shares Durable Object storage across tests within a run,
  * so callers mint a UNIQUE object name per test/case (mirroring how the SQLite suites mint a
  * temporary database file per case). A manual `TestClock.layer()` is provided at the root —
  * the WP0-proven standalone path — so the shared conformance cases can drive lease expiry
  * through virtual time exactly as they do under `@effect/vitest`'s `it.effect` on Node.
  */
-export const withConversationStorage = <A, E>(
+export const withThreadStorage = <A, E>(
   name: string,
   build: (storage: DurableObjectStorage, state: DurableObjectState) => Effect.Effect<A, E>,
 ): Promise<A> =>
-  runInDurableObject(conversationStub(name), (_instance, state) =>
+  runInDurableObject(threadStub(name), (_instance, state) =>
     Effect.runPromise(build(state.storage, state).pipe(Effect.provide(TestClock.layer()))),
   );
 
@@ -70,7 +69,7 @@ export const withScheduleStorage = <A, E>(
 export const id = <A>(schema: Schema.Codec<A, string>, value: string): A =>
   Schema.decodeSync(schema)(value);
 
-export const conversation = (value: string) => id(AdmissionRequest.fields.conversationId, value);
+export const thread = (value: string) => id(AdmissionRequest.fields.threadId, value);
 export const epoch = (value: number) => Schema.decodeSync(ProducerEpoch)(value);
 export const sequence = (value: number) => Schema.decodeSync(CanonicalSequence)(value);
 export const at = (millis: number) => DateTime.toUtc(DateTime.makeUnsafe(millis));
@@ -89,14 +88,14 @@ export const TEST_DIGESTS = DefinitionDigests.make({
 });
 
 export const admission = Effect.fn("DoLedgerTest.admission")(function* (
-  conversationId: string,
+  threadId: string,
   idempotencyKey: string,
   input: PersistedJson,
   parentLinkage?: ParentLinkage,
 ) {
   const inputDigest = yield* digestJson(input);
   return AdmissionRequest.make({
-    conversationId: conversation(conversationId),
+    threadId: thread(threadId),
     principal: TEST_PRINCIPAL,
     idempotencyKey: id(IdempotencyKey, idempotencyKey),
     agentId: TEST_AGENT,
@@ -132,7 +131,7 @@ export const settlementReservation = Effect.fn("DoLedgerTest.settlementReservati
   ).pipe(Effect.orDie);
   const record = RecordEnvelope.make({
     recordId: submissionSettlementRecordId(admitted.submissionId),
-    family: "conversation",
+    family: "thread",
     schemaVersion: 1,
     createdAt: at(1),
     deploymentId: TEST_DEPLOYMENT,

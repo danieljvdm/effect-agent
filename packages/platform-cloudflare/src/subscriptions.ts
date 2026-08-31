@@ -1,4 +1,9 @@
 import {
+  DoSubscriptionAlarmControl,
+  DoSubscriptionTransaction,
+  doSubscriptionStoreLayer,
+} from "@effect-agent/storage-cloudflare";
+import {
   EventAcknowledgement,
   EventSourceVersion,
   type EventSources,
@@ -20,12 +25,7 @@ import {
   SubscriptionSourceError,
   Subscriptions,
   defaultSubscriptionLimits,
-} from "@effect-agent/session";
-import {
-  DoSubscriptionAlarmControl,
-  DoSubscriptionTransaction,
-  doSubscriptionStoreLayer,
-} from "@effect-agent/storage-cloudflare";
+} from "@effect-agent/thread";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Cause, Clock, Context, DateTime, Effect, Layer, Schema } from "effect";
@@ -36,8 +36,8 @@ import {
   type WorkerEnvironment,
 } from "effect-cf";
 
-import { type ConversationObjectNamespace } from "./bindings.ts";
-import { CloudflareConversationClient } from "./client.ts";
+import { type ThreadObjectNamespace } from "./bindings.ts";
+import { CloudflareThreadClient } from "./client.ts";
 import { cloudflarePreparedInputAdmissionLayer } from "./prepared-admission.ts";
 
 const SUBSCRIPTION_ALARM_TAG = "effect-agent/SubscriptionPartitionWake";
@@ -587,7 +587,7 @@ export interface SubscriptionPartitionObjectClass {
  */
 export const makeSubscriptionPartitionObjectClass = <E>(
   host: Layer.Layer<
-    SubscriptionAuthorizer | EventSources | SubscriptionInputBindings | ConversationObjectNamespace,
+    SubscriptionAuthorizer | EventSources | SubscriptionInputBindings | ThreadObjectNamespace,
     E,
     | EffectCfDurableObjectState.DurableObjectState
     | WorkerEnvironment
@@ -626,7 +626,7 @@ export const makeSubscriptionPartitionObjectClass = <E>(
   ).pipe(
     Layer.provideMerge(partitionStore),
     Layer.provide(
-      cloudflarePreparedInputAdmissionLayer.pipe(Layer.provide(CloudflareConversationClient.layer)),
+      cloudflarePreparedInputAdmissionLayer.pipe(Layer.provide(CloudflareThreadClient.layer)),
     ),
     Layer.provide(BrowserCrypto.layer),
     Layer.provideMerge(DurableObjectAlarm.DurableObjectAlarm.layer),

@@ -3,12 +3,12 @@ import {
   submissionSettlementRecordId,
   type CanonicalRecordEnvelope,
   type Receipt,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { CloudflareConversationClient } from "../src/index.ts";
+import { CloudflareThreadClient } from "../src/index.ts";
 import {
   armRuntimeEviction,
   armedEvictionsRemaining,
@@ -61,22 +61,22 @@ const mulberry32 = (seed: number): (() => number) => {
 
 const submitTo = (
   definition: typeof searchDefinition | typeof plannerDefinition,
-  conversation: string,
+  thread: string,
 ): Promise<Receipt> =>
   runClient(
     Effect.gen(function* () {
-      const client = yield* CloudflareConversationClient;
+      const client = yield* CloudflareThreadClient;
       return yield* client.submit(
         { definition },
-        { question: "chaos equivalence", ref: conversation },
-        submitOptions(conversation, `${conversation}-key`),
+        { question: "chaos equivalence", ref: thread },
+        submitOptions(thread, `${thread}-key`),
       );
     }),
   );
 
 /** Abort the CURRENT incarnation between host operations (in-memory state dies). */
-const abortIncarnation = (conversation: string): Promise<void> =>
-  runInDurableObject(stubFor(conversation), (_instance, state) => {
+const abortIncarnation = (thread: string): Promise<void> =>
+  runInDurableObject(stubFor(thread), (_instance, state) => {
     state.abort("chaos abort");
   }).then(
     () => undefined,
@@ -92,7 +92,7 @@ const abortIncarnation = (conversation: string): Promise<void> =>
 const normalizedEvidence = (
   records: ReadonlyArray<CanonicalRecordEnvelope>,
   receipt: Receipt,
-  conversation: string,
+  thread: string,
 ): ReadonlyArray<string> =>
   records
     .filter((envelope) => envelope.record.payload._tag !== "RepairAnnotated")
@@ -100,9 +100,9 @@ const normalizedEvidence = (
       JSON.stringify({ recordId: envelope.record.recordId, record: envelope.record })
         .replaceAll(receipt.submissionId, "{submissionId}")
         .replaceAll(receipt.receiptId, "{receiptId}")
-        .replaceAll(conversation, "{conversationId}")
+        .replaceAll(thread, "{threadId}")
         .replaceAll(/\d{4}-\d{2}-\d{2}T[0-9:.]+Z/g, "{timestamp}")
-        // Digests hash the RAW content (which legally embeds the Conversation identity), so
+        // Digests hash the RAW content (which legally embeds the Thread identity), so
         // they can never be byte-equal across two lanes; the digest CHAIN's integrity is
         // asserted separately by the adapters and `assertConvergence`.
         .replaceAll(/"[0-9a-f]{64}"/g, '"{digest}"'),
@@ -141,32 +141,28 @@ describe("DC chaos-abort evidence equivalence", () => {
   }, 120_000);
 
   it("startup reconciliation ordering: the armed repair executes before the pass claims new work", async () => {
-    const conversation = lane("reconcile-first");
+    const thread = lane("reconcile-first");
     // Strand S1 mid-terminalization: the settlement is reserved but not canonical.
-    armRuntimeEviction(conversation, "terminalize:after-reserve");
-    const receipt1 = await submitTo(plannerDefinition, conversation);
-    await drainAlarmsUntil(conversation, () =>
-      Promise.resolve(armedEvictionsRemaining(conversation) === 0),
-    );
+    armRuntimeEviction(thread, "terminalize:after-reserve");
+    const receipt1 = await submitTo(plannerDefinition, thread);
+    await drainAlarmsUntil(thread, () => Promise.resolve(armedEvictionsRemaining(thread) === 0));
     // New work arrives while the lane still owes S1's repair.
     const receipt2 = await runClient(
       Effect.gen(function* () {
-        const client = yield* CloudflareConversationClient;
+        const client = yield* CloudflareThreadClient;
         return yield* client.submit(
           { definition: plannerDefinition },
-          { question: "queued behind the repair", ref: conversation },
-          submitOptions(conversation, `${conversation}-key-2`),
+          { question: "queued behind the repair", ref: thread },
+          submitOptions(thread, `${thread}-key-2`),
         );
       }),
     );
-    await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation);
+    await drainAlarmsUntil(thread, allSettled(thread));
+    await assertConvergence(thread);
 
     // The repaired settlement of S1 was appended BEFORE S2's canonical input: every pass
-    // runs `runRecovery` before `processConversationResolved` claims anything (plan §1.4).
-    const recordIds = (await readCanonical(conversation)).map(
-      (envelope) => envelope.record.recordId,
-    );
+    // runs `runRecovery` before `processThreadResolved` claims anything (plan §1.4).
+    const recordIds = (await readCanonical(thread)).map((envelope) => envelope.record.recordId);
     const s1Settlement = recordIds.indexOf(submissionSettlementRecordId(receipt1.submissionId));
     const s2Input = recordIds.indexOf(submissionInputRecordId(receipt2.submissionId));
     expect(s1Settlement).toBeGreaterThanOrEqual(0);
@@ -188,23 +184,23 @@ describe("DC chaos-abort evidence equivalence", () => {
       // Chaos: two lanes advance ONLY through seeded abort/alarm actions, so both the abort
       // positions and the alarm-delivery ORDER between the lanes are randomized (bounded).
       const lanes = [
-        { conversation: lane("seeded-chaos-search"), definition: searchDefinition },
-        { conversation: lane("seeded-chaos-planner"), definition: plannerDefinition },
+        { thread: lane("seeded-chaos-search"), definition: searchDefinition },
+        { thread: lane("seeded-chaos-planner"), definition: plannerDefinition },
       ] as const;
       const receipts = [
-        await submitTo(lanes[0].definition, lanes[0].conversation),
-        await submitTo(lanes[1].definition, lanes[1].conversation),
+        await submitTo(lanes[0].definition, lanes[0].thread),
+        await submitTo(lanes[1].definition, lanes[1].thread),
       ] as const;
 
-      const settled = async (conversation: string): Promise<boolean> => {
-        const rows = await laneRows(conversation);
+      const settled = async (thread: string): Promise<boolean> => {
+        const rows = await laneRows(thread);
         return rows.length > 0 && rows.every((row) => row.state === "settled");
       };
       const MAX_ROUNDS = 240;
       for (let round = 0; round < MAX_ROUNDS; round++) {
         const pending = [] as Array<string>;
-        for (const { conversation } of lanes) {
-          if (!(await settled(conversation))) pending.push(conversation);
+        for (const { thread } of lanes) {
+          if (!(await settled(thread))) pending.push(thread);
         }
         if (pending.length === 0) break;
         const target = pending[Math.floor(random() * pending.length)]!;
@@ -223,25 +219,17 @@ describe("DC chaos-abort evidence equivalence", () => {
         }
       }
       // Bounded-round convergence, then the full canonical drain and the shared claims.
-      for (const { conversation } of lanes) {
-        await drainAlarmsUntil(conversation, allSettled(conversation));
-        await assertConvergence(conversation);
+      for (const { thread } of lanes) {
+        await drainAlarmsUntil(thread, allSettled(thread));
+        await assertConvergence(thread);
       }
       expect(
-        normalizedEvidence(
-          await readCanonical(lanes[0].conversation),
-          receipts[0],
-          lanes[0].conversation,
-        ),
+        normalizedEvidence(await readCanonical(lanes[0].thread), receipts[0], lanes[0].thread),
       ).toEqual(
         normalizedEvidence(await readCanonical(searchControl), searchControlReceipt, searchControl),
       );
       expect(
-        normalizedEvidence(
-          await readCanonical(lanes[1].conversation),
-          receipts[1],
-          lanes[1].conversation,
-        ),
+        normalizedEvidence(await readCanonical(lanes[1].thread), receipts[1], lanes[1].thread),
       ).toEqual(
         normalizedEvidence(
           await readCanonical(plannerControl),

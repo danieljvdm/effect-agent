@@ -4,15 +4,15 @@ import {
   ScheduleFailpointError,
   ScheduleId,
   Scheduling,
-} from "@effect-agent/session";
+} from "@effect-agent/thread";
 import { Effect, Layer, Schema } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 
 import {
   CloudflareSchedulingClient,
-  ConversationObjectNamespace,
+  ThreadObjectNamespace,
   ScheduleOwnerNamespace,
-  ConversationObject,
+  ThreadObject,
   makeScheduleOwnerObjectClass,
 } from "../../src/index.ts";
 import {
@@ -20,7 +20,7 @@ import {
   PRODUCER_PREFIX,
   TEST_DIGESTS,
   TEST_PRINCIPAL,
-  decodeConversationId,
+  decodeThreadId,
   fixtureReconcilerLayer,
   testRuntimeLayer,
   plannerDefinition,
@@ -29,14 +29,14 @@ import {
 declare global {
   namespace Cloudflare {
     interface Env {
-      RESTART_CONVERSATIONS: DurableObjectNamespace<SchedulingRestartConversation>;
+      RESTART_THREADS: DurableObjectNamespace<SchedulingRestartThread>;
       RESTART_SCHEDULES: DurableObjectNamespace<SchedulingRestartOwner>;
     }
   }
 }
 
-const conversationOptions: ConversationObject.Options = {
-  namespaceBinding: "RESTART_CONVERSATIONS",
+const threadOptions: ThreadObject.Options = {
+  namespaceBinding: "RESTART_THREADS",
   deploymentId: DEPLOYMENT_ID,
   producerPrefix: PRODUCER_PREFIX,
   ownershipLeaseDuration: 250,
@@ -52,10 +52,7 @@ const conversationOptions: ConversationObject.Options = {
 
 const SubmissionIdRow = Schema.Struct({ submission_id: Schema.String });
 
-export class SchedulingRestartConversation extends ConversationObject.make(
-  testRuntimeLayer,
-  conversationOptions,
-) {
+export class SchedulingRestartThread extends ThreadObject.make(testRuntimeLayer, threadOptions) {
   async submissionIds(): Promise<ReadonlyArray<string>> {
     const rows = this.ctx.storage.sql
       .exec("SELECT submission_id FROM effect_agent_submissions ORDER BY queue_sequence")
@@ -73,8 +70,8 @@ let admissionReplyFailures = 0;
 
 const scheduleHostLayer = Layer.mergeAll(
   Layer.effect(
-    ConversationObjectNamespace,
-    Effect.map(WorkerEnvironment, (env) => ({ namespace: env.RESTART_CONVERSATIONS })),
+    ThreadObjectNamespace,
+    Effect.map(WorkerEnvironment, (env) => ({ namespace: env.RESTART_THREADS })),
   ),
   Layer.succeed(ScheduleAuthorizer)({
     manage: () => Effect.void,
@@ -112,7 +109,7 @@ export class SchedulingRestartOwner extends ScheduleOwnerBase {
 const owner = { tenantId: "restart-tenant", ownerId: "restart-owner" } as const;
 const scope = { owner, principal: TEST_PRINCIPAL };
 const scheduleId = Schema.decodeSync(ScheduleId)("restart-schedule");
-const conversation = "restart-scheduled-conversation";
+const thread = "restart-scheduled-thread";
 const CreateRequest = Schema.Struct({ deadlineAtMillis: Schema.Number });
 
 const schedulingLayer = CloudflareSchedulingClient.layer.pipe(
@@ -143,14 +140,14 @@ const handle = Effect.fn("SchedulingRestartWorker.handle")(function* (request: R
     const client = yield* Scheduling;
     const snapshot = yield* client.create(
       { definition: plannerDefinition },
-      { question: "persist across Miniflare restart", ref: conversation },
+      { question: "persist across Miniflare restart", ref: thread },
       {
         scope,
         scheduleId,
         timing: { _tag: "At", atMillis: deadlineAtMillis },
         destination: {
-          _tag: "ExistingConversation",
-          conversationId: decodeConversationId(conversation),
+          _tag: "ExistingThread",
+          threadId: decodeThreadId(thread),
         },
         deliveryPrincipal: TEST_PRINCIPAL,
         definitions: TEST_DIGESTS,
@@ -163,7 +160,7 @@ const handle = Effect.fn("SchedulingRestartWorker.handle")(function* (request: R
     const snapshot = yield* client.get(scope, scheduleId);
     const env = yield* WorkerEnvironment;
     const submissionIds = yield* Effect.promise(() =>
-      env.RESTART_CONVERSATIONS.getByName(conversation).submissionIds(),
+      env.RESTART_THREADS.getByName(thread).submissionIds(),
     );
     return Response.json({
       delivered: snapshot.lastReceipt !== null,

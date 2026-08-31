@@ -1,4 +1,4 @@
-import { CanonicalSequence, ProducerEpoch } from "@effect-agent/session";
+import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread";
 import { SqliteMigrator } from "@effect/sql-sqlite-do";
 import { Effect, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -25,7 +25,7 @@ import { CurrentDoStorageVersion, doMigrations } from "./migrations.ts";
  */
 const BoundedStoredText = Schema.String.check(Schema.isMaxLength(2_000_000));
 const BoundedIdentifier = Schema.NonEmptyString.check(Schema.isMaxLength(1024));
-const MAX_RECORDS_PER_CONVERSATION = 65_536;
+const MAX_RECORDS_PER_THREAD = 65_536;
 const MAX_IDENTIFIER_LENGTH = 1_024;
 /** Durable Object SQL storage allows at most 100 bound parameters per statement. */
 const MAX_BOUND_PARAMETERS = 100;
@@ -49,8 +49,8 @@ class DoNameRow extends Schema.Class<DoNameRow>("DoNameRow")({
   name: BoundedIdentifier,
 }) {}
 
-class ConversationRow extends Schema.Class<ConversationRow>("ConversationRow")({
-  conversation_id: BoundedIdentifier,
+class ThreadRow extends Schema.Class<ThreadRow>("ThreadRow")({
+  thread_id: BoundedIdentifier,
   created_at: Schema.NonEmptyString.check(Schema.isMaxLength(128)),
   producer_epoch: ProducerEpoch,
   tail_digest: BoundedStoredText,
@@ -61,7 +61,7 @@ class BatchRow extends Schema.Class<BatchRow>("BatchRow")({
   batch_digest: BoundedStoredText,
   batch_id: BoundedIdentifier,
   batch_json: BoundedStoredText,
-  conversation_id: BoundedIdentifier,
+  thread_id: BoundedIdentifier,
   first_sequence: CanonicalSequence,
   last_sequence: CanonicalSequence,
   tail_digest: BoundedStoredText,
@@ -69,7 +69,7 @@ class BatchRow extends Schema.Class<BatchRow>("BatchRow")({
 
 class RecordRow extends Schema.Class<RecordRow>("RecordRow")({
   batch_id: BoundedIdentifier,
-  conversation_id: BoundedIdentifier,
+  thread_id: BoundedIdentifier,
   record_id: BoundedIdentifier,
   record_json: BoundedStoredText,
   sequence: CanonicalSequence,
@@ -77,7 +77,7 @@ class RecordRow extends Schema.Class<RecordRow>("RecordRow")({
 
 class CheckpointRow extends Schema.Class<CheckpointRow>("CheckpointRow")({
   checkpoint_json: BoundedStoredText,
-  conversation_id: BoundedIdentifier,
+  thread_id: BoundedIdentifier,
   tail_digest: BoundedStoredText,
   through_sequence: CanonicalSequence,
 }) {}
@@ -95,7 +95,7 @@ export class RawAppendRequest extends Schema.Class<RawAppendRequest>(
   batchDigest: BoundedStoredText,
   batchId: BoundedIdentifier,
   batchJson: BoundedStoredText,
-  conversationId: BoundedIdentifier,
+  threadId: BoundedIdentifier,
   expectedTailDigest: BoundedStoredText,
   expectedTailSequence: CanonicalSequence,
   producerEpoch: ProducerEpoch,
@@ -115,7 +115,7 @@ export class RawAppendResult extends Schema.Class<RawAppendResult>(
 export class RawReadRequest extends Schema.Class<RawReadRequest>(
   "@effect-agent/storage-cloudflare/RawReadRequest",
 )({
-  conversationId: BoundedIdentifier,
+  threadId: BoundedIdentifier,
   fromSequenceExclusive: CanonicalSequence,
   limit: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1_024)),
 }) {}
@@ -124,17 +124,17 @@ export class RawCheckpoint extends Schema.Class<RawCheckpoint>(
   "@effect-agent/storage-cloudflare/RawCheckpoint",
 )({
   checkpointJson: BoundedStoredText,
-  conversationId: BoundedIdentifier,
+  threadId: BoundedIdentifier,
   tailDigest: BoundedStoredText,
   throughSequence: CanonicalSequence,
 }) {}
 
-export class RawConversationExport extends Schema.Class<RawConversationExport>(
-  "@effect-agent/storage-cloudflare/RawConversationExport",
+export class RawThreadExport extends Schema.Class<RawThreadExport>(
+  "@effect-agent/storage-cloudflare/RawThreadExport",
 )({
   batches: Schema.Array(BatchRow),
   checkpoints: Schema.Array(CheckpointRow),
-  conversation: ConversationRow,
+  thread: ThreadRow,
   records: Schema.Array(RecordRow),
 }) {}
 
@@ -218,7 +218,7 @@ const REQUIRED_TABLES = [
   "effect_agent_checkpoints",
   "effect_agent_child_reservations",
   "effect_agent_child_settlements",
-  "effect_agent_conversations",
+  "effect_agent_threads",
   "effect_agent_meta",
   "effect_agent_settlement_reservations",
   "effect_agent_submission_ownership",
@@ -384,7 +384,7 @@ const makeJournal = (
       );
 
   const materialize = Effect.fn("DoJournal.materialize")(function* (
-    conversationId: string,
+    threadId: string,
     createdAt: string,
     emptyTailDigest: string,
     producerEpoch: ProducerEpoch,
@@ -392,54 +392,54 @@ const makeJournal = (
     void,
     DoFenceRejected | DoStorageCorruptionError | DoStorageError | DoValueBoundExceeded
   > {
-    if (conversationId.length > MAX_IDENTIFIER_LENGTH) {
+    if (threadId.length > MAX_IDENTIFIER_LENGTH) {
       return yield* DoStorageError.make({
-        operation: "materialize conversation",
-        message: "Conversation identity exceeds the Durable Object storage bounds.",
+        operation: "materialize thread",
+        message: "Thread identity exceeds the Durable Object storage bounds.",
       });
     }
-    yield* checkValueBound("materialize conversation", emptyTailDigest);
+    yield* checkValueBound("materialize thread", emptyTailDigest);
     yield* withWriteTransaction("materialize transaction")(
       Effect.gen(function* () {
         const existingRows = yield* sql<Record<string, unknown>>`
           SELECT
-            conversation_id,
+            thread_id,
             created_at,
             tail_sequence,
             tail_digest,
             producer_epoch
-          FROM effect_agent_conversations
-          WHERE conversation_id = ${conversationId}
-        `.pipe(Effect.mapError(storageError("read materialized conversation")));
+          FROM effect_agent_threads
+          WHERE thread_id = ${threadId}
+        `.pipe(Effect.mapError(storageError("read materialized thread")));
         const existing = yield* decodeRows(
-          Schema.Array(ConversationRow),
-          "effect_agent_conversations",
-          conversationId,
+          Schema.Array(ThreadRow),
+          "effect_agent_threads",
+          threadId,
           existingRows,
         );
         if (existing.length > 1) {
           return yield* DoStorageCorruptionError.make({
-            table: "effect_agent_conversations",
-            rowKey: conversationId,
-            message: "A conversation primary key returned more than one row.",
+            table: "effect_agent_threads",
+            rowKey: threadId,
+            message: "A thread primary key returned more than one row.",
           });
         }
         if (existing.length === 0) {
           yield* sql`
-            INSERT INTO effect_agent_conversations (
-              conversation_id,
+            INSERT INTO effect_agent_threads (
+              thread_id,
               created_at,
               tail_sequence,
               tail_digest,
               producer_epoch
             ) VALUES (
-              ${conversationId},
+              ${threadId},
               ${createdAt},
               0,
               ${emptyTailDigest},
               ${producerEpoch}
             )
-          `.pipe(Effect.mapError(storageError("materialize conversation")));
+          `.pipe(Effect.mapError(storageError("materialize thread")));
           return;
         }
         if (producerEpoch < existing[0].producer_epoch) {
@@ -451,41 +451,34 @@ const makeJournal = (
         }
         if (producerEpoch > existing[0].producer_epoch) {
           yield* sql`
-            UPDATE effect_agent_conversations
+            UPDATE effect_agent_threads
             SET producer_epoch = ${producerEpoch}
-            WHERE conversation_id = ${conversationId}
+            WHERE thread_id = ${threadId}
           `.pipe(Effect.mapError(storageError("advance materialization epoch")));
         }
       }),
     );
   });
 
-  const getConversation = Effect.fn("DoJournal.getConversation")(function* (
-    conversationId: string,
-  ) {
+  const getThread = Effect.fn("DoJournal.getThread")(function* (threadId: string) {
     const rows = yield* sql<Record<string, unknown>>`
       SELECT
-        conversation_id,
+        thread_id,
         created_at,
         tail_sequence,
         tail_digest,
         producer_epoch
-      FROM effect_agent_conversations
-      WHERE conversation_id = ${conversationId}
-    `.pipe(Effect.mapError(storageError("read conversation")));
-    return yield* decodeRows(
-      Schema.Array(ConversationRow),
-      "effect_agent_conversations",
-      conversationId,
-      rows,
-    );
+      FROM effect_agent_threads
+      WHERE thread_id = ${threadId}
+    `.pipe(Effect.mapError(storageError("read thread")));
+    return yield* decodeRows(Schema.Array(ThreadRow), "effect_agent_threads", threadId, rows);
   });
 
   const append = Effect.fn("DoJournal.append")(function* (
     request: RawAppendRequest,
   ): Effect.fn.Return<RawAppendResult, AppendError> {
     if (
-      request.conversationId.length > MAX_IDENTIFIER_LENGTH ||
+      request.threadId.length > MAX_IDENTIFIER_LENGTH ||
       request.batchId.length > MAX_IDENTIFIER_LENGTH ||
       request.records.some((record) => record.recordId.length > MAX_IDENTIFIER_LENGTH)
     ) {
@@ -513,34 +506,34 @@ const makeJournal = (
           });
         }
 
-        const conversationRows = yield* sql<Record<string, unknown>>`
+        const threadRows = yield* sql<Record<string, unknown>>`
           SELECT
-            conversation_id,
+            thread_id,
             created_at,
             tail_sequence,
             tail_digest,
             producer_epoch
-          FROM effect_agent_conversations
-          WHERE conversation_id = ${request.conversationId}
+          FROM effect_agent_threads
+          WHERE thread_id = ${request.threadId}
         `.pipe(Effect.mapError(storageError("read append tail")));
-        const conversation = yield* decodeSingleRow(
-          Schema.Array(ConversationRow),
-          "effect_agent_conversations",
-          request.conversationId,
-          conversationRows,
+        const thread = yield* decodeSingleRow(
+          Schema.Array(ThreadRow),
+          "effect_agent_threads",
+          request.threadId,
+          threadRows,
         );
 
-        if (request.producerEpoch !== conversation.producer_epoch) {
+        if (request.producerEpoch !== thread.producer_epoch) {
           return yield* DoFenceRejected.make({
             producerEpoch: request.producerEpoch,
-            actualEpoch: conversation.producer_epoch,
-            message: `Producer epoch ${request.producerEpoch} is not the current epoch ${conversation.producer_epoch}.`,
+            actualEpoch: thread.producer_epoch,
+            message: `Producer epoch ${request.producerEpoch} is not the current epoch ${thread.producer_epoch}.`,
           });
         }
 
         const batchRows = yield* sql<Record<string, unknown>>`
           SELECT
-            conversation_id,
+            thread_id,
             batch_id,
             first_sequence,
             last_sequence,
@@ -548,20 +541,20 @@ const makeJournal = (
             tail_digest,
             batch_json
           FROM effect_agent_canonical_batches
-          WHERE conversation_id = ${request.conversationId}
+          WHERE thread_id = ${request.threadId}
             AND batch_id = ${request.batchId}
         `.pipe(Effect.mapError(storageError("read idempotent batch")));
         const batches = yield* decodeRows(
           Schema.Array(BatchRow),
           "effect_agent_canonical_batches",
-          `${request.conversationId}/${request.batchId}`,
+          `${request.threadId}/${request.batchId}`,
           batchRows,
         );
 
         if (batches.length > 1) {
           return yield* DoStorageCorruptionError.make({
             table: "effect_agent_canonical_batches",
-            rowKey: `${request.conversationId}/${request.batchId}`,
+            rowKey: `${request.threadId}/${request.batchId}`,
             message: "A canonical batch primary key returned more than one row.",
           });
         }
@@ -582,22 +575,22 @@ const makeJournal = (
         }
 
         if (
-          request.expectedTailSequence !== conversation.tail_sequence ||
-          request.expectedTailDigest !== conversation.tail_digest
+          request.expectedTailSequence !== thread.tail_sequence ||
+          request.expectedTailDigest !== thread.tail_digest
         ) {
           return yield* DoAppendConflict.make({
             message:
               `Expected tail ${request.expectedTailSequence}/${request.expectedTailDigest} ` +
-              `but found ${conversation.tail_sequence}/${conversation.tail_digest}.`,
+              `but found ${thread.tail_sequence}/${thread.tail_digest}.`,
             reason: "tail",
-            actualTailSequence: conversation.tail_sequence,
-            actualTailDigest: conversation.tail_digest,
+            actualTailSequence: thread.tail_sequence,
+            actualTailDigest: thread.tail_digest,
           });
         }
-        if (conversation.tail_sequence + request.records.length > MAX_RECORDS_PER_CONVERSATION) {
+        if (thread.tail_sequence + request.records.length > MAX_RECORDS_PER_THREAD) {
           return yield* DoStorageError.make({
             operation: "append canonical batch",
-            message: `Conversation record limit ${MAX_RECORDS_PER_CONVERSATION} would be exceeded.`,
+            message: `Thread record limit ${MAX_RECORDS_PER_THREAD} would be exceeded.`,
           });
         }
 
@@ -607,13 +600,13 @@ const makeJournal = (
         for (const chunk of chunked(recordIds, MAX_BOUND_PARAMETERS - 10)) {
           const existingRecordRows = yield* sql<Record<string, unknown>>`
             SELECT
-              conversation_id,
+              thread_id,
               sequence,
               record_id,
               batch_id,
               record_json
             FROM effect_agent_canonical_records
-            WHERE conversation_id = ${request.conversationId}
+            WHERE thread_id = ${request.threadId}
               AND record_id IN ${sql.in([...chunk])}
             ORDER BY sequence
           `.pipe(Effect.mapError(storageError("check canonical record identities")));
@@ -621,7 +614,7 @@ const makeJournal = (
             ...(yield* decodeRows(
               Schema.Array(RecordRow),
               "effect_agent_canonical_records",
-              `${request.conversationId}/record_ids`,
+              `${request.threadId}/record_ids`,
               existingRecordRows,
             )),
           );
@@ -634,7 +627,7 @@ const makeJournal = (
         }
 
         const firstSequence = yield* Schema.decodeUnknownEffect(CanonicalSequence)(
-          conversation.tail_sequence + 1,
+          thread.tail_sequence + 1,
         ).pipe(
           Effect.mapError((error) =>
             DoStorageError.make({
@@ -658,7 +651,7 @@ const makeJournal = (
 
         yield* sql`
           INSERT INTO effect_agent_canonical_batches (
-            conversation_id,
+            thread_id,
             batch_id,
             first_sequence,
             last_sequence,
@@ -666,7 +659,7 @@ const makeJournal = (
             tail_digest,
             batch_json
           ) VALUES (
-            ${request.conversationId},
+            ${request.threadId},
             ${request.batchId},
             ${firstSequence},
             ${lastSequence},
@@ -683,13 +676,13 @@ const makeJournal = (
             Effect.gen(function* () {
               yield* sql`
                   INSERT INTO effect_agent_canonical_records (
-                    conversation_id,
+                    thread_id,
                     sequence,
                     record_id,
                     batch_id,
                     record_json
                   ) VALUES (
-                    ${request.conversationId},
+                    ${request.threadId},
                     ${firstSequence + index},
                     ${record.recordId},
                     ${request.batchId},
@@ -702,13 +695,13 @@ const makeJournal = (
         );
 
         yield* sql`
-          UPDATE effect_agent_conversations
+          UPDATE effect_agent_threads
           SET
             tail_sequence = ${lastSequence},
             tail_digest = ${request.tailDigest},
             producer_epoch = ${request.producerEpoch}
-          WHERE conversation_id = ${request.conversationId}
-        `.pipe(Effect.mapError(storageError("advance conversation tail")));
+          WHERE thread_id = ${request.threadId}
+        `.pipe(Effect.mapError(storageError("advance thread tail")));
         yield* failpoint("append:after-tail-update");
 
         return RawAppendResult.make({
@@ -724,13 +717,13 @@ const makeJournal = (
   const read = Effect.fn("DoJournal.read")(function* (request: RawReadRequest) {
     const rows = yield* sql<Record<string, unknown>>`
       SELECT
-        conversation_id,
+        thread_id,
         sequence,
         record_id,
         batch_id,
         record_json
       FROM effect_agent_canonical_records
-      WHERE conversation_id = ${request.conversationId}
+      WHERE thread_id = ${request.threadId}
         AND sequence > ${request.fromSequenceExclusive}
       ORDER BY sequence
       LIMIT ${request.limit}
@@ -738,37 +731,35 @@ const makeJournal = (
     return yield* decodeRows(
       Schema.Array(RecordRow),
       "effect_agent_canonical_records",
-      `${request.conversationId}>${request.fromSequenceExclusive}`,
+      `${request.threadId}>${request.fromSequenceExclusive}`,
       rows,
     );
   });
 
-  const exportConversation = Effect.fn("DoJournal.exportConversation")(function* (
-    conversationId: string,
-  ) {
+  const exportThread = Effect.fn("DoJournal.exportThread")(function* (threadId: string) {
     return yield* sql
       .withTransaction(
         Effect.gen(function* () {
-          const conversationRows = yield* sql<Record<string, unknown>>`
+          const threadRows = yield* sql<Record<string, unknown>>`
             SELECT
-              conversation_id,
+              thread_id,
               created_at,
               tail_sequence,
               tail_digest,
               producer_epoch
-            FROM effect_agent_conversations
-            WHERE conversation_id = ${conversationId}
-          `.pipe(Effect.mapError(storageError("export conversation")));
-          const conversation = yield* decodeSingleRow(
-            Schema.Array(ConversationRow),
-            "effect_agent_conversations",
-            conversationId,
-            conversationRows,
+            FROM effect_agent_threads
+            WHERE thread_id = ${threadId}
+          `.pipe(Effect.mapError(storageError("export thread")));
+          const thread = yield* decodeSingleRow(
+            Schema.Array(ThreadRow),
+            "effect_agent_threads",
+            threadId,
+            threadRows,
           );
-          yield* failpoint("export:after-conversation-read");
+          yield* failpoint("export:after-thread-read");
           const batchRows = yield* sql<Record<string, unknown>>`
             SELECT
-              conversation_id,
+              thread_id,
               batch_id,
               first_sequence,
               last_sequence,
@@ -776,49 +767,49 @@ const makeJournal = (
               tail_digest,
               batch_json
             FROM effect_agent_canonical_batches
-            WHERE conversation_id = ${conversationId}
+            WHERE thread_id = ${threadId}
             ORDER BY first_sequence
           `.pipe(Effect.mapError(storageError("export canonical batches")));
           const recordRows = yield* sql<Record<string, unknown>>`
             SELECT
-              conversation_id,
+              thread_id,
               sequence,
               record_id,
               batch_id,
               record_json
             FROM effect_agent_canonical_records
-            WHERE conversation_id = ${conversationId}
+            WHERE thread_id = ${threadId}
             ORDER BY sequence
           `.pipe(Effect.mapError(storageError("export canonical records")));
           const checkpointRows = yield* sql<Record<string, unknown>>`
             SELECT
-              conversation_id,
+              thread_id,
               through_sequence,
               tail_digest,
               checkpoint_json
             FROM effect_agent_checkpoints
-            WHERE conversation_id = ${conversationId}
+            WHERE thread_id = ${threadId}
             ORDER BY through_sequence
           `.pipe(Effect.mapError(storageError("export checkpoints")));
 
-          return RawConversationExport.make({
-            conversation,
+          return RawThreadExport.make({
+            thread,
             batches: yield* decodeRows(
               Schema.Array(BatchRow),
               "effect_agent_canonical_batches",
-              conversationId,
+              threadId,
               batchRows,
             ),
             records: yield* decodeRows(
               Schema.Array(RecordRow),
               "effect_agent_canonical_records",
-              conversationId,
+              threadId,
               recordRows,
             ),
             checkpoints: yield* decodeRows(
               Schema.Array(CheckpointRow),
               "effect_agent_checkpoints",
-              conversationId,
+              threadId,
               checkpointRows,
             ),
           });
@@ -834,7 +825,7 @@ const makeJournal = (
   const saveCheckpoint = Effect.fn("DoJournal.saveCheckpoint")(function* (
     checkpoint: RawCheckpoint,
   ): Effect.fn.Return<void, CheckpointError> {
-    if (checkpoint.conversationId.length > MAX_IDENTIFIER_LENGTH) {
+    if (checkpoint.threadId.length > MAX_IDENTIFIER_LENGTH) {
       return yield* DoStorageError.make({
         operation: "save checkpoint",
         message: "Checkpoint identity exceeds the Durable Object storage bounds.",
@@ -843,50 +834,50 @@ const makeJournal = (
     yield* checkValueBound("save checkpoint", checkpoint.checkpointJson);
     yield* withWriteTransaction("checkpoint transaction")(
       Effect.gen(function* () {
-        const conversationRows = yield* sql<Record<string, unknown>>`
+        const threadRows = yield* sql<Record<string, unknown>>`
           SELECT
-            conversation_id,
+            thread_id,
             created_at,
             tail_sequence,
             tail_digest,
             producer_epoch
-          FROM effect_agent_conversations
-          WHERE conversation_id = ${checkpoint.conversationId}
+          FROM effect_agent_threads
+          WHERE thread_id = ${checkpoint.threadId}
         `.pipe(Effect.mapError(storageError("read checkpoint tail")));
-        const conversation = yield* decodeSingleRow(
-          Schema.Array(ConversationRow),
-          "effect_agent_conversations",
-          checkpoint.conversationId,
-          conversationRows,
+        const thread = yield* decodeSingleRow(
+          Schema.Array(ThreadRow),
+          "effect_agent_threads",
+          checkpoint.threadId,
+          threadRows,
         );
-        if (checkpoint.throughSequence > conversation.tail_sequence) {
+        if (checkpoint.throughSequence > thread.tail_sequence) {
           return yield* DoCheckpointConflict.make({
             message:
               `Checkpoint sequence ${checkpoint.throughSequence} is after canonical tail ` +
-              `${conversation.tail_sequence}.`,
+              `${thread.tail_sequence}.`,
           });
         }
 
         const checkpointRows = yield* sql<Record<string, unknown>>`
           SELECT
-            conversation_id,
+            thread_id,
             through_sequence,
             tail_digest,
             checkpoint_json
           FROM effect_agent_checkpoints
-          WHERE conversation_id = ${checkpoint.conversationId}
+          WHERE thread_id = ${checkpoint.threadId}
             AND through_sequence = ${checkpoint.throughSequence}
         `.pipe(Effect.mapError(storageError("read idempotent checkpoint")));
         const existing = yield* decodeRows(
           Schema.Array(CheckpointRow),
           "effect_agent_checkpoints",
-          `${checkpoint.conversationId}/${checkpoint.throughSequence}`,
+          `${checkpoint.threadId}/${checkpoint.throughSequence}`,
           checkpointRows,
         );
         if (existing.length > 1) {
           return yield* DoStorageCorruptionError.make({
             table: "effect_agent_checkpoints",
-            rowKey: `${checkpoint.conversationId}/${checkpoint.throughSequence}`,
+            rowKey: `${checkpoint.threadId}/${checkpoint.throughSequence}`,
             message: "A checkpoint primary key returned more than one row.",
           });
         }
@@ -904,12 +895,12 @@ const makeJournal = (
 
         yield* sql`
           INSERT INTO effect_agent_checkpoints (
-            conversation_id,
+            thread_id,
             through_sequence,
             tail_digest,
             checkpoint_json
           ) VALUES (
-            ${checkpoint.conversationId},
+            ${checkpoint.threadId},
             ${checkpoint.throughSequence},
             ${checkpoint.tailDigest},
             ${checkpoint.checkpointJson}
@@ -920,17 +911,17 @@ const makeJournal = (
   });
 
   const loadCheckpoint = Effect.fn("DoJournal.loadCheckpoint")(function* (
-    conversationId: string,
+    threadId: string,
     atOrBeforeSequence: CanonicalSequence,
   ) {
     const rows = yield* sql<Record<string, unknown>>`
       SELECT
-        conversation_id,
+        thread_id,
         through_sequence,
         tail_digest,
         checkpoint_json
       FROM effect_agent_checkpoints
-      WHERE conversation_id = ${conversationId}
+      WHERE thread_id = ${threadId}
         AND through_sequence <= ${atOrBeforeSequence}
       ORDER BY through_sequence DESC
       LIMIT 1
@@ -938,26 +929,26 @@ const makeJournal = (
     return yield* decodeRows(
       Schema.Array(CheckpointRow),
       "effect_agent_checkpoints",
-      `${conversationId}<=${atOrBeforeSequence}`,
+      `${threadId}<=${atOrBeforeSequence}`,
       rows,
     );
   });
 
   const getTailDigestAt = Effect.fn("DoJournal.getTailDigestAt")(function* (
-    conversationId: string,
+    threadId: string,
     sequence: CanonicalSequence,
   ) {
     if (sequence === 0) {
-      const conversations = yield* getConversation(conversationId);
-      return conversations.length === 0
+      const threads = yield* getThread(threadId);
+      return threads.length === 0
         ? []
-        : [conversations[0].tail_sequence === 0 ? conversations[0].tail_digest : undefined].filter(
+        : [threads[0].tail_sequence === 0 ? threads[0].tail_digest : undefined].filter(
             (value): value is string => value !== undefined,
           );
     }
     const rows = yield* sql<Record<string, unknown>>`
       SELECT
-        conversation_id,
+        thread_id,
         batch_id,
         first_sequence,
         last_sequence,
@@ -965,13 +956,13 @@ const makeJournal = (
         tail_digest,
         batch_json
       FROM effect_agent_canonical_batches
-      WHERE conversation_id = ${conversationId}
+      WHERE thread_id = ${threadId}
         AND last_sequence = ${sequence}
     `.pipe(Effect.mapError(storageError("read canonical digest at sequence")));
     const batches = yield* decodeRows(
       Schema.Array(BatchRow),
       "effect_agent_canonical_batches",
-      `${conversationId}/${sequence}`,
+      `${threadId}/${sequence}`,
       rows,
     );
     return batches.map((batch) => batch.tail_digest);
@@ -981,19 +972,19 @@ const makeJournal = (
     return yield* sql
       .withTransaction(
         Effect.gen(function* () {
-          const conversations = yield* sql<Record<string, unknown>>`
+          const threads = yield* sql<Record<string, unknown>>`
             SELECT
-              conversation_id,
+              thread_id,
               created_at,
               tail_sequence,
               tail_digest,
               producer_epoch
-            FROM effect_agent_conversations
-            ORDER BY conversation_id
-          `.pipe(Effect.mapError(storageError("scan conversations")));
+            FROM effect_agent_threads
+            ORDER BY thread_id
+          `.pipe(Effect.mapError(storageError("scan threads")));
           const batches = yield* sql<Record<string, unknown>>`
             SELECT
-              conversation_id,
+              thread_id,
               batch_id,
               first_sequence,
               last_sequence,
@@ -1001,33 +992,33 @@ const makeJournal = (
               tail_digest,
               batch_json
             FROM effect_agent_canonical_batches
-            ORDER BY conversation_id, first_sequence
+            ORDER BY thread_id, first_sequence
           `.pipe(Effect.mapError(storageError("scan canonical batches")));
           const records = yield* sql<Record<string, unknown>>`
             SELECT
-              conversation_id,
+              thread_id,
               sequence,
               record_id,
               batch_id,
               record_json
             FROM effect_agent_canonical_records
-            ORDER BY conversation_id, sequence
+            ORDER BY thread_id, sequence
           `.pipe(Effect.mapError(storageError("scan canonical records")));
           const checkpoints = yield* sql<Record<string, unknown>>`
             SELECT
-              conversation_id,
+              thread_id,
               through_sequence,
               tail_digest,
               checkpoint_json
             FROM effect_agent_checkpoints
-            ORDER BY conversation_id, through_sequence
+            ORDER BY thread_id, through_sequence
           `.pipe(Effect.mapError(storageError("scan checkpoints")));
           return {
-            conversations: yield* decodeRows(
-              Schema.Array(ConversationRow),
-              "effect_agent_conversations",
+            threads: yield* decodeRows(
+              Schema.Array(ThreadRow),
+              "effect_agent_threads",
               "startup_scan",
-              conversations,
+              threads,
             ),
             batches: yield* decodeRows(
               Schema.Array(BatchRow),
@@ -1060,8 +1051,8 @@ const makeJournal = (
   return {
     append,
     checkValueBound,
-    exportConversation,
-    getConversation,
+    exportThread,
+    getThread,
     getTailDigestAt,
     loadCheckpoint,
     materialize,
