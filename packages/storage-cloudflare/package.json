@@ -27,16 +27,19 @@
   "dependencies": {
     "@effect-agent/session": "workspace:*",
     "@effect/platform-browser": "catalog:",
-    "@effect/sql-sqlite-do": "catalog:",
-    "effect": "catalog:"
+    "@effect/sql-sqlite-do": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "catalog:",
     "@cloudflare/workers-types": "catalog:",
     "@effect-agent/testing": "workspace:*",
     "@effect/vitest": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }

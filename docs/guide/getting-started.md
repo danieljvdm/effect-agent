@@ -44,6 +44,10 @@ above resolve `beta` and save exact versions; retain the lockfile. This source t
 `effect`, `@effect/ai-openai`, and `@effect/ai-anthropic` at exactly `4.0.0-rc.111`, not Effect v3
 or an arbitrary v4 prerelease. Effect platform, SQL, Atom, and test packages share that pin;
 the contributor compiler plugin `@effect/tsgo` has its own version.
+Every public framework package declares `effect` as a required peer so the application supplies
+the shared runtime. Keep `effect` in your application's dependencies at that exact version;
+the installation commands above already do this. The catalog references used in this repository
+are replaced with concrete versions when packages are packed for npm.
 The `beta` tag moves, so check the selected release's manifests before upgrading and align your
 Effect/provider versions with that release. See the
 [provider example](https://github.com/danieljvdm/effect-agent/tree/main/examples/providers)

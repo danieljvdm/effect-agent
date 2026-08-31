@@ -218,24 +218,28 @@
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
         "@effect-agent/sandbox": "workspace:*",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/core": {
       "name": "@effect-agent/core",
       "version": "0.1.0-beta.38",
-      "dependencies": {
-        "effect": "catalog:",
-      },
       "devDependencies": {
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/effect-agent": {
@@ -245,11 +249,14 @@
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
-        "effect": "catalog:",
       },
       "devDependencies": {
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/engine": {
@@ -257,12 +264,15 @@
       "version": "0.1.0-beta.38",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/platform-cloudflare": {
@@ -276,7 +286,6 @@
         "@effect-agent/storage-cloudflare": "workspace:*",
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@cloudflare/puppeteer": "catalog:",
@@ -287,6 +296,7 @@
         "@effect/platform-node": "catalog:",
         "@effect/sql-d1": "catalog:",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "effect-cf": "catalog:",
         "esbuild": "catalog:",
         "miniflare": "catalog:",
@@ -296,6 +306,7 @@
       },
       "peerDependencies": {
         "@cloudflare/puppeteer": "^1.1.0",
+        "effect": "catalog:",
         "effect-cf": "^0.37.0",
       },
       "optionalPeers": [
@@ -312,26 +323,32 @@
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/pr-review": {
       "name": "@effect-agent/pr-review",
       "version": "0.1.0-beta.38",
       "dependencies": {
-        "effect": "catalog:",
         "effect-agent": "workspace:*",
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/pr-review-action": {
@@ -354,12 +371,13 @@
     "packages/sandbox": {
       "name": "@effect-agent/sandbox",
       "version": "0.1.0-beta.38",
-      "dependencies": {
-        "effect": "catalog:",
-      },
       "devDependencies": {
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/sandbox-local": {
@@ -368,13 +386,16 @@
       "dependencies": {
         "@effect-agent/sandbox": "workspace:*",
         "@effect/platform-node": "catalog:",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
         "@types/node": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/session": {
@@ -383,13 +404,16 @@
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/storage-cloudflare": {
@@ -399,16 +423,19 @@
         "@effect-agent/session": "workspace:*",
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:",
         "@cloudflare/workers-types": "catalog:",
         "@effect-agent/testing": "workspace:*",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
         "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/storage-memory": {
@@ -417,13 +444,16 @@
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/session": "workspace:*",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/storage-sqlite": {
@@ -433,12 +463,15 @@
         "@effect-agent/session": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/testing": {
@@ -450,7 +483,6 @@
         "@effect-agent/engine": "workspace:*",
         "@effect-agent/sandbox": "workspace:*",
         "@effect-agent/session": "workspace:*",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect-agent/platform-node": "workspace:*",
@@ -459,8 +491,12 @@
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
   },

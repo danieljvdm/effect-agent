@@ -26,12 +26,15 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "effect": "catalog:",
     "effect-agent": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }

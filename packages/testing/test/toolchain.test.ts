@@ -672,11 +672,6 @@ printf 'fixture-integrity'
 const manifestDependencies = (manifest: PackageManifest): ReadonlyArray<string> =>
   dependencySections.flatMap((section) => Object.keys(manifest[section] ?? {}));
 
-const effectDependencies = (manifest: PackageManifest): ReadonlyArray<string> =>
-  dependencySections
-    .map((section) => manifest[section]?.effect)
-    .filter((version): version is string => version !== undefined);
-
 layer(NodeServices.layer)("workspace toolchain", (it) => {
   it.effect("executes an Effect program through the Vite+ test runner", () =>
     Effect.sync(() => {
@@ -1990,7 +1985,7 @@ Exercise the generated release verifier.
   );
 
   it.effect(
-    "pins Effect test helpers and the single Vite+ Vitest runtime through the root catalog",
+    "pins Effect peers, test helpers, and the single Vite+ Vitest runtime through the root catalog",
     () =>
       Effect.gen(function* () {
         const rootManifest = yield* readManifest(`${repositoryRoot}/package.json`);
@@ -2014,7 +2009,10 @@ Exercise the generated release verifier.
           const manifest = yield* readManifest(
             `${repositoryRoot}/packages/${packageName}/package.json`,
           );
-          expect(effectDependencies(manifest)).toEqual(["catalog:"]);
+          expect(manifest.peerDependencies?.effect).toBe("catalog:");
+          expect(manifest.devDependencies?.effect).toBe("catalog:");
+          expect(manifest.dependencies?.effect).toBeUndefined();
+          expect(manifest.optionalDependencies?.effect).toBeUndefined();
           if (cloudflarePackageNames.includes(packageName)) {
             // P6 WP0 probe outcome (D-P6-7): `vp test` cannot drive the
             // workers pool runner, so the Cloudflare packages run `vitest run`

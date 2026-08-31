@@ -27,11 +27,14 @@
   "dependencies": {
     "@effect-agent/capabilities": "workspace:*",
     "@effect-agent/core": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
-    "effect": "catalog:"
+    "@effect-agent/engine": "workspace:*"
   },
   "devDependencies": {
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }

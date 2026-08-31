@@ -30,13 +30,16 @@
     "@effect-agent/session": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",
     "@effect/platform-node": "catalog:",
-    "@effect/sql-sqlite-node": "catalog:",
-    "effect": "catalog:"
+    "@effect/sql-sqlite-node": "catalog:"
   },
   "devDependencies": {
     "@effect-agent/capabilities": "workspace:*",
     "@effect/vitest": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }
