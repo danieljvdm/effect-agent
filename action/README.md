@@ -65,8 +65,8 @@ requests retain their possible charge; the transport does not automatically retr
 
 The spending status is an outgoing-only, uncached suffix included in that token count. It shows
 the balance before dispatch, estimated charges, outstanding reservations, and full cache-miss
-input and output prices. It explains that additional source reduces future output capacity;
-it does not claim an output allowance before counting the actual request. The remaining-turn
+input and output prices. It does not tell the reviewer when to finish or claim an output allowance
+before counting the actual request. The remaining-turn
 and tool counters are not presented as a research target. Their safety limits still apply.
 
 The output allowance starts at 32,000 tokens and is reduced before each request when needed to fit

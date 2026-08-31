@@ -266,7 +266,6 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       "<run-status>",
       `Review balance before this request: $${(balance / 1_000_000).toFixed(6)} of the $${(REVIEW_COST_LIMIT_MICROUSD / 1_000_000).toFixed(6)} ceiling. Estimated charges: $${(before.cost / 1_000_000).toFixed(6)}. Outstanding reservations: $${(reservedCost(before) / 1_000_000).toFixed(6)}.`,
       `This request must first reserve its entire input at the full cache-miss rate of $${(pricing.write / 100).toFixed(2)} per million tokens; only the remainder can fund reasoning and output at $${(pricing.output / 100).toFixed(2)} per million tokens. Cache hits reduce the settled charge, not the required reservation.`,
-      "More source grows future requests and shrinks their output allowance. Finish once the supplied patches and concrete defect questions are assessed. If any supplied patch remains unassessed, submit incomplete rather than claiming completion.",
       "</run-status>",
     ].join("\n");
     const payload: Payload = withReviewPromptCache(

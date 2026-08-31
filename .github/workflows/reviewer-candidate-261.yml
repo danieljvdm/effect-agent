@@ -41,7 +41,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: efficient-reviewer-candidate-3
-          path: examples/pr-review-eval/results/efficient-261/candidate-3/
+          name: efficient-reviewer-candidate-4
+          path: examples/pr-review-eval/results/efficient-261/candidate-4/
           if-no-files-found: error
           retention-days: 90

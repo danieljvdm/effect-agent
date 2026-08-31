@@ -15,7 +15,9 @@ overhead without excluding changes; it does not guarantee a complete review with
 The reviewer assesses every supplied patch first. Source reads resolve concrete questions about
 plausible defects, such as a missing caller, guard, contract, or limit. It reuses supplied evidence
 and finishes when those questions are resolved; straightforward changes can finish without source
-tools. Findings explain a supported trigger, concrete impact, and needed correction. Changes that
+tools. Reads prioritize implementation and owned boundary schemas over test examples, including
+the definitions needed to resolve the question rather than only a nearby call site.
+Findings explain a supported trigger, concrete impact, and needed correction. Changes that
 expose an unchanged downstream failure remain eligible. Incremental findings must arise from the
 exact delta; unrelated old bugs and target-only changes stay out of scope, while explicit reverts
 remain reviewable.
