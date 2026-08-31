@@ -456,6 +456,12 @@ describe("review provider boundary", () => {
           const [first, second, third] = sent;
           if (first === undefined || second === undefined || third === undefined)
             throw new Error("Missing model request");
+          const input = Schema.decodeUnknownSync(
+            Schema.Struct({ content: Schema.Array(Schema.Struct({ text: Schema.String })) }),
+          )(first.input.find((item) => item.role === "user"));
+          const inputText = input.content.map((part) => part.text).join("\n");
+          expect(inputText).toContain(request.changes[0]?.patch);
+          expect(inputText).not.toContain("__new hunk__");
           expect(first.tools).toEqual(second.tools);
           expect(second.tools).toEqual(third.tools);
           expect(first.reasoning).toEqual({ effort: "xhigh" });

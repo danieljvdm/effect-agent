@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer, Ref, Result, Stream, Struct } from "effect";
 import {
   type AiError,
@@ -146,12 +146,10 @@ describe("review output boundary", () => {
           "submit_review",
         ]);
         const text = reviewInput(prompt);
-        expect(text).toContain('"formattedDiff"');
-        expect(text).not.toContain('"patch"');
-        expect(text).toContain("__new hunk__");
-        expect(text).toContain("2 +new");
-        expect(text).toContain("__old hunk__");
-        expect(text).toContain("2 -old");
+        expect(text).toContain(patch);
+        expect(text.split(patch)).toHaveLength(2);
+        expect(text).not.toContain("__new hunk__");
+        expect(text).not.toContain("__old hunk__");
 
         const completion = tools.find((tool) => tool.name === "submit_review");
         expect(completion).toBeDefined();
@@ -181,13 +179,17 @@ describe("review output boundary", () => {
         );
       });
 
-      const outcome = yield* makeReviewer({
+      const review = makeReviewer({
         model,
         guidance: "Preserve acknowledgments.",
         estimateCostMicrousd: () => Effect.succeed(123),
-      })
-        .review(request)
-        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+      }).review(request);
+      expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
+      expectTypeOf<Effect.Error<typeof review>>().not.toBeAny();
+      expectTypeOf<
+        Extract<Effect.Error<typeof review>, AiError.AiError | ReviewVerificationError>
+      >().toEqualTypeOf<AiError.AiError | ReviewVerificationError>();
+      const outcome = yield* review.pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
       expect(yield* Ref.get(calls)).toBe(1);
       expect(outcome.report.findings).toEqual([
@@ -562,10 +564,8 @@ new mode 100755`;
         const text = reviewInput(prompt);
         expect(text).toContain("old mode 100644");
         expect(text).toContain("new mode 100755");
-        expect(text).toContain("__new hunk__");
-        expect(text).toContain("__old hunk__");
-        expect(text).toContain("6 -removed");
-        expect(text).toContain(modeOnlyPatch.replaceAll("\n", "\\n"));
+        expect(text).toContain(deletionPatch);
+        expect(text).toContain(modeOnlyPatch);
         return response({ findings: [] });
       });
       yield* makeReviewer({ model })
@@ -574,7 +574,7 @@ new mode 100755`;
     }),
   );
 
-  it.effect("PRR-002 falls back to the complete raw patch when numbering exceeds its bound", () =>
+  it.effect("PRR-002 preserves large literal patches without duplicating context", () =>
     Effect.gen(function* () {
       const manyContextLines = Array.from({ length: 7_000 }, () => " context").join("\n");
       const rawPatch = `@@ -1,7001 +1,7001 @@\n${manyContextLines}\n-old\n+new`;
@@ -586,8 +586,8 @@ new mode 100755`;
       const model = scriptedModel((prompt) => {
         const text = reviewInput(prompt);
         expect(text).not.toContain("__new hunk__");
-        expect(text).toContain("7001 @@\\n");
-        expect(text).toContain("-old\\n+new");
+        expect(text).toContain(rawPatch);
+        expect(text.split(rawPatch)).toHaveLength(2);
         return response({ findings: [] });
       });
       yield* makeReviewer({ model })

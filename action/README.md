@@ -69,6 +69,13 @@ reservations. Each review's logs and footer show model calls, ordinary input, ca
 writes, output, cache-hit ratio, and estimated cost. Raw provider failure causes, credentials, and
 repository source are excluded from the Action's diagnostics.
 
+Each admitted patch reaches the model once as literal unified diff text. The native Agent input
+projection keeps all supplied changes while avoiding JSON-escaped source and duplicated old/new
+context. A large remaining input can still prevent another call before the observed spend reaches
+$1, because admission must cover a cache miss. Refusal logs report the counted input, remaining
+balance, and minimum possible request reservation. Cached input also still counts toward the
+reviewer's cumulative token limit.
+
 The Action uses explicit-only caching with a 30-minute TTL and a stable head-based routing key.
 It marks reusable instructions, the diff, and completed tool batches before the ephemeral run-status
 message, retaining earlier boundaries as history grows. Cache fields are added only at the native
