@@ -57,7 +57,7 @@ export const writeHistory = Effect.fn("example.writeHistory")(function* (filenam
     { conversationId },
   ).pipe(Effect.provide(sqliteHistory(filename)));
   return [first.output, second.output];
-}, Effect.scoped);
+});
 
 /** No model or Agent is needed to reconstruct the retained Prompt after the process restarts. */
 export const readHistory = Effect.fn("example.readHistory")((filename: string) =>

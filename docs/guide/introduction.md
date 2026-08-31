@@ -14,8 +14,8 @@ the framework adds on top of Effect AI, and names the three persistence levels i
 ## One Agent, end to end
 
 An Effect Agent combines Schema-defined input and output, native Effect AI Tools, an explicit
-Model binding, and application Layers. `AgentRuntime.run` interprets that binding as a scoped
-Effect program.
+Model binding, and application Layers. `AgentRuntime.run` interprets that binding as an Effect
+that finishes run-owned cleanup before returning.
 
 ```ts [calculator-agent.ts]
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
@@ -76,7 +76,6 @@ const program = AgentRuntime.run(CalculatorAgent, {
 }).pipe(
   Effect.tap((result) => Effect.logInfo("answer", result.output)),
   Effect.provide(AppLive),
-  Effect.scoped,
 );
 
 void Effect.runPromise(program);
@@ -90,11 +89,15 @@ until the application entrypoint executes it:
 
 ```ts
 AgentRuntime.run(agent, input);
-// Effect<AgentResult<Output>, AgentFailure | DomainFailure, Requirements | Scope>
+// Effect<AgentResult<Output>, AgentFailure | DomainFailure, Requirements>
 
 AgentRuntime.stream(agent, input);
 // Stream<RunEvent, AgentFailure | DomainFailure, Requirements>
 ```
+
+`run` needs no extra caller Scope. `Requirements` still includes any `Scope` contributed by
+instructions, hooks, or Schema operations. Application Layers keep their own lifetime, and
+`AgentRuntime.start` requires a caller Scope to own ongoing execution and event replay.
 
 That signature is more than API styling. It means:
 

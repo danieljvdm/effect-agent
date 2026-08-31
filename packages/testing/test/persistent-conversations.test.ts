@@ -247,6 +247,8 @@ describe("persistent conversations", () => {
           yield* Effect.gen(function* () {
             yield* AgentRuntime.run(binding, "run", options);
             expect(yield* Ref.get(commits)).toBe(1);
+            expect(yield* Ref.get(finalized)).toBe(1);
+            expect(yield* Ref.get(clientLifetime)).toEqual(["acquired", "request"]);
             const started = yield* AgentRuntime.start(binding, "start", options);
             yield* started.observe.pipe(
               Stream.runForEach((event) =>
@@ -635,6 +637,7 @@ describe("persistent conversations", () => {
         const before = yield* exported;
         const started = yield* Deferred.make<void>();
         const finalized = yield* Ref.make(0);
+        const modelFinalized = yield* Ref.make(0);
         const finalize = Ref.update(finalized, (n) => n + 1);
         const interruptedTurn: ScriptedTurnInput = {
           _tag: "Stream",
@@ -648,11 +651,22 @@ describe("persistent conversations", () => {
           ),
           onStreamFinalize: finalize,
         };
-        const fiber = yield* AgentRuntime.run(
-          agent([{ ...lookup, onStreamFinalize: finalize }, interruptedTurn]),
-          "not retained",
-          options,
-        ).pipe(Effect.forkChild);
+        const binding = Agent.withModel(
+          definition,
+          Model.make(
+            "scripted",
+            "history-cleanup",
+            Layer.merge(
+              ScriptedModel.layer([{ ...lookup, onStreamFinalize: finalize }, interruptedTurn]),
+              Layer.effectDiscard(
+                Effect.addFinalizer(() => Ref.update(modelFinalized, (n) => n + 1)),
+              ),
+            ),
+          ),
+        );
+        const fiber = yield* AgentRuntime.run(binding, "not retained", options).pipe(
+          Effect.forkChild,
+        );
         yield* Deferred.await(started);
         if (ending === "timeout") yield* TestClock.adjust("31 seconds");
         if (ending === "interruption") yield* Fiber.interrupt(fiber);
@@ -669,6 +683,7 @@ describe("persistent conversations", () => {
           if (ending === "interruption") expect(Cause.hasInterrupts(exit.cause)).toBe(true);
         }
         expect(yield* Ref.get(finalized)).toBe(2);
+        expect(yield* Ref.get(modelFinalized)).toBe(1);
         expect(yield* exported).toEqual(before);
       }).pipe(Effect.provide(memory)),
     );

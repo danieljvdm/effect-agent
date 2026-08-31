@@ -168,7 +168,7 @@ To keep the default strategy but use another upstream Effect AI Model:
 ```ts
 const compactorLayer = ContextCompactor.layerWithModel(summaryModel);
 
-const result = AgentRuntime.run(agent, input).pipe(Effect.provide(compactorLayer), Effect.scoped);
+const result = AgentRuntime.run(agent, input).pipe(Effect.provide(compactorLayer));
 ```
 
 The Layer retains the summary Model's construction requirements. The interpreter charges its

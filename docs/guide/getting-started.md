@@ -192,13 +192,15 @@ const program = AgentRuntime.run(Triage, {
   Effect.provide(IdGenerator.layer),
   Effect.provide(ConversationHistory.layerTransient),
   Effect.provide(OpenAiClientLive),
-  Effect.scoped,
 );
 ```
 
 `IssueRepoLive` and `OpenAiClientLive` are application Layers whose exact construction is
 intentionally outside the Definition. `IdGenerator.layer` is the framework's default identity
 authority backed by Web Crypto's `randomUUID`; tests replace it with a deterministic Layer.
+`run` closes run-owned resources before returning, so this program needs no extra `Effect.scoped`.
+Application Layers close when their enclosing `Effect.provide` finishes. If caller-supplied
+operations require `Scope`, that requirement remains visible and must still be provided.
 
 ::: tip Deterministic first
 The repository's ordinary tests bind the same Definitions to `ScriptedModel`, not a live provider.
@@ -210,7 +212,7 @@ The [testing guide](./testing) shows the offline path.
 <ContractPanel
   success="AgentResult<TriageResult>"
   failure="IssueUnavailable | AiError | decode/policy failures"
-  requirements="IssueRepo | Tool handlers | IDs | Model client | Scope"
+  requirements="IssueRepo | Tool handlers | IDs | Model client | ConversationHistory"
 />
 
 If you omit a Tool handler Layer or provider client, the Effect cannot run. If a Tool fails with

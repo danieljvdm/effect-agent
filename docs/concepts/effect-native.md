@@ -27,7 +27,6 @@ AgentRuntime.run(agent, input).pipe(
   Effect.retry(modelRetryPolicy),
   Effect.timeout("2 minutes"),
   Effect.provide(AppLive),
-  Effect.scoped,
 );
 ```
 
@@ -71,6 +70,12 @@ core domain records.
 
 One ephemeral Run owns one parent Scope. Model streams, Tool fibers, queues, MCP clients, sandbox
 processes, event publication, and attached Subagent children belong beneath it.
+
+`run` finishes run-owned cleanup before returning and adds no caller `Scope` requirement.
+`stream` closes its resources when consumption completes, fails, or is interrupted. `start`
+requires a caller Scope for ongoing execution and replay. Requirements from caller-supplied
+operations remain visible, including any genuine `Scope` requirement. Shared clients supplied
+by application Layers close at the application's composition boundary and may serve several Runs.
 
 There are no daemon fibers. Interrupting the owner prevents new work, interrupts children, closes
 resources, and cannot emit false success.

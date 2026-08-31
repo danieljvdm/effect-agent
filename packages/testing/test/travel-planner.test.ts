@@ -106,7 +106,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
         const lifecycle = yield* CatalogLifecycle;
         const result = yield* provideTravelLayers(
           AgentRuntime.run(makeScriptedAgent(phase1HappyPathTurns), phase1Trip),
-        ).pipe(Effect.scoped);
+        );
         const counts = yield* lifecycle.counts;
         return { counts, result };
       }).pipe(Effect.provide(CatalogLifecycle.layerNoDeps));
@@ -156,7 +156,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
 
         const fiber = yield* provideTravelLayers(
           AgentRuntime.run(makeScriptedAgent(turns), phase1Trip),
-        ).pipe(Effect.scoped, Effect.forkChild);
+        ).pipe(Effect.forkChild);
 
         yield* Deferred.await(started);
         yield* Fiber.interrupt(fiber);
@@ -219,7 +219,6 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
       phase1Trip,
     ).pipe(
       Effect.provide(layer),
-      Effect.scoped,
       Effect.tap((result) => Effect.sync(() => expect(result.output).toEqual(emptyPlan))),
     );
   });
@@ -301,7 +300,6 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
       ).pipe(Layer.provide(CatalogLifecycle.layerNoDeps));
       const fiber = yield* AgentRuntime.run(makeScriptedAgent(turns), phase1Trip).pipe(
         Effect.provide(layer),
-        Effect.scoped,
         Effect.forkChild,
       );
 

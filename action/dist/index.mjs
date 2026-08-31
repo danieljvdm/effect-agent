@@ -39895,7 +39895,6 @@ var reduceRunEvents = (agent2, events2) => exports_Effect.gen(function* () {
   return result4;
 });
 var run4 = exports_Effect.fn("AgentRuntime.run")(function* (agent2, input, options3 = {}) {
-  yield* exports_Scope.Scope;
   return yield* reduceRunEvents(agent2, (onCompleted) => makeStream(onCompleted)(agent2, input, options3));
 });
 var start = exports_Effect.fn("AgentRuntime.start")(function* (agent2, input, options3 = {}) {
