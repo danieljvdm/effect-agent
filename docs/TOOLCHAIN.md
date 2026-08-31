@@ -186,6 +186,19 @@ results when dependencies are added or removed. These tasks restore no generated
 Use `vp run -v test` to see each cache decision, `vp run --last-details` to inspect the last run,
 and `vp run --no-cache test` to execute every suite again.
 
+## Documentation examples
+
+The homepage imports the TypeScript files in `docs/snippets/travel-planner` through VitePress
+snippet includes. Edit those files to change the displayed example. The `twoslash` fence attribute
+enables type hovers and compiler validation during `vp run docs:build`; unexpected compiler errors
+fail the build. Twoslash resolves relative imports from that snippet directory and re-reads them
+on each render so edits also reach the dev server's type hovers.
+
+Twoslash uses the JavaScript compiler API from the pinned `typescript-twoslash` alias. The repository
+continues to use TypeScript 7 for its checks. The separate compiler is needed because Twoslash does
+not support TypeScript 7's native API. Keep error validation enabled; do not use `noErrors` or
+`noErrorValidation` to make an example build.
+
 ## Releasing to npm
 
 Versioning uses changesets (`vp run changeset`, `vp run changeset:version`);

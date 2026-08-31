@@ -1,9 +1,15 @@
+import { dirname, resolve } from "node:path";
+
+import { transformerTwoslash } from "@shikijs/vitepress-twoslash";
+import ts from "typescript-twoslash";
 import { defineConfig } from "vitepress";
+
+import tokyoNightLight from "./theme/tokyo-night-light.json";
 
 export default defineConfig({
   lang: "en-US",
   title: "Effect Agent",
-  description: "An Effect-native runtime for typed, resource-safe autonomous agents.",
+  description: "A TypeScript agent framework built on Effect and Effect AI.",
   cleanUrls: true,
   lastUpdated: true,
   // Contributor artifacts stay in the repository but out of the published site.
@@ -17,22 +23,36 @@ export default defineConfig({
       "meta",
       {
         property: "og:description",
-        content: "Typed agents. Explicit effects. Honest recovery.",
+        content: "A TypeScript agent framework built on Effect and Effect AI.",
       },
     ],
   ],
   markdown: {
-    // Code panels are always dark (--vp-code-block-bg), so pin dark tokens in both modes.
-    theme: { light: "github-dark", dark: "github-dark" },
-    lineNumbers: true,
+    theme: { light: { ...tokyoNightLight, type: "light" }, dark: "tokyo-night" },
+    languages: ["js", "jsx", "ts", "tsx"],
     image: { lazyLoading: true },
     codeTransformers: [
-      {
-        name: "effect-agent-code-labels",
-        code(node) {
-          node.properties["data-effect-agent-code"] = "";
+      transformerTwoslash({
+        throws: true,
+        twoslashOptions: {
+          // Twoslash uses the JS compiler API, which TypeScript 7 no longer exports.
+          tsModule: ts,
+          tsLibDirectory: dirname(ts.getDefaultLibFilePath({})),
+          vfsRoot: resolve(import.meta.dirname, "../snippets/travel-planner"),
+          // Re-read imported snippets when the dev server rebuilds a page.
+          cache: false,
+          fsCache: false,
+          compilerOptions: {
+            target: ts.ScriptTarget.ES2023,
+            module: ts.ModuleKind.ESNext,
+            moduleResolution: ts.ModuleResolutionKind.Bundler,
+            allowImportingTsExtensions: true,
+            noEmit: true,
+            strict: true,
+            types: [],
+          },
         },
-      },
+      }),
     ],
   },
   themeConfig: {
