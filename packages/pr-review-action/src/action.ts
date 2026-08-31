@@ -34,6 +34,7 @@ import {
 } from "./github.ts";
 import {
   type ReviewCostEstimate,
+  ReviewExclusion,
   ReviewPresentation,
   withReviewMarker,
   withReviewPauseMarker,
@@ -48,7 +49,6 @@ import { reviewModeFromCommand, selectReview, unresolvedChangeRequestCount } fro
 
 export { estimateGpt56CostMicrousd } from "./review-openai.ts";
 
-const MAX_REVIEW_PATCH_CHARS = 256_000;
 const MAX_PATCH_CHARS = 80_000;
 const MAX_REVIEW_FILES = 100;
 const MAX_HYDRATED_SOURCE_BYTES = 8_000_000;
@@ -234,7 +234,12 @@ const matchesIgnore = (path: string, rawPattern: string): boolean => {
   return false;
 };
 
-/** Admit sorted metadata before hydrating exact baseline-to-head patches. */
+// Spend limited review capacity on implementation and configuration before prose
+// and documentation assets. Preserve alphabetical order within each group.
+const documentationPath = (path: string): boolean =>
+  /(^|\/)(docs?|\.changeset)(\/|$)|\.(md|mdx|rst|txt|adoc)$/i.test(path);
+
+/** Hydrate exact patches in implementation-first order; the reviewer batches large input. */
 export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (input: {
   readonly files: ReadonlyArray<ChangedFile>;
   readonly changedPaths: ReadonlyArray<string>;
@@ -278,19 +283,29 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
   const changes: Array<ReviewChange> = [];
   const unreviewedPaths: Array<string> = [];
   const ignoredPaths: Array<string> = [];
+  const exclusions: Array<ReviewExclusion> = [];
   const unavailablePaths = new Set<string>();
-  const exclude = (paths: Array<string>, file: ChangedFile, basePath: string) => {
+  const exclude = (
+    paths: Array<string>,
+    file: ChangedFile,
+    basePath: string,
+    reason?: ReviewExclusion["reason"],
+  ) => {
     paths.push(file.path);
-    unavailablePaths.add(file.path).add(basePath);
-    if (file.previousPath !== undefined) unavailablePaths.add(file.previousPath);
+    if (reason !== undefined) exclusions.push(ReviewExclusion.make({ path: file.path, reason }));
+    // Input capacity does not revoke source access. Ignore rules and genuinely
+    // unreadable entries still exclude both sides of a rename from source tools.
+    if (reason === undefined || reason === "unsupported-entry" || reason === "source-read-failed") {
+      unavailablePaths.add(file.path).add(basePath);
+      if (file.previousPath !== undefined) unavailablePaths.add(file.previousPath);
+    }
   };
   let admittedPaths = 0;
-  let patchChars = 0;
-  let patchBudgetExhausted = false;
   let hydratedSourceBytes = 0;
-  let sourceBudgetExhausted = false;
-  for (const { file, basePath } of [...candidates.values()].sort((left, right) =>
-    left.file.path < right.file.path ? -1 : left.file.path > right.file.path ? 1 : 0,
+  for (const { file, basePath } of [...candidates.values()].sort(
+    (left, right) =>
+      Number(documentationPath(left.file.path)) - Number(documentationPath(right.file.path)) ||
+      (left.file.path < right.file.path ? -1 : left.file.path > right.file.path ? 1 : 0),
   )) {
     const ignored = [file.path, ...(basePath === file.path ? [] : [basePath])].some((path) =>
       input.ignore.some((pattern) => matchesIgnore(path, pattern)),
@@ -299,23 +314,24 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       exclude(ignoredPaths, file, basePath);
       continue;
     }
-    if (
-      file.path.length > 512 ||
-      admittedPaths >= MAX_REVIEW_FILES ||
-      patchBudgetExhausted ||
-      sourceBudgetExhausted
-    ) {
-      exclude(unreviewedPaths, file, basePath);
+    if (file.path.length > 512 || admittedPaths >= MAX_REVIEW_FILES) {
+      exclude(
+        unreviewedPaths,
+        file,
+        basePath,
+        file.path.length > 512 ? "path-limit" : "file-limit",
+      );
       continue;
     }
     admittedPaths += 1;
     const beforeEntry = input.base.entry(basePath);
     const afterEntry = input.head.entry(file.path);
     if (
-      (beforeEntry !== undefined && beforeEntry.type !== "blob") ||
-      (afterEntry !== undefined && afterEntry.type !== "blob")
+      (beforeEntry !== undefined &&
+        (beforeEntry.type !== "blob" || beforeEntry.mode === "120000")) ||
+      (afterEntry !== undefined && (afterEntry.type !== "blob" || afterEntry.mode === "120000"))
     ) {
-      exclude(unreviewedPaths, file, basePath);
+      exclude(unreviewedPaths, file, basePath, "unsupported-entry");
       continue;
     }
     const sourceSizesKnown =
@@ -323,11 +339,10 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       (afterEntry === undefined || afterEntry.size !== undefined);
     const estimatedSourceBytes = (beforeEntry?.size ?? 0) + (afterEntry?.size ?? 0);
     if (
-      sourceSizesKnown &&
-      hydratedSourceBytes + estimatedSourceBytes > MAX_HYDRATED_SOURCE_BYTES
+      hydratedSourceBytes >= MAX_HYDRATED_SOURCE_BYTES ||
+      (sourceSizesKnown && hydratedSourceBytes + estimatedSourceBytes > MAX_HYDRATED_SOURCE_BYTES)
     ) {
-      exclude(unreviewedPaths, file, basePath);
-      sourceBudgetExhausted = true;
+      exclude(unreviewedPaths, file, basePath, "source-limit");
       continue;
     }
     const contents = yield* Effect.all(
@@ -339,15 +354,14 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
     ).pipe(Effect.result);
     if (Result.isFailure(contents)) {
       hydratedSourceBytes += estimatedSourceBytes;
-      exclude(unreviewedPaths, file, basePath);
+      exclude(unreviewedPaths, file, basePath, "source-read-failed");
       continue;
     }
     hydratedSourceBytes += sourceSizesKnown
       ? estimatedSourceBytes
       : contents.success.before.length + contents.success.after.length;
     if (hydratedSourceBytes > MAX_HYDRATED_SOURCE_BYTES) {
-      exclude(unreviewedPaths, file, basePath);
-      sourceBudgetExhausted = true;
+      exclude(unreviewedPaths, file, basePath, "source-limit");
       continue;
     }
     const patch =
@@ -384,19 +398,19 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       exactPatch.length === 0 ||
       exactPatch.length > MAX_PATCH_CHARS
     ) {
-      exclude(unreviewedPaths, file, basePath);
-      continue;
-    }
-    if (patchChars + exactPatch.length > MAX_REVIEW_PATCH_CHARS) {
-      exclude(unreviewedPaths, file, basePath);
-      patchBudgetExhausted = true;
+      exclude(
+        unreviewedPaths,
+        file,
+        basePath,
+        exactPatch !== undefined && exactPatch.length > MAX_PATCH_CHARS
+          ? "patch-limit"
+          : "patch-unavailable",
+      );
       continue;
     }
     changes.push(ReviewChange.make({ path: file.path, patch: exactPatch }));
-    patchChars += exactPatch.length;
-    if (patchChars === MAX_REVIEW_PATCH_CHARS) patchBudgetExhausted = true;
   }
-  return { changes, unreviewedPaths, ignoredPaths, unavailablePaths };
+  return { changes, unreviewedPaths, ignoredPaths, unavailablePaths, exclusions };
 });
 
 const reviewContextFailure = (message: string): ReviewContextError =>
@@ -717,8 +731,16 @@ export const reviewActionProgram = Effect.gen(function* () {
           ),
         ),
       );
+    const pending = new Set(result.pendingPaths ?? []);
+    surface.unreviewedPaths.push(...pending);
+    surface.exclusions.push(
+      ...[...pending].map((path) => ReviewExclusion.make({ path, reason: "review-stopped" })),
+    );
     return {
-      surface,
+      surface: {
+        ...surface,
+        changes: surface.changes.filter((change) => !pending.has(change.path)),
+      },
       modelTurns: result.turns,
       exhausted: result.exhausted,
       incomplete: result.incomplete === true,
@@ -820,6 +842,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       scope,
       reviewedFiles: surface.changes.length,
       unreviewedFiles: surface.unreviewedPaths.length,
+      exclusions: surface.exclusions,
       ignoredFiles: surface.ignoredPaths.length,
       modelTurns,
       complete,
@@ -881,6 +904,12 @@ export const reviewActionProgram = Effect.gen(function* () {
     ["review-url", reviewUrl],
   ]);
   yield* Console.log(`Posted PR review: ${reviewUrl}`);
+  for (const exclusion of surface.exclusions) {
+    yield* Effect.logInfo("Review input excluded", {
+      path: exclusion.path,
+      reason: exclusion.reason,
+    });
+  }
   const publicationFailure = reviewPublicationFailure({
     blockingFindings: blocking,
     unreviewedPaths: surface.unreviewedPaths.length,

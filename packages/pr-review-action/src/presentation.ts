@@ -4,7 +4,7 @@ import type {
   ReviewReport,
   ReviewSeverity,
 } from "@effect-agent/pr-review";
-import { Context } from "effect";
+import { Context, Schema } from "effect";
 
 import { reviewMarker, reviewPauseMarker } from "./selection.ts";
 
@@ -59,7 +59,7 @@ const renderVerdict = (
     return `> [!CAUTION]\n> **Review stopped at the ${exhausted} budget.** Findings are preserved, but coverage is incomplete and this result does not clear the change.`;
   }
   if (!complete) {
-    return "> [!CAUTION]\n> **Review coverage is incomplete.** Not all supplied changes were verified, so this result does not clear the change.";
+    return "> [!CAUTION]\n> **Review coverage is incomplete.** Not all changes were verified, so this result does not clear the change.";
   }
   if (unresolvedChangeRequests > 0) {
     return `> [!CAUTION]\n> **No new blocking finding clears ${countNoun(unresolvedChangeRequests, "earlier change request")}.** A maintainer must dismiss it explicitly after verifying the fix.`;
@@ -96,12 +96,38 @@ const fencedPlainText = (text: string): string => {
   return `${fence}text\n${text}\n${fence}`;
 };
 
+export class ReviewExclusion extends Schema.Class<ReviewExclusion>("ReviewExclusion")({
+  path: Schema.String,
+  reason: Schema.Literals([
+    "path-limit",
+    "file-limit",
+    "source-limit",
+    "unsupported-entry",
+    "source-read-failed",
+    "patch-unavailable",
+    "patch-limit",
+    "review-stopped",
+  ]),
+}) {}
+
+const exclusionReason: Record<ReviewExclusion["reason"], string> = {
+  "path-limit": "Path exceeds 512 characters",
+  "file-limit": "100-file input limit",
+  "source-limit": "8 MB source hydration limit",
+  "unsupported-entry": "Not a regular file",
+  "source-read-failed": "Source could not be read as bounded UTF-8 text",
+  "patch-unavailable": "Exact patch could not be generated within the diff bounds",
+  "patch-limit": "Patch exceeds 80,000 characters",
+  "review-stopped": "Review stopped before this batch started",
+};
+
 export interface ReviewPresentationInput {
   readonly report: ReviewReport;
   readonly automaticReviewsRemaining: number;
   readonly scope: "full" | "incremental";
   readonly reviewedFiles: number;
   readonly unreviewedFiles: number;
+  readonly exclusions?: ReadonlyArray<ReviewExclusion>;
   readonly ignoredFiles: number;
   readonly modelTurns: number;
   readonly complete: boolean;
@@ -127,7 +153,7 @@ export interface ReviewCostEstimate {
 const renderCoverage = (input: ReviewPresentationInput): string =>
   [
     `${String(input.reviewedFiles)} ${input.complete ? "reviewed" : "supplied"}`,
-    ...(input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} unavailable`] : []),
+    ...(input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} excluded`] : []),
     ...(input.ignoredFiles > 0 ? [`${String(input.ignoredFiles)} ignored`] : []),
   ].join(" · ");
 
@@ -168,6 +194,33 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
   const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
   if (automaticPause !== undefined) parts.push(automaticPause);
   parts.push("### Summary", input.report.summary);
+  if (input.exclusions !== undefined && input.exclusions.length > 0) {
+    // Leave room for the maximum finding report and summary in GitHub's body
+    // bound, including paths whose JSON escaping expands every character.
+    const shown: Array<string> = [];
+    let chars = 0;
+    for (const { path, reason } of input.exclusions.slice(0, 30)) {
+      const line = `${JSON.stringify(path.slice(0, 512))}: ${exclusionReason[reason]}`;
+      if (chars + line.length + 1 > 10_000) break;
+      shown.push(line);
+      chars += line.length + 1;
+    }
+    parts.push(
+      [
+        "<details>",
+        `<summary>Files excluded from review input (${String(input.exclusions.length)})</summary>`,
+        "",
+        fencedPlainText(shown.join("\n")),
+        ...(shown.length < input.exclusions.length
+          ? [
+              `\n${String(input.exclusions.length - shown.length)} more excluded paths. See the Action log for the full list.`,
+            ]
+          : []),
+        "",
+        "</details>",
+      ].join("\n"),
+    );
+  }
 
   if (unanchored.length > 0) {
     const findingText = unanchored.map(renderUnanchoredFindingText).join("\n\n---\n\n");

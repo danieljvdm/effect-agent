@@ -329,6 +329,78 @@ describe("review provider boundary", () => {
       }),
   );
 
+  it.effect.each(["complete", "cost", "protocol"] as const)(
+    "reviews large input in fresh batches under one spending ledger: %s",
+    (outcome) =>
+      Effect.gen(function* () {
+        const changes = [
+          ...request.changes,
+          ...Array.from({ length: 10 }, (_, index) =>
+            ReviewChange.make({
+              path: `docs/page-${String(index)}.md`,
+              patch: `@@ -0,0 +1 @@\n+${"x".repeat(70_000)}`,
+            }),
+          ),
+        ];
+        const sent: Array<WireRequest> = [];
+        const input = outcome === "cost" ? 70_000 : 20_000;
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.sync(() => {
+              if (url.pathname.endsWith("/input_tokens"))
+                return json(httpRequest, { object: "response.input_tokens", input_tokens: input });
+              sent.push(decodeWire(httpRequest));
+              const calls =
+                sent.length === 1
+                  ? [{ name: "submit_review", parameters: { findings: [finding] } }]
+                  : outcome === "protocol"
+                    ? [{ name: "unknown_tool", parameters: {} }]
+                    : [submit];
+              return sse(
+                httpRequest,
+                sent.length,
+                calls,
+                rawUsage(input, outcome === "cost" ? 32_000 : 100),
+              );
+            }),
+          ),
+        );
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "large-review",
+        });
+        const result = yield* makeReviewer({ model, costControl: provider.costControl })
+          .review(ReviewRequest.make({ ...request, changes }))
+          .pipe(
+            Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+            Effect.provideService(ReviewRepository, repository),
+          );
+        expect(result.report.findings.map((item) => item.title)).toEqual([finding.title]);
+        expect(result.turns).toBe(sent.length);
+        expect(result.usage).toEqual((yield* provider.costControl.snapshot).usage);
+        expect(result.usage.estimatedCostMicrousd).toBeLessThan(1_000_000);
+        if (outcome === "complete") {
+          expect(sent).toHaveLength(4);
+          expect(result.pendingPaths).toBeUndefined();
+          expect(result.incomplete).toBeUndefined();
+          expect(result.exhausted).toBeUndefined();
+          for (const change of changes) {
+            expect(
+              sent.filter((wire) => JSON.stringify(wire.input).includes(change.path)),
+            ).toHaveLength(1);
+          }
+        } else {
+          expect(sent).toHaveLength(outcome === "cost" ? 1 : 2);
+          expect(result.exhausted).toBe(outcome === "cost" ? "cost" : undefined);
+          expect(result.incomplete).toBe(true);
+          expect(result.pendingPaths).toEqual(
+            changes.slice(outcome === "cost" ? 4 : 7).map((change) => change.path),
+          );
+        }
+      }),
+  );
+
   it.effect("preserves cached tool schemas through the required completion turn", () =>
     Effect.gen(function* () {
       const sent: Array<WireRequest> = [];

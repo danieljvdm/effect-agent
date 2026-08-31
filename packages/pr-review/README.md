@@ -1,8 +1,8 @@
 # @effect-agent/pr-review
 
-A small, provider-neutral review agent. One bounded model run receives every admitted patch as
-a literal unified diff, reads immutable base or head source when needed, records established
-findings with `record_finding`, and returns findings through a required native completion Tool.
+A small, provider-neutral review agent. Bounded model runs receive admitted patches as
+literal unified diffs, read immutable base or head source when needed, record established
+findings with `record_finding`, and return findings through a required native completion Tool.
 There is no voting, candidate cache, private hypothesis
 handoff, or repository code execution.
 
@@ -56,6 +56,13 @@ The 8-turn, 64-tool-call, 5-minute, and 128,000-token context bounds remain in f
 estimator alone does not disable the token quota. Capped hosts own model-visible spending feedback
 at their provider boundary; the generic turn/tool status is disabled for these runs. The Action
 counts its outgoing spending status before admission and keeps it outside the reusable cache prefix.
+With `costControl`, large requests run in sequential batches of at most 256,000 patch characters,
+preserving the host's file order and keeping each patch complete. Each batch has a fresh context
+and the same source service. All batches share the host ledger, turn and tool allowances, deadline,
+and 24-finding capacity. They stop on an incomplete result or exhaustion. `pendingPaths` identifies
+admitted patches never sent to a model, including a batch refused before paid inference. Hosts
+must disclose those paths as unreviewed. Without `costControl`, the reviewer retains one run and its
+cumulative token policy.
 When the host stops research for cost, the reviewer returns `exhausted: "cost"` and delivers
 recorded findings without requiring another paid call. Hosts must reserve the full possible charge
 before sending each request; the port itself does not enforce a cap. The
