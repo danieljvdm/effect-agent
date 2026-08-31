@@ -70,7 +70,7 @@ import {
 
 /**
  * The Travel Planner DC slice (plan §6): the SAME cumulative Travel Planner fixtures the DN
- * suites run — assembled with `CloudflareDurableRuntime` Layers inside real SQLite-backed
+ * suites run — assembled with `ConversationObject.layer` inside real SQLite-backed
  * Durable Objects — while eviction (`ctx.abort()`) and alarm redelivery exercise the
  * Cloudflare-specific recovery path. Together with `travel-planner-phase6.test.ts` (the DN
  * half in `@effect-agent/testing`), the golden-evidence rows here close the P6 exit gate

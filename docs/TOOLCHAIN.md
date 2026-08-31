@@ -297,7 +297,7 @@ owner of the `@effect-agent` scope):
 All fourteen packages publish under the MIT license (owner decision
 2026-08-14). The Cloudflare pair
 joined the channel after their declaration-emit fix: the Durable Object
-class factory carries an explicit `ConversationObjectClass` return type
+class factory carries an explicit `ConversationObject.Class` return type
 because TS4094 rejects inferring an exported anonymous class type around a
 private field, and both packages pin `pack: { dts, sourcemap }` in their
 Vite configs since a package-level config suppresses `vp pack`'s

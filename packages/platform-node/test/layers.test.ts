@@ -8,7 +8,6 @@ import {
   type ToolFailureObservation,
 } from "@effect-agent/engine";
 import {
-  type AgentBindingResolver,
   AdmissionRequest,
   ClaimRequest,
   ConversationRead,
@@ -81,6 +80,7 @@ const runtimeLayerProbe = NodeDurableRuntime.layer({
   deploymentId: "deployment-proof",
   producerId: "producer-proof",
 });
+const hostLayerProbe = NodeDurableHost.layer();
 type RuntimeLayerServicesProof = Assert<
   Equal<Layer.Success<typeof runtimeLayerProbe>, NodeDurableRuntimeServices>
 >;
@@ -96,10 +96,7 @@ type RuntimeInitializationErrorProof = Assert<
   >
 >;
 type HostLayerRequirementsProof = Assert<
-  Equal<
-    Layer.Services<typeof NodeDurableHost.layer>,
-    DurableAgentRuntime | NodeDurableRuntimeConfig | AgentBindingResolver
-  >
+  Equal<Layer.Services<typeof hostLayerProbe>, DurableAgentRuntime | NodeDurableRuntimeConfig>
 >;
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
@@ -195,7 +192,7 @@ const withHost = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<
   A,
-  E | Layer.Error<typeof NodeDurableHost.layer> | NodeDurableRuntimeInitializationError,
+  E | Layer.Error<typeof hostLayerProbe> | NodeDurableRuntimeInitializationError,
   Exclude<R, NodeDurableHost | NodeDurableRuntimeServices>
 > => Effect.provide(effect, NodeDurableHost.layerStack(options));
 

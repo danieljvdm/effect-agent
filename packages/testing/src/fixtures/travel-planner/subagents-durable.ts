@@ -96,7 +96,7 @@ export const s2CoordinatorDigests = DefinitionDigests.make({
 /**
  * The exact child Binding digest strings the application declares on
  * `SubagentRuntimeOptions.durable.targetDigests` AND the host registers with
- * the `AgentBindingResolver` for the researcher Binding. The coordinator
+ * the host's binding array for the researcher Binding. The coordinator
  * stores and verifies them byte-for-byte (SUB-023); a host registration under
  * different strings is a `ChildCompatibilityFailure`, never a substitution.
  */

@@ -7,7 +7,7 @@ import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unsta
 import { expect, it } from "vite-plus/test";
 
 import {
-  CloudflareDurableRuntime,
+  ConversationObject,
   DurableObjectContext,
   conversationNamespaceLayer,
 } from "../src/index.ts";
@@ -31,18 +31,21 @@ it.each([false, true])(
       });
       const tools = Toolkit.make(Failed);
       const usage = { inputTokens: {}, outputTokens: {} };
-      const runtimeLayer = CloudflareDurableRuntime.layer({
-        deploymentId: "observer-test",
-        producerPrefix: "observer-test",
-        toolFailureObserver: configured
-          ? {
-              observe: (observation) =>
-                Effect.sync(() => {
-                  observations.push(observation);
-                }),
-            }
-          : undefined,
-      }).pipe(
+      const runtimeLayer = ConversationObject.layer([]).pipe(
+        Layer.provide(
+          ConversationObject.layerConfig({
+            deploymentId: "observer-test",
+            producerPrefix: "observer-test",
+            toolFailureObserver: configured
+              ? {
+                  observe: (observation) =>
+                    Effect.sync(() => {
+                      observations.push(observation);
+                    }),
+                }
+              : undefined,
+          }),
+        ),
         Layer.provide([
           DurableObjectContext.layer(state, env),
           conversationNamespaceLayer(env, "CONVERSATIONS"),

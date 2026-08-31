@@ -19,9 +19,10 @@ import { Effect, Layer, Schema } from "effect";
 import {
   CloudflareConversationClient,
   ConversationObjectNamespace,
-  makeConversationObjectClass,
+  ConversationObject,
   type ConversationObjectRpc,
 } from "../../src/index.ts";
+import { layerFromBindings } from "../../src/layers.ts";
 import {
   armRuntimeEviction,
   armStorageEviction,
@@ -48,23 +49,25 @@ import {
 let alarmDeliveries = 0;
 const clientEntries: Array<string> = [];
 
-const baseClass = makeConversationObjectClass({
-  namespaceBinding: "CONVERSATIONS",
-  deploymentId: phase6TravelPlannerDeploymentId,
-  producerPrefix: phase6TravelPlannerProducerPrefix,
-  ownershipLeaseDuration: 1_000,
-  leaseRenewalInterval: 100,
-  wakeScanInterval: 100,
-  settlementPollInterval: 25,
-  abortPollInterval: 25,
-  alarmBackoffBase: 10,
-  alarmBackoffCap: 100,
-  observationPollInterval: 10,
-  bindings: () => makePhase6TravelPlannerBindings,
-  toolReconciler: phase6SupplierReconcilerLayer,
-  storageFailpoint: storageEvictionFailpoint,
-  runtimeFailpoint: runtimeEvictionFailpoint,
-});
+const baseClass = ConversationObject.make(
+  Layer.unwrap(Effect.map(makePhase6TravelPlannerBindings, layerFromBindings)),
+  {
+    namespaceBinding: "CONVERSATIONS",
+    deploymentId: phase6TravelPlannerDeploymentId,
+    producerPrefix: phase6TravelPlannerProducerPrefix,
+    ownershipLeaseDuration: 1_000,
+    leaseRenewalInterval: 100,
+    wakeScanInterval: 100,
+    settlementPollInterval: 25,
+    abortPollInterval: 25,
+    alarmBackoffBase: 10,
+    alarmBackoffCap: 100,
+    observationPollInterval: 10,
+    toolReconciler: phase6SupplierReconcilerLayer,
+    storageFailpoint: storageEvictionFailpoint,
+    runtimeFailpoint: runtimeEvictionFailpoint,
+  },
+);
 
 /** The restart lane's Conversation Object, with entry-kind instrumentation. */
 export class TravelPlannerRestartObject extends baseClass {

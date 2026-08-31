@@ -17,7 +17,6 @@ import {
 import { DurableStep, DurableStepError, ToolExecutionClass } from "@effect-agent/engine";
 import {
   AbortCommand,
-  AgentBindingResolver,
   ApprovalDecisionCommand,
   ConversationExportRequest,
   ConversationStore,
@@ -741,11 +740,9 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
         childBinding,
         childLaneDigests(laneIndex),
       );
-      const resolver = AgentBindingResolver.fromBindings([parentResolved, childResolved]);
+      const bindings = [parentResolved, childResolved];
       const driveResolved = (conversation: ConversationId) =>
-        runtime
-          .processConversationResolved(conversation)
-          .pipe(Effect.provideService(AgentBindingResolver, resolver));
+        runtime.processConversationResolved(conversation, bindings);
       const fixture: LaneFixture = {
         index: laneIndex,
         kind,

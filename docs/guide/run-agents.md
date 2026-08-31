@@ -95,6 +95,116 @@ subscriptions are interrupted. Each observer consumption owns its subscription a
 work after delivery. "Detached" means observers cannot backpressure completion; it does not create
 a daemon fiber or survive process loss.
 
+## Run durably on Cloudflare
+
+Compose Agent registrations and application services as a Layer, then pass that Layer to
+`ConversationObject.make`. The factory uses `effect-cf`'s `DurableObject.make` and supplies
+native services, configuration, identity, and Crypto before the application graph acquires.
+This example assumes your generated `Cloudflare.Env` includes the `OPENAI_API_KEY` secret and
+the `CONVERSATIONS` Durable Object namespace:
+
+```ts
+import { Agent, AgentPolicy } from "@effect-agent/core";
+import { ConversationObject } from "@effect-agent/platform-cloudflare";
+import { DefinitionDigestInput } from "@effect-agent/session";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { Effect, Layer, Redacted, Schema } from "effect";
+import { Toolkit } from "effect/unstable/ai";
+import { FetchHttpClient } from "effect/unstable/http";
+import { WorkerEnvironment } from "effect-cf";
+
+const TravelPlanner = Agent.make("travel-planner", {
+  input: Schema.Struct({ destination: Schema.String, days: Schema.Number }),
+  output: Schema.Struct({ itinerary: Schema.Array(Schema.String) }),
+  instructions: "Create a practical travel itinerary.",
+  toolkit: Toolkit.make(),
+  policy: AgentPolicy.make({
+    maxTurns: 3,
+    maxToolCalls: 1,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+});
+
+const modelName = "gpt-4.1-mini";
+
+// Share these version declarations with the submitter.
+export const travelDefinitions = DefinitionDigestInput.make({
+  agent: { id: TravelPlanner.id, revision: 1 },
+  model: { provider: "openai", name: modelName },
+  tools: [],
+});
+
+const OpenAiLive = Layer.unwrap(
+  Effect.map(WorkerEnvironment, (env) =>
+    OpenAiClient.layer({ apiKey: Redacted.make(env.OPENAI_API_KEY) }).pipe(
+      Layer.provide(FetchHttpClient.layer),
+    ),
+  ),
+);
+
+const RuntimeLive = ConversationObject.layer([
+  {
+    agent: Agent.withModel(TravelPlanner, OpenAiLanguageModel.model(modelName)),
+    definitions: travelDefinitions,
+  },
+]).pipe(Layer.provide(OpenAiLive));
+
+export class TravelConversation extends ConversationObject.make(RuntimeLive, {
+  namespaceBinding: "CONVERSATIONS",
+  deploymentId: "travel-planner",
+  producerPrefix: "travel-worker",
+}) {}
+```
+
+Each registration pairs one model-bound Agent with its version declarations. The platform hashes
+those declarations, captures the Agent's required services, and matches queued Submissions by
+Agent ID and exact digests. It does not hash JavaScript implementation code. Bump the Agent
+revision when instructions, input/output Schemas, or policy change, and version Tool implementations
+and model configuration when those change. The submitter supplies the same result of
+`digestDefinitions(travelDefinitions)` through `DurableSubmitOptions.definitions`.
+
+`Layer.provide(AppLive)` supplies shared clients and Tool handlers for the runtime's lifetime.
+Application Layers can yield `effect-cf`'s `WorkerEnvironment` and
+`DurableObjectState.DurableObjectState`, plus `ConversationObjectIdentity` and Crypto. Their
+initialization failures remain in `E`; missing application services remain in `R` and are rejected
+at the class factory. `ConversationObject.layer([])` explicitly registers no Agents and refuses
+every claimed Agent identity.
+
+Use ordinary `Layer.unwrap` when registration values themselves need effectful setup:
+
+```ts
+const RuntimeLive = Layer.unwrap(
+  Effect.gen(function* () {
+    const settings = yield* ApplicationSettings;
+    return ConversationObject.layer(makeRegistrations(settings));
+  }),
+).pipe(Layer.provide(ApplicationSettingsLive));
+```
+
+Provide `RunContextPreparation` and `RunToolAuthorization` through Layers to customize prompt
+preparation and Tool authorization. The bootstrap supplies pass-through preparation and
+`RunToolAuthorization.allowAll` as defaults. `options.eventLayer` accepts an effect-cf event Layer
+with access to the runtime's exposed services. Use `Layer.provideMerge` when an application service
+must also be available to the event Layer.
+
+The application graph acquires once per Object incarnation, inside the local constructor gate,
+and rebuilds after eviction. Construction failures remain failures. The platform owns SQLite,
+alarms, and recovery. Keep acquisition local and bounded. Cloudflare eviction does not guarantee
+finalizers; acquire resources needing timely release in scoped operations or `eventLayer`.
+
+Register `TravelConversation` as a SQLite Durable Object under `CONVERSATIONS` in your Worker
+configuration. `ConversationObject.Options` describes native construction;
+`ConversationObject.Class` and `ConversationObject.Instance` describe the exported class and its
+instances. Custom Effect hosts provide `ConversationObject.layerConfig(options)` around the
+complete application Layer, then supply the native context and namespace Layers.
+
+BEHAVIOR CHANGE: replace `makeConversationObjectClass` with `ConversationObject.make`, passing
+a composed runtime Layer. Replace the `bindings`, `runContext`, and `toolAuthorization` callback
+options with typed registration values and ordinary Layer composition. Pass observability as
+`options.eventLayer`. The class factory supplies runtime configuration, so
+`ConversationObject.layer` takes only the registration array.
+
 ## Turn boundaries
 
 Each Turn follows one visible sequence:
@@ -193,7 +303,7 @@ the observer. These values are never serialized or persisted. Replacement Attemp
 IDs and observations, and replay-injected settled calls are not observed.
 
 Durable hosts pass the same closed value as `NodeDurableRuntimeOptions.toolFailureObserver` or
-`CloudflareDurableRuntimeOptions.toolFailureObserver`. The coordinator captures it when its Layer
+`ConversationObject.Options.toolFailureObserver`. The coordinator captures it when its Layer
 is built and uses that choice for each Attempt, independently of the worker caller's context.
 Omitting the platform option disables observation even if an observer surrounds Layer construction.
 Direct errors that propagate to the Run, interruption, waiting, provider-executed results, and

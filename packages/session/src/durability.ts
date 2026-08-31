@@ -1,6 +1,16 @@
 /** Durable accepted work: admission, ownership, settlement, and recovery. */
 export * from "./admin.ts";
-export * from "./binding-resolver.ts";
+export {
+  BindingUnavailable,
+  BindingDigestMismatch,
+  DurableWorkerBinding,
+  compileRegistrations,
+  definitionDigestsEqual,
+  type AgentRegistration,
+  type ExecutableAgentBinding,
+  type DurableBindingFailure,
+  type ResolvedBinding,
+} from "./agent-registration.ts";
 export * from "./durable-failpoint.ts";
 export * from "./durable-runtime.ts";
 export * from "./invariants.ts";

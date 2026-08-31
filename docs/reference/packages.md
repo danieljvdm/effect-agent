@@ -132,7 +132,9 @@ The coordinator captures the Tool failure observer at construction and explicitl
 fresh and replacement Attempts. Already-settled calls injected on resume bypass observation.
 It also owns the durable Subagent protocol: the requested/started/joined/lineage record
 Schemas, the child budget reservation and `waitingForChild` ledger operations, and the
-host-supplied `AgentBindingResolver` port for exact-digest Binding resolution.
+exact-digest matching of explicit worker bindings. `processConversationResolved(conversationId, bindings)`
+and `runResolvedWorker(bindings)` receive those bindings directly. `compileRegistrations` hashes
+typed Agent version declarations and captures each Agent's required services.
 Adapter certification reports, port runners, and the TestClock-dependent conformance case arrays
 are available only from `@effect-agent/session/testing`; the package root has no transitive
 test-runtime dependency. Mutable coordinator failpoint controls and their test Layer also live
@@ -164,7 +166,7 @@ Only the current stored version is supported, with no upgrade migration promise.
 Assembles the class `DN` Node/SQLite runtime: one shared SQLite client behind both stores,
 validated typed configuration, the in-process wake scheduler with ledger-scan fallback, graceful
 ownership drain, Agent Binding registration for durable workers
-(`NodeDurableRuntimeOptions.bindings` behind `NodeDurableHost.runResolvedWorkers`; an empty
+(`NodeDurableHost.layer(bindings)` behind `NodeDurableHost.runResolvedWorkers`; an empty
 roster fails every claim closed), and the `NodeDurableHost` startup gates (storage compatibility,
 recovery before admission) and shutdown order (close admission → release ownership → close
 storage). It is a Layer-assembly library, not an application entrypoint.
@@ -200,14 +202,19 @@ Assembles the class `DC` Cloudflare runtime and is the only package that imports
 configuration, the single multiplexed `DurableAlarmService` with the idempotent
 `ConversationMaintenance` pass (pre-armed alarm invariant: committed nonterminal work implies a
 committed alarm), the alarm/RPC wake scheduler, the Durable Object RPC port transport,
-`CloudflareDurableRuntime.layer`, `makeConversationObjectClass` (local-only constructor gates
+`ConversationObject.layer`, `ConversationObject.make` (local-only constructor gates
 and the typed admission-limits gate before `submit`), and the Worker-side
 `CloudflareConversationClient`, whose `awaitProgress` RPC retries Object resets with a fresh stub
 and sends explicit scoped cancellation on interruption. The client Layer requires `Crypto.Crypto`
 so its composition root owns collision-resistant cancellation identity generation instead of the
-client reading ambient time or randomness. `CloudflareBindingSource` may capture registered worker
-Bindings from `CloudflareBindingSourceContext` once per Object incarnation, after identity
-derivation. `BrowserQuickActionBrowserBinding.layer` lifts a host-resolved Wrangler `browser`
+client reading ambient time or randomness. The Conversation Object factory accepts a composed
+application Layer. `ConversationObject.layer(registrations)` hashes typed version declarations and
+captures each Agent's dependencies. Application Layers can yield effect-cf's `WorkerEnvironment`
+and `DurableObjectState`, plus platform Crypto and `ConversationObjectIdentity`. The complete graph
+acquires once per incarnation inside the constructor gate. Application requirements and
+initialization errors remain visible in its type; `options.eventLayer` can consume its exposed
+services. See [Cloudflare execution](../guide/run-agents#run-durably-on-cloudflare).
+`BrowserQuickActionBrowserBinding.layer` lifts a host-resolved Wrangler `browser`
 binding into an explicit Effect service. `browserQuickActionCaptureLayer` visibly requires that
 service to adapt `quickAction()` to the `PageCapture` port without granting Workers AI authority.
 `browserQuickActionWorkersAiCaptureLayer` requires both the browser-binding service and the
@@ -280,7 +287,7 @@ payload or persistence. The consumer must authorize resizing, including viewer o
 handoff fencing.
 
 This is a Layer-assembly library, not an application entrypoint.
-`CloudflareDurableRuntimeOptions.toolFailureObserver` installs the same closed trusted observer
+`ConversationObject.Options.toolFailureObserver` installs the same closed trusted observer
 for the Object's coordinator. It adds no journal data or Code Mode durability claim.
 
 ### `@effect-agent/pr-review`
