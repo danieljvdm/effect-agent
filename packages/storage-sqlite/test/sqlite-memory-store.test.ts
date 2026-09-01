@@ -632,4 +632,116 @@ describe("SQLite memory store", () => {
       }),
     ),
   );
+
+  it.effect("rejects canonical receipt results forged independently of their commands", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const created = put("forged-created", null, "created", ["created-scope"]);
+        const corrected = put("forged-corrected", "1", "corrected", ["corrected-scope"]);
+        const withdrawn = withdraw("forged-withdrawn", "2");
+        yield* Effect.gen(function* () {
+          const writer = yield* MemoryWriter;
+          yield* writer.change(created);
+          yield* writer.change(corrected);
+          yield* writer.change(withdrawn);
+        }).pipe(Effect.provide(storeLayer(filename)));
+
+        const replayFailure = (command: MemoryWrite) =>
+          Effect.gen(function* () {
+            const writer = yield* MemoryWriter;
+            return yield* writer.change(command);
+          }).pipe(Effect.provide(storeLayer(filename)), Effect.flip);
+
+        const receiptResults = yield* runRaw(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            return yield* sql<{ operation_id: string; result_json: string }>`
+              SELECT operation_id, result_json
+              FROM effect_agent_memory_receipts_v1
+              WHERE namespace = ${key.namespace}
+                AND operation_id IN (${created.operationId}, ${corrected.operationId}, ${withdrawn.operationId})
+            `;
+          }),
+        );
+        const resultFor = (operationId: string) =>
+          receiptResults.find((row) => row.operation_id === operationId)?.result_json;
+        const createdResult = resultFor(created.operationId);
+        const withdrawnResult = resultFor(withdrawn.operationId);
+        expect(createdResult).toBeDefined();
+        expect(withdrawnResult).toBeDefined();
+        if (createdResult === undefined || withdrawnResult === undefined) return;
+
+        for (const [original, replacement] of [
+          ['"text":"created"', '"text":"forged"'],
+          ['"scopes":["created-scope"]', '"scopes":["forged-scope"]'],
+          ['"locator":"memory://source-1"', '"locator":"memory://forged"'],
+        ]) {
+          yield* runRaw(
+            filename,
+            Effect.gen(function* () {
+              const sql = yield* SqlClientService.SqlClient;
+              yield* sql`
+                UPDATE effect_agent_memory_receipts_v1
+                SET result_json = replace(${createdResult}, ${original}, ${replacement})
+                WHERE namespace = ${key.namespace} AND operation_id = ${created.operationId}
+              `;
+            }),
+          );
+          expect(yield* replayFailure(created)).toEqual(
+            MemoryStorageError.make({ operation: "change memory document", reason: "corrupt" }),
+          );
+        }
+
+        yield* runRaw(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            yield* sql`
+              UPDATE effect_agent_memory_receipts_v1
+              SET result_json = ${createdResult}
+              WHERE namespace = ${key.namespace} AND operation_id = ${corrected.operationId}
+            `;
+          }),
+        );
+        expect(yield* replayFailure(corrected)).toEqual(
+          MemoryStorageError.make({ operation: "change memory document", reason: "corrupt" }),
+        );
+
+        yield* runRaw(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            yield* sql`
+              UPDATE effect_agent_memory_receipts_v1
+              SET result_json = ${createdResult}
+              WHERE namespace = ${key.namespace} AND operation_id = ${withdrawn.operationId}
+            `;
+          }),
+        );
+        expect(yield* replayFailure(withdrawn)).toEqual(
+          MemoryStorageError.make({ operation: "change memory document", reason: "corrupt" }),
+        );
+
+        yield* runRaw(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            yield* sql`
+              UPDATE effect_agent_memory_receipts_v1
+              SET result_json = replace(
+                ${withdrawnResult},
+                ${'"reason":"source withdrawn"'},
+                ${'"reason":"forged withdrawal"'}
+              )
+              WHERE namespace = ${key.namespace} AND operation_id = ${withdrawn.operationId}
+            `;
+          }),
+        );
+        expect(yield* replayFailure(withdrawn)).toEqual(
+          MemoryStorageError.make({ operation: "change memory document", reason: "corrupt" }),
+        );
+      }),
+    ),
+  );
 });

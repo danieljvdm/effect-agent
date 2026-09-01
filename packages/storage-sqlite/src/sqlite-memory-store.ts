@@ -25,6 +25,8 @@ const EncodedMemoryChange = Schema.Struct({
   documentJson: StoredJson,
   resultJson: StoredJson,
 });
+const equivalentContent = Schema.toEquivalence(MemoryWrite.members[0].fields.content);
+const equivalentScopes = Schema.toEquivalence(MemoryWrite.members[0].fields.scopes);
 
 class MemoryMetadataRow extends Schema.Class<MemoryMetadataRow>(
   "@effect-agent/storage-sqlite/MemoryMetadataRow",
@@ -170,6 +172,36 @@ const validateDocument = Effect.fn("SqliteMemoryStore.validateDocument")(functio
     return yield* storageError(operation, "corrupt");
   }
   return document;
+});
+
+const validateReceiptResult = Effect.fn("SqliteMemoryStore.validateReceiptResult")(function* (
+  command: MemoryWrite,
+  result: MemoryDocument,
+  operation: string,
+): Effect.fn.Return<void, MemoryStorageError> {
+  if ((result.predecessor?.revision ?? null) !== command.expectedRevision) {
+    return yield* storageError(operation, "corrupt");
+  }
+  if (command._tag === "Put") {
+    if (result._tag !== "ActiveMemoryDocument" || result.source.locator !== command.locator) {
+      return yield* storageError(operation, "corrupt");
+    }
+    if (
+      !equivalentContent(command.content, result.content) ||
+      !equivalentScopes(command.scopes, result.scopes)
+    ) {
+      return yield* storageError(operation, "corrupt");
+    }
+    return;
+  }
+  if (
+    result._tag !== "WithdrawnMemoryDocument" ||
+    result.reason !== command.reason ||
+    result.predecessor === null ||
+    result.source.locator !== result.predecessor.locator
+  ) {
+    return yield* storageError(operation, "corrupt");
+  }
 });
 
 const initializeMemorySchema = Effect.fn("SqliteMemoryStore.initialize")(function* () {
@@ -347,6 +379,7 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
       return yield* storageError(operation, "corrupt");
     }
     yield* validateDocument(result.value, command.value.key, operation);
+    yield* validateReceiptResult(command.value, result.value, operation);
     return { commandJson: row.command_json, result: result.value };
   });
 

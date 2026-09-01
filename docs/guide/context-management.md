@@ -399,7 +399,8 @@ incompatible; initialize it through `memoryStoreLayer` in the writer process fir
 The connection belongs to its Layer's Scope. The adapter rejects a change before writing when
 its canonical command, document, or receipt-result JSON exceeds 16,777,216 JavaScript string code
 units. `memoryStoreLayerWithFailpoints` accepts a `MemoryMutationFailpoint` service for transaction
-and lost-acknowledgement tests.
+and lost-acknowledgement tests. Replayed receipts must match their original command's predecessor,
+result kind, content, locator, scopes, and withdrawal reason; mismatches fail as corrupt data.
 Recall and validation helpers add named Effect spans without source text or metadata annotations.
 `RecalledMemory.outcomes` reports source availability and selected, deduplicated, and omitted counts;
 the host decides which diagnostics to retain and who can inspect them.
