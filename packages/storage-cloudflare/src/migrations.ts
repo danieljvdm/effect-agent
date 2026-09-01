@@ -2,19 +2,12 @@ import { SqliteMigrator } from "@effect/sql-sqlite-do";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-/**
- * The exact-or-fresh storage version recorded in `effect_agent_meta`. Cloudflare is a fresh
- * platform, so there is exactly ONE migration carrying the complete current schema — no
- * v1→v4 history to replay (deployment spec §9: no rolling data-version promise during
- * private development).
- */
+/** The current storage version recorded in `effect_agent_meta`. */
 export const CurrentDoStorageVersion = 2;
 
 /**
- * The Thread Durable Object schema. Table names and columns mirror the Node/SQLite v4
- * schema byte-for-byte (`packages/storage-sqlite/src/migrations.ts`, migrations 1–4 collapsed
- * into their final shape) so the shared conformance suites and crash-matrix rows address
- * identical durable state. Two DC-specific additions:
+ * The Thread Durable Object schema shares its thread and ledger tables with Node/SQLite.
+ * Schedules and subscriptions use separate Durable Objects. Two DC-specific additions:
  *
  * 1. `effect_agent_meta` replaces `PRAGMA user_version` as the exact-or-fresh version gate —
  *    a meta table is portable regardless of which PRAGMAs Durable Object SQL storage allows.

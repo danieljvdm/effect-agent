@@ -4,8 +4,9 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 export const CurrentSqliteStorageVersion = 7;
 
+/** Initialize empty storage with the complete current schema. */
 export const sqliteMigrations = SqliteMigrator.fromRecord({
-  "1_current_persistent_thread_foundation": Effect.gen(function* () {
+  "1_current_thread_storage": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
     yield* sql`
@@ -67,11 +68,6 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
       )
     `.withoutTransform;
 
-    yield* sql`PRAGMA user_version = 1`.withoutTransform;
-  }),
-  "2_durable_submission_ledger": Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-
     // Admission rows exist before Thread materialization (durability §4), so
     // thread_id intentionally carries no foreign key into effect_agent_threads.
     yield* sql`
@@ -93,6 +89,13 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
         ready_at TEXT,
         input_applied_record_id TEXT,
         input_applied_sequence INTEGER,
+        joined_host_submission_id TEXT,
+        suspended_reason_json TEXT,
+        suspended_at TEXT,
+        unknown_reason TEXT,
+        unknown_tool_call_ids_json TEXT,
+        parent_submission_id TEXT,
+        parent_tool_call_id TEXT,
         UNIQUE (thread_id, principal, idempotency_key),
         UNIQUE (thread_id, queue_sequence)
       )
@@ -155,42 +158,6 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
       )
     `.withoutTransform;
 
-    yield* sql`PRAGMA user_version = 2`.withoutTransform;
-  }),
-  "3_durable_tools_and_joined_input": Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-
-    // Joined queued input (plan §2.5, DUR-016): a joining/joined Submission records which host
-    // Run claimed it. The canonical input marker reuses input_applied_record_id/_sequence
-    // because the joined input IS the Submission's own canonical `input:{sid}` record.
-    yield* sql`
-      ALTER TABLE effect_agent_submissions
-        ADD COLUMN joined_host_submission_id TEXT
-    `.withoutTransform;
-
-    // Durable approval suspension (plan §2.6): the reason is the Schema-encoded
-    // SuspensionReason union so later suspension families stay additive.
-    yield* sql`
-      ALTER TABLE effect_agent_submissions
-        ADD COLUMN suspended_reason_json TEXT
-    `.withoutTransform;
-    yield* sql`
-      ALTER TABLE effect_agent_submissions
-        ADD COLUMN suspended_at TEXT
-    `.withoutTransform;
-
-    // Unknown Outcome marking (DUR-009/DUR-017): the marked open Tool Call identities are
-    // stored so `recordUnknownResolution` can reopen the lane only when every marked call
-    // has a durable resolution intent.
-    yield* sql`
-      ALTER TABLE effect_agent_submissions
-        ADD COLUMN unknown_reason TEXT
-    `.withoutTransform;
-    yield* sql`
-      ALTER TABLE effect_agent_submissions
-        ADD COLUMN unknown_tool_call_ids_json TEXT
-    `.withoutTransform;
-
     yield* sql`
       CREATE INDEX effect_agent_submissions_joined_host
         ON effect_agent_submissions (joined_host_submission_id)
@@ -226,21 +193,8 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
       )
     `.withoutTransform;
 
-    yield* sql`PRAGMA user_version = 3`.withoutTransform;
-  }),
-  "4_durable_subagents": Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-
     // Durable attached children (spec §12, SUB-004): a child Submission records its immutable
     // parent linkage at admission; the parent-side index serves the recovery attachment view.
-    yield* sql`
-      ALTER TABLE effect_agent_submissions
-        ADD COLUMN parent_submission_id TEXT
-    `.withoutTransform;
-    yield* sql`
-      ALTER TABLE effect_agent_submissions
-        ADD COLUMN parent_tool_call_id TEXT
-    `.withoutTransform;
     yield* sql`
       CREATE INDEX effect_agent_submissions_parent
         ON effect_agent_submissions (parent_submission_id)
@@ -270,11 +224,6 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
       )
     `.withoutTransform;
 
-    yield* sql`PRAGMA user_version = 4`.withoutTransform;
-  }),
-  "5_durable_schedules": Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-
     // record_json is authoritative. The remaining columns support owner keyset paging and
     // deadline queries without decoding unrelated future schedules.
     yield* sql`
@@ -300,10 +249,6 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
         WHERE deadline_at_millis IS NOT NULL
     `.withoutTransform;
 
-    yield* sql`PRAGMA user_version = 5`.withoutTransform;
-  }),
-  "6_durable_subscriptions": Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
     yield* sql`
       CREATE TABLE effect_agent_subscription_sequences (
         tenant_id TEXT NOT NULL,
@@ -377,10 +322,6 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
       .withoutTransform;
     yield* sql`CREATE INDEX effect_agent_subscription_deliveries_registration ON effect_agent_subscription_deliveries (tenant_id, source_address, owner_id, subscription_id, delivery_key)`
       .withoutTransform;
-    yield* sql`PRAGMA user_version = 6`.withoutTransform;
-  }),
-  "7_thread_terminology_cutover": Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
     yield* sql`PRAGMA user_version = 7`.withoutTransform;
   }),
 });

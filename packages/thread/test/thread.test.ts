@@ -213,12 +213,12 @@ describe("thread canonical contracts", () => {
     );
   });
 
-  it("rejects unsupported canonical versions and retired Conversation records", () => {
+  it("rejects unsupported canonical versions, families, and payload tags", () => {
     const encoded = Schema.encodeSync(RecordEnvelope)(createdRecord);
     for (const incompatible of [
       { ...encoded, schemaVersion: 2 },
-      { ...encoded, family: "conversation" },
-      { ...encoded, payload: { ...encoded.payload, _tag: "ConversationCreated" } },
+      { ...encoded, family: "invalid" },
+      { ...encoded, payload: { ...encoded.payload, _tag: "InvalidRecord" } },
     ]) {
       expect(Schema.decodeUnknownExit(RecordEnvelope)(incompatible)._tag).toBe("Failure");
     }
