@@ -39,19 +39,19 @@
 
       pre {
         position: absolute;
-        top: 100px;
+        top: 132px;
         right: 32px;
         left: 32px;
         margin: 0;
         border: 1px solid #ffffff30;
         border-radius: 18px;
-        padding: 22px 24px;
+        padding: 38px 24px;
         background: #292638;
         box-shadow: 0 12px 28px #12246540;
         color: #f8f9fb;
         font-family: "IBM Plex Mono", monospace;
-        font-size: 22.5px;
-        line-height: 29px;
+        font-size: 24px;
+        line-height: 43px;
       }
 
       code {
@@ -77,10 +77,6 @@
 
       .number {
         color: #b7a1ff;
-      }
-
-      .comment {
-        color: #a8a1b8;
       }
 
       .mark {
@@ -109,18 +105,11 @@
       <h1>Effect Agent</h1>
       <img class="mark" src="../../public/mark.svg" alt="" />
       <pre><code><span class="keyword">const</span> <span class="namespace">researcher</span> <span class="punctuation">=</span> <span class="namespace">Agent</span>.<span class="call">make</span>(<span class="string">"researcher"</span><span class="punctuation">,</span> {
-  input<span class="punctuation">:</span> <span class="namespace">Schema</span>.<span class="call">Struct</span>({ question<span class="punctuation">:</span> <span class="namespace">Schema</span>.String<span class="punctuation">,</span> maxSources<span class="punctuation">:</span> <span class="namespace">Schema</span>.Int })<span class="punctuation">,</span>
-  output<span class="punctuation">:</span> <span class="namespace">Schema</span>.<span class="call">Struct</span>({
-    summary<span class="punctuation">:</span> <span class="namespace">Schema</span>.String<span class="punctuation">,</span>
-    sources<span class="punctuation">:</span> <span class="namespace">Schema</span>.<span class="call">Array</span>(<span class="namespace">Schema</span>.String)<span class="punctuation">,</span>
-  })<span class="punctuation">,</span>
+  input<span class="punctuation">:</span> <span class="namespace">ResearchQuestion</span><span class="punctuation">,</span>
+  output<span class="punctuation">:</span> <span class="namespace">ResearchReport</span><span class="punctuation">,</span>
   instructions<span class="punctuation">:</span> <span class="string">"Follow the evidence. Cite your sources."</span><span class="punctuation">,</span>
-  <span class="comment">// FactChecker is a Subagent</span>
   toolkit<span class="punctuation">:</span> <span class="namespace">Toolkit</span>.<span class="call">make</span>(SearchWeb<span class="punctuation">,</span> ReadPage<span class="punctuation">,</span> <span class="namespace">FactChecker</span>.tool)<span class="punctuation">,</span>
-  policy<span class="punctuation">:</span> <span class="namespace">AgentPolicy</span>.<span class="call">make</span>({
-    maxTurns<span class="punctuation">:</span> <span class="number">6</span><span class="punctuation">,</span> maxToolCalls<span class="punctuation">:</span> <span class="number">10</span><span class="punctuation">,</span>
-    maxDuration<span class="punctuation">:</span> <span class="string">"2 minutes"</span><span class="punctuation">,</span> toolConcurrency<span class="punctuation">:</span> <span class="number">2</span><span class="punctuation">,</span>
-  })<span class="punctuation">,</span>
+  policy<span class="punctuation">:</span> <span class="namespace">AgentPolicy</span>.<span class="call">make</span>({ ...defaults<span class="punctuation">,</span> maxTurns<span class="punctuation">:</span> <span class="number">6</span><span class="punctuation">,</span> maxToolCalls<span class="punctuation">:</span> <span class="number">10</span> })<span class="punctuation">,</span>
 })</code></pre>
       <footer>
         <span>Built on Effect and Effect AI.</span>
