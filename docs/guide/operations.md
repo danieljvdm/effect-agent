@@ -17,7 +17,7 @@ administration contract applies to Node and SQLite class `DN` and Cloudflare Dur
   operator meaning, and expected disposition. They write nothing.
 - `verify(threadId)` runs read-only integrity checks. The digest-chain check reports
   `skipped` unless the host supplies producer identity.
-- `retry(submissionId, { author, reason })` records an audit entry and repeats the classifier's
+- `retry(RetryCommand.make({ submissionId, author, reason }))` records an audit entry and repeats the classifier's
   decision. It refuses settled work and lanes owned by `resolveUnknown` or `resolveApproval`.
 - `wake(threadId)` sends a droppable liveness hint.
 - `scanObligations(thresholds)` reports blocked or aging accepted work.
@@ -27,10 +27,10 @@ administration contract applies to Node and SQLite class `DN` and Cloudflare Dur
 Cloudflare Thread Objects expose encoded administration methods through the application's
 Worker.
 
-Every runtime operation consults `OperationAuthorizer`, including observation, settlement waits,
-abort, and unknown or approval resolution. Its default allows trusted service holders. Install a
+The administrative methods above, observation, settlement waits, abort, and unknown or approval
+resolution consult `OperationAuthorizer`. Its default allows trusted service holders. Install a
 real authorizer before exposing these methods outside a trusted host. Denial fails as
-`OperationDenied` before protected I/O.
+`OperationDenied` before protected I/O. The host must authorize admissions before calling `submit`.
 
 ## Monitor unfinished work {#obligation-monitoring}
 
@@ -46,11 +46,19 @@ sends no alerts.
 
 After authorization, abort a submission with:
 
-```ts
-DurableAgentRuntime.abort(AbortCommand.make({ submissionId, author, reason }));
+```ts twoslash
+import { AbortCommand, DurableAgentRuntime } from "@effect-agent/thread";
+import { Effect } from "effect";
+
+const abortSubmission = Effect.fn("abortSubmission")(function* (command: AbortCommand) {
+  const runtime = yield* DurableAgentRuntime;
+  return yield* runtime.abort(command);
+});
 ```
 
-On Cloudflare, call `CloudflareThreadClient.abort(receipt.threadId, command)`.
+Create the command with `AbortCommand.make({ submissionId, author, reason })`.
+On Cloudflare, obtain `client` from `yield* CloudflareThreadClient`, then call
+`client.abort(receipt.threadId, command)`.
 The runtime checks authorization before reading or mutating the target.
 
 Recovery claims the unknown head with its abort intent, handles attached children, records an
@@ -85,7 +93,7 @@ revocation, interrupt the wait and start another. Interrupting a wait does not a
 | terminal outcome          | `awaitSettlement(receipt)` returns the durable settlement                             |
 | budget or stop detail     | `SubmissionSettled` records `finishReason`, `exhausted`, and `policyLimit`            |
 
-Use `DurableAgentRuntime.observe(receipt, { after })` for live progress. Filter the thread
+Use `runtime.observe(receipt, { after })` for live progress. Filter the thread
 stream by submission or run identifier. Joined input shares its host run, while its own terminal
 record keeps the original submission identifier.
 
@@ -195,7 +203,7 @@ Object RPCs away from untrusted callers.
 ### Tools, delegation, and external resources
 
 Use [`RunToolAuthorization`](./tools#authorize-tool-calls) to check proposed tool calls.
-Operation authorization covers access to the runtime's own methods.
+`OperationAuthorizer` protects the runtime operations listed above; the host authorizes admission.
 Recheck policy after durable suspension. Approval applies to one exact action and expires. Parent
 approval does not authorize child actions.
 
