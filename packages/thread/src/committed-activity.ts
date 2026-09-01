@@ -163,7 +163,11 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
             Schema.decodeUnknownEffect(ThreadTail)(value).pipe(Effect.mapError(contiguous)),
           ),
         );
-      if (tail.threadId !== key.threadId || tail.tailSequence < claim.throughSequence) {
+      if (
+        tail.threadId !== key.threadId ||
+        tail.tailSequence < claim.throughSequence ||
+        (claim.pending !== null && tail.tailSequence < claim.pending.sequence)
+      ) {
         return yield* contiguous();
       }
       const through = Math.min(tail.tailSequence, claim.throughSequence + limits.maxRecords);

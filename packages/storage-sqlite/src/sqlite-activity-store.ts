@@ -96,6 +96,11 @@ const encodeProgress = Effect.fn("SqliteActivityStore.encodeProgress")(function*
 ): Effect.fn.Return<string, ActivityStoreError> {
   return yield* Schema.encodeEffect(Schema.fromJsonString(ActivityProgress))(progress).pipe(
     Effect.mapError(() => storeError(operation, "corrupt")),
+    Effect.flatMap((encoded) =>
+      Schema.decodeEffect(StoredJson)(encoded).pipe(
+        Effect.mapError(() => storeError(operation, "invalid-input")),
+      ),
+    ),
   );
 });
 

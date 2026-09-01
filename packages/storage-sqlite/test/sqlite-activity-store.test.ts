@@ -6,9 +6,11 @@ import {
   ActivityOwnershipLost,
   ActivityProcessorKey,
   ActivityProcessorStore,
+  ActivityProgress,
   ActivityStoreError,
   ActivityWorkConflict,
   PreparedActivity,
+  RecordId,
 } from "@effect-agent/thread";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
@@ -98,6 +100,60 @@ const runRaw = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientSer
   effect.pipe(Effect.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
 
 describe("SQLite activity processor store", () => {
+  it.effect(
+    "rejects oversized encoded progress without mutation and reopens the exact boundary",
+    () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          const prepared = yield* runStore(
+            filename,
+            Effect.gen(function* () {
+              const store = yield* ActivityProcessorStore;
+              const claim = yield* store.claim(request("worker"));
+              const before = yield* store.inspect(key);
+              const initial = work(1, "a");
+              const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(ActivityProgress))(
+                ActivityProgress.make({ ...claim, version: 1, pending: initial, advancedAt: null }),
+              );
+              const boundary = PreparedActivity.make({
+                ...initial,
+                recordId: yield* Schema.decodeEffect(RecordId)(
+                  "r".repeat(16 * 1024 * 1024 - encoded.length + initial.recordId.length),
+                ),
+              });
+              const oversized = PreparedActivity.make({
+                ...boundary,
+                recordId: yield* Schema.decodeEffect(RecordId)(`${boundary.recordId}x`),
+              });
+              expect(yield* store.prepare({ claim, work: oversized }).pipe(Effect.flip)).toEqual(
+                ActivityStoreError.make({
+                  operation: "prepare activity output",
+                  reason: "invalid-input",
+                }),
+              );
+              expect(yield* store.inspect(key)).toEqual(before);
+              yield* store.prepare({ claim, work: boundary });
+              expect(yield* store.prepare({ claim, work: boundary })).toEqual(boundary);
+              yield* store.release(claim);
+              return boundary;
+            }),
+          );
+          expect((yield* inspect(filename))?.pending).toEqual(prepared);
+          yield* runStore(
+            filename,
+            Effect.gen(function* () {
+              const store = yield* ActivityProcessorStore;
+              const claim = yield* store.claim(request("worker"));
+              expect(claim.pending).toEqual(prepared);
+              const next = yield* store.advance({ claim, workId: prepared.workId });
+              expect(next.throughSequence).toBe(1);
+              expect(next.pending).toBeNull();
+            }),
+          );
+        }),
+      ),
+  );
+
   it.effect("preserves pending output across takeover and release, then fences reacquisition", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {

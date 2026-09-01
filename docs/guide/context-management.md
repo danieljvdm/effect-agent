@@ -425,7 +425,9 @@ is imported. A read-only corpus or direct Markdown recall needs none of these se
 The pass claims its own processor lease and receives any pending output atomically with that
 claim. It captures `ThreadStore.inspectTail` once and reads
 bounded, contiguous pages through that prefix. Records appended afterward belong to a later
-pass. `PersistentHistory` exposes the batch from a successful Run together; durable Runs expose
+pass. Pending work beyond the captured tail fails as `noncontiguous`, including when progress and
+Thread storage were restored to different points. `PersistentHistory` exposes the batch from a
+successful Run together; durable Runs expose
 incremental committed records. A record's presence is evidence of its commit, not evidence that
 the whole Run succeeded. Eligibility rules must account for that distinction.
 
@@ -552,6 +554,8 @@ idempotency and conditional writes remain required. Extraction and application e
 the pass has a deadline and release gets at most another 500ms. If release fails, the lease
 expires. The failpoint-enabled Layer exposes initialization and each mutation before, inside,
 and after its transaction for recovery tests.
+SQLite rejects activity progress whose JSON exceeds 16,777,216 JavaScript string code units before
+writing, with `ActivityStoreError` reason `invalid-input`. Rejected writes leave prior progress intact.
 
 `ActivityProcessorStore.inspect` exposes the per-processor, per-version, per-Thread cursor,
 pending work, and last advancement time. A successful pass reports its captured tail, through
