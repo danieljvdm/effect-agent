@@ -41,10 +41,12 @@ At run start, the runtime evaluates instructions and the definition's optional
 [`inputPrompt`](/guide/agents#choose-model-visible-input). Without `inputPrompt`, the model receives
 the full encoded input as a JSON user message.
 
-Before each turn, `RunOptions.context.prepare` transforms the source prompt. Compaction then works
-on that prepared prompt. The runtime adds the output contract and derived run status last.
-Compaction summaries use the prepared prompt. Durable recovery restores committed messages before
-applying the transform.
+Before each turn, `RunOptions.context.prepare` transforms the source prompt. The engine separately
+loads optional transient reference context from `RunOptions.transientContext`, then compacts only
+the prepared prompt. It appends the references and derived run status to the compacted view and
+adds the output contract. Compaction summaries never receive transient references. Durable
+recovery rebuilds the committed model view before applying prompt preparation; a transient loader
+receives the current Attempt's official source, Thread ID, Run ID, Turn ID, and Turn number.
 
 To add application instructions to each request:
 
@@ -70,6 +72,188 @@ Pass `metricContext` as the `context` option to `AgentRuntime.run`, `stream`, or
 For durable execution, install `MetricContextLive` when [configuring the runtime](./run-agents#assemble-a-custom-durable-runtime).
 Transforms change the model prompt, not stored input or history. Use
 [`inputPrompt`](./agents#choose-model-visible-input) to choose which input fields the model sees.
+
+## Recall application-owned sources {#recall-memory}
+
+`recallMemory` turns readable, application-selected sources into a bounded transient model view.
+The framework does not own a memory database, write recalled material, or build an embedding
+index. If an Agent does not need recall, omit `transientContext`; the Run requires no memory
+service and behaves as before.
+
+Each reader returns `MemoryLookup`. `Found` carries ranked `MemoryPassage` values. `NoMatch` is a
+successful empty result. `Unavailable` and `InsufficientFreshness` remain distinct in the returned
+source outcomes. An unavailable or stale `essential: true` source fails recall; an essential source
+whose matching passages cannot fit also fails. `NoMatch` remains successful even for an essential
+source. Expected reader failures propagate unless the reader deliberately maps them to one of the
+lookup outcomes.
+
+A passage points back to its authoritative source ID, locator, and known revision. Its attribution
+records the speaker, observers, original activity time, and the application's interpretation.
+`recordedAt` says when the application recorded the content, while `extractedAt` says when it made
+this passage. Neither substitutes for `activityAt`; use `null` when the original activity time is
+unknown.
+
+### Recall a Markdown passage directly
+
+This source reads a known Markdown note without a store or adapter:
+
+```ts twoslash
+import { recallMemory } from "@effect-agent/capabilities";
+import {
+  MemoryAttribution,
+  MemoryContent,
+  type MemoryLookup,
+  MemoryPassage,
+  MemoryRecallError,
+  MemoryRecallLimits,
+  MemorySourceReference,
+} from "@effect-agent/core";
+import type { RunTransientContextHook } from "@effect-agent/engine";
+import { Effect } from "effect";
+import { Prompt } from "effect/unstable/ai";
+
+const limits = MemoryRecallLimits.make({
+  maxSources: 1,
+  maxItems: 4,
+  maxBytes: 16_384,
+  maxTokens: 4_096,
+  timeoutMillis: 1_000,
+});
+
+const note = MemoryPassage.make({
+  version: 1,
+  source: MemorySourceReference.make({
+    id: "project-notes",
+    locator: "file:///workspace/notes/queue.md",
+    revision: "sha256:8d31",
+  }),
+  passageId: "retry-policy",
+  content: MemoryContent.make({
+    text: "# Retry policy\nUse a bounded queue and preserve failed work.",
+    attributions: [
+      MemoryAttribution.make({
+        originId: "meeting:2026-08-28:queue",
+        speaker: "Dan",
+        observers: ["Chad"],
+        locator: "meeting://engineering/2026-08-28#queue",
+        activityAt: 1_777_334_400_000,
+        interpretation: "proposal awaiting review",
+      }),
+    ],
+    metadata: { format: "markdown" },
+    recordedAt: 1_777_420_800_000,
+    extractedAt: 1_777_420_801_000,
+  }),
+});
+
+const lookup: MemoryLookup = { _tag: "Found", passages: [note] };
+
+export const projectNotes: RunTransientContextHook<MemoryRecallError> = {
+  load: () =>
+    recallMemory(
+      [{ id: "project-notes", essential: true, read: Effect.succeed(lookup) }],
+      limits,
+    ).pipe(
+      Effect.map((recalled) =>
+        recalled.text === ""
+          ? Prompt.empty
+          : Prompt.make([{ role: "user", content: recalled.text }]),
+      ),
+    ),
+};
+```
+
+Pass `projectNotes` as `transientContext` to `AgentRuntime.run`, `stream`, or `start`.
+`recallMemory` renders positional `memory:N` reference IDs and provenance for that one result.
+`RecalledMemory.outcomes` separately reports what happened at each source. The rendered envelope
+and every citation remain untrusted model input. Validate model claims against
+`RecalledMemory.passages` before presenting them as sourced facts.
+
+### Read an external corpus through an Effect service
+
+Keep authorization, credentials, and query policy inside an application service. This contract has
+one read method; it does not create a durable copy, write to the corpus, or create embeddings:
+
+```ts twoslash
+import { recallMemory } from "@effect-agent/capabilities";
+import { type MemoryLookup, MemoryRecallError, MemoryRecallLimits } from "@effect-agent/core";
+import {
+  RunContextPreparation,
+  RunContextPreparationError,
+  type RunTransientContextHook,
+} from "@effect-agent/engine";
+import { Context, Effect, Layer, Schema } from "effect";
+import { Prompt } from "effect/unstable/ai";
+
+class CorpusReadError extends Schema.TaggedError<CorpusReadError>()("CorpusReadError", {
+  message: Schema.String,
+}) {}
+
+class ExternalCorpus extends Context.Service<
+  ExternalCorpus,
+  {
+    readonly search: (query: string) => Effect.Effect<MemoryLookup, CorpusReadError>;
+  }
+>()("app/ExternalCorpus") {}
+
+const limits = MemoryRecallLimits.make({
+  maxSources: 8,
+  maxItems: 8,
+  maxBytes: 32_768,
+  maxTokens: 8_192,
+  timeoutMillis: 2_000,
+});
+
+export const ExternalCorpusMemoryLive = Layer.effect(
+  RunContextPreparation,
+  Effect.gen(function* () {
+    const corpus = yield* ExternalCorpus;
+    const transientContext: RunTransientContextHook<RunContextPreparationError> = {
+      load: () =>
+        recallMemory(
+          [
+            {
+              id: "team-corpus",
+              essential: false,
+              read: corpus.search("current queue design"),
+            },
+          ],
+          limits,
+        ).pipe(
+          Effect.map((recalled) =>
+            recalled.text === ""
+              ? Prompt.empty
+              : Prompt.make([{ role: "user", content: recalled.text }]),
+          ),
+          Effect.mapError((error: MemoryRecallError | CorpusReadError) =>
+            RunContextPreparationError.make({
+              preparerId: "team-corpus",
+              message: error.message,
+              cause: error,
+            }),
+          ),
+        ),
+    };
+    return RunContextPreparation.of({ transientContext });
+  }),
+);
+```
+
+Provide the application's `ExternalCorpus` Layer to `ExternalCorpusMemoryLive`, then provide that
+closed Layer to `DurableAgentRuntime.layerWithServices` with `RunToolAuthorization`. The durable
+runtime captures `RunContextPreparation` in its Scope. Put `hook`, `transientContext`, and
+`compactor` in the same service value when using all three.
+
+The engine reloads transient context at the start of every normal or grace Turn and after durable
+recovery. A same-Turn provider-overflow retry reuses that Turn's snapshot. Each provider call still
+has to fit `contextTokenLimit`; transient text participates in output-contract, run-status, token
+budget, and completion-reserve admission. Oversized context fails before provider I/O.
+
+Transient references never enter Thread history, canonical records, compaction coverage, or a
+compaction summary request. Recovery reads the source again instead of replaying an earlier
+snapshot. `RunContextRequest.source` is the current Attempt's official pre-preparation history;
+use its stable identities or an application-owned query when retrieval requires canonical durable
+state.
 
 <a id="tool-results-are-bounded-at-the-source"></a>
 
@@ -214,7 +398,8 @@ stores, and applies the artifact.
 
 `RetainedFact` values remain artifact metadata. They do not enter the prompt or a separate memory
 store automatically. This path is separate from `ContextCompactor`; the interpreter does not call
-`applyCompaction`. There is no persistent agent memory API.
+`applyCompaction`. `recallMemory` is the optional read path for application-owned sources; it does
+not persist passages or turn compaction artifacts into memory.
 
 ## Track usage {#observing-usage}
 

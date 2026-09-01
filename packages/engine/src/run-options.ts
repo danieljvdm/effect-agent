@@ -182,7 +182,13 @@ export interface RunContextRequest {
   readonly runId: RunId;
   readonly turnId: TurnId;
   readonly turn: number;
-  /** Official ephemeral history. The engine never replaces or mutates this value. */
+  /**
+   * Official engine history for this Attempt before context preparation. The
+   * engine never replaces or mutates this value. Durable prompt
+   * reconstruction can produce a different model-visible basis afterward, so
+   * adapters that need canonical retrieval should key it by the supplied Run
+   * identities rather than infer durable state from this Prompt alone.
+   */
   readonly source: Prompt.Prompt;
   /**
    * The exact model-visible final-output contract the engine appends to the
@@ -205,6 +211,22 @@ export interface RunContextHook<Error = never, Requirements = never> {
   readonly prepare: (
     request: RunContextRequest,
   ) => Effect.Effect<PreparedRunContext, Error, Requirements>;
+}
+
+/**
+ * Supplies model-visible reference context for one Turn without changing the
+ * prompt that compaction covers or the history that the engine commits.
+ *
+ * The engine treats the returned input as untrusted, validates it before
+ * provider I/O, and includes it in the Turn's context and completion-reserve
+ * admission. It never passes this input to the compaction summary Model. A
+ * same-Turn provider-overflow retry reuses the loaded snapshot. Return an
+ * empty Prompt when the Turn needs no references.
+ */
+export interface RunTransientContextHook<Error = never, Requirements = never> {
+  readonly load: (
+    request: RunContextRequest,
+  ) => Effect.Effect<Prompt.RawInput, Error, Requirements>;
 }
 
 /** A host-supplied model-context preparer failed in its closed, expected error channel. */
@@ -338,6 +360,10 @@ export class RunContextPreparation extends Context.Service<
   {
     /** Optional transformation of the model-visible prompt. */
     readonly hook?: RunContextHook<RunContextPreparationError, never> | undefined;
+    /** Optional per-Turn reference context, excluded from history and compaction coverage. */
+    readonly transientContext?:
+      | RunTransientContextHook<RunContextPreparationError, never>
+      | undefined;
     /** Replaces native compaction after prompt reconstruction; acquired with the host Layer. */
     readonly compactor?: ContextCompactor["Service"] | undefined;
   }
@@ -748,6 +774,14 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   readonly input?: RunInputHook<HookError, HookRequirements> | undefined;
   readonly approval?: RunApprovalHook<HookError, HookRequirements> | undefined;
   readonly context?: RunContextHook<HookError, HookRequirements> | undefined;
+  /**
+   * Model-visible reference context loaded for each Turn, including a grace
+   * finalization Turn and a Turn reconstructed by durable recovery. The engine
+   * validates and budgets the result but never adds it to official history or
+   * compaction coverage. A same-Turn provider-overflow retry reuses the Turn's
+   * loaded snapshot.
+   */
+  readonly transientContext?: RunTransientContextHook<HookError, HookRequirements> | undefined;
   readonly budget?: RunBudgetHook<HookError, HookRequirements> | undefined;
   /**
    * Host-owned action-time authorization for model-declared application Tool batches. The engine

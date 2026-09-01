@@ -2308,6 +2308,28 @@ const inputsToPrompt = (
       }),
   });
 
+/** Validate live reference context before it reaches budgeting or provider I/O. */
+const transientInputToPrompt = (
+  input: Prompt.RawInput,
+): Effect.Effect<Prompt.Prompt, AgentInputError> =>
+  Effect.try({
+    try: () => Prompt.make(input),
+    catch: (cause) =>
+      AgentInputError.make({
+        message: `Unable to materialize transient Run context: ${errorMessage(cause)}`,
+      }),
+  }).pipe(
+    Effect.flatMap((prompt) =>
+      Schema.decodeUnknownEffect(Prompt.Prompt)({ content: prompt.content }).pipe(
+        Effect.mapError((cause) =>
+          AgentInputError.make({
+            message: `Unable to materialize transient Run context: ${errorMessage(cause)}`,
+          }),
+        ),
+      ),
+    ),
+  );
+
 const advanceHistory = <HookError, HookRequirements>(
   context: RunContext,
   history: Prompt.Prompt,
@@ -4035,21 +4057,27 @@ const makeTurn = <
       const outputContract = outputSchemaContract(agent.definition);
       const outputContractMessage =
         outputContract._tag === "rendered" ? outputContract.message : undefined;
+      const contextRequest = {
+        threadId: context.threadId,
+        runId: context.runId,
+        turnId,
+        turn,
+        source: prompt,
+        // Omit the key entirely when no contract renders so hooks keep the
+        // same exact request shape as the preparation hook.
+        ...(outputContractMessage === undefined ? {} : { outputContract: outputContractMessage }),
+      };
       const modelContext =
-        options.context === undefined
-          ? { prompt }
-          : yield* options.context.prepare({
-              threadId: context.threadId,
-              runId: context.runId,
-              turnId,
-              turn,
-              source: prompt,
-              // Omit the key entirely when no contract renders so the
-              // fallback request is byte-identical to the prior behavior.
-              ...(outputContractMessage === undefined
-                ? {}
-                : { outputContract: outputContractMessage }),
-            });
+        options.context === undefined ? { prompt } : yield* options.context.prepare(contextRequest);
+      // Reference context is loaded from official source on every Turn. It is
+      // validated before admission and kept outside modelContext so native
+      // compaction can neither cover nor summarize it.
+      const transientContext =
+        options.transientContext === undefined
+          ? Prompt.empty
+          : yield* options.transientContext
+              .load(contextRequest)
+              .pipe(Effect.flatMap(transientInputToPrompt));
       const trace: TurnTrace = {
         responsePartCount: 0,
         responsePartBytes: 0,
@@ -4143,12 +4171,21 @@ const makeTurn = <
       const derivedPrompt = yield* outgoingModelPrompt(
         policy,
         context,
-        Prompt.fromMessages([]),
+        transientContext,
         turn,
         priorToolCalls,
       );
       const derivedPromptTokens =
         outputContractTokens + (yield* estimateContextTokens(context, derivedPrompt.content));
+      // Provider-reported input usage includes the previous Turn's transient
+      // context, whose size can change independently of canonical history.
+      // A fresh full estimate avoids carrying that stale amount into this
+      // Turn's admission. Runs without transient context retain the anchored
+      // estimate used by existing context economics.
+      const estimateSourceContext = (view: ReadonlyArray<Prompt.Message>) =>
+        options.transientContext === undefined
+          ? nextContextEstimate(context, view)
+          : estimateContextTokens(context, view);
       let preEvents: ReadonlyArray<RunEvent> = [];
       if (!context.finalizing) {
         const consumedTokens = context.inputTokens + context.outputTokens;
@@ -4166,7 +4203,7 @@ const makeTurn = <
         const sourceTarget =
           fullTarget === undefined ? undefined : Math.max(0, fullTarget - derivedPromptTokens);
         const view = buildCompactedView(modelContext.prompt.content, context.compaction);
-        const estimate = (yield* nextContextEstimate(context, view)) + derivedPromptTokens;
+        const estimate = (yield* estimateSourceContext(view)) + derivedPromptTokens;
         const contextPressure = contextCallTarget !== undefined && estimate > contextCallTarget;
         const tokenPressure = tokenCallTarget !== undefined && estimate > tokenCallTarget;
         if (
@@ -4192,8 +4229,7 @@ const makeTurn = <
           preEvents = outcome.events;
         }
         const prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
-        const preparedEstimate =
-          (yield* nextContextEstimate(context, prepared)) + derivedPromptTokens;
+        const preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
         // A summarizing compaction is itself a priced model call. Recompute
         // admission from its reported usage instead of carrying the stale
         // pre-compaction balance into the research call that follows.
@@ -4251,65 +4287,97 @@ const makeTurn = <
       };
       const attempt = (basis: Prompt.Prompt) =>
         Stream.unwrap(
-          outgoingModelPrompt(policy, context, basis, turn, priorToolCalls).pipe(
-            Effect.map((outgoing) => {
+          outgoingModelPrompt(
+            policy,
+            context,
+            Prompt.fromMessages([...basis.content, ...transientContext.content]),
+            turn,
+            priorToolCalls,
+          ).pipe(
+            Effect.flatMap((outgoing) => {
               const terminalToolChoiceOnly =
                 finalAnswerOnly ||
                 (agent.definition.completion?.required === true &&
                   policy.onExhaustion === "fail" &&
                   turn === bounds.maxTurns);
-              return guardBudgetStream(
-                LanguageModel.streamText({
-                  // The contract joins the final outgoing prompt (after
-                  // compaction and the run-status append), so every attempt —
-                  // including the overflow retry — carries it at the last
-                  // system block.
-                  prompt:
-                    outputContractMessage === undefined
-                      ? outgoing
-                      : insertOutputContract(outgoing, outputContractMessage),
-                  toolkit: agent.definition.toolkit,
-                  disableToolCallResolution: true,
-                  // Exact required Tool selection preserves the toolkit. A oneOf
-                  // subset can drop other schemas and break the cached prefix.
-                  ...(terminalToolChoiceOnly
-                    ? agent.definition.completion === undefined
-                      ? { toolChoice: "none" as const }
-                      : agent.definition.completion.required === true
-                        ? { toolChoice: { tool: agent.definition.completion.tool } }
-                        : {
-                            toolChoice: {
-                              mode: "auto" as const,
-                              oneOf: [agent.definition.completion.tool],
-                            },
-                          }
-                    : agent.definition.completion?.required === true
-                      ? { toolChoice: "required" as const }
-                      : {}),
-                }),
-                options.budget,
-              ).pipe(
-                Stream.mapEffect((part) =>
-                  ownModelResponsePart(
-                    part,
-                    agent.definition.toolkit,
-                    trace,
-                    context.bufferLimits,
+              const providerPrompt =
+                outputContractMessage === undefined
+                  ? outgoing
+                  : insertOutputContract(outgoing, outputContractMessage);
+              // Transient context can change independently at every Turn. A
+              // final full-prompt check closes the per-call boundary for grace
+              // finalization and any future path that bypasses research
+              // compaction admission. Runs without this hook keep their
+              // provider-reported incremental estimate.
+              const contextTokenLimit = policy.contextTokenLimit;
+              const admission =
+                options.transientContext === undefined || contextTokenLimit === undefined
+                  ? Effect.void
+                  : estimateContextTokens(context, providerPrompt.content).pipe(
+                      Effect.flatMap((estimatedTokens) =>
+                        estimatedTokens <= contextTokenLimit
+                          ? Effect.void
+                          : ContextBudgetError.make({
+                              message: `Transient context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
+                              estimatedTokens,
+                              targetTokens: contextTokenLimit,
+                              completionReserveTokens: policy.completionReserveTokens,
+                            }),
+                      ),
+                    );
+              return admission.pipe(
+                Effect.as(
+                  guardBudgetStream(
+                    LanguageModel.streamText({
+                      // The contract joins the final outgoing prompt (after
+                      // compaction and the run-status append), so every attempt —
+                      // including the overflow retry — carries it at the last
+                      // system block.
+                      prompt: providerPrompt,
+                      toolkit: agent.definition.toolkit,
+                      disableToolCallResolution: true,
+                      // Exact required Tool selection preserves the toolkit. A oneOf
+                      // subset can drop other schemas and break the cached prefix.
+                      ...(terminalToolChoiceOnly
+                        ? agent.definition.completion === undefined
+                          ? { toolChoice: "none" as const }
+                          : agent.definition.completion.required === true
+                            ? { toolChoice: { tool: agent.definition.completion.tool } }
+                            : {
+                                toolChoice: {
+                                  mode: "auto" as const,
+                                  oneOf: [agent.definition.completion.tool],
+                                },
+                              }
+                        : agent.definition.completion?.required === true
+                          ? { toolChoice: "required" as const }
+                          : {}),
+                    }),
+                    options.budget,
                   ).pipe(
-                    Effect.flatMap((owned) =>
-                      eventsForPart(
-                        context,
-                        turnId,
-                        turn,
-                        agent.definition.toolkit.tools,
+                    Stream.mapEffect((part) =>
+                      ownModelResponsePart(
+                        part,
+                        agent.definition.toolkit,
                         trace,
-                        owned.ownedPart,
-                        owned.retainedBytes,
+                        context.bufferLimits,
+                      ).pipe(
+                        Effect.flatMap((owned) =>
+                          eventsForPart(
+                            context,
+                            turnId,
+                            turn,
+                            agent.definition.toolkit.tools,
+                            trace,
+                            owned.ownedPart,
+                            owned.retainedBytes,
+                          ),
+                        ),
                       ),
                     ),
+                    Stream.flatMap(Stream.fromIterable),
                   ),
                 ),
-                Stream.flatMap(Stream.fromIterable),
               );
             }),
           ),
@@ -4375,7 +4443,7 @@ const makeTurn = <
                   context.compaction,
                 );
                 const retryEstimate =
-                  (yield* nextContextEstimate(context, retryView)) + derivedPromptTokens;
+                  (yield* estimateSourceContext(retryView)) + derivedPromptTokens;
                 if (retryEstimate > contextTokenLimit) {
                   return yield* ContextBudgetError.make({
                     message: `Overflow compaction could not fit the retry inside the ${contextTokenLimit} token context target`,

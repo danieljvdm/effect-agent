@@ -5013,6 +5013,9 @@ const make = Effect.gen(function* () {
               },
             }),
         ...(preparedContext === undefined ? {} : { context: preparedContext }),
+        ...(runContextPreparation.transientContext === undefined
+          ? {}
+          : { transientContext: runContextPreparation.transientContext }),
         ...(config.estimateCostMicrousd === undefined
           ? {}
           : { estimateCostMicrousd: config.estimateCostMicrousd }),

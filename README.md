@@ -40,6 +40,7 @@ Effect Agent uses Effect AI's tools, models, and provider integrations directly.
   input wait until the current model response and tool batch finish.
 - [Thread history](docs/guide/threads.md) across runs, with
   [context management](docs/guide/context-management.md) for long conversations.
+- [Transient recall](docs/guide/context-management.md) from application-owned readable sources.
 - [Attached subagents](docs/guide/subagents.md) with explicit permissions and budgets.
 - [Scheduled input](docs/guide/operations.md#scheduled-input) and
   [event subscriptions](docs/guide/operations.md#event-subscriptions).
