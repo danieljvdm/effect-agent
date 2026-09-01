@@ -1,6 +1,7 @@
 import {
   MemoryDocument,
   MemoryIndexBuild,
+  type MemoryIndexCandidate,
   MemoryIndexError,
   MemoryIndexQuery,
   MemoryIndexSearch,
@@ -52,6 +53,10 @@ export class SemanticQueryLimits extends Schema.Class<SemanticQueryLimits>(
   maxQueryBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_536 })),
   maxCandidates: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 128 })),
   maxScannedChunks: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_536 })),
+  /** Aggregate UTF-8 JSON of current authorized candidate sources; defaults to 16 MiB. */
+  maxSourceBytes: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 67_108_864 })),
+  ),
   minScore: Schema.Finite.check(Schema.isBetween({ minimum: -1, maximum: 1 })),
   timeoutMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60_000 })),
 }) {}
@@ -371,6 +376,10 @@ export const indexMemorySource = Effect.fn("indexMemorySource")(function* (
  * metadata always come from that current source. Revision, generation, namespace, access,
  * locator, and exact UTF-8 excerpt checks run before returning any passage. Older candidates
  * are omitted rather than assigning their similarity score to changed text.
+ * Process candidates in source groups, retain only passage excerpts, and restore index rank.
+ * maxSourceBytes bounds aggregate UTF-8 JSON for distinct authorized sources with matching
+ * generation/revision/locator candidates. Its default is 16 MiB; exhaustion returns no partial
+ * result. Reader allocation, decoding, and one source serialization precede this bound.
  *
  * Compose result.lookup through recallMemory to enforce the final rendered item/byte/token
  * budget and overall deadline. An empty result says nothing about undiscovered sources;
@@ -435,12 +444,20 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
         reason: "corrupt",
       });
     }
-    const documents = new Map<string, MemoryDocument | null>();
-    const encodedDocuments = new Map<string, string>();
-    const passages: Array<MemoryPassage> = [];
+    const groups = new Map<
+      string,
+      {
+        readonly key: MemoryKey;
+        readonly candidates: Array<{
+          readonly rank: number;
+          readonly candidate: MemoryIndexCandidate;
+        }>;
+      }
+    >();
+    const rankedPassages: Array<{ readonly rank: number; readonly passage: MemoryPassage }> = [];
     let staleExcluded = 0;
     let unauthorizedExcluded = 0;
-    for (const candidate of found.candidates) {
+    for (const [rank, candidate] of found.candidates.entries()) {
       if (
         candidate.key.namespace !== checkedAccess.namespace ||
         candidate.source.id !== candidate.key.id ||
@@ -451,45 +468,62 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
           reason: "corrupt",
         });
       }
-      let document = documents.get(candidate.key.id);
-      if (document === undefined) {
-        document = yield* readDocument(candidate.key);
-        documents.set(candidate.key.id, document);
-      }
+      const group = groups.get(candidate.key.id);
+      if (group === undefined) {
+        groups.set(candidate.key.id, { key: candidate.key, candidates: [{ rank, candidate }] });
+      } else group.candidates.push({ rank, candidate });
+    }
+    const maxSourceBytes = checkedLimits.maxSourceBytes ?? 16_777_216;
+    let sourceBytes = 0;
+    for (const group of groups.values()) {
+      yield* Effect.yieldNow;
+      const document = yield* readDocument(group.key);
       if (document === null || document._tag === "WithdrawnMemoryDocument") {
-        staleExcluded += 1;
+        staleExcluded += group.candidates.length;
         continue;
       }
       if (!document.scopes.includes(checkedAccess.scope)) {
-        unauthorizedExcluded += 1;
+        unauthorizedExcluded += group.candidates.length;
         continue;
       }
-      if (
-        document.generation !== candidate.sourceGeneration ||
-        document.source.revision !== candidate.source.revision ||
-        document.source.locator !== candidate.source.locator
-      ) {
-        staleExcluded += 1;
-        continue;
-      }
-      let encodedDocument = encodedDocuments.get(document.key.id);
-      if (encodedDocument === undefined) {
-        encodedDocument = Encoding.encodeHex(document.content.text);
-        encodedDocuments.set(document.key.id, encodedDocument);
-      }
-      if (!sameExcerpt(encodedDocument, candidate, profile.maxChunkBytes)) {
-        staleExcluded += 1;
-        continue;
-      }
-      passages.push(
-        MemoryPassage.make({
-          version: 1,
-          source: document.source,
-          passageId: candidate.passageId,
-          content: { ...document.content, text: candidate.text },
-        }),
+      const current = group.candidates.filter(
+        ({ candidate }) =>
+          document.generation === candidate.sourceGeneration &&
+          document.source.revision === candidate.source.revision &&
+          document.source.locator === candidate.source.locator,
       );
+      staleExcluded += group.candidates.length - current.length;
+      if (current.length === 0) continue;
+      const encoded = JSON.stringify(document);
+      const remainingSourceBytes = maxSourceBytes - sourceBytes;
+      const encodedBytes = encoded.length <= remainingSourceBytes ? byteLength(encoded) : undefined;
+      if (encodedBytes === undefined || encodedBytes > remainingSourceBytes) {
+        return yield* SemanticMemoryError.make({
+          operation: "query source bytes",
+          reason: "budget",
+        });
+      }
+      sourceBytes += encodedBytes;
+      const encodedDocument = Encoding.encodeHex(document.content.text);
+      for (const { rank, candidate } of current) {
+        if (!sameExcerpt(encodedDocument, candidate, profile.maxChunkBytes)) {
+          staleExcluded += 1;
+          continue;
+        }
+        rankedPassages.push({
+          rank,
+          passage: MemoryPassage.make({
+            version: 1,
+            source: document.source,
+            passageId: candidate.passageId,
+            content: { ...document.content, text: candidate.text },
+          }),
+        });
+      }
     }
+    const passages = rankedPassages
+      .sort((left, right) => left.rank - right.rank)
+      .map(({ passage }) => passage);
     return SemanticQueryResult.make({
       lookup: passages.length === 0 ? { _tag: "NoMatch" } : { _tag: "Found", passages },
       scannedChunks: found.scannedChunks,

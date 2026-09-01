@@ -381,6 +381,7 @@ describe("optional semantic workflows", () => {
     const query = querySemanticMemory("queue", access, {
       ...queryLimits,
       maxCandidates: 128,
+      maxSourceBytes: byteLength(JSON.stringify(test.state.current)),
       timeoutMillis: 10_000,
     }).pipe(
       Effect.provideService(SemanticMemoryIndex, {
@@ -395,6 +396,98 @@ describe("optional semantic workflows", () => {
         staleExcluded: 0,
       });
       expect(test.state.reads).toBe(1);
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect(
+    "groups source reads without changing rank and bounds aggregate UTF-8 source input",
+    () => {
+      const test = probe();
+      const otherKey = MemoryKey.make({ ...key, id: "other" });
+      const other = ActiveMemoryDocument.make({
+        ...document,
+        key: otherKey,
+        source: { ...document.source, id: otherKey.id, locator: "chat://other/1" },
+        content: { ...document.content, text: '"🌊"\\ tail' },
+      });
+      const laterKey = MemoryKey.make({ ...key, id: "later" });
+      test.state.candidates = [
+        candidate("Dan 🌊"),
+        MemoryIndexCandidate.make({ ...candidate('"🌊"'), key: otherKey, source: other.source }),
+        MemoryIndexCandidate.make({ ...candidate(" propose", 1), startByte: 8, endByte: 16 }),
+        MemoryIndexCandidate.make({
+          ...candidate("missing"),
+          key: laterKey,
+          source: { ...document.source, id: laterKey.id },
+        }),
+      ];
+      const reads: Array<string> = [];
+      const sourceBytes = [document, other].reduce(
+        (total, item) => total + new TextEncoder().encode(JSON.stringify(item)).byteLength,
+        0,
+      );
+      const read = MemoryReader.of({
+        get: (requested) =>
+          Effect.sync(() => {
+            reads.push(requested.id);
+            return requested.id === key.id ? document : requested.id === otherKey.id ? other : null;
+          }),
+      });
+      return Effect.gen(function* () {
+        expect(
+          yield* querySemanticMemory("queue", access, {
+            ...queryLimits,
+            maxSourceBytes: sourceBytes - 1,
+          }).pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "SemanticMemoryError",
+          operation: "query source bytes",
+          reason: "budget",
+        });
+        expect(reads).toEqual([key.id, otherKey.id]);
+        reads.length = 0;
+        const exact = yield* querySemanticMemory("queue", access, {
+          ...queryLimits,
+          maxSourceBytes: sourceBytes,
+        });
+        expect(reads).toEqual([key.id, otherKey.id, laterKey.id]);
+        expect(exact).toMatchObject({
+          staleExcluded: 1,
+          lookup: {
+            _tag: "Found",
+            passages: [
+              { source: document.source, passageId: "chunk:0", content: { text: "Dan 🌊" } },
+              { source: other.source, passageId: "chunk:0", content: { text: '"🌊"' } },
+              { source: document.source, passageId: "chunk:1", content: { text: " propose" } },
+            ],
+          },
+        });
+      }).pipe(Effect.provideService(MemoryReader, read), Effect.provide(test.layer));
+    },
+  );
+
+  it.effect("does not charge missing, withdrawn, unauthorized, or identity-stale sources", () => {
+    const test = probe();
+    test.state.candidates = [candidate("Dan 🌊"), candidate("Dan 🌊", 1)];
+    const largeContent = { ...document.content, text: "🌊".repeat(512) };
+    return Effect.gen(function* () {
+      for (const current of [
+        null,
+        withdrawn,
+        ActiveMemoryDocument.make({ ...corrected, content: largeContent }),
+        ActiveMemoryDocument.make({ ...document, scopes: [], content: largeContent }),
+      ]) {
+        test.state.current = current;
+        expect(
+          yield* querySemanticMemory("queue", access, { ...queryLimits, maxSourceBytes: 1 }),
+        ).toMatchObject({
+          lookup: { _tag: "NoMatch" },
+          staleExcluded:
+            current?._tag === "ActiveMemoryDocument" && current.scopes.length === 0 ? 0 : 2,
+          unauthorizedExcluded:
+            current?._tag === "ActiveMemoryDocument" && current.scopes.length === 0 ? 2 : 0,
+        });
+      }
     }).pipe(Effect.provide(test.layer));
   });
 

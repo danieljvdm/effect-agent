@@ -679,6 +679,15 @@ never assigned to corrected text. A source correction may temporarily reduce rec
 finishes. Missing, withdrawn, or revoked sources cannot pass checks begun after the authoritative
 change. Already captured views may finish, as described under withdrawal.
 
+Queries group candidates by source, read each source once, and restore the original index ranking
+after validation. Full source documents and their excerpt-check encodings are local to one group.
+`SemanticQueryLimits.maxSourceBytes` separately bounds the aggregate UTF-8 JSON of distinct
+authorized sources with generation, revision, and locator matches. It defaults to 16 MiB and can
+be set up to 64 MiB. Missing, withdrawn, unauthorized, and identity-stale sources are excluded
+without consuming this budget. Exceeding it returns a typed `budget` error with no partial result.
+Reader allocation, decoding, and one source's serialization precede this check; it is not a
+whole-process heap limit. The indexing limit with the same name bounds one source's text instead.
+
 `SemanticQueryResult` reports scanned chunks, excluded stale and unauthorized candidates, query
 embedding usage when the provider supplies it, and whether registered builds are incomplete.
 `incomplete: false` is not a global watermark: the host still owns discovery and required freshness.
