@@ -3,4 +3,4 @@
 "@effect-agent/engine": patch
 ---
 
-Deduplicate equivalent recalled JSON metadata regardless of object member order. Load transient references only after canonical context compaction succeeds.
+Deduplicate equivalent recalled JSON metadata regardless of object member order. Load transient references after initial canonical compaction, then compact further when needed to fit the complete prompt.

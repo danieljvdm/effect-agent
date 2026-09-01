@@ -36,6 +36,7 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
+import { CLEARED_TOOL_RESULT } from "../src/compaction.ts";
 import {
   AgentRuntime,
   CompactionError,
@@ -328,6 +329,241 @@ layer(testLayer)("transient model context", (it) => {
       expect(failureFrom(exit)).toEqual(compactionFailure);
       expect(yield* Ref.get(loads)).toBe(1);
       expect(requests).toHaveLength(1);
+    }),
+  );
+
+  it.effect("compacts the canonical basis when the loaded snapshot exceeds admission", () =>
+    Effect.gen(function* () {
+      const requests: Array<Prompt.Prompt> = [];
+      const Search = Tool.make("search", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Search);
+      const model = Model.make(
+        "scripted",
+        "transient-post-load-compaction",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (request) => {
+              requests.push(request.prompt);
+              if (requests.length <= 2) {
+                return Stream.fromIterable<Response.StreamPartEncoded>([
+                  {
+                    type: "tool-call",
+                    id: `search-${requests.length}`,
+                    name: "search",
+                    params: {},
+                    providerExecuted: false,
+                  },
+                  {
+                    type: "finish",
+                    reason: "tool-calls",
+                    usage: { inputTokens: {}, outputTokens: {} },
+                  },
+                ]);
+              }
+              return Stream.fromIterable(finalParts);
+            },
+          }),
+        ),
+      );
+      const agent = Agent.withModel(
+        Agent.make("transient-post-load-compaction", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Search twice, then answer.",
+          toolkit: tools,
+          policy: AgentPolicy.make({
+            maxTurns: 3,
+            maxToolCalls: 2,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            contextTokenLimit: 2_500,
+            compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "prune" }),
+          }),
+        }),
+        model,
+      );
+      const loads = yield* Ref.make(0);
+      const compactionTargets: Array<number | undefined> = [];
+      const toolCalls = yield* Ref.make(0);
+      const result = yield* AgentRuntime.run(agent, "question").pipe(
+        Effect.provideService(RunContextPreparation, {
+          transientContext: {
+            load: () => Ref.update(loads, (count) => count + 1).pipe(Effect.as("snapshot")),
+          },
+        }),
+        Effect.provideService(ContextCompactor, {
+          estimate: (messages) => {
+            const activeToolResults = messages.reduce(
+              (count, message) =>
+                count +
+                (message.role === "tool" &&
+                message.content.some(
+                  (part) => part.type === "tool-result" && part.result !== CLEARED_TOOL_RESULT,
+                )
+                  ? 1
+                  : 0),
+              0,
+            );
+            return (
+              messages.length * 50 +
+              activeToolResults * 900 +
+              (JSON.stringify(messages).includes("snapshot") ? 600 : 0)
+            );
+          },
+          compact: (request) => {
+            compactionTargets.push(request.targetTokens);
+            return Stream.succeed({ kind: "clear-tool-results" as const, through: 4 });
+          },
+        }),
+        Effect.provide(
+          tools.toLayer({
+            search: () =>
+              Ref.getAndUpdate(toolCalls, (count) => count + 1).pipe(
+                Effect.map((count) => (count === 0 ? "first-result" : "second-result")),
+              ),
+          }),
+        ),
+      );
+
+      expect(result.output).toBe("done");
+      expect(yield* Ref.get(loads)).toBe(3);
+      expect(compactionTargets).toEqual([1_750]);
+      expect(requests).toHaveLength(3);
+      expect(JSON.stringify(requests[2]?.content)).not.toContain("first-result");
+      expect(JSON.stringify(requests[2]?.content)).toContain("second-result");
+      expect(JSON.stringify(requests[2]?.content)).toContain("snapshot");
+    }),
+  );
+
+  it.effect("does not carry a prior Turn summary allowance into post-load compaction", () =>
+    Effect.gen(function* () {
+      const requests: Array<Prompt.Prompt> = [];
+      const Search = Tool.make("search", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Search);
+      const model = Model.make(
+        "scripted",
+        "transient-prior-summary",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (request) => {
+              requests.push(request.prompt);
+              if (requests.length <= 3) {
+                return Stream.fromIterable<Response.StreamPartEncoded>([
+                  {
+                    type: "tool-call",
+                    id: `search-${requests.length}`,
+                    name: "search",
+                    params: {},
+                    providerExecuted: false,
+                  },
+                  {
+                    type: "finish",
+                    reason: "tool-calls",
+                    usage: { inputTokens: {}, outputTokens: {} },
+                  },
+                ]);
+              }
+              return Stream.fromIterable(finalParts);
+            },
+          }),
+        ),
+      );
+      const agent = Agent.withModel(
+        Agent.make("transient-prior-summary", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Search three times, then answer.",
+          toolkit: tools,
+          policy: AgentPolicy.make({
+            maxTurns: 4,
+            maxToolCalls: 3,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            contextTokenLimit: 2_100,
+            compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
+          }),
+        }),
+        model,
+      );
+      const loads = yield* Ref.make(0);
+      const compactionPasses: Array<{
+        readonly sourceLength: number;
+        readonly targetTokens: number | undefined;
+        readonly forceSummarize: boolean;
+      }> = [];
+      const toolCalls = yield* Ref.make(0);
+      const results = ["first-result", "second-result", "third-result"];
+      const result = yield* AgentRuntime.run(agent, "question").pipe(
+        Effect.provideService(RunContextPreparation, {
+          transientContext: {
+            load: () => Ref.update(loads, (count) => count + 1).pipe(Effect.as("snapshot")),
+          },
+        }),
+        Effect.provideService(ContextCompactor, {
+          estimate: (messages) => {
+            const activeToolResults = messages.reduce(
+              (count, message) =>
+                count +
+                (message.role === "tool" &&
+                message.content.some(
+                  (part) => part.type === "tool-result" && part.result !== CLEARED_TOOL_RESULT,
+                )
+                  ? 1
+                  : 0),
+              0,
+            );
+            return (
+              messages.length * 50 +
+              activeToolResults * 700 +
+              (JSON.stringify(messages).includes("snapshot") ? 500 : 0)
+            );
+          },
+          compact: (request) => {
+            compactionPasses.push({
+              sourceLength: request.source.content.length,
+              targetTokens: request.targetTokens,
+              forceSummarize: request.forceSummarize,
+            });
+            return request.source.content.length === 6
+              ? Stream.succeed({
+                  kind: "summarize" as const,
+                  through: 4,
+                  summary: "first search summarized",
+                })
+              : Stream.succeed({ kind: "clear-tool-results" as const, through: 6 });
+          },
+        }),
+        Effect.provide(
+          tools.toLayer({
+            search: () =>
+              Ref.getAndUpdate(toolCalls, (count) => count + 1).pipe(
+                Effect.map((count) => results[count] ?? "unexpected-result"),
+              ),
+          }),
+        ),
+      );
+
+      expect(result.output).toBe("done");
+      expect(yield* Ref.get(loads)).toBe(4);
+      expect(compactionPasses).toEqual([
+        { sourceLength: 6, targetTokens: 1_450, forceSummarize: false },
+        { sourceLength: 8, targetTokens: 1_450, forceSummarize: false },
+      ]);
+      expect(requests).toHaveLength(4);
+      expect(JSON.stringify(requests[3]?.content)).toContain("first search summarized");
+      expect(JSON.stringify(requests[3]?.content)).not.toContain("second-result");
+      expect(JSON.stringify(requests[3]?.content)).toContain("third-result");
+      expect(JSON.stringify(requests[3]?.content)).toContain("snapshot");
     }),
   );
 

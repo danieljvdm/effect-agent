@@ -4263,10 +4263,6 @@ const makeTurn = <
           finalAnswerOnly = true;
         }
       }
-      // Reference context is loaded only after native compaction has produced
-      // and admitted the Turn's final canonical basis. It stays outside
-      // modelContext so compaction can neither cover nor summarize it. The
-      // resulting snapshot is retained for a same-Turn overflow retry.
       const transientContext =
         options.transientContext === undefined
           ? Prompt.empty
@@ -4282,16 +4278,60 @@ const makeTurn = <
           ? canonicalDecorationTokens
           : outputContractTokens + (yield* estimateContextTokens(context, derivedPrompt.content));
       if (!context.finalizing && options.transientContext !== undefined) {
-        const prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
-        const preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
         const contextTokenLimit = policy.contextTokenLimit;
-        if (contextTokenLimit !== undefined && preparedEstimate > contextTokenLimit) {
-          return yield* ContextBudgetError.make({
-            message: `Transient context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
-            estimatedTokens: preparedEstimate,
-            targetTokens: contextTokenLimit,
-            completionReserveTokens: policy.completionReserveTokens,
-          });
+        const tokenCallTarget =
+          policy.tokenBudget === undefined || finalAnswerOnly
+            ? undefined
+            : Math.max(
+                0,
+                policy.tokenBudget -
+                  (context.inputTokens + context.outputTokens) -
+                  policy.completionReserveTokens,
+              );
+        const fullTarget =
+          tokenCallTarget === undefined
+            ? contextTokenLimit
+            : contextTokenLimit === undefined
+              ? tokenCallTarget
+              : Math.min(tokenCallTarget, contextTokenLimit);
+        const sourceTarget =
+          fullTarget === undefined ? undefined : Math.max(0, fullTarget - derivedPromptTokens);
+        let prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
+        let preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
+        const contextPressure =
+          contextTokenLimit !== undefined && preparedEstimate > contextTokenLimit;
+        const tokenPressure = tokenCallTarget !== undefined && preparedEstimate > tokenCallTarget;
+        const currentCompactionAllowance = context.compactionTurn.turn === turn;
+        const summarizedThisTurn =
+          currentCompactionAllowance && context.compactionTurn.applied.has("summarize");
+        const prunedThisTurn =
+          currentCompactionAllowance && context.compactionTurn.applied.has("clear-tool-results");
+        const canCompact =
+          !summarizedThisTurn &&
+          (!prunedThisTurn || (!tokenPressure && policy.compaction.mode !== "prune"));
+        if (
+          (contextPressure || tokenPressure) &&
+          sourceTarget !== undefined &&
+          sourceTarget > 0 &&
+          canCompact
+        ) {
+          context.compaction.lastCompactionTurn = turn;
+          const outcome = yield* compactContext(
+            agent,
+            context,
+            modelContext.prompt,
+            turn,
+            options,
+            sourceTarget,
+            prunedThisTurn,
+            !tokenPressure,
+          );
+          preEvents = [...preEvents, ...outcome.events];
+          prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
+          preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
+        }
+        if (context.tokenExhausted) {
+          finalAnswerOnly = true;
         }
         const preparedTokenCallTarget =
           policy.tokenBudget === undefined || finalAnswerOnly
@@ -4302,6 +4342,14 @@ const makeTurn = <
                   (context.inputTokens + context.outputTokens) -
                   policy.completionReserveTokens,
               );
+        if (contextTokenLimit !== undefined && preparedEstimate > contextTokenLimit) {
+          return yield* ContextBudgetError.make({
+            message: `Transient context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
+            estimatedTokens: preparedEstimate,
+            targetTokens: contextTokenLimit,
+            completionReserveTokens: policy.completionReserveTokens,
+          });
+        }
         if (preparedTokenCallTarget !== undefined && preparedEstimate > preparedTokenCallTarget) {
           const error = AgentPolicyError.make({
             limit: "tokens",

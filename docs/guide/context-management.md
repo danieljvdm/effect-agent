@@ -43,8 +43,10 @@ the full encoded input as a JSON user message.
 
 Before each turn, `RunContextPreparation.hook.prepare` transforms the source prompt. The engine
 compacts the prepared history, then loads optional references through
-`RunContextPreparation.transientContext.load`. It appends the references and derived run status
-to the compacted view and adds the output contract. Compaction summaries never receive transient references. Durable
+`RunContextPreparation.transientContext.load`. If the references exceed the remaining budget,
+the engine can compact canonical history further while keeping the same reference snapshot.
+It appends the references and derived run status to the compacted view and adds the output
+contract. Compaction summaries never receive transient references. Durable
 recovery rebuilds the committed model view before applying prompt preparation; a transient loader
 receives the current Attempt's official source, Thread ID, Run ID, Turn ID, and Turn number.
 
@@ -271,8 +273,10 @@ Put `hook`, `transientContext`, and
 `compactor` in the same service value when using all three.
 
 The engine reloads transient context in every normal or grace Turn and after durable recovery,
-after canonical context preparation and compaction succeed. Failed compaction does not read
-transient sources. A same-Turn provider-overflow retry reuses that Turn's snapshot. Each provider call still
+after canonical context preparation and initial compaction succeed. Failure in that initial
+phase does not read transient sources. Post-load admission can compact canonical history further
+to make room for the references. This pass and a same-Turn provider-overflow retry reuse the
+loaded snapshot. Each provider call still
 has to fit `contextTokenLimit`; transient text participates in output-contract, run-status, token
 budget, and completion-reserve admission. Oversized context fails before provider I/O.
 

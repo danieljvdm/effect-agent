@@ -39344,9 +39344,29 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
   const derivedPrompt = options3.transientContext === undefined ? canonicalDecoration : yield* outgoingModelPrompt(policy2, context3, transientContext, turn, priorToolCalls);
   const derivedPromptTokens = options3.transientContext === undefined ? canonicalDecorationTokens : outputContractTokens + (yield* estimateContextTokens(context3, derivedPrompt.content));
   if (!context3.finalizing && options3.transientContext !== undefined) {
-    const prepared = buildCompactedView(modelContext.prompt.content, context3.compaction);
-    const preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
     const contextTokenLimit = policy2.contextTokenLimit;
+    const tokenCallTarget = policy2.tokenBudget === undefined || finalAnswerOnly ? undefined : Math.max(0, policy2.tokenBudget - (context3.inputTokens + context3.outputTokens) - policy2.completionReserveTokens);
+    const fullTarget = tokenCallTarget === undefined ? contextTokenLimit : contextTokenLimit === undefined ? tokenCallTarget : Math.min(tokenCallTarget, contextTokenLimit);
+    const sourceTarget = fullTarget === undefined ? undefined : Math.max(0, fullTarget - derivedPromptTokens);
+    let prepared = buildCompactedView(modelContext.prompt.content, context3.compaction);
+    let preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
+    const contextPressure = contextTokenLimit !== undefined && preparedEstimate > contextTokenLimit;
+    const tokenPressure = tokenCallTarget !== undefined && preparedEstimate > tokenCallTarget;
+    const currentCompactionAllowance = context3.compactionTurn.turn === turn;
+    const summarizedThisTurn = currentCompactionAllowance && context3.compactionTurn.applied.has("summarize");
+    const prunedThisTurn = currentCompactionAllowance && context3.compactionTurn.applied.has("clear-tool-results");
+    const canCompact = !summarizedThisTurn && (!prunedThisTurn || !tokenPressure && policy2.compaction.mode !== "prune");
+    if ((contextPressure || tokenPressure) && sourceTarget !== undefined && sourceTarget > 0 && canCompact) {
+      context3.compaction.lastCompactionTurn = turn;
+      const outcome = yield* compactContext(agent2, context3, modelContext.prompt, turn, options3, sourceTarget, prunedThisTurn, !tokenPressure);
+      preEvents = [...preEvents, ...outcome.events];
+      prepared = buildCompactedView(modelContext.prompt.content, context3.compaction);
+      preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
+    }
+    if (context3.tokenExhausted) {
+      finalAnswerOnly = true;
+    }
+    const preparedTokenCallTarget = policy2.tokenBudget === undefined || finalAnswerOnly ? undefined : Math.max(0, policy2.tokenBudget - (context3.inputTokens + context3.outputTokens) - policy2.completionReserveTokens);
     if (contextTokenLimit !== undefined && preparedEstimate > contextTokenLimit) {
       return yield* ContextBudgetError.make({
         message: `Transient context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
@@ -39355,7 +39375,6 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
         completionReserveTokens: policy2.completionReserveTokens
       });
     }
-    const preparedTokenCallTarget = policy2.tokenBudget === undefined || finalAnswerOnly ? undefined : Math.max(0, policy2.tokenBudget - (context3.inputTokens + context3.outputTokens) - policy2.completionReserveTokens);
     if (preparedTokenCallTarget !== undefined && preparedEstimate > preparedTokenCallTarget) {
       const error2 = AgentPolicyError.make({
         limit: "tokens",
