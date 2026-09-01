@@ -309,8 +309,13 @@ corpus into a framework store.
 
 The host selects a namespace and access scope. A document explicitly lists the scopes allowed to
 recall it; an empty list grants none. No scope name, shared persona, channel, or DM is enabled by
-default. Call `revalidateMemoryLookup(candidates, access)` inside the reader supplied to
-`recallMemory`, immediately before composition. It requires only `MemoryReader`.
+default. Call `revalidateMemoryLookup(candidates, access, limits)` inside the reader supplied to
+`recallMemory`, immediately before composition. It requires only `MemoryReader`. The optional
+third argument accepts `maxInputBytes` from the recall limits, defaulting to 16 MiB and capped
+at 64 MiB. Revalidation reads one authoritative source at a time and checks aggregate UTF-8
+replacement JSON before retaining it, including duplicate passages. Exceeding this bound fails
+with `MemoryRecallError` reason `budget` before reading later source groups. A single reader
+result and its schema decoding precede the aggregate retention bound.
 
 Validation reloads each candidate's source, excludes missing, withdrawn, or access-revoked
 documents, and replaces stale text with the current document. Even a same-revision excerpt gets

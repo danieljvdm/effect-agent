@@ -71,6 +71,75 @@ const recall = (lookup = candidates) =>
   );
 
 describe("authoritative memory validation", () => {
+  it.effect("bounds retained replacements while preserving rank and one read per source", () =>
+    Effect.gen(function* () {
+      const documents = ["a", "b", "c"].map((id) =>
+        ActiveMemoryDocument.make({
+          ...document,
+          key: { ...key, id },
+          source: { ...document.source, id },
+          content: { ...document.content, text: `🌊 ${"history ".repeat(1_000)}` },
+        }),
+      );
+      const selected = [documents[0]!, documents[1]!, documents[0]!, documents[2]!];
+      const excerpts = selected.map((current, index) =>
+        MemoryPassage.make({
+          ...candidate,
+          source: current.source,
+          passageId: `excerpt-${index}`,
+          content: { ...current.content, text: "🌊" },
+        }),
+      );
+      const bytes = (passage: MemoryPassage) =>
+        new TextEncoder().encode(JSON.stringify(passage)).byteLength;
+      const maxInputBytes = excerpts.reduce((total, passage) => total + bytes(passage), 0);
+      const reads: Array<string> = [];
+      const reader = MemoryReader.of({
+        get: (requested) =>
+          Effect.sync(() => {
+            reads.push(requested.id);
+            return documents.find((current) => current.key.id === requested.id) ?? null;
+          }),
+      });
+      expect(
+        yield* revalidateMemoryLookup({ _tag: "Found", passages: excerpts }, access, {
+          maxInputBytes,
+        }).pipe(Effect.provideService(MemoryReader, reader)),
+      ).toEqual({ _tag: "Found", passages: excerpts });
+      expect(reads).toEqual(["a", "b", "c"]);
+      expect(JSON.stringify(documents[0]).length).toBeGreaterThan(maxInputBytes);
+      reads.length = 0;
+      expect(
+        yield* revalidateMemoryLookup({ _tag: "Found", passages: excerpts }, access, {
+          maxInputBytes: bytes(excerpts[0]!) + bytes(excerpts[2]!) + bytes(excerpts[1]!) - 1,
+        }).pipe(Effect.provideService(MemoryReader, reader), Effect.flip),
+      ).toMatchObject({
+        _tag: "MemoryRecallError",
+        reason: "budget",
+        sourceId: "b",
+      });
+      expect(reads).toEqual(["a", "b"]);
+      reads.length = 0;
+      const stale = MemoryPassage.make({
+        ...excerpts[0]!,
+        source: { ...excerpts[0]!.source, revision: "old" },
+      });
+      expect(
+        yield* revalidateMemoryLookup({ _tag: "Found", passages: [stale] }, access, {
+          maxInputBytes,
+        }).pipe(Effect.provideService(MemoryReader, reader), Effect.flip),
+      ).toMatchObject({ reason: "budget", sourceId: "a" });
+      expect(reads).toEqual(["a"]);
+      reads.length = 0;
+      expect(
+        yield* revalidateMemoryLookup({ _tag: "Found", passages: excerpts }, access, {
+          maxInputBytes: 0,
+        }).pipe(Effect.provideService(MemoryReader, reader), Effect.flip),
+      ).toMatchObject({ reason: "invalid-input" });
+      expect(reads).toEqual([]);
+    }),
+  );
+
   it.effect(
     "replaces stale passages with the correction, preserving source attribution and original times",
     () =>

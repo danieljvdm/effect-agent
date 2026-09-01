@@ -43911,46 +43911,73 @@ var recallMemory = exports_Effect.fn("recallMemory")(function* (sources, limits,
   }));
 });
 // packages/capabilities/src/memory-lifecycle.ts
+var RevalidationLimits = exports_Schema.Struct({
+  maxInputBytes: MemoryRecallLimits.fields.maxInputBytes
+});
+
 class MemoryAccess extends exports_Schema.Class("@effect-agent/capabilities/MemoryAccess")({
   namespace: MemoryKey.fields.namespace,
   scope: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024))
 }) {
 }
-var revalidateMemoryLookup = exports_Effect.fn("revalidateMemoryLookup")(function* (lookup2, access3) {
+var revalidateMemoryLookup = exports_Effect.fn("revalidateMemoryLookup")(function* (lookup2, access3, limits = {}) {
+  const decodedLimits = yield* exports_Schema.decodeUnknownEffect(RevalidationLimits)(limits).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Invalid revalidation limits" })));
   const decodedAccess = yield* exports_Schema.decodeUnknownEffect(MemoryAccess)(access3).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Invalid host memory access" })));
   const decoded = yield* exports_Schema.decodeUnknownEffect(MemoryLookup)(lookup2).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Malformed memory candidates" })));
   if (decoded._tag !== "Found")
     return decoded;
   const reader = yield* MemoryReader;
-  const documents = new Map;
+  const groups = new Map;
+  for (const [index2, candidate] of decoded.passages.entries()) {
+    const group2 = groups.get(candidate.source.id);
+    if (group2 === undefined)
+      groups.set(candidate.source.id, [{ candidate, index: index2 }]);
+    else
+      group2.push({ candidate, index: index2 });
+  }
   const passages = [];
-  for (const candidate of decoded.passages) {
-    let document = documents.get(candidate.source.id);
-    if (document === undefined) {
-      const key = MemoryKey.make({ namespace: decodedAccess.namespace, id: candidate.source.id });
-      document = yield* reader.get(key).pipe(exports_Effect.flatMap((value4) => exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument))(value4).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "validate source view", reason: "corrupt" })))));
-      if (document !== null && (document.key.namespace !== key.namespace || document.key.id !== key.id || document.source.id !== key.id)) {
-        return yield* MemoryStorageError.make({
-          operation: "validate source identity",
-          reason: "corrupt"
-        });
-      }
-      documents.set(candidate.source.id, document);
+  const maxInputBytes = decodedLimits.maxInputBytes ?? 16777216;
+  let inputBytes = 0;
+  for (const [sourceId, group2] of groups) {
+    const key = MemoryKey.make({ namespace: decodedAccess.namespace, id: sourceId });
+    const document = yield* reader.get(key).pipe(exports_Effect.flatMap((value4) => exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument))(value4).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "validate source view", reason: "corrupt" })))));
+    if (document !== null && (document.key.namespace !== key.namespace || document.key.id !== key.id || document.source.id !== key.id)) {
+      return yield* MemoryStorageError.make({
+        operation: "validate source identity",
+        reason: "corrupt"
+      });
     }
     if (document === null || document._tag === "WithdrawnMemoryDocument" || !document.scopes.includes(decodedAccess.scope))
       continue;
-    const sameExcerpt = document.source.revision === candidate.source.revision && document.content.text.includes(candidate.content.text);
-    passages.push(MemoryPassage.make({
-      version: 1,
-      source: document.source,
-      passageId: sameExcerpt ? candidate.passageId : "document",
-      content: {
-        ...document.content,
-        text: sameExcerpt ? candidate.content.text : document.content.text
+    for (const { candidate, index: index2 } of group2) {
+      const sameExcerpt = document.source.revision === candidate.source.revision && document.content.text.includes(candidate.content.text);
+      const passage = MemoryPassage.make({
+        version: 1,
+        source: document.source,
+        passageId: sameExcerpt ? candidate.passageId : "document",
+        content: {
+          ...document.content,
+          text: sameExcerpt ? candidate.content.text : document.content.text
+        }
+      });
+      const encoded = JSON.stringify(passage);
+      const remaining2 = maxInputBytes - inputBytes;
+      const encodedBytes3 = encoded.length <= remaining2 ? exports_Encoding.encodeHex(encoded).length / 2 : undefined;
+      if (encodedBytes3 === undefined || encodedBytes3 > remaining2) {
+        return yield* MemoryRecallError.make({
+          reason: "budget",
+          sourceId,
+          message: "Revalidated memory input encoding budget exceeded"
+        });
       }
-    }));
+      inputBytes += encodedBytes3;
+      passages.push({ passage, index: index2 });
+    }
   }
-  return passages.length === 0 ? { _tag: "NoMatch" } : { _tag: "Found", passages };
+  return passages.length === 0 ? { _tag: "NoMatch" } : {
+    _tag: "Found",
+    passages: passages.sort((left, right) => left.index - right.index).map(({ passage }) => passage)
+  };
 });
 // packages/capabilities/src/scheduling.ts
 var PositiveInt10 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
