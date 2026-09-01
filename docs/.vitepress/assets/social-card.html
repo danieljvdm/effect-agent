@@ -28,42 +28,69 @@
 
       h1 {
         position: absolute;
-        top: 131px;
-        left: 72px;
+        top: 37px;
+        left: 100px;
         margin: 0;
-        font-size: 98px;
+        font-size: 40px;
         font-weight: 570;
-        letter-spacing: -5px;
+        letter-spacing: -1.5px;
         line-height: 1.1;
       }
 
-      .description {
+      pre {
         position: absolute;
-        top: 267px;
-        left: 78px;
+        top: 112px;
+        right: 32px;
+        left: 32px;
         margin: 0;
-        font-size: 38px;
-        line-height: 1.3;
-        letter-spacing: -0.8px;
+        border-radius: 16px;
+        padding: 28px 24px;
+        background: #f8f9fb;
+        color: #273244;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 16.5px;
+        line-height: 31px;
+      }
+
+      code {
+        font: inherit;
+      }
+
+      .keyword {
+        color: #9250ac;
+      }
+
+      .call {
+        color: #245ac1;
+      }
+
+      .string {
+        color: #27734b;
+      }
+
+      .number {
+        color: #b04d2d;
+      }
+
+      .comment {
+        color: #687483;
       }
 
       .mark {
         position: absolute;
-        top: 151px;
-        right: 78px;
-        width: 252px;
-        height: 252px;
+        top: 32px;
+        left: 32px;
+        width: 52px;
+        height: 52px;
       }
 
       footer {
         position: absolute;
-        right: 78px;
-        bottom: 62px;
-        left: 78px;
+        right: 36px;
+        bottom: 32px;
+        left: 36px;
         display: flex;
         justify-content: space-between;
-        border-top: 1px solid #8ba3f2;
-        padding-top: 26px;
         font-family: "IBM Plex Mono", monospace;
         font-size: 20px;
         letter-spacing: -0.5px;
@@ -73,8 +100,18 @@
   <body>
     <main>
       <h1>Effect Agent</h1>
-      <p class="description">An agent harness toolkit<br />for TypeScript.</p>
       <img class="mark" src="../../public/mark.svg" alt="" />
+      <pre><code><span class="keyword">const</span> researcher = Agent.<span class="call">make</span>(<span class="string">"researcher"</span>, {
+  input: Schema.<span class="call">Struct</span>({ question: Schema.String, maxSources: Schema.Int }),
+  output: Schema.<span class="call">Struct</span>({
+    summary: Schema.String,
+    sources: Schema.<span class="call">Array</span>(Schema.String),
+  }),
+  instructions: <span class="string">"Follow the evidence. Cite your sources."</span>,
+  <span class="comment">// FactChecker is a Subagent</span>
+  toolkit: Toolkit.<span class="call">make</span>(SearchWeb, ReadPage, FactChecker.tool),
+  policy: AgentPolicy.<span class="call">make</span>({ maxTurns: <span class="number">6</span>, maxToolCalls: <span class="number">10</span>, maxDuration: <span class="string">"2 minutes"</span>, toolConcurrency: <span class="number">2</span> }),
+})</code></pre>
       <footer>
         <span>Built on Effect and Effect AI.</span>
         <span>effect-agent.com</span>
