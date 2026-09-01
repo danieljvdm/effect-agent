@@ -8,7 +8,7 @@ do not need that optional peer dependency.
 
 This private class E example proves the shipped Cloudflare Browser Run binding path against one
 temporary deployed Worker. The Worker resolves `env.BROWSER` through
-`BrowserQuickActionBrowserBinding.layer`, provides `browserQuickActionCaptureLayer`, and invokes a
+`CloudflareBrowser.layer` and invokes a
 `WebCapture.make` handler directly. It captures `https://example.com/` as bounded Markdown and
 keeps the stable `Example Domain` fact. It then invokes `WebCapture.makeScrape` with the `h1` and
 `a` selectors, validates the grouped heading result, and discards the rendered records. During the

@@ -1,9 +1,8 @@
-import { BrowserCrypto } from "@effect/platform-browser";
 import { describe, expect, it } from "@effect/vitest";
 import { env, runInDurableObject } from "cloudflare:test";
-import { Effect, Layer, Option, Tracer } from "effect";
+import { Effect, Option, Tracer } from "effect";
 
-import { CloudflareThreadClient, threadNamespaceLayer } from "../src/index.ts";
+import { CloudflareThreadClient } from "../src/index.ts";
 import { decodeThreadId } from "./fixtures.ts";
 import { telemetryProbe } from "./observability-fixture.ts";
 
@@ -24,9 +23,10 @@ describe("DEPLOY-016 native receiver invocation contract", () => {
           return span;
         },
       });
-      const clientLayer = CloudflareThreadClient.layer.pipe(
-        Layer.provide([threadNamespaceLayer(env, "TELEMETRY", options), BrowserCrypto.layer]),
-      );
+      const clientLayer = CloudflareThreadClient.layerFromBinding({
+        namespace: env.TELEMETRY,
+        ...(options.rpcTracing ? { rpcTracing: "TELEMETRY" } : {}),
+      });
       const failure = yield* Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
         return yield* client.readPage(threadId, request).pipe(Effect.flip);

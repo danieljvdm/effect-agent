@@ -547,6 +547,37 @@ export const browserQuickActionWorkersAiCaptureLayer = (): Layer.Layer<
     }),
   );
 
+/** Host-owned Quick Action binding and optional, separately billed extraction authority. */
+export interface CloudflareBrowserOptions extends BrowserQuickActionCaptureOptions {
+  readonly workersAi?: BrowserQuickActionWorkersAiPolicy;
+}
+
+/** Compose WebCapture handlers with the Cloudflare Quick Action adapter. */
+export const CloudflareBrowser = {
+  /**
+   * Supply a WebCapture definition and the resolved Worker browser binding.
+   * Supports capture, scrape, and extraction definitions without importing capabilities.
+   * Only PageCapture is provided; other handler requirements and errors stay visible.
+   * Extraction fails closed unless workersAi explicitly authorizes and accounts for it.
+   * Capture limits, typed failures, tracing, and scoped response cleanup are unchanged.
+   */
+  layer: <A, E, R>(
+    definition: { readonly handlers: Layer.Layer<A, E, R> },
+    options: CloudflareBrowserOptions,
+  ): Layer.Layer<A, E, Exclude<R, PageCapture>> => {
+    const capture =
+      options.workersAi === undefined
+        ? browserQuickActionCaptureLayer()
+        : browserQuickActionWorkersAiCaptureLayer().pipe(
+            Layer.provide(BrowserQuickActionWorkersAi.layer(options.workersAi)),
+          );
+
+    return definition.handlers.pipe(
+      Layer.provide(capture.pipe(Layer.provide(BrowserQuickActionBrowserBinding.layer(options)))),
+    );
+  },
+};
+
 const screenshotOptions = (request: PageScreenshotRequest): BrowserRunScreenshotOptions => {
   const options: BrowserRunBaseOptions = {};
   if (

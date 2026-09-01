@@ -18,7 +18,10 @@ import {
   ThreadRead,
   ThreadStore,
   DefinitionDigests,
+  DefinitionDigestInput,
   Digest,
+  type DigestError,
+  digestDefinitions,
   digestJson,
   DurableAgentRuntime,
   DurableRuntimeConfig,
@@ -261,6 +264,155 @@ const readLogTags = (threadId: ThreadId) =>
   });
 
 describe("NodeDurableRuntime", () => {
+  it.effect(
+    "compiles registrations in the host Scope and retains their services until shutdown",
+    () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          class Instructions extends Context.Service<
+            Instructions,
+            { readonly text: Effect.Effect<string> }
+          >()("test/RegisteredInstructions") {}
+          const active = yield* Ref.make(false);
+          const reads = yield* Ref.make(0);
+          const settled = yield* Deferred.make<void>();
+          const instructions = Layer.effect(
+            Instructions,
+            Effect.acquireRelease(
+              Ref.set(active, true).pipe(
+                Effect.as({
+                  text: Effect.gen(function* () {
+                    expect(yield* Ref.get(active)).toBe(true);
+                    yield* Ref.update(reads, (n) => n + 1);
+                    return "Answer as JSON.";
+                  }),
+                }),
+              ),
+              () => Ref.set(active, false),
+            ),
+          );
+          const model = yield* makeScriptedModel(() => finalParts('{"answer":"registered"}'));
+          const agent = Agent.withModel(
+            Agent.make("registered-node-agent", {
+              input: plannerDefinition.input,
+              output: plannerDefinition.output,
+              instructions: () => Effect.flatMap(Instructions, (service) => service.text),
+              toolkit: Toolkit.empty,
+              policy: plannerDefinition.policy,
+            }),
+            model,
+          );
+          const definitions = DefinitionDigestInput.make({
+            agent: { id: agent.definition.id, revision: 1 },
+            model: { provider: "scripted", name: "platform-node-test" },
+            tools: [],
+          });
+          const live = NodeDurableHost.layerRegistered(
+            [{ agent, definitions }],
+            runtimeOptions(filename, {
+              storageFailpoint: (location) =>
+                location === "ledger:finalize-settlement:after"
+                  ? Deferred.succeed(settled, undefined).pipe(Effect.asVoid)
+                  : Effect.void,
+            }),
+          );
+          const requirements: Assert<Equal<Layer.Services<typeof live>, Instructions>> = true;
+          const errors: Assert<
+            Equal<
+              Layer.Error<typeof live>,
+              DigestError | DurableWorkerFailure | NodeDurableRuntimeInitializationError
+            >
+          > = true;
+          expect(requirements && errors).toBe(true);
+          const digests = yield* digestDefinitions(definitions).pipe(
+            Effect.provide(NodeCrypto.layer),
+          );
+          const host = yield* Effect.gen(function* () {
+            const host = yield* NodeDurableHost;
+            expect(yield* Ref.get(reads)).toBe(0);
+            const receipt = yield* host.submit(
+              agent,
+              { question: "registered?" },
+              {
+                ...submitOptions("registered-node-thread", "registered-node-input"),
+                definitions: digests,
+              },
+            );
+            const worker = yield* host.runResolvedWorkers.pipe(Effect.forkChild);
+            yield* Deferred.await(settled);
+            const settlement = yield* host.awaitSettlement(receipt);
+            expect(settlement.outcome).toBe("completed");
+            yield* Fiber.interrupt(worker);
+            expect(yield* Ref.get(active)).toBe(true);
+            return host;
+          }).pipe(Effect.provide(live.pipe(Layer.provide(instructions))));
+          expect(yield* Ref.get(reads)).toBeGreaterThan(0);
+          expect(yield* Ref.get(active)).toBe(false);
+          expect(yield* host.admissionOpen).toBe(false);
+        }),
+      ),
+  );
+
+  it.effect.each(["failure", "defect", "timeout", "interruption"] as const)(
+    "releases registration dependencies when host setup ends in %s",
+    (mode) =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          class Resource extends Context.Service<Resource, {}>()("test/RegistrationResource") {}
+          const released = yield* Ref.make(false);
+          const started = yield* Deferred.make<void>();
+          const model = yield* makeScriptedModel(() => finalParts('{"answer":"unused"}'));
+          const agent = Agent.withModel(
+            Agent.make("registered-setup", {
+              input: plannerDefinition.input,
+              output: plannerDefinition.output,
+              instructions: () => Resource.pipe(Effect.as("unused")),
+              toolkit: Toolkit.empty,
+              policy: plannerDefinition.policy,
+            }),
+            model,
+          );
+          const preparation = Layer.effect(
+            RunContextPreparation,
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              if (mode === "failure") return yield* ContextSetupError.make({});
+              if (mode === "defect") return yield* Effect.die("setup defect");
+              return yield* Effect.never;
+            }),
+          );
+          const resource = Layer.effect(
+            Resource,
+            Effect.acquireRelease(Effect.succeed({}), () => Ref.set(released, true)),
+          );
+          const live = NodeDurableHost.layerRegistered(
+            [
+              {
+                agent,
+                definitions: DefinitionDigestInput.make({ agent: {}, model: {}, tools: [] }),
+              },
+            ],
+            { ...runtimeOptions(filename), runContext: preparation },
+          ).pipe(Layer.provide(resource));
+          const build = NodeDurableHost.pipe(Effect.provide(live));
+          const fiber = yield* (
+            mode === "timeout" ? build.pipe(Effect.timeout("1 second")) : build
+          ).pipe(Effect.forkChild);
+          yield* Deferred.await(started);
+          if (mode === "timeout") yield* TestClock.adjust("1 second");
+          if (mode === "interruption") yield* Fiber.interrupt(fiber);
+          const exit = yield* Fiber.await(fiber);
+          expect(Exit.isFailure(exit)).toBe(true);
+          expect(yield* Ref.get(released)).toBe(true);
+          if (mode === "failure")
+            expect(failureOf(exit)).toMatchObject({ _tag: "ContextSetupError" });
+          if (mode === "defect") expect(failureOf(exit)).toBe("setup defect");
+          if (mode === "interruption") expect(Exit.hasInterrupts(exit)).toBe(true);
+          if (mode === "timeout") expect(failureOf(exit)).toMatchObject({ _tag: "TimeoutError" });
+        }),
+      ),
+  );
+
   it("preserves independent service construction errors and requirements through runtime and host assembly", () => {
     const contextOnly = NodeDurableRuntime.layer({
       ...runtimeOptions("unused.sqlite"),
@@ -270,7 +422,7 @@ describe("NodeDurableRuntime", () => {
       ...runtimeOptions("unused.sqlite"),
       toolAuthorization: configuredAuthorization,
     });
-    const both = NodeDurableHost.layerStack({
+    const both = NodeDurableHost.layerRegistered([], {
       ...runtimeOptions("unused.sqlite"),
       runContext: configuredContext,
       toolAuthorization: configuredAuthorization,
@@ -294,6 +446,7 @@ describe("NodeDurableRuntime", () => {
     const hostErrors: Assert<
       Equal<
         Layer.Error<typeof both>,
+        | DigestError
         | NodeDurableRuntimeInitializationError
         | DurableWorkerFailure
         | ContextSetupError

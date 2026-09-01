@@ -1,12 +1,9 @@
 import { IdGenerator } from "@effect-agent/core";
 import { AgentRuntime, ThreadHistory } from "@effect-agent/engine";
-import {
-  dynamicWorkerCodeExecutorLayer,
-  dynamicWorkerImplementation,
-} from "@effect-agent/platform-cloudflare";
+import { CloudflareCodeMode, dynamicWorkerImplementation } from "@effect-agent/platform-cloudflare";
 import { Effect, Layer, Stream } from "effect";
 
-import { codeModeHandlersLayer } from "./agent.ts";
+import { codeMode, warehouseHandlersLayer } from "./agent.ts";
 import { liveAgent, scriptedAgent, scriptedWriteProbeAgent } from "./profiles.ts";
 import { isValidTenant, Warehouse, WarehouseObject, warehouseLayer } from "./warehouse-object.ts";
 
@@ -111,10 +108,10 @@ const runBound = (
   // provided INTO it (its handler runs with the captured construction
   // context); the Run additionally needs IdGenerator.
   const layers = Layer.mergeAll(
-    codeModeHandlersLayer.pipe(
-      Layer.provide(warehouseLayer(env.WAREHOUSE, tenant)),
-      Layer.provide(dynamicWorkerCodeExecutorLayer({ loader: env.LOADER })),
-    ),
+    CloudflareCodeMode.layer(codeMode, {
+      loader: env.LOADER,
+      handlers: warehouseHandlersLayer.pipe(Layer.provide(warehouseLayer(env.WAREHOUSE, tenant))),
+    }),
     IdGenerator.layer,
     ThreadHistory.layerTransient,
   );

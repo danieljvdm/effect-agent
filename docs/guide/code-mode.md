@@ -45,7 +45,7 @@ rows. The linked warehouse example replaces the fixed data with a brokered SQL q
 import { CodeMode } from "@effect-agent/capabilities";
 import { Agent, AgentPolicy, IdGenerator } from "@effect-agent/core";
 import { AgentRuntime, ThreadHistory, ToolExecutionClass } from "@effect-agent/engine";
-import { dynamicWorkerCodeExecutorLayer } from "@effect-agent/platform-cloudflare";
+import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -101,10 +101,10 @@ const analyst = Agent.make("invoice-analyst", {
 const AnalystLive = Layer.unwrap(
   Effect.gen(function* () {
     const env = yield* WorkerEnvironment;
-    const CodeModeLive = codeMode.handlers.pipe(
-      Layer.provide(InvoiceHandlers),
-      Layer.provide(dynamicWorkerCodeExecutorLayer({ loader: env.LOADER })),
-    );
+    const CodeModeLive = CloudflareCodeMode.layer(codeMode, {
+      loader: env.LOADER,
+      handlers: InvoiceHandlers,
+    });
     const ModelLive = OpenAiLanguageModel.model("gpt-4.1-mini").pipe(
       Layer.provide(
         OpenAiClient.layer({ apiKey: Redacted.make(env.OPENAI_API_KEY) }).pipe(
@@ -130,8 +130,10 @@ the [warehouse Worker](https://github.com/danieljvdm/effect-agent/blob/main/exam
 shows the example's HTTP behavior.
 
 `CodeMode.make` fixes the namespaces and methods visible to generated code. Include `codeMode.tool`
-in the agent's Toolkit and provide the selected Tool handlers and executor **to `codeMode.handlers`**.
-This captures the services used by the inner calls. The runtime supplies its own Tool broker.
+in the agent's Toolkit. `CloudflareCodeMode.layer` supplies the selected Tool handlers and executor
+at construction, capturing the services used by inner calls. Handler construction errors and
+remaining service requirements stay visible. The runtime supplies its own Tool broker.
+For a custom executor, provide it and the selected handlers directly to `codeMode.handlers`.
 
 Code Mode accepts only Tools annotated `readonly` and without approval requirements. That annotation
 does not make a database connection read-only. Enforce resource and tenant access inside handlers;
@@ -176,7 +178,8 @@ binding that gives a Worker access to `env.LOADER`.
 }
 ```
 
-The `dynamicWorkerCodeExecutorLayer({ loader })` in the example above uses that resolved binding.
+`CloudflareCodeMode.layer` uses that resolved binding. The lower-level
+`dynamicWorkerCodeExecutorLayer({ loader })` remains available for direct `CodeExecutor` access.
 
 See Cloudflare's [Dynamic Workers guide](https://developers.cloudflare.com/dynamic-workers/getting-started/)
 for Worker Loader setup and loading modes. This adapter uses `load()` for a fresh pass.

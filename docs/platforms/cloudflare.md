@@ -133,16 +133,15 @@ for Workers using the older `migrations` array.
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { CloudflareThreadClient, threadNamespaceLayer } from "@effect-agent/platform-cloudflare";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { Layer } from "effect";
+import { CloudflareThreadClient, type ThreadObjectRpc } from "@effect-agent/platform-cloudflare";
 
-export const threadClientLayer = (env: unknown) =>
-  CloudflareThreadClient.layer.pipe(
-    Layer.provide(threadNamespaceLayer(env, "THREADS")),
-    Layer.provide(BrowserCrypto.layer),
-  );
+export const threadClientLayer = (env: { THREADS: DurableObjectNamespace<ThreadObjectRpc> }) =>
+  CloudflareThreadClient.layerFromBinding({ namespace: env.THREADS });
 ```
+
+This constructor supplies the namespace and platform Crypto. Pass `rpcTracing: "THREADS"` only
+when the receiver also enables native RPC tracing. Keep `CloudflareThreadClient.layer` for
+custom Crypto or namespace composition, and `threadNamespaceLayer` for untyped environment lookup.
 
 In an authenticated handler, call `client.submit(agent, input, options)` with the thread ID,
 principal, idempotency key, and definition digests. Return its receipt after admission.

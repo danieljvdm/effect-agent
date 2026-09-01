@@ -814,3 +814,22 @@ export const dynamicWorkerCodeExecutorLayer = (
       return CodeExecutor.of({ execute: makeExecute(options, clock) });
     }),
   );
+
+/** Assemble Code Mode handlers with the isolated Dynamic Worker executor. */
+export const CloudflareCodeMode = {
+  /**
+   * Provide the selected tool handlers at construction, where Code Mode captures them.
+   * Their errors and remaining dependencies stay visible. The definition still owns the
+   * allowlist and limits; the runtime supplies the live Tool broker for each scoped pass.
+   */
+  layer: <A, E, R, Handlers, HandlerError, HandlerRequirements>(
+    definition: { readonly handlers: Layer.Layer<A, E, R> },
+    options: DynamicWorkerCodeExecutorOptions & {
+      readonly handlers: Layer.Layer<Handlers, HandlerError, HandlerRequirements>;
+    },
+  ) =>
+    definition.handlers.pipe(
+      Layer.provide(options.handlers),
+      Layer.provide(dynamicWorkerCodeExecutorLayer(options)),
+    ),
+};

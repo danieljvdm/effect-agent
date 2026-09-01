@@ -1,5 +1,7 @@
 import type { ThreadId, SubmissionId } from "@effect-agent/core";
 import {
+  compileRegistrations,
+  type AgentRegistration,
   DurableAgentRuntime,
   type AbortCommand,
   type AbortIntent,
@@ -29,8 +31,8 @@ import {
   type RetryCommand,
   type Settlement,
 } from "@effect-agent/thread";
-import type { Stream } from "effect";
-import { Context, type Crypto, Effect, Layer, Ref, Schema } from "effect";
+import { NodeCrypto } from "@effect/platform-node";
+import { type Stream, Context, type Crypto, Effect, Layer, Ref, Schema } from "effect";
 
 import {
   NodeDurableRuntime,
@@ -193,6 +195,34 @@ export class NodeDurableHost extends Context.Service<
     readonly runResolvedWorkers: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
   }
 >()("@effect-agent/platform-node/NodeDurableHost") {
+  /**
+   * Compile typed registrations and acquire the complete host in one Layer Scope.
+   * Node supplies Crypto; model, tool, instruction, and schema services remain required.
+   * Startup recovery and shutdown gates are unchanged. Workers start only when the caller
+   * runs runResolvedWorkers; this constructor never starts a background worker.
+   */
+  static layerRegistered<
+    const Entries extends ReadonlyArray<AgentRegistration>,
+    ContextError = never,
+    ContextRequirements = never,
+    AuthorizationError = never,
+    AuthorizationRequirements = never,
+  >(
+    registrations: Entries,
+    options: NodeDurableRuntimeOptions<
+      ContextError,
+      ContextRequirements,
+      AuthorizationError,
+      AuthorizationRequirements
+    >,
+  ) {
+    return Layer.unwrap(
+      Effect.map(compileRegistrations(registrations), (bindings) =>
+        NodeDurableHost.layerStack({ ...options, bindings }),
+      ),
+    ).pipe(Layer.provide(NodeCrypto.layer));
+  }
+
   /**
    * Host gates over an assembled `NodeDurableRuntime` stack. Bindings must carry the exact
    * digests stored by submitters. Omission registers no Agents, so resolved work fails closed.

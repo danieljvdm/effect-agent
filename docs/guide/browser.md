@@ -56,7 +56,9 @@ The `remote` setting is for local development. Deployments use the binding norma
 documents the binding, compatibility date, and remote-mode requirement in its
 [Quick Actions guide](https://developers.cloudflare.com/browser-run/quick-actions/).
 
-Provide `BrowserQuickActionBrowserBinding.layer({ browser: env.BROWSER })` to the adapter. Use
+For a WebCapture Tool, use `CloudflareBrowser.layer(ReadPage, { browser: env.BROWSER })` as shown
+below. For direct port access, provide
+`BrowserQuickActionBrowserBinding.layer({ browser: env.BROWSER })` to the adapter. Use
 `browserQuickActionCaptureLayer` for `PageCapture` and
 `browserQuickActionScreenshotLayer` for `PageScreenshot`. The capture adapter supports rendered
 Markdown, links, selector scrape, and structured extraction. Structured extraction may invoke
@@ -92,10 +94,11 @@ a general browsing session and cannot become an agent Tool.
 
 Install `@cloudflare/puppeteer@^1.1.0` alongside
 `@effect-agent/platform-cloudflare@beta` and `effect-cf@^0.37.0`. Then provide
-`BrowserRunInteractiveBinding.layer({ browser: env.BROWSER })` to
-`browserRunInteractiveLayer()` for browser actions. `browserRunInteractiveHostLayer()` adds trusted
-host controls for Live View and handoff. Both variants need `BrowserRunSessionLifecycle` with an
-account ID, a redacted Browser Run API token, and `FetchHttpClient.layer` for session cleanup.
+`CloudflareInteractiveBrowser.layer({ browser: env.BROWSER, accountId, apiToken })` with
+`FetchHttpClient.layer` for browser actions. `CloudflareInteractiveBrowser.hostLayer` opts into
+trusted host controls for Live View and handoff. Both variants assemble the browser binding and
+confirmed-session cleanup; the API token must be redacted. The lower-level binding, lifecycle,
+and adapter Layers remain available for custom composition.
 
 The policy is immutable when the pass opens:
 
@@ -154,14 +157,47 @@ or structured data.
 ## Give an agent a capture Tool
 
 Install `@effect-agent/capabilities@beta` to wrap capture in a native Effect AI Tool. Fix the allowed
-hosts, actions, and output size in the definition, then provide a `PageCapture` adapter to its
-handlers:
+hosts, actions, and output size in the definition. In a Worker, the Cloudflare package assembles
+the capture adapter, binding, and handlers in one Layer:
 
 ```ts twoslash
 import { WebCapture } from "@effect-agent/capabilities";
 import {
-  browserRestCaptureLayer,
-  type BrowserRestCaptureOptions,
+  CloudflareBrowser,
+  type CloudflareBrowserOptions,
+} from "@effect-agent/platform-cloudflare/browser-quick-action";
+import { Toolkit } from "effect/unstable/ai";
+
+declare const env: { BROWSER: CloudflareBrowserOptions["browser"] };
+
+const ReadPage = WebCapture.make("read_page", {
+  description: "Read example.com as rendered Markdown.",
+  urls: ["example.com"],
+  actions: ["markdown"],
+  maxResponseBytes: 16 * 1024,
+});
+
+export const BrowserTools = Toolkit.make(ReadPage.tool);
+export const ReadPageLive = CloudflareBrowser.layer(ReadPage, {
+  browser: env.BROWSER,
+});
+```
+
+Use `BrowserTools` as the agent's toolkit and provide `ReadPageLive` when running it.
+`CloudflareBrowser` is also exported from `@effect-agent/platform-cloudflare`. It accepts
+`WebCapture.makeScrape` and `WebCapture.makeExtract` definitions. Extraction requires an explicit
+`workersAi` option with an `authorizeAndAccount` Effect, using the same policy as
+`BrowserQuickActionWorkersAi.layer`. Without it, extraction fails before making a browser request.
+The constructor supplies only `PageCapture`; any schema decoding services remain required.
+It preserves the definition's host policy, output bounds, typed failures, and response cleanup.
+
+For REST capture, use the Node-safe REST subpath and supply an HTTP client:
+
+```ts twoslash
+import { WebCapture } from "@effect-agent/capabilities";
+import {
+  CloudflareBrowserRest,
+  type CloudflareBrowserRestOptions,
 } from "@effect-agent/platform-cloudflare/browser-rest-capture";
 import { Layer } from "effect";
 import { Toolkit } from "effect/unstable/ai";
@@ -175,11 +211,8 @@ const readPage = WebCapture.make("read_page", {
 });
 
 export const BrowserTools = Toolkit.make(readPage.tool);
-export const browserToolsLive = (credentials: BrowserRestCaptureOptions) =>
-  readPage.handlers.pipe(
-    Layer.provide(browserRestCaptureLayer(credentials)),
-    Layer.provide(FetchHttpClient.layer),
-  );
+export const browserToolsLive = (credentials: CloudflareBrowserRestOptions) =>
+  CloudflareBrowserRest.layer(readPage, credentials).pipe(Layer.provide(FetchHttpClient.layer));
 ```
 
 Use `BrowserTools` as the agent's toolkit and provide `browserToolsLive(credentials)` when running
@@ -187,6 +220,10 @@ it. Use `WebCapture.makeScrape` for grouped selector results or `WebCapture.make
 Schema-validated extraction. Extraction also needs the adapter's explicit Workers AI authorization
 and accounting policy. Capture Tools have uncertain external outcomes because page rendering can
 execute JavaScript; they are not eligible for Code Mode's read-only allowlist.
+
+`CloudflareBrowserRest.layer` accepts the same optional `workersAi` policy as the Worker
+constructor. It preserves schema decoding requirements and leaves `HttpClient` injectable.
+For a custom capture adapter, provide its Layer directly to `readPage.handlers`.
 
 ## Capture and crawl {#capture-and-crawl}
 
@@ -263,11 +300,7 @@ an undispatched provider action can be identified without treating them as a suc
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import {
-  BrowserRunInteractiveBinding,
-  BrowserRunSessionLifecycle,
-  browserRunInteractiveLayer,
-} from "@effect-agent/platform-cloudflare/interactive-browser";
+import { CloudflareInteractiveBrowser } from "@effect-agent/platform-cloudflare/interactive-browser";
 import {
   BrowserNavigateRequest,
   BrowserReadTextRequest,
@@ -292,15 +325,11 @@ declare global {
 const InteractiveLive = Layer.unwrap(
   Effect.gen(function* () {
     const env = yield* WorkerEnvironment;
-    const lifecycle = BrowserRunSessionLifecycle.layer({
+    return CloudflareInteractiveBrowser.layer({
+      browser: env.BROWSER,
       accountId: env.CLOUDFLARE_ACCOUNT_ID,
       apiToken: Redacted.make(env.BROWSER_RENDERING_API_TOKEN),
     }).pipe(Layer.provide(FetchHttpClient.layer));
-    const binding = BrowserRunInteractiveBinding.layer({ browser: env.BROWSER }).pipe(
-      Layer.provide(lifecycle),
-    );
-
-    return browserRunInteractiveLayer().pipe(Layer.provide(binding));
   }),
 );
 

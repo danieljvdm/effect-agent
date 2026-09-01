@@ -1,13 +1,15 @@
-import { InteractiveBrowserPolicy } from "@effect-agent/sandbox";
+import { InteractiveBrowser, InteractiveBrowserPolicy } from "@effect-agent/sandbox";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
-import { vi } from "vite-plus/test";
+import { Effect, Layer, Redacted, Schema } from "effect";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { expectTypeOf, vi } from "vite-plus/test";
 
 import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
 import {
   BrowserRunInteractiveBinding,
   BrowserRunInteractiveHost,
   BrowserRunViewport,
+  CloudflareInteractiveBrowser,
   browserRunInteractiveHostLayer,
 } from "../src/interactive-browser.ts";
 
@@ -32,6 +34,27 @@ const open = Effect.gen(function* () {
 });
 
 describe("Browser Run viewport boundary", () => {
+  it.effect("assembles generic browser access without host controls or an eager launch", () =>
+    Effect.gen(function* () {
+      sdk.launch.mockClear();
+      const live = CloudflareInteractiveBrowser.layer({
+        browser,
+        accountId: "1234567890abcdef1234567890abcdef",
+        apiToken: Redacted.make("token"),
+      });
+      expectTypeOf<Layer.Success<typeof live>>().toEqualTypeOf<InteractiveBrowser>();
+      expectTypeOf<Layer.Services<typeof live>>().toEqualTypeOf<HttpClient.HttpClient>();
+      const service = yield* InteractiveBrowser.pipe(
+        Effect.provide(live),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make(() => Effect.die("Unexpected HTTP request")),
+        ),
+      );
+      expect(service.open).toBeTypeOf("function");
+      expect(sdk.launch).not.toHaveBeenCalled();
+    }),
+  );
   it.effect.each([
     { width: 1, height: 1 },
     { width: 2_048, height: 2_048 },
@@ -120,6 +143,18 @@ describe("Browser Run viewport boundary", () => {
         sdk.launch.mockClear();
         const setViewport = vi.fn<(...args: Array<unknown>) => Promise<void>>(async () => {});
         mockBrowser(setViewport);
+        const cleanupCalls: Array<string> = [];
+        const client = HttpClient.make((request, url) =>
+          Effect.sync(() => {
+            cleanupCalls.push(`${request.method} ${url.pathname}`);
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response('{"status":"closed"}', {
+                headers: { "content-type": "application/json" },
+              }),
+            );
+          }),
+        );
         yield* Effect.gen(function* () {
           const session = yield* open;
           yield* session.resizeViewport({ width: 960, height: 720, deviceScaleFactor: 2 });
@@ -127,20 +162,18 @@ describe("Browser Run viewport boundary", () => {
         }).pipe(
           Effect.scoped,
           Effect.provide(
-            browserRunInteractiveHostLayer().pipe(
-              Layer.provide(
-                BrowserRunInteractiveBinding.layer({
-                  browser,
-                  ...(viewport === undefined ? {} : { viewport }),
-                }).pipe(
-                  Layer.provide(
-                    Layer.succeed(BrowserRunSessionLifecycle)({ close: () => Effect.void }),
-                  ),
-                ),
-              ),
-            ),
+            CloudflareInteractiveBrowser.hostLayer({
+              browser,
+              accountId: "1234567890abcdef1234567890abcdef",
+              apiToken: Redacted.make("token"),
+              ...(viewport === undefined ? {} : { viewport }),
+            }),
           ),
+          Effect.provideService(HttpClient.HttpClient, client),
         );
+        expect(cleanupCalls).toEqual([
+          "DELETE /client/v4/accounts/1234567890abcdef1234567890abcdef/browser-rendering/devtools/browser/c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
+        ]);
         expect(sdk.launch).toHaveBeenCalledExactlyOnceWith(browser, {
           keep_alive: 10_000,
           ...(viewport === undefined
@@ -173,7 +206,7 @@ const mockBrowser = (setViewport: (viewport: unknown) => Promise<void>) => {
   };
   sdk.launch.mockResolvedValue({
     createBrowserContext: async () => ({ newPage: async () => page, close: async () => {} }),
-    sessionId: () => "viewport-regression",
+    sessionId: () => "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
     isConnected: () => true,
     on: () => {},
     off: () => {},

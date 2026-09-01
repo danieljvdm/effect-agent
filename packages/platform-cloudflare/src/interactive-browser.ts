@@ -44,7 +44,10 @@ import {
   type Scope,
 } from "effect";
 
-import { BrowserRunSessionLifecycle } from "./browser-session-lifecycle.ts";
+import {
+  BrowserRunSessionLifecycle,
+  type BrowserRunLifecycleOptions,
+} from "./browser-session-lifecycle.ts";
 export { BrowserRunCleanupError, BrowserRunSessionLifecycle } from "./browser-session-lifecycle.ts";
 
 export const browserRunInteractiveImplementation = SandboxImplementation.make({
@@ -2145,3 +2148,28 @@ export const browserRunInteractiveLayer = (): Layer.Layer<
       });
     }),
   );
+
+/** Resolved Worker binding, cleanup credentials, and optional initial viewport. */
+export interface CloudflareInteractiveBrowserOptions extends BrowserRunLifecycleOptions {
+  readonly browser: BrowserRun;
+  readonly viewport?: BrowserRunViewport;
+}
+
+const interactiveBindingLayer = (options: CloudflareInteractiveBrowserOptions) =>
+  BrowserRunInteractiveBinding.layer(options).pipe(
+    Layer.provide(BrowserRunSessionLifecycle.layer(options)),
+  );
+
+/** Worker-only assembly; importing ordinary capture never loads Puppeteer. */
+export const CloudflareInteractiveBrowser = {
+  /**
+   * Assemble binding, confirmed-session cleanup, and the generic browser service.
+   * HttpClient and construction errors remain visible. Opening a pass still requires
+   * an explicit policy and Scope; no browser is launched during Layer construction.
+   */
+  layer: (options: CloudflareInteractiveBrowserOptions) =>
+    browserRunInteractiveLayer().pipe(Layer.provide(interactiveBindingLayer(options))),
+  /** Opt into private host controls instead of exposing them through the generic service. */
+  hostLayer: (options: CloudflareInteractiveBrowserOptions) =>
+    browserRunInteractiveHostLayer().pipe(Layer.provide(interactiveBindingLayer(options))),
+};

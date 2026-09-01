@@ -1,17 +1,15 @@
 import { WebCapture, WebCaptureScrapeSuccess, WebCaptureSuccess } from "@effect-agent/capabilities";
 import {
   BrowserQuickActionBrowserBinding,
-  browserQuickActionCaptureLayer,
+  CloudflareBrowser,
   browserQuickActionScreenshotLayer,
 } from "@effect-agent/platform-cloudflare/browser-quick-action";
 import {
   BrowserRunHandoffRequest,
   BrowserRunCleanupError,
-  BrowserRunInteractiveBinding,
+  CloudflareInteractiveBrowser,
   BrowserRunInteractiveHost,
-  BrowserRunSessionLifecycle,
   BrowserRunLiveViewRequest,
-  browserRunInteractiveHostLayer,
 } from "@effect-agent/platform-cloudflare/interactive-browser";
 import {
   BrowserNavigateRequest,
@@ -104,22 +102,18 @@ const proofLayer = Layer.unwrap(
       accountId: Config.string("CLOUDFLARE_ACCOUNT_ID"),
       apiToken: Config.redacted("BROWSER_RENDERING_API_TOKEN"),
     }).pipe(Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(env)));
-    const quickActionLayer = Layer.mergeAll(
-      browserQuickActionCaptureLayer(),
-      browserQuickActionScreenshotLayer(),
-    ).pipe(Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: env.BROWSER })));
-    const interactiveLayer = browserRunInteractiveHostLayer().pipe(
-      Layer.provide(BrowserRunInteractiveBinding.layer({ browser: env.BROWSER })),
-      Layer.provide(
-        BrowserRunSessionLifecycle.layer(lifecycleConfig).pipe(
-          Layer.provide(FetchHttpClient.layer),
-        ),
-      ),
+    const quickActionLayer = browserQuickActionScreenshotLayer().pipe(
+      Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: env.BROWSER })),
     );
+    const interactiveLayer = CloudflareInteractiveBrowser.hostLayer({
+      browser: env.BROWSER,
+      ...lifecycleConfig,
+    }).pipe(Layer.provide(FetchHttpClient.layer));
     const browserRunLayer = Layer.merge(quickActionLayer, interactiveLayer);
-    return Layer.merge(proofCapture.handlers, proofScrape.handlers).pipe(
-      Layer.provideMerge(browserRunLayer),
-    );
+    return Layer.merge(
+      CloudflareBrowser.layer(proofCapture, { browser: env.BROWSER }),
+      CloudflareBrowser.layer(proofScrape, { browser: env.BROWSER }),
+    ).pipe(Layer.provideMerge(browserRunLayer));
   }),
 );
 
