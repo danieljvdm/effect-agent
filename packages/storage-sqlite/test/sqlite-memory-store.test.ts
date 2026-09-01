@@ -5,6 +5,7 @@ import {
   MemoryMutationFailure,
   MemoryOperationConflict,
   MemoryReader,
+  MemoryStorageError,
   MemoryWithdrawn,
   MemoryWrite,
   MemoryWriter,
@@ -73,6 +74,36 @@ const withdraw = (operationId: string, expectedRevision: string) =>
     reason: "source withdrawn",
   });
 
+const storedJsonCodeUnitLimit = 16 * 1024 * 1024;
+const boundaryObservers = Array.from({ length: 128 }, (_, index) => {
+  const prefix = `observer-${String(index).padStart(3, "0")}-`;
+  return `${prefix}${"x".repeat(1_024 - prefix.length)}`;
+});
+
+const boundaryPut = (operationId: string, attributionCount: number) =>
+  Schema.decodeSync(MemoryWrite)({
+    _tag: "Put",
+    key,
+    operationId,
+    expectedRevision: null,
+    locator: "memory://source-1",
+    content: {
+      text: "encoded boundary",
+      attributions: Array.from({ length: attributionCount }, (_, index) => ({
+        originId: `origin-${index}`,
+        speaker: "dan",
+        observers: boundaryObservers,
+        locator: "chat://message-1",
+        activityAt: 50,
+        interpretation: "direct statement",
+      })),
+      metadata: { kind: "boundary" },
+      recordedAt: 75,
+      extractedAt: 80,
+    },
+    scopes: ["team"],
+  });
+
 const storeLayer = (filename: string) =>
   memoryStoreLayer.pipe(Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
 
@@ -112,6 +143,55 @@ const runRaw = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientSer
   effect.pipe(Effect.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
 
 describe("SQLite memory store", () => {
+  it.effect("round trips and replays a change near the encoded JSON boundary", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const command = boundaryPut("boundary-roundtrip", 126);
+        const commandLength = JSON.stringify({ version: 1, value: command }).length;
+        expect(commandLength).toBeGreaterThan(storedJsonCodeUnitLimit - 512 * 1024);
+        expect(commandLength).toBeLessThanOrEqual(storedJsonCodeUnitLimit);
+
+        const stored = yield* Effect.gen(function* () {
+          const writer = yield* MemoryWriter;
+          return yield* writer.change(command);
+        }).pipe(Effect.provide(storeLayer(filename)));
+
+        yield* Effect.gen(function* () {
+          const reader = yield* MemoryReader;
+          const writer = yield* MemoryWriter;
+          expect(yield* reader.get(key)).toEqual(stored);
+          expect(yield* writer.change(command)).toEqual(stored);
+        }).pipe(Effect.provide(storeLayer(filename)));
+      }),
+    ),
+  );
+
+  it.effect("rejects an oversized encoded change before document or receipt mutation", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const command = boundaryPut("boundary-rejected", 128);
+        expect(JSON.stringify({ version: 1, value: command }).length).toBeGreaterThan(
+          storedJsonCodeUnitLimit,
+        );
+
+        yield* Effect.gen(function* () {
+          const reader = yield* MemoryReader;
+          const writer = yield* MemoryWriter;
+          expect(yield* writer.change(command).pipe(Effect.flip)).toEqual(
+            MemoryStorageError.make({
+              operation: "change memory document",
+              reason: "invalid-input",
+            }),
+          );
+          expect(yield* reader.get(key)).toBeNull();
+          expect(
+            yield* writer.change(put(command.operationId, null, "accepted retry")),
+          ).toMatchObject({ generation: 1 });
+        }).pipe(Effect.provide(storeLayer(filename)));
+      }),
+    ),
+  );
+
   it.effect("persists corrections, exact receipts, scopes, and a terminal withdrawal", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {

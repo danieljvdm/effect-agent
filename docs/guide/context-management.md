@@ -393,8 +393,10 @@ export const MemoryLive = memoryStoreLayer.pipe(
 
 `memoryStoreLayer` provides both ports and creates only its own memory tables. It does not
 initialize Thread history or a Submission Ledger. `memoryReaderLayer` exposes only reading;
-the connection belongs to its Layer's Scope. The `WithFailpoints` variants accept a
-`MemoryMutationFailpoint` service for transaction and lost-acknowledgement tests.
+the connection belongs to its Layer's Scope. The adapter rejects a change before writing when
+its canonical command, document, or receipt-result JSON exceeds 16,777,216 JavaScript string code
+units. The `WithFailpoints` variants accept a `MemoryMutationFailpoint` service for transaction
+and lost-acknowledgement tests.
 Recall and validation helpers add named Effect spans without source text or metadata annotations.
 `RecalledMemory.outcomes` reports source availability and selected, deduplicated, and omitted counts;
 the host decides which diagnostics to retain and who can inspect them.

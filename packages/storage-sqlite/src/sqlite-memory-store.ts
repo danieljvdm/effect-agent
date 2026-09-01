@@ -18,7 +18,13 @@ const STORAGE_VERSION = 1 as const;
 const METADATA_COMPONENT = "memory";
 const DOCUMENT_TABLE = "effect_agent_memory_documents_v1";
 const RECEIPT_TABLE = "effect_agent_memory_receipts_v1";
-const StoredJson = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
+const MAX_STORED_JSON_CODE_UNITS = 16 * 1024 * 1024;
+const StoredJson = Schema.String.check(Schema.isMaxLength(MAX_STORED_JSON_CODE_UNITS));
+const EncodedMemoryChange = Schema.Struct({
+  commandJson: StoredJson,
+  documentJson: StoredJson,
+  resultJson: StoredJson,
+});
 
 class MemoryMetadataRow extends Schema.Class<MemoryMetadataRow>(
   "@effect-agent/storage-sqlite/MemoryMetadataRow",
@@ -115,6 +121,15 @@ const encodeJson = Effect.fn("SqliteMemoryStore.encodeJson")(function* <A, I>(
 ): Effect.fn.Return<string, MemoryStorageError> {
   return yield* Schema.encodeEffect(Schema.fromJsonString(schema))(value).pipe(
     Effect.mapError(() => storageError(operation, "corrupt")),
+  );
+});
+
+const validateEncodedChange = Effect.fn("SqliteMemoryStore.validateEncodedChange")(function* (
+  encoded: typeof EncodedMemoryChange.Type,
+  operation: string,
+): Effect.fn.Return<void, MemoryStorageError> {
+  yield* Schema.decodeEffect(EncodedMemoryChange)(encoded).pipe(
+    Effect.mapError(() => storageError(operation, "invalid-input")),
   );
 });
 
@@ -358,6 +373,7 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
               StoredMemoryResult.make({ version: STORAGE_VERSION, value: next }),
               "encode memory result",
             );
+            yield* validateEncodedChange({ commandJson, documentJson, resultJson }, operation);
 
             if (current === null) {
               yield* sql`
