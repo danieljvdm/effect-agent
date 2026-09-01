@@ -104,6 +104,7 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
         document.content.text.includes(candidate.content.text);
       const passage = MemoryPassage.make({
         version: 1,
+        authority: decodedAccess.namespace,
         source: document.source,
         passageId: sameExcerpt ? candidate.passageId : "document",
         content: {

@@ -71,6 +71,60 @@ const recall = (lookup = candidates) =>
   );
 
 describe("authoritative memory validation", () => {
+  it.effect("preserves independently authorized namespaces through recall composition", () =>
+    Effect.gen(function* () {
+      const accesses = [access, MemoryAccess.make({ ...access, namespace: "team-b" })];
+      const lookup: MemoryLookup = {
+        _tag: "Found",
+        passages: [
+          MemoryPassage.make({
+            ...candidate,
+            source: { ...candidate.source, id: "profile" },
+            passageId: "document",
+            authority: "forged-candidate-authority",
+          }),
+        ],
+      };
+      for (const projectText of [document.content.text, "Different project preference"]) {
+        const current = accesses.map((bound, index) =>
+          ActiveMemoryDocument.make({
+            ...document,
+            key: { namespace: bound.namespace, id: "profile" },
+            source: { ...document.source, id: "profile" },
+            content: {
+              ...document.content,
+              text: index === 0 ? document.content.text : projectText,
+            },
+          }),
+        );
+        const result = yield* recallMemory(
+          accesses.map((bound, index) => ({
+            id: `reader-${index}`,
+            essential: true,
+            read: revalidateMemoryLookup(lookup, bound).pipe(
+              Effect.provideService(MemoryReader, {
+                get: () => Effect.succeed(current[index] ?? null),
+              }),
+            ),
+          })),
+          limits,
+        );
+        expect(result.passages.map((passage) => passage.authority)).toEqual(
+          accesses.map((bound) => bound.namespace),
+        );
+        expect(result.passages.map((passage) => passage.content.text)).toEqual([
+          document.content.text,
+          projectText,
+        ]);
+        expect(result.text).not.toContain("forged-candidate-authority");
+        expect(result.text).not.toContain("team-a");
+        expect(result.text).not.toContain("team-b");
+        expect(result.text).toContain('"authority":"memory-authority:1"');
+        expect(result.text).toContain('"authority":"memory-authority:2"');
+      }
+    }),
+  );
+
   it.effect("bounds retained replacements while preserving rank and one read per source", () =>
     Effect.gen(function* () {
       const documents = ["a", "b", "c"].map((id) =>
@@ -85,6 +139,7 @@ describe("authoritative memory validation", () => {
       const excerpts = selected.map((current, index) =>
         MemoryPassage.make({
           ...candidate,
+          authority: access.namespace,
           source: current.source,
           passageId: `excerpt-${index}`,
           content: { ...current.content, text: "🌊" },

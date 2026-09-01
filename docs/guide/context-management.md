@@ -317,6 +317,9 @@ replacement JSON before retaining it, including duplicate passages. Exceeding th
 with `MemoryRecallError` reason `budget` before reading later source groups. A single reader
 result and its schema decoding precede the aggregate retention bound.
 
+Validation binds each returned passage's private authority to the host-selected namespace,
+replacing any candidate-supplied authority. Combining independently authorized namespaces
+therefore preserves their distinct source identities without exposing namespace values in model text.
 Validation reloads each candidate's source, excludes missing, withdrawn, or access-revoked
 documents, and replaces stale text with the current document. Even a same-revision excerpt gets
 its attribution and metadata from the current source. It survives only if its text occurs there.

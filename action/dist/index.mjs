@@ -43826,6 +43826,7 @@ var revalidateMemoryLookup = exports_Effect.fn("revalidateMemoryLookup")(functio
       const sameExcerpt = document.source.revision === candidate.source.revision && document.content.text.includes(candidate.content.text);
       const passage = MemoryPassage.make({
         version: 1,
+        authority: decodedAccess.namespace,
         source: document.source,
         passageId: sameExcerpt ? candidate.passageId : "document",
         content: {
