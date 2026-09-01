@@ -1,3 +1,4 @@
+import { WebCapture } from "@effect-agent/capabilities";
 import {
   CapturePageContent,
   CapturePageLinks,
@@ -12,14 +13,17 @@ import {
   type PageCaptureError,
   type PageCaptureResult,
 } from "@effect-agent/sandbox";
-import { Deferred, Effect, Fiber, Layer } from "effect";
-import { describe, expect, it } from "vite-plus/test";
+import { Context, Deferred, Effect, Fiber, Layer, Schema, SchemaGetter, Stream } from "effect";
+import type { Tool } from "effect/unstable/ai";
+import { Toolkit } from "effect/unstable/ai";
+import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
 import {
   BrowserQuickActionBrowserBinding,
   BrowserQuickActionRpcError,
   BrowserQuickActionWorkersAi,
   BrowserQuickActionWorkersAiPolicyError,
+  CloudflareBrowser,
   browserQuickActionCaptureLayer,
   browserQuickActionWorkersAiCaptureLayer,
   type BrowserQuickActionCaptureOptions,
@@ -152,6 +156,121 @@ type WorkersAiAuthorityIsVisible = Equal<
 type NativeBrowserRunIsLayerInput = Equal<BrowserQuickActionCaptureOptions["browser"], BrowserRun>;
 
 describe("Browser Run Quick Action PageCapture adapter", () => {
+  it("assembles named handlers and enforces their host policy through the native binding", async () => {
+    const calls: Array<unknown> = [];
+    const browser: BrowserRun = {
+      fetch: () => Promise.reject(new Error("Unexpected fetch")),
+      quickAction: (action, options) => {
+        calls.push({ action, options });
+        return Promise.resolve(jsonResponse({ success: true, result: "# Pricing" }));
+      },
+    };
+    const ReadPage = WebCapture.make("read_page", {
+      description: "Read pricing",
+      urls: ["docs.example.com"],
+      actions: ["markdown"],
+    });
+    const live = CloudflareBrowser.layer(ReadPage, { browser });
+
+    expectTypeOf(live).toEqualTypeOf<
+      Layer.Layer<Tool.HandlersFor<{ read_page: typeof ReadPage.tool }>>
+    >();
+    const results = await Effect.runPromise(
+      Effect.gen(function* () {
+        const toolkit = yield* Toolkit.make(ReadPage.tool);
+        const allowed = yield* toolkit.handle("read_page", {
+          url: "https://docs.example.com/pricing",
+          action: "markdown",
+        });
+        const denied = yield* toolkit.handle("read_page", {
+          url: "https://attacker.example/pricing",
+          action: "markdown",
+        });
+        return [yield* Stream.runCollect(allowed), yield* Stream.runCollect(denied)];
+      }).pipe(Effect.provide(live)),
+    );
+
+    expect(results).toMatchObject([
+      [{ result: { markdown: "# Pricing" } }],
+      [{ result: { _tag: "WebCaptureFailure", errorTag: "WebCaptureUrlDenied" } }],
+    ]);
+    expect(calls).toMatchObject([
+      { action: "markdown", options: { url: "https://docs.example.com/pricing" } },
+    ]);
+  });
+
+  it("requires explicit Workers AI authority and preserves extraction decoder requirements", async () => {
+    class Decoder extends Context.Service<Decoder, { readonly value: string }>()("test/Decoder") {}
+    const Extract = WebCapture.makeExtract("extract_page", {
+      description: "Extract pricing",
+      urls: ["docs.example.com"],
+      schema: Schema.Struct({
+        name: Schema.String.pipe(
+          Schema.decodeTo(Schema.String, {
+            decode: SchemaGetter.transformOrFail((value) =>
+              Effect.map(Decoder, (decoder) => value + decoder.value),
+            ),
+            encode: SchemaGetter.transform((value) => value),
+          }),
+        ),
+      }),
+    });
+    const events: Array<string> = [];
+    const browser: BrowserRun = {
+      fetch: () => Promise.reject(new Error("Unexpected fetch")),
+      quickAction: (action) => {
+        events.push(action);
+        return Promise.resolve(jsonResponse({ success: true, result: { name: "Pro" } }));
+      },
+    };
+    const denied = CloudflareBrowser.layer(Extract, { browser });
+    const allowed = CloudflareBrowser.layer(Extract, {
+      browser,
+      workersAi: {
+        authorizeAndAccount: () =>
+          Effect.sync(() => {
+            events.push("authorize");
+          }),
+      },
+    });
+
+    expectTypeOf(allowed).toEqualTypeOf<
+      Layer.Layer<Tool.HandlersFor<{ extract_page: typeof Extract.tool }>, never, Decoder>
+    >();
+    const invoke = Effect.gen(function* () {
+      const toolkit = yield* Toolkit.make(Extract.tool);
+      const output = yield* toolkit.handle("extract_page", { url: "https://docs.example.com/" });
+      return yield* Stream.runCollect(output);
+    });
+    const decoder = Layer.succeed(Decoder, { value: " plan" });
+    const refused = await Effect.runPromise(
+      invoke.pipe(Effect.provide(denied.pipe(Layer.provideMerge(decoder)))),
+    );
+
+    expect(refused).toMatchObject([
+      { result: { _tag: "WebCaptureFailure", errorTag: "PageCaptureUnsupportedError" } },
+    ]);
+    expect(events).toEqual([]);
+    const result = await Effect.runPromise(
+      invoke.pipe(Effect.provide(allowed.pipe(Layer.provideMerge(decoder)))),
+    );
+
+    expect(result).toMatchObject([{ result: { name: "Pro plan" } }]);
+    expect(events).toEqual(["authorize", "json"]);
+
+    const fallible = CloudflareBrowser.layer(
+      {
+        handlers: Extract.handlers.pipe(
+          Layer.provide(Layer.effect(Decoder, Effect.fail("setup" as const))),
+        ),
+      },
+      { browser },
+    );
+    expectTypeOf(fallible).toEqualTypeOf<
+      Layer.Layer<Tool.HandlersFor<{ extract_page: typeof Extract.tool }>, "setup">
+    >();
+  });
+
   it("keeps browser RPC and separately billed Workers AI authority visible in adapter Layers", () => {
     const browserProof: BrowserBindingAuthorityIsVisible = true;
     const workersAiProof: WorkersAiAuthorityIsVisible = true;

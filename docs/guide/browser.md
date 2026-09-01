@@ -56,7 +56,9 @@ The `remote` setting is for local development. Deployments use the binding norma
 documents the binding, compatibility date, and remote-mode requirement in its
 [Quick Actions guide](https://developers.cloudflare.com/browser-run/quick-actions/).
 
-Provide `BrowserQuickActionBrowserBinding.layer({ browser: env.BROWSER })` to the adapter. Use
+For a WebCapture Tool, use `CloudflareBrowser.layer(ReadPage, { browser: env.BROWSER })` as shown
+below. For direct port access, provide
+`BrowserQuickActionBrowserBinding.layer({ browser: env.BROWSER })` to the adapter. Use
 `browserQuickActionCaptureLayer` for `PageCapture` and
 `browserQuickActionScreenshotLayer` for `PageScreenshot`. The capture adapter supports rendered
 Markdown, links, selector scrape, and structured extraction. Structured extraction may invoke
@@ -154,8 +156,41 @@ or structured data.
 ## Give an agent a capture Tool
 
 Install `@effect-agent/capabilities@beta` to wrap capture in a native Effect AI Tool. Fix the allowed
-hosts, actions, and output size in the definition, then provide a `PageCapture` adapter to its
-handlers:
+hosts, actions, and output size in the definition. In a Worker, the Cloudflare package assembles
+the capture adapter, binding, and handlers in one Layer:
+
+```ts twoslash
+import { WebCapture } from "@effect-agent/capabilities";
+import {
+  CloudflareBrowser,
+  type CloudflareBrowserOptions,
+} from "@effect-agent/platform-cloudflare/browser-quick-action";
+import { Toolkit } from "effect/unstable/ai";
+
+declare const env: { BROWSER: CloudflareBrowserOptions["browser"] };
+
+const ReadPage = WebCapture.make("read_page", {
+  description: "Read example.com as rendered Markdown.",
+  urls: ["example.com"],
+  actions: ["markdown"],
+  maxResponseBytes: 16 * 1024,
+});
+
+export const BrowserTools = Toolkit.make(ReadPage.tool);
+export const ReadPageLive = CloudflareBrowser.layer(ReadPage, {
+  browser: env.BROWSER,
+});
+```
+
+Use `BrowserTools` as the agent's toolkit and provide `ReadPageLive` when running it.
+`CloudflareBrowser` is also exported from `@effect-agent/platform-cloudflare`. It accepts
+`WebCapture.makeScrape` and `WebCapture.makeExtract` definitions. Extraction requires an explicit
+`workersAi` option with an `authorizeAndAccount` Effect, using the same policy as
+`BrowserQuickActionWorkersAi.layer`. Without it, extraction fails before making a browser request.
+The constructor supplies only `PageCapture`; any schema decoding services remain required.
+It preserves the definition's host policy, output bounds, typed failures, and response cleanup.
+
+For REST capture or custom adapters, keep composing the handler Layer directly:
 
 ```ts twoslash
 import { WebCapture } from "@effect-agent/capabilities";
