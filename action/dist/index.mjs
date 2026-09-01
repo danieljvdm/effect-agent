@@ -32334,6 +32334,7 @@ class MemoryRecallLimits extends exports_Schema.Class("@effect-agent/core/Memory
   maxItems: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 128 })),
   maxBytes: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 4194304 })),
   maxTokens: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 1048576 })),
+  maxInputBytes: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 67108864 }))),
   timeoutMillis: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 60000 }))
 }) {
 }
@@ -43470,6 +43471,8 @@ var recallMemory = exports_Effect.fn("recallMemory")(function* (sources, limits,
     const claims = new Map;
     const selectedIdentities = new Set;
     const selectedSources = new Set;
+    const maxInputBytes = validated.maxInputBytes ?? 16777216;
+    let inputBytes = 0;
     let estimatedTokens = 0;
     const outcomes = [];
     for (const source of sources) {
@@ -43500,8 +43503,18 @@ var recallMemory = exports_Effect.fn("recallMemory")(function* (sources, limits,
       let deduplicated = 0;
       let omitted = 0;
       for (const passage of result4.passages) {
-        const key = identity3(passage);
         const encoded = JSON.stringify(passage);
+        const remainingInputBytes = maxInputBytes - inputBytes;
+        const encodedBytes3 = encoded.length <= remainingInputBytes ? bytes(encoded) : undefined;
+        if (encodedBytes3 === undefined || encodedBytes3 > remainingInputBytes) {
+          return yield* MemoryRecallError.make({
+            reason: "budget",
+            sourceId: source.id,
+            message: "Recall input encoding budget exceeded"
+          });
+        }
+        inputBytes += encodedBytes3;
+        const key = identity3(passage);
         const previous = claims.get(key);
         if (previous !== undefined && previous !== encoded) {
           return yield* MemoryRecallError.make({

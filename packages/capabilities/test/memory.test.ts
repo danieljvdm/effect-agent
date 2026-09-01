@@ -208,6 +208,50 @@ describe("bounded memory recall", () => {
   );
 
   it.effect(
+    "bounds aggregate UTF-8 input before retaining omitted known and unknown identities",
+    () =>
+      Effect.gen(function* () {
+        const known = passage("known", "large 🌊 ".repeat(256));
+        const unknown = MemoryPassage.make({
+          ...known,
+          source: MemorySourceReference.make({ ...known.source, revision: null }),
+        });
+        const inputBytes = [known, unknown].reduce(
+          (total, item) => total + new TextEncoder().encode(JSON.stringify(item)).byteLength,
+          0,
+        );
+        let laterReads = 0;
+        const sources = [
+          source("known", found(known)),
+          source("unknown", found(unknown)),
+          {
+            id: "later",
+            essential: false,
+            read: Effect.sync(() => {
+              laterReads += 1;
+              return found();
+            }),
+          },
+        ];
+        const bounded = MemoryRecallLimits.make({
+          ...limits,
+          maxBytes: 1,
+          maxInputBytes: inputBytes - 1,
+        });
+        expect(yield* recallMemory(sources, bounded).pipe(Effect.flip)).toMatchObject({
+          _tag: "MemoryRecallError",
+          reason: "budget",
+          sourceId: "unknown",
+        });
+        expect(laterReads).toBe(0);
+        const exact = yield* recallMemory(sources, { ...bounded, maxInputBytes: inputBytes });
+        expect(exact.passages).toEqual([]);
+        expect(exact.outcomes.map((outcome) => outcome.omitted)).toEqual([1, 1, 0]);
+        expect(laterReads).toBe(1);
+      }),
+  );
+
+  it.effect(
     "bounds source identities from a single retriever and retains the validated tokenizer result",
     () =>
       Effect.gen(function* () {

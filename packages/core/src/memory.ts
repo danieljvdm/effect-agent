@@ -85,7 +85,7 @@ export const MemoryLookup = Schema.Union([
 ]);
 export type MemoryLookup = typeof MemoryLookup.Type;
 
-/** Bounds cover the complete rendered reference text, including citations and provenance. */
+/** Output bounds cover the complete rendered reference text, including citations and provenance. */
 export class MemoryRecallLimits extends Schema.Class<MemoryRecallLimits>(
   "@effect-agent/core/MemoryRecallLimits",
 )({
@@ -93,6 +93,10 @@ export class MemoryRecallLimits extends Schema.Class<MemoryRecallLimits>(
   maxItems: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 128 })),
   maxBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4_194_304 })),
   maxTokens: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_048_576 })),
+  /** Aggregate UTF-8 JSON passage input, including omitted/duplicate candidates. Defaults to 16 MiB. */
+  maxInputBytes: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 67_108_864 })),
+  ),
   timeoutMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60_000 })),
 }) {}
 

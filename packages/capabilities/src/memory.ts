@@ -64,7 +64,10 @@ const render = (passages: ReadonlyArray<MemoryPassage>): string =>
  * must have a represented passage when they return matches, including exact duplicates.
  * maxSources bounds both reader declarations and distinct selected source IDs. No-match is successful even when
  * essential. Optional unavailable/stale sources remain visible in outcomes. Nothing is cached.
- * Conflicting identities are rejected even when an earlier passage does not fit the budget.
+ * Admitted conflicting identities are rejected even when an earlier passage does not fit the output budget.
+ * maxInputBytes bounds cumulative JSON passage encodings before selection or identity retention;
+ * its default is 16 MiB. Exhaustion stops validation and returns no partial context. Reader-owned
+ * allocation and result decoding precede that input bound.
  *
  * The default estimate is one token per UTF-8 byte. Supply the selected model's tokenizer
  * for tighter selection. The engine independently enforces its full per-call context budget.
@@ -104,6 +107,8 @@ export const recallMemory = Effect.fn("recallMemory")(function* <E = never, R = 
     const claims = new Map<string, string>();
     const selectedIdentities = new Set<string>();
     const selectedSources = new Set<string>();
+    const maxInputBytes = validated.maxInputBytes ?? 16_777_216;
+    let inputBytes = 0;
     let estimatedTokens = 0;
     const outcomes: Array<typeof MemorySourceOutcome.Type> = [];
     for (const source of sources) {
@@ -138,8 +143,18 @@ export const recallMemory = Effect.fn("recallMemory")(function* <E = never, R = 
       let deduplicated = 0;
       let omitted = 0;
       for (const passage of result.passages) {
-        const key = identity(passage);
         const encoded = JSON.stringify(passage);
+        const remainingInputBytes = maxInputBytes - inputBytes;
+        const encodedBytes = encoded.length <= remainingInputBytes ? bytes(encoded) : undefined;
+        if (encodedBytes === undefined || encodedBytes > remainingInputBytes) {
+          return yield* MemoryRecallError.make({
+            reason: "budget",
+            sourceId: source.id,
+            message: "Recall input encoding budget exceeded",
+          });
+        }
+        inputBytes += encodedBytes;
+        const key = identity(passage);
         const previous = claims.get(key);
         if (previous !== undefined && previous !== encoded) {
           return yield* MemoryRecallError.make({

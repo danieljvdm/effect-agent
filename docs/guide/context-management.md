@@ -169,6 +169,14 @@ Pass `projectNotes` as `transientContext` to `AgentRuntime.run`, `stream`, or `s
 and every citation remain untrusted model input. Validate model claims against
 `RecalledMemory.passages` before presenting them as sourced facts.
 
+`MemoryRecallLimits.maxInputBytes` separately bounds the aggregate UTF-8 JSON passage encodings
+considered by one call, including omitted and duplicate candidates. It defaults to 16 MiB and can
+be set up to 64 MiB. Exceeding it returns a typed `budget` error before retaining that candidate's
+identity or encoding, even when the source is optional. Reader allocation, result decoding, and
+one candidate's serialization occur before this check; it is not a whole-process heap limit.
+Input-budget exhaustion stops validation and returns no partial context. Within admitted input,
+conflicting known-revision identities fail even when an earlier passage exceeds the output budget.
+
 ### Read an external corpus through an Effect service
 
 Keep authorization, credentials, and query policy inside an application service. This contract has
