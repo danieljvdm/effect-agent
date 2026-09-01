@@ -1,5 +1,34 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.39
+
+### Minor Changes
+
+- [#263](https://github.com/danieljvdm/effect-agent/pull/263) [`95865d7`](https://github.com/danieljvdm/effect-agent/commit/95865d78f55546d42f562f2f13509bbfc198c091) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Rename `@effect-agent/session` to `@effect-agent/thread` and rename the Conversation framework API to Thread.
+
+  BEHAVIOR CHANGE: Rename Conversation identifiers, fields, record families and tags, and the durable-admin `--conversation` selector to their Thread equivalents. Reset incompatible alpha storage before upgrading.
+
+### Patch Changes
+
+- [#265](https://github.com/danieljvdm/effect-agent/pull/265) [`fea81ca`](https://github.com/danieljvdm/effect-agent/commit/fea81caca30b57b6c8f532665aba11a17be18311) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Review large inputs in sequential batches under a shared host spending limit, preserving findings and execution allowances across batches. Report admitted paths that never reached the model when a review stops early.
+
+- [#261](https://github.com/danieljvdm/effect-agent/pull/261) [`bce20c1`](https://github.com/danieljvdm/effect-agent/commit/bce20c171e3b6c0940bfb24d611c5458fc01a1b6) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Review supplied diffs first and use source lookups to resolve concrete defect questions. Preserve findings and explicitly report incomplete coverage when the reviewer cannot finish.
+
+- [#255](https://github.com/danieljvdm/effect-agent/pull/255) [`62555fe`](https://github.com/danieljvdm/effect-agent/commit/62555fe8a0da2cdbb6dfd457375f06227600588c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Send each admitted review patch once as a literal unified diff to reduce repeated input overhead while preserving every supplied change and its metadata.
+
+- [#259](https://github.com/danieljvdm/effect-agent/pull/259) [`79fbd8b`](https://github.com/danieljvdm/effect-agent/commit/79fbd8b755434a162629a534478e188636d186fe) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Let host spending admission replace the reviewer's cumulative token quota and retain usage diagnostics when an accounted attempt fails before recording findings. Preserve tool definitions when selecting a required completion tool.
+
+- [#244](https://github.com/danieljvdm/effect-agent/pull/244) [`e1e29a0`](https://github.com/danieljvdm/effect-agent/commit/e1e29a015d1695fcabd09cc61793d206e96702ae) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reserve a final review response when token, turn, or tool budgets stop investigation, preserving findings and usage.
+
+  BEHAVIOR CHANGE: Treat outcomes with `exhausted` as incomplete coverage, even when no findings are returned.
+
+- [#250](https://github.com/danieljvdm/effect-agent/pull/250) [`d004a36`](https://github.com/danieljvdm/effect-agent/commit/d004a361518c23cdc81f1768e5ab31560e014935) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Retain recorded review findings when research stops, mark partial results with `incomplete` or `exhausted`, and admit review Action requests only below $1. Permit completion on the single grace turn and reuse stable OpenAI prompt prefixes.
+
+- [#256](https://github.com/danieljvdm/effect-agent/pull/256) [`ac70e21`](https://github.com/danieljvdm/effect-agent/commit/ac70e212c7d9741ce48bd9b2a4dbd355f9dac72e) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Declare `effect` as a required `^4.0.0-rc.111` peer across all public packages so they share the application's runtime and accept compatible upgrades. Keep `effect` in application dependencies at a version satisfying the framework's and providers' peer ranges.
+
+- Updated dependencies [[`95865d7`](https://github.com/danieljvdm/effect-agent/commit/95865d78f55546d42f562f2f13509bbfc198c091), [`ac70e21`](https://github.com/danieljvdm/effect-agent/commit/ac70e212c7d9741ce48bd9b2a4dbd355f9dac72e)]:
+  - effect-agent@0.1.0-beta.39
+
 ## 0.1.0-beta.38
 
 ### Patch Changes
