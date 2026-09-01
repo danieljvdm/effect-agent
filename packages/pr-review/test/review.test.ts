@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer, Ref, Result, Stream, Struct } from "effect";
+import { TestClock } from "effect/testing";
 import {
   type AiError,
   LanguageModel,
@@ -78,6 +79,35 @@ const scriptedModel = (
 const emptyRepository = ReviewRepository.of({
   readFile: () => Effect.fail(ReviewContextError.make({ message: "Source unavailable" })),
   findFiles: () => Effect.succeed(ReviewFileList.make({ paths: [], truncated: false })),
+});
+
+const largeRequest = (count: number) =>
+  ReviewRequest.make({
+    ...request,
+    changes: Array.from({ length: count }, (_, index) =>
+      ReviewChange.make({
+        path: `src/part-${String(index)}.ts`,
+        patch: `@@ -0,0 +1 @@\n+${"x".repeat(70_000)}`,
+      }),
+    ),
+  });
+
+const costControl = (calls: Ref.Ref<number>) => ({
+  snapshot: Ref.get(calls).pipe(
+    Effect.map((modelCalls) =>
+      ReviewCostSnapshot.make({
+        stopped: false,
+        modelCalls,
+        usage: ReviewUsage.make({
+          inputTokens: modelCalls * 10,
+          uncachedInputTokens: modelCalls * 7,
+          cachedInputTokens: modelCalls * 2,
+          cacheWriteInputTokens: modelCalls,
+          outputTokens: modelCalls * 4,
+        }),
+      }),
+    ),
+  ),
 });
 
 const blocker = ReviewFinding.make({
@@ -626,24 +656,136 @@ new mode 100755`;
     }),
   );
 
-  it.effect("PRR-002 closes the single run on interruption", () =>
+  it.effect("shares the turn allowance across batches and reports patches it never supplied", () =>
     Effect.gen(function* () {
-      const finalized = yield* Ref.make(false);
-      const started = yield* Deferred.make<void>();
-      const model = scriptedModel(() =>
-        Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
-          Stream.flatMap(() => Stream.never),
-          Stream.ensuring(Ref.set(finalized, true)),
+      const calls = yield* Ref.make(0);
+      const input = largeRequest(27);
+      const review = makeReviewer({
+        model: scriptedModel(() =>
+          Stream.unwrap(
+            Ref.update(calls, (count) => count + 1).pipe(Effect.as(response({ findings: [] }))),
+          ),
+        ),
+        costControl: costControl(calls),
+      }).review(input);
+      expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
+      expectTypeOf<Effect.Error<typeof review>>().not.toBeAny();
+      const outcome = yield* review.pipe(Effect.provideService(ReviewRepository, emptyRepository));
+      expect(yield* Ref.get(calls)).toBe(8);
+      expect(outcome.exhausted).toBe("turns");
+      expect(outcome.incomplete).toBe(true);
+      expect(outcome.pendingPaths).toEqual(input.changes.slice(24).map((change) => change.path));
+    }),
+  );
+
+  it.effect("does not renew the tool allowance when the next patch batch starts", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0);
+      const reads = yield* Ref.make(0);
+      const input = largeRequest(9);
+      const model = scriptedModel((_prompt, _tools, choice) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+            if (call === 2 || typeof choice === "object") return response({ findings: [] });
+            return Stream.fromIterable<Response.StreamPartEncoded>([
+              ...Array.from(
+                { length: 32 },
+                (_, index): Response.StreamPartEncoded => ({
+                  type: "tool-call",
+                  id: `read-${String(call)}-${String(index)}`,
+                  name: "find_files",
+                  params: { revision: "head", query: "part" },
+                }),
+              ),
+              { type: "finish", reason: "tool-calls", usage },
+            ]);
+          }),
         ),
       );
-      const fiber = yield* makeReviewer({ model })
-        .review(request)
-        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.forkChild);
-      yield* Deferred.await(started);
-      yield* Fiber.interrupt(fiber);
-      expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
-      expect(yield* Ref.get(finalized)).toBe(true);
+      const outcome = yield* makeReviewer({ model, costControl: costControl(calls) })
+        .review(input)
+        .pipe(
+          Effect.provideService(ReviewRepository, {
+            ...emptyRepository,
+            findFiles: () =>
+              Ref.update(reads, (count) => count + 1).pipe(
+                Effect.as(ReviewFileList.make({ paths: [], truncated: false })),
+              ),
+          }),
+        );
+      expect(yield* Ref.get(reads)).toBe(32);
+      expect(outcome.exhausted).toBe("tool-calls");
+      expect(outcome.pendingPaths).toEqual(input.changes.slice(6).map((change) => change.path));
     }),
+  );
+
+  it.effect("keeps one deadline across batches and closes each model stream", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0);
+      const finalized = yield* Ref.make(0);
+      const firstStarted = yield* Deferred.make<void>();
+      const secondStarted = yield* Deferred.make<void>();
+      const input = largeRequest(9);
+      const model = scriptedModel(() =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+            yield* Deferred.succeed(call === 1 ? firstStarted : secondStarted, undefined);
+            return Stream.fromEffect(Effect.sleep("4 minutes")).pipe(
+              Stream.flatMap(() => response({ findings: [] })),
+              Stream.ensuring(Ref.update(finalized, (count) => count + 1)),
+            );
+          }),
+        ),
+      );
+      const fiber = yield* makeReviewer({ model, costControl: costControl(calls) })
+        .review(input)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.forkChild);
+      yield* Deferred.await(firstStarted);
+      yield* TestClock.adjust("4 minutes");
+      yield* Deferred.await(secondStarted);
+      yield* TestClock.adjust("1 minute");
+      const outcome = yield* Fiber.join(fiber);
+      expect(yield* Ref.get(calls)).toBe(2);
+      expect(yield* Ref.get(finalized)).toBe(2);
+      expect(outcome.incomplete).toBe(true);
+      expect(outcome.pendingPaths).toEqual(input.changes.slice(6).map((change) => change.path));
+    }),
+  );
+
+  it.effect.each(["interrupt", "defect"] as const)(
+    "closes batch streams on %s without returning a review",
+    (failure) =>
+      Effect.gen(function* () {
+        const finalized = yield* Ref.make(0);
+        const calls = yield* Ref.make(0);
+        const started = yield* Deferred.make<void>();
+        const model = scriptedModel(() =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+              const stream =
+                call === 1
+                  ? response({ findings: [] })
+                  : Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+                      Stream.flatMap(() =>
+                        failure === "interrupt" ? Stream.never : Stream.die("batch defect"),
+                      ),
+                    );
+              return stream.pipe(Stream.ensuring(Ref.update(finalized, (count) => count + 1)));
+            }),
+          ),
+        );
+        const fiber = yield* makeReviewer({ model, costControl: costControl(calls) })
+          .review(largeRequest(9))
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.forkChild);
+        yield* Deferred.await(started);
+        if (failure === "interrupt") yield* Fiber.interrupt(fiber);
+        expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
+        expect(yield* Ref.get(calls)).toBe(2);
+        expect(yield* Ref.get(finalized)).toBe(2);
+      }),
   );
 
   it.effect("PRR-003 shares exact source range bounds", () =>

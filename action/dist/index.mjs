@@ -44016,6 +44016,7 @@ class ReviewOutcome extends exports_Schema.Class("@effect-agent/pr-review/Review
   report: ReviewReport,
   turns: exports_Schema.Natural,
   usage: ReviewUsage,
+  pendingPaths: exports_Schema.optionalKey(exports_Schema.Array(ReviewPath).check(exports_Schema.isMaxLength(100))),
   exhausted: exports_Schema.optionalKey(exports_Schema.Literals(["tokens", "tool-calls", "turns", "cost"])),
   incomplete: exports_Schema.optionalKey(exports_Schema.Literal(true))
 }) {
@@ -44141,7 +44142,24 @@ var isCommentableLine = (patch3, line) => commentableLines(patch3).has(line);
 var reviewSummary = (request3, findings) => {
   const blocking = findings.filter((finding) => finding.severity === "blocking").length;
   const summary2 = findings.length === 0 ? "No concrete defects found in the supplied change." : `Reported ${findings.length} finding(s), including ${blocking} blocking finding(s).`;
-  return `${summary2}${request3.scope === "incremental" ? " This incremental review does not resolve earlier findings or establish that merging is safe." : ""}${request3.unreviewedPaths.length > 0 ? " Coverage is incomplete because some changed paths were unavailable." : ""}`;
+  return `${summary2}${request3.scope === "incremental" ? " This incremental review does not resolve earlier findings or establish that merging is safe." : ""}${request3.unreviewedPaths.length > 0 ? " Coverage is incomplete because some changed paths were excluded from review input." : ""}`;
+};
+var batchChanges = (changes2) => {
+  const batches = [];
+  let batch = [];
+  let chars = 0;
+  for (const change of changes2) {
+    if (batch.length > 0 && chars + change.patch.length > 256000) {
+      batches.push(batch);
+      batch = [];
+      chars = 0;
+    }
+    batch.push(change);
+    chars += change.patch.length;
+  }
+  if (batch.length > 0 || batches.length === 0)
+    batches.push(batch);
+  return batches;
 };
 var validatedFindings = exports_Effect.fn("validatedFindings")(function* (request3, submitted) {
   const patches = new Map(request3.changes.map((change) => [change.path, change.patch]));
@@ -44194,9 +44212,11 @@ var makeReviewer = (options3) => {
     const budget2 = yield* makeUsageBudget(UsageBudgetLimits.make({}));
     const modelCalls = yield* exports_Ref.make(0);
     const recorded = yield* exports_Ref.make([]);
-    const recordingLayer = reviewRecording.toLayer({
+    const startedAt = yield* exports_DateTime.now;
+    const deadline = exports_DateTime.add(startedAt, { minutes: 5 });
+    const recordingLayer = (batch) => reviewRecording.toLayer({
       record_finding: exports_Effect.fn("Reviewer.recordFinding")(function* (finding) {
-        const report3 = yield* validatedFindings(request3, [finding]);
+        const report3 = yield* validatedFindings(batch, [finding]);
         const accepted = yield* exports_Ref.modify(recorded, (current) => {
           const additions = report3.findings.filter((entry) => !current.some((prior) => JSON.stringify(prior) === JSON.stringify(entry)));
           if (current.length + additions.length > 24)
@@ -44212,6 +44232,8 @@ var makeReviewer = (options3) => {
     });
     const accounting = toRunBudgetHook(budget2);
     const runOptions = {
+      runStartedAt: startedAt,
+      durationDeadline: deadline,
       budget: {
         ...accounting,
         consume: exports_Effect.fn("Reviewer.consumeUsage")(function* (delta) {
@@ -44232,39 +44254,82 @@ var makeReviewer = (options3) => {
       },
       ...options3.estimateCostMicrousd === undefined ? {} : { estimateCostMicrousd: options3.estimateCostMicrousd }
     };
-    const result4 = yield* AgentRuntime.run(reviewer, request3, runOptions).pipe(exports_Effect.provide(recordingLayer), exports_Effect.result);
-    const saved = yield* exports_Ref.get(recorded);
-    const cost = options3.costControl === undefined ? undefined : yield* options3.costControl.snapshot;
-    const preserveAttempt = cost?.stopped === true || (cost?.modelCalls ?? 0) > 0 || saved.length > 0;
-    if (exports_Result.isFailure(result4) && !preserveAttempt) {
-      return yield* result4.failure;
-    }
-    const submitted = exports_Result.isSuccess(result4) ? yield* validatedFindings(request3, result4.success.output.findings).pipe(exports_Effect.result) : exports_Result.succeed(ReviewReport.make({ summary: "Research stopped before completion.", findings: [] }));
-    if (exports_Result.isFailure(submitted) && !preserveAttempt)
-      return yield* submitted.failure;
-    const failure = exports_Result.isFailure(result4) ? result4.failure : exports_Result.isFailure(submitted) ? submitted.failure : undefined;
-    if (failure !== undefined)
-      yield* exports_Effect.logWarning("Review stopped before completion", { failureType: failure._tag });
-    const combined = [...saved];
-    if (exports_Result.isSuccess(submitted)) {
-      for (const finding of submitted.success.findings) {
-        if (!combined.some((prior) => JSON.stringify(prior) === JSON.stringify(finding)))
-          combined.push(finding);
+    const runBatch2 = exports_Effect.fn("Reviewer.reviewBatch")(function* (batch) {
+      const totals = yield* budget2.snapshot;
+      const usedTurns = yield* exports_Ref.get(modelCalls);
+      const priorCost = options3.costControl === undefined ? undefined : yield* options3.costControl.snapshot;
+      const result4 = yield* AgentRuntime.run(reviewer, batch, {
+        ...runOptions,
+        turnAllowance: 8 - usedTurns,
+        toolCallAllowance: 64 - totals.toolCalls
+      }).pipe(exports_Effect.provide(recordingLayer(batch)), exports_Effect.result);
+      const saved = yield* exports_Ref.get(recorded);
+      const cost2 = options3.costControl === undefined ? undefined : yield* options3.costControl.snapshot;
+      const preserveAttempt = cost2?.stopped === true || (cost2?.modelCalls ?? 0) > 0 || saved.length > 0;
+      if (exports_Result.isFailure(result4) && !preserveAttempt) {
+        return yield* result4.failure;
       }
+      const submitted = exports_Result.isSuccess(result4) ? yield* validatedFindings(batch, result4.success.output.findings).pipe(exports_Effect.result) : exports_Result.succeed(ReviewReport.make({ summary: "Research stopped before completion.", findings: [] }));
+      if (exports_Result.isFailure(submitted) && !preserveAttempt)
+        return yield* submitted.failure;
+      const failure = exports_Result.isFailure(result4) ? result4.failure : exports_Result.isFailure(submitted) ? submitted.failure : undefined;
+      if (failure !== undefined)
+        yield* exports_Effect.logWarning("Review stopped before completion", {
+          failureType: failure._tag
+        });
+      const combined2 = [...saved];
+      if (exports_Result.isSuccess(submitted)) {
+        for (const finding of submitted.success.findings) {
+          if (!combined2.some((prior) => JSON.stringify(prior) === JSON.stringify(finding)))
+            combined2.push(finding);
+        }
+      }
+      const incomplete2 = exports_Result.isFailure(result4) || exports_Result.isFailure(submitted) || combined2.length > 24 || result4.success.output.incomplete === true;
+      const exhausted2 = cost2?.stopped === true ? "cost" : exports_Result.isSuccess(result4) ? result4.success.exhausted : undefined;
+      yield* exports_Ref.set(recorded, combined2.slice(0, 24));
+      return {
+        incomplete: incomplete2,
+        exhausted: exhausted2,
+        protocolError: failure?._tag === "ModelProtocolError",
+        attempted: (yield* exports_Ref.get(modelCalls)) > usedTurns || (cost2?.modelCalls ?? 0) > (priorCost?.modelCalls ?? 0)
+      };
+    });
+    const batches = options3.costControl === undefined ? [request3.changes] : batchChanges(request3.changes);
+    let incomplete = false;
+    let exhausted;
+    let protocolError = false;
+    let supplied = 0;
+    for (const changes2 of batches) {
+      const totals = yield* budget2.snapshot;
+      if ((yield* exports_Ref.get(modelCalls)) >= 8 || totals.toolCalls >= 64) {
+        exhausted = totals.toolCalls >= 64 ? "tool-calls" : "turns";
+        incomplete = true;
+        break;
+      }
+      const batch = yield* runBatch2(ReviewRequest.make({ ...request3, changes: changes2 }));
+      if (batch.attempted)
+        supplied += changes2.length;
+      incomplete = batch.incomplete;
+      exhausted = batch.exhausted;
+      protocolError = batch.protocolError;
+      if (incomplete || exhausted !== undefined)
+        break;
     }
-    const incomplete = exports_Result.isFailure(result4) || exports_Result.isFailure(submitted) || combined.length > 24 || result4.success.output.incomplete === true;
-    const exhausted = cost?.stopped === true ? "cost" : exports_Result.isSuccess(result4) ? result4.success.exhausted : undefined;
+    const combined = yield* exports_Ref.get(recorded);
+    const pendingPaths = request3.changes.slice(supplied).map((change) => change.path);
     const report2 = ReviewReport.make({
       findings: combined.slice(0, 24),
-      summary: exhausted !== undefined ? `Review stopped at the ${exhausted} budget. These findings cover the investigation completed before finalization; the remaining change has not been verified.` : incomplete ? `${failure?._tag === "ModelProtocolError" ? "The review stopped after a model protocol error." : "The investigation did not complete."} Recorded findings are preserved; the remaining change has not been verified.` : reviewSummary(request3, combined)
+      summary: exhausted !== undefined ? `Review stopped at the ${exhausted} budget. These findings cover the investigation completed before finalization; the remaining change has not been verified.` : incomplete ? `${protocolError ? "The review stopped after a model protocol error." : "The investigation did not complete."} Recorded findings are preserved; the remaining change has not been verified.` : reviewSummary(request3, combined)
     });
     yield* exports_Effect.logDebug("Review completed", { findingCount: report2.findings.length });
     const usage2 = yield* budget2.snapshot;
+    const cost = options3.costControl === undefined ? undefined : yield* options3.costControl.snapshot;
     return ReviewOutcome.make({
       report: report2,
+      ...pendingPaths.length === 0 ? {} : { pendingPaths },
       ...exhausted === undefined ? {} : { exhausted },
       ...incomplete ? { incomplete: true } : {},
-      turns: cost?.modelCalls ?? (exports_Result.isSuccess(result4) ? result4.success.turns : yield* exports_Ref.get(modelCalls)),
+      turns: cost?.modelCalls ?? (yield* exports_Ref.get(modelCalls)),
       usage: cost?.usage ?? ReviewUsage.make({
         inputTokens: usage2.inputTokens,
         uncachedInputTokens: Math.max(0, usage2.inputTokens - usage2.cacheReadInputTokens - usage2.cacheWriteInputTokens),
@@ -49418,7 +49483,7 @@ var renderVerdict = (report2, complete, unresolvedChangeRequests, exhausted) => 
   }
   if (!complete) {
     return `> [!CAUTION]
-> **Review coverage is incomplete.** Not all supplied changes were verified, so this result does not clear the change.`;
+> **Review coverage is incomplete.** Not all changes were verified, so this result does not clear the change.`;
   }
   if (unresolvedChangeRequests > 0) {
     return `> [!CAUTION]
@@ -49455,9 +49520,34 @@ var fencedPlainText = (text2) => {
 ${text2}
 ${fence}`;
 };
+
+class ReviewExclusion extends exports_Schema.Class("ReviewExclusion")({
+  path: exports_Schema.String,
+  reason: exports_Schema.Literals([
+    "path-limit",
+    "file-limit",
+    "source-limit",
+    "unsupported-entry",
+    "source-read-failed",
+    "patch-unavailable",
+    "patch-limit",
+    "review-stopped"
+  ])
+}) {
+}
+var exclusionReason = {
+  "path-limit": "Path exceeds 512 characters",
+  "file-limit": "100-file input limit",
+  "source-limit": "8 MB source hydration limit",
+  "unsupported-entry": "Not a regular file",
+  "source-read-failed": "Source could not be read as bounded UTF-8 text",
+  "patch-unavailable": "Exact patch could not be generated within the diff bounds",
+  "patch-limit": "Patch exceeds 80,000 characters",
+  "review-stopped": "Review stopped before this batch started"
+};
 var renderCoverage = (input) => [
   `${String(input.reviewedFiles)} ${input.complete ? "reviewed" : "supplied"}`,
-  ...input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} unavailable`] : [],
+  ...input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} excluded`] : [],
   ...input.ignoredFiles > 0 ? [`${String(input.ignoredFiles)} ignored`] : []
 ].join(" · ");
 var formatEstimatedUsd = (microusd) => {
@@ -49488,6 +49578,31 @@ var renderReviewBody = (input) => {
   if (automaticPause !== undefined)
     parts2.push(automaticPause);
   parts2.push("### Summary", input.report.summary);
+  if (input.exclusions !== undefined && input.exclusions.length > 0) {
+    const shown = [];
+    let chars = 0;
+    for (const { path, reason } of input.exclusions.slice(0, 30)) {
+      const line = `${JSON.stringify(path.slice(0, 512))}: ${exclusionReason[reason]}`;
+      if (chars + line.length + 1 > 1e4)
+        break;
+      shown.push(line);
+      chars += line.length + 1;
+    }
+    parts2.push([
+      "<details>",
+      `<summary>Files excluded from review input (${String(input.exclusions.length)})</summary>`,
+      "",
+      fencedPlainText(shown.join(`
+`)),
+      ...shown.length < input.exclusions.length ? [
+        `
+${String(input.exclusions.length - shown.length)} more excluded paths. See the Action log for the full list.`
+      ] : [],
+      "",
+      "</details>"
+    ].join(`
+`));
+  }
   if (unanchored.length > 0) {
     const findingText = unanchored.map(renderUnanchoredFindingText).join(`
 
@@ -49893,7 +50008,6 @@ var makeReviewOpenAi = exports_Effect.fn("makeReviewOpenAi")(function* (options3
 });
 
 // packages/pr-review-action/src/action.ts
-var MAX_REVIEW_PATCH_CHARS = 256000;
 var MAX_PATCH_CHARS = 80000;
 var MAX_REVIEW_FILES = 100;
 var MAX_HYDRATED_SOURCE_BYTES = 8000000;
@@ -50016,6 +50130,7 @@ var matchesIgnore = (path, rawPattern) => {
   }
   return false;
 };
+var documentationPath = (path) => /(^|\/)(docs?|\.changeset)(\/|$)|\.(md|mdx|rst|txt|adoc)$/i.test(path);
 var hydrateExactChanges = exports_Effect.fn("hydrateExactChanges")(function* (input) {
   const metadata = new Map(input.files.map((file2) => [file2.path, file2]));
   const activeRenames = new Map;
@@ -50042,40 +50157,41 @@ var hydrateExactChanges = exports_Effect.fn("hydrateExactChanges")(function* (in
   const changes2 = [];
   const unreviewedPaths = [];
   const ignoredPaths = [];
+  const exclusions = [];
   const unavailablePaths = new Set;
-  const exclude = (paths, file2, basePath) => {
+  const exclude = (paths, file2, basePath, reason) => {
     paths.push(file2.path);
-    unavailablePaths.add(file2.path).add(basePath);
-    if (file2.previousPath !== undefined)
-      unavailablePaths.add(file2.previousPath);
+    if (reason !== undefined)
+      exclusions.push(ReviewExclusion.make({ path: file2.path, reason }));
+    if (reason === undefined || reason === "unsupported-entry" || reason === "source-read-failed") {
+      unavailablePaths.add(file2.path).add(basePath);
+      if (file2.previousPath !== undefined)
+        unavailablePaths.add(file2.previousPath);
+    }
   };
   let admittedPaths = 0;
-  let patchChars = 0;
-  let patchBudgetExhausted = false;
   let hydratedSourceBytes = 0;
-  let sourceBudgetExhausted = false;
-  for (const { file: file2, basePath } of [...candidates.values()].sort((left, right) => left.file.path < right.file.path ? -1 : left.file.path > right.file.path ? 1 : 0)) {
+  for (const { file: file2, basePath } of [...candidates.values()].sort((left, right) => Number(documentationPath(left.file.path)) - Number(documentationPath(right.file.path)) || (left.file.path < right.file.path ? -1 : left.file.path > right.file.path ? 1 : 0))) {
     const ignored = [file2.path, ...basePath === file2.path ? [] : [basePath]].some((path) => input.ignore.some((pattern) => matchesIgnore(path, pattern)));
     if (ignored) {
       exclude(ignoredPaths, file2, basePath);
       continue;
     }
-    if (file2.path.length > 512 || admittedPaths >= MAX_REVIEW_FILES || patchBudgetExhausted || sourceBudgetExhausted) {
-      exclude(unreviewedPaths, file2, basePath);
+    if (file2.path.length > 512 || admittedPaths >= MAX_REVIEW_FILES) {
+      exclude(unreviewedPaths, file2, basePath, file2.path.length > 512 ? "path-limit" : "file-limit");
       continue;
     }
     admittedPaths += 1;
     const beforeEntry = input.base.entry(basePath);
     const afterEntry = input.head.entry(file2.path);
-    if (beforeEntry !== undefined && beforeEntry.type !== "blob" || afterEntry !== undefined && afterEntry.type !== "blob") {
-      exclude(unreviewedPaths, file2, basePath);
+    if (beforeEntry !== undefined && (beforeEntry.type !== "blob" || beforeEntry.mode === "120000") || afterEntry !== undefined && (afterEntry.type !== "blob" || afterEntry.mode === "120000")) {
+      exclude(unreviewedPaths, file2, basePath, "unsupported-entry");
       continue;
     }
     const sourceSizesKnown = (beforeEntry === undefined || beforeEntry.size !== undefined) && (afterEntry === undefined || afterEntry.size !== undefined);
     const estimatedSourceBytes = (beforeEntry?.size ?? 0) + (afterEntry?.size ?? 0);
-    if (sourceSizesKnown && hydratedSourceBytes + estimatedSourceBytes > MAX_HYDRATED_SOURCE_BYTES) {
-      exclude(unreviewedPaths, file2, basePath);
-      sourceBudgetExhausted = true;
+    if (hydratedSourceBytes >= MAX_HYDRATED_SOURCE_BYTES || sourceSizesKnown && hydratedSourceBytes + estimatedSourceBytes > MAX_HYDRATED_SOURCE_BYTES) {
+      exclude(unreviewedPaths, file2, basePath, "source-limit");
       continue;
     }
     const contents = yield* exports_Effect.all({
@@ -50084,13 +50200,12 @@ var hydrateExactChanges = exports_Effect.fn("hydrateExactChanges")(function* (in
     }, { concurrency: 2 }).pipe(exports_Effect.result);
     if (exports_Result.isFailure(contents)) {
       hydratedSourceBytes += estimatedSourceBytes;
-      exclude(unreviewedPaths, file2, basePath);
+      exclude(unreviewedPaths, file2, basePath, "source-read-failed");
       continue;
     }
     hydratedSourceBytes += sourceSizesKnown ? estimatedSourceBytes : contents.success.before.length + contents.success.after.length;
     if (hydratedSourceBytes > MAX_HYDRATED_SOURCE_BYTES) {
-      exclude(unreviewedPaths, file2, basePath);
-      sourceBudgetExhausted = true;
+      exclude(unreviewedPaths, file2, basePath, "source-limit");
       continue;
     }
     const patch3 = basePath === file2.path && contents.success.before === contents.success.after && beforeEntry !== undefined && afterEntry !== undefined && beforeEntry.mode !== afterEntry.mode ? [
@@ -50115,20 +50230,12 @@ var hydrateExactChanges = exports_Effect.fn("hydrateExactChanges")(function* (in
     ].join(`
 `) : patch3;
     if (exactPatch === undefined || exactPatch.length === 0 || exactPatch.length > MAX_PATCH_CHARS) {
-      exclude(unreviewedPaths, file2, basePath);
-      continue;
-    }
-    if (patchChars + exactPatch.length > MAX_REVIEW_PATCH_CHARS) {
-      exclude(unreviewedPaths, file2, basePath);
-      patchBudgetExhausted = true;
+      exclude(unreviewedPaths, file2, basePath, exactPatch !== undefined && exactPatch.length > MAX_PATCH_CHARS ? "patch-limit" : "patch-unavailable");
       continue;
     }
     changes2.push(ReviewChange.make({ path: file2.path, patch: exactPatch }));
-    patchChars += exactPatch.length;
-    if (patchChars === MAX_REVIEW_PATCH_CHARS)
-      patchBudgetExhausted = true;
   }
-  return { changes: changes2, unreviewedPaths, ignoredPaths, unavailablePaths };
+  return { changes: changes2, unreviewedPaths, ignoredPaths, unavailablePaths, exclusions };
 });
 var reviewContextFailure = (message) => ReviewContextError.make({ message });
 var makeReviewRepository = (input) => {
@@ -50341,8 +50448,14 @@ var reviewActionProgram = exports_Effect.gen(function* () {
       ...snapshot3.usage,
       costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD
     })))));
+    const pending = new Set(result4.pendingPaths ?? []);
+    surface2.unreviewedPaths.push(...pending);
+    surface2.exclusions.push(...[...pending].map((path) => ReviewExclusion.make({ path, reason: "review-stopped" })));
     return {
-      surface: surface2,
+      surface: {
+        ...surface2,
+        changes: surface2.changes.filter((change) => !pending.has(change.path))
+      },
       modelTurns: result4.turns,
       exhausted: result4.exhausted,
       incomplete: result4.incomplete === true,
@@ -50426,6 +50539,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     scope: scope3,
     reviewedFiles: surface.changes.length,
     unreviewedFiles: surface.unreviewedPaths.length,
+    exclusions: surface.exclusions,
     ignoredFiles: surface.ignoredPaths.length,
     modelTurns,
     complete,
@@ -50475,6 +50589,12 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     ["review-url", reviewUrl]
   ]);
   yield* exports_Console.log(`Posted PR review: ${reviewUrl}`);
+  for (const exclusion of surface.exclusions) {
+    yield* exports_Effect.logInfo("Review input excluded", {
+      path: exclusion.path,
+      reason: exclusion.reason
+    });
+  }
   const publicationFailure = reviewPublicationFailure({
     blockingFindings: blocking,
     unreviewedPaths: surface.unreviewedPaths.length,

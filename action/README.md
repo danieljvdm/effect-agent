@@ -45,7 +45,11 @@ the check, including when no defects were found. Such an attempt cannot become
 an incremental baseline or clear an earlier change request. This preserves useful findings without
 claiming the full change was reviewed.
 The model's `incomplete` flag describes unfinished assessment of supplied patches. The Action
-separately discloses unavailable paths, even when assessment of the supplied patches completes.
+separately lists excluded paths and their reasons, including input limits, unreadable source, and
+batches that never started. Excluded paths prevent a complete review even when assessment of the
+supplied patches completes. The comment shows up to 30 exclusions; the Action log includes all of
+them. Paths excluded only by input capacity remain available to bounded source tools, while ignore
+rules and unsupported or unreadable entries continue to block access.
 
 ## Spending and prompt caching
 
@@ -93,9 +97,16 @@ cost. Raw provider failure causes, credentials, and
 repository source are excluded from the Action's diagnostics. Logs also count supplied tool
 definitions, returned function calls, and completion calls to diagnose protocol failures.
 
-Each admitted patch reaches the model once as literal unified diff text. The native Agent input
-projection keeps all supplied changes while avoiding JSON-escaped source and duplicated old/new
-context. A large remaining input can still prevent another call before the observed spend reaches
+The Action admits implementation and configuration changes before documentation paths and prose,
+with alphabetical order within each group. The reviewer divides admitted patches into sequential
+batches of at most 256,000 patch characters, with a fresh model context for each batch. Each patch
+belongs to one batch and remains complete. Every batch can read the same authorized base/head source
+to investigate interactions with other files. One spending ledger, 8-turn allowance, 64-tool-call
+allowance, 5-minute deadline, and 24-finding capacity cover the entire attempt. Findings survive a
+later batch's expected failure; stopping leaves the remaining batches explicitly unreviewed.
+
+The native Agent input projection uses literal unified diff text, avoiding JSON-escaped source and
+duplicated old/new context. A large remaining input can still prevent another call before the observed spend reaches
 $1, because admission must cover a cache miss. Refusal logs report the counted input, remaining
 balance, and minimum possible request reservation. The Action's spending admission replaces the
 reviewer's cumulative token quota, so reusing cached context does not force early finalization.
@@ -111,6 +122,7 @@ the research tool definitions and their order in the encoded request.
 Compaction can change prefixes, and routing and cache availability still affect hits. See
 [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
 
-Input admission allows at most 100 files, 256,000 aggregate patch characters, 80,000 characters per
-patch, and 8 MB of hydrated base/head source. These bounds decide which files are supplied, not how
-much inference may spend. Unavailable paths remain explicit coverage gaps.
+Input admission allows at most 100 candidate files, 80,000 characters per patch, and 8 MB of hydrated
+base/head source. The batch size does not exclude later patches. A file that exceeds the remaining
+source allowance is excluded without preventing smaller later files from fitting. These bounds
+limit input preparation independently of the shared inference spending ceiling.

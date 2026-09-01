@@ -7,6 +7,7 @@ import {
   renderReviewPauseBody,
   renderReviewBody,
   renderReviewFailureBody,
+  ReviewExclusion,
   withReviewMarker,
   withReviewPauseMarker,
 } from "../src/presentation.ts";
@@ -48,6 +49,7 @@ describe("review presentation", () => {
       scope: "full",
       reviewedFiles: 2,
       unreviewedFiles: 1,
+      exclusions: [ReviewExclusion.make({ path: "docs/large.md", reason: "patch-limit" })],
       ignoredFiles: 3,
       modelTurns: 5,
       complete: true,
@@ -67,8 +69,9 @@ describe("review presentation", () => {
 
     expect(body).toContain("> [!CAUTION]\n> **1 blocking finding.** Do not merge");
     expect(body).toContain(
-      "| **Full diff** | 2 reviewed · 1 unavailable · 3 ignored | 🛑 1 blocking · ⚠️ 1 important |",
+      "| **Full diff** | 2 reviewed · 1 excluded · 3 ignored | 🛑 1 blocking · ⚠️ 1 important |",
     );
+    expect(body).toContain('"docs/large.md": Patch exceeds 80,000 characters');
     expect(body).toContain("### Findings without an inline anchor (1)");
     expect(body).toContain("```text\n[⚠️ important · security] Authorization is not enforced");
     expect(body).toContain(
@@ -219,22 +222,25 @@ describe("review presentation", () => {
     }
   });
 
-  it("renders all twenty-four unanchored findings once within the publication bound", () => {
+  it("keeps maximum findings and adversarial excluded paths within the publication bound", () => {
     const findings = Array.from({ length: 24 }, (_, index) =>
       ReviewFinding.make({
-        path: `src/finding-${String(index).padStart(2, "0")}.ts`,
+        path: `src/${String(index).padStart(2, "0")}${"x".repeat(506)}`,
         severity: "blocking",
         category: "correctness",
-        title: `Distinct blocker ${String(index).padStart(2, "0")}`,
-        body: "<".repeat(2_000),
+        title: `Title ${String(index).padStart(2, "0")}${"x".repeat(192)}`,
+        body: "`".repeat(2_000),
       }),
     );
     const body = renderReviewBody({
-      report: ReviewReport.make({ summary: "Twenty-four distinct blockers.", findings }),
+      report: ReviewReport.make({ summary: "x".repeat(6_000), findings }),
       automaticReviewsRemaining: 1,
       scope: "full",
       reviewedFiles: 24,
-      unreviewedFiles: 0,
+      unreviewedFiles: 100,
+      exclusions: Array.from({ length: 100 }, () =>
+        ReviewExclusion.make({ path: "\u0001".repeat(512), reason: "patch-limit" }),
+      ),
       ignoredFiles: 0,
       modelTurns: 9,
       complete: true,
@@ -248,6 +254,7 @@ describe("review presentation", () => {
     });
 
     expect(body.length).toBeLessThanOrEqual(100_000);
+    expect(body).toContain("more excluded paths. See the Action log for the full list.");
     for (const finding of findings) {
       expect(body.split(finding.title)).toHaveLength(2);
     }

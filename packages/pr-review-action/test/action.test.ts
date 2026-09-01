@@ -931,6 +931,7 @@ describe("exact review delta", () => {
       });
 
       expect(surface.unreviewedPaths).toEqual(["src/a.ts"]);
+      expect(surface.exclusions).toEqual([{ path: "src/a.ts", reason: "source-read-failed" }]);
       expect([...surface.unavailablePaths]).toEqual(["src/a.ts"]);
       expect(surface.changes.map((change) => change.path)).toEqual(["src/b.ts"]);
     }),
@@ -1051,36 +1052,68 @@ describe("exact review delta", () => {
       expect(surface.changes).toHaveLength(100);
       expect(surface.ignoredPaths).toEqual([ignored]);
       expect(surface.unreviewedPaths).toEqual([afterCap]);
+      expect(surface.exclusions).toEqual([{ path: afterCap, reason: "file-limit" }]);
     }),
   );
 
-  it.effect("stops blob hydration after the aggregate patch budget is exhausted", () =>
+  it.effect(
+    "admits large documentation changes without excluding implementation or later patches",
+    () =>
+      Effect.gen(function* () {
+        const paths = ["docs/a.md", "docs/b.md", "docs/c.md", "docs/d.md", "src/e.ts"];
+        const surface = yield* hydrateExactChanges({
+          files: paths.map((path) => file(path, undefined)),
+          changedPaths: paths,
+          base: treeSnapshot("base", {}),
+          head: treeSnapshot("head", {
+            "docs/a.md": "a".repeat(70_000),
+            "docs/b.md": "b".repeat(70_000),
+            "docs/c.md": "c".repeat(70_000),
+            "docs/d.md": "d".repeat(70_000),
+            "src/e.ts": "export const corrected = true;",
+          }),
+          ignore: [],
+        });
+
+        expect(surface.changes.map((change) => change.path)).toEqual([
+          "src/e.ts",
+          "docs/a.md",
+          "docs/b.md",
+          "docs/c.md",
+          "docs/d.md",
+        ]);
+        expect(surface.unreviewedPaths).toEqual([]);
+        expect(surface.exclusions).toEqual([]);
+      }),
+  );
+
+  it.effect("keeps oversized patches readable as context without claiming they were reviewed", () =>
     Effect.gen(function* () {
-      const paths = ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"];
+      const path = "src/large.ts";
+      const base = treeSnapshot("base", {});
+      const head = treeSnapshot("head", { [path]: "export const large = true;\n".repeat(4_000) });
       const surface = yield* hydrateExactChanges({
-        files: paths.map((path) => file(path, undefined)),
-        changedPaths: paths,
-        base: treeSnapshot("base", {}),
-        head: treeSnapshot(
-          "head",
-          {
-            "src/a.ts": "a".repeat(70_000),
-            "src/b.ts": "b".repeat(70_000),
-            "src/c.ts": "c".repeat(70_000),
-            "src/d.ts": "d".repeat(70_000),
-            "src/e.ts": "must not be read",
-          },
-          new Set(["src/e.ts"]),
-        ),
+        files: [file(path, undefined)],
+        changedPaths: [path],
+        base,
+        head,
         ignore: [],
       });
-
-      expect(surface.changes.map((change) => change.path)).toEqual([
-        "src/a.ts",
-        "src/b.ts",
-        "src/c.ts",
+      const repository = makeReviewRepository({
+        base,
+        head,
+        ignore: [],
+        unavailablePaths: surface.unavailablePaths,
+      });
+      expect(surface.changes).toEqual([]);
+      expect(surface.exclusions).toEqual([{ path, reason: "patch-limit" }]);
+      expect((yield* repository.findFiles({ revision: "head", query: "large" })).paths).toEqual([
+        path,
       ]);
-      expect(surface.unreviewedPaths).toEqual(["src/d.ts", "src/e.ts"]);
+      expect(
+        (yield* repository.readFile({ path, revision: "head", startLine: 1, lineCount: 1 }))
+          .content,
+      ).toBe("export const large = true;");
     }),
   );
 
