@@ -123,7 +123,7 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
       const bindings = yield* compileRegistrations([
         { agent: parent, definitions: versions },
         { agent: target, model: childModel, definitions: versions },
-      ]).pipe(Effect.provide(handlers), Effect.provide(NodeCrypto.layer));
+      ]).pipe(Effect.provide([handlers, NodeCrypto.layer]));
       const parentId = Schema.decodeSync(ThreadId)("shared-budget-parent");
       const runtimeLayer = () =>
         NodeDurableRuntime.layer({

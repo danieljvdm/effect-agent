@@ -2749,15 +2749,15 @@ layer(TestServices)("derived subagent declarations", (it) => {
           ),
         );
         const handle = yield* AgentRuntime.start(parent, "start").pipe(
-          Effect.provide(childLayer),
-          Effect.provide(
+          Effect.provide([
+            childLayer,
             delegatingModel(
               "defaults-parent",
               delegation.name,
               [{ id: "defaults", params: { question: "research:defaults" } }],
               '"done"',
             ),
-          ),
+          ]),
         );
         const completed = yield* handle.await;
         const result = findEvent(yield* handle.events, "ToolCallSucceeded");
@@ -2806,20 +2806,18 @@ layer(TestServices)("derived subagent declarations", (it) => {
           toolkit: Toolkit.make(delegation.tool),
         });
         const handle = yield* AgentRuntime.start(parent, "start").pipe(
-          Effect.provide(
+          Effect.provide([
             SubagentRuntime.layer(
               delegation,
               answeringModel("transformed", '{"answer":"ok"}', prompt),
             ),
-          ),
-          Effect.provide(
             delegatingModel(
               "transformed-parent",
               delegation.name,
               [{ id: "transformed", params: { amount: "41" } }],
               '"done"',
             ),
-          ),
+          ]),
         );
         yield* handle.await;
         expect(findEvent(yield* handle.events, "ToolCallSucceeded")).toMatchObject({

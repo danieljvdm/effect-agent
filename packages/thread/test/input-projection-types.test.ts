@@ -224,7 +224,7 @@ const proveRegistrationRequirements = (
     },
   ]);
   const empty = compileRegistrations([]);
-  compileRegistrations([
+  const rejectedMixedModel = compileRegistrations([
     // @ts-expect-error An existing Binding cannot also select a different model.
     {
       agent: first,
@@ -232,6 +232,7 @@ const proveRegistrationRequirements = (
       definitions: DefinitionDigestInput.make({ agent: "mixed", model: "mixed", tools: [] }),
     },
   ]);
+  void rejectedMixedModel;
   const identityOnly = {
     agentId: first.definition.id,
     attempt: () => Effect.never,
