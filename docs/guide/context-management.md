@@ -661,6 +661,9 @@ baseline; it makes no sentence-boundary or relevance promise.
 `inMemorySemanticIndexLayer` is a replaceable exact cosine adapter. It bounds all registered source
 keys, including withdrawal tombstones, and all ready chunks. A search over its scan limit fails
 instead of ranking an arbitrary prefix. Scores tie by source ID, revision, and chunk ordinal.
+Configuration rejects `maxChunks * profile.dimensions` above 16,777,216 vector components before
+allocating index state. For a 4,096-dimensional profile, set `maxChunks` to at most 4,096. This bounds
+stored vectors, not total process memory or allocations made by callers.
 The adapter holds no authoritative documents or attribution.
 
 Refresh prepares chunks and embeddings before calling `SemanticMemoryIndex.replace`. Replacement

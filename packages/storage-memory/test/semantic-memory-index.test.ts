@@ -77,6 +77,17 @@ describe("in-memory semantic index", () => {
           yield* Layer.build(layer(invalidProfile)).pipe(Effect.scoped, Effect.flip),
         ).toMatchObject({ reason: "invalid-input" });
 
+        const maximumDimensions = SemanticMemoryProfile.make({ ...profile, dimensions: 4_096 });
+        yield* Layer.build(layer(maximumDimensions, { maxSources: 1, maxChunks: 4_096 })).pipe(
+          Effect.scoped,
+        );
+        expect(
+          yield* Layer.build(layer(maximumDimensions, { maxSources: 1, maxChunks: 4_097 })).pipe(
+            Effect.scoped,
+            Effect.flip,
+          ),
+        ).toMatchObject({ reason: "invalid-input" });
+
         const index = yield* SemanticMemoryIndex;
         yield* index.replace({
           source: source("b"),

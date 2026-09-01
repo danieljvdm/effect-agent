@@ -13,8 +13,12 @@ import {
 import { Clock, Effect, Encoding, Layer, Ref, Schema } from "effect";
 
 const PositiveCapacity = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_536 }));
+const MaxStoredVectorComponents = 16_777_216;
 
-/** Hard per-Layer bounds for disposable semantic index state. */
+/**
+ * Hard per-Layer bounds for disposable semantic index state. maxChunks times profile dimensions
+ * must not exceed 16,777,216 vector components.
+ */
 export class InMemorySemanticIndexCapacity extends Schema.Class<InMemorySemanticIndexCapacity>(
   "@effect-agent/storage-memory/InMemorySemanticIndexCapacity",
 )({
@@ -142,6 +146,9 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
     rawCapacity,
     "configure semantic memory index",
   );
+  if (capacity.maxChunks * profile.dimensions > MaxStoredVectorComponents) {
+    return yield* error("configure semantic memory index", "invalid-input");
+  }
   const data = yield* Ref.make<IndexData>({ closed: false, entries: new Map() });
   yield* Effect.addFinalizer(() => Ref.set(data, { closed: true, entries: new Map() }));
 
