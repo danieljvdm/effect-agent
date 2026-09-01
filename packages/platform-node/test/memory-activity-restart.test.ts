@@ -10,7 +10,11 @@ import {
   MemoryWriter,
   ThreadId,
 } from "@effect-agent/core";
-import { AgentRuntime, ThreadHistory } from "@effect-agent/engine";
+import {
+  AgentRuntime,
+  ThreadHistory,
+  RunContextPreparationPassthrough,
+} from "@effect-agent/engine";
 import {
   activityProcessorStoreLayer,
   layer as sqliteThreadStoreLayer,
@@ -257,7 +261,14 @@ const runTim = Effect.fn("MemoryActivityTest.runTim")(function* (
           ),
       },
     },
-  ).pipe(Effect.provide([historyLayer(filename), readerLayer(filename), IdGenerator.layer]));
+  ).pipe(
+    Effect.provide([
+      historyLayer(filename),
+      readerLayer(filename),
+      IdGenerator.layer,
+      RunContextPreparationPassthrough,
+    ]),
+  );
   return { prompts: yield* Ref.get(prompts), recalled: yield* Ref.get(recalled) };
 });
 
@@ -296,7 +307,11 @@ it.live(
         const filename = `${directory}/memory.sqlite`;
 
         yield* AgentRuntime.run(sourceAgent, danStatement, { threadId: danThreadId }).pipe(
-          Effect.provide([historyLayer(filename), IdGenerator.layer]),
+          Effect.provide([
+            historyLayer(filename),
+            IdGenerator.layer,
+            RunContextPreparationPassthrough,
+          ]),
         );
         const source = yield* exportThread(filename, danThreadId);
         expect(source.records.map(({ record }) => record.payload._tag)).toEqual([
