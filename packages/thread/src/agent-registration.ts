@@ -8,7 +8,8 @@ import {
   type RunDispositionDeclaration,
 } from "@effect-agent/core";
 import type { RuntimeBinding } from "@effect-agent/engine";
-import { type Option, Crypto, Effect, type Layer, Schema } from "effect";
+import type { Crypto } from "effect";
+import { type Option, Effect, type Layer, Schema } from "effect";
 import type { Tool } from "effect/unstable/ai";
 
 import { digestDefinitions, type DigestError } from "./digest.ts";
@@ -146,22 +147,19 @@ export interface ResolvedBinding extends CapturedBinding {
 const capture = <A extends ExecutableAgentBinding>(
   agent: A,
 ): Effect.Effect<CapturedBinding, never, DurableWorkerRequirements<A>> =>
-  Effect.map(
-    Effect.context<DurableWorkerRequirements<A>>(),
-    (context): CapturedBinding => ({
-      agentId: agent.definition.id,
-      attempt: (driver, threadId, claim) => {
-        // Registration closes one concrete Binding before heterogeneous registrations are
-        // collected. TypeScript cannot instantiate the higher-rank RuntimeBinding parameters
-        // from the intentionally erased public shape, so specialize the driver back to A here.
-        const run = driver as unknown as CapturedAttempt<A>;
-        return run(agent, threadId, claim).pipe(Effect.provide(context)) as Effect.Effect<
-          Option.Option<Settlement>,
-          DurableWorkerFailure
-        >;
-      },
-    }),
-  );
+  Effect.map(Effect.context<DurableWorkerRequirements<A>>(), (context): CapturedBinding => ({
+    agentId: agent.definition.id,
+    attempt: (driver, threadId, claim) => {
+      // Registration closes one concrete Binding before heterogeneous registrations are
+      // collected. TypeScript cannot instantiate the higher-rank RuntimeBinding parameters
+      // from the intentionally erased public shape, so specialize the driver back to A here.
+      const run = driver as unknown as CapturedAttempt<A>;
+      return run(agent, threadId, claim).pipe(Effect.provide(context)) as Effect.Effect<
+        Option.Option<Settlement>,
+        DurableWorkerFailure
+      >;
+    },
+  }));
 
 /**
  * Build one exact worker registration from an executable Agent Binding and

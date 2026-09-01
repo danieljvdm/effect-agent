@@ -689,15 +689,12 @@ new mode 100755`;
             const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
             if (call === 2 || typeof choice === "object") return response({ findings: [] });
             return Stream.fromIterable<Response.StreamPartEncoded>([
-              ...Array.from(
-                { length: 32 },
-                (_, index): Response.StreamPartEncoded => ({
-                  type: "tool-call",
-                  id: `read-${String(call)}-${String(index)}`,
-                  name: "find_files",
-                  params: { revision: "head", query: "part" },
-                }),
-              ),
+              ...Array.from({ length: 32 }, (_, index): Response.StreamPartEncoded => ({
+                type: "tool-call",
+                id: `read-${String(call)}-${String(index)}`,
+                name: "find_files",
+                params: { revision: "head", query: "part" },
+              })),
               { type: "finish", reason: "tool-calls", usage },
             ]);
           }),

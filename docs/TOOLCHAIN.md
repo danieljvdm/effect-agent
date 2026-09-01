@@ -11,8 +11,8 @@ Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 
 | Tool                                                    | Repository version   |
 | ------------------------------------------------------- | -------------------- |
-| Bun                                                     | `1.3.14`             |
-| Vite+                                                   | `0.2.6`              |
+| Bun                                                     | `1.4.0`              |
+| Vite+                                                   | `0.3.0`              |
 | Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.111`       |
 | `effect-cf`                                             | `0.37.0`             |
 | TypeScript                                              | `7.0.2`              |
@@ -198,9 +198,9 @@ manifests afterward. All public packages use the MIT license.
 ## Script runners
 
 Package scripts use Bun through `vp run`.
-Scripts that import `@effect-agent/storage-sqlite` use
-`node --experimental-transform-types` because Bun does not implement `node:sqlite`
-and strip-only execution cannot handle the framework's runtime namespaces.
+Scripts that import `@effect-agent/storage-sqlite` continue to use
+`node --experimental-transform-types` to exercise the Node host runtime.
+Strip-only execution cannot handle the framework's runtime namespaces.
 This includes `admin:durable` and the Node crash/soak workers.
 
 ## Post-install setup

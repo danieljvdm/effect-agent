@@ -702,21 +702,19 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
   it.effect("isolates the child prompt from the parent transcript and vice versa", () =>
     Effect.gen(function* () {
       let childPromptChecks = 0;
-      const childTurns = researcherHappyPathTurns("LHR").map(
-        (turn): ScriptedTurnInput => ({
-          ...turn,
-          assertRequest: (request) => {
-            const prompt = JSON.stringify(request.prompt.content);
-            // The child sees exactly the projected input (SUB-006)...
-            expect(prompt).toContain("LHR");
-            expect(prompt).toContain("research:museums");
-            // ...and never the coordinator's transcript or instructions.
-            expect(prompt).not.toContain(missionConfidentialMarker);
-            expect(prompt).not.toContain(coordinatorConfidentialMarker);
-            childPromptChecks += 1;
-          },
-        }),
-      );
+      const childTurns = researcherHappyPathTurns("LHR").map((turn): ScriptedTurnInput => ({
+        ...turn,
+        assertRequest: (request) => {
+          const prompt = JSON.stringify(request.prompt.content);
+          // The child sees exactly the projected input (SUB-006)...
+          expect(prompt).toContain("LHR");
+          expect(prompt).toContain("research:museums");
+          // ...and never the coordinator's transcript or instructions.
+          expect(prompt).not.toContain(missionConfidentialMarker);
+          expect(prompt).not.toContain(coordinatorConfidentialMarker);
+          childPromptChecks += 1;
+        },
+      }));
       const childBinding = Agent.withModel(
         DestinationResearcher,
         Model.make("scripted", "destination-researcher-isolated", ScriptedModel.layer(childTurns)),

@@ -121,9 +121,11 @@ layer(testLayer)("Agent input prompts", (it) => {
                 expect(JSON.stringify(request.source)).toContain("context-added");
               }).pipe(
                 Effect.andThen(request.summarize(request.source)),
-                Effect.map(
-                  (summary): CompactionDecision => ({ kind: "summarize", through: 1, summary }),
-                ),
+                Effect.map((summary): CompactionDecision => ({
+                  kind: "summarize",
+                  through: 1,
+                  summary,
+                })),
               ),
             ),
         }),

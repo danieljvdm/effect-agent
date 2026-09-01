@@ -1692,39 +1692,38 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
       isolateToolkitHandle(toolkit.handle(prepared.name, prepared.nativeHandlerParams, call.id)),
     ),
   ).pipe(
-    Stream.mapEffect(
-      (result): Effect.Effect<RunEvent | undefined, ModelProtocolError> =>
-        Effect.gen(function* () {
-          if (terminal || trace.finalToolResultIds.has(call.id)) {
-            return yield* ModelProtocolError.make({
-              message: `Tool Call ${call.id} produced more than one terminal result`,
-            });
-          }
-          const toolCallId = yield* decodeToolCallId(call.id);
-          if (result.preliminary) {
-            const event: RunEvent = ToolProgress.make({
-              ...(yield* eventBase(context)),
-              turnId,
-              toolCallId,
-              toolName: call.name,
-              result: yield* decodeEventJson(result.encodedResult, "Tool result"),
-              providerExecuted: false,
-            });
-            return event;
-          }
+    Stream.mapEffect((result): Effect.Effect<RunEvent | undefined, ModelProtocolError> =>
+      Effect.gen(function* () {
+        if (terminal || trace.finalToolResultIds.has(call.id)) {
+          return yield* ModelProtocolError.make({
+            message: `Tool Call ${call.id} produced more than one terminal result`,
+          });
+        }
+        const toolCallId = yield* decodeToolCallId(call.id);
+        if (result.preliminary) {
+          const event: RunEvent = ToolProgress.make({
+            ...(yield* eventBase(context)),
+            turnId,
+            toolCallId,
+            toolName: call.name,
+            result: yield* decodeEventJson(result.encodedResult, "Tool result"),
+            providerExecuted: false,
+          });
+          return event;
+        }
 
-          terminal = true;
-          terminalOutcome = result.isFailure ? "failure" : "success";
-          terminalResult = {
-            encodedResult: result.encodedResult,
-            isFailure: result.isFailure,
-            result: result.result,
-          };
-          // A terminal Toolkit value is provisional until its handler stream closes. Emitting the
-          // append-only event or committing the Turn trace here would leave contradictory Run state
-          // if that stream later fails or produces another terminal value.
-          return undefined;
-        }),
+        terminal = true;
+        terminalOutcome = result.isFailure ? "failure" : "success";
+        terminalResult = {
+          encodedResult: result.encodedResult,
+          isFailure: result.isFailure,
+          result: result.result,
+        };
+        // A terminal Toolkit value is provisional until its handler stream closes. Emitting the
+        // append-only event or committing the Turn trace here would leave contradictory Run state
+        // if that stream later fails or produces another terminal value.
+        return undefined;
+      }),
     ),
     Stream.filter((event): event is RunEvent => event !== undefined),
   );
@@ -4388,17 +4387,16 @@ const makeTurn = <
                 // The retried call is outside the outer catch: a second
                 // classified overflow converts here, typed, no retry.
                 const retried: TurnStream = attempt(compactedOutgoing()).pipe(
-                  Stream.catch(
-                    (again): TurnStream =>
-                      again instanceof AiError.AiError &&
-                      isContextOverflowMessage(overflowText(again))
-                        ? Stream.fail(
-                            ContextOverflowError.make({
-                              message: overflowText(again),
-                              retried: true,
-                            }),
-                          )
-                        : Stream.fail(again),
+                  Stream.catch((again): TurnStream =>
+                    again instanceof AiError.AiError &&
+                    isContextOverflowMessage(overflowText(again))
+                      ? Stream.fail(
+                          ContextOverflowError.make({
+                            message: overflowText(again),
+                            retried: true,
+                          }),
+                        )
+                      : Stream.fail(again),
                   ),
                 );
                 const events: TurnStream = Stream.fromIterable(outcome.events);

@@ -162,15 +162,13 @@ const delegatingModel = (
                   Stream.fromIterable<Response.StreamPartEncoded>(
                     value === 0
                       ? [
-                          ...calls.map(
-                            (call): Response.StreamPartEncoded => ({
-                              type: "tool-call",
-                              id: call.id,
-                              name: toolName,
-                              params: call.params,
-                              providerExecuted: false,
-                            }),
-                          ),
+                          ...calls.map((call): Response.StreamPartEncoded => ({
+                            type: "tool-call",
+                            id: call.id,
+                            name: toolName,
+                            params: call.params,
+                            providerExecuted: false,
+                          })),
                           { type: "finish", reason: "tool-calls", usage },
                         ]
                       : finalParts(answerText),
@@ -2652,16 +2650,13 @@ const probingChildModel = (
             return Stream.fromIterable(finalParts(script.answer));
           }
           return Stream.fromIterable<Response.StreamPartEncoded>([
-            ...Array.from(
-              { length: script.declares },
-              (_, index): Response.StreamPartEncoded => ({
-                type: "tool-call",
-                id: `probe-${script.topic}-${index + 1}`,
-                name: "probe_doc",
-                params: { ref: `doc-${index + 1}` },
-                providerExecuted: false,
-              }),
-            ),
+            ...Array.from({ length: script.declares }, (_, index): Response.StreamPartEncoded => ({
+              type: "tool-call",
+              id: `probe-${script.topic}-${index + 1}`,
+              name: "probe_doc",
+              params: { ref: `doc-${index + 1}` },
+              providerExecuted: false,
+            })),
             { type: "finish", reason: "tool-calls", usage },
           ]);
         },

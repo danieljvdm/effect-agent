@@ -424,13 +424,12 @@ export class CloudflareThreadClient extends Context.Service<
               }),
           });
           return yield* decodeHostResponse(raw).pipe(
-            Effect.mapError(
-              (error): HostProtocolError =>
-                HostProtocolError.make({
-                  message: boundHostDiagnostic(
-                    `The ${operation} answer could not be decoded: ${error.message}`,
-                  ),
-                }),
+            Effect.mapError((error): HostProtocolError =>
+              HostProtocolError.make({
+                message: boundHostDiagnostic(
+                  `The ${operation} answer could not be decoded: ${error.message}`,
+                ),
+              }),
             ),
           );
         },

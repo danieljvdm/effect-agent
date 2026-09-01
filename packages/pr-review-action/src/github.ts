@@ -227,17 +227,15 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
 
   const getPullRequest = execute("get pull request", HttpClientRequest.get(pullUrl)).pipe(
     Effect.flatMap(decode(PullRequestWire, "get pull request")),
-    Effect.map(
-      (wire): PullRequestView => ({
-        number: wire.number,
-        title: wire.title,
-        description: wire.body ?? "",
-        draft: wire.draft,
-        url: wire.html_url,
-        baseRevision: wire.base.sha,
-        headRevision: wire.head.sha,
-      }),
-    ),
+    Effect.map((wire): PullRequestView => ({
+      number: wire.number,
+      title: wire.title,
+      description: wire.body ?? "",
+      draft: wire.draft,
+      url: wire.html_url,
+      baseRevision: wire.base.sha,
+      headRevision: wire.head.sha,
+    })),
   );
 
   const listFiles = Effect.gen(function* () {
