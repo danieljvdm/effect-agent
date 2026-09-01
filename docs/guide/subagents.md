@@ -20,6 +20,37 @@ Coordinator
 
 The parent sees the shortlist. The child's tool history and research notes stay in its thread.
 
+## Start with the child contract
+
+Ordinary delegation needs only a target. Its toolkit remains explicit; parent tools are never
+inherited.
+
+```ts
+const Research = Subagent.define("delegate_research", {
+  target: Agent.make("researcher", {
+    input: ResearchRequest,
+    output: ResearchFindings,
+    instructions: "Check opening hours. Cite URLs.",
+    toolkit: ResearchTools,
+  }),
+});
+
+const ResearchLive = SubagentRuntime.layer(Research, ResearchModel).pipe(
+  Layer.provide(ResearchToolsLive),
+);
+```
+
+The tool parameters use the child's input Schema. The default result is
+`{ output: ResearchFindings, budgetExhausted: boolean }`. Identity input mapping works on decoded
+values, including transformed Schemas. Expected child failures become a bounded
+`SubagentExecutionFailure` with the error tag, without exposing the raw child error.
+
+Set `parameters` and `prepareInput` when the parent's request differs from the child's input.
+Set `success` and `projectResult` when only part of the child output should be exposed.
+Set `failure` and `mapChildFailure` for application-specific errors. These customization points
+are independent. Missing mappings validate the default value against the selected Schema and
+fail with `SubagentProjectionFailure` if it does not fit.
+
 ## Define the child
 
 The child is an ordinary agent. Give it a narrow task and the tools that task needs.
@@ -44,8 +75,9 @@ and what the parent gets back. Delegation tool names must start with `delegate_`
 
 <<< @/snippets/travel-planner/delegation.ts{ts twoslash}
 
-`prepareInput` selects the child's input from decoded parameters. It also receives bounded parent
-metadata, but never the parent's transcript. `projectResult` drops `researchNotes` and exposes
+This example inherits parameters and input mapping from `Researcher`. A custom `prepareInput`
+also receives bounded parent metadata, but never the parent's transcript.
+`projectResult` drops `researchNotes` and exposes
 whether the child finished because its budget ran out.
 
 For a successful call, the parent receives a tool result shaped like this:
@@ -72,8 +104,8 @@ own allowance. The parent waits for the projected result before continuing its m
 
 ## Bind models and run
 
-`Agent.withModel` fixes the child's model. `SubagentRuntime.layer` implements the delegation tool
-and receives the child's tool handlers through `Layer.provide`.
+`SubagentRuntime.layer` receives the child's model Layer directly and implements the delegation
+tool. Supply the child's tool handlers through `Layer.provide`.
 
 ::: code-group
 
@@ -83,8 +115,8 @@ and receives the child's tool handlers through `Layer.provide`.
 
 :::
 
-The model Layer on `AgentRuntime.run` supplies the parent. The model in `ChildBinding` supplies the
-child. They use the same model here; change either binding independently.
+The model Layer on `AgentRuntime.run` supplies the parent. The model passed to
+`SubagentRuntime.layer` supplies the child. They use the same model here; change either independently.
 
 `SubagentReservationsMemoryLive` tracks the parent's child reservations. `ThreadHistory.layerTransient`
 keeps this example ephemeral. `RunContextPreparationPassthrough` disables additional context
@@ -92,6 +124,22 @@ loading. Children inherit the parent's history and context services. The provide
 HTTP Layer serve both model bindings.
 
 ## Bound child work
+
+Children inherit omitted policy fields from their parent's resolved policy. Explicit child fields
+override those defaults, then delegation ceilings clamp turns, calls, duration, tokens, and cost.
+Use a partial `policy` object for selective overrides. A complete `AgentPolicy.make(...)` value
+already includes its defaults, so those fields count as explicit.
+
+When delegation `policy` is omitted, the parent's limits also set a shared delegation pool.
+Children reserve slices of that pool, not a fresh copy per invocation. Explicit `SubagentPolicy`
+retains the per-child limits below and derives aggregate caps by multiplying by `maxChildren`.
+Use `parentCaps` to set another aggregate pool, and share identical caps across all delegations
+in the parent Run. This pool accounts for child work; it is separate from the parent's own
+model and tool-call counters. A global spending quota still needs a host-owned usage budget.
+
+Ephemeral settlement refunds reported unused allocation. Durable settlement conservatively
+charges the reservation when usage is unavailable. Durable admission rejects a reservation
+that exceeds the shared pool, including its child-count and concurrency limits.
 
 Parent, delegation, and child limits apply at different points:
 
@@ -107,11 +155,12 @@ Parent, delegation, and child limits apply at different points:
 To let the parent request a smaller allowance, change `delegation.ts`:
 
 ```diff
- parameters: Schema.Struct({
-   city: Schema.String,
-   focus: Schema.String,
++parameters: Schema.Struct({
++  city: Schema.String,
++  focus: Schema.String,
 +  maxCalls: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
- }),
++}),
++prepareInput: ({ city, focus }) => Effect.succeed({ city, focus }),
 +toolCallAllowance: {
 +  default: 1,
 +  fromParameters: ({ maxCalls }) => maxCalls,
@@ -133,7 +182,7 @@ the parent model as result data, change one option in `delegation.ts`:
 +failureMode: "return",
 ```
 
-`mapChildFailure` maps a child run failure to the declared `ResearchFailed` Schema. With return
+The optional `mapChildFailure` maps a child run failure to the declared `ResearchFailed` Schema. With return
 mode, the parent can receive this result and choose another approach:
 
 ```json
@@ -172,7 +221,7 @@ attempts; a waiting parent releases its worker permit.
 For durable execution, the handler Layer also needs the registered child's exact digests:
 
 ```diff
- SubagentRuntime.layer(Research, ChildBinding, {
+SubagentRuntime.layer(Research, ResearchModel, {
    mapChildFailure: (error) => ResearchFailed.make({ reason: error._tag }),
 +  durable: { targetDigests },
  })
@@ -182,7 +231,18 @@ Obtain `targetDigests` from the child's matching host registration. Use the
 [Node](../platforms/node) or [Cloudflare](../platforms/cloudflare) runtime setup to supply durable
 storage and registrations instead of the ephemeral assembly above.
 
-Recovery rejoins the same child and restores its allowance and committed usage. Uncertain admission
+Registration accepts the same Definition and model Layer without `Agent.withModel`:
+
+```ts
+{ agent: Research.target, model: ResearchModel, definitions: childVersions }
+```
+
+Existing bindings still work, but `SubagentRuntime.layer` rejects one whose Definition is not
+the delegation's exact target. Durable workers continue to require matching identity and version
+digests. Change the declared versions when changing a definition, model, or tool contract.
+
+Recovery rejoins the same child and restores its resolved policy, allowance, shared reservation,
+and committed usage. These values are recorded before child admission. Uncertain admission
 never starts a replacement child. Parent abort joins the child's terminal outcome before settling
 the parent; it cannot undo external effects. See [child recovery](../concepts/durability#attached-subagents).
 

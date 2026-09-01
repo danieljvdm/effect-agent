@@ -210,7 +210,8 @@ const proveRegistrationRequirements = (
   const second = Agent.withModel(secondDefinition, secondModel);
   const compiled = compileRegistrations([
     {
-      agent: first,
+      agent: definition,
+      model: firstModel,
       definitions: DefinitionDigestInput.make({ agent: "first", model: "first", tools: [] }),
     },
     {
@@ -223,6 +224,14 @@ const proveRegistrationRequirements = (
     },
   ]);
   const empty = compileRegistrations([]);
+  compileRegistrations([
+    // @ts-expect-error An existing Binding cannot also select a different model.
+    {
+      agent: first,
+      model: secondModel,
+      definitions: DefinitionDigestInput.make({ agent: "mixed", model: "mixed", tools: [] }),
+    },
+  ]);
   const identityOnly = {
     agentId: first.definition.id,
     attempt: () => Effect.never,

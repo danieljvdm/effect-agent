@@ -2,6 +2,9 @@ import {
   type ModelCallUsage,
   AgentApprovalPending,
   AgentInputError,
+  AgentPolicy,
+  SubagentBudgetReservation,
+  SubagentReservationAmounts,
   ThreadId,
   DelegationDepth,
   IdGenerator,
@@ -64,6 +67,7 @@ import {
   DateTime,
   Duration,
   Effect,
+  Equal,
   Layer,
   Option,
   Ref,
@@ -2485,6 +2489,7 @@ const make = Effect.gen(function* () {
         ...(request.toolCallAllowance === undefined
           ? {}
           : { toolCallAllowance: request.toolCallAllowance }),
+        ...(request.policy === undefined ? {} : { policy: request.policy }),
       }),
     );
     const tail = yield* store.inspectTail(
@@ -2754,7 +2759,8 @@ const make = Effect.gen(function* () {
       !definitionDigestsEqual(lineage.childDefinitionDigests, request.targetDigests) ||
       lineage.childInputDigest !== request.childInputDigest ||
       lineage.grantDigest !== request.grantDigest ||
-      lineage.toolCallAllowance !== request.toolCallAllowance
+      lineage.toolCallAllowance !== request.toolCallAllowance ||
+      !Equal.equals(lineage.policy, request.policy)
     ) {
       return mismatch("The child lineage digests or allowance do not match the canonical request");
     }
@@ -4610,6 +4616,7 @@ const make = Effect.gen(function* () {
        * hooks: the engine wraps a `CoordinatorHalt` into `SubagentDurabilityError` in the
        * handler channel while the Attempt aborts with the original infrastructure failure.
        */
+      const establishmentGate = yield* Semaphore.make(1);
       const establishSubagent = (
         request: RunSubagentEstablishRequest,
       ): Effect.Effect<ChildEstablishStatus, CoordinatorHalt> =>
@@ -4679,6 +4686,88 @@ const make = Effect.gen(function* () {
                   "The child Tool Call allowance must be a positive integer",
                 );
               }
+              if (request.policy !== undefined && !Schema.is(AgentPolicy)(request.policy)) {
+                return denied("SubagentPolicyInvalid", "The resolved child policy is invalid");
+              }
+              if (request.budget !== undefined) {
+                if (!Schema.is(SubagentBudgetReservation)(request.budget)) {
+                  return denied("SubagentBudgetInvalid", "The shared delegation budget is invalid");
+                }
+                const decodedAllocation = Schema.decodeUnknownOption(SubagentReservationAmounts)(
+                  allocation.value,
+                );
+                if (
+                  Option.isNone(decodedAllocation) ||
+                  !Equal.equals(decodedAllocation.value, request.budget.allocation)
+                ) {
+                  return denied(
+                    "SubagentBudgetInvalid",
+                    "The reserved allocation differs from its budget declaration",
+                  );
+                }
+                const { caps, allocation: requested } = request.budget;
+                const prior = [...subagentState.requested.values()];
+                if (
+                  prior.some(
+                    (entry) => entry.budget === undefined || !Equal.equals(entry.budget.caps, caps),
+                  )
+                ) {
+                  return denied(
+                    "SubagentParentBudgetConflict",
+                    "Delegations in one parent Run must share the same caps",
+                  );
+                }
+                if (
+                  caps.maxTotalChildInvocations !== undefined &&
+                  prior.length >= caps.maxTotalChildInvocations
+                ) {
+                  return denied(
+                    "SubagentBudgetExhausted",
+                    "The parent Run exhausted its child invocation budget",
+                  );
+                }
+                const active = prior.filter((entry) => !subagentState.joined.has(entry.toolCallId));
+                if (
+                  caps.maxConcurrentChildren !== undefined &&
+                  active.length >= caps.maxConcurrentChildren
+                ) {
+                  return denied(
+                    "SubagentBudgetExhausted",
+                    "The parent Run exhausted its concurrent child budget",
+                  );
+                }
+                const dimensions = [
+                  ["turns", "maxTurns"],
+                  ["toolCalls", "maxToolCalls"],
+                  ["durationMillis", "maxDurationMillis"],
+                  ["inputTokens", "maxInputTokens"],
+                  ["outputTokens", "maxOutputTokens"],
+                  ["costMicrousd", "maxCostMicrousd"],
+                  ["resultBytes", "maxResultBytes"],
+                ] as const;
+                const accounting = Schema.Struct({ consumed: SubagentReservationAmounts });
+                for (const [amount, cap] of dimensions) {
+                  const limit = caps[cap];
+                  if (limit === undefined) continue;
+                  let consumed = requested[amount];
+                  for (const entry of prior) {
+                    const joined = subagentState.joined.get(entry.toolCallId);
+                    const observed =
+                      joined === undefined
+                        ? Option.none()
+                        : Schema.decodeUnknownOption(accounting)(joined.finalAccounting);
+                    consumed += Option.isSome(observed)
+                      ? observed.value.consumed[amount]
+                      : (entry.budget?.allocation[amount] ?? limit);
+                  }
+                  if (consumed > limit) {
+                    return denied(
+                      "SubagentBudgetExhausted",
+                      `The parent Run exhausted its shared ${amount} budget`,
+                    );
+                  }
+                }
+              }
               const childInputDigest = yield* withCrypto(digestJson(childInput.value));
               const grantDigest = yield* withCrypto(digestJson(grant.value));
               const allocationDigest = yield* withCrypto(digestJson(allocation.value));
@@ -4721,6 +4810,8 @@ const make = Effect.gen(function* () {
                 ...(request.toolCallAllowance === undefined
                   ? {}
                   : { toolCallAllowance: request.toolCallAllowance }),
+                ...(request.policy === undefined ? {} : { policy: request.policy }),
+                ...(request.budget === undefined ? {} : { budget: request.budget }),
               });
               const requestRecordId = subagentRequestedRecordId(runId, toolCallId);
               if (!knownIds.has(requestRecordId)) {
@@ -4823,7 +4914,7 @@ const make = Effect.gen(function* () {
               });
             }
             if (child.value.state !== "settled") {
-              return { _tag: "waiting", ...identity };
+              return { _tag: "waiting" as const, ...identity };
             }
             // §1.6: the child already settled — verify Parent Link, target, digests, and the
             // settlement record fail-closed before handing the outcome to the handler.
@@ -4836,7 +4927,7 @@ const make = Effect.gen(function* () {
               return denied("SubagentVerificationFailed", verification.message);
             }
             return {
-              _tag: "settled",
+              _tag: "settled" as const,
               ...identity,
               outcome: verification.value.outcome,
               encodedResult: verification.value.encodedResult,
@@ -4847,7 +4938,7 @@ const make = Effect.gen(function* () {
                 ? {}
                 : { finishReason: verification.value.settlement.finishReason }),
             };
-          }),
+          }).pipe(establishmentGate.withPermits(1)),
         );
 
       const joinSubagent = (
@@ -5495,7 +5586,7 @@ const make = Effect.gen(function* () {
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
   >(
-    agent: RuntimeBinding<
+    registeredAgent: RuntimeBinding<
       InputSchema,
       OutputSchema,
       Instructions,
@@ -5534,6 +5625,19 @@ const make = Effect.gen(function* () {
       }
       const ctx = yield* attemptContextFor(threadId, claim.producerEpoch);
       const records = yield* readAll(threadId);
+      const childPolicy =
+        submission.parentLinkage === undefined
+          ? undefined
+          : records
+              .map((envelope) => envelope.record.payload)
+              .find((payload) => payload._tag === "SubagentLineageRecorded")?.policy;
+      const agent =
+        childPolicy === undefined
+          ? registeredAgent
+          : {
+              ...registeredAgent,
+              definition: { ...registeredAgent.definition, policy: childPolicy },
+            };
       const evidence = yield* evidenceFor(records, submissionId, true, snapshot.hostSubmissionId);
       const knownIds = knownRecordIdsOf(records);
 

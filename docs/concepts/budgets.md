@@ -116,6 +116,18 @@ result bytes. The parent reserves the slice before starting the child and releas
 settlement. An overrun remains charged and reduces later headroom. The child's stop policy still
 controls its run and final-answer behavior.
 
+Omitted child policy fields inherit the parent's defaults; explicit child settings override
+those defaults within the delegation ceilings. Omitted delegation policy uses one parent-sized
+pool shared by child invocations. Inheritance supplies limits, not new budget credit.
+An explicit delegation policy derives aggregate caps by multiplying per-child limits by
+`maxChildren`; `parentCaps` can replace those caps. Every delegation in one parent Run must
+use the same aggregate caps. The pool covers delegated work separately from the parent's own
+turn and tool-call counters.
+
+Durable admission checks the recorded pool before reserving another child. Recovery restores
+the child's resolved policy and existing reservation. Unknown usage remains charged
+conservatively, and admission fails closed on inconsistent caps or exhausted concurrency.
+
 ### Request a larger child budget {#containment-and-the-extension-flow}
 
 `failureMode: "return"` converts expected child failures into model-visible result data. Engine

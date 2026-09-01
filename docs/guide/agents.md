@@ -25,8 +25,13 @@ resource. Reuse one definition across many runs.
 
 ## Build a definition {#definition-contract}
 
-`Agent.make` requires an ID, input and output schemas, instructions, a toolkit, and an
-`AgentPolicy`. It also accepts `inputPrompt`, `completion`, `runDisposition`, a description, and metadata.
+`Agent.make` requires an ID, input and output schemas, instructions, and a toolkit.
+`policy` accepts an `AgentPolicy` or a partial policy declaration. Standalone defaults are
+12 turns, 24 tool calls, 5 minutes, and tool concurrency 4. Other defaults follow `AgentPolicy.make`.
+Delegated children inherit omitted policy fields from their parent. Supply a partial object
+to inherit individual fields; `AgentPolicy.make` fills its own defaults before inheritance.
+Definitions retain the explicit fields as `policyOverrides`; `policy` holds their standalone values.
+It also accepts `inputPrompt`, `completion`, `runDisposition`, a description, and metadata.
 
 Instructions may be static prompt input or a function of decoded input. That function may return
 an `Effect`. Its errors and service requirements become part of the run type.
@@ -91,8 +96,10 @@ const captured = Effect.gen(function* () {
 Use `Stream.provide` with `stream`. Keep the model layer around both `start` and the detached
 run's lifetime.
 
-Use `Agent.withModel` when durable registration or subagent construction must fix a model for one
-agent. Its layer must provide all three model services and have no construction error. Put
+Pass a model Layer directly to `SubagentRuntime.layer(delegation, model)`. Durable registration
+accepts `{ agent: definition, model, definitions: versions }`. `Agent.withModel` remains available
+when an application wants a reusable binding. The model Layer must provide all three model
+services and have no construction error. Put
 fallible setup in the enclosing layer or Effect.
 
 ```ts

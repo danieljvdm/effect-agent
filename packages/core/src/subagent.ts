@@ -2,6 +2,45 @@ import { Context, Schema } from "effect";
 
 import { AgentId, ThreadId, DelegationId, RunId, ToolCallId } from "./identifiers.ts";
 
+const Natural = Schema.Natural;
+
+/** Finite delegable caps for one parent Run. Absent means not configured; present values are finite. */
+export class SubagentDelegationCaps extends Schema.Class<SubagentDelegationCaps>(
+  "@effect-agent/capabilities/SubagentDelegationCaps",
+)({
+  maxTotalChildInvocations: Schema.optionalKey(Natural),
+  maxConcurrentChildren: Schema.optionalKey(Natural),
+  maxTurns: Schema.optionalKey(Natural),
+  maxToolCalls: Schema.optionalKey(Natural),
+  maxDurationMillis: Schema.optionalKey(Natural),
+  maxInputTokens: Schema.optionalKey(Natural),
+  maxOutputTokens: Schema.optionalKey(Natural),
+  maxCostMicrousd: Schema.optionalKey(Natural),
+  maxResultBytes: Schema.optionalKey(Natural),
+}) {}
+
+const AmountFields = {
+  turns: Natural,
+  toolCalls: Natural,
+  durationMillis: Natural,
+  inputTokens: Natural,
+  outputTokens: Natural,
+  costMicrousd: Natural,
+  resultBytes: Natural,
+} as const;
+
+/** Exact amounts across every reservable delegation dimension. */
+export class SubagentReservationAmounts extends Schema.Class<SubagentReservationAmounts>(
+  "@effect-agent/capabilities/SubagentReservationAmounts",
+)(AmountFields) {}
+
+/** One child reservation against the parent Run's shared delegation pool. */
+export const SubagentBudgetReservation = Schema.Struct({
+  caps: SubagentDelegationCaps,
+  allocation: SubagentReservationAmounts,
+});
+export type SubagentBudgetReservation = typeof SubagentBudgetReservation.Type;
+
 /** Root-relative delegation depth; the direct child of a top-level run has depth 1. */
 export const DelegationDepth = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 export type DelegationDepth = typeof DelegationDepth.Type;
