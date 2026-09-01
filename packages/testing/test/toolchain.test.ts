@@ -290,7 +290,7 @@ const runFixtureCommand = Effect.fn("toolchainTest.runFixtureCommand")(function*
   return output.trim();
 });
 
-const runReleaseCheckReporter = Effect.fn("toolchainTest.runReleaseCheckReporter")(function* (
+const runReleaseWorkflowStep = Effect.fn("toolchainTest.runReleaseWorkflowStep")(function* (
   script: string,
   options: {
     readonly baseRef: string | undefined;
@@ -299,6 +299,9 @@ const runReleaseCheckReporter = Effect.fn("toolchainTest.runReleaseCheckReporter
     readonly expectedBaseSha: string;
     readonly headRef: string | undefined;
     readonly headRepository: string | undefined;
+    readonly prState?: string;
+    readonly fetchedSha?: string;
+    readonly failingEndpoint?: string;
     readonly strictReady: string | undefined;
     readonly verifiedHeadSha: string;
     readonly verifyOutcome: string;
@@ -311,7 +314,10 @@ const runReleaseCheckReporter = Effect.fn("toolchainTest.runReleaseCheckReporter
   });
   const binDirectory = path.join(temporaryRoot, "bin");
   const capturePath = path.join(temporaryRoot, "check-run-arguments");
+  const outputPath = path.join(temporaryRoot, "step-output");
+  const fetchPath = path.join(temporaryRoot, "fetch-arguments");
   const ghPath = path.join(binDirectory, "gh");
+  const gitPath = path.join(binDirectory, "git");
   yield* fs.makeDirectory(binDirectory, { recursive: true });
   yield* fs.writeFileString(
     ghPath,
@@ -328,6 +334,10 @@ if [ "\${1:-}" = "--method" ]; then
 fi
 
 ENDPOINT="\${1:-}"
+if [ "$ENDPOINT" = "$GH_STUB_FAILING_ENDPOINT" ]; then
+  echo "GitHub API unavailable" >&2
+  exit 1
+fi
 
 QUERY=""
 while [ "$#" -gt 0 ]; do
@@ -339,53 +349,77 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-case "$QUERY" in
-  ".head.sha")
-    test "$ENDPOINT" = "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
+case "$ENDPOINT" in
+  "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
+    printf '%s\\n' "$GH_STUB_PR" | jq -r "$QUERY"
+    ;;
+  "repos/$GITHUB_REPOSITORY/git/ref/heads/changeset-release/main")
+    test "$QUERY" = ".object.sha"
     printf '%s\\n' "$GH_STUB_HEAD_SHA"
     ;;
-  ".head.repo.full_name")
-    test "$ENDPOINT" = "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
-    printf '%s\\n' "$GH_STUB_HEAD_REPOSITORY"
-    ;;
-  ".head.ref")
-    test "$ENDPOINT" = "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
-    printf '%s\\n' "$GH_STUB_HEAD_REF"
-    ;;
-  ".base.sha")
-    test "$ENDPOINT" = "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
+  "repos/$GITHUB_REPOSITORY/git/ref/heads/main")
+    test "$QUERY" = ".object.sha"
     printf '%s\\n' "$GH_STUB_BASE_SHA"
     ;;
-  ".base.ref")
-    test "$ENDPOINT" = "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
-    printf '%s\\n' "$GH_STUB_BASE_REF"
+  "repos/$GITHUB_REPOSITORY/rules/branches/main")
+    printf '%s\\n' "$GH_STUB_RULES" | jq -r "$QUERY"
     ;;
-  *"strict_required_status_checks_policy"*)
-    test "$ENDPOINT" = "repos/$GITHUB_REPOSITORY/rules/branches/main"
-    printf '%s\\n' "$GH_STUB_STRICT_READY"
-    ;;
-  *) echo "Unexpected gh query: $QUERY" >&2; exit 64 ;;
+  *) echo "Unexpected gh endpoint: $ENDPOINT" >&2; exit 64 ;;
 esac
 `,
   );
   yield* fs.chmod(ghPath, 0o755);
+  yield* fs.writeFileString(
+    gitPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "fetch --no-tags origin $GH_STUB_HEAD_SHA")
+    printf '%s\\n' "$@" > "$GIT_STUB_CAPTURE"
+    ;;
+  "rev-parse FETCH_HEAD") printf '%s\\n' "$GIT_STUB_FETCHED_SHA" ;;
+  *) echo "Unexpected git arguments: $*" >&2; exit 64 ;;
+esac
+`,
+  );
+  yield* fs.chmod(gitPath, 0o755);
 
   const child = yield* ChildProcess.make("bash", ["-euo", "pipefail", "-c", script], {
     cwd: temporaryRoot,
     env: {
       EXPECTED_BASE_SHA: options.expectedBaseSha,
-      GH_STUB_BASE_REF: options.baseRef ?? "main",
       GH_STUB_BASE_SHA: options.currentBaseSha,
       GH_STUB_CAPTURE: capturePath,
-      GH_STUB_HEAD_REF: options.headRef ?? "changeset-release/main",
-      GH_STUB_HEAD_REPOSITORY: options.headRepository ?? "effect-agent/release-check-fixture",
+      GH_STUB_FAILING_ENDPOINT: options.failingEndpoint ?? "",
+      GH_STUB_PR: JSON.stringify({
+        // GitHub's PR projection can still describe the previous generation.
+        base: { ref: options.baseRef ?? "main", sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+        head: {
+          ref: options.headRef ?? "changeset-release/main",
+          repo: { full_name: options.headRepository ?? "effect-agent/release-check-fixture" },
+          sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+        state: options.prState ?? "open",
+      }),
       GH_STUB_HEAD_SHA: options.currentHeadSha,
-      GH_STUB_STRICT_READY: options.strictReady ?? "true",
+      GH_STUB_RULES: JSON.stringify([
+        {
+          type: "required_status_checks",
+          parameters: {
+            strict_required_status_checks_policy: (options.strictReady ?? "true") === "true",
+            required_status_checks: [{ context: "ready" }],
+          },
+        },
+      ]),
       GH_TOKEN: "test-token",
+      GIT_STUB_CAPTURE: fetchPath,
+      GIT_STUB_FETCHED_SHA: options.fetchedSha ?? options.currentHeadSha,
+      GITHUB_OUTPUT: outputPath,
       GITHUB_REPOSITORY: "effect-agent/release-check-fixture",
       GITHUB_RUN_ATTEMPT: "1",
       GITHUB_RUN_ID: "1234",
       GITHUB_SERVER_URL: "https://github.example.invalid",
+      GITHUB_SHA: options.expectedBaseSha,
       PATH: `${binDirectory}:${globalThis.process.env["PATH"] ?? ""}`,
       PR_NUMBER: "22",
       VERIFIED_HEAD_SHA: options.verifiedHeadSha,
@@ -400,7 +434,9 @@ esac
     child.exitCode,
   ]);
   const invocation = (yield* fs.exists(capturePath)) ? yield* fs.readFileString(capturePath) : "";
-  return { exitCode, invocation, output } as const;
+  const stepOutput = (yield* fs.exists(outputPath)) ? yield* fs.readFileString(outputPath) : "";
+  const fetchInvocation = (yield* fs.exists(fetchPath)) ? yield* fs.readFileString(fetchPath) : "";
+  return { exitCode, fetchInvocation, invocation, output, stepOutput } as const;
 });
 
 const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(function* (
@@ -967,15 +1003,6 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       );
       expect(trustedCheckout?.with).toMatchObject({ ref: "${{ github.sha }}" });
 
-      const resolveStep = workflowStep(
-        releaseWorkflow,
-        "verify-release",
-        "Resolve the generated release head",
-      );
-      expect(resolveStep?.run).toContain('test "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"');
-      expect(resolveStep?.run).toContain('test "$HEAD_REF" = "changeset-release/main"');
-      expect(resolveStep?.run).toContain('test "$BASE_SHA" = "$GITHUB_SHA"');
-
       const verifyStep = workflowStep(
         releaseWorkflow,
         "verify-release",
@@ -1115,6 +1142,69 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
   );
 
   it.effect(
+    "resolves release commits from Git refs despite stale PR metadata and rejects unsafe inputs",
+    () =>
+      Effect.gen(function* () {
+        const releaseWorkflow = yield* readWorkflow(".github/workflows/release.yml");
+        const resolveScript = workflowStep(
+          releaseWorkflow,
+          "verify-release",
+          "Resolve the generated release head",
+        )?.run;
+        if (resolveScript === undefined) {
+          return yield* Effect.die(new Error("Release resolver must have an executable body."));
+        }
+
+        const baseSha = "1111111111111111111111111111111111111111";
+        const headSha = "2222222222222222222222222222222222222222";
+        const defaults = {
+          baseRef: "main",
+          currentBaseSha: baseSha,
+          currentHeadSha: headSha,
+          expectedBaseSha: baseSha,
+          headRef: "changeset-release/main",
+          headRepository: "effect-agent/release-check-fixture",
+          strictReady: "true",
+          verifiedHeadSha: "",
+          verifyOutcome: "skipped",
+        };
+
+        const success = yield* runReleaseWorkflowStep(resolveScript, defaults);
+        expect({ exitCode: success.exitCode, output: success.output }).toMatchObject({
+          exitCode: 0,
+        });
+        expect(success.stepOutput).toBe(`head-sha=${headSha}\n`);
+        expect(success.fetchInvocation).toBe(`fetch\n--no-tags\norigin\n${headSha}\n`);
+
+        for (const overrides of [
+          { currentBaseSha: "3333333333333333333333333333333333333333" },
+          { currentHeadSha: "not-a-commit" },
+          { headRepository: "someone-else/effect-agent" },
+          { headRef: "untrusted-release" },
+          { baseRef: "release-target" },
+          { prState: "closed" },
+          { fetchedSha: "3333333333333333333333333333333333333333" },
+          {
+            failingEndpoint:
+              "repos/effect-agent/release-check-fixture/git/ref/heads/changeset-release/main",
+          },
+        ]) {
+          const failure = yield* runReleaseWorkflowStep(resolveScript, {
+            ...defaults,
+            ...overrides,
+          });
+          expect({ fixture: overrides, exitCode: failure.exitCode }).not.toMatchObject({
+            exitCode: 0,
+          });
+          expect(failure.stepOutput).toBe("");
+          expect(failure.invocation).toBe("");
+          expect(failure.output).not.toBe("");
+        }
+      }),
+    15_000,
+  );
+
+  it.effect(
     "executes the generated release check reporter fail-closed",
     () =>
       Effect.gen(function* () {
@@ -1141,18 +1231,23 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           readonly headRef?: string;
           readonly headRepository?: string;
           readonly strictReady?: string;
+          readonly prState?: string;
+          readonly verifiedHeadSha?: string;
           readonly verifyOutcome?: string;
+          readonly failingEndpoint?: string;
         }) =>
-          runReleaseCheckReporter(reportScript, {
+          runReleaseWorkflowStep(reportScript, {
             baseRef: overrides.baseRef,
             currentBaseSha: overrides.currentBaseSha ?? expectedBaseSha,
             currentHeadSha: overrides.currentHeadSha ?? verifiedHeadSha,
             expectedBaseSha,
             headRef: overrides.headRef,
             headRepository: overrides.headRepository,
+            prState: overrides.prState,
             strictReady: overrides.strictReady,
-            verifiedHeadSha,
+            verifiedHeadSha: overrides.verifiedHeadSha ?? verifiedHeadSha,
             verifyOutcome: overrides.verifyOutcome ?? "success",
+            failingEndpoint: overrides.failingEndpoint,
           });
 
         const success = yield* run({});
@@ -1182,7 +1277,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           exitCode: 0,
         });
         expect(changedHead.invocation).toContain("conclusion=failure\n");
-        expect(changedHead.invocation).toContain(`head_sha=${changedHeadSha}\n`);
+        expect(changedHead.invocation).toContain(`head_sha=${verifiedHeadSha}\n`);
         expect(changedHead.invocation).toContain(
           "output[title]=Generated release head changed during verification\n",
         );
@@ -1219,6 +1314,31 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         expect(wrongBaseRef.invocation).toContain(
           "output[title]=Generated release target changed during verification\n",
         );
+
+        const closedPr = yield* run({ prState: "closed" });
+        expect(closedPr.invocation).toContain("conclusion=failure\n");
+
+        const skippedVerification = yield* run({ verifyOutcome: "skipped" });
+        expect(skippedVerification.invocation).toContain("conclusion=failure\n");
+        expect(skippedVerification.invocation).toContain(
+          "output[summary]=Exact-tree verification did not complete successfully.",
+        );
+
+        for (const unresolvedSha of ["", "not-a-commit"]) {
+          const unresolvedHead = yield* run({
+            verifiedHeadSha: unresolvedSha,
+            verifyOutcome: "skipped",
+          });
+          expect(unresolvedHead.exitCode).not.toBe(0);
+          expect(unresolvedHead.invocation).toBe("");
+          expect(unresolvedHead.output).toContain("no ready check can be attached safely");
+        }
+
+        const apiFailure = yield* run({
+          failingEndpoint: "repos/effect-agent/release-check-fixture/git/ref/heads/main",
+        });
+        expect(apiFailure.exitCode).not.toBe(0);
+        expect(apiFailure.invocation).toBe("");
       }),
     15_000,
   );

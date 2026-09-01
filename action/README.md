@@ -18,10 +18,30 @@ to resolve specific questions about plausible defects. Straightforward changes c
 the diff; source tools are not an exhaustive repository audit. The host validates paths and
 RIGHT-side anchors and publishes against the inspected head. A stopped run preserves findings
 recorded before research ended. Preparation failures publish a failure marker. Blocking findings
-request changes and fail the Action after publication; other outcomes remain comments and cannot
-clear an older change request.
+request changes and fail the Action after publication; other outcomes remain comments.
 
-Automatic waves use the configured limit, defaulting to two; zero disables automatic reviews.
+A complete pass with no new blockers can dismiss this bot's earlier change requests, but only
+when the reviewer explicitly verifies every blocker in each selected review against current source.
+The dismissal records the inspected commit and the fixing evidence. A clean delta, changed line,
+resolved conversation, or commit message alone does not clear earlier feedback. Human and other
+bots' reviews are never dismissed.
+
+Incremental passes select prior reviews with an inline finding on an admitted changed path.
+They verify those specific blockers without expanding new-defect discovery beyond the delta.
+Use `@effect-agent review full` for body-only findings, fixes in other paths, or a same-head retry.
+At most eight prior reviews are considered, each with its complete review body and bot comments
+within 32,000 characters. Oversized feedback stays blocking; it is never truncated for verification.
+Follow-up verification runs in the final patch batch under the existing spending and execution
+limits. Incomplete, exhausted, excluded-path, or newly blocking results dismiss nothing.
+The Action rechecks review ownership, feedback, and head before each dismissal. GitHub does not
+support a conditional dismissal, so a push can still race the final API request. Dismissals happen
+before the new comment is posted; if a later API call fails, the Action fails and any completed
+dismissals retain their evidence in GitHub. A failed dismissal records an incomplete attempt when
+GitHub still accepts review comments, so it consumes the automatic allowance. Retry with a full
+review or inspect and dismiss manually.
+
+Automatic waves use the configured limit, defaulting to two; this repository allows five.
+Zero disables automatic reviews.
 Only trusted bot-authored terminal markers count. Failed attempts count but cannot become diff
 baselines. An owner, member, or collaborator can request `@effect-agent review` for incremental
 review or `@effect-agent review full` for the whole admitted diff. Manual waves do not consume the

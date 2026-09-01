@@ -159,6 +159,9 @@ Unexpected paths, changed lineage, or incomplete verification fail closed.
 
 Keep strict up-to-date enforcement for the required `ready` check. The reporting job rechecks
 the PR head, source, base, and rules before posting success to the verified commit.
+Commit SHAs come from Git branch refs because PR SHA fields can lag after a force-push.
+Checks attach only to the resolved verification commit, never a newer unverified head.
+If setup fails before resolving that commit, the job fails without posting a check.
 A later generated-only edit has no verified check; a change to another path runs ordinary PR CI.
 The verifier runs in a fresh read-only job with script-suppressed installs. Cleanup failures fail verification.
 

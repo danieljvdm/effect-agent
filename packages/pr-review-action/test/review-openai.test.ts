@@ -33,7 +33,7 @@ import {
   REVIEW_COST_LIMIT_MICROUSD,
   reviewCostEstimator,
 } from "../src/review-openai.ts";
-import { reviewMarker } from "../src/selection.ts";
+import { reviewMarker, reviewPauseMarker } from "../src/selection.ts";
 
 const WireRequest = Schema.Struct({
   model: Schema.String,
@@ -447,6 +447,207 @@ describe("review provider boundary", () => {
       expect(result.report.findings.map((item) => item.title)).toEqual([finding.title]);
       expect(result.usage.estimatedCostMicrousd).toBeLessThan(REVIEW_COST_LIMIT_MICROUSD);
     }),
+  );
+
+  it.effect.each([
+    "addressed",
+    "omitted",
+    "incomplete",
+    "new-blocker",
+    "stale",
+    "publish-failure",
+    "dismiss-failure",
+  ] as const)(
+    "rechecks a blocker after two automatic attempts without widening the delta: %s",
+    (mode) =>
+      Effect.gen(function* () {
+        let modelCalls = 0;
+        let dismissed = false;
+        const mutations: Array<string> = [];
+        const published: Array<string> = [];
+        const user = { login: "github-actions[bot]", type: "Bot" };
+        const prior = {
+          id: 2,
+          body: `One blocking defect.\n${reviewMarker(true)}`,
+          commit_id: "reviewed-head",
+          submitted_at: "2026-08-25T01:00:00Z",
+          state: "CHANGES_REQUESTED",
+          user,
+        };
+        const evidence = "src/value.ts now returns the saved value instead of zero.";
+        const client = HttpClient.make((httpRequest, url) =>
+          Effect.sync(() => {
+            if (url.pathname.endsWith("/input_tokens"))
+              return json(httpRequest, { object: "response.input_tokens", input_tokens: 1_000 });
+            if (url.pathname === "/v1/responses") {
+              modelCalls += 1;
+              const input = JSON.stringify(decodeWire(httpRequest).input);
+              expect(input).toContain("reviewed-head");
+              expect(input).toContain("incremental");
+              expect(input).toContain("Returning zero loses the acknowledged value");
+              return sse(
+                httpRequest,
+                modelCalls,
+                [
+                  {
+                    name: "submit_review",
+                    parameters: {
+                      findings: mode === "new-blocker" ? [finding] : [],
+                      incomplete: mode === "incomplete",
+                      ...(mode === "omitted" ? {} : { resolutions: [{ id: "2", evidence }] }),
+                    },
+                  },
+                ],
+                rawUsage(1_000, 100),
+              );
+            }
+            if (url.pathname.endsWith("/pulls/12"))
+              return json(httpRequest, {
+                number: 12,
+                title: "Fix reviewed blocker",
+                body: null,
+                draft: false,
+                html_url: "https://github.test/fixtures/example/pull/12",
+                base: { sha: "base" },
+                head: { sha: mode === "stale" && modelCalls > 0 ? "moved-head" : "head" },
+              });
+            if (url.pathname.endsWith("/reviews") && httpRequest.method === "GET")
+              return json(httpRequest, [
+                {
+                  ...prior,
+                  id: 1,
+                  state: "COMMENTED",
+                  commit_id: "initial-head",
+                  submitted_at: "2026-08-25T00:00:00Z",
+                },
+                { ...prior, state: dismissed ? "DISMISSED" : "CHANGES_REQUESTED" },
+                {
+                  ...prior,
+                  id: 3,
+                  state: "COMMENTED",
+                  body: reviewPauseMarker(2),
+                  commit_id: "head",
+                  submitted_at: "2026-08-25T02:00:00Z",
+                },
+              ]);
+            if (url.pathname.endsWith("/reviews/2/comments"))
+              return json(httpRequest, [
+                {
+                  pull_request_review_id: 2,
+                  path: "src/value.ts",
+                  body: finding.body,
+                  user,
+                },
+              ]);
+            if (url.pathname.endsWith("/reviews/2")) return json(httpRequest, prior);
+            if (url.pathname.endsWith("/reviews/2/dismissals")) {
+              expect(httpRequest.method).toBe("PUT");
+              const encoded =
+                httpRequest.body._tag === "Uint8Array"
+                  ? new TextDecoder().decode(httpRequest.body.body)
+                  : "";
+              expect(encoded).toContain("Verified addressed at head");
+              expect(encoded).toContain(evidence);
+              mutations.push("dismiss");
+              if (mode === "dismiss-failure") return json(httpRequest, {}, 403);
+              dismissed = true;
+              return json(httpRequest, { id: 2, state: "DISMISSED" });
+            }
+            if (url.pathname.endsWith("/files"))
+              return json(httpRequest, [
+                {
+                  filename: "src/value.ts",
+                  status: "modified",
+                  additions: 1,
+                  deletions: 1,
+                  patch: "@@ -1,2 +1,2 @@\n export const value = 1;\n-return 0;\n+return value;",
+                },
+              ]);
+            if (url.pathname.includes("/compare/"))
+              return json(httpRequest, { merge_base_commit: { sha: "base" } });
+            if (url.pathname.includes("/git/commits/")) {
+              const revision = url.pathname.split("/").at(-1);
+              expect(["reviewed-head", "head"]).toContain(revision);
+              return json(httpRequest, { sha: revision, tree: { sha: `${revision}-tree` } });
+            }
+            if (url.pathname.includes("/git/trees/")) {
+              const tree = url.pathname.split("/").at(-1);
+              return json(httpRequest, {
+                sha: tree,
+                truncated: false,
+                tree: [
+                  {
+                    path: "src/value.ts",
+                    type: "blob",
+                    mode: "100644",
+                    sha: `${tree}-blob`,
+                    size: 48,
+                  },
+                ],
+              });
+            }
+            if (url.pathname.includes("/git/blobs/")) {
+              const sha = url.pathname.split("/").at(-1);
+              const source = `export const value = 1;\nreturn ${sha?.startsWith("reviewed-head") ? "0" : "value"};\n`;
+              return json(httpRequest, {
+                sha,
+                size: source.length,
+                encoding: "base64",
+                content: Encoding.encodeBase64(source),
+              });
+            }
+            if (url.pathname.endsWith("/reviews") && httpRequest.method === "POST") {
+              mutations.push("publish");
+              const encoded =
+                httpRequest.body._tag === "Uint8Array"
+                  ? new TextDecoder().decode(httpRequest.body.body)
+                  : "";
+              const body = Schema.decodeUnknownSync(
+                Schema.fromJsonString(Schema.Struct({ body: Schema.String })),
+              )(encoded);
+              published.push(body.body);
+              return json(
+                httpRequest,
+                { html_url: "https://github.test/fixtures/example/pull/12#review" },
+                mode === "publish-failure" ? 500 : 200,
+              );
+            }
+            throw new Error(`Unexpected fixture request: ${httpRequest.method} ${url.pathname}`);
+          }),
+        );
+        const exit = yield* reviewActionProgram.pipe(
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromEnv({
+              env: {
+                GITHUB_REPOSITORY: "fixtures/example",
+                GITHUB_TOKEN: "github-fixture",
+                GITHUB_API_URL: "https://api.github.test",
+                OPENAI_API_KEY: "openai-fixture",
+                PR_REVIEW_PULL_REQUEST: "12",
+                PR_REVIEW_AUTOMATIC_LIMIT: "5",
+              },
+            }),
+          ),
+          Effect.provideService(HttpClient.HttpClient, client),
+          Effect.provide(NodeServices.layer),
+          Effect.exit,
+        );
+        expect(modelCalls).toBe(1);
+        expect(Exit.isSuccess(exit)).toBe(mode === "addressed");
+        expect(dismissed).toBe(mode === "addressed" || mode === "publish-failure");
+        expect(mutations).toEqual(
+          dismissed || mode === "dismiss-failure" ? ["dismiss", "publish"] : ["publish"],
+        );
+        if (mode === "addressed") {
+          expect(published[0]).toContain("**Incremental**");
+          expect(published[0]).toContain("✅ None");
+          expect(published[0]).toContain("2 automatic reviews remain");
+        } else if (mode === "omitted")
+          expect(published[0]).toContain("1 earlier change request remains unresolved");
+        else if (mode === "stale" || mode === "incomplete" || mode === "dismiss-failure")
+          expect(published[0]).toContain(reviewMarker(true, false));
+      }),
   );
 
   it.effect.each([

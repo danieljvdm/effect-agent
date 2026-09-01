@@ -59,7 +59,7 @@ jobs:
           mode: ${{ github.event_name == 'pull_request' && 'auto' || 'incremental' }}
           command: ${{ github.event_name == 'issue_comment' && github.event.comment.body || '' }}
           comment-id: ${{ github.event.comment.id || 0 }}
-          automatic-review-limit: 2
+          automatic-review-limit: 5
           expected-head: ${{ github.event.pull_request.head.sha || '' }}
           effort: xhigh
           guidance-file: .github/review-guidance.md

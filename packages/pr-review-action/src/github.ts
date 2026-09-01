@@ -1,9 +1,10 @@
+import { ReviewFollowUp } from "@effect-agent/pr-review";
 import { createTwoFilesPatch } from "diff";
 import type { Redacted } from "effect";
 import { Effect, Encoding, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
-import type { ReviewHistoryItem } from "./selection.ts";
+import { unresolvedChangeRequests, type ReviewHistoryItem } from "./selection.ts";
 
 const ShortString = Schema.String.check(Schema.isMaxLength(2_048));
 const Revision = Schema.NonEmptyString.check(Schema.isMaxLength(128));
@@ -37,6 +38,31 @@ const ReviewWire = Schema.Struct({
     login: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
     type: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
   }),
+});
+
+const ReviewCommentWire = Schema.Struct({
+  pull_request_review_id: Schema.Natural,
+  path: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
+  body: Schema.String.check(Schema.isMaxLength(100_000)),
+  user: ReviewWire.fields.user,
+});
+
+const DismissReviewWire = Schema.Struct({
+  message: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
+});
+const DismissedReviewWire = Schema.Struct({
+  id: Schema.Natural,
+  state: Schema.Literal("DISMISSED"),
+});
+
+const reviewFromWire = (wire: typeof ReviewWire.Type): ReviewHistoryItem => ({
+  id: wire.id,
+  authorLogin: wire.user.login,
+  authorType: wire.user.type,
+  body: wire.body ?? "",
+  commitId: wire.commit_id ?? undefined,
+  submittedAt: wire.submitted_at ?? undefined,
+  state: wire.state,
 });
 
 const GitCommitWire = Schema.Struct({
@@ -275,23 +301,165 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
           ),
         ),
       );
-      all.push(
-        ...wires.map((wire) => ({
-          id: wire.id,
-          authorLogin: wire.user.login,
-          authorType: wire.user.type,
-          body: wire.body ?? "",
-          commitId: wire.commit_id ?? undefined,
-          submittedAt: wire.submitted_at ?? undefined,
-          state: wire.state,
-        })),
-      );
+      all.push(...wires.map(reviewFromWire));
       if (wires.length < 100) return all;
     }
     return yield* GitHubApiFailure.make({
       operation: "list pull request reviews",
       reason: "review history exceeds the 1,000-review admission bound",
     });
+  });
+
+  /** Never truncate feedback used to authorize clearing an entire change request. */
+  const loadReviewFollowUps = Effect.fn("GitHubClient.loadReviewFollowUps")(function* (input: {
+    readonly reviewAuthor: string;
+    readonly history: ReadonlyArray<ReviewHistoryItem>;
+    readonly scope: "full" | "incremental";
+    readonly changedPaths: ReadonlySet<string>;
+  }) {
+    const followUps: Array<ReviewFollowUp> = [];
+    for (const review of unresolvedChangeRequests(input).slice(0, 8)) {
+      const comments: Array<typeof ReviewCommentWire.Type> = [];
+      for (let page = 1; ; page += 1) {
+        if (page > 3) {
+          return yield* GitHubApiFailure.make({
+            operation: "load review follow-ups",
+            reason: "Review comments exceed the 300-comment admission bound",
+          });
+        }
+        const batch = yield* execute(
+          "list review comments",
+          HttpClientRequest.get(
+            `${pullUrl}/reviews/${String(review.id)}/comments?per_page=100&page=${String(page)}`,
+          ),
+        ).pipe(
+          Effect.flatMap(
+            decode(
+              Schema.Array(ReviewCommentWire).check(Schema.isMaxLength(100)),
+              "list review comments",
+            ),
+          ),
+        );
+        if (batch.some((comment) => comment.pull_request_review_id !== review.id)) {
+          return yield* GitHubApiFailure.make({
+            operation: "load review follow-ups",
+            reason: "GitHub returned comments for a different review",
+          });
+        }
+        comments.push(
+          ...batch.filter(
+            (comment) =>
+              comment.user.type === "Bot" &&
+              comment.user.login.toLowerCase() === input.reviewAuthor.toLowerCase(),
+          ),
+        );
+        if (batch.length < 100) break;
+      }
+      if (
+        input.scope === "incremental" &&
+        !comments.some((comment) => input.changedPaths.has(comment.path))
+      )
+        continue;
+      const candidate = Schema.decodeUnknownOption(ReviewFollowUp)({
+        id: String(review.id),
+        description: JSON.stringify({
+          reviewedCommit: review.commitId,
+          review: review.body,
+          comments: comments.map(({ path, body }) => ({ path, body })),
+        }),
+      });
+      if (candidate._tag === "Some") followUps.push(candidate.value);
+      else
+        yield* Effect.logInfo(
+          "Prior review exceeds follow-up input bound; retaining change request",
+          {
+            reviewId: review.id,
+          },
+        );
+    }
+    return followUps;
+  });
+
+  /** Recheck ownership, feedback, and head before each dismissal. GitHub has no conditional PUT. */
+  const dismissReview = Effect.fn("GitHubClient.dismissReview")(function* (input: {
+    readonly review: ReviewHistoryItem;
+    readonly followUp: ReviewFollowUp;
+    readonly reviewAuthor: string;
+    readonly commitId: string;
+    readonly evidence: string;
+  }) {
+    if (
+      input.followUp.id !== String(input.review.id) ||
+      unresolvedChangeRequests({ reviewAuthor: input.reviewAuthor, history: [input.review] })
+        .length !== 1
+    ) {
+      return yield* GitHubApiFailure.make({
+        operation: "dismiss review",
+        reason: "Review is not an owned change request",
+      });
+    }
+    const reviewUrl = `${pullUrl}/reviews/${String(input.review.id)}`;
+    const currentReview = yield* execute(
+      "get review before dismissal",
+      HttpClientRequest.get(reviewUrl),
+    ).pipe(
+      Effect.flatMap(decode(ReviewWire, "get review before dismissal")),
+      Effect.map(reviewFromWire),
+    );
+    if (
+      currentReview.id !== input.review.id ||
+      currentReview.authorLogin !== input.review.authorLogin ||
+      currentReview.authorType !== "Bot" ||
+      currentReview.body !== input.review.body ||
+      currentReview.commitId !== input.review.commitId
+    ) {
+      return yield* GitHubApiFailure.make({
+        operation: "dismiss review",
+        reason: "Review changed after verification",
+      });
+    }
+    if (currentReview.state === "DISMISSED") return;
+    if (currentReview.state !== "CHANGES_REQUESTED") {
+      return yield* GitHubApiFailure.make({
+        operation: "dismiss review",
+        reason: "Review is no longer a change request",
+      });
+    }
+    const [currentFollowUp] = yield* loadReviewFollowUps({
+      reviewAuthor: input.reviewAuthor,
+      history: [currentReview],
+      scope: "full",
+      changedPaths: new Set(),
+    });
+    if (currentFollowUp?.description !== input.followUp.description) {
+      return yield* GitHubApiFailure.make({
+        operation: "dismiss review",
+        reason: "Review comments changed after verification",
+      });
+    }
+    const current = yield* getPullRequest;
+    if (current.headRevision !== input.commitId) {
+      return yield* StaleReviewHead.make({
+        inspectedHead: input.commitId,
+        currentHead: current.headRevision,
+      });
+    }
+    const body = yield* Schema.encodeEffect(DismissReviewWire)({
+      message: `Verified addressed at ${input.commitId}.\n\n${input.evidence}`,
+    }).pipe(Effect.mapError((cause) => failure("encode review dismissal", cause)));
+    const request = yield* HttpClientRequest.put(`${reviewUrl}/dismissals`).pipe(
+      HttpClientRequest.bodyJson(body),
+      Effect.mapError((cause) => failure("encode review dismissal", cause)),
+    );
+    const dismissed = yield* execute("dismiss addressed review", request).pipe(
+      Effect.flatMap(decode(DismissedReviewWire, "dismiss addressed review")),
+    );
+    if (dismissed.id !== input.review.id) {
+      return yield* GitHubApiFailure.make({
+        operation: "dismiss review",
+        reason: "GitHub returned a different dismissed review",
+      });
+    }
   });
 
   const textBlobs = new Map<string, string>();
@@ -518,6 +686,8 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     getPullRequest,
     listFiles,
     listReviews,
+    loadReviewFollowUps,
+    dismissReview,
     getMergeBase,
     compareTrees,
     acknowledgeComment,

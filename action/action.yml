@@ -74,7 +74,7 @@ outputs:
   blocking-findings:
     description: "Number of published blocking findings."
   unresolved-change-requests:
-    description: "Trusted earlier change requests still awaiting maintainer dismissal. These fail the action even when no new blocker is found."
+    description: "Trusted earlier change requests not explicitly verified as addressed or manually dismissed. These fail the action even when no new blocker is found."
   review-url:
     description: "URL of the published review."
 runs:
