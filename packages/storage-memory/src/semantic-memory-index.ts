@@ -1,12 +1,10 @@
 import {
-  MemoryIndexBuild,
   MemoryIndexCandidate,
   MemoryIndexError,
-  MemoryIndexFailpoint,
   MemoryIndexQuery,
+  MemoryIndexReplacement,
   MemoryIndexSearch,
   MemoryIndexSource,
-  MemoryIndexState,
   MemoryKey,
   SemanticMemoryChunk,
   SemanticMemoryIndex,
@@ -24,41 +22,26 @@ export class InMemorySemanticIndexCapacity extends Schema.Class<InMemorySemantic
   maxChunks: PositiveCapacity,
 }) {}
 
-const PublishRequest = Schema.Struct({
-  build: MemoryIndexBuild,
-  chunks: Schema.Array(SemanticMemoryChunk).check(Schema.isMinLength(1), Schema.isMaxLength(256)),
-});
-
-interface StoredEntry {
-  readonly state: MemoryIndexState;
-  readonly build: MemoryIndexBuild | null;
-  readonly chunks: ReadonlyArray<SemanticMemoryChunk>;
-}
+type StoredEntry = {
+  readonly source: MemoryIndexSource;
+} & (
+  | {
+      readonly _tag: "Indexed";
+      readonly chunks: ReadonlyArray<SemanticMemoryChunk>;
+      readonly indexedAt: number;
+    }
+  | { readonly _tag: "Withdrawn" }
+);
 
 interface IndexData {
   readonly closed: boolean;
   readonly entries: ReadonlyMap<string, StoredEntry>;
 }
 
-type Decision<A> =
-  | { readonly _tag: "success"; readonly value: A; readonly changed: boolean }
-  | { readonly _tag: "failure"; readonly error: MemoryIndexError };
-
 const sameProfile = Schema.toEquivalence(SemanticMemoryProfile);
-const sameBuild = Schema.toEquivalence(MemoryIndexBuild);
-const sameChunks = Schema.toEquivalence(Schema.Array(SemanticMemoryChunk));
-
-const sameSource = (left: MemoryIndexSource, right: MemoryIndexSource): boolean =>
-  left.key.namespace === right.key.namespace &&
-  left.key.id === right.key.id &&
-  left.source.id === right.source.id &&
-  left.source.locator === right.source.locator &&
-  left.source.revision === right.source.revision &&
-  left.sourceGeneration === right.sourceGeneration;
-
+const sameSource = Schema.toEquivalence(MemoryIndexSource);
 const error = (operation: string, reason: MemoryIndexError["reason"]): MemoryIndexError =>
   MemoryIndexError.make({ operation, reason });
-
 const keyString = (key: MemoryKey): string => JSON.stringify([key.namespace, key.id]);
 
 const decodeBoundary = Effect.fn("InMemorySemanticIndex.decodeBoundary")(function* <A, I>(
@@ -72,55 +55,22 @@ const decodeBoundary = Effect.fn("InMemorySemanticIndex.decodeBoundary")(functio
   );
 });
 
-const freezeProfile = (profile: SemanticMemoryProfile): SemanticMemoryProfile =>
-  Object.freeze(SemanticMemoryProfile.make({ ...profile }));
-
-const freezeKey = (key: MemoryKey): MemoryKey => Object.freeze(MemoryKey.make({ ...key }));
-
 const freezeSource = (source: MemoryIndexSource): MemoryIndexSource =>
   Object.freeze(
     MemoryIndexSource.make({
-      key: freezeKey(source.key),
+      key: Object.freeze(MemoryKey.make({ ...source.key })),
       source: Object.freeze({ ...source.source }),
       sourceGeneration: source.sourceGeneration,
     }),
   );
 
-const freezeBuild = (build: MemoryIndexBuild, profile: SemanticMemoryProfile): MemoryIndexBuild => {
-  const source = freezeSource(build);
-  return Object.freeze(
-    MemoryIndexBuild.make({
-      ...source,
-      profile,
-      epoch: build.epoch,
-    }),
-  );
-};
-
 const freezeChunk = (chunk: SemanticMemoryChunk): SemanticMemoryChunk =>
-  Object.freeze(
-    SemanticMemoryChunk.make({
-      ...chunk,
-      vector: Object.freeze([...chunk.vector]),
-    }),
-  );
+  Object.freeze(SemanticMemoryChunk.make({ ...chunk, vector: Object.freeze([...chunk.vector]) }));
 
-const freezeState = (state: MemoryIndexState): MemoryIndexState => {
-  const source = freezeSource(state);
-  return Object.freeze(
-    MemoryIndexState.make({
-      ...source,
-      version: 1,
-      epoch: state.epoch,
-      status: state.status,
-      chunkCount: state.chunkCount,
-      indexedAt: state.indexedAt,
-    }),
-  );
-};
-
-const sourceIdentityIsValid = (source: MemoryIndexSource): boolean =>
-  source.source.id === source.key.id;
+const sourceIsFenced = (source: MemoryIndexSource, existing: StoredEntry): boolean =>
+  source.sourceGeneration < existing.source.sourceGeneration ||
+  (source.sourceGeneration === existing.source.sourceGeneration &&
+    !sameSource(source, existing.source));
 
 const squaredNorm = (vector: ReadonlyArray<number>): number | null => {
   let sum = 0;
@@ -160,14 +110,6 @@ const validateChunks = Effect.fn("InMemorySemanticIndex.validateChunks")(functio
   }
 });
 
-const readyChunkCount = (entries: ReadonlyMap<string, StoredEntry>): number => {
-  let count = 0;
-  for (const entry of entries.values()) {
-    if (entry.state.status === "ready") count += entry.chunks.length;
-  }
-  return count;
-};
-
 const cosine = (left: ReadonlyArray<number>, right: ReadonlyArray<number>): number => {
   const leftNorm = Math.sqrt(squaredNorm(left) ?? 1);
   const rightNorm = Math.sqrt(squaredNorm(right) ?? 1);
@@ -182,159 +124,69 @@ const cosine = (left: ReadonlyArray<number>, right: ReadonlyArray<number>): numb
 const compareText = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
 
-const resolve = <A>(decision: Decision<A>): Effect.Effect<A, MemoryIndexError> =>
-  decision._tag === "failure" ? Effect.fail(decision.error) : Effect.succeed(decision.value);
-
 const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
   rawProfile: SemanticMemoryProfile,
   rawCapacity: InMemorySemanticIndexCapacity,
 ) {
-  const profile = freezeProfile(
-    yield* decodeBoundary(SemanticMemoryProfile, rawProfile, "configure semantic memory index"),
+  const profile = Object.freeze(
+    SemanticMemoryProfile.make({
+      ...(yield* decodeBoundary(
+        SemanticMemoryProfile,
+        rawProfile,
+        "configure semantic memory index",
+      )),
+    }),
   );
   const capacity = yield* decodeBoundary(
     InMemorySemanticIndexCapacity,
     rawCapacity,
     "configure semantic memory index",
   );
-  const failpoint = yield* MemoryIndexFailpoint;
   const data = yield* Ref.make<IndexData>({ closed: false, entries: new Map() });
   yield* Effect.addFinalizer(() => Ref.set(data, { closed: true, entries: new Map() }));
 
-  const ensureOpen = Effect.fn("InMemorySemanticIndex.ensureOpen")(function* (
-    operation: string,
-  ): Effect.fn.Return<void, MemoryIndexError> {
+  const ensureOpen = Effect.fn("InMemorySemanticIndex.ensureOpen")(function* (operation: string) {
     if ((yield* Ref.get(data)).closed) return yield* error(operation, "unavailable");
   });
 
-  const begin: SemanticMemoryIndex["Service"]["begin"] = Effect.fn("InMemorySemanticIndex.begin")(
-    function* (rawSource) {
-      const operation = "begin semantic memory build";
-      yield* ensureOpen(operation);
-      const source = freezeSource(yield* decodeBoundary(MemoryIndexSource, rawSource, operation));
-      if (!sourceIdentityIsValid(source)) return yield* error(operation, "invalid-input");
-      yield* ensureOpen(operation);
-      yield* failpoint.hit("index:begin:before");
-      const decision = yield* Ref.modify(
-        data,
-        (current): readonly [Decision<MemoryIndexBuild>, IndexData] => {
-          if (current.closed)
-            return [{ _tag: "failure", error: error(operation, "unavailable") }, current];
-          const id = keyString(source.key);
-          const existing = current.entries.get(id);
-          if (existing?.state.status === "withdrawn") {
-            return [{ _tag: "failure", error: error(operation, "fenced") }, current];
-          }
-          if (existing !== undefined) {
-            if (
-              source.sourceGeneration < existing.state.sourceGeneration ||
-              (source.sourceGeneration === existing.state.sourceGeneration &&
-                !sameSource(source, existing.state))
-            ) {
-              return [{ _tag: "failure", error: error(operation, "fenced") }, current];
-            }
-          } else if (current.entries.size >= capacity.maxSources) {
-            return [{ _tag: "failure", error: error(operation, "budget") }, current];
-          }
-          const epoch = (existing?.state.epoch ?? 0) + 1;
-          if (!Number.isSafeInteger(epoch)) {
-            return [{ _tag: "failure", error: error(operation, "budget") }, current];
-          }
-          const build = freezeBuild(MemoryIndexBuild.make({ ...source, profile, epoch }), profile);
-          const state = freezeState(
-            MemoryIndexState.make({
-              version: 1,
-              ...source,
-              epoch,
-              status: "building",
-              chunkCount: 0,
-              indexedAt: null,
-            }),
-          );
-          const entries = new Map(current.entries);
-          entries.set(id, { state, build, chunks: Object.freeze([]) });
-          return [
-            { _tag: "success", value: build, changed: true },
-            { ...current, entries },
-          ];
-        },
-      );
-      const build = yield* resolve(decision);
-      yield* failpoint.hit("index:begin:after");
-      yield* ensureOpen(operation);
-      return build;
-    },
-  );
-
-  const publish: SemanticMemoryIndex["Service"]["publish"] = Effect.fn(
-    "InMemorySemanticIndex.publish",
+  const replace: SemanticMemoryIndex["Service"]["replace"] = Effect.fn(
+    "InMemorySemanticIndex.replace",
   )(function* (rawRequest) {
-    const operation = "publish semantic memory build";
+    const operation = "replace semantic memory source";
     yield* ensureOpen(operation);
-    const decoded = yield* decodeBoundary(PublishRequest, rawRequest, operation);
-    const build = freezeBuild(decoded.build, freezeProfile(decoded.build.profile));
-    const chunks = Object.freeze(decoded.chunks.map(freezeChunk));
-    if (!sourceIdentityIsValid(build) || !sameProfile(build.profile, profile)) {
-      return yield* error(
-        operation,
-        sameProfile(build.profile, profile) ? "invalid-input" : "incompatible",
-      );
-    }
+    const request = yield* decodeBoundary(MemoryIndexReplacement, rawRequest, operation);
+    const source = freezeSource(request.source);
+    const chunks = Object.freeze(request.chunks.map(freezeChunk));
+    if (source.source.id !== source.key.id) return yield* error(operation, "invalid-input");
+    if (!sameProfile(request.profile, profile)) return yield* error(operation, "incompatible");
     yield* validateChunks(chunks, profile, operation);
-    yield* ensureOpen(operation);
-    yield* failpoint.hit("index:publish:before");
     const indexedAt = yield* Clock.currentTimeMillis;
-    const decision = yield* Ref.modify(
+    const failure = yield* Ref.modify(
       data,
-      (current): readonly [Decision<MemoryIndexState>, IndexData] => {
-        if (current.closed)
-          return [{ _tag: "failure", error: error(operation, "unavailable") }, current];
-        const id = keyString(build.key);
+      (current): readonly [MemoryIndexError | undefined, IndexData] => {
+        if (current.closed) return [error(operation, "unavailable"), current];
+        const id = keyString(source.key);
         const existing = current.entries.get(id);
         if (
-          existing === undefined ||
-          existing.build === null ||
-          !sameBuild(existing.build, build)
+          existing !== undefined &&
+          (existing._tag === "Withdrawn" || sourceIsFenced(source, existing))
         ) {
-          return [{ _tag: "failure", error: error(operation, "fenced") }, current];
+          return [error(operation, "fenced"), current];
         }
-        if (existing.state.status === "ready") {
-          return sameChunks(existing.chunks, chunks)
-            ? [{ _tag: "success", value: existing.state, changed: false }, current]
-            : [{ _tag: "failure", error: error(operation, "fenced") }, current];
+        if (existing === undefined && current.entries.size >= capacity.maxSources) {
+          return [error(operation, "budget"), current];
         }
-        if (existing.state.status !== "building") {
-          return [{ _tag: "failure", error: error(operation, "fenced") }, current];
+        let count = chunks.length;
+        for (const [entryId, entry] of current.entries) {
+          if (entryId !== id && entry._tag === "Indexed") count += entry.chunks.length;
         }
-        if (readyChunkCount(current.entries) + chunks.length > capacity.maxChunks) {
-          return [{ _tag: "failure", error: error(operation, "budget") }, current];
-        }
-        const state = freezeState(
-          MemoryIndexState.make({
-            version: 1,
-            key: build.key,
-            source: build.source,
-            sourceGeneration: build.sourceGeneration,
-            epoch: build.epoch,
-            status: "ready",
-            chunkCount: chunks.length,
-            indexedAt,
-          }),
-        );
+        if (count > capacity.maxChunks) return [error(operation, "budget"), current];
         const entries = new Map(current.entries);
-        entries.set(id, { state, build, chunks });
-        return [
-          { _tag: "success", value: state, changed: true },
-          { ...current, entries },
-        ];
+        entries.set(id, { _tag: "Indexed", source, chunks, indexedAt });
+        return [undefined, { ...current, entries }];
       },
     );
-    const state = yield* resolve(decision);
-    if (decision._tag === "success" && decision.changed) {
-      yield* failpoint.hit("index:publish:after");
-    }
-    yield* ensureOpen(operation);
-    return state;
+    if (failure !== undefined) return yield* failure;
   });
 
   const withdraw: SemanticMemoryIndex["Service"]["withdraw"] = Effect.fn(
@@ -343,73 +195,30 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
     const operation = "withdraw semantic memory source";
     yield* ensureOpen(operation);
     const source = freezeSource(yield* decodeBoundary(MemoryIndexSource, rawSource, operation));
-    if (!sourceIdentityIsValid(source)) return yield* error(operation, "invalid-input");
-    yield* ensureOpen(operation);
-    yield* failpoint.hit("index:withdraw:before");
-    const decision = yield* Ref.modify(
+    if (source.source.id !== source.key.id) return yield* error(operation, "invalid-input");
+    const failure = yield* Ref.modify(
       data,
-      (current): readonly [Decision<MemoryIndexState>, IndexData] => {
-        if (current.closed)
-          return [{ _tag: "failure", error: error(operation, "unavailable") }, current];
+      (current): readonly [MemoryIndexError | undefined, IndexData] => {
+        if (current.closed) return [error(operation, "unavailable"), current];
         const id = keyString(source.key);
         const existing = current.entries.get(id);
-        if (existing === undefined && current.entries.size >= capacity.maxSources) {
-          return [{ _tag: "failure", error: error(operation, "budget") }, current];
-        }
         if (existing !== undefined) {
-          if (existing.state.status === "withdrawn") {
-            return sameSource(existing.state, source)
-              ? [{ _tag: "success", value: existing.state, changed: false }, current]
-              : [{ _tag: "failure", error: error(operation, "fenced") }, current];
+          if (existing._tag === "Withdrawn") {
+            return [
+              sameSource(source, existing.source) ? undefined : error(operation, "fenced"),
+              current,
+            ];
           }
-          if (
-            source.sourceGeneration < existing.state.sourceGeneration ||
-            (source.sourceGeneration === existing.state.sourceGeneration &&
-              !sameSource(source, existing.state))
-          ) {
-            return [{ _tag: "failure", error: error(operation, "fenced") }, current];
-          }
+          if (sourceIsFenced(source, existing)) return [error(operation, "fenced"), current];
+        } else if (current.entries.size >= capacity.maxSources) {
+          return [error(operation, "budget"), current];
         }
-        const epoch = (existing?.state.epoch ?? 0) + 1;
-        if (!Number.isSafeInteger(epoch)) {
-          return [{ _tag: "failure", error: error(operation, "budget") }, current];
-        }
-        const state = freezeState(
-          MemoryIndexState.make({
-            version: 1,
-            ...source,
-            epoch,
-            status: "withdrawn",
-            chunkCount: 0,
-            indexedAt: null,
-          }),
-        );
         const entries = new Map(current.entries);
-        entries.set(id, { state, build: null, chunks: Object.freeze([]) });
-        return [
-          { _tag: "success", value: state, changed: true },
-          { ...current, entries },
-        ];
+        entries.set(id, { _tag: "Withdrawn", source });
+        return [undefined, { ...current, entries }];
       },
     );
-    const state = yield* resolve(decision);
-    if (decision._tag === "success" && decision.changed) {
-      yield* failpoint.hit("index:withdraw:after");
-    }
-    yield* ensureOpen(operation);
-    return state;
-  });
-
-  const inspect: SemanticMemoryIndex["Service"]["inspect"] = Effect.fn(
-    "InMemorySemanticIndex.inspect",
-  )(function* (rawKey) {
-    const operation = "inspect semantic memory index";
-    yield* ensureOpen(operation);
-    const key = freezeKey(yield* decodeBoundary(MemoryKey, rawKey, operation));
-    yield* ensureOpen(operation);
-    const state = (yield* Ref.get(data)).entries.get(keyString(key))?.state ?? null;
-    yield* ensureOpen(operation);
-    return state;
+    if (failure !== undefined) return yield* failure;
   });
 
   const search: SemanticMemoryIndex["Service"]["search"] = Effect.fn(
@@ -420,45 +229,34 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
     const query = yield* decodeBoundary(MemoryIndexQuery, rawQuery, operation);
     const vector = Object.freeze([...query.vector]);
     if (!validVector(vector, profile)) return yield* error(operation, "invalid-input");
-    yield* ensureOpen(operation);
     const current = yield* Ref.get(data);
     if (current.closed) return yield* error(operation, "unavailable");
     let scannedChunks = 0;
     let inspectedSources = 0;
-    let incomplete = false;
     const candidates: Array<MemoryIndexCandidate> = [];
     for (const entry of current.entries.values()) {
       inspectedSources += 1;
       if (inspectedSources % 128 === 0) yield* Effect.yieldNow;
-      if (entry.state.key.namespace !== query.namespace) continue;
-      if (entry.state.status === "building") incomplete = true;
-      if (entry.state.status !== "ready" || entry.state.indexedAt === null) continue;
+      if (entry.source.key.namespace !== query.namespace || entry._tag !== "Indexed") continue;
       scannedChunks += entry.chunks.length;
       if (scannedChunks > query.maxScannedChunks) return yield* error(operation, "budget");
     }
     for (const entry of current.entries.values()) {
-      if (
-        entry.state.key.namespace !== query.namespace ||
-        entry.state.status !== "ready" ||
-        entry.state.indexedAt === null
-      )
-        continue;
+      if (entry.source.key.namespace !== query.namespace || entry._tag !== "Indexed") continue;
       yield* Effect.yieldNow;
       for (const chunk of entry.chunks) {
         const score = cosine(vector, chunk.vector);
         if (score < query.minScore) continue;
         candidates.push(
           MemoryIndexCandidate.make({
-            key: entry.state.key,
-            source: entry.state.source,
-            sourceGeneration: entry.state.sourceGeneration,
+            ...entry.source,
             passageId: chunk.passageId,
             ordinal: chunk.ordinal,
             startByte: chunk.startByte,
             endByte: chunk.endByte,
             text: chunk.text,
             score,
-            indexedAt: entry.state.indexedAt,
+            indexedAt: entry.indexedAt,
           }),
         );
       }
@@ -471,28 +269,15 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
         left.ordinal - right.ordinal,
     );
     yield* ensureOpen(operation);
-    return MemoryIndexSearch.make({
-      candidates: candidates.slice(0, query.limit),
-      scannedChunks,
-      incomplete,
-    });
+    return MemoryIndexSearch.make({ candidates: candidates.slice(0, query.limit), scannedChunks });
   });
 
-  return SemanticMemoryIndex.of({ profile, begin, publish, withdraw, inspect, search });
+  return SemanticMemoryIndex.of({ profile, replace, withdraw, search });
 });
 
-/** Scoped disposable semantic index with an injectable mutation failpoint. */
-export const inMemorySemanticIndexLayerWithFailpoints = (
-  profile: SemanticMemoryProfile,
-  capacity: InMemorySemanticIndexCapacity,
-): Layer.Layer<SemanticMemoryIndex, MemoryIndexError, MemoryIndexFailpoint> =>
-  Layer.effect(SemanticMemoryIndex, makeIndex(profile, capacity));
-
-/** Scoped disposable semantic index with production no-op mutation failpoints. */
+/** Scoped disposable semantic index. No persistent build or recovery state is retained. */
 export const inMemorySemanticIndexLayer = (
   profile: SemanticMemoryProfile,
   capacity: InMemorySemanticIndexCapacity,
 ): Layer.Layer<SemanticMemoryIndex, MemoryIndexError> =>
-  inMemorySemanticIndexLayerWithFailpoints(profile, capacity).pipe(
-    Layer.provide(MemoryIndexFailpoint.layer),
-  );
+  Layer.effect(SemanticMemoryIndex, makeIndex(profile, capacity));

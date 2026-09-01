@@ -1,4 +1,5 @@
-import { Context, Effect, Layer, Schema } from "effect";
+import type { Effect } from "effect";
+import { Context, Schema } from "effect";
 
 import { ActiveMemoryDocument, MemoryKey } from "./memory-lifecycle.ts";
 import { MemoryPassage } from "./memory.ts";
@@ -45,24 +46,13 @@ export class MemoryIndexSource extends Schema.Class<MemoryIndexSource>(
   "@effect-agent/core/MemoryIndexSource",
 )(SourceFields) {}
 
-export class MemoryIndexBuild extends Schema.Class<MemoryIndexBuild>(
-  "@effect-agent/core/MemoryIndexBuild",
+/** A complete replacement, prepared before touching the disposable index. */
+export class MemoryIndexReplacement extends Schema.Class<MemoryIndexReplacement>(
+  "@effect-agent/core/MemoryIndexReplacement",
 )({
-  ...SourceFields,
+  source: MemoryIndexSource,
   profile: SemanticMemoryProfile,
-  epoch: Positive,
-}) {}
-
-/** Disposable per-source progress, independent of committed-activity extraction progress. */
-export class MemoryIndexState extends Schema.Class<MemoryIndexState>(
-  "@effect-agent/core/MemoryIndexState",
-)({
-  version: Schema.Literal(1),
-  ...SourceFields,
-  epoch: Positive,
-  status: Schema.Literals(["building", "ready", "withdrawn"]),
-  chunkCount: Schema.Natural,
-  indexedAt: Schema.NullOr(Timestamp),
+  chunks: Schema.Array(SemanticMemoryChunk).check(Schema.isMinLength(1), Schema.isMaxLength(256)),
 }) {}
 
 export class MemoryIndexCandidate extends Schema.Class<MemoryIndexCandidate>(
@@ -93,8 +83,6 @@ export class MemoryIndexSearch extends Schema.Class<MemoryIndexSearch>(
 )({
   candidates: Schema.Array(MemoryIndexCandidate).check(Schema.isMaxLength(128)),
   scannedChunks: Schema.Natural,
-  /** At least one registered source in this namespace has an unfinished build. */
-  incomplete: Schema.Boolean,
 }) {}
 
 export class MemoryIndexError extends Schema.TaggedError<MemoryIndexError>()("MemoryIndexError", {
@@ -109,75 +97,33 @@ export class MemoryIndexError extends Schema.TaggedError<MemoryIndexError>()("Me
   ]),
 }) {}
 
-export const MemoryIndexMutationPoint = Schema.Literals([
-  "index:begin:before",
-  "index:begin:after",
-  "index:publish:before",
-  "index:publish:after",
-  "index:withdraw:before",
-  "index:withdraw:after",
-]);
-export type MemoryIndexMutationPoint = typeof MemoryIndexMutationPoint.Type;
-
-export class MemoryIndexMutationFailure extends Schema.TaggedError<MemoryIndexMutationFailure>()(
-  "MemoryIndexMutationFailure",
-  { point: MemoryIndexMutationPoint },
-) {}
-
-export class MemoryIndexFailpoint extends Context.Service<
-  MemoryIndexFailpoint,
-  {
-    readonly hit: (
-      point: MemoryIndexMutationPoint,
-    ) => Effect.Effect<void, MemoryIndexMutationFailure>;
-  }
->()("@effect-agent/core/MemoryIndexFailpoint") {
-  static readonly layer = Layer.succeed(this, { hit: () => Effect.void });
-}
-
 /**
- * Replaceable derivative index. The profile is fixed for an instance; incompatible builds
- * must fail rather than mix vector spaces. begin allocates a newer epoch and hides obsolete
- * chunks. publish atomically exposes all chunks only for the current epoch and source version;
- * identical replay is idempotent, divergent replay fails. Withdraw is terminal for the key and
- * fences delayed publication. Older source generations cannot supersede newer ones.
- * Source IDs must equal key IDs. Equal generations with different revisions or locators are
- * fenced, and an exact withdrawal replay returns its original state.
+ * Optional disposable ranking index with one fixed embedding/chunking profile.
+ * replace validates a complete replacement before atomically exchanging chunks. Failure leaves
+ * the last successful index intact. Older generations and divergent same-generation source
+ * identities are fenced; refreshing the same source is allowed. Source IDs must equal key IDs.
+ * withdraw retains a terminal tombstone that fences every later replacement for that key.
  *
- * Vectors must match profile dimensions and have a positive finite squared norm. Published
- * chunks form one nonempty contiguous ordinal/byte sequence starting at zero, have unique
- * passage IDs, and each text's UTF-8 byte length equals its byte range and fits maxChunkBytes.
- * A publication contains at most 256 chunks. Ready state counts that complete array and records
- * publication time; building/withdrawn state has zero chunks and no indexedAt. Exact publication
- * replay keeps its original time. Implementations take snapshots rather than retain mutable
- * caller vectors.
+ * Vectors match the profile dimensions and have positive finite squared norms. Chunks form a
+ * nonempty contiguous ordinal/byte sequence starting at zero, with unique passage IDs and exact
+ * UTF-8 byte ranges bounded by maxChunkBytes. Implementations snapshot mutable caller values.
  *
- * A bounded in-memory adapter counts ALL registered keys (including tombstones) against
- * maxSources and all ready chunks against maxChunks. begin removes prior chunks. Publication
- * over capacity leaves the build pending. Search rejects a scan over maxScannedChunks; it never
- * silently ranks a truncated prefix. scannedChunks counts all ready chunks in the namespace
- * before threshold/limit. Ties sort by key ID, source revision, then ordinal in UTF-16 code-unit
- * order. Scope close clears state and makes every captured method fail unavailable.
+ * Bounded adapters count every source key, including tombstones, against capacity. Replacement
+ * capacity is measured after removing the old chunks. Search rejects scans over maxScannedChunks
+ * instead of ranking a truncated prefix. scannedChunks counts all indexed chunks in the namespace
+ * before threshold/limit. Ties sort by source ID, revision, then ordinal in UTF-16 code-unit order.
+ * Scope close clears the index and makes captured methods fail unavailable.
  *
  * Search is ranking only: callers MUST recheck authoritative revision, access, and withdrawal.
- * Source discovery, required freshness, and ranking thresholds belong to the host. Incomplete
- * describes registered builds, not undiscovered sources or a global freshness watermark.
+ * This port tracks no builds, extraction progress, or corpus completeness. The host owns source
+ * discovery, refresh scheduling, and required freshness.
  */
 export class SemanticMemoryIndex extends Context.Service<
   SemanticMemoryIndex,
   {
     readonly profile: SemanticMemoryProfile;
-    readonly begin: (
-      source: MemoryIndexSource,
-    ) => Effect.Effect<MemoryIndexBuild, MemoryIndexError | MemoryIndexMutationFailure>;
-    readonly publish: (request: {
-      readonly build: MemoryIndexBuild;
-      readonly chunks: ReadonlyArray<SemanticMemoryChunk>;
-    }) => Effect.Effect<MemoryIndexState, MemoryIndexError | MemoryIndexMutationFailure>;
-    readonly withdraw: (
-      source: MemoryIndexSource,
-    ) => Effect.Effect<MemoryIndexState, MemoryIndexError | MemoryIndexMutationFailure>;
-    readonly inspect: (key: MemoryKey) => Effect.Effect<MemoryIndexState | null, MemoryIndexError>;
+    readonly replace: (request: MemoryIndexReplacement) => Effect.Effect<void, MemoryIndexError>;
+    readonly withdraw: (source: MemoryIndexSource) => Effect.Effect<void, MemoryIndexError>;
     readonly search: (
       query: MemoryIndexQuery,
     ) => Effect.Effect<MemoryIndexSearch, MemoryIndexError>;

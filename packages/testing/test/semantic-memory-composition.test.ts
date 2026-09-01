@@ -4,14 +4,20 @@ import {
   querySemanticMemory,
   recallMemory,
 } from "@effect-agent/capabilities";
-import { MemoryKey, MemoryWriter, SemanticMemoryProfile } from "@effect-agent/core";
+import {
+  MemoryKey,
+  MemoryWriter,
+  SemanticMemoryIndex,
+  SemanticMemoryProfile,
+} from "@effect-agent/core";
 import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory";
 import { memoryStoreLayer } from "@effect-agent/storage-sqlite";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
-import { EmbeddingModel } from "effect/unstable/ai";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect";
+import { TestClock } from "effect/testing";
+import { AiError, EmbeddingModel } from "effect/unstable/ai";
 
 const key = MemoryKey.make({ namespace: "team", id: "proposal" });
 const access = MemoryAccess.make({ namespace: key.namespace, scope: "channel" });
@@ -50,27 +56,28 @@ const services = Layer.mergeAll(
   NodeCrypto.layer,
 );
 
+const content = {
+  text: "Dan proposes a queue.",
+  attributions: [
+    {
+      originId: "dan:1",
+      speaker: "Dan",
+      observers: ["Chad"],
+      locator: "chat://engineering/1",
+      activityAt: 10,
+      interpretation: "proposal",
+    },
+  ],
+  metadata: {},
+  recordedAt: 20,
+  extractedAt: 30,
+};
+
 it.effect(
   "composes SQLite authority, native embeddings, the real index, and bounded recall across correction and withdrawal",
   () =>
     Effect.gen(function* () {
       const writer = yield* MemoryWriter;
-      const content = {
-        text: "Dan proposes a queue.",
-        attributions: [
-          {
-            originId: "dan:1",
-            speaker: "Dan",
-            observers: ["Chad"],
-            locator: "chat://engineering/1",
-            activityAt: 10,
-            interpretation: "proposal",
-          },
-        ],
-        metadata: {},
-        recordedAt: 20,
-        extractedAt: 30,
-      };
       yield* writer.change({
         _tag: "Put",
         key,
@@ -133,4 +140,145 @@ it.effect(
         scannedChunks: 0,
       });
     }).pipe(Effect.provide(services)),
+);
+
+it.effect("preserves usable recall when an unchanged-source refresh fails or is cancelled", () =>
+  Effect.gen(function* () {
+    const writer = yield* MemoryWriter;
+    yield* writer.change({
+      _tag: "Put",
+      key,
+      operationId: "initial",
+      expectedRevision: null,
+      locator: "memory://proposal",
+      content,
+      scopes: [access.scope],
+    });
+    yield* indexMemorySource(key, indexLimits);
+    const index = yield* SemanticMemoryIndex;
+    const search = {
+      namespace: key.namespace,
+      vector: [1, 0],
+      limit: 8,
+      minScore: 0,
+      maxScannedChunks: 8,
+    };
+    const original = yield* index.search(search);
+    const providerFailure = AiError.make({
+      module: "refresh-fixture",
+      method: "embedMany",
+      reason: new AiError.InvalidOutputError({ description: "provider unavailable" }),
+    });
+
+    for (const mode of ["failure", "defect", "timeout", "interrupt"] as const) {
+      const started = yield* Deferred.make<void>();
+      let finalized = 0;
+      const model = yield* EmbeddingModel.make({
+        embedMany: () =>
+          Effect.acquireRelease(Deferred.succeed(started, undefined), () =>
+            Effect.sync(() => {
+              finalized += 1;
+            }),
+          ).pipe(
+            Effect.andThen(
+              mode === "failure"
+                ? Effect.fail(providerFailure)
+                : mode === "defect"
+                  ? Effect.die("embedding defect")
+                  : Effect.never,
+            ),
+            Effect.scoped,
+          ),
+      });
+      const refreshing = yield* indexMemorySource(key, indexLimits).pipe(
+        Effect.provideService(EmbeddingModel.EmbeddingModel, model),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(started);
+      expect((yield* querySemanticMemory("queue", access, queryLimits)).lookup._tag).toBe("Found");
+      if (mode === "timeout") yield* TestClock.adjust(1_001);
+      if (mode === "interrupt") yield* Fiber.interrupt(refreshing);
+      const exit = yield* Fiber.await(refreshing);
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        if (mode === "failure")
+          expect(Cause.findErrorOption(exit.cause)).toMatchObject({ value: providerFailure });
+        if (mode === "defect") expect(Cause.hasDies(exit.cause)).toBe(true);
+        if (mode === "timeout")
+          expect(Cause.findErrorOption(exit.cause)).toMatchObject({ value: { reason: "timeout" } });
+        if (mode === "interrupt") expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+      }
+      expect(finalized).toBe(1);
+      expect(yield* index.search(search)).toEqual(original);
+    }
+  }).pipe(Effect.provide(services)),
+);
+
+it.effect("fences delayed replacement after a newer index or terminal withdrawal commits", () =>
+  Effect.gen(function* () {
+    for (const mutation of ["correction", "withdrawal"] as const) {
+      yield* Effect.gen(function* () {
+        const writer = yield* MemoryWriter;
+        yield* writer.change({
+          _tag: "Put",
+          key,
+          operationId: "initial",
+          expectedRevision: null,
+          locator: "memory://proposal",
+          content,
+          scopes: [access.scope],
+        });
+        yield* indexMemorySource(key, indexLimits);
+        const index = yield* SemanticMemoryIndex;
+        const reached = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        const delayed = yield* indexMemorySource(key, indexLimits).pipe(
+          Effect.provideService(SemanticMemoryIndex, {
+            ...index,
+            replace: (request) =>
+              Deferred.succeed(reached, undefined).pipe(
+                Effect.andThen(Deferred.await(resume)),
+                Effect.andThen(index.replace(request)),
+              ),
+          }),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(reached);
+        if (mutation === "correction") {
+          yield* writer.change({
+            _tag: "Put",
+            key,
+            operationId: "correction",
+            expectedRevision: "1",
+            locator: "memory://proposal",
+            content: { ...content, text: "Dan proposes a scheduler." },
+            scopes: [access.scope],
+          });
+        } else {
+          yield* writer.change({
+            _tag: "Withdraw",
+            key,
+            operationId: "withdrawal",
+            expectedRevision: "1",
+            reason: "retracted",
+          });
+        }
+        yield* indexMemorySource(key, indexLimits);
+        const current = yield* querySemanticMemory("queue", access, queryLimits);
+        expect(current.lookup).toMatchObject(
+          mutation === "correction"
+            ? { _tag: "Found", passages: [{ source: { revision: "2" } }] }
+            : { _tag: "NoMatch" },
+        );
+        yield* Deferred.succeed(resume, undefined);
+        expect(yield* Fiber.join(delayed).pipe(Effect.flip)).toMatchObject({
+          _tag: "MemoryIndexError",
+          reason: "fenced",
+        });
+        expect((yield* querySemanticMemory("queue", access, queryLimits)).lookup).toEqual(
+          current.lookup,
+        );
+      }).pipe(Effect.provide(services));
+    }
+  }),
 );

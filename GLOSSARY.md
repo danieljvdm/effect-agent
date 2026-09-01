@@ -297,7 +297,8 @@ past outputs, idempotency receipts, and backups have separate retention policies
 
 A disposable ranking derivative tied to one embedding model and chunking profile. Its candidates
 carry source revisions and byte ranges; authoritative sources supply current access and attribution.
-Index readiness is separate from committed-activity extraction progress and global corpus freshness.
+Index contents are separate from committed-activity extraction progress and make no global corpus
+freshness claim.
 
 **Canonical Record**  
 An immutable, schema-versioned fact in the Thread Log. Canonical Records are the only

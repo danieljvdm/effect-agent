@@ -661,14 +661,14 @@ baseline; it makes no sentence-boundary or relevance promise.
 `inMemorySemanticIndexLayer` is a replaceable exact cosine adapter. It bounds all registered source
 keys, including withdrawal tombstones, and all ready chunks. A search over its scan limit fails
 instead of ranking an arbitrary prefix. Scores tie by source ID, revision, and chunk ordinal.
-The adapter holds no authoritative documents or attribution. Its `WithFailpoints` variant accepts
-`MemoryIndexFailpoint` for failures before and after each atomic mutation.
+The adapter holds no authoritative documents or attribution.
 
-Refresh begins a new epoch and hides old chunks. Publication exposes the whole replacement
-atomically. Failed embedding or publication leaves a visible unfinished build; retry by refreshing
-the source again. Older generations, divergent same-generation identities, and stale epochs are
-fenced. Withdrawal is terminal within the instance. Exact publication replay retains its original
-indexing time. Closing and recreating the Layer discards all index progress, chunks, and tombstones;
+Refresh prepares chunks and embeddings before calling `SemanticMemoryIndex.replace`. Replacement
+validates the profile and source revision, then exchanges all chunks atomically. Failed or cancelled
+refreshes leave the last successful index intact. Older generations and divergent same-generation
+identities are fenced. Withdrawal is terminal within the instance and blocks delayed replacements.
+The index exposes no build epochs, publication states, inspection, or mutation failpoints.
+Closing and recreating the Layer discards all chunks and tombstones;
 rebuild from current authoritative sources before requiring complete semantic recall.
 
 The index and source are independent. Refresh reads the source again before publication, but a
@@ -689,8 +689,8 @@ Reader allocation, decoding, and one source's serialization precede this check; 
 whole-process heap limit. The indexing limit with the same name bounds one source's text instead.
 
 `SemanticQueryResult` reports scanned chunks, excluded stale and unauthorized candidates, query
-embedding usage when the provider supplies it, and whether registered builds are incomplete.
-`incomplete: false` is not a global watermark: the host still owns discovery and required freshness.
+embedding usage when the provider supplies it. It makes no completeness claim;
+the host owns discovery, refresh scheduling, and required freshness.
 An empty index or no-match result does not prove the corpus has no relevant memory. No source text,
 query text, attribution, or vectors are attached to the helpers' Effect spans.
 

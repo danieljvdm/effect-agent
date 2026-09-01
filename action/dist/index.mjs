@@ -32545,20 +32545,10 @@ var SourceFields = {
 class MemoryIndexSource extends exports_Schema.Class("@effect-agent/core/MemoryIndexSource")(SourceFields) {
 }
 
-class MemoryIndexBuild extends exports_Schema.Class("@effect-agent/core/MemoryIndexBuild")({
-  ...SourceFields,
+class MemoryIndexReplacement extends exports_Schema.Class("@effect-agent/core/MemoryIndexReplacement")({
+  source: MemoryIndexSource,
   profile: SemanticMemoryProfile,
-  epoch: Positive
-}) {
-}
-
-class MemoryIndexState extends exports_Schema.Class("@effect-agent/core/MemoryIndexState")({
-  version: exports_Schema.Literal(1),
-  ...SourceFields,
-  epoch: Positive,
-  status: exports_Schema.Literals(["building", "ready", "withdrawn"]),
-  chunkCount: exports_Schema.Natural,
-  indexedAt: exports_Schema.NullOr(Timestamp3)
+  chunks: exports_Schema.Array(SemanticMemoryChunk).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(256))
 }) {
 }
 
@@ -32585,8 +32575,7 @@ class MemoryIndexQuery extends exports_Schema.Class("@effect-agent/core/MemoryIn
 
 class MemoryIndexSearch extends exports_Schema.Class("@effect-agent/core/MemoryIndexSearch")({
   candidates: exports_Schema.Array(MemoryIndexCandidate).check(exports_Schema.isMaxLength(128)),
-  scannedChunks: exports_Schema.Natural,
-  incomplete: exports_Schema.Boolean
+  scannedChunks: exports_Schema.Natural
 }) {
 }
 
@@ -32601,21 +32590,6 @@ class MemoryIndexError extends exports_Schema.TaggedError()("MemoryIndexError", 
     "budget"
   ])
 }) {
-}
-var MemoryIndexMutationPoint = exports_Schema.Literals([
-  "index:begin:before",
-  "index:begin:after",
-  "index:publish:before",
-  "index:publish:after",
-  "index:withdraw:before",
-  "index:withdraw:after"
-]);
-
-class MemoryIndexMutationFailure extends exports_Schema.TaggedError()("MemoryIndexMutationFailure", { point: MemoryIndexMutationPoint }) {
-}
-
-class MemoryIndexFailpoint extends exports_Context.Service()("@effect-agent/core/MemoryIndexFailpoint") {
-  static layer = exports_Layer.succeed(this, { hit: () => exports_Effect.void });
 }
 
 class SemanticMemoryIndex extends exports_Context.Service()("@effect-agent/core/SemanticMemoryIndex") {
@@ -44156,7 +44130,6 @@ class SemanticQueryLimits extends exports_Schema.Class("@effect-agent/capabiliti
 class SemanticIndexResult extends exports_Schema.Class("@effect-agent/capabilities/SemanticIndexResult")({
   key: MemoryKey,
   status: exports_Schema.Literals(["Missing", "Withdrawn", "Indexed"]),
-  state: exports_Schema.NullOr(MemoryIndexState),
   embeddedChunks: exports_Schema.Natural,
   embeddedBytes: exports_Schema.Natural,
   inputTokens: InputTokens,
@@ -44170,7 +44143,6 @@ class SemanticQueryResult extends exports_Schema.Class("@effect-agent/capabiliti
   scannedChunks: exports_Schema.Natural,
   staleExcluded: exports_Schema.Natural,
   unauthorizedExcluded: exports_Schema.Natural,
-  incomplete: exports_Schema.Boolean,
   queryBytes: exports_Schema.Natural,
   inputTokens: InputTokens,
   startedAt: Timestamp4,
@@ -44189,9 +44161,6 @@ var asSource = (document) => MemoryIndexSource.make({
   sourceGeneration: document.generation
 });
 var sameSource = (left, right) => left.key.namespace === right.key.namespace && left.key.id === right.key.id && left.generation === right.generation && left.source.revision === right.source.revision && left.source.locator === right.source.locator && left._tag === right._tag;
-var sameIndexSource = (left, right) => left.key.namespace === right.key.namespace && left.key.id === right.key.id && left.source.id === right.source.id && left.source.locator === right.source.locator && left.source.revision === right.source.revision && left.sourceGeneration === right.sourceGeneration;
-var sameProfile = exports_Schema.toEquivalence(SemanticMemoryProfile);
-var decodeIndexState = (state) => exports_Schema.decodeUnknownEffect(MemoryIndexState)(state).pipe(exports_Effect.mapError(() => MemoryIndexError.make({ operation: "validate index state", reason: "corrupt" })));
 var readDocument = exports_Effect.fn("semanticMemory.readDocument")(function* (key) {
   const reader = yield* MemoryReader;
   const document = yield* reader.get(key).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument))), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(MemoryStorageError.make({ operation: "validate semantic source", reason: "corrupt" }))));
@@ -44265,17 +44234,11 @@ var indexMemorySource = exports_Effect.fn("indexMemorySource")(function* (key, l
     const profile = yield* exports_Schema.decodeUnknownEffect(SemanticMemoryProfile)(index2.profile).pipe(exports_Effect.mapError(() => invalid2("index profile")));
     const document = yield* readDocument(checkedKey);
     if (document === null || document._tag === "WithdrawnMemoryDocument") {
-      const state2 = document === null ? null : yield* index2.withdraw(asSource(document)).pipe(exports_Effect.flatMap(decodeIndexState));
-      if (document !== null && state2 !== null && (!sameIndexSource(state2, asSource(document)) || state2.status !== "withdrawn" || state2.chunkCount !== 0 || state2.indexedAt !== null)) {
-        return yield* MemoryIndexError.make({
-          operation: "validate index withdrawal",
-          reason: "corrupt"
-        });
-      }
+      if (document !== null)
+        yield* index2.withdraw(asSource(document));
       return SemanticIndexResult.make({
         key: checkedKey,
         status: document === null ? "Missing" : "Withdrawn",
-        state: state2,
         embeddedChunks: 0,
         embeddedBytes: 0,
         inputTokens: null,
@@ -44287,13 +44250,6 @@ var indexMemorySource = exports_Effect.fn("indexMemorySource")(function* (key, l
     const encodedProfile = yield* exports_Schema.encodeEffect(exports_Schema.fromJsonString(SemanticMemoryProfile))(profile).pipe(exports_Effect.mapError(() => invalid2("encode profile")));
     const crypto2 = yield* exports_Crypto.Crypto;
     const fingerprint = yield* crypto2.digest("SHA-256", utf82(encodedProfile)).pipe(exports_Effect.map(exports_Encoding.encodeHex), exports_Effect.mapError(() => SemanticMemoryError.make({ operation: "fingerprint profile", reason: "unavailable" })));
-    const build2 = yield* index2.begin(asSource(document)).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(MemoryIndexBuild)), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(MemoryIndexError.make({ operation: "validate index build", reason: "corrupt" }))));
-    if (!sameProfile(build2.profile, profile) || !sameIndexSource(build2, asSource(document))) {
-      return yield* MemoryIndexError.make({
-        operation: "validate index build identity",
-        reason: "corrupt"
-      });
-    }
     const response = yield* embeddings(texts.map((chunk) => chunk.text), profile);
     const chunks2 = [];
     for (const text2 of texts) {
@@ -44318,17 +44274,10 @@ var indexMemorySource = exports_Effect.fn("indexMemorySource")(function* (key, l
         reason: "source-changed"
       });
     }
-    const state = yield* index2.publish({ build: build2, chunks: chunks2 }).pipe(exports_Effect.flatMap(decodeIndexState));
-    if (!sameIndexSource(state, build2) || state.epoch !== build2.epoch || state.status !== "ready" || state.chunkCount !== chunks2.length || state.indexedAt === null) {
-      return yield* MemoryIndexError.make({
-        operation: "validate index publication",
-        reason: "corrupt"
-      });
-    }
+    yield* index2.replace({ source: asSource(document), profile, chunks: chunks2 });
     return SemanticIndexResult.make({
       key: checkedKey,
       status: "Indexed",
-      state,
       embeddedChunks: chunks2.length,
       embeddedBytes: byteLength(document.content.text),
       inputTokens: response.usage.inputTokens ?? null,
@@ -44438,7 +44387,6 @@ var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (qu
       scannedChunks: found.scannedChunks,
       staleExcluded,
       unauthorizedExcluded,
-      incomplete: found.incomplete,
       queryBytes,
       inputTokens: response.usage.inputTokens ?? null,
       startedAt,

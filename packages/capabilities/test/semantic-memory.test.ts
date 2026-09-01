@@ -1,11 +1,8 @@
 import {
   ActiveMemoryDocument,
   type MemoryDocument,
-  MemoryIndexBuild,
   MemoryIndexCandidate,
   MemoryIndexError,
-  type MemoryIndexMutationFailure,
-  MemoryIndexState,
   MemoryKey,
   MemoryReader,
   MemoryRecallLimits,
@@ -146,40 +143,22 @@ const probe = () => {
   };
   const index = SemanticMemoryIndex.of({
     profile,
-    begin: (source) => Effect.succeed(MemoryIndexBuild.make({ ...source, profile, epoch: 1 })),
-    publish: ({ build, chunks }) =>
+    replace: ({ chunks }) =>
       Effect.gen(function* () {
         yield* state.beforePublish;
         state.chunks = chunks;
         state.published += 1;
-        return MemoryIndexState.make({
-          ...build,
-          version: 1,
-          status: "ready",
-          chunkCount: chunks.length,
-          indexedAt: 40,
-        });
       }),
-    withdraw: (source) =>
+    withdraw: () =>
       Effect.sync(() => {
         state.withdrawals += 1;
-        return MemoryIndexState.make({
-          ...source,
-          version: 1,
-          epoch: 1,
-          status: "withdrawn",
-          chunkCount: 0,
-          indexedAt: null,
-        });
       }),
-    inspect: () => Effect.succeed(null),
     search: () =>
       Effect.suspend(() =>
         state.searchFailure === null
           ? Effect.succeed({
               candidates: state.candidates,
               scannedChunks: state.candidates.length,
-              incomplete: false,
             })
           : Effect.fail(state.searchFailure),
       ),
@@ -237,20 +216,8 @@ describe("optional semantic workflows", () => {
         );
         const changedProfile = SemanticMemoryProfile.make({ ...profile, modelRevision: "2" });
         const changedIndex = { ...test.index, profile: changedProfile };
-        expect(
-          yield* indexMemorySource(key, indexLimits).pipe(
-            Effect.provideService(SemanticMemoryIndex, changedIndex),
-            Effect.flip,
-          ),
-        ).toMatchObject({ _tag: "MemoryIndexError", reason: "corrupt" });
         yield* indexMemorySource(key, indexLimits).pipe(
-          Effect.provideService(SemanticMemoryIndex, {
-            ...changedIndex,
-            begin: (source) =>
-              Effect.succeed(
-                MemoryIndexBuild.make({ ...source, profile: changedProfile, epoch: 1 }),
-              ),
-          }),
+          Effect.provideService(SemanticMemoryIndex, changedIndex),
         );
         expect(test.state.chunks[0]?.passageId).not.toBe(chunks[0]?.passageId);
         const calls = test.state.inputs.length;
@@ -601,12 +568,7 @@ describe("optional semantic workflows", () => {
 it("keeps native provider, source, index E/R visible and owns its temporary Scope", () => {
   const indexing = indexMemorySource(key, indexLimits);
   const querying = querySemanticMemory("queue", access, queryLimits);
-  type IndexErrors =
-    | SemanticMemoryError
-    | MemoryStorageError
-    | MemoryIndexError
-    | MemoryIndexMutationFailure
-    | AiError.AiError;
+  type IndexErrors = SemanticMemoryError | MemoryStorageError | MemoryIndexError | AiError.AiError;
   type QueryErrors = SemanticMemoryError | MemoryStorageError | MemoryIndexError | AiError.AiError;
   type IndexServices =
     | MemoryReader

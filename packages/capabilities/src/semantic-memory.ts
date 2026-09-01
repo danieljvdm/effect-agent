@@ -1,12 +1,10 @@
 import {
   MemoryDocument,
-  MemoryIndexBuild,
   type MemoryIndexCandidate,
   MemoryIndexError,
   MemoryIndexQuery,
   MemoryIndexSearch,
   MemoryIndexSource,
-  MemoryIndexState,
   MemoryKey,
   MemoryLookup,
   MemoryPassage,
@@ -66,7 +64,6 @@ export class SemanticIndexResult extends Schema.Class<SemanticIndexResult>(
 )({
   key: MemoryKey,
   status: Schema.Literals(["Missing", "Withdrawn", "Indexed"]),
-  state: Schema.NullOr(MemoryIndexState),
   embeddedChunks: Schema.Natural,
   embeddedBytes: Schema.Natural,
   inputTokens: InputTokens,
@@ -82,7 +79,6 @@ export class SemanticQueryResult extends Schema.Class<SemanticQueryResult>(
   scannedChunks: Schema.Natural,
   staleExcluded: Schema.Natural,
   unauthorizedExcluded: Schema.Natural,
-  incomplete: Schema.Boolean,
   queryBytes: Schema.Natural,
   inputTokens: InputTokens,
   startedAt: Timestamp,
@@ -111,21 +107,6 @@ const sameSource = (left: MemoryDocument, right: MemoryDocument): boolean =>
   left.source.revision === right.source.revision &&
   left.source.locator === right.source.locator &&
   left._tag === right._tag;
-
-const sameIndexSource = (left: MemoryIndexSource, right: MemoryIndexSource): boolean =>
-  left.key.namespace === right.key.namespace &&
-  left.key.id === right.key.id &&
-  left.source.id === right.source.id &&
-  left.source.locator === right.source.locator &&
-  left.source.revision === right.source.revision &&
-  left.sourceGeneration === right.sourceGeneration;
-const sameProfile = Schema.toEquivalence(SemanticMemoryProfile);
-const decodeIndexState = (state: MemoryIndexState) =>
-  Schema.decodeUnknownEffect(MemoryIndexState)(state).pipe(
-    Effect.mapError(() =>
-      MemoryIndexError.make({ operation: "validate index state", reason: "corrupt" }),
-    ),
-  );
 
 const readDocument = Effect.fn("semanticMemory.readDocument")(function* (key: MemoryKey) {
   const reader = yield* MemoryReader;
@@ -233,10 +214,10 @@ const chunkText = Effect.fn("semanticMemory.chunkText")(function* (
  * index profile to that provider's immutable model revision. A fresh Layer starts empty.
  * Every invocation rebuilds; the host owns source discovery, scheduling, and freshness policy.
  *
- * begin hides old chunks, then publish exposes the entire replacement. Failed work remains a
- * visible unfinished build and can be retried. A final authoritative read rejects a source
- * changed during embedding. An independent source can still change between that read and
- * publication; querySemanticMemory always revalidates and excludes such stale candidates.
+ * Chunking and embedding leave the last successful index intact. A final authoritative read
+ * rejects a source changed during embedding, then replace atomically exchanges its chunks.
+ * An independent source can still change between that read and replacement;
+ * querySemanticMemory always revalidates and excludes such stale candidates.
  * No model or source text is attached to telemetry. Errors retain native provider/index types.
  */
 export const indexMemorySource = Effect.fn("indexMemorySource")(function* (
@@ -257,27 +238,10 @@ export const indexMemorySource = Effect.fn("indexMemorySource")(function* (
     );
     const document = yield* readDocument(checkedKey);
     if (document === null || document._tag === "WithdrawnMemoryDocument") {
-      const state =
-        document === null
-          ? null
-          : yield* index.withdraw(asSource(document)).pipe(Effect.flatMap(decodeIndexState));
-      if (
-        document !== null &&
-        state !== null &&
-        (!sameIndexSource(state, asSource(document)) ||
-          state.status !== "withdrawn" ||
-          state.chunkCount !== 0 ||
-          state.indexedAt !== null)
-      ) {
-        return yield* MemoryIndexError.make({
-          operation: "validate index withdrawal",
-          reason: "corrupt",
-        });
-      }
+      if (document !== null) yield* index.withdraw(asSource(document));
       return SemanticIndexResult.make({
         key: checkedKey,
         status: document === null ? "Missing" : "Withdrawn",
-        state,
         embeddedChunks: 0,
         embeddedBytes: 0,
         inputTokens: null,
@@ -296,20 +260,6 @@ export const indexMemorySource = Effect.fn("indexMemorySource")(function* (
         SemanticMemoryError.make({ operation: "fingerprint profile", reason: "unavailable" }),
       ),
     );
-    const build = yield* index.begin(asSource(document)).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(MemoryIndexBuild)),
-      Effect.catchTag("SchemaError", () =>
-        Effect.fail(
-          MemoryIndexError.make({ operation: "validate index build", reason: "corrupt" }),
-        ),
-      ),
-    );
-    if (!sameProfile(build.profile, profile) || !sameIndexSource(build, asSource(document))) {
-      return yield* MemoryIndexError.make({
-        operation: "validate index build identity",
-        reason: "corrupt",
-      });
-    }
     const response = yield* embeddings(
       texts.map((chunk) => chunk.text),
       profile,
@@ -338,23 +288,10 @@ export const indexMemorySource = Effect.fn("indexMemorySource")(function* (
         reason: "source-changed",
       });
     }
-    const state = yield* index.publish({ build, chunks }).pipe(Effect.flatMap(decodeIndexState));
-    if (
-      !sameIndexSource(state, build) ||
-      state.epoch !== build.epoch ||
-      state.status !== "ready" ||
-      state.chunkCount !== chunks.length ||
-      state.indexedAt === null
-    ) {
-      return yield* MemoryIndexError.make({
-        operation: "validate index publication",
-        reason: "corrupt",
-      });
-    }
+    yield* index.replace({ source: asSource(document), profile, chunks });
     return SemanticIndexResult.make({
       key: checkedKey,
       status: "Indexed",
-      state,
       embeddedChunks: chunks.length,
       embeddedBytes: byteLength(document.content.text),
       inputTokens: response.usage.inputTokens ?? null,
@@ -382,9 +319,9 @@ export const indexMemorySource = Effect.fn("indexMemorySource")(function* (
  * result. Reader allocation, decoding, and one source serialization precede this bound.
  *
  * Compose result.lookup through recallMemory to enforce the final rendered item/byte/token
- * budget and overall deadline. An empty result says nothing about undiscovered sources;
- * incomplete only describes registered unfinished builds. Checks begun before an acknowledged
- * correction/withdrawal may finish with their already captured source view.
+ * budget and overall deadline. An empty result says nothing about undiscovered sources.
+ * Checks begun before an acknowledged correction/withdrawal may finish with their already
+ * captured source view.
  */
 export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
   query: string,
@@ -529,7 +466,6 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
       scannedChunks: found.scannedChunks,
       staleExcluded,
       unauthorizedExcluded,
-      incomplete: found.incomplete,
       queryBytes,
       inputTokens: response.usage.inputTokens ?? null,
       startedAt,
