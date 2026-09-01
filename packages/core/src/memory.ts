@@ -65,6 +65,8 @@ export class MemoryContent extends Schema.Class<MemoryContent>("@effect-agent/co
 /** A bounded passage supplied directly by a document reader or external retriever. */
 export class MemoryPassage extends Schema.Class<MemoryPassage>("@effect-agent/core/MemoryPassage")({
   version: Schema.Literal(1),
+  /** Host-bound authority for composition, not model-visible metadata or an access grant. */
+  authority: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(4_096))),
   source: MemorySourceReference,
   passageId: Identity,
   content: MemoryContent,

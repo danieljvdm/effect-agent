@@ -59,11 +59,92 @@ const source = (id: string, result: MemoryLookup, essential = false): MemoryReca
 });
 
 describe("bounded memory recall", () => {
+  it.effect("qualifies recall identities without exposing private authorities", () =>
+    Effect.gen(function* () {
+      const personal = MemoryPassage.make({
+        ...passage("profile", "Personal preference"),
+        authority: "private-personal-authority",
+      });
+      const project = MemoryPassage.make({
+        ...personal,
+        authority: "private-project-authority",
+        content: { ...personal.content, text: "Project preference" },
+      });
+      for (const next of [
+        project,
+        MemoryPassage.make({ ...personal, authority: project.authority }),
+      ]) {
+        const recalled = yield* recallMemory(
+          [source("personal-reader", found(personal)), source("project-reader", found(next))],
+          limits,
+        );
+        expect(recalled.passages).toEqual([personal, next]);
+        expect(recalled.outcomes.map((outcome) => outcome.selected)).toEqual([1, 1]);
+        expect(recalled.text).toContain('"authority":"memory-authority:1"');
+        expect(recalled.text).toContain('"authority":"memory-authority:2"');
+        expect(recalled.text).not.toContain(personal.authority);
+        expect(recalled.text).not.toContain(project.authority);
+      }
+      const shared = yield* recallMemory(
+        [source("primary", found(personal)), source("replica", found(personal))],
+        limits,
+      );
+      expect(shared.passages).toEqual([personal]);
+      expect(shared.outcomes[1]).toMatchObject({ selected: 0, deduplicated: 1 });
+      expect(
+        yield* recallMemory(
+          [
+            source("primary", found(personal)),
+            source(
+              "replica",
+              found(MemoryPassage.make({ ...project, authority: personal.authority })),
+            ),
+          ],
+          limits,
+        ).pipe(Effect.flip),
+      ).toMatchObject({ reason: "invalid-input" });
+      const unqualified = passage("profile", "Unqualified preference");
+      expect(
+        (yield* recallMemory(
+          [source("first", found(unqualified)), source("second", found(unqualified))],
+          limits,
+        )).passages,
+      ).toEqual([unqualified, unqualified]);
+      expect(
+        (yield* recallMemory(
+          [
+            source("first", found(personal)),
+            source("private-personal-authority", found(unqualified)),
+          ],
+          limits,
+        )).passages,
+      ).toEqual([personal, unqualified]);
+      const bounded = yield* recallMemory(
+        [
+          source(
+            "personal",
+            found(
+              personal,
+              MemoryPassage.make({ ...personal, source: { ...personal.source, id: "other" } }),
+            ),
+          ),
+          source("project", found(project)),
+        ],
+        { ...limits, maxSources: 2 },
+      );
+      expect(bounded.passages).toHaveLength(2);
+      expect(bounded.outcomes[1]).toMatchObject({ selected: 0, omitted: 1 });
+    }),
+  );
+
   it.effect(
     "reads Markdown and external passages without a store, retaining attribution and uncertainty",
     () =>
       Effect.gen(function* () {
-        const markdown = passage("notes", "# Proposal\nUse a queue for retries.");
+        const markdown = MemoryPassage.make({
+          ...passage("notes", "# Proposal\nUse a queue for retries."),
+          authority: "shared-notes",
+        });
         const external = passage("external", "Adam proposes synchronous delivery.");
         const recalled = yield* recallMemory(
           [source("known", found(markdown), true), source("remote", found(external, markdown))],

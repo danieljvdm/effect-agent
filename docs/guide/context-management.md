@@ -201,6 +201,19 @@ parent's per-Run overrides.
 and every citation remain untrusted model input. Validate model claims against
 `RecalledMemory.passages` before presenting them as sourced facts.
 
+Source IDs are local to an authority. A host can set `MemoryPassage.authority` to share that
+authority across readers; passages without it are scoped to their reader declaration's `id`.
+Deduplication, conflict detection, and the selected-source limit use authority-qualified IDs.
+Two independent authorities can therefore both contain `profile` at revision `1` without being
+merged or rejected. Direct readers must explicitly share an authority to deduplicate across
+reader declarations. Authority is an identity boundary, not an authorization grant.
+
+The rendered text substitutes positional `memory-authority:N` labels for private authority
+values. These labels are local to the result and qualify its evidence origins; different labels
+alone do not prove independent corroboration. `RecalledMemory.passages` retains explicit authority
+for host-side composition and validation. Use `RecalledMemory.text` for model input, not a raw
+serialization of those host passages.
+
 `MemoryRecallLimits.maxInputBytes` separately bounds the aggregate UTF-8 JSON passage encodings
 considered by one call, including omitted and duplicate candidates. It defaults to 16 MiB and can
 be set up to 64 MiB. Exceeding it returns a typed `budget` error before retaining that candidate's
@@ -209,7 +222,7 @@ one candidate's serialization occur before this check; it is not a whole-process
 Input-budget exhaustion stops validation and returns no partial context. Within admitted input,
 conflicting known-revision identities fail even when an earlier passage exceeds the output budget.
 Identity and conflict checks ignore JSON object member order, including nested metadata, while
-preserving array order. Equivalent unknown-revision passages share one citation.
+preserving array order. Equivalent unknown-revision passages within one authority share one citation.
 
 ### Read an external corpus through an Effect service
 
