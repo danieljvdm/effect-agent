@@ -108,7 +108,9 @@ const storeLayer = (filename: string) =>
   memoryStoreLayer.pipe(Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
 
 const readerLayer = (filename: string) =>
-  memoryReaderLayer.pipe(Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
+  memoryReaderLayer.pipe(
+    Layer.provide(SqliteClient.layer({ filename, readonly: true, busyTimeout: 5_000 })),
+  );
 
 const failpointLayer = (filename: string, handler: MemoryMutationFailpoint["Service"]["hit"]) =>
   memoryStoreLayerWithFailpoints.pipe(
@@ -143,6 +145,37 @@ const runRaw = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientSer
   effect.pipe(Effect.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
 
 describe("SQLite memory store", () => {
+  it.effect("rejects uninitialized and incompatible reader schemas without creating tables", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        yield* runRaw(filename, Effect.void);
+        expect(yield* readCurrent(filename).pipe(Effect.flip)).toEqual(
+          MemoryStorageError.make({ operation: "open memory reader", reason: "unavailable" }),
+        );
+        const tables = yield* runRaw(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            return yield* sql`SELECT name FROM sqlite_master WHERE type = 'table'`;
+          }),
+        );
+        expect(tables).toEqual([]);
+        yield* Effect.void.pipe(Effect.provide(storeLayer(filename)));
+        expect(yield* readCurrent(filename)).toBeNull();
+        yield* runRaw(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            yield* sql`UPDATE effect_agent_memory_metadata SET version = 2`;
+          }),
+        );
+        expect(yield* readCurrent(filename).pipe(Effect.flip)).toEqual(
+          MemoryStorageError.make({ operation: "open memory reader", reason: "incompatible" }),
+        );
+      }),
+    ),
+  );
+
   it.effect("round trips and replays a change near the encoded JSON boundary", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
@@ -457,6 +490,7 @@ describe("SQLite memory store", () => {
             Effect.exit,
           );
           expect(Exit.isFailure(opened)).toBe(true);
+          yield* Effect.void.pipe(Effect.provide(storeLayer(filename)));
           expect(yield* readCurrent(filename)).toBeNull();
           const names = yield* runRaw(
             filename,

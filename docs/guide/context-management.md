@@ -392,10 +392,13 @@ export const MemoryLive = memoryStoreLayer.pipe(
 ```
 
 `memoryStoreLayer` provides both ports and creates only its own memory tables. It does not
-initialize Thread history or a Submission Ledger. `memoryReaderLayer` exposes only reading;
-the connection belongs to its Layer's Scope. The adapter rejects a change before writing when
+initialize Thread history or a Submission Ledger. `memoryReaderLayer` checks an existing schema
+without creating tables or starting a write transaction, and supports `SqliteClient.layer({
+filename, readonly: true })`. It fails with `MemoryStorageError` when the schema is absent or
+incompatible; initialize it through `memoryStoreLayer` in the writer process first.
+The connection belongs to its Layer's Scope. The adapter rejects a change before writing when
 its canonical command, document, or receipt-result JSON exceeds 16,777,216 JavaScript string code
-units. The `WithFailpoints` variants accept a `MemoryMutationFailpoint` service for transaction
+units. `memoryStoreLayerWithFailpoints` accepts a `MemoryMutationFailpoint` service for transaction
 and lost-acknowledgement tests.
 Recall and validation helpers add named Effect spans without source text or metadata annotations.
 `RecalledMemory.outcomes` reports source availability and selected, deduplicated, and omitted counts;

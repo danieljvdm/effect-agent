@@ -172,7 +172,7 @@ const validateDocument = Effect.fn("SqliteMemoryStore.validateDocument")(functio
   return document;
 });
 
-const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
+const initializeMemorySchema = Effect.fn("SqliteMemoryStore.initialize")(function* () {
   const sql = yield* SqlClientService.SqlClient;
   const failpoint = yield* MemoryMutationFailpoint;
 
@@ -257,6 +257,10 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
     )
     .pipe(Effect.catchTag("SqlError", () => Effect.fail(storageError("initialize memory schema"))));
   yield* failpoint.hit("memory:initialize:after");
+});
+
+const makeMemoryReader = Effect.fn("SqliteMemoryStore.makeReader")(function* () {
+  const sql = yield* SqlClientService.SqlClient;
 
   const readDocument = Effect.fn("SqliteMemoryStore.readDocument")(function* (
     key: MemoryKey,
@@ -289,6 +293,20 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
     }
     return document;
   });
+
+  const get: MemoryReader["Service"]["get"] = Effect.fn("SqliteMemoryStore.get")(function* (key) {
+    const decodedKey = yield* decodeInput(MemoryKey, key, "get memory document");
+    return yield* readDocument(decodedKey, "get memory document");
+  });
+
+  return { get, readDocument };
+});
+
+const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
+  const sql = yield* SqlClientService.SqlClient;
+  const failpoint = yield* MemoryMutationFailpoint;
+  yield* initializeMemorySchema();
+  const { get, readDocument } = yield* makeMemoryReader();
 
   const readReceipt = Effect.fn("SqliteMemoryStore.readReceipt")(function* (
     write: MemoryWrite,
@@ -330,11 +348,6 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
     }
     yield* validateDocument(result.value, command.value.key, operation);
     return { commandJson: row.command_json, result: result.value };
-  });
-
-  const get: MemoryReader["Service"]["get"] = Effect.fn("SqliteMemoryStore.get")(function* (key) {
-    const decodedKey = yield* decodeInput(MemoryKey, key, "get memory document");
-    return yield* readDocument(decodedKey, "get memory document");
   });
 
   const change: MemoryWriter["Service"]["change"] = Effect.fn("SqliteMemoryStore.change")(
@@ -442,19 +455,45 @@ export const memoryStoreLayer: Layer.Layer<
   SqlClientService.SqlClient
 > = memoryStoreLayerWithFailpoints.pipe(Layer.provide(MemoryMutationFailpoint.layer));
 
-/** Reader-only SQLite memory port with the initialization failpoint kept injectable. */
-export const memoryReaderLayerWithFailpoints: Layer.Layer<
-  MemoryReader,
-  SqliteMemoryInitializationError,
-  SqlClientService.SqlClient | MemoryMutationFailpoint
-> = Layer.effect(
-  MemoryReader,
-  makeMemoryServices().pipe(Effect.map((services) => Context.get(services, MemoryReader))),
-);
-
-/** Reader-only SQLite memory port with the production no-op mutation failpoint. */
+/** Reads an existing memory schema without writes, transactions, or mutation failpoints. */
 export const memoryReaderLayer: Layer.Layer<
   MemoryReader,
-  SqliteMemoryInitializationError,
+  MemoryStorageError,
   SqlClientService.SqlClient
-> = memoryReaderLayerWithFailpoints.pipe(Layer.provide(MemoryMutationFailpoint.layer));
+> = Layer.effect(
+  MemoryReader,
+  Effect.gen(function* () {
+    const sql = yield* SqlClientService.SqlClient;
+    const operation = "open memory reader";
+    const tables = yield* query(
+      sql<Record<string, unknown>>`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name IN (
+          'effect_agent_memory_metadata', ${DOCUMENT_TABLE}, ${RECEIPT_TABLE}
+        )
+      `,
+      operation,
+    ).pipe(Effect.flatMap((rows) => decodeRows(MemoryTableRow, rows, operation)));
+    if (tables.length !== 3) {
+      return yield* storageError(operation, tables.length === 0 ? "unavailable" : "incompatible");
+    }
+    const metadata = yield* query(
+      sql<Record<string, unknown>>`
+        SELECT version FROM effect_agent_memory_metadata WHERE component = ${METADATA_COMPONENT}
+      `,
+      operation,
+    ).pipe(Effect.flatMap((rows) => decodeRows(MemoryMetadataRow, rows, operation)));
+    if (metadata.length !== 1 || metadata[0].version !== STORAGE_VERSION) {
+      return yield* storageError(operation, "incompatible");
+    }
+    yield* query(
+      sql`
+        SELECT namespace, source_id, format_version, generation, revision, document_json
+        FROM effect_agent_memory_documents_v1 LIMIT 0
+      `,
+      operation,
+    );
+    const { get } = yield* makeMemoryReader();
+    return MemoryReader.of({ get });
+  }),
+);
