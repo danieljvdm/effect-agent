@@ -39381,7 +39381,6 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
     ...outputContractMessage === undefined ? {} : { outputContract: outputContractMessage }
   };
   const modelContext = options3.context === undefined ? { prompt } : yield* options3.context.prepare(contextRequest);
-  const transientContext = options3.transientContext === undefined ? exports_Prompt.empty : yield* options3.transientContext.load(contextRequest).pipe(exports_Effect.flatMap(transientInputToPrompt));
   const trace3 = {
     responsePartCount: 0,
     responsePartBytes: 0,
@@ -39436,8 +39435,8 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
   const outputContractTokens = outputContractMessage === undefined ? 0 : yield* estimateContextTokens(context3, [
     exports_Prompt.makeMessage("system", { content: outputContractMessage })
   ]);
-  const derivedPrompt = yield* outgoingModelPrompt(policy2, context3, transientContext, turn, priorToolCalls);
-  const derivedPromptTokens = outputContractTokens + (yield* estimateContextTokens(context3, derivedPrompt.content));
+  const canonicalDecoration = yield* outgoingModelPrompt(policy2, context3, exports_Prompt.empty, turn, priorToolCalls);
+  const canonicalDecorationTokens = outputContractTokens + (yield* estimateContextTokens(context3, canonicalDecoration.content));
   const estimateSourceContext = (view) => options3.transientContext === undefined ? nextContextEstimate(context3, view) : estimateContextTokens(context3, view);
   let preEvents = [];
   if (!context3.finalizing) {
@@ -39445,9 +39444,9 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
     const tokenCallTarget = policy2.tokenBudget === undefined || finalAnswerOnly ? undefined : Math.max(0, policy2.tokenBudget - consumedTokens - policy2.completionReserveTokens);
     const contextCallTarget = policy2.contextTokenLimit;
     const fullTarget = tokenCallTarget === undefined ? contextCallTarget : contextCallTarget === undefined ? tokenCallTarget : Math.min(tokenCallTarget, contextCallTarget);
-    const sourceTarget = fullTarget === undefined ? undefined : Math.max(0, fullTarget - derivedPromptTokens);
+    const sourceTarget = fullTarget === undefined ? undefined : Math.max(0, fullTarget - canonicalDecorationTokens);
     const view = buildCompactedView(modelContext.prompt.content, context3.compaction);
-    const estimate = (yield* estimateSourceContext(view)) + derivedPromptTokens;
+    const estimate = (yield* estimateSourceContext(view)) + canonicalDecorationTokens;
     const contextPressure = contextCallTarget !== undefined && estimate > contextCallTarget;
     const tokenPressure = tokenCallTarget !== undefined && estimate > tokenCallTarget;
     if ((contextPressure || tokenPressure) && sourceTarget !== undefined && sourceTarget > 0 && context3.compaction.lastCompactionTurn !== turn) {
@@ -39456,7 +39455,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
       preEvents = outcome.events;
     }
     const prepared = buildCompactedView(modelContext.prompt.content, context3.compaction);
-    const preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
+    const preparedEstimate = (yield* estimateSourceContext(prepared)) + canonicalDecorationTokens;
     if (context3.tokenExhausted) {
       finalAnswerOnly = true;
     }
@@ -39469,6 +39468,35 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options3) => exp
         completionReserveTokens: policy2.completionReserveTokens
       });
     }
+    if (preparedTokenCallTarget !== undefined && preparedEstimate > preparedTokenCallTarget) {
+      const error2 = AgentPolicyError.make({
+        limit: "tokens",
+        message: `The next research call would consume this Run's ${policy2.completionReserveTokens} token completion reserve`
+      });
+      if (policy2.onExhaustion === "fail") {
+        return yield* error2;
+      }
+      context3.tokenExhausted = true;
+      context3.exhaustedDimension ??= "tokens";
+      finalAnswerOnly = true;
+    }
+  }
+  const transientContext = options3.transientContext === undefined ? exports_Prompt.empty : yield* options3.transientContext.load(contextRequest).pipe(exports_Effect.flatMap(transientInputToPrompt));
+  const derivedPrompt = options3.transientContext === undefined ? canonicalDecoration : yield* outgoingModelPrompt(policy2, context3, transientContext, turn, priorToolCalls);
+  const derivedPromptTokens = options3.transientContext === undefined ? canonicalDecorationTokens : outputContractTokens + (yield* estimateContextTokens(context3, derivedPrompt.content));
+  if (!context3.finalizing && options3.transientContext !== undefined) {
+    const prepared = buildCompactedView(modelContext.prompt.content, context3.compaction);
+    const preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
+    const contextTokenLimit = policy2.contextTokenLimit;
+    if (contextTokenLimit !== undefined && preparedEstimate > contextTokenLimit) {
+      return yield* ContextBudgetError.make({
+        message: `Transient context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
+        estimatedTokens: preparedEstimate,
+        targetTokens: contextTokenLimit,
+        completionReserveTokens: policy2.completionReserveTokens
+      });
+    }
+    const preparedTokenCallTarget = policy2.tokenBudget === undefined || finalAnswerOnly ? undefined : Math.max(0, policy2.tokenBudget - (context3.inputTokens + context3.outputTokens) - policy2.completionReserveTokens);
     if (preparedTokenCallTarget !== undefined && preparedEstimate > preparedTokenCallTarget) {
       const error2 = AgentPolicyError.make({
         limit: "tokens",
@@ -43563,7 +43591,8 @@ class RecalledMemory extends exports_Schema.Class("@effect-agent/capabilities/Re
 }) {
 }
 var bytes = (text2) => exports_Encoding.encodeHex(text2).length / 2;
-var identity3 = (passage) => JSON.stringify([
+var canonicalJson3 = (value4) => JSON.stringify(value4, (_key, item) => exports_Predicate.isObject(item) && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) : item);
+var identity3 = (passage) => canonicalJson3([
   passage.source.id,
   passage.source.revision,
   passage.passageId,
@@ -43626,7 +43655,7 @@ var recallMemory = exports_Effect.fn("recallMemory")(function* (sources, limits,
       let deduplicated = 0;
       let omitted = 0;
       for (const passage of result4.passages) {
-        const encoded = JSON.stringify(passage);
+        const encoded = canonicalJson3(passage);
         const remainingInputBytes = maxInputBytes - inputBytes;
         const encodedBytes3 = encoded.length <= remainingInputBytes ? bytes(encoded) : undefined;
         if (encodedBytes3 === undefined || encodedBytes3 > remainingInputBytes) {

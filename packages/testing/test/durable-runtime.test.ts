@@ -3308,11 +3308,12 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           .pipe(Effect.exit, Effect.ensuring(clearFailpoint));
         expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
         expect(second.prompts).toHaveLength(0);
+        expect(reads).toBe(1);
         reference = "EXTERNAL-REVISION-TWO";
         expect((yield* runtime.processThread(agent, decodeThreadId(thread)))[0]?.outcome).toBe(
           "completed",
         );
-        expect(reads).toBe(3);
+        expect(reads).toBe(2);
         expect(promptTexts(second.prompts[0] ?? Prompt.empty)).toContain("EXTERNAL-REVISION-TWO");
         expect(promptTexts(second.prompts[0] ?? Prompt.empty)).not.toContain(
           "EXTERNAL-REVISION-ONE",

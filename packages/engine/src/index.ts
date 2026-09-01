@@ -4072,15 +4072,6 @@ const makeTurn = <
       };
       const modelContext =
         options.context === undefined ? { prompt } : yield* options.context.prepare(contextRequest);
-      // Reference context is loaded from official source on every Turn. It is
-      // validated before admission and kept outside modelContext so native
-      // compaction can neither cover nor summarize it.
-      const transientContext =
-        options.transientContext === undefined
-          ? Prompt.empty
-          : yield* options.transientContext
-              .load(contextRequest)
-              .pipe(Effect.flatMap(transientInputToPrompt));
       const trace: TurnTrace = {
         responsePartCount: 0,
         responsePartBytes: 0,
@@ -4171,15 +4162,15 @@ const makeTurn = <
           : yield* estimateContextTokens(context, [
               Prompt.makeMessage("system", { content: outputContractMessage }),
             ]);
-      const derivedPrompt = yield* outgoingModelPrompt(
+      const canonicalDecoration = yield* outgoingModelPrompt(
         policy,
         context,
-        transientContext,
+        Prompt.empty,
         turn,
         priorToolCalls,
       );
-      const derivedPromptTokens =
-        outputContractTokens + (yield* estimateContextTokens(context, derivedPrompt.content));
+      const canonicalDecorationTokens =
+        outputContractTokens + (yield* estimateContextTokens(context, canonicalDecoration.content));
       // Provider-reported input usage includes the previous Turn's transient
       // context, whose size can change independently of canonical history.
       // A fresh full estimate avoids carrying that stale amount into this
@@ -4204,9 +4195,11 @@ const makeTurn = <
               ? tokenCallTarget
               : Math.min(tokenCallTarget, contextCallTarget);
         const sourceTarget =
-          fullTarget === undefined ? undefined : Math.max(0, fullTarget - derivedPromptTokens);
+          fullTarget === undefined
+            ? undefined
+            : Math.max(0, fullTarget - canonicalDecorationTokens);
         const view = buildCompactedView(modelContext.prompt.content, context.compaction);
-        const estimate = (yield* estimateSourceContext(view)) + derivedPromptTokens;
+        const estimate = (yield* estimateSourceContext(view)) + canonicalDecorationTokens;
         const contextPressure = contextCallTarget !== undefined && estimate > contextCallTarget;
         const tokenPressure = tokenCallTarget !== undefined && estimate > tokenCallTarget;
         if (
@@ -4232,7 +4225,8 @@ const makeTurn = <
           preEvents = outcome.events;
         }
         const prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
-        const preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
+        const preparedEstimate =
+          (yield* estimateSourceContext(prepared)) + canonicalDecorationTokens;
         // A summarizing compaction is itself a priced model call. Recompute
         // admission from its reported usage instead of carrying the stale
         // pre-compaction balance into the research call that follows.
@@ -4256,6 +4250,58 @@ const makeTurn = <
             completionReserveTokens: policy.completionReserveTokens,
           });
         }
+        if (preparedTokenCallTarget !== undefined && preparedEstimate > preparedTokenCallTarget) {
+          const error = AgentPolicyError.make({
+            limit: "tokens",
+            message: `The next research call would consume this Run's ${policy.completionReserveTokens} token completion reserve`,
+          });
+          if (policy.onExhaustion === "fail") {
+            return yield* error;
+          }
+          context.tokenExhausted = true;
+          context.exhaustedDimension ??= "tokens";
+          finalAnswerOnly = true;
+        }
+      }
+      // Reference context is loaded only after native compaction has produced
+      // and admitted the Turn's final canonical basis. It stays outside
+      // modelContext so compaction can neither cover nor summarize it. The
+      // resulting snapshot is retained for a same-Turn overflow retry.
+      const transientContext =
+        options.transientContext === undefined
+          ? Prompt.empty
+          : yield* options.transientContext
+              .load(contextRequest)
+              .pipe(Effect.flatMap(transientInputToPrompt));
+      const derivedPrompt =
+        options.transientContext === undefined
+          ? canonicalDecoration
+          : yield* outgoingModelPrompt(policy, context, transientContext, turn, priorToolCalls);
+      const derivedPromptTokens =
+        options.transientContext === undefined
+          ? canonicalDecorationTokens
+          : outputContractTokens + (yield* estimateContextTokens(context, derivedPrompt.content));
+      if (!context.finalizing && options.transientContext !== undefined) {
+        const prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
+        const preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
+        const contextTokenLimit = policy.contextTokenLimit;
+        if (contextTokenLimit !== undefined && preparedEstimate > contextTokenLimit) {
+          return yield* ContextBudgetError.make({
+            message: `Transient context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
+            estimatedTokens: preparedEstimate,
+            targetTokens: contextTokenLimit,
+            completionReserveTokens: policy.completionReserveTokens,
+          });
+        }
+        const preparedTokenCallTarget =
+          policy.tokenBudget === undefined || finalAnswerOnly
+            ? undefined
+            : Math.max(
+                0,
+                policy.tokenBudget -
+                  (context.inputTokens + context.outputTokens) -
+                  policy.completionReserveTokens,
+              );
         if (preparedTokenCallTarget !== undefined && preparedEstimate > preparedTokenCallTarget) {
           const error = AgentPolicyError.make({
             limit: "tokens",

@@ -3,6 +3,7 @@ import {
   AgentInputError,
   AgentPolicy,
   AgentPolicyError,
+  CompactionPolicy,
   ContextBudgetError,
   IdGenerator,
   MemoryRecallError,
@@ -25,9 +26,22 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import {
+  AiError,
+  LanguageModel,
+  Model,
+  Prompt,
+  type Response,
+  Tool,
+  Toolkit,
+} from "effect/unstable/ai";
 
-import { AgentRuntime, ContextCompactor, RunContextPreparation } from "../src/index.ts";
+import {
+  AgentRuntime,
+  CompactionError,
+  ContextCompactor,
+  RunContextPreparation,
+} from "../src/index.ts";
 import { ThreadHistory } from "../src/thread-history.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -239,6 +253,147 @@ layer(testLayer)("transient model context", (it) => {
       const failure = failureFrom(exit);
       expect(Schema.is(ContextBudgetError)(failure)).toBe(true);
       expect(requests).toHaveLength(0);
+    }),
+  );
+
+  it.effect("loads transient context only after threshold compaction succeeds", () =>
+    Effect.gen(function* () {
+      const requests: Array<Prompt.Prompt> = [];
+      const Search = Tool.make("search", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Search);
+      const model = Model.make(
+        "scripted",
+        "transient-compaction-order",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (request) => {
+              requests.push(request.prompt);
+              return Stream.fromIterable<Response.StreamPartEncoded>([
+                {
+                  type: "tool-call",
+                  id: "search-1",
+                  name: "search",
+                  params: {},
+                  providerExecuted: false,
+                },
+                {
+                  type: "finish",
+                  reason: "tool-calls",
+                  usage: { inputTokens: {}, outputTokens: {} },
+                },
+              ]);
+            },
+          }),
+        ),
+      );
+      const agent = Agent.withModel(
+        Agent.make("transient-compaction-order", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Search, then answer.",
+          toolkit: tools,
+          policy: AgentPolicy.make({
+            maxTurns: 2,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            contextTokenLimit: 2_500,
+            compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "prune" }),
+          }),
+        }),
+        model,
+      );
+      const loads = yield* Ref.make(0);
+      const compactionFailure = CompactionError.make({ message: "compaction unavailable" });
+      const exit = yield* AgentRuntime.run(agent, "question").pipe(
+        Effect.provideService(RunContextPreparation, {
+          transientContext: {
+            load: () => Ref.update(loads, (count) => count + 1).pipe(Effect.as(Prompt.empty)),
+          },
+        }),
+        Effect.provideService(ContextCompactor, {
+          estimate: (messages) =>
+            messages.some((message) => message.role === "tool") ? 3_000 : messages.length * 100,
+          compact: () => Stream.fail(compactionFailure),
+        }),
+        Effect.provide(tools.toLayer({ search: () => Effect.succeed("found") })),
+        Effect.exit,
+      );
+
+      expect(failureFrom(exit)).toEqual(compactionFailure);
+      expect(yield* Ref.get(loads)).toBe(1);
+      expect(requests).toHaveLength(1);
+    }),
+  );
+
+  it.effect("reuses one transient snapshot for a same-Turn overflow retry", () =>
+    Effect.gen(function* () {
+      const requests: Array<Prompt.Prompt> = [];
+      const model = Model.make(
+        "scripted",
+        "transient-overflow-retry",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (request) => {
+              requests.push(request.prompt);
+              return requests.length === 1
+                ? Stream.fail(
+                    AiError.AiError.make({
+                      module: "test",
+                      method: "streamText",
+                      reason: AiError.UnknownError.make({
+                        description: "context_length_exceeded",
+                      }),
+                    }),
+                  )
+                : Stream.fromIterable(finalParts);
+            },
+          }),
+        ),
+      );
+      const agent = Agent.withModel(
+        Agent.make("transient-overflow-retry", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Answer the question.",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({
+            maxTurns: 1,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            contextTokenLimit: 100_000,
+            compaction: CompactionPolicy.make({ keepRecentTokens: 300 }),
+          }),
+        }),
+        model,
+      );
+      const loads = yield* Ref.make(0);
+      const result = yield* AgentRuntime.run(agent, "question").pipe(
+        Effect.provideService(RunContextPreparation, {
+          transientContext: {
+            load: () =>
+              Ref.getAndUpdate(loads, (count) => count + 1).pipe(
+                Effect.map((count) => Prompt.make(`snapshot ${count + 1}`)),
+              ),
+          },
+        }),
+      );
+
+      expect(result.output).toBe("done");
+      expect(yield* Ref.get(loads)).toBe(1);
+      expect(requests).toHaveLength(2);
+      for (const request of requests) {
+        expect(JSON.stringify(request.content)).toContain("snapshot 1");
+        expect(JSON.stringify(request.content)).not.toContain("snapshot 2");
+      }
     }),
   );
 

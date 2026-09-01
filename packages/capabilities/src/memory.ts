@@ -4,7 +4,7 @@ import {
   MemoryRecallError,
   MemoryRecallLimits,
 } from "@effect-agent/core";
-import { Effect, Encoding, Schema, type Scope } from "effect";
+import { Effect, Encoding, Predicate, Schema, type Scope } from "effect";
 
 /**
  * Host-selected read capability. Close over authorization and query policy here; neither
@@ -37,8 +37,18 @@ export class RecalledMemory extends Schema.Class<RecalledMemory>(
 }) {}
 
 const bytes = (text: string): number => Encoding.encodeHex(text).length / 2;
+const canonicalJson = (value: object): string =>
+  JSON.stringify(value, (_key, item: unknown) =>
+    Predicate.isObject(item) && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.entries(item).sort(([left], [right]) =>
+            left < right ? -1 : left > right ? 1 : 0,
+          ),
+        )
+      : item,
+  );
 const identity = (passage: MemoryPassage): string =>
-  JSON.stringify([
+  canonicalJson([
     passage.source.id,
     passage.source.revision,
     passage.passageId,
@@ -143,7 +153,7 @@ export const recallMemory = Effect.fn("recallMemory")(function* <E = never, R = 
       let deduplicated = 0;
       let omitted = 0;
       for (const passage of result.passages) {
-        const encoded = JSON.stringify(passage);
+        const encoded = canonicalJson(passage);
         const remainingInputBytes = maxInputBytes - inputBytes;
         const encodedBytes = encoded.length <= remainingInputBytes ? bytes(encoded) : undefined;
         if (encodedBytes === undefined || encodedBytes > remainingInputBytes) {

@@ -178,6 +178,45 @@ describe("bounded memory recall", () => {
       }),
   );
 
+  it.effect("deduplicates reordered nested JSON metadata while preserving array order", () =>
+    Effect.gen(function* () {
+      for (const revision of ["r1", null]) {
+        const original = passage("claim", "use a queue");
+        const first = MemoryPassage.make({
+          ...original,
+          source: MemorySourceReference.make({ ...original.source, revision }),
+          content: MemoryContent.make({
+            ...original.content,
+            metadata: { topic: "queue", details: { a: 1, b: [{ x: 2, y: 3 }, 4] } },
+          }),
+        });
+        const reordered = MemoryPassage.make({
+          ...first,
+          content: MemoryContent.make({
+            ...first.content,
+            metadata: { details: { b: [{ y: 3, x: 2 }, 4], a: 1 }, topic: "queue" },
+          }),
+        });
+        const recalled = yield* recallMemory([source("known", found(first, reordered))], limits);
+        expect(recalled.passages).toEqual([first]);
+        expect(recalled.outcomes[0]).toMatchObject({ selected: 1, deduplicated: 1 });
+        const changed = MemoryPassage.make({
+          ...first,
+          content: MemoryContent.make({
+            ...first.content,
+            metadata: { topic: "queue", details: { a: 1, b: [4, { x: 2, y: 3 }] } },
+          }),
+        });
+        const program = recallMemory([source("changed", found(first, changed))], limits);
+        if (revision === null) {
+          expect((yield* program).passages).toEqual([first, changed]);
+        } else {
+          expect(yield* program.pipe(Effect.flip)).toMatchObject({ reason: "invalid-input" });
+        }
+      }
+    }),
+  );
+
   it.effect(
     "rejects conflicting identities after an omitted passage without deduplicating omissions",
     () =>

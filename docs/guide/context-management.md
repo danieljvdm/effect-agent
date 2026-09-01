@@ -206,6 +206,8 @@ identity or encoding, even when the source is optional. Reader allocation, resul
 one candidate's serialization occur before this check; it is not a whole-process heap limit.
 Input-budget exhaustion stops validation and returns no partial context. Within admitted input,
 conflicting known-revision identities fail even when an earlier passage exceeds the output budget.
+Identity and conflict checks ignore JSON object member order, including nested metadata, while
+preserving array order. Equivalent unknown-revision passages share one citation.
 
 ### Read an external corpus through an Effect service
 
@@ -268,8 +270,9 @@ closed Layer to an ephemeral Run or to `DurableAgentRuntime.layerWithServices` w
 Put `hook`, `transientContext`, and
 `compactor` in the same service value when using all three.
 
-The engine reloads transient context at the start of every normal or grace Turn and after durable
-recovery. A same-Turn provider-overflow retry reuses that Turn's snapshot. Each provider call still
+The engine reloads transient context in every normal or grace Turn and after durable recovery,
+after canonical context preparation and compaction succeed. Failed compaction does not read
+transient sources. A same-Turn provider-overflow retry reuses that Turn's snapshot. Each provider call still
 has to fit `contextTokenLimit`; transient text participates in output-contract, run-status, token
 budget, and completion-reserve admission. Oversized context fails before provider I/O.
 
