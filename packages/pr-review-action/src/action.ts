@@ -7,6 +7,7 @@ import {
   ReviewFinding,
   type ReviewOutcome,
   ReviewReport,
+  type ReviewResolution,
   ReviewRepository,
   ReviewRequest,
   ReviewSource,
@@ -26,7 +27,7 @@ import {
 
 import {
   type ChangedFile,
-  type GitHubApiFailure,
+  GitHubApiFailure,
   makeExactPatch,
   makeGitHubClient,
   type RepositorySnapshot,
@@ -45,7 +46,12 @@ import {
   reviewCostEstimator,
   reviewModelPricing,
 } from "./review-openai.ts";
-import { reviewModeFromCommand, selectReview, unresolvedChangeRequestCount } from "./selection.ts";
+import {
+  reviewModeFromCommand,
+  selectReview,
+  unresolvedChangeRequestCount,
+  unresolvedChangeRequests as selectUnresolvedChangeRequests,
+} from "./selection.ts";
 
 export { estimateGpt56CostMicrousd } from "./review-openai.ts";
 
@@ -574,7 +580,7 @@ export const reviewActionProgram = Effect.gen(function* () {
   }
 
   const history = yield* github.listReviews;
-  const unresolvedChangeRequests = unresolvedChangeRequestCount({ reviewAuthor, history });
+  let unresolvedChangeRequests = unresolvedChangeRequestCount({ reviewAuthor, history });
   const selection = selectReview({
     mode,
     currentHead: pull.headRevision,
@@ -658,7 +664,10 @@ export const reviewActionProgram = Effect.gen(function* () {
         : (yield* fs.readFileString(guidanceFile)).slice(0, 20_000);
 
     if (surface.changes.length === 0) {
+      const resolutions: ReadonlyArray<ReviewResolution> = [];
       return {
+        resolutions,
+        followUps: [],
         surface,
         modelTurns: 0,
         exhausted: undefined,
@@ -683,6 +692,13 @@ export const reviewActionProgram = Effect.gen(function* () {
         }),
       };
     }
+
+    const followUps = yield* github.loadReviewFollowUps({
+      reviewAuthor,
+      history,
+      scope,
+      changedPaths: new Set(surface.changes.map(({ path }) => path)),
+    });
 
     const provider = yield* makeReviewOpenAi({
       client: yield* OpenAiClient.make({ apiKey: yield* Config.redacted("OPENAI_API_KEY") }),
@@ -713,6 +729,7 @@ export const reviewActionProgram = Effect.gen(function* () {
           unreviewedPaths: surface.unreviewedPaths
             .filter((path) => path.length <= 512)
             .slice(0, 300),
+          followUps,
         }),
       )
       .pipe(
@@ -737,6 +754,8 @@ export const reviewActionProgram = Effect.gen(function* () {
       ...[...pending].map((path) => ReviewExclusion.make({ path, reason: "review-stopped" })),
     );
     return {
+      resolutions: result.resolutions ?? [],
+      followUps,
       surface: {
         ...surface,
         changes: surface.changes.filter((change) => !pending.has(change.path)),
@@ -821,6 +840,8 @@ export const reviewActionProgram = Effect.gen(function* () {
     report,
     exhausted,
     incomplete,
+    resolutions,
+    followUps,
   } = attemptExit.value;
   const complete = surface.unreviewedPaths.length === 0 && exhausted === undefined && !incomplete;
 
@@ -835,6 +856,57 @@ export const reviewActionProgram = Effect.gen(function* () {
         };
 
   const blocking = report.findings.filter((finding) => finding.severity === "blocking").length;
+  // Only positive verification from a complete, nonblocking pass can retire prior feedback.
+  // Dismissals retain the inspected commit and evidence even if later publication fails.
+  if (complete && blocking === 0 && resolutions.length > 0) {
+    const owned = selectUnresolvedChangeRequests({ reviewAuthor, history });
+    yield* publishHeadBoundReview(
+      Effect.gen(function* () {
+        for (const resolution of resolutions) {
+          const review = owned.find(({ id }) => String(id) === resolution.id);
+          const followUp = followUps.find(({ id }) => id === resolution.id);
+          if (review === undefined || followUp === undefined) {
+            return yield* GitHubApiFailure.make({
+              operation: "dismiss review",
+              reason: "Resolution identified an unowned review",
+            });
+          }
+          yield* github.dismissReview({
+            review,
+            followUp,
+            reviewAuthor,
+            commitId: pull.headRevision,
+            evidence: resolution.evidence,
+          });
+          yield* Effect.logInfo("Dismissed addressed review", {
+            reviewId: review.id,
+            headRevision: pull.headRevision,
+          });
+        }
+        unresolvedChangeRequests = unresolvedChangeRequestCount({
+          reviewAuthor,
+          history: yield* github.listReviews,
+        });
+        return "";
+      }).pipe(
+        Effect.tapErrorTag("GitHubApiFailure", () =>
+          github.publishAttemptMarker({
+            commitId: pull.headRevision,
+            body: withReviewMarker(
+              presentation.renderFailure({
+                automaticReviewsRemaining: selection.automaticReviewsRemaining,
+                failureSummary:
+                  "GitHub could not confirm dismissal of the verified reviews. Check the review timeline and request a full review to retry.",
+              }),
+              selection.automatic,
+              false,
+            ),
+          }),
+        ),
+      ),
+      { publish: github.publishAttemptMarker, automatic: selection.automatic },
+    );
+  }
   const body = withReviewMarker(
     presentation.renderReview({
       report,

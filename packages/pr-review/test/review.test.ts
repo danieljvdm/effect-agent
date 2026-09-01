@@ -19,6 +19,8 @@ import {
   ReviewCostSnapshot,
   ReviewFileList,
   ReviewFinding,
+  ReviewFollowUp,
+  ReviewResolution,
   type ReviewOutcome,
   ReviewRepository,
   ReviewRequest,
@@ -41,6 +43,16 @@ const request = ReviewRequest.make({
   headRevision: "head",
   changes: [ReviewChange.make({ path: "src/index.ts", patch })],
   unreviewedPaths: [],
+});
+
+const followUp = ReviewFollowUp.make({
+  id: "prior-review",
+  description: "The earlier review blocks because omitted input is retained without a bound.",
+});
+const resolution = ReviewResolution.make({
+  id: followUp.id,
+  evidence:
+    "src/index.ts now charges every candidate before retaining it, rejecting input over the aggregate bound.",
 });
 
 const usage = {
@@ -164,6 +176,106 @@ const reviewInput = (prompt: Prompt.Prompt): string =>
     .at(0) ?? "";
 
 describe("review output boundary", () => {
+  it.effect.each(["complete", "incomplete", "excluded", "cost", "omitted"] as const)(
+    "returns only explicit resolutions after complete coverage: %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const control = costControl(calls);
+        const review = makeReviewer({
+          model: scriptedModel((prompt) => {
+            expect(reviewInput(prompt)).toContain(followUp.description);
+            return Stream.unwrap(
+              Ref.update(calls, (n) => n + 1).pipe(
+                Effect.as(
+                  response({
+                    findings: [],
+                    ...(mode === "omitted" ? {} : { resolutions: [resolution] }),
+                    incomplete: mode === "incomplete",
+                  }),
+                ),
+              ),
+            );
+          }),
+          costControl: {
+            snapshot: control.snapshot.pipe(
+              Effect.map((snapshot) =>
+                ReviewCostSnapshot.make({
+                  ...snapshot,
+                  stopped: mode === "cost" && snapshot.modelCalls > 0,
+                }),
+              ),
+            ),
+          },
+        }).review(
+          ReviewRequest.make({
+            ...request,
+            followUps: [followUp],
+            unreviewedPaths: mode === "excluded" ? ["src/other.ts"] : [],
+          }),
+        );
+        expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
+        expectTypeOf<
+          Extract<Effect.Error<typeof review>, ReviewVerificationError>
+        >().toEqualTypeOf<ReviewVerificationError>();
+        const outcome = yield* review.pipe(
+          Effect.provideService(ReviewRepository, emptyRepository),
+        );
+        expect(outcome.resolutions ?? []).toEqual(mode === "complete" ? [resolution] : []);
+      }),
+  );
+
+  it.effect.each(["unknown", "duplicate", "out-of-scope"] as const)(
+    "rejects invalid resolutions without widening new-finding scope: %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const outcome = yield* makeReviewer({
+          model: scriptedModel(() =>
+            response({
+              findings:
+                mode === "out-of-scope"
+                  ? [
+                      submittedFinding(
+                        ReviewFinding.make({ ...blocker, path: "src/unchanged.ts" }),
+                        1,
+                      ),
+                    ]
+                  : [],
+              resolutions:
+                mode === "unknown"
+                  ? [{ ...resolution, id: "forged" }]
+                  : mode === "duplicate"
+                    ? [resolution, resolution]
+                    : [resolution],
+            }),
+          ),
+        })
+          .review(ReviewRequest.make({ ...request, followUps: [followUp] }))
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.flip);
+        expect(outcome._tag).toBe("ReviewVerificationError");
+      }),
+  );
+
+  it.effect("verifies follow-ups once in the final batch without renewing the budget", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0);
+      const model = scriptedModel((prompt) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const call = yield* Ref.updateAndGet(calls, (n) => n + 1);
+            expect(reviewInput(prompt).includes(followUp.description)).toBe(call === 2);
+            return response({ findings: [], ...(call === 2 ? { resolutions: [resolution] } : {}) });
+          }),
+        ),
+      );
+      const outcome = yield* makeReviewer({ model, costControl: costControl(calls) })
+        .review(ReviewRequest.make({ ...largeRequest(4), followUps: [followUp] }))
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+      expect(outcome.resolutions).toEqual([resolution]);
+      expect(outcome.turns).toBe(2);
+    }),
+  );
+
   it.effect("preserves findings when the model explicitly reports unfinished coverage", () =>
     Effect.gen(function* () {
       const model = scriptedModel(() =>
@@ -651,7 +763,9 @@ new mode 100755`;
       })
         .review(ReviewRequest.make({ ...request, scope: "incremental" }))
         .pipe(Effect.provideService(ReviewRepository, emptyRepository));
-      expect(outcome.report.summary).toContain("does not resolve earlier findings");
+      expect(outcome.report.summary).toContain(
+        "Earlier findings remain open unless explicitly verified",
+      );
       expect(outcome.report.summary).not.toContain("safe to merge");
     }),
   );
