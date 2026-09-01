@@ -125,13 +125,19 @@ describe("SQLite activity processor store", () => {
                 ...boundary,
                 recordId: yield* Schema.decodeEffect(RecordId)(`${boundary.recordId}x`),
               });
-              expect(yield* store.prepare({ claim, work: oversized }).pipe(Effect.flip)).toEqual(
-                ActivityStoreError.make({
-                  operation: "prepare activity output",
-                  reason: "invalid-input",
-                }),
-              );
-              expect(yield* store.inspect(key)).toEqual(before);
+              const escaped = PreparedActivity.make({
+                ...initial,
+                recordId: yield* Schema.decodeEffect(RecordId)("\0".repeat(3 * 1024 * 1024)),
+              });
+              for (const rejected of [oversized, escaped]) {
+                expect(yield* store.prepare({ claim, work: rejected }).pipe(Effect.flip)).toEqual(
+                  ActivityStoreError.make({
+                    operation: "prepare activity output",
+                    reason: "invalid-input",
+                  }),
+                );
+                expect(yield* store.inspect(key)).toEqual(before);
+              }
               yield* store.prepare({ claim, work: boundary });
               expect(yield* store.prepare({ claim, work: boundary })).toEqual(boundary);
               yield* store.release(claim);
