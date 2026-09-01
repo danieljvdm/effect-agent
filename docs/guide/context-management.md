@@ -301,6 +301,83 @@ state.
 
 ### Correct or withdraw a remembered source {#memory-lifecycle}
 
+Define namespaces with an application-owned identity Schema. Constructor inputs retain brands;
+keys, writes, documents, access values, and index results retain the definition's name, version,
+and identity type. Definitions with the same identity fields but different names or versions are
+not interchangeable.
+
+```ts twoslash
+import { MemoryKey, MemoryNamespace } from "@effect-agent/core";
+import { MemoryAccess } from "@effect-agent/capabilities";
+import { Schema } from "effect";
+
+const TenantId = Schema.NonEmptyString.pipe(Schema.brand("app/TenantId"));
+const UserId = Schema.NonEmptyString.pipe(Schema.brand("app/UserId"));
+const UserConversations = MemoryNamespace.define({
+  name: "app/user-conversations",
+  version: 1,
+  identity: Schema.Struct({ tenantId: TenantId, userId: UserId }),
+});
+
+declare const session: {
+  readonly tenantId: typeof TenantId.Type;
+  readonly userId: typeof UserId.Type;
+};
+const conversations = UserConversations.make(session);
+const key = MemoryKey.make({ namespace: conversations, id: "conversation-42" });
+const access = MemoryAccess.make({ namespace: conversations, scope: "private" });
+```
+
+`make` takes decoded identity values and throws on invalid construction. `decode(unknown)`
+decodes external identity input as an Effect with `MemoryNamespaceError` and no service
+requirements. `restore(address)` validates a stored address against the specific definition,
+including its identity codec, name, and version. It rejects noncanonical addresses and reports
+wrong definitions or unsupported address formats separately. Validation does not authenticate
+a principal. Two tenants still share the same `TenantId` type. The host must establish session
+identity and authorization before constructing namespaces or access values. `"private"` is only
+an application-defined scope name, not a built-in privacy policy.
+
+#### Namespace encoding and adapter boundaries
+
+Every adapter uses `namespace.address`, a branded, Schema-validated string. Its format is compact
+JSON `[1, definitionName, definitionVersion, encodedIdentity]`. Object keys sort recursively in
+UTF-16 code-unit order, including numeric-looking keys. Array order is preserved. Strings use
+JSON escaping without Unicode normalization. JSON number serialization normalizes negative zero
+to zero. Separator characters cannot join distinct identity fields into the same address.
+
+Identity codecs must be deterministic, synchronous, service-free, and encode to JSON. Branded
+Structs, records, arrays, and codecs such as `Schema.DateFromString` are supported. Encoding then
+decoding normalizes constructor values through the identity codec. Another round trip must leave
+the encoded identity unchanged. Schema-defined normalization, such as ignored excess Struct
+fields, deliberately selects the same address. Non-JSON values such as undefined, non-finite
+numbers, and bigint must be converted by the codec or are rejected.
+
+Names contain 1–256 UTF-16 code units; definition versions are positive safe integers. The full
+address is at most 4,096 UTF-8 bytes. Encoded identities allow at most 16 nested container levels
+and 128 entries per container. These limits apply before storage or indexing. Changing a
+definition version selects a distinct namespace, even for the same identity. It never interprets
+old memory under a new Schema. Document revisions and SQLite's storage-format version are separate.
+
+`MemoryKey.Wire`, `MemoryDocument.Wire`, `MemoryWrite.Wire`, and the access/index `.Wire` Schemas
+are explicitly heterogeneous transport representations. Their namespaces contain only the
+canonical address, not a recovered application identity type. Adapter authors use
+`MemoryReader.fromAdapter`, `MemoryWriter.fromAdapter`, and `SemanticMemoryIndex.fromAdapter`
+to validate results and restore the caller's namespace type. For persisted documents outside a
+port, restore a namespace through its definition, then call `MemoryDocument.restore(namespace, input)`.
+Never assert a wire value into an application namespace type. Generic types without an explicit
+namespace parameter describe heterogeneous values; use `MemoryKey<typeof conversations>` and
+the equivalent document/write/access/index types for family-specific application APIs.
+
+Namespace identities and addresses can contain sensitive identifiers. They are not retrieval
+parameters for the model and are not automatically added to recall text, logs, or telemetry.
+The framework does not supply a registry, tenant membership checks, wildcard search, or a fixed
+memory taxonomy.
+
+This changes SQLite memory storage to format 2. Format-1 memory data and old string-namespace
+prepared activity outputs are incompatible and fail decoding. Reset affected development memory
+and processor data before reusing it. There is no migration or raw-string fallback. Existing
+Thread history is a separate retention concern.
+
 `MemoryReader` and `MemoryWriter` are separate optional capabilities. Use a reader to validate
 search or cache candidates against the current source. A writer is appropriate only when its
 adapter can atomically check an expected revision and retain idempotency receipts. A read-only
@@ -327,10 +404,15 @@ The usual recall budget can omit a replacement that no longer fits. Source failu
 the consumer must explicitly choose any optional fallback.
 
 ```ts twoslash
-import { MemoryContent, MemoryKey, MemoryWriter } from "@effect-agent/core";
-import { Effect } from "effect";
+import { MemoryContent, MemoryKey, MemoryNamespace, MemoryWriter } from "@effect-agent/core";
+import { Effect, Schema } from "effect";
 
-const key = MemoryKey.make({ namespace: "team-a", id: "queue-discussion" });
+const TeamMemory = MemoryNamespace.define({
+  name: "app/team-memory",
+  version: 1,
+  identity: Schema.String,
+});
+const key = MemoryKey.make({ namespace: TeamMemory.make("team-a"), id: "queue-discussion" });
 
 export const correctDiscussion = Effect.fn("correctDiscussion")(function* (
   content: MemoryContent,
@@ -451,7 +533,14 @@ does not become another witness. Applications that extract assistant references 
 the original `originId` instead of assigning independent evidence identity.
 
 ```ts twoslash
-import { MemoryContent, MemoryKey, MemoryWrite, MemoryWriter, ThreadId } from "@effect-agent/core";
+import {
+  MemoryContent,
+  MemoryKey,
+  MemoryNamespace,
+  MemoryWrite,
+  MemoryWriter,
+  ThreadId,
+} from "@effect-agent/core";
 import {
   ActivityPassLimits,
   ActivityProcessorKey,
@@ -502,9 +591,14 @@ const apply = Effect.fn("applyDiscussion")(function* (work: PreparedActivity) {
   const content = yield* Schema.decodeUnknownEffect(Schema.NullOr(MemoryContent))(work.output);
   if (content === null) return;
   const writer = yield* MemoryWriter;
-  const command = yield* Schema.decodeUnknownEffect(MemoryWrite)({
+  const namespace = MemoryNamespace.define({
+    name: "app/discussions",
+    version: 1,
+    identity: Schema.String,
+  }).make("dan");
+  const command = MemoryWrite.make({
     _tag: "Put",
-    key: MemoryKey.make({ namespace: "dan-discussions", id: work.workId }),
+    key: MemoryKey.make({ namespace, id: work.workId }),
     operationId: work.workId,
     expectedRevision: null,
     locator: `memory://dan-discussions/${work.workId}`,
@@ -593,15 +687,27 @@ import {
   querySemanticMemory,
   recallMemory,
 } from "@effect-agent/capabilities";
-import { MemoryKey, MemoryRecallLimits, SemanticMemoryProfile } from "@effect-agent/core";
+import {
+  MemoryKey,
+  MemoryNamespace,
+  MemoryRecallLimits,
+  SemanticMemoryProfile,
+} from "@effect-agent/core";
 import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 
 // Keep this Layer alive across refreshes and queries. A new instance starts empty.
 export const makeIndex = (profile: SemanticMemoryProfile) =>
   inMemorySemanticIndexLayer(profile, { maxSources: 1_024, maxChunks: 8_192 });
 
-export const refresh = (key: MemoryKey) =>
+const TeamMemory = MemoryNamespace.define({
+  name: "app/team-memory",
+  version: 1,
+  identity: Schema.String,
+});
+const namespace = TeamMemory.make("team-a");
+
+export const refresh = (key: MemoryKey<typeof namespace>) =>
   indexMemorySource(
     key,
     SemanticIndexLimits.make({
@@ -620,7 +726,7 @@ export const recall = (query: string) =>
         read: querySemanticMemory(
           query,
           MemoryAccess.make({
-            namespace: "team-a",
+            namespace,
             scope: "participating-channels",
           }),
           SemanticQueryLimits.make({

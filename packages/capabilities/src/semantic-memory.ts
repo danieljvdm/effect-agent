@@ -1,4 +1,5 @@
 import {
+  type MemoryNamespace,
   MemoryDocument,
   type MemoryIndexCandidate,
   MemoryIndexError,
@@ -59,10 +60,10 @@ export class SemanticQueryLimits extends Schema.Class<SemanticQueryLimits>(
   timeoutMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60_000 })),
 }) {}
 
-export class SemanticIndexResult extends Schema.Class<SemanticIndexResult>(
+class SemanticIndexResultWire extends Schema.Class<SemanticIndexResultWire>(
   "@effect-agent/capabilities/SemanticIndexResult",
 )({
-  key: MemoryKey,
+  key: MemoryKey.Wire,
   status: Schema.Literals(["Missing", "Withdrawn", "Indexed"]),
   embeddedChunks: Schema.Natural,
   embeddedBytes: Schema.Natural,
@@ -70,6 +71,20 @@ export class SemanticIndexResult extends Schema.Class<SemanticIndexResult>(
   startedAt: Timestamp,
   finishedAt: Timestamp,
 }) {}
+
+export type SemanticIndexResult<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> = Omit<
+  SemanticIndexResultWire,
+  "key"
+> & { readonly key: MemoryKey<Namespace> };
+export const SemanticIndexResult = {
+  Wire: SemanticIndexResultWire,
+  make: <Namespace extends MemoryNamespace.Any>(
+    fields: SemanticIndexResult<Namespace>,
+  ): SemanticIndexResult<Namespace> =>
+    Object.assign(Schema.decodeUnknownSync(SemanticIndexResultWire)(fields), {
+      key: MemoryKey.make(fields.key),
+    }),
+};
 
 /** Candidates have already passed current-source checks; compose lookup with recallMemory. */
 export class SemanticQueryResult extends Schema.Class<SemanticQueryResult>(
@@ -101,7 +116,7 @@ const asSource = (document: MemoryDocument): MemoryIndexSource =>
     sourceGeneration: document.generation,
   });
 const sameSource = (left: MemoryDocument, right: MemoryDocument): boolean =>
-  left.key.namespace === right.key.namespace &&
+  left.key.namespace.address === right.key.namespace.address &&
   left.key.id === right.key.id &&
   left.generation === right.generation &&
   left.source.revision === right.source.revision &&
@@ -111,7 +126,7 @@ const sameSource = (left: MemoryDocument, right: MemoryDocument): boolean =>
 const readDocument = Effect.fn("semanticMemory.readDocument")(function* (key: MemoryKey) {
   const reader = yield* MemoryReader;
   const document = yield* reader.get(key).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(Schema.NullOr(MemoryDocument))),
+    Effect.flatMap(Schema.decodeUnknownEffect(Schema.NullOr(MemoryDocument.Wire))),
     Effect.catchTag("SchemaError", () =>
       Effect.fail(
         MemoryStorageError.make({ operation: "validate semantic source", reason: "corrupt" }),
@@ -120,7 +135,7 @@ const readDocument = Effect.fn("semanticMemory.readDocument")(function* (key: Me
   );
   if (
     document !== null &&
-    (document.key.namespace !== key.namespace ||
+    (document.key.namespace.address !== key.namespace.address ||
       document.key.id !== key.id ||
       document.source.id !== key.id)
   ) {
@@ -220,13 +235,13 @@ const chunkText = Effect.fn("semanticMemory.chunkText")(function* (
  * querySemanticMemory always revalidates and excludes such stale candidates.
  * No model or source text is attached to telemetry. Errors retain native provider/index types.
  */
-export const indexMemorySource = Effect.fn("indexMemorySource")(function* (
-  key: MemoryKey,
-  limits: SemanticIndexLimits,
-) {
-  const checkedKey = yield* Schema.decodeUnknownEffect(MemoryKey)(key).pipe(
+export const indexMemorySource = Effect.fn("indexMemorySource")(function* <
+  Namespace extends MemoryNamespace.Any,
+>(key: MemoryKey<Namespace>, limits: SemanticIndexLimits) {
+  yield* Schema.decodeUnknownEffect(MemoryKey.Wire)(key).pipe(
     Effect.mapError(() => invalid("index key")),
   );
+  const checkedKey = MemoryKey.make(key);
   const checkedLimits = yield* Schema.decodeUnknownEffect(SemanticIndexLimits)(limits).pipe(
     Effect.mapError(() => invalid("index limits")),
   );
@@ -331,7 +346,7 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
   const checkedQuery = yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(query).pipe(
     Effect.mapError(() => invalid("query text")),
   );
-  const checkedAccess = yield* Schema.decodeUnknownEffect(MemoryAccess)(access).pipe(
+  const checkedAccess = yield* Schema.decodeUnknownEffect(MemoryAccess.Wire)(access).pipe(
     Effect.mapError(() => invalid("query access")),
   );
   const checkedLimits = yield* Schema.decodeUnknownEffect(SemanticQueryLimits)(limits).pipe(
@@ -364,7 +379,7 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
         }),
       )
       .pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(MemoryIndexSearch)),
+        Effect.flatMap(Schema.decodeUnknownEffect(MemoryIndexSearch.Wire)),
         Effect.catchTag("SchemaError", () =>
           Effect.fail(
             MemoryIndexError.make({ operation: "validate candidates", reason: "corrupt" }),
@@ -396,7 +411,7 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
     let unauthorizedExcluded = 0;
     for (const [rank, candidate] of found.candidates.entries()) {
       if (
-        candidate.key.namespace !== checkedAccess.namespace ||
+        candidate.key.namespace.address !== checkedAccess.namespace.address ||
         candidate.source.id !== candidate.key.id ||
         candidate.score < checkedLimits.minScore
       ) {
@@ -451,7 +466,7 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
           rank,
           passage: MemoryPassage.make({
             version: 1,
-            authority: checkedAccess.namespace,
+            authority: checkedAccess.namespace.address,
             source: document.source,
             passageId: candidate.passageId,
             content: { ...document.content, text: candidate.text },

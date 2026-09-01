@@ -1,3 +1,4 @@
+import type { MemoryNamespace } from "@effect-agent/core";
 import {
   MemoryDocument,
   MemoryKey,
@@ -15,12 +16,26 @@ const RevalidationLimits = Schema.Struct({
 });
 
 /** Bind these values in host code. Neither is a model-selectable retrieval parameter. */
-export class MemoryAccess extends Schema.Class<MemoryAccess>(
+class MemoryAccessWire extends Schema.Class<MemoryAccessWire>(
   "@effect-agent/capabilities/MemoryAccess",
 )({
-  namespace: MemoryKey.fields.namespace,
+  namespace: MemoryKey.Wire.fields.namespace,
   scope: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
 }) {}
+
+export type MemoryAccess<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> = Omit<
+  MemoryAccessWire,
+  "namespace"
+> & { readonly namespace: Namespace };
+export const MemoryAccess = {
+  Wire: MemoryAccessWire,
+  make: <Namespace extends MemoryNamespace.Any>(
+    fields: MemoryAccess<Namespace>,
+  ): MemoryAccess<Namespace> =>
+    Object.assign(Schema.decodeUnknownSync(MemoryAccessWire)(fields), {
+      namespace: fields.namespace,
+    }),
+};
 
 /**
  * Resolve derivative candidates against the current authoritative source and host-bound access.
@@ -44,7 +59,7 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
       MemoryRecallError.make({ reason: "invalid-input", message: "Invalid revalidation limits" }),
     ),
   );
-  const decodedAccess = yield* Schema.decodeUnknownEffect(MemoryAccess)(access).pipe(
+  const decodedAccess = yield* Schema.decodeUnknownEffect(MemoryAccess.Wire)(access).pipe(
     Effect.mapError(() =>
       MemoryRecallError.make({ reason: "invalid-input", message: "Invalid host memory access" }),
     ),
@@ -74,7 +89,7 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
       .get(key)
       .pipe(
         Effect.flatMap((value) =>
-          Schema.decodeUnknownEffect(Schema.NullOr(MemoryDocument))(value).pipe(
+          Schema.decodeUnknownEffect(Schema.NullOr(MemoryDocument.Wire))(value).pipe(
             Effect.mapError(() =>
               MemoryStorageError.make({ operation: "validate source view", reason: "corrupt" }),
             ),
@@ -83,7 +98,7 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
       );
     if (
       document !== null &&
-      (document.key.namespace !== key.namespace ||
+      (document.key.namespace.address !== key.namespace.address ||
         document.key.id !== key.id ||
         document.source.id !== key.id)
     ) {
@@ -104,7 +119,7 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
         document.content.text.includes(candidate.content.text);
       const passage = MemoryPassage.make({
         version: 1,
-        authority: decodedAccess.namespace,
+        authority: decodedAccess.namespace.address,
         source: document.source,
         passageId: sameExcerpt ? candidate.passageId : "document",
         content: {

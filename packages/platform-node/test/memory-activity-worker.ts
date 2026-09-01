@@ -88,7 +88,7 @@ const applyPrepared = Effect.fn("MemoryActivityWorker.applyPrepared")(function* 
   if (output._tag === "Skip") return;
   const writer = yield* MemoryWriter;
   yield* writer.change(
-    yield* Schema.decodeUnknownEffect(MemoryWrite)({
+    yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
       _tag: "Put",
       key: output.key,
       operationId: work.workId,

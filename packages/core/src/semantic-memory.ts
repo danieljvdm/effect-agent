@@ -1,7 +1,7 @@
-import type { Effect } from "effect";
-import { Context, Schema } from "effect";
+import { Context, Effect, Schema } from "effect";
 
 import { ActiveMemoryDocument, MemoryKey } from "./memory-lifecycle.ts";
+import { MemoryNamespace } from "./memory-namespace.ts";
 import { MemoryPassage } from "./memory.ts";
 
 const Identity = Schema.NonEmptyString.check(Schema.isMaxLength(256));
@@ -37,25 +37,51 @@ export class SemanticMemoryChunk extends Schema.Class<SemanticMemoryChunk>(
 }) {}
 
 const SourceFields = {
-  key: MemoryKey,
-  source: ActiveMemoryDocument.fields.source,
+  key: MemoryKey.Wire,
+  source: ActiveMemoryDocument.Wire.fields.source,
   sourceGeneration: Positive,
 };
 
-export class MemoryIndexSource extends Schema.Class<MemoryIndexSource>(
+class MemoryIndexSourceWire extends Schema.Class<MemoryIndexSourceWire>(
   "@effect-agent/core/MemoryIndexSource",
 )(SourceFields) {}
 
+export type MemoryIndexSource<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> = Omit<
+  MemoryIndexSourceWire,
+  "key"
+> & { readonly key: MemoryKey<Namespace> };
+export const MemoryIndexSource = {
+  Wire: MemoryIndexSourceWire,
+  make: <Namespace extends MemoryNamespace.Any>(
+    fields: MemoryIndexSource<Namespace>,
+  ): MemoryIndexSource<Namespace> =>
+    Object.assign(Schema.decodeUnknownSync(MemoryIndexSourceWire)(fields), {
+      key: MemoryKey.make(fields.key),
+    }),
+};
+
 /** A complete replacement, prepared before touching the disposable index. */
-export class MemoryIndexReplacement extends Schema.Class<MemoryIndexReplacement>(
+class MemoryIndexReplacementWire extends Schema.Class<MemoryIndexReplacementWire>(
   "@effect-agent/core/MemoryIndexReplacement",
 )({
-  source: MemoryIndexSource,
+  source: MemoryIndexSource.Wire,
   profile: SemanticMemoryProfile,
   chunks: Schema.Array(SemanticMemoryChunk).check(Schema.isMinLength(1), Schema.isMaxLength(256)),
 }) {}
 
-export class MemoryIndexCandidate extends Schema.Class<MemoryIndexCandidate>(
+export type MemoryIndexReplacement<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> =
+  Omit<MemoryIndexReplacementWire, "source"> & { readonly source: MemoryIndexSource<Namespace> };
+export const MemoryIndexReplacement = {
+  Wire: MemoryIndexReplacementWire,
+  make: <Namespace extends MemoryNamespace.Any>(
+    fields: MemoryIndexReplacement<Namespace>,
+  ): MemoryIndexReplacement<Namespace> =>
+    Object.assign(Schema.decodeUnknownSync(MemoryIndexReplacementWire)(fields), {
+      source: fields.source,
+    }),
+};
+
+class MemoryIndexCandidateWire extends Schema.Class<MemoryIndexCandidateWire>(
   "@effect-agent/core/MemoryIndexCandidate",
 )({
   ...SourceFields,
@@ -68,22 +94,62 @@ export class MemoryIndexCandidate extends Schema.Class<MemoryIndexCandidate>(
   indexedAt: Timestamp,
 }) {}
 
-export class MemoryIndexQuery extends Schema.Class<MemoryIndexQuery>(
+export type MemoryIndexCandidate<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> =
+  Omit<MemoryIndexCandidateWire, "key"> & { readonly key: MemoryKey<Namespace> };
+export const MemoryIndexCandidate = {
+  Wire: MemoryIndexCandidateWire,
+  make: <Namespace extends MemoryNamespace.Any>(
+    fields: MemoryIndexCandidate<Namespace>,
+  ): MemoryIndexCandidate<Namespace> =>
+    Object.assign(Schema.decodeUnknownSync(MemoryIndexCandidateWire)(fields), {
+      key: MemoryKey.make(fields.key),
+    }),
+};
+
+class MemoryIndexQueryWire extends Schema.Class<MemoryIndexQueryWire>(
   "@effect-agent/core/MemoryIndexQuery",
 )({
-  namespace: MemoryKey.fields.namespace,
+  namespace: MemoryKey.Wire.fields.namespace,
   vector: Vector,
   limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 128 })),
   minScore: Schema.Finite.check(Schema.isBetween({ minimum: -1, maximum: 1 })),
   maxScannedChunks: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_536 })),
 }) {}
 
-export class MemoryIndexSearch extends Schema.Class<MemoryIndexSearch>(
+export type MemoryIndexQuery<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> = Omit<
+  MemoryIndexQueryWire,
+  "namespace"
+> & { readonly namespace: Namespace };
+export const MemoryIndexQuery = {
+  Wire: MemoryIndexQueryWire,
+  make: <Namespace extends MemoryNamespace.Any>(
+    fields: MemoryIndexQuery<Namespace>,
+  ): MemoryIndexQuery<Namespace> =>
+    Object.assign(Schema.decodeUnknownSync(MemoryIndexQueryWire)(fields), {
+      namespace: fields.namespace,
+    }),
+};
+
+class MemoryIndexSearchWire extends Schema.Class<MemoryIndexSearchWire>(
   "@effect-agent/core/MemoryIndexSearch",
 )({
-  candidates: Schema.Array(MemoryIndexCandidate).check(Schema.isMaxLength(128)),
+  candidates: Schema.Array(MemoryIndexCandidate.Wire).check(Schema.isMaxLength(128)),
   scannedChunks: Schema.Natural,
 }) {}
+
+export type MemoryIndexSearch<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> = Omit<
+  MemoryIndexSearchWire,
+  "candidates"
+> & { readonly candidates: ReadonlyArray<MemoryIndexCandidate<Namespace>> };
+export const MemoryIndexSearch = {
+  Wire: MemoryIndexSearchWire,
+  make: <Namespace extends MemoryNamespace.Any>(
+    fields: MemoryIndexSearch<Namespace>,
+  ): MemoryIndexSearch<Namespace> =>
+    Object.assign(Schema.decodeUnknownSync(MemoryIndexSearchWire)(fields), {
+      candidates: fields.candidates,
+    }),
+};
 
 export class MemoryIndexError extends Schema.TaggedError<MemoryIndexError>()("MemoryIndexError", {
   operation: Identity,
@@ -122,10 +188,52 @@ export class SemanticMemoryIndex extends Context.Service<
   SemanticMemoryIndex,
   {
     readonly profile: SemanticMemoryProfile;
+    readonly replace: <Namespace extends MemoryNamespace.Any>(
+      request: MemoryIndexReplacement<Namespace>,
+    ) => Effect.Effect<void, MemoryIndexError>;
+    readonly withdraw: <Namespace extends MemoryNamespace.Any>(
+      source: MemoryIndexSource<Namespace>,
+    ) => Effect.Effect<void, MemoryIndexError>;
+    readonly search: <Namespace extends MemoryNamespace.Any>(
+      query: MemoryIndexQuery<Namespace>,
+    ) => Effect.Effect<MemoryIndexSearch<Namespace>, MemoryIndexError>;
+  }
+>()("@effect-agent/core/SemanticMemoryIndex") {
+  static fromAdapter(adapter: {
+    readonly profile: SemanticMemoryProfile;
     readonly replace: (request: MemoryIndexReplacement) => Effect.Effect<void, MemoryIndexError>;
     readonly withdraw: (source: MemoryIndexSource) => Effect.Effect<void, MemoryIndexError>;
     readonly search: (
       query: MemoryIndexQuery,
     ) => Effect.Effect<MemoryIndexSearch, MemoryIndexError>;
+  }): SemanticMemoryIndex["Service"] {
+    return {
+      ...adapter,
+      search: Effect.fn("SemanticMemoryIndex.search")(function* <
+        Namespace extends MemoryNamespace.Any,
+      >(query: MemoryIndexQuery<Namespace>) {
+        const result = yield* adapter.search(query);
+        const checked = yield* Schema.decodeUnknownEffect(MemoryIndexSearch.Wire)(result).pipe(
+          Effect.mapError(() =>
+            MemoryIndexError.make({ operation: "restore index search", reason: "corrupt" }),
+          ),
+        );
+        const candidates: Array<MemoryIndexCandidate<Namespace>> = [];
+        for (const candidate of checked.candidates) {
+          if (!MemoryNamespace.equals(candidate.key.namespace, query.namespace))
+            return yield* MemoryIndexError.make({
+              operation: "restore index namespace",
+              reason: "corrupt",
+            });
+          candidates.push(
+            MemoryIndexCandidate.make({
+              ...candidate,
+              key: MemoryKey.make({ ...candidate.key, namespace: query.namespace }),
+            }),
+          );
+        }
+        return MemoryIndexSearch.make({ ...checked, candidates });
+      }),
+    };
   }
->()("@effect-agent/core/SemanticMemoryIndex") {}
+}

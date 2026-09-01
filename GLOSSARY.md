@@ -293,6 +293,12 @@ A terminal change that excludes a source from future authoritative recall checks
 after successful withdrawal exclude it; already captured views may finish. Original history,
 past outputs, idempotency receipts, and backups have separate retention policies.
 
+**Memory namespace**
+
+An application-defined name, version, and Schema-validated identity addressing memory sources,
+operation receipts, and index entries. The canonical address is portable across adapters.
+Definition versions select distinct namespaces, not document revisions. Host code owns authorization.
+
 **Semantic memory index**
 
 A disposable ranking derivative tied to one embedding model and chunking profile. Its candidates

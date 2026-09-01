@@ -1,6 +1,6 @@
 import { recallMemory, revalidateMemoryLookup } from "@effect-agent/capabilities";
-import type { ActiveMemoryDocument } from "@effect-agent/core";
 import {
+  MemoryNamespace,
   Agent,
   AgentPolicy,
   IdGenerator,
@@ -10,6 +10,7 @@ import {
   MemoryWriter,
   ThreadId,
 } from "@effect-agent/core";
+import type { ActiveMemoryDocument } from "@effect-agent/core";
 import {
   AgentRuntime,
   ThreadHistory,
@@ -32,6 +33,7 @@ import { NodeServices } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
 import {
+  Schema as NamespaceSchema,
   Duration,
   Effect,
   Fiber,
@@ -64,6 +66,12 @@ import {
   memoryKey,
   type MemoryActivityWorkerMode,
 } from "./memory-activity-fixtures.ts";
+
+const TestNamespace = MemoryNamespace.define({
+  name: "test/memory",
+  version: 1,
+  identity: NamespaceSchema.String,
+});
 
 const danThreadId = Schema.decodeSync(ThreadId)(DAN_THREAD);
 const timThreadId = Schema.decodeSync(ThreadId)(TIM_THREAD);
@@ -277,7 +285,7 @@ const originalWriteFrom = Effect.fn("MemoryActivityTest.originalWriteFrom")(func
 ) {
   const output = yield* Schema.decodeUnknownEffect(ActivityMemoryOutput)(pending.output);
   if (output._tag !== "Remember") return yield* Effect.die("Expected remembered activity");
-  return yield* Schema.decodeUnknownEffect(MemoryWrite)({
+  return yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
     _tag: "Put",
     key: output.key,
     operationId: pending.workId,
@@ -415,7 +423,7 @@ it.live(
         expect(initialPrompt).toContain(String(askedAt));
 
         const wrongNamespace = yield* revalidateMemoryLookup(staleCandidates, {
-          namespace: "another-team",
+          namespace: TestNamespace.make("another-team"),
           scope: MEMORY_SCOPE,
         }).pipe(Effect.provide(readerLayer(filename)));
         const wrongScope = yield* revalidateMemoryLookup(staleCandidates, {
