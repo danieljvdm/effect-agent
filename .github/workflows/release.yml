@@ -140,23 +140,31 @@ jobs:
             exit 1
           fi
 
-          HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          HEAD_REPOSITORY="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name')"
-          HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.ref')"
-          BASE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.sha')"
-          BASE_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.ref')"
+          PR_IDENTITY="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.head.repo.full_name, .head.ref, .base.ref, .state] | @tsv')"
+          IFS=$'\t' read -r HEAD_REPOSITORY HEAD_REF BASE_REF PR_STATE <<< "$PR_IDENTITY"
+          if [ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ] || [ "$HEAD_REF" != "changeset-release/main" ] || [ "$BASE_REF" != "main" ] || [ "$PR_STATE" != "open" ]; then
+            echo "Expected an open same-repository Changesets pull request targeting main." >&2
+            exit 1
+          fi
 
-          test "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"
-          test "$HEAD_REF" = "changeset-release/main"
-          test "$BASE_SHA" = "$GITHUB_SHA"
-          test "$BASE_REF" = "main"
+          # PR SHA fields can lag behind a successful Changesets force-push.
+          # Resolve commits from Git refs, using the PR only for branch identity.
+          HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/changeset-release/main" --jq '.object.sha')"
+          BASE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [ "$BASE_SHA" != "$GITHUB_SHA" ]; then
+            echo "Main advanced: expected $GITHUB_SHA, found $BASE_SHA. Regenerate from the new base." >&2
+            exit 1
+          fi
           if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Changesets returned an invalid head commit SHA." >&2
             exit 1
           fi
 
           git fetch --no-tags origin "$HEAD_SHA"
-          test "$(git rev-parse FETCH_HEAD)" = "$HEAD_SHA"
+          if [ "$(git rev-parse FETCH_HEAD)" != "$HEAD_SHA" ]; then
+            echo "Fetched release commit does not match $HEAD_SHA." >&2
+            exit 1
+          fi
           echo "head-sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Regenerate and verify the release tree
@@ -193,17 +201,21 @@ jobs:
         run: |
           CONCLUSION="failure"
           TITLE="Generated release tree did not verify"
-          SUMMARY="The proposed tree is not the exact Changesets output from its trusted main base."
+          SUMMARY="Exact-tree verification did not complete successfully. See the verification job for the failure."
           if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
             echo "Changesets returned an invalid pull request number." >&2
             exit 1
           fi
 
-          CURRENT_HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          CURRENT_HEAD_REPOSITORY="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name')"
-          CURRENT_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.ref')"
-          CURRENT_BASE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.sha')"
-          CURRENT_BASE_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.ref')"
+          if [[ ! "$VERIFIED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Verification never resolved a valid release commit; no ready check can be attached safely." >&2
+            exit 1
+          fi
+
+          PR_IDENTITY="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.head.repo.full_name, .head.ref, .base.ref, .state] | @tsv')"
+          IFS=$'\t' read -r CURRENT_HEAD_REPOSITORY CURRENT_HEAD_REF CURRENT_BASE_REF PR_STATE <<< "$PR_IDENTITY"
+          CURRENT_HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/changeset-release/main" --jq '.object.sha')"
+          CURRENT_BASE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
           STRICT_READY="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main" --jq 'any(.[]; .type == "required_status_checks" and .parameters.strict_required_status_checks_policy == true and any(.parameters.required_status_checks[]; .context == "ready"))')"
 
           if [ "$VERIFY_OUTCOME" != "success" ]; then
@@ -217,9 +229,9 @@ jobs:
           elif [ "$CURRENT_BASE_SHA" != "$EXPECTED_BASE_SHA" ]; then
             TITLE="Generated release base changed during verification"
             SUMMARY="The pull request base advanced after generation; the release head must be regenerated from the new base."
-          elif [ "$CURRENT_BASE_REF" != "main" ]; then
+          elif [ "$CURRENT_BASE_REF" != "main" ] || [ "$PR_STATE" != "open" ]; then
             TITLE="Generated release target changed during verification"
-            SUMMARY="The pull request no longer targets the trusted main branch."
+            SUMMARY="The pull request is no longer open against the trusted main branch."
           elif [ "$STRICT_READY" != "true" ]; then
             TITLE="Strict required-check policy is missing"
             SUMMARY="The main branch must require the ready check and require branches to be up to date before merging."
@@ -231,7 +243,7 @@ jobs:
 
           gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" \
             -f name="ready" \
-            -f head_sha="$CURRENT_HEAD_SHA" \
+            -f head_sha="$VERIFIED_HEAD_SHA" \
             -f status="completed" \
             -f conclusion="$CONCLUSION" \
             -f details_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
