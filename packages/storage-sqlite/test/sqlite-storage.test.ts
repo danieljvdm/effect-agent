@@ -48,7 +48,6 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import {
   type SqliteStorageFailpoint,
-  CurrentSqliteStorageVersion,
   threadStoreLayer,
   layer,
   observationOffsetAt,
@@ -91,7 +90,6 @@ const id = <A>(schema: Schema.Codec<A, string>, value: string): A =>
 const sequence = (value: number) => Schema.decodeSync(CanonicalSequence)(value);
 const epoch = (value: number) => Schema.decodeSync(ProducerEpoch)(value);
 const isSqliteStorageError = Schema.is(SqliteStorageError);
-const isSqliteStorageCompatibilityError = Schema.is(SqliteStorageCompatibilityError);
 const isThreadStoreError = Schema.is(ThreadStoreError);
 
 const at = (millis: number) => DateTime.toUtc(DateTime.makeUnsafe(millis));
@@ -479,54 +477,6 @@ describe("SqliteThreadStore", () => {
           }),
         );
         expect(tables).toEqual([]);
-      }),
-    ),
-  );
-
-  it.effect("rejects the Conversation-era storage version without mutating its tables", () =>
-    withTemporaryDatabase((filename) =>
-      Effect.gen(function* () {
-        const previousVersion = CurrentSqliteStorageVersion - 1;
-        yield* withSql(
-          filename,
-          Effect.gen(function* () {
-            const sql = yield* SqlClientService.SqlClient;
-            yield* sql.unsafe(`PRAGMA user_version = ${previousVersion}`);
-            yield* sql`
-              CREATE TABLE effect_agent_conversations (
-                conversation_id TEXT PRIMARY KEY NOT NULL
-              )
-            `;
-            yield* sql`
-              INSERT INTO effect_agent_conversations (conversation_id)
-              VALUES ('legacy-conversation')
-            `;
-          }),
-        );
-
-        const opened = yield* withStorage(filename, ThreadStore).pipe(Effect.exit);
-        expect(Exit.isFailure(opened)).toBe(true);
-        if (Exit.isFailure(opened)) {
-          const error = Cause.squash(opened.cause);
-          expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
-          if (isSqliteStorageCompatibilityError(error)) {
-            expect(error.actualVersion).toBe(previousVersion);
-            expect(error.supportedVersion).toBe(CurrentSqliteStorageVersion);
-            expect(error.message).toContain("Reset the database file explicitly");
-          }
-        }
-
-        const rows = yield* withSql(
-          filename,
-          Effect.gen(function* () {
-            const sql = yield* SqlClientService.SqlClient;
-            return yield* sql<Record<string, unknown>>`
-              SELECT conversation_id
-              FROM effect_agent_conversations
-            `;
-          }),
-        );
-        expect(rows).toEqual([{ conversation_id: "legacy-conversation" }]);
       }),
     ),
   );

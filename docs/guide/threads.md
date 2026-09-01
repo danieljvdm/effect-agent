@@ -139,14 +139,3 @@ may require a reset. See [Persistence & durability](../concepts/durability) befo
 active execution survives process loss.
 
 For a custom adapter, follow the [store contract and certification guide](./certify-adapters#store-contract).
-
-## Upgrade from conversations
-
-Rename imports from `@effect-agent/session` to `@effect-agent/thread`. Rename
-`ConversationId`, `conversationId`, `ConversationHistory`, and `ConversationStore` to
-`ThreadId`, `threadId`, `ThreadHistory`, and `ThreadStore`. The durable-admin CLI now
-uses `--thread`.
-
-Canonical records now use the `thread` family, `ThreadCreated`, and
-`@effect-agent/thread/*` Schema identifiers and tags. Reset incompatible alpha storage and use
-a fresh Durable Object namespace before upgrading. The framework does not migrate stored data.

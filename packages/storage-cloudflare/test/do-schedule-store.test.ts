@@ -42,9 +42,9 @@ describe("Durable Object ScheduleStore conformance", () => {
     });
   }
 
-  it("rejects the Conversation-era schedule version without mutation", () =>
+  it("rejects an unsupported schedule version without mutation", () =>
     expect(
-      withScheduleStorage("schedule-store-conversation-era-version", (storage) =>
+      withScheduleStorage("schedule-store-unsupported-version", (storage) =>
         Effect.gen(function* () {
           const sql = yield* SqlClientService.SqlClient;
           yield* sql`

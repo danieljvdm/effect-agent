@@ -173,8 +173,8 @@ describe("DoThreadStore", () => {
       }),
     ));
 
-  it("rejects the Conversation-era storage version without mutating its tables", () =>
-    withThreadStorage("wp1-store-conversation-era-version", (storage) =>
+  it("rejects an unsupported storage version without mutating its tables", () =>
+    withThreadStorage("wp1-store-unsupported-version", (storage) =>
       Effect.gen(function* () {
         const previousVersion = CurrentDoStorageVersion - 1;
         storage.sql.exec(`
@@ -184,11 +184,11 @@ describe("DoThreadStore", () => {
           );
           INSERT INTO effect_agent_meta (key, value)
           VALUES ('storage_version', '${previousVersion}');
-          CREATE TABLE effect_agent_conversations (
-            conversation_id TEXT PRIMARY KEY NOT NULL
+          CREATE TABLE effect_agent_threads (
+            thread_id TEXT PRIMARY KEY NOT NULL
           );
-          INSERT INTO effect_agent_conversations (conversation_id)
-          VALUES ('legacy-conversation');
+          INSERT INTO effect_agent_threads (thread_id)
+          VALUES ('retained-thread');
         `);
 
         const opened = yield* ThreadStore.pipe(
@@ -212,11 +212,9 @@ describe("DoThreadStore", () => {
         }
 
         const rows = storage.sql
-          .exec<{ conversation_id: string }>(
-            "SELECT conversation_id FROM effect_agent_conversations",
-          )
+          .exec<{ thread_id: string }>("SELECT thread_id FROM effect_agent_threads")
           .toArray();
-        expect(rows).toEqual([{ conversation_id: "legacy-conversation" }]);
+        expect(rows).toEqual([{ thread_id: "retained-thread" }]);
       }),
     ));
 

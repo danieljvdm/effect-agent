@@ -49,9 +49,9 @@ describe("Durable Object SubscriptionStore conformance", () => {
     );
   }
 
-  it("rejects the Conversation-era subscription version without mutation", () =>
+  it("rejects an unsupported subscription version without mutation", () =>
     expect(
-      withScheduleStorage("subscription-store-conversation-era-version", (storage) =>
+      withScheduleStorage("subscription-store-unsupported-version", (storage) =>
         Effect.gen(function* () {
           const sql = yield* SqlClientService.SqlClient;
           yield* sql`
