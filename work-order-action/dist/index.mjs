@@ -44501,6 +44501,7 @@ var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (qu
           rank,
           passage: MemoryPassage.make({
             version: 1,
+            authority: checkedAccess.namespace,
             source: document.source,
             passageId: candidate.passageId,
             content: { ...document.content, text: candidate.text }

@@ -281,6 +281,7 @@ describe("optional semantic workflows", () => {
           _tag: "Found",
           passages: [
             {
+              authority: access.namespace,
               content: {
                 text: "Dan 🌊",
                 attributions: document.content.attributions,
@@ -288,7 +289,10 @@ describe("optional semantic workflows", () => {
                 extractedAt: 25,
               },
             },
-            { content: { text: "Dan 🌊", attributions: document.content.attributions } },
+            {
+              authority: access.namespace,
+              content: { text: "Dan 🌊", attributions: document.content.attributions },
+            },
           ],
         });
         const recalled = yield* recallMemory(
@@ -298,6 +302,8 @@ describe("optional semantic workflows", () => {
         expect(recalled.passages).toHaveLength(1);
         expect(recalled.text).toContain('"speaker":"Dan"');
         expect(recalled.text).toContain('"observers":["Chad"]');
+        expect(recalled.text).not.toContain(access.namespace);
+        expect(recalled.text).toContain('"authority":"memory-authority:1"');
         const limited = yield* recallMemory(
           [{ id: "semantic", essential: false, read: Effect.succeed(queried.lookup) }],
           { ...recallLimits, maxTokens: recalled.estimatedTokens - 1 },

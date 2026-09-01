@@ -99,7 +99,9 @@ it.effect(
           timeoutMillis: 1_000,
         },
       );
-      expect(recalled.passages).toMatchObject([{ source: { id: key.id, revision: "1" }, content }]);
+      expect(recalled.passages).toMatchObject([
+        { authority: access.namespace, source: { id: key.id, revision: "1" }, content },
+      ]);
 
       const corrected = { ...content, text: "Dan proposes a scheduler instead." };
       yield* writer.change({

@@ -686,7 +686,9 @@ candidate source, checks namespace, access, revision, generation, locator, and e
 takes attribution and metadata from that source. Stale candidates are omitted; their old score is
 never assigned to corrected text. A source correction may temporarily reduce recall until refresh
 finishes. Missing, withdrawn, or revoked sources cannot pass checks begun after the authoritative
-change. Already captured views may finish, as described under withdrawal.
+change. Already captured views may finish, as described under withdrawal. Returned passages bind
+their private authority to the query's authorized namespace, so downstream recall can combine
+independent namespaces without confusing their source IDs. Recall renders only opaque authority labels.
 
 Queries group candidates by source, read each source once, and restore the original index ranking
 after validation. Full source documents and their excerpt-check encodings are local to one group.
