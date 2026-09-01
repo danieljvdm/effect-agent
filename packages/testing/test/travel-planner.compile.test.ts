@@ -14,7 +14,6 @@ import {
   AgentPolicy,
   type AgentToolAuthorizationDenied,
 } from "@effect-agent/core";
-import type { RunContextPreparation } from "@effect-agent/engine";
 import {
   type AgentChildPending,
   AgentRuntime,
@@ -103,7 +102,6 @@ type ExpectedRequirements =
   | TravelGuidance
   | Tool.HandlersFor<Toolkit.Tools<typeof TravelPlannerToolkit>>
   | IdGenerator
-  | RunContextPreparation
   | ThreadHistory;
 type ExpectedFailure =
   | FlightUnavailable
@@ -199,12 +197,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
       model,
     );
     const outputRun = AgentRuntime.run(outputAgent, "question");
-    type ScopedRequirements =
-      | IdGenerator
-      | ThreadHistory
-      | RunContextPreparation
-      | CallerService
-      | Scope.Scope;
+    type ScopedRequirements = IdGenerator | ThreadHistory | CallerService | Scope.Scope;
     type BaseFailure = Exclude<
       ExpectedFailure,
       FlightUnavailable | LodgingUnavailable | ActivityUnavailable | GuidanceFailure

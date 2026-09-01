@@ -40035,7 +40035,7 @@ function streamWithCompletion(agentValue, input, runOptions = {}, onCompleted) {
   const model = "definition" in agentValue ? agentValue.model : undefined;
   return exports_Stream.unwrap(exports_Effect.gen(function* () {
     const history = yield* ThreadHistory;
-    const preparation = yield* RunContextPreparation;
+    const preparation = yield* exports_Effect.serviceOption(RunContextPreparation).pipe(exports_Effect.map(exports_Option.getOrElse(() => RunContextPreparation.of({}))));
     const ids = yield* IdGenerator2;
     const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
     const runId = runOptions.runId ?? (yield* ids.nextRunId);

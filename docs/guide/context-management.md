@@ -80,8 +80,9 @@ Transforms change the model prompt, not stored input or history. Use
 
 `recallMemory` turns readable, application-selected sources into a bounded transient model view.
 The framework does not own a memory database, write recalled material, or build an embedding
-index. If an Agent does not need context loading, provide `RunContextPreparationPassthrough`.
-This satisfies the runtime's context requirement without a memory reader or store.
+index. An Agent that does not need context loading requires no context service, memory reader,
+or store. `RunContextPreparationPassthrough` remains available to explicitly disable inherited
+context preparation.
 
 Each reader returns `MemoryLookup`. `Found` carries ranked `MemoryPassage` values. `NoMatch` is a
 successful empty result. `Unavailable` and `InsufficientFreshness` remain distinct in the returned

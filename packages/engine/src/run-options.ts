@@ -345,11 +345,11 @@ export interface RunToolAuthorizationHook<Error = never, Requirements = never> {
 /**
  * Host-owned model-context preparation, independent of action-time Tool authorization.
  *
- * Ephemeral Runs require this service; durable coordinators capture it while their runtime
+ * Runs use this service when provided; durable coordinators capture it while their runtime
  * Layer is acquired. Implementations acquire dependencies in their Layer and preserve the
  * declared error tags. Layer acquisition failures belong to the providing Effect, not this union.
- * Assemblies without context loading explicitly provide
- * `RunContextPreparationPassthrough`. Installing a compactor cannot replace `RunToolAuthorization`.
+ * Without this service, Runs apply no host context loading. Installing a compactor cannot
+ * replace `RunToolAuthorization`.
  */
 export class RunContextPreparation extends Context.Service<
   RunContextPreparation,

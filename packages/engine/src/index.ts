@@ -395,7 +395,6 @@ export type AgentRuntimeRequirements<
   | Agent.OutputSchema<AgentValue>["DecodingServices"]
   | IdGenerator
   | ThreadHistory
-  | RunContextPreparation
   | HookRequirements
   | InstructionRequirements;
 
@@ -5584,10 +5583,12 @@ function streamWithCompletion<
         | ModelRequires
       >,
       ThreadHistoryError,
-      ThreadHistory | IdGenerator | RunContextPreparation
+      ThreadHistory | IdGenerator
     > {
       const history = yield* ThreadHistory;
-      const preparation = yield* RunContextPreparation;
+      const preparation = yield* Effect.serviceOption(RunContextPreparation).pipe(
+        Effect.map(Option.getOrElse(() => RunContextPreparation.of({}))),
+      );
       const ids = yield* IdGenerator;
       const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
       const runId = runOptions.runId ?? (yield* ids.nextRunId);

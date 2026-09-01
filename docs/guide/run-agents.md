@@ -15,8 +15,8 @@ Every entry point also requires `ThreadHistory`. Use
 `PersistentHistory.layer` with a store to [retain completed runs](./threads#retain-completed-runs).
 History commits before a successful result or `RunCompleted` event becomes visible.
 
-Every entry point requires `RunContextPreparation` as well. Provide your context Layer, or
-`RunContextPreparationPassthrough` when no extra context is needed. See
+Context preparation is optional. Provide `RunContextPreparation` to load extra context;
+without it, Runs use their normal prompt and compaction behavior. See
 [context management](./context-management#recall-memory) for service-based recall and tagged errors.
 
 ## Await one result
@@ -88,18 +88,17 @@ to accept work that survives eviction. For a process with SQLite, use the
 
 Platform hosts assemble storage and runtime services for you. When building your own host,
 `DurableAgentRuntime.layer` supplies default prompt preparation and tool authorization.
-Use `layerWithServices` to supply your own service layers. It requires both
-`RunContextPreparation` and `RunToolAuthorization`.
+Use `layerWithServices` to supply your own service layers. It requires
+`RunToolAuthorization` and captures `RunContextPreparation` when provided.
 
-Here are the defaults written out; replace either layer with your application's implementation:
+Here is the default authorization policy; replace it with your application's implementation:
 
 ```ts twoslash
-import { RunContextPreparationPassthrough, RunToolAuthorization } from "@effect-agent/engine";
+import { RunToolAuthorization } from "@effect-agent/engine";
 import { DurableAgentRuntime } from "@effect-agent/thread";
 import { Layer } from "effect";
 
 export const RuntimeLive = DurableAgentRuntime.layerWithServices.pipe(
-  Layer.provide(RunContextPreparationPassthrough),
   Layer.provide(RunToolAuthorization.allowAll),
 );
 ```

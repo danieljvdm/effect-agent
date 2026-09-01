@@ -210,7 +210,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       });
       const preparationRequired: RunContextPreparation extends Effect.Services<typeof program>
         ? true
-        : false = true;
+        : false = false;
       const authorizationRequired: RunToolAuthorization extends Effect.Services<typeof program>
         ? true
         : false = true;
@@ -234,7 +234,8 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           }
           expect(seen).toEqual(outcome === "denied" ? ["prepare", "authorize"] : ["prepare"]);
         }
-        expect(preparationRequired && authorizationRequired && preparationError).toBe(true);
+        expect(preparationRequired).toBe(false);
+        expect(authorizationRequired && preparationError).toBe(true);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(

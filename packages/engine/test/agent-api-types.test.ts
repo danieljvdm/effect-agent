@@ -10,7 +10,6 @@ import {
   type AgentRuntimeRequirements,
   type AgentCompletionProjectionRequirements,
   type ThreadHistory,
-  type RunContextPreparation,
 } from "../src/index.ts";
 
 class Instructions extends Context.Service<Instructions, string>()("api-types/Instructions") {}
@@ -81,7 +80,6 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
   const provided = run.pipe(Effect.provide(model));
   type DefinitionServices =
     | ThreadHistory
-    | RunContextPreparation
     | Instructions
     | Decoder
     | Encoder
@@ -233,7 +231,7 @@ it("preserves disjoint tool schemas and callbacks with different input types", (
   const binding = Agent.withModel(select(true), model);
   const execution = AgentRuntime.run(binding, { topic: "Lisbon" });
   expectTypeOf<Effect.Services<typeof execution>>().toEqualTypeOf<
-    ExpectedServices | ProviderClient | ThreadHistory | IdGenerator | RunContextPreparation
+    ExpectedServices | ProviderClient | ThreadHistory | IdGenerator
   >();
   expectTypeOf<
     Extract<Effect.Error<typeof execution>, InstructionError | ToolError | TopicFailure>
@@ -263,7 +261,6 @@ it("retains every branch's tool requirements and failures across execution views
   type RuntimeServices =
     | DefinitionServices
     | ThreadHistory
-    | RunContextPreparation
     | IdGenerator
     | LanguageModel.LanguageModel
     | Model.ProviderName
@@ -313,9 +310,9 @@ it("retains every branch's tool requirements and failures across execution views
   const boundRun = AgentRuntime.run(binding, input);
   const selectedRun = AgentRuntime.run(bindSelected, input);
   expectTypeOf<Effect.Services<typeof boundRun>>().toEqualTypeOf<
-    BoundServices | ThreadHistory | IdGenerator | RunContextPreparation
+    BoundServices | ThreadHistory | IdGenerator
   >();
   expectTypeOf<Effect.Services<typeof selectedRun>>().toEqualTypeOf<
-    BoundServices | ThreadHistory | IdGenerator | RunContextPreparation
+    BoundServices | ThreadHistory | IdGenerator
   >();
 });

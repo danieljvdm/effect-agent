@@ -27,12 +27,7 @@ import {
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
-import {
-  AgentRuntime,
-  ContextCompactor,
-  RunContextPreparation,
-  RunContextPreparationPassthrough,
-} from "../src/index.ts";
+import { AgentRuntime, ContextCompactor, RunContextPreparation } from "../src/index.ts";
 import { ThreadHistory } from "../src/thread-history.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -41,12 +36,7 @@ const identifiers = Layer.succeed(IdGenerator, {
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("transient-turn")),
 });
 
-const testLayer = Layer.mergeAll(
-  identifiers,
-  ThreadHistory.layerTransient,
-  ContextCompactor.layer,
-  RunContextPreparationPassthrough,
-);
+const testLayer = Layer.mergeAll(identifiers, ThreadHistory.layerTransient, ContextCompactor.layer);
 
 const finalParts: ReadonlyArray<Response.StreamPartEncoded> = [
   { type: "text-start", id: "answer" },
@@ -109,6 +99,14 @@ class TransientContextDependency extends Context.Service<
 >()("@effect-agent/engine/test/TransientContextDependency") {}
 
 layer(testLayer)("transient model context", (it) => {
+  it.effect("runs without installing a context preparation service", () =>
+    Effect.gen(function* () {
+      const requests: Array<Prompt.Prompt> = [];
+      const result = yield* AgentRuntime.run(makeAgent(requests), "question");
+      expect(result.output).toBe("done");
+      expect(requests).toHaveLength(1);
+    }),
+  );
   for (const entrypoint of ["run", "stream", "start"]) {
     it.effect(`loads the provided context service through ${entrypoint}`, () =>
       Effect.gen(function* () {
@@ -128,10 +126,10 @@ layer(testLayer)("transient model context", (it) => {
         });
         const contextRequired: RunContextPreparation extends Effect.Services<typeof program>
           ? true
-          : false = true;
+          : false = false;
         yield* program.pipe(Effect.provide(contextLive));
 
-        expect(contextRequired).toBe(true);
+        expect(contextRequired).toBe(false);
         expect(requests).toHaveLength(1);
         expect(requests[0]?.content).toContainEqual(Prompt.make("project memory").content[0]);
       }),

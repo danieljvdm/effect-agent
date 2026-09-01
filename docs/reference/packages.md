@@ -66,8 +66,8 @@ Exports `AgentRuntime`, `DetachedRun`, `RunOptions`, and `ThreadHistory`.
 
 Every entry point needs a history policy. Use `ThreadHistory.layerTransient` to retain
 nothing or `PersistentHistory.layer` from `@effect-agent/thread` to retain successful runs.
-Every entry point also requires `RunContextPreparation`; provide your context Layer or
-`RunContextPreparationPassthrough`. Context service failures retain their concrete tagged errors.
+Provide `RunContextPreparation` only when you need host context loading. Context service failures
+retain their concrete tagged errors.
 Use [`toolFailureObserverLayer`](../guide/run-agents#observe-recovered-tool-failures) to observe
 recovered tool failures locally. Observations are not stored or exported automatically.
 
