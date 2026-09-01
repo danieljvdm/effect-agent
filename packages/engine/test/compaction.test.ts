@@ -59,6 +59,7 @@ import {
   type RunTransientContextHook,
   type RunTurnUsage,
 } from "../src/index.ts";
+import { RunContextPreparation, RunContextPreparationPassthrough } from "../src/run-options.ts";
 import { ThreadHistory } from "../src/thread-history.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -258,7 +259,11 @@ const driveRun = (setup: RunSetup) => driveRunWith(answerOutput, setup);
 
 const compactionTestLayer = Layer.merge(identifiers, ContextCompactor.layer);
 
-const testLayer = Layer.merge(compactionTestLayer, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  compactionTestLayer,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer)("engine compaction and overflow recovery", (it) => {
   const replacementSetup: RunSetup = {
@@ -369,7 +374,14 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             Effect.sync(() => {
               usage.push(delta);
             }),
-        }).pipe(Effect.provide(compactor));
+        }).pipe(
+          Effect.provide(
+            Layer.effect(
+              RunContextPreparation,
+              Effect.map(ContextCompactor, (compactor) => ({ compactor })),
+            ).pipe(Layer.provide(compactor)),
+          ),
+        );
         expect(Exit.isSuccess(result.exit)).toBe(true);
         expect(result.requests).toHaveLength(3);
         expect(summaryModel.requests).toHaveLength(1);

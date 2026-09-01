@@ -5,6 +5,7 @@ import {
   AgentPolicyError,
   ContextBudgetError,
   IdGenerator,
+  MemoryRecallError,
   RunId,
   ThreadId,
   TurnId,
@@ -26,7 +27,12 @@ import {
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
-import { AgentRuntime, ContextCompactor } from "../src/index.ts";
+import {
+  AgentRuntime,
+  ContextCompactor,
+  RunContextPreparation,
+  RunContextPreparationPassthrough,
+} from "../src/index.ts";
 import { ThreadHistory } from "../src/thread-history.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -35,7 +41,12 @@ const identifiers = Layer.succeed(IdGenerator, {
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("transient-turn")),
 });
 
-const testLayer = Layer.mergeAll(identifiers, ThreadHistory.layerTransient, ContextCompactor.layer);
+const testLayer = Layer.mergeAll(
+  identifiers,
+  ThreadHistory.layerTransient,
+  ContextCompactor.layer,
+  RunContextPreparationPassthrough,
+);
 
 const finalParts: ReadonlyArray<Response.StreamPartEncoded> = [
   { type: "text-start", id: "answer" },
@@ -98,6 +109,102 @@ class TransientContextDependency extends Context.Service<
 >()("@effect-agent/engine/test/TransientContextDependency") {}
 
 layer(testLayer)("transient model context", (it) => {
+  for (const entrypoint of ["run", "stream", "start"]) {
+    it.effect(`loads the provided context service through ${entrypoint}`, () =>
+      Effect.gen(function* () {
+        const requests: Array<Prompt.Prompt> = [];
+        const agent = makeAgent(requests);
+        const contextLive = Layer.succeed(RunContextPreparation, {
+          transientContext: { load: () => Effect.succeed("project memory") },
+        });
+        const program = Effect.gen(function* () {
+          if (entrypoint === "run") yield* AgentRuntime.run(agent, "question");
+          else if (entrypoint === "stream") {
+            yield* AgentRuntime.stream(agent, "question").pipe(Stream.runDrain);
+          } else {
+            const handle = yield* AgentRuntime.start(agent, "question");
+            yield* handle.await;
+          }
+        });
+        const contextRequired: RunContextPreparation extends Effect.Services<typeof program>
+          ? true
+          : false = true;
+        yield* program.pipe(Effect.provide(contextLive));
+
+        expect(contextRequired).toBe(true);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.content).toContainEqual(Prompt.make("project memory").content[0]);
+      }),
+    );
+  }
+
+  for (const phase of ["acquisition", "load"]) {
+    it.effect(`preserves tagged ${phase} errors and closes the context Layer`, () =>
+      Effect.gen(function* () {
+        const requests: Array<Prompt.Prompt> = [];
+        const finalized = yield* Ref.make(0);
+        const contextLive = Layer.effect(
+          RunContextPreparation,
+          Effect.gen(function* () {
+            const dependency = yield* TransientContextDependency;
+            yield* Effect.acquireRelease(Effect.void, () =>
+              Ref.update(finalized, (count) => count + 1),
+            );
+            if (phase === "acquisition") {
+              return yield* TransientContextFailure.make({ message: dependency.value });
+            }
+            return RunContextPreparation.of({
+              transientContext: {
+                load: () =>
+                  Effect.fail(
+                    MemoryRecallError.make({
+                      reason: "unavailable",
+                      sourceId: "project-notes",
+                      message: dependency.value,
+                    }),
+                  ),
+              },
+            });
+          }),
+        );
+        const program = AgentRuntime.run(makeAgent(requests), "question").pipe(
+          Effect.provide(contextLive),
+        );
+        const dependencyRequired: TransientContextDependency extends Effect.Services<typeof program>
+          ? true
+          : false = true;
+        const acquisitionErrorPreserved: TransientContextFailure extends Effect.Error<
+          typeof program
+        >
+          ? true
+          : false = true;
+        const methodErrorPreserved: MemoryRecallError extends Effect.Error<typeof program>
+          ? true
+          : false = true;
+        const result = yield* program.pipe(
+          Effect.catchTags({
+            TransientContextFailure: (error) => Effect.succeed(error),
+            MemoryRecallError: (error) => Effect.succeed(error),
+          }),
+          Effect.provideService(TransientContextDependency, { value: "source unavailable" }),
+        );
+
+        expect(result).toEqual(
+          phase === "acquisition"
+            ? TransientContextFailure.make({ message: "source unavailable" })
+            : MemoryRecallError.make({
+                reason: "unavailable",
+                sourceId: "project-notes",
+                message: "source unavailable",
+              }),
+        );
+        expect(dependencyRequired && acquisitionErrorPreserved && methodErrorPreserved).toBe(true);
+        expect(yield* Ref.get(finalized)).toBe(1);
+        expect(requests).toHaveLength(0);
+      }),
+    );
+  }
+
   it.effect("fails malformed transient messages before provider I/O", () =>
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
@@ -108,9 +215,12 @@ layer(testLayer)("transient model context", (it) => {
             property === "content" ? 42 : Reflect.get(target, property, receiver),
         },
       );
-      const exit = yield* AgentRuntime.run(makeAgent(requests), "question", {
-        transientContext: { load: () => Effect.succeed([malformedMessage]) },
-      }).pipe(Effect.exit);
+      const exit = yield* AgentRuntime.run(makeAgent(requests), "question").pipe(
+        Effect.provideService(RunContextPreparation, {
+          transientContext: { load: () => Effect.succeed([malformedMessage]) },
+        }),
+        Effect.exit,
+      );
 
       const failure = failureFrom(exit);
       expect(Schema.is(AgentInputError)(failure)).toBe(true);
@@ -121,9 +231,12 @@ layer(testLayer)("transient model context", (it) => {
   it.effect("budgets oversized transient context before provider I/O", () =>
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
-      const exit = yield* AgentRuntime.run(makeAgent(requests, 2_000), "question", {
-        transientContext: { load: () => Effect.succeed("reference".repeat(4_000)) },
-      }).pipe(Effect.exit);
+      const exit = yield* AgentRuntime.run(makeAgent(requests, 2_000), "question").pipe(
+        Effect.provideService(RunContextPreparation, {
+          transientContext: { load: () => Effect.succeed("reference".repeat(4_000)) },
+        }),
+        Effect.exit,
+      );
 
       const failure = failureFrom(exit);
       expect(Schema.is(ContextBudgetError)(failure)).toBe(true);
@@ -188,16 +301,17 @@ layer(testLayer)("transient model context", (it) => {
         model,
       );
       const loads = yield* Ref.make(0);
-      const exit = yield* AgentRuntime.run(agent, "question", {
-        transientContext: {
-          load: () =>
-            Ref.getAndUpdate(loads, (count) => count + 1).pipe(
-              Effect.map((count) =>
-                count === 0 ? Prompt.empty : Prompt.make("new reference".repeat(4_000)),
+      const exit = yield* AgentRuntime.run(agent, "question").pipe(
+        Effect.provideService(RunContextPreparation, {
+          transientContext: {
+            load: () =>
+              Ref.getAndUpdate(loads, (count) => count + 1).pipe(
+                Effect.map((count) =>
+                  count === 0 ? Prompt.empty : Prompt.make("new reference".repeat(4_000)),
+                ),
               ),
-            ),
-        },
-      }).pipe(
+          },
+        }),
         Effect.provide(tools.toLayer({ search: () => Effect.succeed("found") })),
         Effect.exit,
       );
@@ -209,7 +323,7 @@ layer(testLayer)("transient model context", (it) => {
     }),
   );
 
-  it.effect("preserves a transient hook's typed error and service requirement", () => {
+  it.effect("preserves a per-Run override's typed error and service requirement", () => {
     const requests: Array<Prompt.Prompt> = [];
     const program = AgentRuntime.run(makeAgent(requests), "question", {
       transientContext: {
@@ -234,16 +348,24 @@ layer(testLayer)("transient model context", (it) => {
       );
       expect(dependencyRequired && failurePreserved).toBe(true);
       expect(requests).toHaveLength(0);
-    }).pipe(Effect.provideService(TransientContextDependency, { value: "typed dependency" }));
+    }).pipe(
+      Effect.provideService(TransientContextDependency, { value: "typed dependency" }),
+      Effect.provideService(RunContextPreparation, {
+        transientContext: { load: () => Effect.die("The overridden service loader must not run") },
+      }),
+    );
   });
 
   it.effect("preserves loader defects before provider I/O", () =>
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
       const defect = new Error("transient loader defect");
-      const exit = yield* AgentRuntime.run(makeAgent(requests), "question", {
-        transientContext: { load: () => Effect.die(defect) },
-      }).pipe(Effect.exit);
+      const exit = yield* AgentRuntime.run(makeAgent(requests), "question").pipe(
+        Effect.provideService(RunContextPreparation, {
+          transientContext: { load: () => Effect.die(defect) },
+        }),
+        Effect.exit,
+      );
 
       expect(Exit.isFailure(exit)).toBe(true);
       if (Exit.isSuccess(exit)) throw new Error("Expected defect");
@@ -259,14 +381,16 @@ layer(testLayer)("transient model context", (it) => {
       const requests: Array<Prompt.Prompt> = [];
       const entered = yield* Deferred.make<void>();
       const released = yield* Deferred.make<void>();
-      const run = AgentRuntime.run(makeAgent(requests), "question", {
-        transientContext: {
-          load: () =>
-            Effect.acquireRelease(Deferred.succeed(entered, undefined), () =>
-              Deferred.succeed(released, undefined),
-            ).pipe(Effect.andThen(Effect.never)),
-        },
-      });
+      const run = AgentRuntime.run(makeAgent(requests), "question").pipe(
+        Effect.provideService(RunContextPreparation, {
+          transientContext: {
+            load: () =>
+              Effect.acquireRelease(Deferred.succeed(entered, undefined), () =>
+                Deferred.succeed(released, undefined),
+              ).pipe(Effect.andThen(Effect.never), Effect.scoped),
+          },
+        }),
+      );
       const fiber = yield* Effect.forkChild(Effect.scoped(run));
       yield* Deferred.await(entered);
       yield* Fiber.interrupt(fiber);
@@ -281,14 +405,17 @@ layer(testLayer)("transient model context", (it) => {
       const requests: Array<Prompt.Prompt> = [];
       const entered = yield* Deferred.make<void>();
       const finalized = yield* Ref.make(0);
-      const fiber = yield* AgentRuntime.run(makeAgent(requests), "question", {
-        transientContext: {
-          load: () =>
-            Effect.acquireRelease(Deferred.succeed(entered, undefined), () =>
-              Ref.update(finalized, (count) => count + 1),
-            ).pipe(Effect.andThen(Effect.never)),
-        },
-      }).pipe(Effect.forkChild);
+      const fiber = yield* AgentRuntime.run(makeAgent(requests), "question").pipe(
+        Effect.provideService(RunContextPreparation, {
+          transientContext: {
+            load: () =>
+              Effect.acquireRelease(Deferred.succeed(entered, undefined), () =>
+                Ref.update(finalized, (count) => count + 1),
+              ).pipe(Effect.andThen(Effect.never), Effect.scoped),
+          },
+        }),
+        Effect.forkChild,
+      );
       yield* Deferred.await(entered);
       yield* TestClock.adjust("30 seconds");
       const exit = yield* Fiber.await(fiber);

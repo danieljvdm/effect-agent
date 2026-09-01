@@ -1,5 +1,9 @@
 import { Agent, AgentPolicy, ThreadId, IdGenerator, type RunEvent } from "@effect-agent/core";
-import { AgentRuntime, ThreadHistory } from "@effect-agent/engine";
+import {
+  AgentRuntime,
+  ThreadHistory,
+  RunContextPreparationPassthrough,
+} from "@effect-agent/engine";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory";
 import { layer as sqliteStore, SqliteStorageFailpointError } from "@effect-agent/storage-sqlite";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
@@ -96,6 +100,7 @@ const lookup: ScriptedTurnInput = {
   termination: { _tag: "Complete" },
 };
 const services = Layer.mergeAll(
+  RunContextPreparationPassthrough,
   IdGenerator.layer,
   NodeCrypto.layer,
   toolkit.toLayer({ lookup: () => Effect.succeed("Kyoto") }),

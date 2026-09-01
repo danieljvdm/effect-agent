@@ -1,5 +1,9 @@
 import { Agent, type RunEvent } from "@effect-agent/core";
-import { ThreadHistory, AgentRuntime } from "@effect-agent/engine";
+import {
+  ThreadHistory,
+  AgentRuntime,
+  RunContextPreparationPassthrough,
+} from "@effect-agent/engine";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
 import {
   ActivityCatalog,
@@ -31,6 +35,7 @@ const makeScriptedAgent = (turns: ReadonlyArray<ScriptedTurnInput>) =>
   );
 
 const TravelRuntimeLayer = Layer.mergeAll(
+  RunContextPreparationPassthrough,
   ThreadHistory.layerTransient,
   TravelPlannerToolkitLayer,
   FlightCatalogLayer,
@@ -205,6 +210,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
       }),
     );
     const layer = Layer.mergeAll(
+      RunContextPreparationPassthrough,
       ThreadHistory.layerTransient,
       TravelPlannerToolkitLayer,
       FlightCatalogLayer,
@@ -237,6 +243,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
         }),
       );
       const layer = Layer.mergeAll(
+        RunContextPreparationPassthrough,
         ThreadHistory.layerTransient,
         TravelPlannerToolkitLayer,
         failingFlightLayer,
@@ -290,6 +297,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
         },
       ];
       const layer = Layer.mergeAll(
+        RunContextPreparationPassthrough,
         ThreadHistory.layerTransient,
         controlled.layer,
         FlightCatalogLayer,

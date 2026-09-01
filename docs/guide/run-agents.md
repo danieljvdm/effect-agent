@@ -15,6 +15,10 @@ Every entry point also requires `ThreadHistory`. Use
 `PersistentHistory.layer` with a store to [retain completed runs](./threads#retain-completed-runs).
 History commits before a successful result or `RunCompleted` event becomes visible.
 
+Every entry point requires `RunContextPreparation` as well. Provide your context Layer, or
+`RunContextPreparationPassthrough` when no extra context is needed. See
+[context management](./context-management#recall-memory) for service-based recall and tagged errors.
+
 ## Await one result
 
 ```ts
@@ -107,7 +111,10 @@ Provide those before acquiring the runtime.
 The runtime captures its services at acquisition. Supplying a different layer around a later
 worker call does not replace them. Acquire service dependencies in their layers and keep them
 alive for the runtime's Scope. Durable service hooks must have no unresolved dependencies.
-Preparation failures use `RunContextPreparationError`; authorization returns an allowed or denied
+Preparation failures retain their `AgentInputError`, `MemoryRecallError`, or `CompactionError`
+tags; `RunContextPreparationError` is their type union, not a wrapper. Durable execution records
+failed Runs in Settlements with bounded diagnostics; it does not reconstitute the original error
+object from storage. Authorization returns an allowed or denied
 decision. Configure [prompt preparation](./context-management#prompt-preparation-order)
 and [tool authorization](./tools#authorize-tool-calls) in their respective services.
 

@@ -49,6 +49,7 @@ import {
   type RunSubagentJoinRequest,
   type RunTurnResume,
 } from "../src/index.ts";
+import { RunContextPreparationPassthrough } from "../src/run-options.ts";
 import { ThreadHistory } from "../src/thread-history.ts";
 
 class DelegationFailed extends Schema.TaggedError<DelegationFailed>()("DelegationFailed", {
@@ -267,7 +268,11 @@ const scriptedHook = (
     joins === undefined ? Effect.void : Ref.update(joins, (all) => [...all, request]),
 });
 
-const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  identifiers,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
   it.effect("a waiting delegation call does not trigger the batch failure policy", () =>

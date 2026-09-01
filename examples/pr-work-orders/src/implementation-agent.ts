@@ -4,6 +4,7 @@ import {
   AgentPolicy,
   AgentRuntime,
   ThreadHistory,
+  RunContextPreparationPassthrough,
   IdGenerator,
   ToolExecutionClass,
 } from "effect-agent";
@@ -225,7 +226,11 @@ export const makeImplementationAgent = <Provider, ModelProvides, ModelRequires>(
         ImplementationWorkspaceService,
         ImplementationWorkspaceService.of(workspace),
       ),
-      Effect.provide([IdGenerator.layer, ThreadHistory.layerTransient]),
+      Effect.provide([
+        IdGenerator.layer,
+        ThreadHistory.layerTransient,
+        RunContextPreparationPassthrough,
+      ]),
       Effect.scoped,
     );
   return { definition: PullRequestImplementer, binding, run } as const;

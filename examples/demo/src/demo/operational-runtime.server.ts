@@ -36,6 +36,7 @@ import { Agent, ThreadId, IdGenerator, RunId, TurnId, type RunEvent } from "@eff
 import {
   AgentRuntime,
   ThreadHistory,
+  RunContextPreparationPassthrough,
   type RunInputHook,
   type RunOptions,
 } from "@effect-agent/engine";
@@ -946,6 +947,7 @@ const InteractiveRuntimeLive = Layer.effect(
 
           const controlsLayer = Layer.succeed(DemoRunControls)(controls);
           const commonRuntimeLayers = Layer.mergeAll(
+            RunContextPreparationPassthrough,
             ThreadHistory.layerTransient,
             DemoTravelToolkitLayer,
             DemoHoldGatewayLayer,
@@ -960,6 +962,7 @@ const InteractiveRuntimeLive = Layer.effect(
             TravelGuidanceLayer,
           ).pipe(Layer.provide(controlsLayer));
           const liveRuntimeLayer = Layer.mergeAll(
+            RunContextPreparationPassthrough,
             ThreadHistory.layerTransient,
             RealTravelToolkitLayer,
             DemoHoldGatewayLayer,

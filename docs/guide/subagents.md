@@ -87,7 +87,9 @@ The model Layer on `AgentRuntime.run` supplies the parent. The model in `ChildBi
 child. They use the same model here; change either binding independently.
 
 `SubagentReservationsMemoryLive` tracks the parent's child reservations. `ThreadHistory.layerTransient`
-keeps this example ephemeral. The provider client and HTTP Layer serve both model bindings.
+keeps this example ephemeral. `RunContextPreparationPassthrough` disables additional context
+loading. Children inherit the parent's history and context services. The provider client and
+HTTP Layer serve both model bindings.
 
 ## Bound child work
 

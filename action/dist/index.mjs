@@ -37292,13 +37292,6 @@ var errorTag = (error2) => ownStringDiagnostic(error2, "_tag", DIAGNOSTIC_TAG_LI
 var CurrentToolFailureObserver = exports_Context.Reference("@effect-agent/engine/CurrentToolFailureObserver", { defaultValue: () => {
   return;
 } });
-class RunContextPreparationError extends exports_Schema.TaggedError()("RunContextPreparationError", {
-  preparerId: exports_Schema.NonEmptyString,
-  message: exports_Schema.String.check(exports_Schema.isMaxLength(4096)),
-  cause: exports_Schema.optionalKey(exports_Schema.Defect())
-}) {
-}
-
 class RunContextPreparation extends exports_Context.Service()("@effect-agent/engine/RunContextPreparation") {
 }
 var RunContextPreparationPassthrough = exports_Layer.succeed(RunContextPreparation)({});
@@ -39901,6 +39894,7 @@ function streamWithCompletion(agentValue, input, runOptions = {}, onCompleted) {
   const model = "definition" in agentValue ? agentValue.model : undefined;
   return exports_Stream.unwrap(exports_Effect.gen(function* () {
     const history = yield* ThreadHistory;
+    const preparation = yield* RunContextPreparation;
     const ids = yield* IdGenerator2;
     const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
     const runId = runOptions.runId ?? (yield* ids.nextRunId);
@@ -39914,6 +39908,8 @@ function streamWithCompletion(agentValue, input, runOptions = {}, onCompleted) {
     }
     const options3 = {
       ...runOptions,
+      context: runOptions.context ?? preparation.hook,
+      transientContext: runOptions.transientContext ?? preparation.transientContext,
       threadId,
       runId,
       ...retained === undefined ? {} : { history: retained.prompt, onHistory: retained.stageHistory }
@@ -39934,10 +39930,10 @@ function streamWithCompletion(agentValue, input, runOptions = {}, onCompleted) {
       const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
       const durationDeadlineMillis = options3.durationDeadline === undefined ? attemptDeadlineMillis : Math.min(attemptDeadlineMillis, exports_DateTime.toEpochMillis(options3.durationDeadline));
       const startedAtMillis = options3.runStartedAt === undefined ? attemptStartedAtMillis : exports_DateTime.toEpochMillis(options3.runStartedAt);
-      const compactor = yield* exports_Effect.serviceOption(ContextCompactor).pipe(exports_Effect.flatMap(exports_Option.match({
+      const compactor = preparation.compactor ?? (yield* exports_Effect.serviceOption(ContextCompactor).pipe(exports_Effect.flatMap(exports_Option.match({
         onSome: exports_Effect.succeed,
         onNone: () => exports_Effect.provide(ContextCompactor, ContextCompactor.layer)
-      })));
+      }))));
       const context3 = {
         agentId: agent2.definition.id,
         threadId,
@@ -40045,7 +40041,7 @@ function streamWithCompletion(agentValue, input, runOptions = {}, onCompleted) {
         agentId: context3.agentId,
         threadId: context3.threadId,
         runId: context3.runId
-      }, options3.parentLink?.depth ?? 0, history)).pipe(exports_Context.add(RunEventSink, closedRunEventSink), exports_Context.add(DurableStep, closedDurableStep), exports_Context.add(SubagentDurability, closedSubagentDurability), exports_Context.add(ToolBroker, closedToolBroker));
+      }, options3.parentLink?.depth ?? 0, history, preparation)).pipe(exports_Context.add(RunEventSink, closedRunEventSink), exports_Context.add(DurableStep, closedDurableStep), exports_Context.add(SubagentDurability, closedSubagentDurability), exports_Context.add(ToolBroker, closedToolBroker));
       return started.pipe(exports_Stream.concat(deadline), exports_Stream.catch((error2) => {
         const terminal = exports_Stream.fromEffect(exports_Effect.gen(function* () {
           if (error2 instanceof AgentApprovalPending || error2 instanceof AgentChildPending) {
@@ -40657,7 +40653,7 @@ var waitingFromCause = (cause) => {
   const squashed = exports_Cause.squash(cause);
   return squashed instanceof ToolCallWaiting ? squashed : undefined;
 };
-var spawnWithParent = (parent, depth, history) => exports_Effect.fn("AgentSpawner.spawn")(function* (binding, input, delegation, options3) {
+var spawnWithParent = (parent, depth, history, preparation) => exports_Effect.fn("AgentSpawner.spawn")(function* (binding, input, delegation, options3) {
   const ids = yield* IdGenerator2;
   const threadId = yield* ids.nextThreadId;
   const runId = yield* ids.nextRunId;
@@ -40675,7 +40671,7 @@ var spawnWithParent = (parent, depth, history) => exports_Effect.fn("AgentSpawne
     threadId,
     runId,
     parentLink
-  }).pipe(exports_Effect.provideService(ThreadHistory, history));
+  }).pipe(exports_Effect.provide(exports_Context.make(ThreadHistory, history).pipe(exports_Context.add(RunContextPreparation, preparation))));
   return {
     ...child,
     threadId,
@@ -40686,10 +40682,10 @@ var spawnWithParent = (parent, depth, history) => exports_Effect.fn("AgentSpawne
 
 class AgentSpawner extends exports_Context.Service()("@effect-agent/engine/AgentSpawner") {
 }
-var makeAgentSpawner = (parent, depth, history) => ({
+var makeAgentSpawner = (parent, depth, history, preparation) => ({
   depth,
   parent,
-  spawn: spawnWithParent(parent, depth, history)
+  spawn: spawnWithParent(parent, depth, history, preparation)
 });
 var AgentRuntime = {
   decodeFinalOutput,
@@ -44737,6 +44733,7 @@ var makeReviewer = (options3) => {
   }, exports_Effect.provide([
     IdGenerator2.layer,
     ThreadHistory.layerTransient,
+    RunContextPreparationPassthrough,
     reviewToolkitLayer,
     reviewCompletion.toLayer({ submit_review: () => exports_Effect.succeed(null) })
   ]), exports_Effect.scoped);

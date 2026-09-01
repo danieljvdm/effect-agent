@@ -619,7 +619,7 @@ export type DurableWorkerRequirements<
 > =
   | Exclude<
       AgentRuntimeRequirements<AgentValue, never, InstructionRequirements>,
-      IdGenerator | ThreadHistory
+      IdGenerator | ThreadHistory | RunContextPreparation
     >
   | AgentCompletionProjectionRequirements<AgentValue>;
 
@@ -5328,6 +5328,7 @@ const make = Effect.gen(function* () {
           Stream.provide(ThreadHistory.layerTransient),
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
           Stream.provideService(ContextCompactor, compactor),
+          Stream.provideService(RunContextPreparation, { ...runContextPreparation, compactor }),
         ),
         (event) =>
           halt(

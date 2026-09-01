@@ -4,6 +4,7 @@ import {
   AgentPolicy,
   AgentRuntime,
   ThreadHistory,
+  RunContextPreparationPassthrough,
   IdGenerator,
   makeUsageBudget,
   type RunCostEstimator,
@@ -629,6 +630,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
     Effect.provide([
       IdGenerator.layer,
       ThreadHistory.layerTransient,
+      RunContextPreparationPassthrough,
       reviewToolkitLayer,
       reviewCompletion.toLayer({ submit_review: () => Effect.succeed(null) }),
     ]),

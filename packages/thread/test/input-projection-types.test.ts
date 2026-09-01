@@ -1,8 +1,21 @@
 import { Agent, AgentPolicy, type ThreadId, type IdGenerator } from "@effect-agent/core";
-import { type ThreadHistory, AgentRuntime, type AgentRuntimeFailure } from "@effect-agent/engine";
+import {
+  type ThreadHistory,
+  type RunContextPreparation,
+  AgentRuntime,
+  type AgentRuntimeFailure,
+} from "@effect-agent/engine";
 import { describe, expect, it } from "@effect/vitest";
-import type { Crypto } from "effect";
-import { type Stream, Context, Effect, Schema, SchemaGetter, type Scope, type Layer } from "effect";
+import {
+  type Crypto,
+  type Stream,
+  Context,
+  Effect,
+  Schema,
+  SchemaGetter,
+  type Scope,
+  type Layer,
+} from "effect";
 import { Toolkit, type LanguageModel, type Model, Tool } from "effect/unstable/ai";
 
 import { compileRegistrations } from "../src/agent-registration.ts";
@@ -155,16 +168,28 @@ const proveWorkerRequirements = (
     Equal<Extract<Agent.Failure<typeof agent>, InputProjectionFailure>, InputProjectionFailure>
   >;
   type RunRequirementsProof = Assert<
-    Equal<Effect.Services<typeof execution>, Expected | ThreadHistory | IdGenerator>
+    Equal<
+      Effect.Services<typeof execution>,
+      Expected | ThreadHistory | IdGenerator | RunContextPreparation
+    >
   >;
   type StreamRequirementsProof = Assert<
-    Equal<Stream.Services<typeof events>, Expected | ThreadHistory | IdGenerator>
+    Equal<
+      Stream.Services<typeof events>,
+      Expected | ThreadHistory | IdGenerator | RunContextPreparation
+    >
   >;
   type StartRequirementsProof = Assert<
-    Equal<Effect.Services<typeof detached>, Expected | ThreadHistory | IdGenerator | Scope.Scope>
+    Equal<
+      Effect.Services<typeof detached>,
+      Expected | ThreadHistory | IdGenerator | RunContextPreparation | Scope.Scope
+    >
   >;
   type HistoryRequirementsProof = Assert<
-    Equal<Effect.Services<typeof retained>, Expected | ThreadStore | IdGenerator>
+    Equal<
+      Effect.Services<typeof retained>,
+      Expected | ThreadStore | IdGenerator | RunContextPreparation
+    >
   >;
   type HistoryFailureProof = Assert<
     Equal<Effect.Error<typeof retained>, AgentRuntimeFailure<typeof agent>>

@@ -41,10 +41,10 @@ At run start, the runtime evaluates instructions and the definition's optional
 [`inputPrompt`](/guide/agents#choose-model-visible-input). Without `inputPrompt`, the model receives
 the full encoded input as a JSON user message.
 
-Before each turn, `RunOptions.context.prepare` transforms the source prompt. The engine separately
-loads optional transient reference context from `RunOptions.transientContext`, then compacts only
-the prepared prompt. It appends the references and derived run status to the compacted view and
-adds the output contract. Compaction summaries never receive transient references. Durable
+Before each turn, `RunContextPreparation.hook.prepare` transforms the source prompt. The engine
+compacts the prepared history, then loads optional references through
+`RunContextPreparation.transientContext.load`. It appends the references and derived run status
+to the compacted view and adds the output contract. Compaction summaries never receive transient references. Durable
 recovery rebuilds the committed model view before applying prompt preparation; a transient loader
 receives the current Attempt's official source, Thread ID, Run ID, Turn ID, and Turn number.
 
@@ -68,7 +68,10 @@ export const metricContext: RunContextHook = {
 export const MetricContextLive = Layer.succeed(RunContextPreparation, { hook: metricContext });
 ```
 
-Pass `metricContext` as the `context` option to `AgentRuntime.run`, `stream`, or `start`.
+Provide `MetricContextLive` to `AgentRuntime.run` or `start` with `Effect.provide`, or to
+`AgentRuntime.stream` with `Stream.provide`.
+With `start`, provide the Layer around the whole scoped workflow, including awaiting the handle,
+so its resources remain available until the detached Run finishes.
 For durable execution, install `MetricContextLive` when [configuring the runtime](./run-agents#assemble-a-custom-durable-runtime).
 Transforms change the model prompt, not stored input or history. Use
 [`inputPrompt`](./agents#choose-model-visible-input) to choose which input fields the model sees.
@@ -77,8 +80,8 @@ Transforms change the model prompt, not stored input or history. Use
 
 `recallMemory` turns readable, application-selected sources into a bounded transient model view.
 The framework does not own a memory database, write recalled material, or build an embedding
-index. If an Agent does not need recall, omit `transientContext`; the Run requires no memory
-service and behaves as before.
+index. If an Agent does not need context loading, provide `RunContextPreparationPassthrough`.
+This satisfies the runtime's context requirement without a memory reader or store.
 
 Each reader returns `MemoryLookup`. `Found` carries ranked `MemoryPassage` values. `NoMatch` is a
 successful empty result. `Unavailable` and `InsufficientFreshness` remain distinct in the returned
@@ -108,8 +111,8 @@ import {
   MemoryRecallLimits,
   MemorySourceReference,
 } from "@effect-agent/core";
-import type { RunTransientContextHook } from "@effect-agent/engine";
-import { Effect } from "effect";
+import { RunContextPreparation, type RunTransientContextHook } from "@effect-agent/engine";
+import { Effect, Layer } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
 const limits = MemoryRecallLimits.make({
@@ -161,9 +164,35 @@ export const projectNotes: RunTransientContextHook<MemoryRecallError> = {
       ),
     ),
 };
+
+export const ProjectContextLive = Layer.succeed(RunContextPreparation, {
+  transientContext: projectNotes,
+});
 ```
 
-Pass `projectNotes` as `transientContext` to `AgentRuntime.run`, `stream`, or `start`.
+Provide `ProjectContextLive` to the run. With an existing agent and input:
+
+```ts
+const runnable = AgentRuntime.run(agent, input).pipe(
+  Effect.provide(ProjectContextLive),
+  Effect.catchTags({
+    MemoryRecallError: handleRecallFailure,
+    CompactionError: handleCompactionFailure,
+  }),
+);
+```
+
+The service declares `AgentInputError | MemoryRecallError | CompactionError`; method failures
+retain their original tags and fields. `RunContextPreparationError` names that type union, not a
+wrapper class. `Effect.provide` adds any errors from acquiring the Layer separately. Adapters
+handle backend-specific failures or translate them into this contract. Providing a Layer does not
+add undeclared service-method errors to a program's error type.
+
+For an application-specific error or requirement channel, the existing generic `RunOptions.context`
+and `RunOptions.transientContext` hooks override the corresponding service fields for that Run.
+Other service fields remain active. Attached children inherit the host context service, not the
+parent's per-Run overrides.
+
 `recallMemory` renders positional `memory:N` reference IDs and provenance for that one result.
 `RecalledMemory.outcomes` separately reports what happened at each source. The rendered envelope
 and every citation remain untrusted model input. Validate model claims against
@@ -185,22 +214,14 @@ one read method; it does not create a durable copy, write to the corpus, or crea
 ```ts twoslash
 import { recallMemory } from "@effect-agent/capabilities";
 import { type MemoryLookup, MemoryRecallError, MemoryRecallLimits } from "@effect-agent/core";
-import {
-  RunContextPreparation,
-  RunContextPreparationError,
-  type RunTransientContextHook,
-} from "@effect-agent/engine";
-import { Context, Effect, Layer, Schema } from "effect";
+import { RunContextPreparation, type RunTransientContextHook } from "@effect-agent/engine";
+import { Context, Effect, Layer } from "effect";
 import { Prompt } from "effect/unstable/ai";
-
-class CorpusReadError extends Schema.TaggedError<CorpusReadError>()("CorpusReadError", {
-  message: Schema.String,
-}) {}
 
 class ExternalCorpus extends Context.Service<
   ExternalCorpus,
   {
-    readonly search: (query: string) => Effect.Effect<MemoryLookup, CorpusReadError>;
+    readonly search: (query: string) => Effect.Effect<MemoryLookup, MemoryRecallError>;
   }
 >()("app/ExternalCorpus") {}
 
@@ -216,7 +237,7 @@ export const ExternalCorpusMemoryLive = Layer.effect(
   RunContextPreparation,
   Effect.gen(function* () {
     const corpus = yield* ExternalCorpus;
-    const transientContext: RunTransientContextHook<RunContextPreparationError> = {
+    const transientContext: RunTransientContextHook<MemoryRecallError> = {
       load: () =>
         recallMemory(
           [
@@ -233,13 +254,6 @@ export const ExternalCorpusMemoryLive = Layer.effect(
               ? Prompt.empty
               : Prompt.make([{ role: "user", content: recalled.text }]),
           ),
-          Effect.mapError((error: MemoryRecallError | CorpusReadError) =>
-            RunContextPreparationError.make({
-              preparerId: "team-corpus",
-              message: error.message,
-              cause: error,
-            }),
-          ),
         ),
     };
     return RunContextPreparation.of({ transientContext });
@@ -248,8 +262,9 @@ export const ExternalCorpusMemoryLive = Layer.effect(
 ```
 
 Provide the application's `ExternalCorpus` Layer to `ExternalCorpusMemoryLive`, then provide that
-closed Layer to `DurableAgentRuntime.layerWithServices` with `RunToolAuthorization`. The durable
-runtime captures `RunContextPreparation` in its Scope. Put `hook`, `transientContext`, and
+closed Layer to an ephemeral Run or to `DurableAgentRuntime.layerWithServices` with
+`RunToolAuthorization`. The durable runtime captures `RunContextPreparation` in its Scope.
+Put `hook`, `transientContext`, and
 `compactor` in the same service value when using all three.
 
 The engine reloads transient context at the start of every normal or grace Turn and after durable

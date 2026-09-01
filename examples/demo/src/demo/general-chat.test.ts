@@ -7,12 +7,14 @@ import type {
   AgentToolAuthorizationDenied,
   ContextBudgetError,
   ContextOverflowError,
+  MemoryRecallError,
   IdGenerator,
   ModelProtocolError,
 } from "@effect-agent/core";
 import {
   AgentRuntime,
   type ThreadHistory,
+  type RunContextPreparation,
   type ThreadHistoryError,
   type CompactionError,
   type AgentChildPending,
@@ -48,6 +50,7 @@ type ExpectedRequirements =
   | FixtureKnowledge
   | Tool.HandlersFor<Toolkit.Tools<typeof FixtureChatToolkit>>
   | IdGenerator
+  | RunContextPreparation
   | ThreadHistory;
 type ExpectedFailure =
   | CalculationFailure
@@ -58,6 +61,7 @@ type ExpectedFailure =
   | ContextBudgetError
   | ContextOverflowError
   | CompactionError
+  | MemoryRecallError
   | ThreadHistoryError
   | ModelProtocolError
   | AgentApprovalDenied

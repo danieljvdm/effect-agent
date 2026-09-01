@@ -16,6 +16,7 @@ import {
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
   type ThreadHistory,
+  type RunContextPreparation,
   AgentSpawner,
   type AgentSpawnerParent,
   type RunBudgetHook,
@@ -821,8 +822,8 @@ export type SubagentChildRunFailure<
  * Binding's full runtime requirements (Model Layer requirements, child Tool
  * handlers and their services, Schema services), both projection
  * requirements, and the parent-owned reservation service. Nothing here leaks
- * into the per-call Tool handler requirements. ThreadHistory belongs to the parent Run's
- * AgentSpawner and is inherited at invocation rather than captured when this Layer is built.
+ * into the per-call Tool handler requirements. ThreadHistory and RunContextPreparation belong
+ * to the parent Run's AgentSpawner and are inherited at invocation rather than captured here.
  */
 export type SubagentLayerRequirements<
   TargetInput extends Schema.Top,
@@ -858,7 +859,7 @@ export type SubagentLayerRequirements<
         HookRequirements,
         InstructionRequirements
       >,
-      ThreadHistory
+      ThreadHistory | RunContextPreparation
     >
   | TargetInput["EncodingServices"]
   | PrepareRequirements

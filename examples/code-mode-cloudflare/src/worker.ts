@@ -1,5 +1,9 @@
 import { IdGenerator } from "@effect-agent/core";
-import { AgentRuntime, ThreadHistory } from "@effect-agent/engine";
+import {
+  AgentRuntime,
+  ThreadHistory,
+  RunContextPreparationPassthrough,
+} from "@effect-agent/engine";
 import { CloudflareCodeMode, dynamicWorkerImplementation } from "@effect-agent/platform-cloudflare";
 import { Effect, Layer, Stream } from "effect";
 
@@ -114,6 +118,7 @@ const runBound = (
     }),
     IdGenerator.layer,
     ThreadHistory.layerTransient,
+    RunContextPreparationPassthrough,
   );
   return Effect.gen(function* () {
     // Stream the Run and correlate each `run_javascript` call's declared

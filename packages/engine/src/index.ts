@@ -253,6 +253,8 @@ import {
   type RunResumeUsage,
   type RunDurabilityHook,
   RunResumeUsageSchema,
+  RunContextPreparation,
+  type RunContextPreparationError,
   type RunOptions,
   type RunSchedulingHook,
   type RunSubagentChildIdentity,
@@ -340,6 +342,7 @@ export type AgentRuntimeFailure<
   | ContextBudgetError
   | ContextOverflowError
   | CompactionError
+  | RunContextPreparationError
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentToolAuthorizationDenied
@@ -392,6 +395,7 @@ export type AgentRuntimeRequirements<
   | Agent.OutputSchema<AgentValue>["DecodingServices"]
   | IdGenerator
   | ThreadHistory
+  | RunContextPreparation
   | HookRequirements
   | InstructionRequirements;
 
@@ -5580,9 +5584,10 @@ function streamWithCompletion<
         | ModelRequires
       >,
       ThreadHistoryError,
-      ThreadHistory | IdGenerator
+      ThreadHistory | IdGenerator | RunContextPreparation
     > {
       const history = yield* ThreadHistory;
+      const preparation = yield* RunContextPreparation;
       const ids = yield* IdGenerator;
       const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
       const runId = runOptions.runId ?? (yield* ids.nextRunId);
@@ -5604,8 +5609,13 @@ function streamWithCompletion<
             "Provided history cannot share ownership with explicit history, input queues, or durable recovery hooks",
         });
       }
-      const options: RunOptions<HookError | ThreadHistoryError, HookRequirements> = {
+      const options: RunOptions<
+        HookError | ThreadHistoryError | RunContextPreparationError,
+        HookRequirements
+      > = {
         ...runOptions,
+        context: runOptions.context ?? preparation.hook,
+        transientContext: runOptions.transientContext ?? preparation.transientContext,
         threadId,
         runId,
         ...(retained === undefined
@@ -5654,14 +5664,16 @@ function streamWithCompletion<
             options.runStartedAt === undefined
               ? attemptStartedAtMillis
               : DateTime.toEpochMillis(options.runStartedAt);
-          const compactor = yield* Effect.serviceOption(ContextCompactor).pipe(
-            Effect.flatMap(
-              Option.match({
-                onSome: Effect.succeed,
-                onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
-              }),
-            ),
-          );
+          const compactor =
+            preparation.compactor ??
+            (yield* Effect.serviceOption(ContextCompactor).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onSome: Effect.succeed,
+                  onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
+                }),
+              ),
+            ));
           const context: RunContext = {
             agentId: agent.definition.id,
             threadId,
@@ -5852,6 +5864,7 @@ function streamWithCompletion<
               },
               options.parentLink?.depth ?? 0,
               history,
+              preparation,
             ),
           ).pipe(
             Context.add(RunEventSink, closedRunEventSink),
@@ -7242,13 +7255,14 @@ export interface SpawnedChildRun<Output, Error> extends DetachedRun<Output, Erro
  * the caller-provided Scope, so parent interruption always reaches the child
  * and its finalizers. Preflight policy (including S1's normative
  * nested-delegation rejection) belongs to the delegation capability and runs
- * before `spawn` is called. Children inherit the parent Run's provided history service;
- * delegation handlers do not select a separate history policy.
+ * before `spawn` is called. Children inherit the parent Run's provided history and context
+ * services; delegation handlers do not select separate host policies.
  */
 const spawnWithParent = (
   parent: AgentSpawnerParent,
   depth: number,
   history: ThreadHistory["Service"],
+  preparation: RunContextPreparation["Service"],
 ) =>
   Effect.fn("AgentSpawner.spawn")(function* <
     InputSchema extends Schema.Top,
@@ -7293,7 +7307,7 @@ const spawnWithParent = (
     | Scope.Scope
     | Exclude<
         AgentRuntimeRequirements<typeof binding, HookRequirements, InstructionRequirements>,
-        ThreadHistory
+        ThreadHistory | RunContextPreparation
       >
   > {
     const ids = yield* IdGenerator;
@@ -7314,7 +7328,11 @@ const spawnWithParent = (
       threadId,
       runId,
       parentLink,
-    }).pipe(Effect.provideService(ThreadHistory, history));
+    }).pipe(
+      Effect.provide(
+        Context.make(ThreadHistory, history).pipe(Context.add(RunContextPreparation, preparation)),
+      ),
+    );
     return {
       ...child,
       threadId,
@@ -7407,7 +7425,7 @@ export interface AgentSpawnerService {
           HookRequirements,
           InstructionRequirements
         >,
-        ThreadHistory
+        ThreadHistory | RunContextPreparation
       >
   >;
 }
@@ -7429,10 +7447,11 @@ const makeAgentSpawner = (
   parent: AgentSpawnerParent,
   depth: number,
   history: ThreadHistory["Service"],
+  preparation: RunContextPreparation["Service"],
 ): AgentSpawnerService => ({
   depth,
   parent,
-  spawn: spawnWithParent(parent, depth, history),
+  spawn: spawnWithParent(parent, depth, history, preparation),
 });
 
 /** Bound applied to the rendered defect message of `withTerminalDefectEvent` (SEC-013). */

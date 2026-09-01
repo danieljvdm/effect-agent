@@ -26,7 +26,14 @@ Save as `agent.ts`:
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { BunRuntime } from "@effect/platform-bun";
 import { Config, Console, Effect, Schema } from "effect";
-import { Agent, AgentPolicy, AgentRuntime, ThreadHistory, IdGenerator } from "effect-agent";
+import {
+  Agent,
+  AgentPolicy,
+  AgentRuntime,
+  ThreadHistory,
+  IdGenerator,
+  RunContextPreparationPassthrough,
+} from "effect-agent";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -53,6 +60,7 @@ const program = AgentRuntime.run(triage, "All users get a 500 error when signing
   Effect.provide(FetchHttpClient.layer),
   Effect.provide(IdGenerator.layer),
   Effect.provide(ThreadHistory.layerTransient),
+  Effect.provide(RunContextPreparationPassthrough),
 );
 
 BunRuntime.runMain(program);

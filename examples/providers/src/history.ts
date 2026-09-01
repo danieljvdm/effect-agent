@@ -1,5 +1,9 @@
 import { Agent, AgentPolicy, ThreadId } from "@effect-agent/core";
-import { AgentRuntime, ThreadHistory } from "@effect-agent/engine";
+import {
+  AgentRuntime,
+  ThreadHistory,
+  RunContextPreparationPassthrough,
+} from "@effect-agent/engine";
 import { layer as sqliteStore } from "@effect-agent/storage-sqlite";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
 import { PersistentHistory } from "@effect-agent/thread/history";
@@ -50,12 +54,12 @@ const binding = (answer: string) => {
 export const writeHistory = Effect.fn("example.writeHistory")(function* (filename: string) {
   const first = yield* AgentRuntime.run(binding("I'll remember Kyoto."), "I'm visiting Kyoto.", {
     threadId,
-  }).pipe(Effect.provide(sqliteHistory(filename)));
+  }).pipe(Effect.provide([sqliteHistory(filename), RunContextPreparationPassthrough]));
   const second = yield* AgentRuntime.run(
     binding("You're visiting Kyoto."),
     "Which city am I visiting?",
     { threadId },
-  ).pipe(Effect.provide(sqliteHistory(filename)));
+  ).pipe(Effect.provide([sqliteHistory(filename), RunContextPreparationPassthrough]));
   return [first.output, second.output];
 });
 
