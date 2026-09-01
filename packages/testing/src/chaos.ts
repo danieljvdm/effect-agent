@@ -216,13 +216,12 @@ const laneArbitrary: FastCheck.Arbitrary<GeneratedLane> = FastCheck.constantFrom
   "approval",
   "join",
   "delegation",
-).chain(
-  (kind): FastCheck.Arbitrary<GeneratedLane> =>
-    kind === "join"
-      ? FastCheck.integer({ min: 2, max: 3 }).map((depth): GeneratedLane => ({ kind, depth }))
-      : kind === "plain"
-        ? FastCheck.integer({ min: 1, max: 2 }).map((depth): GeneratedLane => ({ kind, depth }))
-        : FastCheck.constant<GeneratedLane>({ kind, depth: 1 }),
+).chain((kind): FastCheck.Arbitrary<GeneratedLane> =>
+  kind === "join"
+    ? FastCheck.integer({ min: 2, max: 3 }).map((depth): GeneratedLane => ({ kind, depth }))
+    : kind === "plain"
+      ? FastCheck.integer({ min: 1, max: 2 }).map((depth): GeneratedLane => ({ kind, depth }))
+      : FastCheck.constant<GeneratedLane>({ kind, depth: 1 }),
 );
 
 interface ChaosPlanShape {

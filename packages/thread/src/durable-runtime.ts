@@ -4590,12 +4590,10 @@ const make = Effect.gen(function* () {
             );
             return yield* Effect.forEach(joinedInputs, (joinedInput) =>
               renderJoinedInput(joinedInput).pipe(
-                Effect.map(
-                  (input): RunInputCommand => ({
-                    kind: "steering",
-                    input,
-                  }),
-                ),
+                Effect.map((input): RunInputCommand => ({
+                  kind: "steering",
+                  input,
+                })),
               ),
             );
           }),
@@ -5144,13 +5142,12 @@ const make = Effect.gen(function* () {
       ): Effect.Effect<void, DurableWorkerFailure> =>
         Effect.gen(function* () {
           const result = yield* Schema.decodeUnknownEffect(PersistedJson)(output).pipe(
-            Effect.mapError(
-              (cause): DurableWorkerFailure =>
-                LedgerError.make({
-                  operation: "recordCompleted",
-                  message: "Run output exceeds canonical persistence bounds",
-                  cause,
-                }),
+            Effect.mapError((cause): DurableWorkerFailure =>
+              LedgerError.make({
+                operation: "recordCompleted",
+                message: "Run output exceeds canonical persistence bounds",
+                cause,
+              }),
             ),
           );
           if (finishReason === "budget-exhausted" && runDisposition !== undefined) {
@@ -5163,13 +5160,12 @@ const make = Effect.gen(function* () {
             runDisposition === undefined
               ? undefined
               : yield* Schema.decodeUnknownEffect(PersistedJson)(runDisposition).pipe(
-                  Effect.mapError(
-                    (cause): DurableWorkerFailure =>
-                      LedgerError.make({
-                        operation: "recordCompleted",
-                        message: "Run disposition exceeds canonical persistence bounds",
-                        cause,
-                      }),
+                  Effect.mapError((cause): DurableWorkerFailure =>
+                    LedgerError.make({
+                      operation: "recordCompleted",
+                      message: "Run disposition exceeds canonical persistence bounds",
+                      cause,
+                    }),
                   ),
                 );
           yield* Ref.update(stateRef, (state) => ({

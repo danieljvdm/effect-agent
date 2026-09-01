@@ -101,15 +101,13 @@ const scriptedUsage = { inputTokens: { total: 96 }, outputTokens: { total: 64 } 
 const summaryDelegationParts = (
   documentIds: ReadonlyArray<string>,
 ): ReadonlyArray<Response.StreamPartEncoded> => [
-  ...documentIds.map(
-    (documentId): Response.StreamPartEncoded => ({
-      type: "tool-call",
-      id: summarizeCallId(documentId),
-      name: "delegate_document_summary",
-      params: { documentId },
-      providerExecuted: false,
-    }),
-  ),
+  ...documentIds.map((documentId): Response.StreamPartEncoded => ({
+    type: "tool-call",
+    id: summarizeCallId(documentId),
+    name: "delegate_document_summary",
+    params: { documentId },
+    providerExecuted: false,
+  })),
   { type: "finish", reason: "tool-calls", usage: scriptedUsage },
 ];
 

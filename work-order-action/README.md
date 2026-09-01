@@ -176,7 +176,7 @@ jobs:
           artifact-directory: state
           repository-path: worktree
           checks: ${{ vars.PR_WORK_ORDER_CHECKS }}
-          check-container-image: ghcr.io/voidzero-dev/vite-plus:0.2.6@sha256:de284eb61eb6ee5fe1da3824032ed6fb37827eecd597d0d796cacd4434f806ea
+          check-container-image: ghcr.io/voidzero-dev/vite-plus:0.3.0@sha256:bca24ac970b21298430ad281f306dbe0a17be3fd1d6c9ec5f2cc73da65740b88
 
       - name: Transfer host check evidence
         if: ${{ always() }}

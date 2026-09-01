@@ -39,19 +39,23 @@ export default defineConfig({
     // Leave result caching to Vite Task, without a mutable results.json input.
     cache: false,
     silent: "passed-only",
-  },
-  plugins: [
-    cloudflareTest({
-      main: "./test/worker.ts",
-      miniflare: {
-        compatibilityDate: "2025-05-01",
-        compatibilityFlags: ["nodejs_compat"],
-        durableObjects: {
-          PROBE: { className: "ProbeDurableObject", useSQLite: true },
-          THREADS: { className: "ThreadStorageObject", useSQLite: true },
-          SCHEDULES: { className: "ScheduleStorageObject", useSQLite: true },
-        },
+    projects: [
+      {
+        plugins: [
+          cloudflareTest({
+            main: "./test/worker.ts",
+            miniflare: {
+              compatibilityDate: "2025-05-01",
+              compatibilityFlags: ["nodejs_compat"],
+              durableObjects: {
+                PROBE: { className: "ProbeDurableObject", useSQLite: true },
+                THREADS: { className: "ThreadStorageObject", useSQLite: true },
+                SCHEDULES: { className: "ScheduleStorageObject", useSQLite: true },
+              },
+            },
+          }),
+        ],
       },
-    }),
-  ],
+    ],
+  },
 });

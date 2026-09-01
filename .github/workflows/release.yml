@@ -44,7 +44,7 @@ jobs:
       is-release-commit: ${{ steps.classify-release.outputs.is-release-commit }}
     env:
       CI: "true"
-      VITE_GIT_HOOKS: "0"
+      VP_GIT_HOOKS: "0"
     steps:
       - name: Check out repository (full history for changesets)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -54,7 +54,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.0
 
       - name: Install dependencies (frozen, scripts suppressed)
         run: bun install --frozen-lockfile --ignore-scripts
@@ -107,7 +107,7 @@ jobs:
       verification-outcome: ${{ steps.verify-release.outcome }}
     env:
       CI: "true"
-      VITE_GIT_HOOKS: "0"
+      VP_GIT_HOOKS: "0"
     steps:
       # This is a fresh job: no workspace state produced by changesets/action
       # crosses the boundary. The verifier and its dependencies come from the
@@ -121,7 +121,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.0
 
       - name: Install trusted verifier dependencies
         run: bun install --frozen-lockfile --ignore-scripts
@@ -263,7 +263,7 @@ jobs:
       publish-count: ${{ steps.prepare.outputs.publish-count }}
     env:
       CI: "true"
-      VITE_GIT_HOOKS: "0"
+      VP_GIT_HOOKS: "0"
     steps:
       - name: Check out versioned main commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -274,7 +274,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.0
 
       - name: Install dependencies (frozen, scripts suppressed)
         run: bun install --frozen-lockfile --ignore-scripts
