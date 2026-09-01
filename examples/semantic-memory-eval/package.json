@@ -1,0 +1,30 @@
+{
+  "name": "@effect-agent/example-semantic-memory-eval",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect-agent/capabilities": "workspace:*",
+    "@effect-agent/core": "workspace:*",
+    "@effect-agent/storage-memory": "workspace:*",
+    "@effect-agent/storage-sqlite": "workspace:*",
+    "@effect-agent/thread": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
+    "@huggingface/transformers": "4.2.0",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

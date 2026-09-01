@@ -43,6 +43,7 @@
     "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/sandbox": "workspace:*",
     "@effect-agent/sandbox-local": "workspace:*",
+    "@effect-agent/storage-memory": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",
     "@effect-agent/thread": "workspace:*",
     "@effect/ai-anthropic": "catalog:",

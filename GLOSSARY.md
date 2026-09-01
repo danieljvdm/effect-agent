@@ -293,6 +293,12 @@ A terminal change that excludes a source from future authoritative recall checks
 after successful withdrawal exclude it; already captured views may finish. Original history,
 past outputs, idempotency receipts, and backups have separate retention policies.
 
+**Semantic memory index**
+
+A disposable ranking derivative tied to one embedding model and chunking profile. Its candidates
+carry source revisions and byte ranges; authoritative sources supply current access and attribution.
+Index readiness is separate from committed-activity extraction progress and global corpus freshness.
+
 **Canonical Record**  
 An immutable, schema-versioned fact in the Thread Log. Canonical Records are the only
 recovery truth.

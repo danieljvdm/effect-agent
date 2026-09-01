@@ -76,7 +76,9 @@ recovered tool failures locally. Observations are not stored or exported automat
 Adds thread queues, approval, audit, budgets, context utilities, bounded `recallMemory`, scheduling
 overrides, MCP, redaction, and subagents to the engine. `recallMemory` reads ranked
 `MemoryPassage` values from host-selected sources and returns a transient `RecalledMemory` view;
-it supplies no store or retrieval adapter. [`CodeMode.make`](../guide/code-mode) exposes generated
+it supplies no store. Optional `indexMemorySource` and `querySemanticMemory` use upstream
+Effect AI `EmbeddingModel` with an application-selected index and authoritative reader. See
+[semantic retrieval](../guide/context-management#semantic-memory). [`CodeMode.make`](../guide/code-mode) exposes generated
 JavaScript execution over an explicit read-only Tool allowlist. `WebCapture.make`,
 `WebCapture.makeScrape`, and `WebCapture.makeExtract` expose a supplied `PageCapture` service as tools.
 Capture calls have uncertain external outcomes;
@@ -115,6 +117,8 @@ progress. The host owns record eligibility, extraction, and durable output appli
 ### `@effect-agent/storage-memory`
 
 Scoped in-memory thread and submission stores for tests. The ledger is non-durable.
+The independent `inMemorySemanticIndexLayer` supplies a bounded exact cosine derivative index.
+It is disposable and must be rebuilt from authoritative sources after its Scope closes.
 
 ### `@effect-agent/storage-sqlite`
 

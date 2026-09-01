@@ -569,6 +569,132 @@ schedule that meets it. Recorded, extracted, advanced, indexed, and accessed tim
 different events; none replaces the original activity time. An embedding index has its own
 progress and readiness, and must not advance this extraction cursor.
 
+### Add optional semantic retrieval {#semantic-memory}
+
+`indexMemorySource` and `querySemanticMemory` use the pinned upstream Effect AI
+`EmbeddingModel`. Supply its provider Layer directly. Direct loading, keyword retrieval, external
+attributed passages, and the cross-Thread workflow above need no embedding model or vector index.
+The framework does not define another provider abstraction or impose a ranking or aging policy.
+
+The host binds `SemanticMemoryProfile` to the actual provider, model revision, dimensions, and
+chunking configuration. Rebuild when any of those change. Matching dimensions alone does not
+make two models compatible. Provider configuration overrides must not silently change the model
+behind a live index. Treat different preprocessing or precision settings as a new profile identity.
+Choose chunk sizes within the selected provider's input limits. Read-only external sources can
+implement `MemoryReader` without a writer; sources with unknown revisions should use direct
+passage retrieval instead of this index.
+
+```ts twoslash
+import {
+  MemoryAccess,
+  SemanticIndexLimits,
+  SemanticQueryLimits,
+  indexMemorySource,
+  querySemanticMemory,
+  recallMemory,
+} from "@effect-agent/capabilities";
+import { MemoryKey, MemoryRecallLimits, SemanticMemoryProfile } from "@effect-agent/core";
+import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory";
+import { Effect } from "effect";
+
+// Keep this Layer alive across refreshes and queries. A new instance starts empty.
+export const makeIndex = (profile: SemanticMemoryProfile) =>
+  inMemorySemanticIndexLayer(profile, { maxSources: 1_024, maxChunks: 8_192 });
+
+export const refresh = (key: MemoryKey) =>
+  indexMemorySource(
+    key,
+    SemanticIndexLimits.make({
+      maxSourceBytes: 262_144,
+      maxChunks: 128,
+      timeoutMillis: 30_000,
+    }),
+  );
+
+export const recall = (query: string) =>
+  recallMemory(
+    [
+      {
+        id: "team-semantic",
+        essential: false,
+        read: querySemanticMemory(
+          query,
+          MemoryAccess.make({
+            namespace: "team-a",
+            scope: "participating-channels",
+          }),
+          SemanticQueryLimits.make({
+            maxQueryBytes: 8_192,
+            maxCandidates: 16,
+            maxScannedChunks: 8_192,
+            minScore: 0.35,
+            timeoutMillis: 1_000,
+          }),
+        ).pipe(Effect.map((result) => result.lookup)),
+      },
+    ],
+    MemoryRecallLimits.make({
+      maxSources: 8,
+      maxItems: 8,
+      maxBytes: 16_384,
+      maxTokens: 4_096,
+      timeoutMillis: 1_000,
+    }),
+  );
+```
+
+Provide the same index instance, `MemoryReader`, and native `EmbeddingModel` to both operations.
+Refresh also requires Effect `Crypto`. The provider Layer owns its resources; the index belongs
+to its Layer's Scope. Captured index methods fail after that Scope closes. Put `recall` in the
+transient-context hook above. The final envelope, including attribution and citations, must fit
+`recallMemory`'s item, UTF-8 byte, and token limits; the engine separately admits the full prompt.
+`essential: false` permits explicitly returned unavailable outcomes. It does not swallow errors.
+Map only intended expected failures to an `Unavailable` lookup in application policy.
+
+Chunking greedily packs complete Unicode codepoints up to `maxChunkBytes`. It neither summarizes
+nor silently drops a source suffix. Chunk IDs include a digest of the whole profile and the
+ordinal; candidates also carry source identity, revision, generation, and byte offsets. Indexing
+checks source-byte and chunk-count limits before calling the provider. Returned vectors must
+match the profile and have a positive finite norm. This simple chunker is a deterministic
+baseline; it makes no sentence-boundary or relevance promise.
+
+`inMemorySemanticIndexLayer` is a replaceable exact cosine adapter. It bounds all registered source
+keys, including withdrawal tombstones, and all ready chunks. A search over its scan limit fails
+instead of ranking an arbitrary prefix. Scores tie by source ID, revision, and chunk ordinal.
+The adapter holds no authoritative documents or attribution. Its `WithFailpoints` variant accepts
+`MemoryIndexFailpoint` for failures before and after each atomic mutation.
+
+Refresh begins a new epoch and hides old chunks. Publication exposes the whole replacement
+atomically. Failed embedding or publication leaves a visible unfinished build; retry by refreshing
+the source again. Older generations, divergent same-generation identities, and stale epochs are
+fenced. Withdrawal is terminal within the instance. Exact publication replay retains its original
+indexing time. Closing and recreating the Layer discards all index progress, chunks, and tombstones;
+rebuild from current authoritative sources before requiring complete semantic recall.
+
+The index and source are independent. Refresh reads the source again before publication, but a
+change can still occur between that read and the index write. Every query therefore rereads each
+candidate source, checks namespace, access, revision, generation, locator, and exact excerpt, and
+takes attribution and metadata from that source. Stale candidates are omitted; their old score is
+never assigned to corrected text. A source correction may temporarily reduce recall until refresh
+finishes. Missing, withdrawn, or revoked sources cannot pass checks begun after the authoritative
+change. Already captured views may finish, as described under withdrawal.
+
+`SemanticQueryResult` reports scanned chunks, excluded stale and unauthorized candidates, query
+embedding usage when the provider supplies it, and whether registered builds are incomplete.
+`incomplete: false` is not a global watermark: the host still owns discovery and required freshness.
+An empty index or no-match result does not prove the corpus has no relevant memory. No source text,
+query text, attribution, or vectors are attached to the helpers' Effect spans.
+
+Deadlines interrupt cooperative work and run finalizers. A provider that cannot cancel native I/O
+may need to drain its active call before finalizing; account for that in the host's latency policy.
+The reproducible `examples/semantic-memory-eval` consumer compares direct, lexical, and real local
+embedding recall on a frozen synthetic corpus. It separates warm query latency, cached-file cold
+model startup, source-commit-to-recallable lag, background extraction/indexing, and injected slow or
+failed requests. Its declared targets are 250 ms warm added recall, 3 seconds with a cold model
+instance and cached files, and 60 seconds from a healthy source commit to recall. These are example
+targets, not provider or production guarantees. The example reports misses and contradictory
+retrievals; applications must choose their own decision, commitment, and aging policies.
+
 ## Limit tool output
 
 Every application tool result, including MCP output, passes through `toolResultBounds` once before

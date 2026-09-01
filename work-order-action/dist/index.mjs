@@ -8305,6 +8305,20 @@ var RequestPrototype = {
   ...StructuralProto,
   [TypeId11]: requestVariance
 };
+var Class4 = /* @__PURE__ */ function() {
+  function Class5(args2) {
+    if (args2) {
+      assignProperties(this, args2);
+    }
+  }
+  Class5.prototype = RequestPrototype;
+  return Class5;
+}();
+var TaggedClass2 = (tag) => {
+  return class TaggedClass3 extends Class4 {
+    _tag = tag;
+  };
+};
 var makeEntry = (options) => options;
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/request.js
@@ -20320,7 +20334,7 @@ __export(exports_Schema, {
   Char: () => Char,
   Chunk: () => Chunk,
   ChunkReviver: () => ChunkReviver,
-  Class: () => Class4,
+  Class: () => Class5,
   Date: () => Date4,
   DateFromMillis: () => DateFromMillis,
   DateFromString: () => DateFromString,
@@ -20407,7 +20421,7 @@ __export(exports_Schema, {
   Struct: () => Struct2,
   StructWithRest: () => StructWithRest,
   Symbol: () => Symbol3,
-  TaggedClass: () => TaggedClass2,
+  TaggedClass: () => TaggedClass3,
   TaggedError: () => TaggedError3,
   TaggedStruct: () => TaggedStruct,
   TaggedUnion: () => TaggedUnion,
@@ -28437,7 +28451,7 @@ function getClassSchemaFactory(from, identifier2, annotations2) {
 function isStruct(schema) {
   return isSchema(schema);
 }
-var Class4 = (identifier2) => (schema, annotations2) => {
+var Class5 = (identifier2) => (schema, annotations2) => {
   const struct2 = isStruct(schema) ? schema : Struct2(schema);
   return makeClass(Class3, identifier2, struct2, annotations2, (identifier3) => ({
     toString() {
@@ -28447,7 +28461,7 @@ var Class4 = (identifier2) => (schema, annotations2) => {
     }
   }));
 };
-var TaggedClass2 = (identifier2) => {
+var TaggedClass3 = (identifier2) => {
   return (tagValue, schema, annotations2) => {
     const struct2 = isStruct(schema) ? schema.mapFields((fields) => ({
       _tag: tag(tagValue),
@@ -28455,7 +28469,7 @@ var TaggedClass2 = (identifier2) => {
     }), {
       unsafePreserveChecks: true
     }) : TaggedStruct(tagValue, schema);
-    return Class4(identifier2 ?? tagValue)(struct2, annotations2);
+    return Class5(identifier2 ?? tagValue)(struct2, annotations2);
   };
 };
 var Error4 = (identifier2) => (schema, annotations2) => {
@@ -32641,6 +32655,117 @@ var applyMemoryWrite = exports_Effect.fn("applyMemoryWrite")(function* (current,
   } : { _tag: "WithdrawnMemoryDocument", ...fields, reason: write2.reason };
   return yield* exports_Schema.decodeUnknownEffect(MemoryDocument)(next).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "memory transition", reason: "invalid-input" })));
 });
+// packages/core/src/semantic-memory.ts
+var Identity3 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
+var Positive = exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
+var Timestamp3 = exports_Schema.Finite.check(exports_Schema.isGreaterThanOrEqualTo(0));
+var Vector = exports_Schema.Array(exports_Schema.Finite).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(4096));
+
+class SemanticMemoryProfile extends exports_Schema.Class("@effect-agent/core/SemanticMemoryProfile")({
+  version: exports_Schema.Literal(1),
+  provider: Identity3,
+  model: Identity3,
+  modelRevision: Identity3,
+  dimensions: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 4096 })),
+  chunker: exports_Schema.Literal("utf8-codepoint@1"),
+  maxChunkBytes: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 4, maximum: 8192 })),
+  distance: exports_Schema.Literal("cosine")
+}) {
+}
+
+class SemanticMemoryChunk extends exports_Schema.Class("@effect-agent/core/SemanticMemoryChunk")({
+  passageId: MemoryPassage.fields.passageId,
+  ordinal: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 0, maximum: 255 })),
+  startByte: exports_Schema.Natural,
+  endByte: exports_Schema.Natural,
+  text: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(8192)),
+  vector: Vector
+}) {
+}
+var SourceFields = {
+  key: MemoryKey,
+  source: ActiveMemoryDocument.fields.source,
+  sourceGeneration: Positive
+};
+
+class MemoryIndexSource extends exports_Schema.Class("@effect-agent/core/MemoryIndexSource")(SourceFields) {
+}
+
+class MemoryIndexBuild extends exports_Schema.Class("@effect-agent/core/MemoryIndexBuild")({
+  ...SourceFields,
+  profile: SemanticMemoryProfile,
+  epoch: Positive
+}) {
+}
+
+class MemoryIndexState extends exports_Schema.Class("@effect-agent/core/MemoryIndexState")({
+  version: exports_Schema.Literal(1),
+  ...SourceFields,
+  epoch: Positive,
+  status: exports_Schema.Literals(["building", "ready", "withdrawn"]),
+  chunkCount: exports_Schema.Natural,
+  indexedAt: exports_Schema.NullOr(Timestamp3)
+}) {
+}
+
+class MemoryIndexCandidate extends exports_Schema.Class("@effect-agent/core/MemoryIndexCandidate")({
+  ...SourceFields,
+  passageId: SemanticMemoryChunk.fields.passageId,
+  ordinal: SemanticMemoryChunk.fields.ordinal,
+  startByte: SemanticMemoryChunk.fields.startByte,
+  endByte: SemanticMemoryChunk.fields.endByte,
+  text: SemanticMemoryChunk.fields.text,
+  score: exports_Schema.Finite.check(exports_Schema.isBetween({ minimum: -1, maximum: 1 })),
+  indexedAt: Timestamp3
+}) {
+}
+
+class MemoryIndexQuery extends exports_Schema.Class("@effect-agent/core/MemoryIndexQuery")({
+  namespace: MemoryKey.fields.namespace,
+  vector: Vector,
+  limit: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 128 })),
+  minScore: exports_Schema.Finite.check(exports_Schema.isBetween({ minimum: -1, maximum: 1 })),
+  maxScannedChunks: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 65536 }))
+}) {
+}
+
+class MemoryIndexSearch extends exports_Schema.Class("@effect-agent/core/MemoryIndexSearch")({
+  candidates: exports_Schema.Array(MemoryIndexCandidate).check(exports_Schema.isMaxLength(128)),
+  scannedChunks: exports_Schema.Natural,
+  incomplete: exports_Schema.Boolean
+}) {
+}
+
+class MemoryIndexError extends exports_Schema.TaggedError()("MemoryIndexError", {
+  operation: Identity3,
+  reason: exports_Schema.Literals([
+    "invalid-input",
+    "unavailable",
+    "corrupt",
+    "incompatible",
+    "fenced",
+    "budget"
+  ])
+}) {
+}
+var MemoryIndexMutationPoint = exports_Schema.Literals([
+  "index:begin:before",
+  "index:begin:after",
+  "index:publish:before",
+  "index:publish:after",
+  "index:withdraw:before",
+  "index:withdraw:after"
+]);
+
+class MemoryIndexMutationFailure extends exports_Schema.TaggedError()("MemoryIndexMutationFailure", { point: MemoryIndexMutationPoint }) {
+}
+
+class MemoryIndexFailpoint extends exports_Context.Service()("@effect-agent/core/MemoryIndexFailpoint") {
+  static layer = exports_Layer.succeed(this, { hit: () => exports_Effect.void });
+}
+
+class SemanticMemoryIndex extends exports_Context.Service()("@effect-agent/core/SemanticMemoryIndex") {
+}
 // packages/core/src/tool-result.ts
 var ENVELOPE_FLOOR_BYTES = 256;
 
@@ -33131,7 +33256,7 @@ var ResponseMetadataPart = /* @__PURE__ */ Struct2({
 });
 var FinishReason = /* @__PURE__ */ Literals(["stop", "length", "content-filter", "tool-calls", "error", "pause", "other", "unknown"]);
 
-class Usage extends (/* @__PURE__ */ Class4("effect/ai/AiResponse/Usage")({
+class Usage extends (/* @__PURE__ */ Class5("effect/ai/AiResponse/Usage")({
   inputTokens: /* @__PURE__ */ Struct2({
     uncached: /* @__PURE__ */ optional2(Int),
     total: /* @__PURE__ */ optional2(Int),
@@ -33588,13 +33713,157 @@ var reasonFromHttpStatus = (params) => {
       return new UnknownError3(common);
   }
 };
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/EmbeddingModel.js
+var exports_EmbeddingModel = {};
+__export(exports_EmbeddingModel, {
+  Dimensions: () => Dimensions,
+  EmbedManyResponse: () => EmbedManyResponse,
+  EmbedResponse: () => EmbedResponse,
+  EmbeddingModel: () => EmbeddingModel,
+  EmbeddingRequest: () => EmbeddingRequest,
+  EmbeddingUsage: () => EmbeddingUsage,
+  make: () => make53
+});
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/PrimaryKey.js
+var symbol4 = "~effect/interfaces/PrimaryKey";
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/RequestResolver.js
+var TypeId54 = "~effect/RequestResolver";
+var RequestResolverProto = {
+  [TypeId54]: {
+    _A: identity,
+    _R: identity
+  },
+  pipe() {
+    return pipeArguments(this, arguments);
+  }
+};
+var isRequestResolver = (u) => hasProperty(u, TypeId54);
+var makeWith3 = (options3) => {
+  const self = Object.create(RequestResolverProto);
+  self.batchKey = options3.batchKey;
+  self.preCheck = options3.preCheck;
+  self.delay = options3.delay;
+  self.collectWhile = options3.collectWhile;
+  self.runAll = options3.runAll;
+  return self;
+};
+var defaultKeyObject = {};
+var defaultKey = (_request) => defaultKeyObject;
+var make52 = (runAll) => makeWith3({
+  batchKey: defaultKey,
+  delay: yieldNow2,
+  collectWhile: constTrue,
+  runAll
+});
+var withSpan6 = /* @__PURE__ */ dual((args2) => isRequestResolver(args2[0]), (self, name, options3) => makeWith3({
+  ...self,
+  runAll: (entries3, key) => suspend3(() => {
+    const opts = typeof options3 === "function" ? options3(entries3) : options3;
+    const links = opts?.links ? opts.links.slice() : [];
+    const seen = new Set;
+    for (const entry of entries3) {
+      const span2 = getOption(entry.context, ParentSpan);
+      if (span2._tag === "None" || seen.has(span2.value))
+        continue;
+      seen.add(span2.value);
+      links.push({
+        span: span2.value,
+        attributes: {}
+      });
+    }
+    return withSpan3(self.runAll(entries3, key), name, {
+      ...options3,
+      links,
+      attributes: {
+        batchSize: entries3.length,
+        ...opts?.attributes
+      }
+    });
+  })
+}));
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/EmbeddingModel.js
+class EmbeddingModel extends (/* @__PURE__ */ Service()("effect/unstable/ai/EmbeddingModel")) {
+}
+
+class Dimensions extends (/* @__PURE__ */ Service()("effect/unstable/ai/EmbeddingModel/Dimensions")) {
+}
+
+class EmbeddingUsage extends (/* @__PURE__ */ Class5("effect/ai/EmbeddingModel/EmbeddingUsage")({
+  inputTokens: /* @__PURE__ */ optional2(Finite)
+})) {
+}
+
+class EmbedResponse extends (/* @__PURE__ */ Class5("effect/ai/EmbeddingModel/EmbedResponse")({
+  vector: /* @__PURE__ */ ArraySchema(Finite)
+})) {
+}
+
+class EmbedManyResponse extends (/* @__PURE__ */ Class5("effect/ai/EmbeddingModel/EmbedManyResponse")({
+  embeddings: /* @__PURE__ */ ArraySchema(EmbedResponse),
+  usage: EmbeddingUsage
+})) {
+}
+
+class EmbeddingRequest extends (/* @__PURE__ */ TaggedClass2("EmbeddingRequest")) {
+}
+var invalidProviderResponse = (description) => make51({
+  module: "EmbeddingModel",
+  method: "embedMany",
+  reason: new InvalidOutputError({
+    description
+  })
+});
+var make53 = /* @__PURE__ */ fnUntraced2(function* (params) {
+  const resolver = make52((entries3) => flatMap5(params.embedMany({
+    inputs: entries3.map((entry) => entry.request.input)
+  }), (response) => map8(mapProviderResults(entries3.length, response.results), (embeddings) => {
+    for (let i = 0;i < entries3.length; i++) {
+      entries3[i].completeUnsafe(succeed4(embeddings[i]));
+    }
+  }))).pipe(withSpan6("EmbeddingModel.resolver"));
+  return EmbeddingModel.of({
+    resolver,
+    embed: (input) => request2(new EmbeddingRequest({
+      input
+    }), resolver).pipe(withSpan3("EmbeddingModel.embed")),
+    embedMany: (input) => (input.length === 0 ? succeed7(new EmbedManyResponse({
+      embeddings: [],
+      usage: new EmbeddingUsage({
+        inputTokens: undefined
+      })
+    })) : params.embedMany({
+      inputs: input
+    }).pipe(flatMap5((response) => mapProviderResults(input.length, response.results).pipe(map8((embeddings) => new EmbedManyResponse({
+      embeddings,
+      usage: new EmbeddingUsage({
+        inputTokens: response.usage.inputTokens
+      })
+    })))))).pipe(withSpan3("EmbeddingModel.embedMany"))
+  });
+});
+var mapProviderResults = (inputLength, results) => {
+  const embeddings = new Array(inputLength);
+  if (results.length !== inputLength) {
+    return fail7(invalidProviderResponse(`Provider returned ${results.length} embeddings but expected ${inputLength}`));
+  }
+  for (let i = 0;i < results.length; i++) {
+    const vector = results[i];
+    embeddings[i] = new EmbedResponse({
+      vector
+    });
+  }
+  return succeed7(embeddings);
+};
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/IdGenerator.js
 var exports_IdGenerator = {};
 __export(exports_IdGenerator, {
   IdGenerator: () => IdGenerator,
   defaultIdGenerator: () => defaultIdGenerator,
   layer: () => layer16,
-  make: () => make52
+  make: () => make54
 });
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Random.js
@@ -33633,7 +33902,7 @@ var defaultIdGenerator = {
     prefix: "id"
   })
 };
-var make52 = /* @__PURE__ */ fnUntraced2(function* ({
+var make54 = /* @__PURE__ */ fnUntraced2(function* ({
   alphabet = DEFAULT_ALPHABET,
   prefix: prefix3,
   separator = DEFAULT_SEPARATOR,
@@ -33653,7 +33922,7 @@ var make52 = /* @__PURE__ */ fnUntraced2(function* ({
     generateId
   };
 });
-var layer16 = (options3) => effect(IdGenerator)(make52(options3));
+var layer16 = (options3) => effect(IdGenerator)(make54(options3));
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/LanguageModel.js
 var exports_LanguageModel = {};
 __export(exports_LanguageModel, {
@@ -33664,15 +33933,15 @@ __export(exports_LanguageModel, {
   generateObject: () => generateObject,
   generateText: () => generateText,
   getObjectName: () => getObjectName,
-  make: () => make57,
+  make: () => make59,
   streamText: () => streamText
 });
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/FiberSet.js
-var TypeId54 = "~effect/FiberSet";
-var isFiberSet = (u) => hasProperty(u, TypeId54);
+var TypeId55 = "~effect/FiberSet";
+var isFiberSet = (u) => hasProperty(u, TypeId55);
 var Proto14 = {
-  [TypeId54]: TypeId54,
+  [TypeId55]: TypeId55,
   [Symbol.iterator]() {
     if (this.state._tag === "Closed") {
       return empty2();
@@ -33696,7 +33965,7 @@ var makeUnsafe10 = (backing, deferred) => {
   self.deferred = deferred;
   return self;
 };
-var make53 = () => acquireRelease2(sync4(() => makeUnsafe10(new Set, makeUnsafe2())), (set8) => suspend3(() => {
+var make55 = () => acquireRelease2(sync4(() => makeUnsafe10(new Set, makeUnsafe2())), (set8) => suspend3(() => {
   const state = set8.state;
   if (state._tag === "Closed")
     return void_5;
@@ -33819,7 +34088,7 @@ __export(exports_Prompt, {
   isMessage: () => isMessage,
   isPart: () => isPart2,
   isPrompt: () => isPrompt,
-  make: () => make54,
+  make: () => make56,
   makeMessage: () => makeMessage,
   makePart: () => makePart2,
   prependSystem: () => prependSystem,
@@ -33974,8 +34243,8 @@ var ToolMessage = /* @__PURE__ */ Struct2({
 });
 var toolMessage = (params) => makeMessage("tool", params);
 var Message = /* @__PURE__ */ Union2([SystemMessage, UserMessage, AssistantMessage, ToolMessage]);
-var TypeId55 = "~effect/unstable/ai/Prompt";
-var isPrompt = (u) => hasProperty(u, TypeId55);
+var TypeId56 = "~effect/unstable/ai/Prompt";
+var isPrompt = (u) => hasProperty(u, TypeId56);
 var $Prompt = /* @__PURE__ */ declare((u) => isPrompt(u), {
   identifier: "Prompt"
 });
@@ -33998,7 +34267,7 @@ var Prompt = /* @__PURE__ */ Struct2({
   })
 })));
 var Proto15 = {
-  [TypeId55]: TypeId55,
+  [TypeId56]: TypeId56,
   pipe() {
     return pipeArguments(this, arguments);
   }
@@ -34008,7 +34277,7 @@ var makePrompt = (content) => Object.assign(Object.create(Proto15), {
 });
 var decodeMessagesSync = /* @__PURE__ */ decodeSync2(/* @__PURE__ */ ArraySchema(Message));
 var empty16 = /* @__PURE__ */ makePrompt([]);
-var make54 = (input) => {
+var make56 = (input) => {
   if (typeof input === "string") {
     const part = makePart2("text", {
       text: input
@@ -34156,7 +34425,7 @@ var fromResponseParts = (parts2) => {
   return makePrompt(messages);
 };
 var concat3 = /* @__PURE__ */ dual(2, (self, input) => {
-  const other = make54(input);
+  const other = make56(input);
   if (self.content.length === 0) {
     return other;
   }
@@ -34214,7 +34483,7 @@ var appendSystem = /* @__PURE__ */ dual(2, (self, content) => {
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/ResponseIdTracker.js
 class ResponseIdTracker extends (/* @__PURE__ */ Service()("effect/ai/ResponseIdTracker")) {
 }
-var make55 = /* @__PURE__ */ sync4(() => {
+var make57 = /* @__PURE__ */ sync4(() => {
   const sentParts = new Map;
   const none3 = () => {
     sentParts.clear();
@@ -34307,10 +34576,10 @@ class CurrentSpanTransformer extends (/* @__PURE__ */ Service()("effect/ai/Telem
 var exports_Toolkit = {};
 __export(exports_Toolkit, {
   empty: () => empty17,
-  make: () => make56,
+  make: () => make58,
   merge: () => merge8
 });
-var TypeId56 = "~effect/ai/Toolkit";
+var TypeId57 = "~effect/ai/Toolkit";
 var Proto16 = {
   .../* @__PURE__ */ Prototype2({
     label: "Toolkit",
@@ -34425,7 +34694,7 @@ var Proto16 = {
       };
     })
   }),
-  [TypeId56]: TypeId56,
+  [TypeId57]: TypeId57,
   of: identity,
   toHandlers(build2) {
     return gen4({
@@ -34468,7 +34737,7 @@ var resolveInput = (...tools) => {
   return output;
 };
 var empty17 = /* @__PURE__ */ makeProto2({});
-var make56 = (...tools) => makeProto2(resolveInput(...tools));
+var make58 = (...tools) => makeProto2(resolveInput(...tools));
 var merge8 = (...toolkits) => {
   const tools = {};
   for (const toolkit of toolkits) {
@@ -34548,7 +34817,7 @@ class GenerateObjectResponse extends GenerateTextResponse {
     this.value = value4;
   }
 }
-var make57 = /* @__PURE__ */ fnUntraced2(function* (params) {
+var make59 = /* @__PURE__ */ fnUntraced2(function* (params) {
   const codecTransformer = params.codecTransformer ?? defaultCodecTransformer2;
   const parentSpanTransformer = yield* serviceOption2(CurrentSpanTransformer);
   const getSpanTransformer = serviceOption2(CurrentSpanTransformer).pipe(map8(orElse(() => parentSpanTransformer)));
@@ -34561,7 +34830,7 @@ var make57 = /* @__PURE__ */ fnUntraced2(function* (params) {
   }, fnUntraced2(function* (span2) {
     const spanTransformer = yield* getSpanTransformer;
     const providerOptions = {
-      prompt: make54(options3.prompt),
+      prompt: make56(options3.prompt),
       tools: [],
       toolChoice: "none",
       responseFormat: {
@@ -34592,7 +34861,7 @@ var make57 = /* @__PURE__ */ fnUntraced2(function* (params) {
     }, fnUntraced2(function* (span2) {
       const spanTransformer = yield* getSpanTransformer;
       const providerOptions = {
-        prompt: make54(options3.prompt),
+        prompt: make56(options3.prompt),
         tools: [],
         toolChoice: "none",
         responseFormat: {
@@ -34636,7 +34905,7 @@ var make57 = /* @__PURE__ */ fnUntraced2(function* (params) {
       }
     });
     const providerOptions = {
-      prompt: make54(options3.prompt),
+      prompt: make56(options3.prompt),
       tools: [],
       toolChoice: "none",
       responseFormat: {
@@ -34962,7 +35231,7 @@ var make57 = /* @__PURE__ */ fnUntraced2(function* (params) {
     if (preResolvedStreamParts.length > 0) {
       yield* offerAll(queue, preResolvedStreamParts);
     }
-    const toolCallFibers = yield* make53();
+    const toolCallFibers = yield* make55();
     const toolCallSemaphore = concurrency === "unbounded" ? undefined : yield* make16(concurrency);
     const handleToolCall = fnUntraced2(function* (part) {
       const tool = toolkit.tools[part.name];
@@ -35249,7 +35518,7 @@ var resolveToolCalls = (content, toolkit, messages, concurrency) => {
     concurrency
   });
 };
-var makeToolkitWithEncodedParameters = (toolkit) => make56(...Object.values(toolkit.tools).map((tool) => tool.setParameters(toEncoded2(tool.parametersSchema))));
+var makeToolkitWithEncodedParameters = (toolkit) => make58(...Object.values(toolkit.tools).map((tool) => tool.setParameters(toEncoded2(tool.parametersSchema))));
 var resolveToolkit = (toolkit) => isEffect2(toolkit) ? toolkit : succeed7(toolkit);
 var getObjectName = (objectName, schema2) => {
   if (isNotUndefined(objectName)) {
@@ -35302,9 +35571,9 @@ var exports_Model = {};
 __export(exports_Model, {
   ModelName: () => ModelName,
   ProviderName: () => ProviderName,
-  make: () => make58
+  make: () => make60
 });
-var TypeId57 = "~effect/ai/Model";
+var TypeId58 = "~effect/ai/Model";
 
 class ProviderName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ProviderName")) {
 }
@@ -35312,7 +35581,7 @@ class ProviderName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/
 class ModelName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ModelName")) {
 }
 var Proto17 = {
-  [TypeId57]: TypeId57,
+  [TypeId58]: TypeId58,
   ["~effect/Layer"]: {
     _ROut: identity,
     _E: identity,
@@ -35330,7 +35599,7 @@ var Proto17 = {
     };
   }
 };
-var make58 = (provider, modelName, layer17) => Object.assign(Object.create(Proto17), {
+var make60 = (provider, modelName, layer17) => Object.assign(Object.create(Proto17), {
   provider
 }, merge3(layer17, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/Tool.js
@@ -35347,7 +35616,7 @@ __export(exports_Tool, {
   Readonly: () => Readonly,
   Strict: () => Strict,
   Title: () => Title,
-  TypeId: () => TypeId58,
+  TypeId: () => TypeId59,
   dynamic: () => dynamic,
   getDescription: () => getDescription,
   getJsonSchema: () => getJsonSchema,
@@ -35357,19 +35626,19 @@ __export(exports_Tool, {
   isEmptyParamsRecord: () => isEmptyParamsRecord,
   isProviderDefined: () => isProviderDefined,
   isUserDefined: () => isUserDefined,
-  make: () => make59,
+  make: () => make61,
   providerDefined: () => providerDefined,
   unsafeSecureJsonParse: () => unsafeSecureJsonParse
 });
-var TypeId58 = "~effect/ai/Tool";
+var TypeId59 = "~effect/ai/Tool";
 var ProviderDefinedTypeId = "~effect/ai/Tool/ProviderDefined";
 var DynamicTypeId = "~effect/ai/Tool/Dynamic";
-var isUserDefined = (u) => hasProperty(u, TypeId58) && !isProviderDefined(u) && !isDynamic(u);
+var isUserDefined = (u) => hasProperty(u, TypeId59) && !isProviderDefined(u) && !isDynamic(u);
 var isProviderDefined = (u) => hasProperty(u, ProviderDefinedTypeId);
 var isDynamic = (u) => hasProperty(u, DynamicTypeId);
 var clone2 = (self, overrides) => Object.assign(Object.create(Object.getPrototypeOf(self)), self, overrides);
 var Proto18 = {
-  [TypeId58]: {
+  [TypeId59]: {
     _Requirements: identity
   },
   pipe() {
@@ -35431,7 +35700,7 @@ var dynamicProto = (options3) => {
   self.id = `effect/ai/Tool/${options3.name}`;
   return self;
 };
-var make59 = (name, options3) => {
+var make61 = (name, options3) => {
   const successSchema = options3?.success ?? Void2;
   const failureSchema = options3?.failure ?? Never2;
   return userDefinedProto({
@@ -42689,9 +42958,6 @@ var RunApprovalAdapterPolicySchema = exports_Schema.Struct({
   risk: exports_Schema.Literals(["low", "medium", "high", "critical"]),
   denial: exports_Schema.Literals(["terminal", "recoverable"])
 });
-// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/PrimaryKey.js
-var symbol4 = "~effect/interfaces/PrimaryKey";
-
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/RpcSchema.js
 var StreamSchemaTypeId = "~effect/rpc/RpcSchema/StreamSchema";
 var schema2 = /* @__PURE__ */ declare(isStream);
@@ -42704,9 +42970,9 @@ function Stream2(success, error2) {
 }
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/Rpc.js
-var TypeId59 = "~effect/rpc/Rpc";
+var TypeId60 = "~effect/rpc/Rpc";
 var Proto19 = {
-  [TypeId59]: TypeId59,
+  [TypeId60]: TypeId60,
   pipe() {
     return pipeArguments(this, arguments);
   },
@@ -42795,13 +43061,13 @@ var makeProto3 = (options3) => {
   Rpc.key = `effect/rpc/Rpc/${options3._tag}`;
   return Rpc;
 };
-var make60 = (tag2, options3) => {
+var make62 = (tag2, options3) => {
   const successSchema = options3?.success ?? Void2;
   const errorSchema = options3?.error ?? Never2;
   const defectSchema = options3?.defect ?? Defect();
   let payloadSchema;
   if (options3?.primaryKey) {
-    payloadSchema = class Payload extends Class4(`effect/rpc/Rpc/${tag2}`)(options3.payload) {
+    payloadSchema = class Payload extends Class5(`effect/rpc/Rpc/${tag2}`)(options3.payload) {
       [symbol4]() {
         return options3.primaryKey(this);
       }
@@ -42876,7 +43142,7 @@ class Annotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
 }))) {
 }
 
-class Icon extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Icon")({
+class Icon extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/Icon")({
   src: String6,
   mimeType: /* @__PURE__ */ optional3(String6),
   sizes: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6)),
@@ -42894,7 +43160,7 @@ class Implementation extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
 }))) {
 }
 
-class ClientCapabilities extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ClientCapabilities")({
+class ClientCapabilities extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ClientCapabilities")({
   experimental: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Struct2({}))),
   extensions: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(/* @__PURE__ */ TemplateLiteral2([String6, "/", String6]), Json2)),
   roots: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
@@ -42929,7 +43195,7 @@ class ServerCapabilities extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struc
 }))) {
 }
 
-class McpErrorBase extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/McpErrorBase")({
+class McpErrorBase extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/McpErrorBase")({
   code: Int,
   message: String6,
   data: /* @__PURE__ */ optional3(Any2)
@@ -42988,7 +43254,7 @@ class InitializeResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2
 }))) {
 }
 
-class Initialize extends (/* @__PURE__ */ make60("initialize", {
+class Initialize extends (/* @__PURE__ */ make62("initialize", {
   success: InitializeResult,
   error: McpError,
   payload: {
@@ -42999,7 +43265,7 @@ class Initialize extends (/* @__PURE__ */ make60("initialize", {
   }
 })) {
 }
-class CancelledNotification extends (/* @__PURE__ */ make60("notifications/cancelled", {
+class CancelledNotification extends (/* @__PURE__ */ make62("notifications/cancelled", {
   payload: {
     ...NotificationMeta.fields,
     requestId: RequestId,
@@ -43008,7 +43274,7 @@ class CancelledNotification extends (/* @__PURE__ */ make60("notifications/cance
 })) {
 }
 
-class ProgressNotification extends (/* @__PURE__ */ make60("notifications/progress", {
+class ProgressNotification extends (/* @__PURE__ */ make62("notifications/progress", {
   payload: {
     ...NotificationMeta.fields,
     progressToken: ProgressToken,
@@ -43019,7 +43285,7 @@ class ProgressNotification extends (/* @__PURE__ */ make60("notifications/progre
 })) {
 }
 
-class Resource2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Resource")({
+class Resource2 extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/Resource")({
   uri: String6,
   name: String6,
   title: /* @__PURE__ */ optional3(String6),
@@ -43032,7 +43298,7 @@ class Resource2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Resource")
 })) {
 }
 
-class ResourceTemplate extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ResourceTemplate")({
+class ResourceTemplate extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ResourceTemplate")({
   uriTemplate: String6,
   name: String6,
   title: /* @__PURE__ */ optional3(String6),
@@ -43063,12 +43329,12 @@ class BlobResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Str
 }))) {
 }
 
-class ListResourcesResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListResourcesResult")({
+class ListResourcesResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ListResourcesResult")({
   ...PaginatedResultMeta.fields,
   resources: /* @__PURE__ */ ArraySchema(Resource2)
 })) {
 }
-class ListResourceTemplatesResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListResourceTemplatesResult")({
+class ListResourceTemplatesResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ListResourceTemplatesResult")({
   ...PaginatedResultMeta.fields,
   resourceTemplates: /* @__PURE__ */ ArraySchema(ResourceTemplate)
 })) {
@@ -43079,7 +43345,7 @@ class ReadResourceResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struc
 }))) {
 }
 
-class ReadResource extends (/* @__PURE__ */ make60("resources/read", {
+class ReadResource extends (/* @__PURE__ */ make62("resources/read", {
   success: ReadResourceResult,
   error: McpError,
   payload: {
@@ -43088,7 +43354,7 @@ class ReadResource extends (/* @__PURE__ */ make60("resources/read", {
   }
 })) {
 }
-class Subscribe extends (/* @__PURE__ */ make60("resources/subscribe", {
+class Subscribe extends (/* @__PURE__ */ make62("resources/subscribe", {
   success: /* @__PURE__ */ Struct2({}),
   error: McpError,
   payload: {
@@ -43098,7 +43364,7 @@ class Subscribe extends (/* @__PURE__ */ make60("resources/subscribe", {
 })) {
 }
 
-class Unsubscribe extends (/* @__PURE__ */ make60("resources/unsubscribe", {
+class Unsubscribe extends (/* @__PURE__ */ make62("resources/unsubscribe", {
   success: /* @__PURE__ */ Struct2({}),
   error: McpError,
   payload: {
@@ -43108,7 +43374,7 @@ class Unsubscribe extends (/* @__PURE__ */ make60("resources/unsubscribe", {
 })) {
 }
 
-class ResourceUpdatedNotification extends (/* @__PURE__ */ make60("notifications/resources/updated", {
+class ResourceUpdatedNotification extends (/* @__PURE__ */ make62("notifications/resources/updated", {
   payload: {
     ...NotificationMeta.fields,
     uri: String6
@@ -43124,7 +43390,7 @@ class PromptArgument extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
 }))) {
 }
 
-class Prompt2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Prompt")({
+class Prompt2 extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/Prompt")({
   name: String6,
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -43181,19 +43447,19 @@ class PromptMessage extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
 }))) {
 }
 
-class ListPromptsResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListPromptsResult")({
+class ListPromptsResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ListPromptsResult")({
   ...PaginatedResultMeta.fields,
   prompts: /* @__PURE__ */ ArraySchema(Prompt2)
 })) {
 }
-class GetPromptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/GetPromptResult")({
+class GetPromptResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/GetPromptResult")({
   ...ResultMeta.fields,
   messages: /* @__PURE__ */ ArraySchema(PromptMessage),
   description: /* @__PURE__ */ optional3(String6)
 })) {
 }
 
-class GetPrompt extends (/* @__PURE__ */ make60("prompts/get", {
+class GetPrompt extends (/* @__PURE__ */ make62("prompts/get", {
   success: GetPromptResult,
   error: McpError,
   payload: {
@@ -43218,7 +43484,7 @@ var ToolJsonSchema = /* @__PURE__ */ StructWithRest(/* @__PURE__ */ Struct2({
   required: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6))
 }), [JsonObject]);
 
-class Tool extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
+class Tool extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/Tool")({
   name: String6,
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -43230,12 +43496,12 @@ class Tool extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
 })) {
 }
 
-class ListToolsResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListToolsResult")({
+class ListToolsResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ListToolsResult")({
   ...PaginatedResultMeta.fields,
   tools: /* @__PURE__ */ ArraySchema(Tool)
 })) {
 }
-class CallToolResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CallToolResult")({
+class CallToolResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/CallToolResult")({
   ...ResultMeta.fields,
   content: /* @__PURE__ */ ArraySchema(ContentBlock),
   structuredContent: /* @__PURE__ */ optional3(Json2),
@@ -43243,7 +43509,7 @@ class CallToolResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CallT
 })) {
 }
 
-class CallTool extends (/* @__PURE__ */ make60("tools/call", {
+class CallTool extends (/* @__PURE__ */ make62("tools/call", {
   success: CallToolResult,
   error: McpError,
   payload: {
@@ -43255,7 +43521,7 @@ class CallTool extends (/* @__PURE__ */ make60("tools/call", {
 }
 var LoggingLevel = /* @__PURE__ */ Literals(["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]);
 
-class SetLevel extends (/* @__PURE__ */ make60("logging/setLevel", {
+class SetLevel extends (/* @__PURE__ */ make62("logging/setLevel", {
   payload: {
     ...RequestMeta.fields,
     level: LoggingLevel
@@ -43265,7 +43531,7 @@ class SetLevel extends (/* @__PURE__ */ make60("logging/setLevel", {
 })) {
 }
 
-class LoggingMessageNotification extends (/* @__PURE__ */ make60("notifications/message", {
+class LoggingMessageNotification extends (/* @__PURE__ */ make62("notifications/message", {
   payload: /* @__PURE__ */ Struct2({
     ...NotificationMeta.fields,
     level: LoggingLevel,
@@ -43275,7 +43541,7 @@ class LoggingMessageNotification extends (/* @__PURE__ */ make60("notifications/
 })) {
 }
 
-class ToolUseContent extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ToolUseContent")({
+class ToolUseContent extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ToolUseContent")({
   type: /* @__PURE__ */ tag("tool_use"),
   id: String6,
   name: String6,
@@ -43284,7 +43550,7 @@ class ToolUseContent extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ToolU
 })) {
 }
 
-class ToolResultContent extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ToolResultContent")({
+class ToolResultContent extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ToolResultContent")({
   type: /* @__PURE__ */ tag("tool_result"),
   toolUseId: String6,
   content: /* @__PURE__ */ ArraySchema(ContentBlock),
@@ -43302,7 +43568,7 @@ class SamplingMessage extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2(
 }))) {
 }
 
-class ToolChoice extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ToolChoice")({
+class ToolChoice extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ToolChoice")({
   mode: /* @__PURE__ */ optional3(/* @__PURE__ */ Literals(["auto", "required", "none"]))
 })) {
 }
@@ -43312,7 +43578,7 @@ class ModelHint extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
 }))) {
 }
 
-class ModelPreferences extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ModelPreferences")({
+class ModelPreferences extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ModelPreferences")({
   hints: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(ModelHint)),
   costPriority: /* @__PURE__ */ optional3(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
     minimum: 0,
@@ -43329,7 +43595,7 @@ class ModelPreferences extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Mod
 })) {
 }
 
-class CreateMessageResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CreateMessageResult")({
+class CreateMessageResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/CreateMessageResult")({
   role: Role,
   content: /* @__PURE__ */ Union2([SamplingMessageContentBlock, /* @__PURE__ */ ArraySchema(SamplingMessageContentBlock)]),
   _meta: /* @__PURE__ */ optional3(JsonObject),
@@ -43338,7 +43604,7 @@ class CreateMessageResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/
 })) {
 }
 
-class CreateMessage extends (/* @__PURE__ */ make60("sampling/createMessage", {
+class CreateMessage extends (/* @__PURE__ */ make62("sampling/createMessage", {
   success: CreateMessageResult,
   error: McpError,
   payload: {
@@ -43371,7 +43637,7 @@ class CompleteResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
     }
   });
 }
-class StringSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/StringSchema")({
+class StringSchema extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/StringSchema")({
   type: /* @__PURE__ */ tag("string"),
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -43382,7 +43648,7 @@ class StringSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/StringS
 })) {
 }
 
-class NumberSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/NumberSchema")({
+class NumberSchema extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/NumberSchema")({
   type: /* @__PURE__ */ Literals(["number", "integer"]),
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -43392,7 +43658,7 @@ class NumberSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/NumberS
 })) {
 }
 
-class BooleanSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/BooleanSchema")({
+class BooleanSchema extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/BooleanSchema")({
   type: /* @__PURE__ */ tag("boolean"),
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -43400,7 +43666,7 @@ class BooleanSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Boolea
 })) {
 }
 
-class UntitledSingleSelectEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/UntitledSingleSelectEnumSchema")({
+class UntitledSingleSelectEnumSchema extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/UntitledSingleSelectEnumSchema")({
   type: /* @__PURE__ */ tag("string"),
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -43409,7 +43675,7 @@ class UntitledSingleSelectEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai
 })) {
 }
 
-class TitledSingleSelectEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/TitledSingleSelectEnumSchema")({
+class TitledSingleSelectEnumSchema extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/TitledSingleSelectEnumSchema")({
   type: /* @__PURE__ */ tag("string"),
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -43422,7 +43688,7 @@ class TitledSingleSelectEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/M
 }
 var SingleSelectEnumSchema = /* @__PURE__ */ Union2([UntitledSingleSelectEnumSchema, TitledSingleSelectEnumSchema]);
 
-class UntitledMultiSelectEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/UntitledMultiSelectEnumSchema")({
+class UntitledMultiSelectEnumSchema extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/UntitledMultiSelectEnumSchema")({
   type: /* @__PURE__ */ tag("array"),
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -43436,7 +43702,7 @@ class UntitledMultiSelectEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/
 })) {
 }
 
-class TitledMultiSelectEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/TitledMultiSelectEnumSchema")({
+class TitledMultiSelectEnumSchema extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/TitledMultiSelectEnumSchema")({
   type: /* @__PURE__ */ tag("array"),
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -43453,7 +43719,7 @@ class TitledMultiSelectEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/Mc
 }
 var MultiSelectEnumSchema = /* @__PURE__ */ Union2([UntitledMultiSelectEnumSchema, TitledMultiSelectEnumSchema]);
 
-class LegacyTitledEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/LegacyTitledEnumSchema")({
+class LegacyTitledEnumSchema extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/LegacyTitledEnumSchema")({
   type: /* @__PURE__ */ tag("string"),
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -43471,7 +43737,7 @@ var ElicitationFormSchema = /* @__PURE__ */ Struct2({
   required: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6))
 });
 
-class ElicitRequestFormParams extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ElicitRequestFormParams")({
+class ElicitRequestFormParams extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ElicitRequestFormParams")({
   ...RequestMeta.fields,
   mode: /* @__PURE__ */ optional3(/* @__PURE__ */ Literal2("form")),
   message: String6,
@@ -43479,7 +43745,7 @@ class ElicitRequestFormParams extends (/* @__PURE__ */ Class4("@effect/ai/McpSch
 })) {
 }
 
-class ElicitRequestURLParams extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ElicitRequestURLParams")({
+class ElicitRequestURLParams extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ElicitRequestURLParams")({
   ...RequestMeta.fields,
   mode: /* @__PURE__ */ Literal2("url"),
   message: String6,
@@ -43489,21 +43755,21 @@ class ElicitRequestURLParams extends (/* @__PURE__ */ Class4("@effect/ai/McpSche
 }
 var ElicitRequestParams = /* @__PURE__ */ Union2([ElicitRequestFormParams, ElicitRequestURLParams]);
 
-class ElicitAcceptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ElicitAcceptResult")({
+class ElicitAcceptResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ElicitAcceptResult")({
   ...ResultMeta.fields,
   action: /* @__PURE__ */ Literal2("accept"),
   content: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Union2([String6, Finite, Boolean3, /* @__PURE__ */ ArraySchema(String6)])))
 })) {
 }
 
-class ElicitDeclineResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ElicitDeclineResult")({
+class ElicitDeclineResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ElicitDeclineResult")({
   ...ResultMeta.fields,
   action: /* @__PURE__ */ Literals(["cancel", "decline"])
 })) {
 }
 var ElicitResult = /* @__PURE__ */ Union2([ElicitAcceptResult, ElicitDeclineResult]);
 
-class Elicit extends (/* @__PURE__ */ make60("elicitation/create", {
+class Elicit extends (/* @__PURE__ */ make62("elicitation/create", {
   success: ElicitResult,
   error: McpError,
   payload: ElicitRequestParams
@@ -43980,6 +44246,312 @@ var revalidateMemoryLookup = exports_Effect.fn("revalidateMemoryLookup")(functio
     passages: passages.sort((left, right) => left.index - right.index).map(({ passage }) => passage)
   };
 });
+// packages/capabilities/src/semantic-memory.ts
+var Timestamp4 = exports_Schema.Finite.check(exports_Schema.isGreaterThanOrEqualTo(0));
+var InputTokens = exports_Schema.NullOr(exports_Schema.Natural);
+
+class SemanticMemoryError extends exports_Schema.TaggedError()("SemanticMemoryError", {
+  operation: exports_Schema.NonEmptyString,
+  reason: exports_Schema.Literals([
+    "invalid-input",
+    "invalid-embedding",
+    "budget",
+    "timeout",
+    "source-changed",
+    "unavailable"
+  ])
+}) {
+}
+
+class SemanticIndexLimits extends exports_Schema.Class("@effect-agent/capabilities/SemanticIndexLimits")({
+  maxSourceBytes: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 4194304 })),
+  maxChunks: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 256 })),
+  timeoutMillis: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 300000 }))
+}) {
+}
+
+class SemanticQueryLimits extends exports_Schema.Class("@effect-agent/capabilities/SemanticQueryLimits")({
+  maxQueryBytes: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 65536 })),
+  maxCandidates: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 128 })),
+  maxScannedChunks: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 65536 })),
+  minScore: exports_Schema.Finite.check(exports_Schema.isBetween({ minimum: -1, maximum: 1 })),
+  timeoutMillis: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 60000 }))
+}) {
+}
+
+class SemanticIndexResult extends exports_Schema.Class("@effect-agent/capabilities/SemanticIndexResult")({
+  key: MemoryKey,
+  status: exports_Schema.Literals(["Missing", "Withdrawn", "Indexed"]),
+  state: exports_Schema.NullOr(MemoryIndexState),
+  embeddedChunks: exports_Schema.Natural,
+  embeddedBytes: exports_Schema.Natural,
+  inputTokens: InputTokens,
+  startedAt: Timestamp4,
+  finishedAt: Timestamp4
+}) {
+}
+
+class SemanticQueryResult extends exports_Schema.Class("@effect-agent/capabilities/SemanticQueryResult")({
+  lookup: MemoryLookup,
+  scannedChunks: exports_Schema.Natural,
+  staleExcluded: exports_Schema.Natural,
+  unauthorizedExcluded: exports_Schema.Natural,
+  incomplete: exports_Schema.Boolean,
+  queryBytes: exports_Schema.Natural,
+  inputTokens: InputTokens,
+  startedAt: Timestamp4,
+  finishedAt: Timestamp4
+}) {
+}
+var utf82 = (text2) => {
+  const hex2 = exports_Encoding.encodeHex(text2);
+  return Uint8Array.from({ length: hex2.length / 2 }, (_, index2) => Number.parseInt(hex2.slice(index2 * 2, index2 * 2 + 2), 16));
+};
+var byteLength = (text2) => exports_Encoding.encodeHex(text2).length / 2;
+var invalid2 = (operation) => SemanticMemoryError.make({ operation, reason: "invalid-input" });
+var asSource = (document) => MemoryIndexSource.make({
+  key: document.key,
+  source: document.source,
+  sourceGeneration: document.generation
+});
+var sameSource = (left, right) => left.key.namespace === right.key.namespace && left.key.id === right.key.id && left.generation === right.generation && left.source.revision === right.source.revision && left.source.locator === right.source.locator && left._tag === right._tag;
+var sameIndexSource = (left, right) => left.key.namespace === right.key.namespace && left.key.id === right.key.id && left.source.id === right.source.id && left.source.locator === right.source.locator && left.source.revision === right.source.revision && left.sourceGeneration === right.sourceGeneration;
+var sameProfile = exports_Schema.toEquivalence(SemanticMemoryProfile);
+var decodeIndexState = (state) => exports_Schema.decodeUnknownEffect(MemoryIndexState)(state).pipe(exports_Effect.mapError(() => MemoryIndexError.make({ operation: "validate index state", reason: "corrupt" })));
+var readDocument = exports_Effect.fn("semanticMemory.readDocument")(function* (key) {
+  const reader = yield* MemoryReader;
+  const document = yield* reader.get(key).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument))), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(MemoryStorageError.make({ operation: "validate semantic source", reason: "corrupt" }))));
+  if (document !== null && (document.key.namespace !== key.namespace || document.key.id !== key.id || document.source.id !== key.id)) {
+    return yield* MemoryStorageError.make({
+      operation: "validate semantic source identity",
+      reason: "corrupt"
+    });
+  }
+  return document;
+});
+var embeddings = exports_Effect.fn("semanticMemory.embeddings")(function* (inputs, profile) {
+  const model = yield* exports_EmbeddingModel.EmbeddingModel;
+  const response = yield* model.embedMany(inputs).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(exports_EmbeddingModel.EmbedManyResponse)), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(SemanticMemoryError.make({ operation: "decode embeddings", reason: "invalid-embedding" }))));
+  const tokens = response.usage.inputTokens;
+  if (response.embeddings.length !== inputs.length || tokens !== undefined && (!Number.isSafeInteger(tokens) || tokens < 0) || response.embeddings.some(({ vector }) => {
+    const norm = vector.reduce((sum3, value4) => sum3 + value4 * value4, 0);
+    return vector.length !== profile.dimensions || norm <= 0 || !Number.isFinite(norm);
+  })) {
+    return yield* SemanticMemoryError.make({
+      operation: "validate embeddings",
+      reason: "invalid-embedding"
+    });
+  }
+  return response;
+});
+var chunkText = exports_Effect.fn("semanticMemory.chunkText")(function* (text2, profile, limits) {
+  if (byteLength(text2) > limits.maxSourceBytes) {
+    return yield* SemanticMemoryError.make({ operation: "chunk source", reason: "budget" });
+  }
+  const chunks2 = [];
+  let current = "";
+  let startByte = 0;
+  let currentBytes = 0;
+  for (const codepoint of text2) {
+    const size9 = byteLength(codepoint);
+    if (currentBytes + size9 > profile.maxChunkBytes) {
+      chunks2.push({
+        ordinal: chunks2.length,
+        startByte,
+        endByte: startByte + currentBytes,
+        text: current
+      });
+      startByte += currentBytes;
+      current = "";
+      currentBytes = 0;
+      if (chunks2.length >= limits.maxChunks) {
+        return yield* SemanticMemoryError.make({ operation: "chunk source", reason: "budget" });
+      }
+    }
+    current += codepoint;
+    currentBytes += size9;
+  }
+  if (current.length > 0)
+    chunks2.push({
+      ordinal: chunks2.length,
+      startByte,
+      endByte: startByte + currentBytes,
+      text: current
+    });
+  if (chunks2.length === 0)
+    return yield* invalid2("chunk empty source");
+  return chunks2;
+});
+var indexMemorySource = exports_Effect.fn("indexMemorySource")(function* (key, limits) {
+  const checkedKey = yield* exports_Schema.decodeUnknownEffect(MemoryKey)(key).pipe(exports_Effect.mapError(() => invalid2("index key")));
+  const checkedLimits = yield* exports_Schema.decodeUnknownEffect(SemanticIndexLimits)(limits).pipe(exports_Effect.mapError(() => invalid2("index limits")));
+  return yield* exports_Effect.gen(function* () {
+    const startedAt = yield* exports_Clock.currentTimeMillis;
+    const index2 = yield* SemanticMemoryIndex;
+    const profile = yield* exports_Schema.decodeUnknownEffect(SemanticMemoryProfile)(index2.profile).pipe(exports_Effect.mapError(() => invalid2("index profile")));
+    const document = yield* readDocument(checkedKey);
+    if (document === null || document._tag === "WithdrawnMemoryDocument") {
+      const state2 = document === null ? null : yield* index2.withdraw(asSource(document)).pipe(exports_Effect.flatMap(decodeIndexState));
+      if (document !== null && state2 !== null && (!sameIndexSource(state2, asSource(document)) || state2.status !== "withdrawn" || state2.chunkCount !== 0 || state2.indexedAt !== null)) {
+        return yield* MemoryIndexError.make({
+          operation: "validate index withdrawal",
+          reason: "corrupt"
+        });
+      }
+      return SemanticIndexResult.make({
+        key: checkedKey,
+        status: document === null ? "Missing" : "Withdrawn",
+        state: state2,
+        embeddedChunks: 0,
+        embeddedBytes: 0,
+        inputTokens: null,
+        startedAt,
+        finishedAt: yield* exports_Clock.currentTimeMillis
+      });
+    }
+    const texts = yield* chunkText(document.content.text, profile, checkedLimits);
+    const encodedProfile = yield* exports_Schema.encodeEffect(exports_Schema.fromJsonString(SemanticMemoryProfile))(profile).pipe(exports_Effect.mapError(() => invalid2("encode profile")));
+    const crypto2 = yield* exports_Crypto.Crypto;
+    const fingerprint = yield* crypto2.digest("SHA-256", utf82(encodedProfile)).pipe(exports_Effect.map(exports_Encoding.encodeHex), exports_Effect.mapError(() => SemanticMemoryError.make({ operation: "fingerprint profile", reason: "unavailable" })));
+    const build2 = yield* index2.begin(asSource(document)).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(MemoryIndexBuild)), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(MemoryIndexError.make({ operation: "validate index build", reason: "corrupt" }))));
+    if (!sameProfile(build2.profile, profile) || !sameIndexSource(build2, asSource(document))) {
+      return yield* MemoryIndexError.make({
+        operation: "validate index build identity",
+        reason: "corrupt"
+      });
+    }
+    const response = yield* embeddings(texts.map((chunk) => chunk.text), profile);
+    const chunks2 = [];
+    for (const text2 of texts) {
+      const vector = response.embeddings[text2.ordinal]?.vector;
+      if (vector === undefined)
+        return yield* SemanticMemoryError.make({
+          operation: "embedding count",
+          reason: "invalid-embedding"
+        });
+      chunks2.push(SemanticMemoryChunk.make({
+        ...text2,
+        passageId: `chunk:${fingerprint}:${text2.ordinal}`,
+        vector: [...vector]
+      }));
+    }
+    const latest = yield* readDocument(checkedKey);
+    if (latest === null || !sameSource(document, latest)) {
+      if (latest?._tag === "WithdrawnMemoryDocument")
+        yield* index2.withdraw(asSource(latest));
+      return yield* SemanticMemoryError.make({
+        operation: "publish current source",
+        reason: "source-changed"
+      });
+    }
+    const state = yield* index2.publish({ build: build2, chunks: chunks2 }).pipe(exports_Effect.flatMap(decodeIndexState));
+    if (!sameIndexSource(state, build2) || state.epoch !== build2.epoch || state.status !== "ready" || state.chunkCount !== chunks2.length || state.indexedAt === null) {
+      return yield* MemoryIndexError.make({
+        operation: "validate index publication",
+        reason: "corrupt"
+      });
+    }
+    return SemanticIndexResult.make({
+      key: checkedKey,
+      status: "Indexed",
+      state,
+      embeddedChunks: chunks2.length,
+      embeddedBytes: byteLength(document.content.text),
+      inputTokens: response.usage.inputTokens ?? null,
+      startedAt,
+      finishedAt: yield* exports_Clock.currentTimeMillis
+    });
+  }).pipe(exports_Effect.scoped, exports_Effect.timeoutOrElse({
+    duration: checkedLimits.timeoutMillis,
+    orElse: () => exports_Effect.fail(SemanticMemoryError.make({ operation: "index source", reason: "timeout" }))
+  }));
+});
+var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (query, access3, limits) {
+  const checkedQuery = yield* exports_Schema.decodeUnknownEffect(exports_Schema.NonEmptyString)(query).pipe(exports_Effect.mapError(() => invalid2("query text")));
+  const checkedAccess = yield* exports_Schema.decodeUnknownEffect(MemoryAccess)(access3).pipe(exports_Effect.mapError(() => invalid2("query access")));
+  const checkedLimits = yield* exports_Schema.decodeUnknownEffect(SemanticQueryLimits)(limits).pipe(exports_Effect.mapError(() => invalid2("query limits")));
+  const queryBytes = byteLength(checkedQuery);
+  if (queryBytes > checkedLimits.maxQueryBytes)
+    return yield* SemanticMemoryError.make({ operation: "query bytes", reason: "budget" });
+  return yield* exports_Effect.gen(function* () {
+    const startedAt = yield* exports_Clock.currentTimeMillis;
+    const index2 = yield* SemanticMemoryIndex;
+    const profile = yield* exports_Schema.decodeUnknownEffect(SemanticMemoryProfile)(index2.profile).pipe(exports_Effect.mapError(() => invalid2("query profile")));
+    const response = yield* embeddings([checkedQuery], profile);
+    const vector = response.embeddings[0]?.vector;
+    if (vector === undefined)
+      return yield* SemanticMemoryError.make({
+        operation: "query embedding count",
+        reason: "invalid-embedding"
+      });
+    const found = yield* index2.search(MemoryIndexQuery.make({
+      namespace: checkedAccess.namespace,
+      vector,
+      limit: checkedLimits.maxCandidates,
+      minScore: checkedLimits.minScore,
+      maxScannedChunks: checkedLimits.maxScannedChunks
+    })).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(MemoryIndexSearch)), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(MemoryIndexError.make({ operation: "validate candidates", reason: "corrupt" }))));
+    if (found.candidates.length > checkedLimits.maxCandidates || found.scannedChunks > checkedLimits.maxScannedChunks || found.scannedChunks < found.candidates.length) {
+      return yield* MemoryIndexError.make({
+        operation: "validate candidate bounds",
+        reason: "corrupt"
+      });
+    }
+    const documents = new Map;
+    const passages = [];
+    let staleExcluded = 0;
+    let unauthorizedExcluded = 0;
+    for (const candidate of found.candidates) {
+      if (candidate.key.namespace !== checkedAccess.namespace || candidate.source.id !== candidate.key.id || candidate.score < checkedLimits.minScore) {
+        return yield* MemoryIndexError.make({
+          operation: "validate candidate identity",
+          reason: "corrupt"
+        });
+      }
+      let document = documents.get(candidate.key.id);
+      if (document === undefined) {
+        document = yield* readDocument(candidate.key);
+        documents.set(candidate.key.id, document);
+      }
+      if (document === null || document._tag === "WithdrawnMemoryDocument") {
+        staleExcluded += 1;
+        continue;
+      }
+      if (!document.scopes.includes(checkedAccess.scope)) {
+        unauthorizedExcluded += 1;
+        continue;
+      }
+      if (document.generation !== candidate.sourceGeneration || document.source.revision !== candidate.source.revision || document.source.locator !== candidate.source.locator || !sameExcerpt(document, candidate, profile.maxChunkBytes)) {
+        staleExcluded += 1;
+        continue;
+      }
+      passages.push(MemoryPassage.make({
+        version: 1,
+        source: document.source,
+        passageId: candidate.passageId,
+        content: { ...document.content, text: candidate.text }
+      }));
+    }
+    return SemanticQueryResult.make({
+      lookup: passages.length === 0 ? { _tag: "NoMatch" } : { _tag: "Found", passages },
+      scannedChunks: found.scannedChunks,
+      staleExcluded,
+      unauthorizedExcluded,
+      incomplete: found.incomplete,
+      queryBytes,
+      inputTokens: response.usage.inputTokens ?? null,
+      startedAt,
+      finishedAt: yield* exports_Clock.currentTimeMillis
+    });
+  }).pipe(exports_Effect.scoped, exports_Effect.timeoutOrElse({
+    duration: checkedLimits.timeoutMillis,
+    orElse: () => exports_Effect.fail(SemanticMemoryError.make({ operation: "query memory", reason: "timeout" }))
+  }));
+});
+var sameExcerpt = (document, candidate, maxChunkBytes) => {
+  const hex2 = exports_Encoding.encodeHex(candidate.text);
+  return candidate.startByte < candidate.endByte && hex2.length / 2 === candidate.endByte - candidate.startByte && hex2.length / 2 <= maxChunkBytes && exports_Encoding.encodeHex(document.content.text).slice(candidate.startByte * 2, candidate.endByte * 2) === hex2;
+};
 // packages/capabilities/src/scheduling.ts
 var PositiveInt10 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var RunSchedulingOverride = exports_Schema.Union([
@@ -45330,7 +45902,7 @@ __export(exports_AnthropicClient, {
   AnthropicClient: () => AnthropicClient,
   layer: () => layer17,
   layerConfig: () => layerConfig,
-  make: () => make62
+  make: () => make64
 });
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/ChannelSchema.js
@@ -49127,7 +49699,7 @@ var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet200 = BetaGetSkillVersio
 var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet4XX = BetaErrorResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete200 = BetaDeleteSkillVersionResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete4XX = BetaErrorResponse;
-var make61 = (httpClient, options3 = {}) => {
+var make63 = (httpClient, options3 = {}) => {
   const unexpectedStatus = (response) => flatMap5(orElseSucceed2(response.json, () => "Unexpected status code"), (description) => fail7(new HttpClientError({
     reason: new StatusCodeError({
       request: response.request,
@@ -49916,11 +50488,11 @@ var RedactedAnthropicHeaders = {
   AnthropicApiKey: "x-api-key"
 };
 var withRedactedHeaders = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedAnthropicHeaders)));
-var make62 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make64 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiVersion = options3.apiVersion ?? "2023-06-01";
   const httpClient = baseClient.pipe(mapRequest((request3) => request3.pipe(prependUrl(options3.apiUrl ?? "https://api.anthropic.com"), isNotUndefined(options3.apiKey) ? setHeader(RedactedAnthropicHeaders.AnthropicApiKey, value3(options3.apiKey)) : identity, setHeader("anthropic-version", apiVersion), acceptJson)), isNotUndefined(options3.transformClient) ? options3.transformClient : identity);
-  const client = make61(httpClient, {
+  const client = make63(httpClient, {
     transformClient: fnUntraced2(function* (client2) {
       const config = yield* AnthropicConfig.getOrUndefined;
       if (isNotUndefined(config?.transformClient)) {
@@ -49974,12 +50546,12 @@ var make62 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createMessageStream
   });
 }, withRedactedHeaders);
-var layer17 = (options3) => effect(AnthropicClient, make62(options3));
+var layer17 = (options3) => effect(AnthropicClient, make64(options3));
 var layerConfig = (options3) => effect(AnthropicClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const apiVersion = isNotUndefined(options3?.apiVersion) ? yield* options3.apiVersion : undefined;
-  return yield* make62({
+  return yield* make64({
     apiKey,
     apiUrl,
     apiVersion,
@@ -49991,7 +50563,7 @@ var exports_AnthropicLanguageModel = {};
 __export(exports_AnthropicLanguageModel, {
   Config: () => Config,
   layer: () => layer18,
-  make: () => make63,
+  make: () => make65,
   model: () => model,
   withConfigOverride: () => withConfigOverride
 });
@@ -50670,11 +51242,11 @@ var formatIssue2 = /* @__PURE__ */ makeFormatterDefault();
 
 class Config extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicLanguageModel/Config")) {
 }
-var model = (model2, config) => make58("anthropic", model2, layer18({
+var model = (model2, config) => make60("anthropic", model2, layer18({
   model: model2,
   config
 }));
-var make63 = /* @__PURE__ */ fnUntraced2(function* ({
+var make65 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model2,
   config: providerConfig
 }) {
@@ -50755,7 +51327,7 @@ var make63 = /* @__PURE__ */ fnUntraced2(function* ({
       payload
     };
   });
-  return yield* make57({
+  return yield* make59({
     codecTransformer: toCodecAnthropic,
     generateText: fnUntraced2(function* (options3) {
       const config = yield* makeConfig;
@@ -50797,7 +51369,7 @@ var make63 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer18 = (options3) => effect(LanguageModel, make63(options3));
+var layer18 = (options3) => effect(LanguageModel, make65(options3));
 var withConfigOverride = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config), (config) => provideService2(self, Config, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -52589,15 +53161,15 @@ __export(exports_OpenAiClient, {
   layer: () => layer19,
   layerConfig: () => layerConfig2,
   layerWebSocketMode: () => layerWebSocketMode,
-  make: () => make65,
+  make: () => make67,
   withWebSocketMode: () => withWebSocketMode
 });
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/socket/Socket.js
-var TypeId60 = "~effect/socket/Socket";
+var TypeId61 = "~effect/socket/Socket";
 var Socket = /* @__PURE__ */ Service("effect/socket/Socket");
-var make64 = (options3) => Socket.of({
-  [TypeId60]: TypeId60,
+var make66 = (options3) => Socket.of({
+  [TypeId61]: TypeId61,
   runRaw: options3.runRaw,
   run: options3.run ?? ((handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(encoder3.encode(data)) : data instanceof Uint8Array ? handler(data) : handler(new Uint8Array(data)), opts)),
   runString: options3.runString ?? (options3.run ? (handler, opts) => options3.run((data) => handler(decoder2.decode(data)), opts) : (handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(data) : data instanceof Uint8Array ? handler(decoder2.decode(data)) : handler(decoder2.decode(new Uint8Array(data))), opts)),
@@ -52702,7 +53274,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
   const acquireContext = fiber3.context;
   const closeCodeIsError = options3?.closeCodeIsError ?? defaultCloseCodeIsError;
   const runRaw = (handler, opts) => scopedWith2(fnUntraced2(function* (scope3) {
-    const fiberSet = yield* make53().pipe(provide(scope3));
+    const fiberSet = yield* make55().pipe(provide(scope3));
     const ws = yield* provide(acquire, scope3);
     const run5 = yield* provideService2(runtime(fiberSet)(), WebSocket, ws);
     let open3 = false;
@@ -52800,7 +53372,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
     }
   }));
   const writer = succeed7(write2);
-  return succeed7(make64({
+  return succeed7(make66({
     runRaw,
     writer
   }));
@@ -53494,7 +54066,7 @@ var RedactedOpenAiHeaders = {
   OpenAiProject: "OpenAI-Project"
 };
 var withRedactedHeaders2 = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedOpenAiHeaders)));
-var make65 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make67 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiUrl = options3.apiUrl ?? "https://api.openai.com/v1";
   const httpClient = baseClient.pipe(mapRequest(flow(prependUrl(apiUrl), options3.apiKey ? bearerToken(value3(options3.apiKey)) : identity, options3.organizationId ? setHeader(RedactedOpenAiHeaders.OpenAiOrganization, value3(options3.organizationId)) : identity, options3.projectId ? setHeader(RedactedOpenAiHeaders.OpenAiProject, value3(options3.projectId)) : identity, acceptJson)), filterStatusOk2, options3.transformClient ? options3.transformClient : identity);
@@ -53540,13 +54112,13 @@ var make65 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createEmbedding
   });
 }, withRedactedHeaders2);
-var layer19 = (options3) => effect(OpenAiClient, make65(options3));
+var layer19 = (options3) => effect(OpenAiClient, make67(options3));
 var layerConfig2 = (options3) => effect(OpenAiClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const organizationId = isNotUndefined(options3?.organizationId) ? yield* options3.organizationId : undefined;
   const projectId = isNotUndefined(options3?.projectId) ? yield* options3.projectId : undefined;
-  return yield* make65({
+  return yield* make67({
     apiKey,
     apiUrl,
     organizationId,
@@ -53559,7 +54131,7 @@ class OpenAiSocket extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiC
 }
 var makeSocket = /* @__PURE__ */ gen4(function* () {
   const client = yield* OpenAiClient;
-  const tracker = yield* make55;
+  const tracker = yield* make57;
   const socketScope = yield* scope2;
   const makeRequest = flatMap5(OpenAiConfig.getOrUndefined, (config) => {
     const httpClient = isNotUndefined(config?.transformClient) ? config.transformClient(client.client) : client.client;
@@ -53706,7 +54278,7 @@ var exports_OpenAiLanguageModel = {};
 __export(exports_OpenAiLanguageModel, {
   Config: () => Config2,
   layer: () => layer20,
-  make: () => make66,
+  make: () => make68,
   model: () => model2,
   withConfigOverride: () => withConfigOverride2
 });
@@ -53757,11 +54329,11 @@ var SharedModelIds = ModelIdsShared.members[1];
 
 class Config2 extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiLanguageModel/Config")) {
 }
-var model2 = (model3, config) => make58("openai", model3, layer20({
+var model2 = (model3, config) => make60("openai", model3, layer20({
   model: model3,
   config
 }));
-var make66 = /* @__PURE__ */ fnUntraced2(function* ({
+var make68 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model3,
   config: providerConfig
 }) {
@@ -53822,7 +54394,7 @@ var make66 = /* @__PURE__ */ fnUntraced2(function* ({
       request3.previous_response_id = options3.previousResponseId;
     return request3;
   });
-  return yield* make57({
+  return yield* make59({
     codecTransformer: toCodecOpenAI,
     generateText: fnUntraced2(function* (options3) {
       const config = yield* makeConfig;
@@ -53865,7 +54437,7 @@ var make66 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer20 = (options3) => effect(LanguageModel, make66(options3));
+var layer20 = (options3) => effect(LanguageModel, make68(options3));
 var withConfigOverride2 = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config2), (config) => provideService2(self, Config2, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides

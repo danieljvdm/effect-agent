@@ -1,0 +1,136 @@
+import {
+  MemoryAccess,
+  indexMemorySource,
+  querySemanticMemory,
+  recallMemory,
+} from "@effect-agent/capabilities";
+import { MemoryKey, MemoryWriter, SemanticMemoryProfile } from "@effect-agent/core";
+import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory";
+import { memoryStoreLayer } from "@effect-agent/storage-sqlite";
+import { NodeCrypto } from "@effect/platform-node";
+import { SqliteClient } from "@effect/sql-sqlite-node";
+import { expect, it } from "@effect/vitest";
+import { Effect, Layer } from "effect";
+import { EmbeddingModel } from "effect/unstable/ai";
+
+const key = MemoryKey.make({ namespace: "team", id: "proposal" });
+const access = MemoryAccess.make({ namespace: key.namespace, scope: "channel" });
+const profile = SemanticMemoryProfile.make({
+  version: 1,
+  provider: "deterministic-port-fixture",
+  model: "two-dimensional",
+  modelRevision: "1",
+  dimensions: 2,
+  chunker: "utf8-codepoint@1",
+  maxChunkBytes: 64,
+  distance: "cosine",
+});
+const indexLimits = { maxSourceBytes: 1_024, maxChunks: 8, timeoutMillis: 1_000 };
+const queryLimits = {
+  maxQueryBytes: 128,
+  maxCandidates: 3,
+  maxScannedChunks: 8,
+  minScore: 0.35,
+  timeoutMillis: 1_000,
+};
+const sql = SqliteClient.layer({ filename: ":memory:" });
+const services = Layer.mergeAll(
+  memoryStoreLayer.pipe(Layer.provide(sql)),
+  inMemorySemanticIndexLayer(profile, { maxSources: 1, maxChunks: 8 }),
+  Layer.effect(
+    EmbeddingModel.EmbeddingModel,
+    EmbeddingModel.make({
+      embedMany: ({ inputs }) =>
+        Effect.succeed({
+          results: inputs.map(() => [1, 0]),
+          usage: { inputTokens: undefined },
+        }),
+    }),
+  ),
+  NodeCrypto.layer,
+);
+
+it.effect(
+  "composes SQLite authority, native embeddings, the real index, and bounded recall across correction and withdrawal",
+  () =>
+    Effect.gen(function* () {
+      const writer = yield* MemoryWriter;
+      const content = {
+        text: "Dan proposes a queue.",
+        attributions: [
+          {
+            originId: "dan:1",
+            speaker: "Dan",
+            observers: ["Chad"],
+            locator: "chat://engineering/1",
+            activityAt: 10,
+            interpretation: "proposal",
+          },
+        ],
+        metadata: {},
+        recordedAt: 20,
+        extractedAt: 30,
+      };
+      yield* writer.change({
+        _tag: "Put",
+        key,
+        operationId: "initial",
+        expectedRevision: null,
+        locator: "memory://proposal",
+        content,
+        scopes: [access.scope],
+      });
+      yield* indexMemorySource(key, indexLimits);
+      const initial = yield* querySemanticMemory("queue", access, queryLimits);
+      const recalled = yield* recallMemory(
+        [{ id: "semantic", essential: true, read: Effect.succeed(initial.lookup) }],
+        {
+          maxSources: 1,
+          maxItems: 1,
+          maxBytes: 4_096,
+          maxTokens: 4_096,
+          timeoutMillis: 1_000,
+        },
+      );
+      expect(recalled.passages).toMatchObject([{ source: { id: key.id, revision: "1" }, content }]);
+
+      const corrected = { ...content, text: "Dan proposes a scheduler instead." };
+      yield* writer.change({
+        _tag: "Put",
+        key,
+        operationId: "correction",
+        expectedRevision: "1",
+        locator: "memory://proposal",
+        content: corrected,
+        scopes: [access.scope],
+      });
+      expect(yield* querySemanticMemory("queue", access, queryLimits)).toMatchObject({
+        lookup: { _tag: "NoMatch" },
+        staleExcluded: 1,
+      });
+      yield* indexMemorySource(key, indexLimits);
+      expect((yield* querySemanticMemory("scheduler", access, queryLimits)).lookup).toMatchObject({
+        _tag: "Found",
+        passages: [{ source: { revision: "2" }, content: corrected }],
+      });
+      yield* writer.change({
+        _tag: "Withdraw",
+        key,
+        operationId: "withdrawal",
+        expectedRevision: "2",
+        reason: "withdrawn",
+      });
+      expect(yield* querySemanticMemory("scheduler", access, queryLimits)).toMatchObject({
+        lookup: { _tag: "NoMatch" },
+        staleExcluded: 1,
+      });
+      expect(yield* indexMemorySource(key, indexLimits)).toMatchObject({
+        status: "Withdrawn",
+        embeddedChunks: 0,
+      });
+      expect(yield* querySemanticMemory("scheduler", access, queryLimits)).toMatchObject({
+        lookup: { _tag: "NoMatch" },
+        scannedChunks: 0,
+      });
+    }).pipe(Effect.provide(services)),
+);

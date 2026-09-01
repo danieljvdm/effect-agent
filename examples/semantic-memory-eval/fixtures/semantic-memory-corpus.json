@@ -1,0 +1,321 @@
+{
+  "version": 1,
+  "kind": "synthetic-labeled-semantic-memory-regression",
+  "documents": [
+    {
+      "id": "alex-role-old",
+      "text": "Alex was listed as incident commander for the Aurora rollout.",
+      "speaker": "Nina",
+      "observers": ["Alex", "Ravi"],
+      "interpretation": "superseded role record",
+      "activityDaysAgo": 21,
+      "originId": "origin:alex-role",
+      "state": "withdrawn"
+    },
+    {
+      "id": "alex-role-current",
+      "text": "Correction: Alex is release captain for Aurora; Ravi is incident commander.",
+      "speaker": "Nina",
+      "observers": ["Alex", "Ravi"],
+      "interpretation": "corrected role record",
+      "activityDaysAgo": 19,
+      "originId": "origin:alex-role",
+      "state": "active",
+      "previousText": "Alex was listed as incident commander for the Aurora rollout."
+    },
+    {
+      "id": "cache-proposal-large",
+      "text": "Bo proposed a 24-hour cache for catalog search to reduce database load.",
+      "speaker": "Bo",
+      "observers": ["Dana", "Inez"],
+      "interpretation": "proposal",
+      "activityDaysAgo": 17,
+      "originId": "origin:cache-large",
+      "state": "active"
+    },
+    {
+      "id": "cache-proposal-small",
+      "text": "Inez proposed a five-minute catalog-search cache so price changes stay visible.",
+      "speaker": "Inez",
+      "observers": ["Bo", "Dana"],
+      "interpretation": "proposal",
+      "activityDaysAgo": 16,
+      "originId": "origin:cache-small",
+      "state": "active"
+    },
+    {
+      "id": "cache-decision",
+      "text": "Decision: catalog search uses a five-minute cache. Revisit after the holiday sale.",
+      "speaker": "Dana",
+      "observers": ["Bo", "Inez"],
+      "interpretation": "lasting decision",
+      "activityDaysAgo": 15,
+      "originId": "origin:cache-decision",
+      "state": "active"
+    },
+    {
+      "id": "cache-proposal-withdrawn",
+      "text": "Bo withdrew the 24-hour cache proposal after seeing same-day price corrections.",
+      "speaker": "Bo",
+      "observers": ["Dana"],
+      "interpretation": "withdrawn proposal",
+      "activityDaysAgo": 14,
+      "originId": "origin:cache-large",
+      "state": "withdrawn"
+    },
+    {
+      "id": "deploy-staging-old",
+      "text": "Earlier plan: deploy Aurora to staging on Thursday, then decide about production.",
+      "speaker": "Ravi",
+      "observers": ["Alex", "Maya"],
+      "interpretation": "superseded rollout discussion",
+      "activityDaysAgo": 13,
+      "originId": "origin:aurora-deploy",
+      "state": "withdrawn"
+    },
+    {
+      "id": "deploy-production-decision",
+      "text": "Decision: Aurora goes to production Friday at 14:00 UTC after the smoke check.",
+      "speaker": "Ravi",
+      "observers": ["Alex", "Maya"],
+      "interpretation": "lasting deployment decision",
+      "activityDaysAgo": 12,
+      "originId": "origin:aurora-deploy",
+      "state": "active"
+    },
+    {
+      "id": "deploy-assistant-reference",
+      "text": "Assistant note: cite Ravi's production-Friday decision; this is the same rollout evidence.",
+      "speaker": "Assistant",
+      "observers": ["Ravi"],
+      "interpretation": "reference to original decision",
+      "activityDaysAgo": 11,
+      "originId": "origin:aurora-deploy",
+      "state": "active"
+    },
+    {
+      "id": "deploy-recent-chatter",
+      "text": "Maya said the smoke dashboard colors are easier to read after the CSS cleanup.",
+      "speaker": "Maya",
+      "observers": ["Alex"],
+      "interpretation": "recent discussion",
+      "activityDaysAgo": 1,
+      "originId": "origin:dashboard-colors",
+      "state": "active"
+    },
+    {
+      "id": "runbook-commitment-open",
+      "text": "Maya committed to draft the rollback runbook before Aurora's Friday release.",
+      "speaker": "Maya",
+      "observers": ["Ravi"],
+      "interpretation": "unresolved commitment",
+      "activityDaysAgo": 10,
+      "originId": "origin:rollback-runbook",
+      "state": "active"
+    },
+    {
+      "id": "runbook-commitment-completed",
+      "text": "Maya completed the rollback runbook draft and shared it with Ravi.",
+      "speaker": "Maya",
+      "observers": ["Ravi"],
+      "interpretation": "completed commitment",
+      "activityDaysAgo": 4,
+      "originId": "origin:rollback-runbook-completed",
+      "state": "active"
+    },
+    {
+      "id": "vendor-commitment-open",
+      "text": "Luis will send the accessibility vendor questions by Wednesday; no reply has arrived yet.",
+      "speaker": "Luis",
+      "observers": ["Nina"],
+      "interpretation": "unresolved commitment",
+      "activityDaysAgo": 3,
+      "originId": "origin:vendor-questions",
+      "state": "active"
+    },
+    {
+      "id": "api-json-old",
+      "text": "Earlier API note: the mobile sync endpoint would return JSON payloads.",
+      "speaker": "Nina",
+      "observers": ["Luis", "Bo"],
+      "interpretation": "superseded technical discussion",
+      "activityDaysAgo": 18,
+      "originId": "origin:mobile-wire-format",
+      "state": "withdrawn"
+    },
+    {
+      "id": "api-protobuf-decision",
+      "text": "Decision: mobile sync uses Protocol Buffers; JSON remains only for the debug endpoint.",
+      "speaker": "Luis",
+      "observers": ["Nina", "Bo"],
+      "interpretation": "lasting technical decision",
+      "activityDaysAgo": 9,
+      "originId": "origin:mobile-wire-format",
+      "state": "active"
+    },
+    {
+      "id": "budget-proposal-low",
+      "text": "Inez proposed a 50 dollar monthly limit for image-rendering experiments.",
+      "speaker": "Inez",
+      "observers": ["Dana", "Bo"],
+      "interpretation": "proposal",
+      "activityDaysAgo": 8,
+      "originId": "origin:image-budget-low",
+      "state": "active"
+    },
+    {
+      "id": "budget-proposal-high",
+      "text": "Bo proposed a 200 dollar monthly limit for image-rendering experiments.",
+      "speaker": "Bo",
+      "observers": ["Dana", "Inez"],
+      "interpretation": "proposal",
+      "activityDaysAgo": 8,
+      "originId": "origin:image-budget-high",
+      "state": "active"
+    },
+    {
+      "id": "budget-decision",
+      "text": "Decision: image-rendering experiments have a 50 dollar monthly cap until usage is reviewed.",
+      "speaker": "Dana",
+      "observers": ["Bo", "Inez"],
+      "interpretation": "lasting decision",
+      "activityDaysAgo": 7,
+      "originId": "origin:image-budget-decision",
+      "state": "active"
+    },
+    {
+      "id": "sso-commitment-completed",
+      "text": "Nina finished the SSO migration checklist and closed the tracking task.",
+      "speaker": "Nina",
+      "observers": ["Luis"],
+      "interpretation": "completed commitment",
+      "activityDaysAgo": 2,
+      "originId": "origin:sso-checklist",
+      "state": "active"
+    },
+    {
+      "id": "garden-note",
+      "text": "Bo recommended mint tea for the office planter watering schedule.",
+      "speaker": "Bo",
+      "observers": ["Maya"],
+      "interpretation": "unrelated conversation",
+      "activityDaysAgo": 1,
+      "originId": "origin:garden-note",
+      "state": "active"
+    }
+  ],
+  "queries": [
+    {
+      "id": "locator-release-current",
+      "text": "memory://evaluation/deploy-production-decision",
+      "category": "direct-locator",
+      "usefulIds": ["deploy-production-decision"],
+      "forbiddenIds": ["deploy-staging-old"]
+    },
+    {
+      "id": "locator-wire-format",
+      "text": "memory://evaluation/api-protobuf-decision",
+      "category": "direct-locator",
+      "usefulIds": ["api-protobuf-decision"],
+      "forbiddenIds": ["api-json-old"]
+    },
+    {
+      "id": "paraphrase-production-date",
+      "text": "When is the Aurora launch reaching real users?",
+      "category": "semantic-paraphrase",
+      "usefulIds": ["deploy-production-decision"],
+      "forbiddenIds": ["deploy-staging-old"]
+    },
+    {
+      "id": "paraphrase-role-correction",
+      "text": "Who owns release coordination, and who handles an outage?",
+      "category": "corrected-role",
+      "usefulIds": ["alex-role-current"],
+      "forbiddenIds": ["alex-role-old"]
+    },
+    {
+      "id": "cache-proposals",
+      "text": "What alternatives did people suggest for keeping search results around?",
+      "category": "conflicting-proposals",
+      "usefulIds": ["cache-proposal-large", "cache-proposal-small"],
+      "forbiddenIds": []
+    },
+    {
+      "id": "cache-current-policy",
+      "text": "How long may catalog search show stored results?",
+      "category": "lasting-decision",
+      "usefulIds": ["cache-decision"],
+      "forbiddenIds": ["cache-proposal-large", "cache-proposal-withdrawn"]
+    },
+    {
+      "id": "withdrawn-cache-idea",
+      "text": "Is the day-long catalog cache still an option?",
+      "category": "withdrawn-discussion",
+      "usefulIds": ["cache-decision"],
+      "forbiddenIds": ["cache-proposal-large", "cache-proposal-withdrawn"]
+    },
+    {
+      "id": "wire-format",
+      "text": "What encoding will the phone synchronization service speak?",
+      "category": "semantic-paraphrase",
+      "usefulIds": ["api-protobuf-decision"],
+      "forbiddenIds": ["api-json-old"]
+    },
+    {
+      "id": "lasting-decision-amid-chatter",
+      "text": "Ignore the latest dashboard comments: what rollout decision remains in force?",
+      "category": "stale-versus-lasting-decision",
+      "usefulIds": ["deploy-production-decision"],
+      "forbiddenIds": ["deploy-staging-old", "deploy-recent-chatter"]
+    },
+    {
+      "id": "open-commitments",
+      "text": "Which promised work has not been finished yet?",
+      "category": "unresolved-commitments",
+      "usefulIds": ["runbook-commitment-open", "vendor-commitment-open"],
+      "forbiddenIds": ["runbook-commitment-completed", "sso-commitment-completed"]
+    },
+    {
+      "id": "runbook-status",
+      "text": "Do we still need Maya to prepare the rollback instructions?",
+      "category": "completed-versus-open",
+      "usefulIds": ["runbook-commitment-completed"],
+      "forbiddenIds": ["runbook-commitment-open"]
+    },
+    {
+      "id": "budget-proposals",
+      "text": "Which spending limits were argued for on image experiments?",
+      "category": "conflicting-proposals",
+      "usefulIds": ["budget-proposal-low", "budget-proposal-high"],
+      "forbiddenIds": []
+    },
+    {
+      "id": "budget-current-cap",
+      "text": "What is the present monthly ceiling for image generation trials?",
+      "category": "lasting-decision",
+      "usefulIds": ["budget-decision"],
+      "forbiddenIds": ["budget-proposal-high"]
+    },
+    {
+      "id": "same-origin-reference",
+      "text": "What evidence supports the Friday production rollout?",
+      "category": "attribution-deduplication",
+      "usefulIds": ["deploy-production-decision", "deploy-assistant-reference"],
+      "forbiddenIds": ["deploy-staging-old"]
+    },
+    {
+      "id": "negative-evidence",
+      "text": "Which team approved a redesign of the payroll tax rules?",
+      "category": "negative-no-evidence",
+      "usefulIds": [],
+      "forbiddenIds": []
+    },
+    {
+      "id": "negative-unrelated",
+      "text": "Who selected the office coffee supplier?",
+      "category": "negative-no-evidence",
+      "usefulIds": [],
+      "forbiddenIds": []
+    }
+  ]
+}
