@@ -179,6 +179,35 @@ describe("bounded memory recall", () => {
   );
 
   it.effect(
+    "rejects conflicting identities after an omitted passage without deduplicating omissions",
+    () =>
+      Effect.gen(function* () {
+        const compact = passage("claim", "deliver synchronously");
+        const oversized = passage("claim", "use a queue ".repeat(2_000));
+        const one = yield* recallMemory([source("compact", found(compact))], limits);
+        const bounded = MemoryRecallLimits.make({
+          ...limits,
+          maxBytes: one.bytes,
+          maxTokens: one.estimatedTokens,
+        });
+        const omitted = yield* recallMemory(
+          [source("omitted", found(oversized, oversized))],
+          bounded,
+        );
+        expect(omitted.outcomes[0]).toMatchObject({ selected: 0, deduplicated: 0, omitted: 2 });
+        expect(
+          yield* recallMemory([source("conflicting", found(oversized, compact))], bounded).pipe(
+            Effect.flip,
+          ),
+        ).toMatchObject({
+          _tag: "MemoryRecallError",
+          reason: "invalid-input",
+          sourceId: "conflicting",
+        });
+      }),
+  );
+
+  it.effect(
     "bounds source identities from a single retriever and retains the validated tokenizer result",
     () =>
       Effect.gen(function* () {

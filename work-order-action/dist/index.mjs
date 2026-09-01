@@ -43594,7 +43594,8 @@ var recallMemory = exports_Effect.fn("recallMemory")(function* (sources, limits,
   }
   return yield* exports_Effect.gen(function* () {
     const selected = [];
-    const seen = new Map;
+    const claims = new Map;
+    const selectedIdentities = new Set;
     const selectedSources = new Set;
     let estimatedTokens = 0;
     const outcomes = [];
@@ -43628,15 +43629,16 @@ var recallMemory = exports_Effect.fn("recallMemory")(function* (sources, limits,
       for (const passage of result4.passages) {
         const key = identity3(passage);
         const encoded = JSON.stringify(passage);
-        const previous = seen.get(key);
-        if (previous !== undefined) {
-          if (previous !== encoded) {
-            return yield* MemoryRecallError.make({
-              reason: "invalid-input",
-              sourceId: source.id,
-              message: "Conflicting passages claim the same source revision and identity"
-            });
-          }
+        const previous = claims.get(key);
+        if (previous !== undefined && previous !== encoded) {
+          return yield* MemoryRecallError.make({
+            reason: "invalid-input",
+            sourceId: source.id,
+            message: "Conflicting passages claim the same source revision and identity"
+          });
+        }
+        claims.set(key, encoded);
+        if (selectedIdentities.has(key)) {
           deduplicated += 1;
           continue;
         }
@@ -43654,7 +43656,7 @@ var recallMemory = exports_Effect.fn("recallMemory")(function* (sources, limits,
           continue;
         }
         selected.push(passage);
-        seen.set(key, encoded);
+        selectedIdentities.add(key);
         selectedSources.add(passage.source.id);
         estimatedTokens = tokens;
         accepted += 1;

@@ -64,6 +64,7 @@ const render = (passages: ReadonlyArray<MemoryPassage>): string =>
  * must have a represented passage when they return matches, including exact duplicates.
  * maxSources bounds both reader declarations and distinct selected source IDs. No-match is successful even when
  * essential. Optional unavailable/stale sources remain visible in outcomes. Nothing is cached.
+ * Conflicting identities are rejected even when an earlier passage does not fit the budget.
  *
  * The default estimate is one token per UTF-8 byte. Supply the selected model's tokenizer
  * for tighter selection. The engine independently enforces its full per-call context budget.
@@ -100,7 +101,8 @@ export const recallMemory = Effect.fn("recallMemory")(function* <E = never, R = 
   }
   return yield* Effect.gen(function* () {
     const selected: Array<MemoryPassage> = [];
-    const seen = new Map<string, string>();
+    const claims = new Map<string, string>();
+    const selectedIdentities = new Set<string>();
     const selectedSources = new Set<string>();
     let estimatedTokens = 0;
     const outcomes: Array<typeof MemorySourceOutcome.Type> = [];
@@ -138,15 +140,16 @@ export const recallMemory = Effect.fn("recallMemory")(function* <E = never, R = 
       for (const passage of result.passages) {
         const key = identity(passage);
         const encoded = JSON.stringify(passage);
-        const previous = seen.get(key);
-        if (previous !== undefined) {
-          if (previous !== encoded) {
-            return yield* MemoryRecallError.make({
-              reason: "invalid-input",
-              sourceId: source.id,
-              message: "Conflicting passages claim the same source revision and identity",
-            });
-          }
+        const previous = claims.get(key);
+        if (previous !== undefined && previous !== encoded) {
+          return yield* MemoryRecallError.make({
+            reason: "invalid-input",
+            sourceId: source.id,
+            message: "Conflicting passages claim the same source revision and identity",
+          });
+        }
+        claims.set(key, encoded);
+        if (selectedIdentities.has(key)) {
           deduplicated += 1;
           continue;
         }
@@ -169,7 +172,7 @@ export const recallMemory = Effect.fn("recallMemory")(function* <E = never, R = 
           continue;
         }
         selected.push(passage);
-        seen.set(key, encoded);
+        selectedIdentities.add(key);
         selectedSources.add(passage.source.id);
         estimatedTokens = tokens;
         accepted += 1;
