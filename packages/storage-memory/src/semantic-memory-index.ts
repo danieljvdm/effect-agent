@@ -17,17 +17,22 @@ const MaxStoredVectorComponents = 16_777_216;
 
 /**
  * Hard per-Layer bounds for disposable semantic index state. maxChunks times profile dimensions
- * must not exceed 16,777,216 vector components.
+ * must not exceed 16,777,216 vector components. maxSourceBytes bounds the aggregate UTF-8 JSON
+ * of retained source identities and defaults to 16 MiB; it is not a general heap limit.
  */
 export class InMemorySemanticIndexCapacity extends Schema.Class<InMemorySemanticIndexCapacity>(
   "@effect-agent/storage-memory/InMemorySemanticIndexCapacity",
 )({
   maxSources: PositiveCapacity,
   maxChunks: PositiveCapacity,
+  maxSourceBytes: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 67_108_864 })),
+  ),
 }) {}
 
 type StoredEntry = {
   readonly source: MemoryIndexSource;
+  readonly sourceBytes: number;
 } & (
   | {
       readonly _tag: "Indexed";
@@ -40,6 +45,7 @@ type StoredEntry = {
 interface IndexData {
   readonly closed: boolean;
   readonly entries: ReadonlyMap<string, StoredEntry>;
+  readonly sourceBytes: number;
 }
 
 const sameProfile = Schema.toEquivalence(SemanticMemoryProfile);
@@ -47,6 +53,8 @@ const sameSource = Schema.toEquivalence(MemoryIndexSource);
 const error = (operation: string, reason: MemoryIndexError["reason"]): MemoryIndexError =>
   MemoryIndexError.make({ operation, reason });
 const keyString = (key: MemoryKey): string => JSON.stringify([key.namespace, key.id]);
+const sourceIdentityBytes = (source: MemoryIndexSource): number =>
+  Encoding.encodeHex(JSON.stringify(source)).length / 2;
 
 const decodeBoundary = Effect.fn("InMemorySemanticIndex.decodeBoundary")(function* <A, I>(
   schema: Schema.Codec<A, I, never>,
@@ -149,8 +157,11 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
   if (capacity.maxChunks * profile.dimensions > MaxStoredVectorComponents) {
     return yield* error("configure semantic memory index", "invalid-input");
   }
-  const data = yield* Ref.make<IndexData>({ closed: false, entries: new Map() });
-  yield* Effect.addFinalizer(() => Ref.set(data, { closed: true, entries: new Map() }));
+  const maxSourceBytes = capacity.maxSourceBytes ?? 16_777_216;
+  const data = yield* Ref.make<IndexData>({ closed: false, entries: new Map(), sourceBytes: 0 });
+  yield* Effect.addFinalizer(() =>
+    Ref.set(data, { closed: true, entries: new Map(), sourceBytes: 0 }),
+  );
 
   const ensureOpen = Effect.fn("InMemorySemanticIndex.ensureOpen")(function* (operation: string) {
     if ((yield* Ref.get(data)).closed) return yield* error(operation, "unavailable");
@@ -163,6 +174,7 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
     yield* ensureOpen(operation);
     const request = yield* decodeBoundary(MemoryIndexReplacement, rawRequest, operation);
     const source = freezeSource(request.source);
+    const sourceBytes = sourceIdentityBytes(source);
     const chunks = Object.freeze(request.chunks.map(freezeChunk));
     if (source.source.id !== source.key.id) return yield* error(operation, "invalid-input");
     if (!sameProfile(request.profile, profile)) return yield* error(operation, "incompatible");
@@ -183,14 +195,16 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
         if (existing === undefined && current.entries.size >= capacity.maxSources) {
           return [error(operation, "budget"), current];
         }
+        const nextSourceBytes = current.sourceBytes - (existing?.sourceBytes ?? 0) + sourceBytes;
+        if (nextSourceBytes > maxSourceBytes) return [error(operation, "budget"), current];
         let count = chunks.length;
         for (const [entryId, entry] of current.entries) {
           if (entryId !== id && entry._tag === "Indexed") count += entry.chunks.length;
         }
         if (count > capacity.maxChunks) return [error(operation, "budget"), current];
         const entries = new Map(current.entries);
-        entries.set(id, { _tag: "Indexed", source, chunks, indexedAt });
-        return [undefined, { ...current, entries }];
+        entries.set(id, { _tag: "Indexed", source, sourceBytes, chunks, indexedAt });
+        return [undefined, { ...current, entries, sourceBytes: nextSourceBytes }];
       },
     );
     if (failure !== undefined) return yield* failure;
@@ -202,6 +216,7 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
     const operation = "withdraw semantic memory source";
     yield* ensureOpen(operation);
     const source = freezeSource(yield* decodeBoundary(MemoryIndexSource, rawSource, operation));
+    const sourceBytes = sourceIdentityBytes(source);
     if (source.source.id !== source.key.id) return yield* error(operation, "invalid-input");
     const failure = yield* Ref.modify(
       data,
@@ -220,9 +235,11 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
         } else if (current.entries.size >= capacity.maxSources) {
           return [error(operation, "budget"), current];
         }
+        const nextSourceBytes = current.sourceBytes - (existing?.sourceBytes ?? 0) + sourceBytes;
+        if (nextSourceBytes > maxSourceBytes) return [error(operation, "budget"), current];
         const entries = new Map(current.entries);
-        entries.set(id, { _tag: "Withdrawn", source });
-        return [undefined, { ...current, entries }];
+        entries.set(id, { _tag: "Withdrawn", source, sourceBytes });
+        return [undefined, { ...current, entries, sourceBytes: nextSourceBytes }];
       },
     );
     if (failure !== undefined) return yield* failure;

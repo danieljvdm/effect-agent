@@ -130,6 +130,71 @@ describe("in-memory semantic index", () => {
       }).pipe(Effect.provide(layer())),
   );
 
+  it.effect("bounds source identities atomically and releases replaced identity bytes", () => {
+    const original = source("a", 1, "1", `memory://${"🌊".repeat(200)}`);
+    const originalBytes = Encoding.encodeHex(JSON.stringify(original)).length / 2;
+    return Effect.gen(function* () {
+      const index = yield* SemanticMemoryIndex;
+      const chunks = [chunk("current", 0, 0, "current", [1, 0])];
+      const larger = source("a", 2, "2", `${original.source.locator}x`);
+      const other = source("b");
+      yield* index.replace({ source: original, profile, chunks });
+      yield* index.replace({ source: original, profile, chunks });
+      const before = yield* index.search(query([1, 0]));
+      for (const change of [
+        index.replace({ source: larger, profile, chunks }),
+        index.withdraw(larger),
+        index.replace({ source: other, profile, chunks }),
+        index.withdraw(other),
+      ]) {
+        expect(yield* change.pipe(Effect.flip)).toMatchObject({ reason: "budget" });
+        expect(yield* index.search(query([1, 0]))).toEqual(before);
+      }
+      const smaller = source("a", 2);
+      yield* index.replace({ source: smaller, profile, chunks });
+      yield* index.withdraw(other);
+      yield* index.withdraw(other);
+      yield* index.withdraw(smaller);
+      yield* index.withdraw(smaller);
+      expect((yield* index.search(query([1, 0]))).candidates).toEqual([]);
+      expect(
+        yield* index.replace({ source: other, profile, chunks }).pipe(Effect.flip),
+      ).toMatchObject({ reason: "fenced" });
+    }).pipe(
+      Effect.provide(
+        layer(profile, {
+          maxSources: 2,
+          maxChunks: 2,
+          maxSourceBytes: originalBytes,
+        }),
+      ),
+    );
+  });
+
+  it.effect("charges tombstones against the exact UTF-8 source identity boundary", () => {
+    const tombstone = source("gone", 1, "1", "memory://🌊");
+    const bytes = Encoding.encodeHex(JSON.stringify(tombstone)).length / 2;
+    return Effect.gen(function* () {
+      for (const maxSourceBytes of [bytes - 1, bytes]) {
+        yield* Effect.gen(function* () {
+          const index = yield* SemanticMemoryIndex;
+          if (maxSourceBytes < bytes) {
+            expect(yield* index.withdraw(tombstone).pipe(Effect.flip)).toMatchObject({
+              reason: "budget",
+            });
+            yield* index.withdraw(source("gone", 1, "1", "m"));
+          } else {
+            yield* index.withdraw(tombstone);
+            yield* index.withdraw(tombstone);
+            expect(yield* index.withdraw(source("next")).pipe(Effect.flip)).toMatchObject({
+              reason: "budget",
+            });
+          }
+        }).pipe(Effect.provide(layer(profile, { maxSources: 2, maxChunks: 2, maxSourceBytes })));
+      }
+    });
+  });
+
   it.effect(
     "keeps the last index on rejected refresh and measures capacity after replacement",
     () =>

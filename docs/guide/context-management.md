@@ -664,6 +664,12 @@ instead of ranking an arbitrary prefix. Scores tie by source ID, revision, and c
 Configuration rejects `maxChunks * profile.dimensions` above 16,777,216 vector components before
 allocating index state. For a 4,096-dimensional profile, set `maxChunks` to at most 4,096. This bounds
 stored vectors, not total process memory or allocations made by callers.
+`maxSourceBytes` caps the aggregate UTF-8 JSON of retained source identities, including terminal
+tombstones. It defaults to 16 MiB and accepts at most 64 MiB. Replacement and withdrawal check
+this bound atomically before changing the index. A rejected change leaves the prior source and
+chunks intact; a smaller replacement releases identity capacity. Replaying a withdrawal does not
+charge the same tombstone twice. Map keys, object overhead, and vector storage are not included
+in this source-encoding budget.
 The adapter holds no authoritative documents or attribution.
 
 Refresh prepares chunks and embeddings before calling `SemanticMemoryIndex.replace`. Replacement
