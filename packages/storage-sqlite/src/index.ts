@@ -2,6 +2,7 @@ export * from "./errors.ts";
 export { CurrentSqliteStorageVersion } from "./migrations.ts";
 export * from "./sqlite-thread-store.ts";
 export * from "./sqlite-ledger.ts";
+export * from "./sqlite-memory-store.ts";
 export * from "./sqlite-schedule-store.ts";
 export * from "./sqlite-subscription-store.ts";
 export * from "./sqlite-storage-config.ts";

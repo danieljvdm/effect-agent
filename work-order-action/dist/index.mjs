@@ -32498,6 +32498,149 @@ class MemoryRecallError extends exports_Schema.TaggedError()("MemoryRecallError"
   message: exports_Schema.String.check(exports_Schema.isMaxLength(4096))
 }) {
 }
+// packages/core/src/memory-lifecycle.ts
+var Identity2 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
+var Timestamp2 = exports_Schema.Finite.check(exports_Schema.isGreaterThanOrEqualTo(0));
+
+class MemoryKey extends exports_Schema.Class("@effect-agent/core/MemoryKey")({
+  namespace: Identity2,
+  id: MemorySourceReference.fields.id
+}) {
+}
+var KnownSource = exports_Schema.Struct({
+  ...MemorySourceReference.fields,
+  revision: Identity2
+});
+var AccessScopes = exports_Schema.Array(Identity2).check(exports_Schema.isMaxLength(128), exports_Schema.makeFilter((scopes) => new Set(scopes).size === scopes.length, {
+  expected: "unique access scopes"
+}));
+var DocumentFields = {
+  version: exports_Schema.Literal(1),
+  key: MemoryKey,
+  source: KnownSource,
+  generation: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+  predecessor: exports_Schema.NullOr(MemorySourceReference),
+  modifiedAt: Timestamp2
+};
+
+class ActiveMemoryDocument extends exports_Schema.TaggedClass()("ActiveMemoryDocument", {
+  ...DocumentFields,
+  content: MemoryContent,
+  scopes: AccessScopes
+}) {
+}
+
+class WithdrawnMemoryDocument extends exports_Schema.TaggedClass()("WithdrawnMemoryDocument", {
+  ...DocumentFields,
+  reason: exports_Schema.String.check(exports_Schema.isMaxLength(4096))
+}) {
+}
+var MemoryDocument = exports_Schema.Union([ActiveMemoryDocument, WithdrawnMemoryDocument]);
+var WriteFields = {
+  key: MemoryKey,
+  operationId: Identity2
+};
+var MemoryWrite = exports_Schema.Union([
+  exports_Schema.TaggedStruct("Put", {
+    ...WriteFields,
+    expectedRevision: exports_Schema.NullOr(Identity2),
+    locator: MemorySourceReference.fields.locator,
+    content: MemoryContent,
+    scopes: AccessScopes
+  }),
+  exports_Schema.TaggedStruct("Withdraw", {
+    ...WriteFields,
+    expectedRevision: Identity2,
+    reason: WithdrawnMemoryDocument.fields.reason
+  })
+]);
+
+class MemoryConflict extends exports_Schema.TaggedError()("MemoryConflict", {
+  key: MemoryKey,
+  expectedRevision: exports_Schema.NullOr(Identity2),
+  actualRevision: exports_Schema.NullOr(Identity2)
+}) {
+}
+
+class MemoryWithdrawn extends exports_Schema.TaggedError()("MemoryWithdrawn", {
+  key: MemoryKey,
+  revision: Identity2
+}) {
+}
+
+class MemoryOperationConflict extends exports_Schema.TaggedError()("MemoryOperationConflict", {
+  key: MemoryKey,
+  operationId: Identity2
+}) {
+}
+
+class MemoryStorageError extends exports_Schema.TaggedError()("MemoryStorageError", {
+  operation: exports_Schema.NonEmptyString,
+  reason: exports_Schema.Literals(["invalid-input", "unavailable", "corrupt", "incompatible"])
+}) {
+}
+var MemoryMutationPoint = exports_Schema.Literals([
+  "memory:initialize:before",
+  "memory:initialize:after",
+  "memory:change:before",
+  "memory:change:after-state",
+  "memory:change:after-receipt",
+  "memory:change:after"
+]);
+
+class MemoryMutationFailure extends exports_Schema.TaggedError()("MemoryMutationFailure", {
+  point: MemoryMutationPoint
+}) {
+}
+
+class MemoryMutationFailpoint extends exports_Context.Service()("@effect-agent/core/MemoryMutationFailpoint") {
+  static layer = exports_Layer.succeed(this, { hit: () => exports_Effect.void });
+}
+
+class MemoryReader extends exports_Context.Service()("@effect-agent/core/MemoryReader") {
+}
+
+class MemoryWriter extends exports_Context.Service()("@effect-agent/core/MemoryWriter") {
+}
+var applyMemoryWrite = exports_Effect.fn("applyMemoryWrite")(function* (current, write2, modifiedAt) {
+  if (current !== null && (current.key.namespace !== write2.key.namespace || current.key.id !== write2.key.id || current.source.id !== write2.key.id)) {
+    return yield* MemoryStorageError.make({
+      operation: "memory transition identity",
+      reason: "corrupt"
+    });
+  }
+  if (current?._tag === "WithdrawnMemoryDocument") {
+    return yield* MemoryWithdrawn.make({ key: write2.key, revision: current.source.revision });
+  }
+  const actualRevision = current?.source.revision ?? null;
+  if (actualRevision !== write2.expectedRevision) {
+    return yield* MemoryConflict.make({
+      key: write2.key,
+      expectedRevision: write2.expectedRevision,
+      actualRevision
+    });
+  }
+  const generation = (current?.generation ?? 0) + 1;
+  const fields = {
+    version: 1,
+    key: write2.key,
+    source: {
+      id: write2.key.id,
+      locator: write2._tag === "Put" ? write2.locator : current?.source.locator ?? "",
+      revision: String(generation)
+    },
+    generation,
+    predecessor: current?.source ?? null,
+    modifiedAt
+  };
+  const next = write2._tag === "Put" ? {
+    _tag: "ActiveMemoryDocument",
+    ...fields,
+    content: write2.content,
+    scopes: write2.scopes
+  } : { _tag: "WithdrawnMemoryDocument", ...fields, reason: write2.reason };
+  return yield* exports_Schema.decodeUnknownEffect(MemoryDocument)(next).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "memory transition", reason: "invalid-input" })));
+});
 // packages/core/src/tool-result.ts
 var ENVELOPE_FLOOR_BYTES = 256;
 
@@ -43766,6 +43909,48 @@ var recallMemory = exports_Effect.fn("recallMemory")(function* (sources, limits,
     duration: validated.timeoutMillis,
     orElse: () => exports_Effect.fail(MemoryRecallError.make({ reason: "timeout", message: "Recall deadline exceeded" }))
   }));
+});
+// packages/capabilities/src/memory-lifecycle.ts
+class MemoryAccess extends exports_Schema.Class("@effect-agent/capabilities/MemoryAccess")({
+  namespace: MemoryKey.fields.namespace,
+  scope: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024))
+}) {
+}
+var revalidateMemoryLookup = exports_Effect.fn("revalidateMemoryLookup")(function* (lookup2, access3) {
+  const decodedAccess = yield* exports_Schema.decodeUnknownEffect(MemoryAccess)(access3).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Invalid host memory access" })));
+  const decoded = yield* exports_Schema.decodeUnknownEffect(MemoryLookup)(lookup2).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Malformed memory candidates" })));
+  if (decoded._tag !== "Found")
+    return decoded;
+  const reader = yield* MemoryReader;
+  const documents = new Map;
+  const passages = [];
+  for (const candidate of decoded.passages) {
+    let document = documents.get(candidate.source.id);
+    if (document === undefined) {
+      const key = MemoryKey.make({ namespace: decodedAccess.namespace, id: candidate.source.id });
+      document = yield* reader.get(key).pipe(exports_Effect.flatMap((value4) => exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument))(value4).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "validate source view", reason: "corrupt" })))));
+      if (document !== null && (document.key.namespace !== key.namespace || document.key.id !== key.id || document.source.id !== key.id)) {
+        return yield* MemoryStorageError.make({
+          operation: "validate source identity",
+          reason: "corrupt"
+        });
+      }
+      documents.set(candidate.source.id, document);
+    }
+    if (document === null || document._tag === "WithdrawnMemoryDocument" || !document.scopes.includes(decodedAccess.scope))
+      continue;
+    const sameExcerpt = document.source.revision === candidate.source.revision && document.content.text.includes(candidate.content.text);
+    passages.push(MemoryPassage.make({
+      version: 1,
+      source: document.source,
+      passageId: sameExcerpt ? candidate.passageId : "document",
+      content: {
+        ...document.content,
+        text: sameExcerpt ? candidate.content.text : document.content.text
+      }
+    }));
+  }
+  return passages.length === 0 ? { _tag: "NoMatch" } : { _tag: "Found", passages };
 });
 // packages/capabilities/src/scheduling.ts
 var PositiveInt10 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));

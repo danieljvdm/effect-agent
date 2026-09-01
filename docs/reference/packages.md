@@ -120,6 +120,11 @@ Rejects incompatible stored versions; no migration path is promised.
 `CurrentSqliteStorageVersion` identifies the supported version.
 Test failpoints are in `@effect-agent/storage-sqlite/testing`.
 
+The independent `memoryStoreLayer` supplies optional `MemoryReader` and `MemoryWriter` ports
+for conditional document updates and terminal withdrawal. It initializes only memory tables.
+Use `memoryReaderLayer` when the application needs no writer. See
+[memory lifecycle](../guide/context-management#memory-lifecycle).
+
 ### `@effect-agent/platform-node`
 
 Assembles SQLite storage, recovery, and workers through `NodeDurableHost`.
