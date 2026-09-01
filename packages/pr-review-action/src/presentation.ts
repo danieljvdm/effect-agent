@@ -62,7 +62,7 @@ const renderVerdict = (
     return "> [!CAUTION]\n> **Review coverage is incomplete.** Not all changes were verified, so this result does not clear the change.";
   }
   if (unresolvedChangeRequests > 0) {
-    return `> [!CAUTION]\n> **No new blocking finding clears ${countNoun(unresolvedChangeRequests, "earlier change request")}.** A maintainer must dismiss it explicitly after verifying the fix.`;
+    return `> [!CAUTION]\n> **${countNoun(unresolvedChangeRequests, "earlier change request")} ${unresolvedChangeRequests === 1 ? "remains" : "remain"} unresolved.** Request \`@effect-agent review full\` to verify earlier blockers, or dismiss the review manually after checking the fix.`;
   }
   if (counts.important > 0) {
     return `> [!IMPORTANT]\n> **${countNoun(counts.important, "important finding")}.** Address before merging.`;

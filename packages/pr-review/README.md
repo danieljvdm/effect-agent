@@ -35,9 +35,14 @@ invalid inline anchors become top-level findings. Model output, usage, context, 
 bytes remain bounded. Public finding paths, titles, and bodies retain their 512, 200, and
 2,000-character limits.
 
-The reviewer does not resolve previous findings or declare a partial review safe
-to merge. GitHub history, credentials, diff collection, and publication belong to
-the host channel.
+Hosts may supply up to eight `ReviewFollowUp` values containing complete prior feedback, each
+bounded to 32,000 characters. The reviewer separately checks those blockers against current source
+and may return `ReviewOutcome.resolutions` with their exact IDs and fixing evidence. Omitted or
+uncertain resolutions leave prior feedback open. Unknown or duplicate resolution IDs fail
+verification. Incomplete, exhausted, pending-path, or excluded-path results return no resolutions.
+Follow-ups appear only in the final patch batch, sharing the existing execution and spending limits.
+They do not expand new-finding scope or declare a partial review safe to merge.
+GitHub history, credentials, selection, dismissal authorization, and publication belong to the host.
 
 Without host spending admission, the engine owns a cumulative 416,000-token stop policy and
 reserves 160,000 tokens for a final context and completion response. The model sees its current

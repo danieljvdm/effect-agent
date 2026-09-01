@@ -102,14 +102,19 @@ const trustedHistory = (input: {
     });
 };
 
-/** Count trusted change requests that GitHub still considers unresolved. */
+/** Select only this channel's terminal, bot-authored change requests. */
+export const unresolvedChangeRequests = (input: {
+  readonly reviewAuthor: string;
+  readonly history: ReadonlyArray<ReviewHistoryItem>;
+}): ReadonlyArray<ReviewHistoryItem> =>
+  trustedHistory(input).flatMap(({ item, marker }) =>
+    marker._tag === "attempt" && item.state === "CHANGES_REQUESTED" ? [item] : [],
+  );
+
 export const unresolvedChangeRequestCount = (input: {
   readonly reviewAuthor: string;
   readonly history: ReadonlyArray<ReviewHistoryItem>;
-}): number =>
-  trustedHistory(input).filter(
-    ({ item, marker }) => marker._tag === "attempt" && item.state === "CHANGES_REQUESTED",
-  ).length;
+}): number => unresolvedChangeRequests(input).length;
 
 /** Select scope from trusted GitHub reviews without persisting model context. */
 export const selectReview = (input: {
@@ -192,6 +197,6 @@ export const selectReview = (input: {
     baseRevision: latest.commitId,
     automatic: input.mode === "auto",
     automaticReviewsRemaining,
-    reason: input.mode === "auto" ? "one automatic follow-up" : "manual incremental review",
+    reason: input.mode === "auto" ? "automatic incremental review" : "manual incremental review",
   };
 };
