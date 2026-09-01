@@ -39,41 +39,48 @@
 
       pre {
         position: absolute;
-        top: 112px;
+        top: 100px;
         right: 32px;
         left: 32px;
         margin: 0;
-        border-radius: 16px;
-        padding: 28px 24px;
-        background: #f8f9fb;
-        color: #273244;
+        border: 1px solid #ffffff30;
+        border-radius: 18px;
+        padding: 22px 24px;
+        background: #292638;
+        box-shadow: 0 12px 28px #12246540;
+        color: #f8f9fb;
         font-family: "IBM Plex Mono", monospace;
-        font-size: 16.5px;
-        line-height: 31px;
+        font-size: 22.5px;
+        line-height: 29px;
       }
 
       code {
         font: inherit;
       }
 
-      .keyword {
-        color: #9250ac;
+      .keyword,
+      .punctuation {
+        color: #ff6b9d;
+      }
+
+      .namespace {
+        color: #40c9f5;
       }
 
       .call {
-        color: #245ac1;
+        color: #7bdca3;
       }
 
       .string {
-        color: #27734b;
+        color: #eee18b;
       }
 
       .number {
-        color: #b04d2d;
+        color: #b7a1ff;
       }
 
       .comment {
-        color: #687483;
+        color: #a8a1b8;
       }
 
       .mark {
@@ -87,7 +94,7 @@
       footer {
         position: absolute;
         right: 36px;
-        bottom: 32px;
+        bottom: 24px;
         left: 36px;
         display: flex;
         justify-content: space-between;
@@ -101,16 +108,19 @@
     <main>
       <h1>Effect Agent</h1>
       <img class="mark" src="../../public/mark.svg" alt="" />
-      <pre><code><span class="keyword">const</span> researcher = Agent.<span class="call">make</span>(<span class="string">"researcher"</span>, {
-  input: Schema.<span class="call">Struct</span>({ question: Schema.String, maxSources: Schema.Int }),
-  output: Schema.<span class="call">Struct</span>({
-    summary: Schema.String,
-    sources: Schema.<span class="call">Array</span>(Schema.String),
-  }),
-  instructions: <span class="string">"Follow the evidence. Cite your sources."</span>,
+      <pre><code><span class="keyword">const</span> <span class="namespace">researcher</span> <span class="punctuation">=</span> <span class="namespace">Agent</span>.<span class="call">make</span>(<span class="string">"researcher"</span><span class="punctuation">,</span> {
+  input<span class="punctuation">:</span> <span class="namespace">Schema</span>.<span class="call">Struct</span>({ question<span class="punctuation">:</span> <span class="namespace">Schema</span>.String<span class="punctuation">,</span> maxSources<span class="punctuation">:</span> <span class="namespace">Schema</span>.Int })<span class="punctuation">,</span>
+  output<span class="punctuation">:</span> <span class="namespace">Schema</span>.<span class="call">Struct</span>({
+    summary<span class="punctuation">:</span> <span class="namespace">Schema</span>.String<span class="punctuation">,</span>
+    sources<span class="punctuation">:</span> <span class="namespace">Schema</span>.<span class="call">Array</span>(<span class="namespace">Schema</span>.String)<span class="punctuation">,</span>
+  })<span class="punctuation">,</span>
+  instructions<span class="punctuation">:</span> <span class="string">"Follow the evidence. Cite your sources."</span><span class="punctuation">,</span>
   <span class="comment">// FactChecker is a Subagent</span>
-  toolkit: Toolkit.<span class="call">make</span>(SearchWeb, ReadPage, FactChecker.tool),
-  policy: AgentPolicy.<span class="call">make</span>({ maxTurns: <span class="number">6</span>, maxToolCalls: <span class="number">10</span>, maxDuration: <span class="string">"2 minutes"</span>, toolConcurrency: <span class="number">2</span> }),
+  toolkit<span class="punctuation">:</span> <span class="namespace">Toolkit</span>.<span class="call">make</span>(SearchWeb<span class="punctuation">,</span> ReadPage<span class="punctuation">,</span> <span class="namespace">FactChecker</span>.tool)<span class="punctuation">,</span>
+  policy<span class="punctuation">:</span> <span class="namespace">AgentPolicy</span>.<span class="call">make</span>({
+    maxTurns<span class="punctuation">:</span> <span class="number">6</span><span class="punctuation">,</span> maxToolCalls<span class="punctuation">:</span> <span class="number">10</span><span class="punctuation">,</span>
+    maxDuration<span class="punctuation">:</span> <span class="string">"2 minutes"</span><span class="punctuation">,</span> toolConcurrency<span class="punctuation">:</span> <span class="number">2</span><span class="punctuation">,</span>
+  })<span class="punctuation">,</span>
 })</code></pre>
       <footer>
         <span>Built on Effect and Effect AI.</span>
