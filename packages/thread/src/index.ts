@@ -1,4 +1,6 @@
 export * from "./admin.ts";
+export * from "./activity.ts";
+export * from "./committed-activity.ts";
 export {
   BindingUnavailable,
   BindingDigestMismatch,

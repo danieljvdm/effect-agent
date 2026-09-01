@@ -43,6 +43,7 @@ Effect Agent uses Effect AI's tools, models, and provider integrations directly.
 - [Transient recall](docs/guide/context-management.md) from application-owned readable sources.
 - [Revision-aware memory stores](docs/guide/context-management.md) with conditional corrections and
   withdrawal.
+- [Resumable processing of committed Thread activity](docs/guide/context-management.md).
 - [Attached subagents](docs/guide/subagents.md) with explicit permissions and budgets.
 - [Scheduled input](docs/guide/operations.md#scheduled-input) and
   [event subscriptions](docs/guide/operations.md#event-subscriptions).

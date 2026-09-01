@@ -1,5 +1,6 @@
 export * from "./errors.ts";
 export { CurrentSqliteStorageVersion } from "./migrations.ts";
+export * from "./sqlite-activity-store.ts";
 export * from "./sqlite-thread-store.ts";
 export * from "./sqlite-ledger.ts";
 export * from "./sqlite-memory-store.ts";
