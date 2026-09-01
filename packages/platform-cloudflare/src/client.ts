@@ -30,6 +30,7 @@ import {
   type DurableSubmitAgent,
   type DurableSubmitOptions,
 } from "@effect-agent/thread";
+import { BrowserCrypto } from "@effect/platform-browser";
 import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect";
 import { RpcTracing } from "effect-cf";
 
@@ -387,6 +388,20 @@ export class CloudflareThreadClient extends Context.Service<
     ) => Effect.Effect<UnknownResolutionIntent, ClientUnknownFailure>;
   }
 >()("@effect-agent/platform-cloudflare/CloudflareThreadClient") {
+  /**
+   * Assemble the client from a resolved namespace and the platform Crypto implementation.
+   * rpcTracing is the binding name and remains opt-in. Caller authentication, principals,
+   * idempotency keys, and definition digests are still explicit submission inputs.
+   */
+  static layerFromBinding(options: {
+    readonly namespace: DurableObjectNamespace<ThreadObjectRpc>;
+    readonly rpcTracing?: string;
+  }): Layer.Layer<CloudflareThreadClient> {
+    return CloudflareThreadClient.layer.pipe(
+      Layer.provide([ThreadObjectNamespace.layer(options.namespace, options), BrowserCrypto.layer]),
+    );
+  }
+
   static readonly layer: Layer.Layer<
     CloudflareThreadClient,
     never,

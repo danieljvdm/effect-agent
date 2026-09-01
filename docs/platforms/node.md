@@ -23,11 +23,14 @@ Keep framework packages at one release and use compatible [Effect and provider p
 Use a persistent database path with one live host per SQLite file. Give each replacement host
 incarnation a distinct `producerId`.
 `workerConcurrency` limits worker loops and defaults to one.
-`NodeDurableHost.layerStack` checks storage and runs recovery before accepting work.
+`NodeDurableHost.layerRegistered` checks storage and runs recovery before accepting work.
 
-Create the `ResolvedBinding` values with `compileRegistrations` from `@effect-agent/thread`.
-Supply Crypto, provider clients, and tool handlers while compiling. Keep those Layers alive
-in the host's application Scope.
+Pass typed agent registrations to `NodeDurableHost.layerRegistered`. It computes definition
+digests and captures worker services in the host Layer's Scope. Node supplies Crypto; provide
+model clients, tool handlers, instruction services, and schema services to the returned Layer.
+Keep the concrete registration tuple inferred so its requirements remain visible.
+Use `NodeDurableHost.layerStack` when you already have `ResolvedBinding` values from
+`compileRegistrations` and own their application Scope yourself.
 
 Registrations include JSON descriptions and versions for the agent, model, and toolkit.
 Version tool implementations and other behavior JSON cannot represent.
@@ -41,36 +44,37 @@ Use `digestDefinitions` to compute submission digests.
 
 ```ts twoslash
 import { NodeDurableHost } from "@effect-agent/platform-node";
-import type { ResolvedBinding } from "@effect-agent/thread";
-import { NodeRuntime } from "@effect/platform-node";
+import type { AgentRegistration } from "@effect-agent/thread";
 import { Effect } from "effect";
 
-export const startWorkers = (bindings: ReadonlyArray<ResolvedBinding>) =>
+export const workers = <const Entries extends ReadonlyArray<AgentRegistration>>(
+  registrations: Entries,
+) =>
   Effect.gen(function* () {
     const host = yield* NodeDurableHost;
     yield* host.runResolvedWorkers;
   }).pipe(
     Effect.provide(
-      NodeDurableHost.layerStack({
+      NodeDurableHost.layerRegistered(registrations, {
         filename: "./agents.sqlite",
         deploymentId: "travel-planner",
         producerId: "worker-1",
         workerConcurrency: 4,
-        bindings,
       }),
     ),
     Effect.scoped,
-    NodeRuntime.runMain,
   );
 ```
 
-Call `startWorkers(bindings)` at the process entry point. Creating the host alone does not
-start workers. If the process also serves requests, share one host Layer between both effects.
+Provide the remaining application services to `workers(registrations)`, then call
+`NodeRuntime.runMain` at the process entry point. Creating the host alone does not start workers.
+If the process also serves requests, share one host Layer between both effects.
 Use `NodeDurableRuntime.layer` for custom lifecycle composition.
 
 ## Configure runtime services
 
-Pass service layers through `NodeDurableHost.layerStack` or `NodeDurableRuntime.layer`:
+Pass service layers through `NodeDurableHost.layerRegistered`, `NodeDurableHost.layerStack`,
+or `NodeDurableRuntime.layer`:
 
 | Option              | Service                 | Default                                                     |
 | ------------------- | ----------------------- | ----------------------------------------------------------- |

@@ -94,10 +94,11 @@ a general browsing session and cannot become an agent Tool.
 
 Install `@cloudflare/puppeteer@^1.1.0` alongside
 `@effect-agent/platform-cloudflare@beta` and `effect-cf@^0.37.0`. Then provide
-`BrowserRunInteractiveBinding.layer({ browser: env.BROWSER })` to
-`browserRunInteractiveLayer()` for browser actions. `browserRunInteractiveHostLayer()` adds trusted
-host controls for Live View and handoff. Both variants need `BrowserRunSessionLifecycle` with an
-account ID, a redacted Browser Run API token, and `FetchHttpClient.layer` for session cleanup.
+`CloudflareInteractiveBrowser.layer({ browser: env.BROWSER, accountId, apiToken })` with
+`FetchHttpClient.layer` for browser actions. `CloudflareInteractiveBrowser.hostLayer` opts into
+trusted host controls for Live View and handoff. Both variants assemble the browser binding and
+confirmed-session cleanup; the API token must be redacted. The lower-level binding, lifecycle,
+and adapter Layers remain available for custom composition.
 
 The policy is immutable when the pass opens:
 
@@ -190,13 +191,13 @@ Use `BrowserTools` as the agent's toolkit and provide `ReadPageLive` when runnin
 The constructor supplies only `PageCapture`; any schema decoding services remain required.
 It preserves the definition's host policy, output bounds, typed failures, and response cleanup.
 
-For REST capture or custom adapters, keep composing the handler Layer directly:
+For REST capture, use the Node-safe REST subpath and supply an HTTP client:
 
 ```ts twoslash
 import { WebCapture } from "@effect-agent/capabilities";
 import {
-  browserRestCaptureLayer,
-  type BrowserRestCaptureOptions,
+  CloudflareBrowserRest,
+  type CloudflareBrowserRestOptions,
 } from "@effect-agent/platform-cloudflare/browser-rest-capture";
 import { Layer } from "effect";
 import { Toolkit } from "effect/unstable/ai";
@@ -210,11 +211,8 @@ const readPage = WebCapture.make("read_page", {
 });
 
 export const BrowserTools = Toolkit.make(readPage.tool);
-export const browserToolsLive = (credentials: BrowserRestCaptureOptions) =>
-  readPage.handlers.pipe(
-    Layer.provide(browserRestCaptureLayer(credentials)),
-    Layer.provide(FetchHttpClient.layer),
-  );
+export const browserToolsLive = (credentials: CloudflareBrowserRestOptions) =>
+  CloudflareBrowserRest.layer(readPage, credentials).pipe(Layer.provide(FetchHttpClient.layer));
 ```
 
 Use `BrowserTools` as the agent's toolkit and provide `browserToolsLive(credentials)` when running
@@ -222,6 +220,10 @@ it. Use `WebCapture.makeScrape` for grouped selector results or `WebCapture.make
 Schema-validated extraction. Extraction also needs the adapter's explicit Workers AI authorization
 and accounting policy. Capture Tools have uncertain external outcomes because page rendering can
 execute JavaScript; they are not eligible for Code Mode's read-only allowlist.
+
+`CloudflareBrowserRest.layer` accepts the same optional `workersAi` policy as the Worker
+constructor. It preserves schema decoding requirements and leaves `HttpClient` injectable.
+For a custom capture adapter, provide its Layer directly to `readPage.handlers`.
 
 ## Capture and crawl {#capture-and-crawl}
 
@@ -298,11 +300,7 @@ an undispatched provider action can be identified without treating them as a suc
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import {
-  BrowserRunInteractiveBinding,
-  BrowserRunSessionLifecycle,
-  browserRunInteractiveLayer,
-} from "@effect-agent/platform-cloudflare/interactive-browser";
+import { CloudflareInteractiveBrowser } from "@effect-agent/platform-cloudflare/interactive-browser";
 import {
   BrowserNavigateRequest,
   BrowserReadTextRequest,
@@ -327,15 +325,11 @@ declare global {
 const InteractiveLive = Layer.unwrap(
   Effect.gen(function* () {
     const env = yield* WorkerEnvironment;
-    const lifecycle = BrowserRunSessionLifecycle.layer({
+    return CloudflareInteractiveBrowser.layer({
+      browser: env.BROWSER,
       accountId: env.CLOUDFLARE_ACCOUNT_ID,
       apiToken: Redacted.make(env.BROWSER_RENDERING_API_TOKEN),
     }).pipe(Layer.provide(FetchHttpClient.layer));
-    const binding = BrowserRunInteractiveBinding.layer({ browser: env.BROWSER }).pipe(
-      Layer.provide(lifecycle),
-    );
-
-    return browserRunInteractiveLayer().pipe(Layer.provide(binding));
   }),
 );
 

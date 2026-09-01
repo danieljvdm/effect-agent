@@ -418,3 +418,30 @@ export const browserRestWorkersAiCaptureLayer = (
       return PageCapture.of({ capture: makeCapture(client, options, workersAi) });
     }),
   );
+
+/** Explicit REST credentials and optional authorization for separately billed extraction. */
+export interface CloudflareBrowserRestOptions extends BrowserRestCaptureOptions {
+  readonly workersAi?: BrowserQuickActionWorkersAiPolicy;
+}
+
+/** Node-safe WebCapture handler assembly; the application supplies its HttpClient. */
+export const CloudflareBrowserRest = {
+  /**
+   * Supports capture, scrape, and extraction definitions. Only PageCapture is supplied;
+   * handler errors and other services remain visible. Extraction fails closed without
+   * workersAi. Existing host policies, response limits, and scoped cleanup are unchanged.
+   */
+  layer: <A, E, R>(
+    definition: { readonly handlers: Layer.Layer<A, E, R> },
+    options: CloudflareBrowserRestOptions,
+  ): Layer.Layer<A, E, Exclude<R, PageCapture> | HttpClient.HttpClient> => {
+    const capture =
+      options.workersAi === undefined
+        ? browserRestCaptureLayer(options)
+        : browserRestWorkersAiCaptureLayer(options).pipe(
+            Layer.provide(BrowserQuickActionWorkersAi.layer(options.workersAi)),
+          );
+
+    return definition.handlers.pipe(Layer.provide(capture));
+  },
+};

@@ -7,11 +7,9 @@ import {
 import {
   BrowserRunHandoffRequest,
   BrowserRunCleanupError,
-  BrowserRunInteractiveBinding,
+  CloudflareInteractiveBrowser,
   BrowserRunInteractiveHost,
-  BrowserRunSessionLifecycle,
   BrowserRunLiveViewRequest,
-  browserRunInteractiveHostLayer,
 } from "@effect-agent/platform-cloudflare/interactive-browser";
 import {
   BrowserNavigateRequest,
@@ -107,14 +105,10 @@ const proofLayer = Layer.unwrap(
     const quickActionLayer = browserQuickActionScreenshotLayer().pipe(
       Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: env.BROWSER })),
     );
-    const interactiveLayer = browserRunInteractiveHostLayer().pipe(
-      Layer.provide(BrowserRunInteractiveBinding.layer({ browser: env.BROWSER })),
-      Layer.provide(
-        BrowserRunSessionLifecycle.layer(lifecycleConfig).pipe(
-          Layer.provide(FetchHttpClient.layer),
-        ),
-      ),
-    );
+    const interactiveLayer = CloudflareInteractiveBrowser.hostLayer({
+      browser: env.BROWSER,
+      ...lifecycleConfig,
+    }).pipe(Layer.provide(FetchHttpClient.layer));
     const browserRunLayer = Layer.merge(quickActionLayer, interactiveLayer);
     return Layer.merge(
       CloudflareBrowser.layer(proofCapture, { browser: env.BROWSER }),

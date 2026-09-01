@@ -66,8 +66,12 @@ export class ThreadObjectNamespace extends Context.Service<
 >()("@effect-agent/platform-cloudflare/ThreadObjectNamespace") {
   static layer(
     namespace: DurableObjectNamespace<ThreadObjectRpc>,
+    options: { readonly rpcTracing?: string } = {},
   ): Layer.Layer<ThreadObjectNamespace> {
-    return Layer.succeed(ThreadObjectNamespace)({ namespace });
+    return Layer.succeed(ThreadObjectNamespace)({
+      namespace,
+      ...(options.rpcTracing === undefined ? {} : { rpcTracing: options.rpcTracing }),
+    });
   }
 }
 

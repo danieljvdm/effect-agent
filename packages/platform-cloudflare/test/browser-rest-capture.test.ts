@@ -1,3 +1,4 @@
+import { WebCapture } from "@effect-agent/capabilities";
 import {
   CapturePageMarkdown,
   CapturePageScrape,
@@ -8,8 +9,10 @@ import {
   PageUrlTarget,
 } from "@effect-agent/sandbox";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Logger, Redacted, Ref, type Layer } from "effect";
+import { Effect, Logger, Redacted, Ref, Schema, Stream, type Layer } from "effect";
+import { Toolkit } from "effect/unstable/ai";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { expectTypeOf } from "vite-plus/test";
 
 import {
   BrowserQuickActionWorkersAi,
@@ -19,6 +22,7 @@ import {
   browserRestCaptureImplementation,
   browserRestCaptureLayer,
   browserRestWorkersAiCaptureLayer,
+  CloudflareBrowserRest,
 } from "../src/browser-rest-capture.ts";
 
 type Equal<Left, Right> =
@@ -69,6 +73,57 @@ const captureWith = (client: HttpClient.HttpClient, input = request()) =>
   );
 
 describe("Browser Run REST PageCapture adapter", () => {
+  it.effect(
+    "assembles extraction handlers while retaining HTTP injection and explicit AI authority",
+    () =>
+      Effect.gen(function* () {
+        const definition = WebCapture.makeExtract("extract_plan", {
+          description: "Read plan",
+          urls: ["docs.example.com"],
+          schema: Schema.Struct({ name: Schema.String }),
+        });
+        const calls: Array<string> = [];
+        const client = HttpClient.make((request) =>
+          Effect.sync(() => {
+            calls.push("request");
+            return HttpClientResponse.fromWeb(
+              request,
+              response('{"success":true,"result":{"name":"Pro"}}'),
+            );
+          }),
+        );
+        const options = { accountId: "account", apiToken: Redacted.make("token") };
+        const denied = CloudflareBrowserRest.layer(definition, options);
+        const allowed = CloudflareBrowserRest.layer(definition, {
+          ...options,
+          workersAi: {
+            authorizeAndAccount: () =>
+              Effect.sync(() => {
+                calls.push("authorize");
+              }),
+          },
+        });
+        expectTypeOf<Layer.Services<typeof allowed>>().toEqualTypeOf<HttpClient.HttpClient>();
+        const invoke = Effect.gen(function* () {
+          const toolkit = yield* Toolkit.make(definition.tool);
+          return yield* Stream.runCollect(
+            yield* toolkit.handle("extract_plan", { url: "https://docs.example.com/" }),
+          );
+        });
+        const refused = yield* invoke.pipe(
+          Effect.provide(denied),
+          Effect.provideService(HttpClient.HttpClient, client),
+        );
+        expect(refused).toMatchObject([{ result: { errorTag: "PageCaptureUnsupportedError" } }]);
+        expect(calls).toEqual([]);
+        const result = yield* invoke.pipe(
+          Effect.provide(allowed),
+          Effect.provideService(HttpClient.HttpClient, client),
+        );
+        expect(result).toMatchObject([{ result: { name: "Pro" } }]);
+        expect(calls).toEqual(["authorize", "request"]);
+      }),
+  );
   it("keeps its Node-safe Layer requirements visible", () => {
     const httpClient: RestRequiresHttpClient = true;
     const workersAi: RestWorkersAiRequiresVisibleAuthorities = true;

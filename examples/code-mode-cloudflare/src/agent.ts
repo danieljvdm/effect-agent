@@ -1,7 +1,8 @@
 import { CodeMode } from "@effect-agent/capabilities";
 import { Agent, AgentPolicy } from "@effect-agent/core";
 import { ToolExecutionClass } from "@effect-agent/engine";
-import { Effect, Layer, Schema } from "effect";
+import type { Layer } from "effect";
+import { Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { Warehouse } from "./warehouse-object.ts";
@@ -101,6 +102,3 @@ export const codeModeAgent = Agent.make("warehouse-analyst", {
     toolConcurrency: 1,
   }),
 });
-
-/** The composed handler Layer, minus the `CodeExecutor` (supplied by the host). */
-export const codeModeHandlersLayer = codeMode.handlers.pipe(Layer.provide(warehouseHandlersLayer));

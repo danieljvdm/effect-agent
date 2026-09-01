@@ -1,9 +1,10 @@
 import {
+  CloudflareBrowserRest,
   browserRestWorkersAiCaptureLayer,
   type browserRestCaptureLayer,
 } from "@effect-agent/platform-cloudflare/browser-rest-capture";
 import type { PageCapture } from "@effect-agent/sandbox";
-import { Redacted, type Layer } from "effect";
+import { Redacted, Layer } from "effect";
 import type { HttpClient } from "effect/unstable/http";
 import { expect, it } from "vite-plus/test";
 
@@ -38,4 +39,5 @@ it("loads and composes the REST subpath in a Node-only consumer", async () => {
   expect(requirement && output).toBe(true);
   // This source imports no Worker globals; a cloudflare: runtime dependency would fail this Node test.
   expect(browserRestWorkersAiCaptureLayer(options)).toBeDefined();
+  expect(CloudflareBrowserRest.layer({ handlers: Layer.empty }, options)).toBeDefined();
 });
