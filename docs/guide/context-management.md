@@ -422,7 +422,8 @@ The host chooses the processor ID and version, eligible records, extractor, dest
 scope, invocation schedule, and Thread discovery. No background worker starts when the package
 is imported. A read-only corpus or direct Markdown recall needs none of these services.
 
-The pass claims its own processor lease, captures `ThreadStore.inspectTail` once, and reads
+The pass claims its own processor lease and receives any pending output atomically with that
+claim. It captures `ThreadStore.inspectTail` once and reads
 bounded, contiguous pages through that prefix. Records appended afterward belong to a later
 pass. `PersistentHistory` exposes the batch from a successful Run together; durable Runs expose
 incremental committed records. A record's presence is evidence of its commit, not evidence that
@@ -430,7 +431,8 @@ the whole Run succeeded. Eligibility rules must account for that distinction.
 
 For each record the processor saves a Schema-encoded extraction, applies that saved output, and
 then advances its separate cursor. The work ID depends on processor, version, Thread, and
-sequence, never the worker or clock. A saved output wins over re-extraction after restart. Its
+sequence, never the worker or clock. Advancing clears pending output in the same transaction;
+there is no separate pending-work read per record. A saved output wins over re-extraction after restart. Its
 canonical record digest excludes the adapter's opaque observation cursor. Another processor
 version has independent progress; changing a version is an application decision about
 reprocessing and destination identities.

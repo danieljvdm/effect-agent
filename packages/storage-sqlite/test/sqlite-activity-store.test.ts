@@ -119,7 +119,7 @@ describe("SQLite activity processor store", () => {
             const store = yield* ActivityProcessorStore;
             const claim = yield* store.claim(request("takeover"));
             expect(claim.epoch).toBe(first.claim.epoch + 1);
-            expect(yield* store.loadPrepared(claim)).toEqual(first.prepared);
+            expect(claim.pending).toEqual(first.prepared);
             yield* store.release(claim);
             return claim;
           }),
@@ -134,7 +134,7 @@ describe("SQLite activity processor store", () => {
             const store = yield* ActivityProcessorStore;
             const claim = yield* store.claim(request("takeover"));
             expect(claim.epoch).toBe(takeover.epoch + 1);
-            expect(yield* store.loadPrepared(claim)).toEqual(first.prepared);
+            expect(claim.pending).toEqual(first.prepared);
             yield* TestClock.setTime(13_000);
             const advanced = yield* store.advance({ claim, workId: first.prepared.workId });
             yield* store.release(claim);
@@ -142,6 +142,7 @@ describe("SQLite activity processor store", () => {
           }),
         );
         expect(second.advanced.throughSequence).toBe(1);
+        expect(second.advanced.pending).toBeNull();
         const progressed = yield* inspect(filename);
         expect(progressed?.throughSequence).toBe(1);
         expect(progressed?.pending).toBeNull();
@@ -152,7 +153,9 @@ describe("SQLite activity processor store", () => {
           Effect.gen(function* () {
             const store = yield* ActivityProcessorStore;
             const claim = yield* store.claim(request("takeover"));
-            const stale = yield* store.loadPrepared(second.claim).pipe(Effect.flip);
+            const stale = yield* store
+              .advance({ claim: second.claim, workId: first.prepared.workId })
+              .pipe(Effect.flip);
             return { claim, stale };
           }),
         );
@@ -276,15 +279,7 @@ describe("SQLite activity processor store", () => {
         expect(prepareFailure).toEqual(
           ActivityMutationFailure.make({ point: "activity:prepare:after" }),
         );
-        expect(
-          yield* runStore(
-            filename,
-            Effect.gen(function* () {
-              const store = yield* ActivityProcessorStore;
-              return yield* store.loadPrepared(claim);
-            }),
-          ),
-        ).toEqual(prepared);
+        expect((yield* inspect(filename))?.pending).toEqual(prepared);
 
         yield* TestClock.setTime(2_000);
         const advanceFailure = yield* Effect.gen(function* () {

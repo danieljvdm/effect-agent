@@ -94,10 +94,10 @@ const probe = (initial: ReadonlyArray<CanonicalRecordEnvelope> = [record(1)]) =>
           ...request,
           epoch: state.epoch,
           throughSequence: state.through,
+          pending: state.pending,
           leaseExpiresAt: (yield* Clock.currentTimeMillis) + request.leaseMillis,
         });
       }),
-    loadPrepared: () => Effect.sync(() => state.pending),
     prepare: ({ work }) =>
       Effect.gen(function* () {
         state.pending = work;
@@ -116,7 +116,7 @@ const probe = (initial: ReadonlyArray<CanonicalRecordEnvelope> = [record(1)]) =>
           state.advanceLostAck = false;
           return yield* ActivityMutationFailure.make({ point: "activity:advance:after" });
         }
-        return ActivityClaim.make({ ...claim, throughSequence: state.through });
+        return ActivityClaim.make({ ...claim, throughSequence: state.through, pending: null });
       }),
     release: () =>
       Effect.sync(() => {

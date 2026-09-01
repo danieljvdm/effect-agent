@@ -192,7 +192,7 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
             Effect.mapError(contiguous),
           );
           const recordDigest = yield* digestJson(encodedRecord);
-          let work = yield* progress.loadPrepared(claim);
+          let work = claim.pending;
           if (work === null) {
             const output = yield* Effect.scoped(processor.extract(record)).pipe(
               Effect.flatMap((value) =>
@@ -239,7 +239,8 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
             !Schema.toEquivalence(ActivityProcessorKey)(next.key, key) ||
             next.owner !== claim.owner ||
             next.epoch !== claim.epoch ||
-            next.throughSequence !== record.sequence
+            next.throughSequence !== record.sequence ||
+            next.pending !== null
           )
             return yield* invalid("Activity progress advanced outside the claimed record");
           claim = next;

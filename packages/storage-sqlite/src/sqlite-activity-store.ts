@@ -142,6 +142,7 @@ const makeClaim = (progress: ActivityProgress): ActivityClaim | null =>
         epoch: progress.epoch,
         throughSequence: progress.throughSequence,
         leaseExpiresAt: progress.leaseExpiresAt,
+        pending: progress.pending,
       });
 
 const ownershipLost = (claim: ActivityClaim) =>
@@ -382,21 +383,6 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
     },
   );
 
-  const loadPrepared: ActivityProcessorStore["Service"]["loadPrepared"] = Effect.fn(
-    "SqliteActivityStore.loadPrepared",
-  )(function* (claim) {
-    const operation = "load prepared activity";
-    const decoded = yield* decodeInput(ActivityClaim, claim, operation);
-    return yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const current = yield* readProgress(decoded.key, operation);
-          return (yield* requireLive(current, decoded, true)).pending;
-        }),
-      )
-      .pipe(Effect.catchTag("SqlError", () => Effect.fail(storeError(operation))));
-  });
-
   const prepare: ActivityProcessorStore["Service"]["prepare"] = Effect.fn(
     "SqliteActivityStore.prepare",
   )(function* (request) {
@@ -494,7 +480,7 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
     yield* failpoint.hit("activity:release:after");
   });
 
-  return ActivityProcessorStore.of({ inspect, claim, loadPrepared, prepare, advance, release });
+  return ActivityProcessorStore.of({ inspect, claim, prepare, advance, release });
 });
 
 /** SQLite activity progress with mutation failpoints kept injectable for recovery tests. */

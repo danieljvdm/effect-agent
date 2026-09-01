@@ -38,6 +38,8 @@ export class ActivityClaim extends Schema.Class<ActivityClaim>(
   epoch: Epoch,
   throughSequence: CanonicalSequence,
   leaseExpiresAt: Timestamp,
+  /** Pending output captured atomically at acquisition; advance returns null here. */
+  pending: Schema.NullOr(PreparedActivity),
 }) {}
 
 export class ActivityProgress extends Schema.Class<ActivityProgress>(
@@ -126,7 +128,7 @@ export class ActivityClaimRequest extends Schema.Class<ActivityClaimRequest>(
  * Optional durable progress for finite committed-activity passes. Every mutation is atomic.
  * claim rejects an unexpired owner and allocates a strictly newer epoch on every successful
  * acquisition, including an initial grant and reacquisition after release with the same owner. It preserves
- * pending output. loadPrepared, prepare, and advance reject expired or superseded claims and
+ * pending output and returns it with the claim. prepare and advance reject expired or superseded claims and
  * require the claim's throughSequence to equal current progress. prepare accepts only the next
  * sequence, pins one output, and rejects divergent reuse. advance requires its pending work ID,
  * increments progress by exactly one, and clears pending in the same transaction.
@@ -144,9 +146,6 @@ export class ActivityProcessorStore extends Context.Service<
     readonly claim: (
       request: ActivityClaimRequest,
     ) => Effect.Effect<ActivityClaim, ActivityStoreFailure>;
-    readonly loadPrepared: (
-      claim: ActivityClaim,
-    ) => Effect.Effect<PreparedActivity | null, ActivityStoreFailure>;
     readonly prepare: (request: {
       readonly claim: ActivityClaim;
       readonly work: PreparedActivity;
