@@ -1,5 +1,4 @@
 import {
-  type ActiveMemoryDocument,
   MemoryDocument,
   MemoryIndexBuild,
   MemoryIndexError,
@@ -437,6 +436,7 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
       });
     }
     const documents = new Map<string, MemoryDocument | null>();
+    const encodedDocuments = new Map<string, string>();
     const passages: Array<MemoryPassage> = [];
     let staleExcluded = 0;
     let unauthorizedExcluded = 0;
@@ -467,9 +467,17 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
       if (
         document.generation !== candidate.sourceGeneration ||
         document.source.revision !== candidate.source.revision ||
-        document.source.locator !== candidate.source.locator ||
-        !sameExcerpt(document, candidate, profile.maxChunkBytes)
+        document.source.locator !== candidate.source.locator
       ) {
+        staleExcluded += 1;
+        continue;
+      }
+      let encodedDocument = encodedDocuments.get(document.key.id);
+      if (encodedDocument === undefined) {
+        encodedDocument = Encoding.encodeHex(document.content.text);
+        encodedDocuments.set(document.key.id, encodedDocument);
+      }
+      if (!sameExcerpt(encodedDocument, candidate, profile.maxChunkBytes)) {
         staleExcluded += 1;
         continue;
       }
@@ -504,7 +512,7 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
 });
 
 const sameExcerpt = (
-  document: ActiveMemoryDocument,
+  encodedDocument: string,
   candidate: {
     readonly startByte: number;
     readonly endByte: number;
@@ -517,9 +525,6 @@ const sameExcerpt = (
     candidate.startByte < candidate.endByte &&
     hex.length / 2 === candidate.endByte - candidate.startByte &&
     hex.length / 2 <= maxChunkBytes &&
-    Encoding.encodeHex(document.content.text).slice(
-      candidate.startByte * 2,
-      candidate.endByte * 2,
-    ) === hex
+    encodedDocument.slice(candidate.startByte * 2, candidate.endByte * 2) === hex
   );
 };

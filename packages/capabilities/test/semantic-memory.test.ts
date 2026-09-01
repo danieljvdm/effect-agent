@@ -364,6 +364,40 @@ describe("optional semantic workflows", () => {
     },
   );
 
+  it.effect("validates 128 candidate chunks from one maximum-size source", () => {
+    const test = probe();
+    const chunks = Array.from({ length: 128 }, (_, ordinal) => String(ordinal % 10).repeat(8_192));
+    test.state.current = ActiveMemoryDocument.make({
+      ...document,
+      content: { ...document.content, text: chunks.join("") },
+    });
+    test.state.candidates = chunks.map((text, ordinal) =>
+      MemoryIndexCandidate.make({
+        ...candidate(text, ordinal),
+        startByte: ordinal * 8_192,
+        endByte: (ordinal + 1) * 8_192,
+      }),
+    );
+    const query = querySemanticMemory("queue", access, {
+      ...queryLimits,
+      maxCandidates: 128,
+      timeoutMillis: 10_000,
+    }).pipe(
+      Effect.provideService(SemanticMemoryIndex, {
+        ...test.index,
+        profile: SemanticMemoryProfile.make({ ...profile, maxChunkBytes: 8_192 }),
+      }),
+    );
+    return Effect.gen(function* () {
+      const result = yield* query;
+      expect(result).toMatchObject({
+        lookup: { _tag: "Found", passages: chunks.map((text) => ({ content: { text } })) },
+        staleExcluded: 0,
+      });
+      expect(test.state.reads).toBe(1);
+    }).pipe(Effect.provide(test.layer));
+  });
+
   it.effect("filters the independent authority/index publication race before recall", () => {
     const test = probe();
     test.state.beforePublish = Effect.sync(() => {

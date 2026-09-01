@@ -44371,6 +44371,7 @@ var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (qu
       });
     }
     const documents = new Map;
+    const encodedDocuments = new Map;
     const passages = [];
     let staleExcluded = 0;
     let unauthorizedExcluded = 0;
@@ -44394,7 +44395,16 @@ var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (qu
         unauthorizedExcluded += 1;
         continue;
       }
-      if (document.generation !== candidate.sourceGeneration || document.source.revision !== candidate.source.revision || document.source.locator !== candidate.source.locator || !sameExcerpt(document, candidate, profile.maxChunkBytes)) {
+      if (document.generation !== candidate.sourceGeneration || document.source.revision !== candidate.source.revision || document.source.locator !== candidate.source.locator) {
+        staleExcluded += 1;
+        continue;
+      }
+      let encodedDocument = encodedDocuments.get(document.key.id);
+      if (encodedDocument === undefined) {
+        encodedDocument = exports_Encoding.encodeHex(document.content.text);
+        encodedDocuments.set(document.key.id, encodedDocument);
+      }
+      if (!sameExcerpt(encodedDocument, candidate, profile.maxChunkBytes)) {
         staleExcluded += 1;
         continue;
       }
@@ -44421,9 +44431,9 @@ var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (qu
     orElse: () => exports_Effect.fail(SemanticMemoryError.make({ operation: "query memory", reason: "timeout" }))
   }));
 });
-var sameExcerpt = (document, candidate, maxChunkBytes) => {
+var sameExcerpt = (encodedDocument, candidate, maxChunkBytes) => {
   const hex2 = exports_Encoding.encodeHex(candidate.text);
-  return candidate.startByte < candidate.endByte && hex2.length / 2 === candidate.endByte - candidate.startByte && hex2.length / 2 <= maxChunkBytes && exports_Encoding.encodeHex(document.content.text).slice(candidate.startByte * 2, candidate.endByte * 2) === hex2;
+  return candidate.startByte < candidate.endByte && hex2.length / 2 === candidate.endByte - candidate.startByte && hex2.length / 2 <= maxChunkBytes && encodedDocument.slice(candidate.startByte * 2, candidate.endByte * 2) === hex2;
 };
 // packages/capabilities/src/scheduling.ts
 var PositiveInt10 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
