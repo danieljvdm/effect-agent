@@ -1,4 +1,6 @@
+import { createRequire } from "node:module";
 var __defProp = Object.defineProperty;
+var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
 var __returnValue = (v) => v;
 function __exportSetter(name, newValue) {
   this[name] = __returnValue.bind(null, newValue);
@@ -12,6 +14,578 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
+var __require = /* @__PURE__ */ createRequire(import.meta.url);
+
+// node_modules/.bun/detect-libc@2.1.2/node_modules/detect-libc/lib/process.js
+var require_process = __commonJS(function(exports, module) {
+  var isLinux = () => process.platform === "linux";
+  var report2 = null;
+  var getReport = () => {
+    if (!report2) {
+      if (isLinux() && process.report) {
+        const orig = process.report.excludeNetwork;
+        process.report.excludeNetwork = true;
+        report2 = process.report.getReport();
+        process.report.excludeNetwork = orig;
+      } else {
+        report2 = {};
+      }
+    }
+    return report2;
+  };
+  module.exports = { isLinux, getReport };
+});
+
+// node_modules/.bun/detect-libc@2.1.2/node_modules/detect-libc/lib/filesystem.js
+var require_filesystem = __commonJS(function(exports, module) {
+  var fs = __require("fs");
+  var LDD_PATH = "/usr/bin/ldd";
+  var SELF_PATH = "/proc/self/exe";
+  var MAX_LENGTH = 2048;
+  var readFileSync = (path) => {
+    const fd = fs.openSync(path, "r");
+    const buffer3 = Buffer.alloc(MAX_LENGTH);
+    const bytesRead = fs.readSync(fd, buffer3, 0, MAX_LENGTH, 0);
+    fs.close(fd, () => {});
+    return buffer3.subarray(0, bytesRead);
+  };
+  var readFile3 = (path) => new Promise((resolve4, reject) => {
+    fs.open(path, "r", (err, fd) => {
+      if (err) {
+        reject(err);
+      } else {
+        const buffer3 = Buffer.alloc(MAX_LENGTH);
+        fs.read(fd, buffer3, 0, MAX_LENGTH, 0, (_, bytesRead) => {
+          resolve4(buffer3.subarray(0, bytesRead));
+          fs.close(fd, () => {});
+        });
+      }
+    });
+  });
+  module.exports = {
+    LDD_PATH,
+    SELF_PATH,
+    readFileSync,
+    readFile: readFile3
+  };
+});
+
+// node_modules/.bun/detect-libc@2.1.2/node_modules/detect-libc/lib/elf.js
+var require_elf = __commonJS(function(exports, module) {
+  var interpreterPath = (elf) => {
+    if (elf.length < 64) {
+      return null;
+    }
+    if (elf.readUInt32BE(0) !== 2135247942) {
+      return null;
+    }
+    if (elf.readUInt8(4) !== 2) {
+      return null;
+    }
+    if (elf.readUInt8(5) !== 1) {
+      return null;
+    }
+    const offset = elf.readUInt32LE(32);
+    const size9 = elf.readUInt16LE(54);
+    const count2 = elf.readUInt16LE(56);
+    for (let i = 0;i < count2; i++) {
+      const headerOffset = offset + i * size9;
+      const type2 = elf.readUInt32LE(headerOffset);
+      if (type2 === 3) {
+        const fileOffset = elf.readUInt32LE(headerOffset + 8);
+        const fileSize = elf.readUInt32LE(headerOffset + 32);
+        return elf.subarray(fileOffset, fileOffset + fileSize).toString().replace(/\0.*$/g, "");
+      }
+    }
+    return null;
+  };
+  module.exports = {
+    interpreterPath
+  };
+});
+
+// node_modules/.bun/detect-libc@2.1.2/node_modules/detect-libc/lib/detect-libc.js
+var require_detect_libc = __commonJS(function(exports, module) {
+  var childProcess = __require("child_process");
+  var { isLinux, getReport } = require_process();
+  var { LDD_PATH, SELF_PATH, readFile: readFile3, readFileSync } = require_filesystem();
+  var { interpreterPath } = require_elf();
+  var cachedFamilyInterpreter;
+  var cachedFamilyFilesystem;
+  var cachedVersionFilesystem;
+  var command = "getconf GNU_LIBC_VERSION 2>&1 || true; ldd --version 2>&1 || true";
+  var commandOut = "";
+  var safeCommand = () => {
+    if (!commandOut) {
+      return new Promise((resolve4) => {
+        childProcess.exec(command, (err, out) => {
+          commandOut = err ? " " : out;
+          resolve4(commandOut);
+        });
+      });
+    }
+    return commandOut;
+  };
+  var safeCommandSync = () => {
+    if (!commandOut) {
+      try {
+        commandOut = childProcess.execSync(command, { encoding: "utf8" });
+      } catch (_err) {
+        commandOut = " ";
+      }
+    }
+    return commandOut;
+  };
+  var GLIBC = "glibc";
+  var RE_GLIBC_VERSION = /LIBC[a-z0-9 \-).]*?(\d+\.\d+)/i;
+  var MUSL = "musl";
+  var isFileMusl = (f) => f.includes("libc.musl-") || f.includes("ld-musl-");
+  var familyFromReport = () => {
+    const report2 = getReport();
+    if (report2.header && report2.header.glibcVersionRuntime) {
+      return GLIBC;
+    }
+    if (Array.isArray(report2.sharedObjects)) {
+      if (report2.sharedObjects.some(isFileMusl)) {
+        return MUSL;
+      }
+    }
+    return null;
+  };
+  var familyFromCommand = (out) => {
+    const [getconf, ldd1] = out.split(/[\r\n]+/);
+    if (getconf && getconf.includes(GLIBC)) {
+      return GLIBC;
+    }
+    if (ldd1 && ldd1.includes(MUSL)) {
+      return MUSL;
+    }
+    return null;
+  };
+  var familyFromInterpreterPath = (path) => {
+    if (path) {
+      if (path.includes("/ld-musl-")) {
+        return MUSL;
+      } else if (path.includes("/ld-linux-")) {
+        return GLIBC;
+      }
+    }
+    return null;
+  };
+  var getFamilyFromLddContent = (content) => {
+    content = content.toString();
+    if (content.includes("musl")) {
+      return MUSL;
+    }
+    if (content.includes("GNU C Library")) {
+      return GLIBC;
+    }
+    return null;
+  };
+  var familyFromFilesystem = async () => {
+    if (cachedFamilyFilesystem !== undefined) {
+      return cachedFamilyFilesystem;
+    }
+    cachedFamilyFilesystem = null;
+    try {
+      const lddContent = await readFile3(LDD_PATH);
+      cachedFamilyFilesystem = getFamilyFromLddContent(lddContent);
+    } catch (e) {}
+    return cachedFamilyFilesystem;
+  };
+  var familyFromFilesystemSync = () => {
+    if (cachedFamilyFilesystem !== undefined) {
+      return cachedFamilyFilesystem;
+    }
+    cachedFamilyFilesystem = null;
+    try {
+      const lddContent = readFileSync(LDD_PATH);
+      cachedFamilyFilesystem = getFamilyFromLddContent(lddContent);
+    } catch (e) {}
+    return cachedFamilyFilesystem;
+  };
+  var familyFromInterpreter = async () => {
+    if (cachedFamilyInterpreter !== undefined) {
+      return cachedFamilyInterpreter;
+    }
+    cachedFamilyInterpreter = null;
+    try {
+      const selfContent = await readFile3(SELF_PATH);
+      const path = interpreterPath(selfContent);
+      cachedFamilyInterpreter = familyFromInterpreterPath(path);
+    } catch (e) {}
+    return cachedFamilyInterpreter;
+  };
+  var familyFromInterpreterSync = () => {
+    if (cachedFamilyInterpreter !== undefined) {
+      return cachedFamilyInterpreter;
+    }
+    cachedFamilyInterpreter = null;
+    try {
+      const selfContent = readFileSync(SELF_PATH);
+      const path = interpreterPath(selfContent);
+      cachedFamilyInterpreter = familyFromInterpreterPath(path);
+    } catch (e) {}
+    return cachedFamilyInterpreter;
+  };
+  var family = async () => {
+    let family2 = null;
+    if (isLinux()) {
+      family2 = await familyFromInterpreter();
+      if (!family2) {
+        family2 = await familyFromFilesystem();
+        if (!family2) {
+          family2 = familyFromReport();
+        }
+        if (!family2) {
+          const out = await safeCommand();
+          family2 = familyFromCommand(out);
+        }
+      }
+    }
+    return family2;
+  };
+  var familySync = () => {
+    let family2 = null;
+    if (isLinux()) {
+      family2 = familyFromInterpreterSync();
+      if (!family2) {
+        family2 = familyFromFilesystemSync();
+        if (!family2) {
+          family2 = familyFromReport();
+        }
+        if (!family2) {
+          const out = safeCommandSync();
+          family2 = familyFromCommand(out);
+        }
+      }
+    }
+    return family2;
+  };
+  var isNonGlibcLinux = async () => isLinux() && await family() !== GLIBC;
+  var isNonGlibcLinuxSync = () => isLinux() && familySync() !== GLIBC;
+  var versionFromFilesystem = async () => {
+    if (cachedVersionFilesystem !== undefined) {
+      return cachedVersionFilesystem;
+    }
+    cachedVersionFilesystem = null;
+    try {
+      const lddContent = await readFile3(LDD_PATH);
+      const versionMatch = lddContent.match(RE_GLIBC_VERSION);
+      if (versionMatch) {
+        cachedVersionFilesystem = versionMatch[1];
+      }
+    } catch (e) {}
+    return cachedVersionFilesystem;
+  };
+  var versionFromFilesystemSync = () => {
+    if (cachedVersionFilesystem !== undefined) {
+      return cachedVersionFilesystem;
+    }
+    cachedVersionFilesystem = null;
+    try {
+      const lddContent = readFileSync(LDD_PATH);
+      const versionMatch = lddContent.match(RE_GLIBC_VERSION);
+      if (versionMatch) {
+        cachedVersionFilesystem = versionMatch[1];
+      }
+    } catch (e) {}
+    return cachedVersionFilesystem;
+  };
+  var versionFromReport = () => {
+    const report2 = getReport();
+    if (report2.header && report2.header.glibcVersionRuntime) {
+      return report2.header.glibcVersionRuntime;
+    }
+    return null;
+  };
+  var versionSuffix = (s) => s.trim().split(/\s+/)[1];
+  var versionFromCommand = (out) => {
+    const [getconf, ldd1, ldd2] = out.split(/[\r\n]+/);
+    if (getconf && getconf.includes(GLIBC)) {
+      return versionSuffix(getconf);
+    }
+    if (ldd1 && ldd2 && ldd1.includes(MUSL)) {
+      return versionSuffix(ldd2);
+    }
+    return null;
+  };
+  var version = async () => {
+    let version2 = null;
+    if (isLinux()) {
+      version2 = await versionFromFilesystem();
+      if (!version2) {
+        version2 = versionFromReport();
+      }
+      if (!version2) {
+        const out = await safeCommand();
+        version2 = versionFromCommand(out);
+      }
+    }
+    return version2;
+  };
+  var versionSync = () => {
+    let version2 = null;
+    if (isLinux()) {
+      version2 = versionFromFilesystemSync();
+      if (!version2) {
+        version2 = versionFromReport();
+      }
+      if (!version2) {
+        const out = safeCommandSync();
+        version2 = versionFromCommand(out);
+      }
+    }
+    return version2;
+  };
+  module.exports = {
+    GLIBC,
+    MUSL,
+    family,
+    familySync,
+    isNonGlibcLinux,
+    isNonGlibcLinuxSync,
+    version,
+    versionSync
+  };
+});
+
+// node_modules/.bun/node-gyp-build-optional-packages@5.2.2/node_modules/node-gyp-build-optional-packages/node-gyp-build.js
+var require_node_gyp_build = __commonJS(function(exports, module) {
+  var fs = __require("fs");
+  var path = __require("path");
+  var url2 = __require("url");
+  var os = __require("os");
+  var runtimeRequire = typeof __webpack_require__ === "function" ? __non_webpack_require__ : __require;
+  var vars = process.config && process.config.variables || {};
+  var prebuildsOnly = !!process.env.PREBUILDS_ONLY;
+  var versions = process.versions;
+  var abi = versions.modules;
+  if (versions.deno || process.isBun) {
+    abi = "unsupported";
+  }
+  var runtime2 = isElectron() ? "electron" : isNwjs() ? "node-webkit" : "node";
+  var arch = process.env.npm_config_arch || os.arch();
+  var platform = process.env.npm_config_platform || os.platform();
+  var libc = process.env.LIBC || (isMusl(platform) ? "musl" : "glibc");
+  var armv = process.env.ARM_VERSION || (arch === "arm64" ? "8" : vars.arm_version) || "";
+  var uv = (versions.uv || "").split(".")[0];
+  module.exports = load;
+  function load(dir2) {
+    return runtimeRequire(load.resolve(dir2));
+  }
+  load.resolve = load.path = function(dir2) {
+    dir2 = path.resolve(dir2 || ".");
+    var packageName = "";
+    var packageNameError;
+    try {
+      packageName = runtimeRequire(path.join(dir2, "package.json")).name;
+      var varName = packageName.toUpperCase().replace(/-/g, "_");
+      if (process.env[varName + "_PREBUILD"])
+        dir2 = process.env[varName + "_PREBUILD"];
+    } catch (err) {
+      packageNameError = err;
+    }
+    if (!prebuildsOnly) {
+      var release3 = getFirst(path.join(dir2, "build/Release"), matchBuild);
+      if (release3)
+        return release3;
+      var debug2 = getFirst(path.join(dir2, "build/Debug"), matchBuild);
+      if (debug2)
+        return debug2;
+    }
+    var prebuild = resolve4(dir2);
+    if (prebuild)
+      return prebuild;
+    var nearby = resolve4(path.dirname(process.execPath));
+    if (nearby)
+      return nearby;
+    var platformPackage = (packageName[0] == "@" ? "" : "@" + packageName + "/") + packageName + "-" + platform + "-" + arch;
+    var packageResolutionError;
+    try {
+      var prebuildPackage = path.dirname(__require("module").createRequire(url2.pathToFileURL(path.join(dir2, "package.json"))).resolve(platformPackage));
+      return resolveFile(prebuildPackage);
+    } catch (error2) {
+      packageResolutionError = error2;
+    }
+    var target2 = [
+      "platform=" + platform,
+      "arch=" + arch,
+      "runtime=" + runtime2,
+      "abi=" + abi,
+      "uv=" + uv,
+      armv ? "armv=" + armv : "",
+      "libc=" + libc,
+      "node=" + process.versions.node,
+      process.versions.electron ? "electron=" + process.versions.electron : "",
+      typeof __webpack_require__ === "function" ? "webpack=true" : ""
+    ].filter(Boolean).join(" ");
+    let errMessage = "No native build was found for " + target2 + `
+    attempted loading from: ` + dir2 + " and package:" + " " + platformPackage + `
+`;
+    if (packageNameError) {
+      errMessage += "Error finding package.json: " + packageNameError.message + `
+`;
+    }
+    if (packageResolutionError) {
+      errMessage += "Error resolving package: " + packageResolutionError.message + `
+`;
+    }
+    throw new Error(errMessage);
+    function resolve4(dir3) {
+      var tuples = readdirSync(path.join(dir3, "prebuilds")).map(parseTuple);
+      var tuple2 = tuples.filter(matchTuple(platform, arch)).sort(compareTuples)[0];
+      if (!tuple2)
+        return;
+      return resolveFile(path.join(dir3, "prebuilds", tuple2.name));
+    }
+    function resolveFile(prebuilds) {
+      var parsed = readdirSync(prebuilds).map(parseTags);
+      var candidates = parsed.filter(matchTags(runtime2, abi));
+      var winner = candidates.sort(compareTags(runtime2))[0];
+      if (winner)
+        return path.join(prebuilds, winner.file);
+    }
+  };
+  function readdirSync(dir2) {
+    try {
+      return fs.readdirSync(dir2);
+    } catch (err) {
+      return [];
+    }
+  }
+  function getFirst(dir2, filter12) {
+    var files = readdirSync(dir2).filter(filter12);
+    return files[0] && path.join(dir2, files[0]);
+  }
+  function matchBuild(name) {
+    return /\.node$/.test(name);
+  }
+  function parseTuple(name) {
+    var arr = name.split("-");
+    if (arr.length !== 2)
+      return;
+    var platform2 = arr[0];
+    var architectures = arr[1].split("+");
+    if (!platform2)
+      return;
+    if (!architectures.length)
+      return;
+    if (!architectures.every(Boolean))
+      return;
+    return { name, platform: platform2, architectures };
+  }
+  function matchTuple(platform2, arch2) {
+    return function(tuple2) {
+      if (tuple2 == null)
+        return false;
+      if (tuple2.platform !== platform2)
+        return false;
+      return tuple2.architectures.includes(arch2);
+    };
+  }
+  function compareTuples(a, b) {
+    return a.architectures.length - b.architectures.length;
+  }
+  function parseTags(file2) {
+    var arr = file2.split(".");
+    var extension = arr.pop();
+    var tags3 = { file: file2, specificity: 0 };
+    if (extension !== "node")
+      return;
+    for (var i = 0;i < arr.length; i++) {
+      var tag4 = arr[i];
+      if (tag4 === "node" || tag4 === "electron" || tag4 === "node-webkit") {
+        tags3.runtime = tag4;
+      } else if (tag4 === "napi") {
+        tags3.napi = true;
+      } else if (tag4.slice(0, 3) === "abi") {
+        tags3.abi = tag4.slice(3);
+      } else if (tag4.slice(0, 2) === "uv") {
+        tags3.uv = tag4.slice(2);
+      } else if (tag4.slice(0, 4) === "armv") {
+        tags3.armv = tag4.slice(4);
+      } else if (tag4 === "glibc" || tag4 === "musl") {
+        tags3.libc = tag4;
+      } else {
+        continue;
+      }
+      tags3.specificity++;
+    }
+    return tags3;
+  }
+  function matchTags(runtime3, abi2) {
+    return function(tags3) {
+      if (tags3 == null)
+        return false;
+      if (tags3.runtime !== runtime3 && !runtimeAgnostic(tags3))
+        return false;
+      if (tags3.abi !== abi2 && !tags3.napi)
+        return false;
+      if (tags3.uv && tags3.uv !== uv)
+        return false;
+      if (tags3.armv && tags3.armv !== armv)
+        return false;
+      if (tags3.libc && tags3.libc !== libc)
+        return false;
+      return true;
+    };
+  }
+  function runtimeAgnostic(tags3) {
+    return tags3.runtime === "node" && tags3.napi;
+  }
+  function compareTags(runtime3) {
+    return function(a, b) {
+      if (a.runtime !== b.runtime) {
+        return a.runtime === runtime3 ? -1 : 1;
+      } else if (a.abi !== b.abi) {
+        return a.abi ? -1 : 1;
+      } else if (a.specificity !== b.specificity) {
+        return a.specificity > b.specificity ? -1 : 1;
+      } else {
+        return 0;
+      }
+    };
+  }
+  function isNwjs() {
+    return !!(process.versions && process.versions.nw);
+  }
+  function isElectron() {
+    if (process.versions && process.versions.electron)
+      return true;
+    if (process.env.ELECTRON_RUN_AS_NODE)
+      return true;
+    return typeof window !== "undefined" && window.process && window.process.type === "renderer";
+  }
+  function isMusl(platform2) {
+    if (platform2 !== "linux")
+      return false;
+    const { familySync, MUSL } = require_detect_libc();
+    return familySync() === MUSL;
+  }
+  load.parseTags = parseTags;
+  load.matchTags = matchTags;
+  load.compareTags = compareTags;
+  load.parseTuple = parseTuple;
+  load.matchTuple = matchTuple;
+  load.compareTuples = compareTuples;
+});
+
+// node_modules/.bun/node-gyp-build-optional-packages@5.2.2/node_modules/node-gyp-build-optional-packages/index.js
+var require_node_gyp_build_optional_packages = __commonJS(function(exports, module) {
+  var runtimeRequire = typeof __webpack_require__ === "function" ? __non_webpack_require__ : __require;
+  if (typeof runtimeRequire.addon === "function") {
+    module.exports = runtimeRequire.addon.bind(runtimeRequire);
+  } else {
+    module.exports = require_node_gyp_build();
+  }
+});
+
+// node_modules/.bun/msgpackr-extract@3.0.4/node_modules/msgpackr-extract/index.js
+var require_msgpackr_extract = __commonJS(function(exports, module) {
+  var __dirname = "/Users/adamrankin/dev/effect-agent/node_modules/.bun/msgpackr-extract@3.0.4/node_modules/msgpackr-extract";
+  module.exports = require_node_gyp_build_optional_packages()(__dirname);
+});
 // node_modules/.bun/@effect+platform-node@4.0.0-rc.111+1c5a24aacf2db9bb/node_modules/@effect/platform-node/dist/NodeRuntime.js
 var exports_NodeRuntime = {};
 __export(exports_NodeRuntime, {
@@ -2332,6 +2906,11 @@ var repeat = /* @__PURE__ */ dual(2, (self, n) => flatten3(makeBy(() => self, {
   length: n
 })));
 var forever = (self) => repeat(self, Infinity);
+var head = (self) => {
+  const iterator = self[Symbol.iterator]();
+  const result = iterator.next();
+  return result.done ? none2() : some3(result.value);
+};
 var headUnsafe = (self) => {
   const iterator = self[Symbol.iterator]();
   const result = iterator.next();
@@ -3369,6 +3948,30 @@ var Class3 = class extends Class {
 var TaggedClass = (tag) => class extends Class3 {
   _tag = tag;
 };
+var taggedEnum = () => new Proxy({}, {
+  get(_target, tag, _receiver) {
+    if (tag === "$is") {
+      return isTagged;
+    } else if (tag === "$match") {
+      return taggedMatch;
+    }
+    return (props) => ({
+      ...props,
+      _tag: tag
+    });
+  }
+});
+function taggedMatch() {
+  if (arguments.length === 1) {
+    const cases2 = arguments[0];
+    return function(value2) {
+      return cases2[value2._tag](value2);
+    };
+  }
+  const value = arguments[0];
+  const cases = arguments[1];
+  return cases[value._tag](value);
+}
 var Error3 = Error2;
 var TaggedError2 = TaggedError;
 
@@ -3660,6 +4263,9 @@ var CurrentLogLevel = /* @__PURE__ */ Reference("effect/References/CurrentLogLev
 var MinimumLogLevel = /* @__PURE__ */ Reference("effect/References/MinimumLogLevel", {
   fiberCached: true,
   defaultValue: () => "Info"
+});
+var UnhandledLogLevel = /* @__PURE__ */ Reference("effect/References/UnhandledLogLevel", {
+  defaultValue: () => "Error"
 });
 var CurrentLogSpans = /* @__PURE__ */ Reference("effect/References/CurrentLogSpans", {
   defaultValue: () => []
@@ -5414,7 +6020,7 @@ var forEach = /* @__PURE__ */ dual((args2) => typeof args2[1] === "function", (i
   });
   return eff ? as2(eff, out) : succeed3(out);
 }));
-var head = (self) => flatMap3(self, (elements) => {
+var head2 = (self) => flatMap3(self, (elements) => {
   const result2 = elements[Symbol.iterator]().next();
   return result2.done ? fail3(new NoSuchElementError) : succeed3(result2.value);
 });
@@ -6551,7 +7157,7 @@ __export(exports_Effect, {
   fromOption: () => fromOption4,
   fromResult: () => fromResult2,
   gen: () => gen4,
-  head: () => head2,
+  head: () => head3,
   ignore: () => ignore2,
   ignoreCause: () => ignoreCause2,
   interrupt: () => interrupt5,
@@ -6904,6 +7510,7 @@ var CurrentLogAnnotations2 = CurrentLogAnnotations;
 var CurrentLogSpans2 = CurrentLogSpans;
 var CurrentStackFrame2 = CurrentStackFrame;
 var TracerTimingEnabled2 = TracerTimingEnabled;
+var UnhandledLogLevel2 = UnhandledLogLevel;
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Scope.js
 var exports_Scope = {};
@@ -8087,6 +8694,34 @@ var toStepWithMetadata = (schedule) => clockWith((clock) => map5(toStep(schedule
   });
 }));
 var toStepWithSleep = (schedule) => map5(toStepWithMetadata(schedule), (step) => (input) => map5(step(input), (meta) => meta.output));
+var min5 = (schedules) => fromStep(map5(all3(schedules.map(toStep)), (steps) => (now2, input) => flatMap3(forEach(steps, (step) => matchEffect2(step(now2, input), {
+  onSuccess: (result2) => succeed3(result2[1]),
+  onDone: () => undefined_,
+  onFailure: failCause
+})), (results) => {
+  const duration = minDuration(results);
+  if (duration === undefined) {
+    return done2(zero);
+  }
+  return succeed3([duration, duration]);
+})));
+var minDuration = (results) => {
+  let min6 = undefined;
+  for (let i = 0;i < results.length; i++) {
+    const duration = results[i];
+    if (duration !== undefined) {
+      min6 = min6 === undefined ? duration : min3(min6, duration);
+    }
+  }
+  return min6;
+};
+var exponential = (base, factor = 2) => {
+  const baseMillis = toMillis(fromInputUnsafe(base));
+  return fromStepWithMetadata(succeed3((meta) => {
+    const duration = millis(baseMillis * Math.pow(factor, meta.attempt - 1));
+    return succeed3([duration, duration]);
+  }));
+};
 var passthrough = (self) => fromStep(map5(toStep(self), (step) => (now2, input) => matchEffect2(step(now2, input), {
   onSuccess: (result2) => succeed3([input, result2[1]]),
   onFailure: failCause,
@@ -8626,7 +9261,7 @@ class HistogramMetric extends Metric$ {
     const boundaries = new Float64Array(size);
     let count = 0;
     let sum2 = 0;
-    let min5 = Number.MAX_VALUE;
+    let min6 = Number.MAX_VALUE;
     let max5 = -Number.MAX_VALUE;
     map4(sort(bounds, Number2), (n, i) => {
       boundaries[i] = n;
@@ -8653,8 +9288,8 @@ class HistogramMetric extends Metric$ {
       values[from] = values[from] + 1;
       count = count + 1;
       sum2 = sum2 + value;
-      if (value < min5) {
-        min5 = value;
+      if (value < min6) {
+        min6 = value;
       }
       if (value > max5) {
         max5 = value;
@@ -8674,7 +9309,7 @@ class HistogramMetric extends Metric$ {
     return makeHooks(() => ({
       buckets: getBuckets(),
       count,
-      min: min5,
+      min: min6,
       max: max5,
       sum: sum2
     }), update);
@@ -8700,10 +9335,10 @@ class SummaryMetric extends Metric$ {
         throw new Error(`Quantile must be between 0 and 1, found: ${quantile}`);
       }
     }
-    let head2 = 0;
+    let head3 = 0;
     let count = 0;
     let sum2 = 0;
-    let min5 = Number.MAX_VALUE;
+    let min6 = Number.MAX_VALUE;
     let max5 = -Number.MAX_VALUE;
     const snapshot = (now2) => {
       const builder = [];
@@ -8735,14 +9370,14 @@ class SummaryMetric extends Metric$ {
     };
     const observe = (value, timestamp) => {
       if (this.#maxSize > 0) {
-        const target = head2 % this.#maxSize;
+        const target = head3 % this.#maxSize;
         observations[target] = [timestamp, value];
-        head2 = head2 + 1;
+        head3 = head3 + 1;
       }
       count = count + 1;
       sum2 = sum2 + value;
-      if (value < min5) {
-        min5 = value;
+      if (value < min6) {
+        min6 = value;
       }
       if (value > max5) {
         max5 = value;
@@ -8754,7 +9389,7 @@ class SummaryMetric extends Metric$ {
       return {
         quantiles,
         count,
-        min: min5,
+        min: min6,
         max: max5,
         sum: sum2
       };
@@ -8877,20 +9512,20 @@ var renderState = (metric) => {
       const state = metric.state;
       const buckets = `buckets: [${renderKeyValues(state.buckets)}]`;
       const count = `count: [${state.count}]`;
-      const min5 = `min: [${state.min}]`;
+      const min6 = `min: [${state.min}]`;
       const max5 = `max: [${state.max}]`;
       const sum2 = `sum: [${state.sum}]`;
-      return `${prefix}[${buckets}, ${count}, ${min5}, ${max5}, ${sum2}]`;
+      return `${prefix}[${buckets}, ${count}, ${min6}, ${max5}, ${sum2}]`;
     }
     case "Summary": {
       const state = metric.state;
       const printableQuantiles = state.quantiles.map(([key, value2]) => [key, value2 ?? 0]);
       const quantiles = `quantiles: [${renderKeyValues(printableQuantiles)}]`;
       const count = `count: [${state.count}]`;
-      const min5 = `min: [${state.min}]`;
+      const min6 = `min: [${state.min}]`;
       const max5 = `max: [${state.max}]`;
       const sum2 = `sum: [${state.sum}]`;
-      return `${prefix}[${quantiles}, ${count}, ${min5}, ${max5}, ${sum2}]`;
+      return `${prefix}[${quantiles}, ${count}, ${min6}, ${max5}, ${sum2}]`;
     }
   }
 };
@@ -8992,7 +9627,7 @@ var validate2 = validate;
 var findFirst2 = findFirst;
 var findFirstFilter2 = findFirstFilter;
 var forEach2 = forEach;
-var head2 = head;
+var head3 = head2;
 var whileLoop2 = whileLoop;
 var promise2 = promise;
 var tryPromise2 = tryPromise;
@@ -10082,14 +10717,14 @@ var takeUpTo = /* @__PURE__ */ dual(2, (self, max5) => suspend3(() => {
   self.strategy.onPubSubEmptySpaceUnsafe(self.pubsub, self.subscribers);
   return replay ? succeed7(replay.concat(as4)) : succeed7(as4);
 }));
-var takeBetween = /* @__PURE__ */ dual(3, (self, min5, max5) => suspend3(() => takeRemainderLoop(self, min5, max5, [])));
-var takeRemainderLoop = (self, min5, max5, acc) => {
-  if (max5 < min5) {
+var takeBetween = /* @__PURE__ */ dual(3, (self, min6, max5) => suspend3(() => takeRemainderLoop(self, min6, max5, [])));
+var takeRemainderLoop = (self, min6, max5, acc) => {
+  if (max5 < min6) {
     return succeed7(acc);
   }
   return flatMap5(takeUpTo(self, max5), (bs) => {
     acc.push(...bs);
-    const remaining = min5 - bs.length;
+    const remaining = min6 - bs.length;
     if (remaining === 1) {
       return map8(take2(self), (b) => {
         acc.push(b);
@@ -11343,7 +11978,7 @@ var collect = (self) => suspend(() => {
   }), () => void_3), out);
 });
 var takeN2 = (self, n) => takeBetween2(self, n, n);
-var takeBetween2 = (self, min5, max5) => suspend(() => takeBetweenUnsafe(self, min5, max5) ?? andThen3(awaitTake(self), takeBetween2(self, 1, max5)));
+var takeBetween2 = (self, min6, max5) => suspend(() => takeBetweenUnsafe(self, min6, max5) ?? andThen3(awaitTake(self), takeBetween2(self, 1, max5)));
 var take3 = (self) => suspend(() => takeUnsafe(self) ?? andThen3(awaitTake(self), take3(self)));
 var poll2 = (self) => suspend(() => {
   const result3 = takeUnsafe(self);
@@ -11426,10 +12061,10 @@ var scheduleReleaseTaker = (self) => {
   self.scheduleRunning = true;
   self.dispatcher.scheduleTask(() => releaseTakers(self), 0);
 };
-var takeBetweenUnsafe = (self, min5, max5) => {
+var takeBetweenUnsafe = (self, min6, max5) => {
   if (self.state._tag === "Done") {
     return self.state.exit;
-  } else if (max5 <= 0 || min5 <= 0) {
+  } else if (max5 <= 0 || min6 <= 0) {
     return exitSucceed([]);
   } else if (self.capacity <= 0 && self.state.offers.size > 0) {
     self.capacity = 1;
@@ -11439,8 +12074,8 @@ var takeBetweenUnsafe = (self, min5, max5) => {
     releaseCapacity(self);
     return exitSucceed(messages);
   }
-  min5 = Math.min(min5, self.capacity || 1);
-  if (min5 <= self.messages.length) {
+  min6 = Math.min(min6, self.capacity || 1);
+  if (min6 <= self.messages.length) {
     const messages = takeN(self.messages, max5);
     releaseCapacity(self);
     return exitSucceed(messages);
@@ -12482,11 +13117,11 @@ var mkUint8Array = (self) => map8(runFold(self, () => ({
   return result3;
 });
 var runHead = (self) => suspend3(() => {
-  let head3 = none2();
+  let head4 = none2();
   return runWith(self, (pull) => pull.pipe(asSome2, flatMap5((head_) => {
-    head3 = head_;
+    head4 = head_;
     return done2();
-  })), () => succeed7(head3));
+  })), () => succeed7(head4));
 });
 var runLast = (self) => suspend3(() => {
   const absent = Symbol();
@@ -13363,9 +13998,9 @@ var paginate = (s, f) => fromPull2(sync4(() => {
   });
 }));
 var iterate = (value2, next) => unfold(value2, (a) => succeed7([a, next(a)]));
-var range2 = (min5, max5, chunkSize = DefaultChunkSize) => min5 > max5 ? empty9 : fromPull2(sync4(() => {
+var range2 = (min6, max5, chunkSize = DefaultChunkSize) => min6 > max5 ? empty9 : fromPull2(sync4(() => {
   const size5 = Math.max(1, chunkSize);
-  let start = min5;
+  let start = min6;
   let done4 = false;
   return suspend3(() => {
     if (done4)
@@ -15897,7 +16532,7 @@ __export(exports_DateTime, {
   mapEpochMillis: () => mapEpochMillis2,
   match: () => match8,
   max: () => max5,
-  min: () => min5,
+  min: () => min6,
   mutate: () => mutate2,
   mutateUtc: () => mutateUtc2,
   nearest: () => nearest2,
@@ -15971,7 +16606,7 @@ var zoneToString2 = zoneToString;
 var setZoneNamed2 = setZoneNamed;
 var setZoneNamedUnsafe2 = setZoneNamedUnsafe;
 var distance2 = distance;
-var min5 = min4;
+var min6 = min4;
 var max5 = max4;
 var isGreaterThan4 = isGreaterThan3;
 var isGreaterThanOrEqualTo4 = isGreaterThanOrEqualTo3;
@@ -16533,9 +17168,9 @@ var toExponential = (n) => {
   }
   const normalized = normalize(n);
   const digits = `${abs2(normalized).value}`;
-  const head3 = digits.slice(0, 1);
+  const head4 = digits.slice(0, 1);
   const tail = digits.slice(1);
-  let output = `${isNegative2(normalized) ? "-" : ""}${head3}`;
+  let output = `${isNegative2(normalized) ? "-" : ""}${head4}`;
   if (tail !== "") {
     output += `.${tail}`;
   }
@@ -17194,7 +17829,7 @@ function hasCheck(checks, id) {
 }
 var number2 = /* @__PURE__ */ new Number5;
 
-class Boolean extends Base2 {
+class Boolean2 extends Base2 {
   _tag = "Boolean";
   getParser() {
     return fromRefinement(this, isBoolean);
@@ -17203,7 +17838,7 @@ class Boolean extends Base2 {
     return "boolean";
   }
 }
-var boolean = /* @__PURE__ */ new Boolean;
+var boolean = /* @__PURE__ */ new Boolean2;
 
 class Symbol2 extends Base2 {
   _tag = "Symbol";
@@ -19770,11 +20405,11 @@ var make29 = (impl) => {
     random: sync4(() => nextDoubleUnsafe()),
     randomBoolean: sync4(() => nextDoubleUnsafe() > 0.5),
     randomInt: sync4(() => nextIntUnsafe()),
-    randomBetween: (min6, max6) => sync4(() => nextDoubleUnsafe() * (max6 - min6) + min6),
-    randomIntBetween(min6, max6, options) {
+    randomBetween: (min7, max6) => sync4(() => nextDoubleUnsafe() * (max6 - min7) + min7),
+    randomIntBetween(min7, max6, options) {
       const extra = options?.halfOpen === true ? 0 : 1;
       return sync4(() => {
-        const minInt = Math.ceil(min6);
+        const minInt = Math.ceil(min7);
         const maxInt = Math.floor(max6);
         return Math.floor(nextDoubleUnsafe() * (maxInt - minInt + extra)) + minInt;
       });
@@ -20325,7 +20960,7 @@ __export(exports_Schema, {
   BigDecimalReviver: () => BigDecimalReviver,
   BigInt: () => BigInt5,
   BigIntFromString: () => BigIntFromString,
-  Boolean: () => Boolean3,
+  Boolean: () => Boolean4,
   BooleanFromBit: () => BooleanFromBit,
   Cause: () => Cause,
   CauseReason: () => CauseReason,
@@ -21887,7 +22522,7 @@ function make36(ast, options) {
 }
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Boolean.js
-var Boolean2 = globalThis.Boolean;
+var Boolean3 = globalThis.Boolean;
 var ReducerOr = /* @__PURE__ */ make2((a, b) => a || b, false);
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Struct.js
@@ -22006,12 +22641,12 @@ function appendObjectEntries(out, entries3) {
   })));
 }
 var max6 = /* @__PURE__ */ makeReducer2(ReducerMax);
-var min6 = /* @__PURE__ */ makeReducer2(ReducerMin);
+var min7 = /* @__PURE__ */ makeReducer2(ReducerMin);
 var or2 = /* @__PURE__ */ makeReducer2(ReducerOr);
 var concat2 = /* @__PURE__ */ makeReducer2(/* @__PURE__ */ makeReducerConcat());
 var combiner = /* @__PURE__ */ makeCombiner({
   integer: or2,
-  maxLength: min6,
+  maxLength: min7,
   minLength: max6,
   noInfinity: or2,
   noNaN: or2,
@@ -22157,10 +22792,10 @@ function objectWithOptionalCount(fc, pss, orderedNames, requiredKeys, optionalNa
     return out;
   });
 }
-function toRangeConstraints(ordered, min7, max7, error) {
+function toRangeConstraints(ordered, min8, max7, error) {
   const out = {};
   if (ordered?.minimum !== undefined) {
-    out.min = min7(ordered.minimum, ordered.exclusiveMinimum === true);
+    out.min = min8(ordered.minimum, ordered.exclusiveMinimum === true);
   }
   if (ordered?.maximum !== undefined) {
     out.max = max7(ordered.maximum, ordered.exclusiveMaximum === true);
@@ -22397,10 +23032,10 @@ function base(ast, path) {
         }
         let out = fc.tuple(...elementArbitraries).map(getSomes);
         if (isReadonlyArrayNonEmpty(rest)) {
-          const [head3, ...tail] = rest;
+          const [head4, ...tail] = rest;
           const restCtx = ast.elements.length === 0 ? ctx : reset;
           const minRestLength = Math.max(0, minLength - length - tail.length);
-          const headArbitrary = minRestLength === 0 ? undefined : head3.arbitrary.terminal(fc, reset, recursionStack);
+          const headArbitrary = minRestLength === 0 ? undefined : head4.arbitrary.terminal(fc, reset, recursionStack);
           if (minRestLength > 0 && headArbitrary === undefined) {
             return;
           }
@@ -22438,10 +23073,10 @@ function base(ast, path) {
         });
         let out = fc.tuple(...elementArbitraries).map((elements2) => getSomes(takeWhile(elements2, isSome2)));
         if (isReadonlyArrayNonEmpty(rest)) {
-          const [head3, ...tail] = rest.map(({
+          const [head4, ...tail] = rest.map(({
             arbitrary
           }) => arbitrary(fc, reset, recursionStack));
-          const restArbitrary = array2(fc, ast.elements.length === 0 ? ctx : reset, head3);
+          const restArbitrary = array2(fc, ast.elements.length === 0 ? ctx : reset, head4);
           out = appendArray(fc, out, len, restArbitrary);
           if (tail.length > 0) {
             const t = fc.tuple(...tail);
@@ -22666,9 +23301,9 @@ function recur2(ast, path) {
           }
         }
         if (rest.length > 0) {
-          const [head3, ...tail] = rest;
+          const [head4, ...tail] = rest;
           for (;i < len2 - tail.length; i++) {
-            if (!head3(a[i], b[i])) {
+            if (!head4(a[i], b[i])) {
               return false;
             }
           }
@@ -25047,7 +25682,7 @@ var Null2 = /* @__PURE__ */ make39(null_);
 var Undefined2 = /* @__PURE__ */ make39(undefined_3);
 var String6 = /* @__PURE__ */ make39(string2);
 var Number6 = /* @__PURE__ */ make39(number2);
-var Boolean3 = /* @__PURE__ */ make39(boolean);
+var Boolean4 = /* @__PURE__ */ make39(boolean);
 var Symbol3 = /* @__PURE__ */ make39(symbol3);
 var BigInt5 = /* @__PURE__ */ make39(bigInt);
 var Void2 = /* @__PURE__ */ make39(void_6);
@@ -27976,18 +28611,18 @@ function bigDecimalScaleConstraints(ordered) {
   if (bigDecimalValueConstraintsAtScale(ordered, max7) === undefined) {
     throw new globalThis.Error(bigDecimalInvalidOrderedConstraintsError);
   }
-  let min7 = 0;
+  let min8 = 0;
   let high = max7;
-  while (min7 < high) {
-    const scale2 = min7 + Math.floor((high - min7) / 2);
+  while (min8 < high) {
+    const scale2 = min8 + Math.floor((high - min8) / 2);
     if (bigDecimalValueConstraintsAtScale(ordered, scale2) === undefined) {
-      min7 = scale2 + 1;
+      min8 = scale2 + 1;
     } else {
       high = scale2;
     }
   }
   return {
-    min: min7,
+    min: min8,
     max: max7
   };
 }
@@ -28175,7 +28810,7 @@ var StandardSchemaV1FailureResult = /* @__PURE__ */ Struct2({
     })])))
   }))
 });
-var BooleanFromBit = /* @__PURE__ */ Literals([0, 1]).pipe(/* @__PURE__ */ decodeTo2(Boolean3, /* @__PURE__ */ transform2({
+var BooleanFromBit = /* @__PURE__ */ Literals([0, 1]).pipe(/* @__PURE__ */ decodeTo2(Boolean4, /* @__PURE__ */ transform2({
   decode: (bit) => bit === 1,
   encode: (bool) => bool ? 1 : 0
 })));
@@ -28540,9 +29175,9 @@ function toFormatter(schema, options) {
             }
           }
           if (rest.length > 0) {
-            const [head3, ...tail] = rest;
+            const [head4, ...tail] = rest;
             for (;i < t.length - tail.length; i++) {
-              out.push(head3(t[i]));
+              out.push(head4(t[i]));
             }
             for (let j = 0;j < tail.length; j++) {
               out.push(tail[j](t[i + j]));
@@ -29218,7 +29853,7 @@ var layer13 = /* @__PURE__ */ provideMerge(layer2, /* @__PURE__ */ mergeAll2(lay
 var exports_Config = {};
 __export(exports_Config, {
   Array: () => ArrayConfig,
-  Boolean: () => Boolean4,
+  Boolean: () => Boolean5,
   ConfigError: () => ConfigError,
   FalseValues: () => FalseValues,
   LogLevel: () => LogLevel,
@@ -29625,7 +30260,7 @@ function schema(codec, path) {
 }
 var TrueValues = /* @__PURE__ */ Literals(["true", "yes", "on", "1", "y"]);
 var FalseValues = /* @__PURE__ */ Literals(["false", "no", "off", "0", "n"]);
-var Boolean4 = /* @__PURE__ */ Literals([...TrueValues.literals, ...FalseValues.literals]).pipe(/* @__PURE__ */ decodeTo2(Boolean3, /* @__PURE__ */ transform2({
+var Boolean5 = /* @__PURE__ */ Literals([...TrueValues.literals, ...FalseValues.literals]).pipe(/* @__PURE__ */ decodeTo2(Boolean4, /* @__PURE__ */ transform2({
   decode: (value4) => value4 === "true" || value4 === "yes" || value4 === "on" || value4 === "1" || value4 === "y",
   encode: (value4) => value4 ? "true" : "false"
 })));
@@ -29684,7 +30319,7 @@ function literals(literals2, name) {
   return schema(Literals(literals2), name);
 }
 function boolean2(name) {
-  return schema(Boolean4, name);
+  return schema(Boolean5, name);
 }
 function duration(name) {
   return schema(DurationFromString, name);
@@ -29970,7 +30605,28 @@ __export(exports_FetchHttpClient, {
 });
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/Headers.js
+var exports_Headers = {};
+__export(exports_Headers, {
+  CurrentRedactedNames: () => CurrentRedactedNames,
+  Equivalence: () => Equivalence6,
+  HeadersSchema: () => HeadersSchema,
+  TypeId: () => TypeId44,
+  empty: () => empty12,
+  fromInput: () => fromInput2,
+  fromRecordUnsafe: () => fromRecordUnsafe,
+  get: () => get10,
+  has: () => has6,
+  isHeaders: () => isHeaders,
+  isRedactedName: () => isRedactedName,
+  merge: () => merge6,
+  redact: () => redact2,
+  remove: () => remove7,
+  removeMany: () => removeMany2,
+  set: () => set5,
+  setAll: () => setAll
+});
 var TypeId44 = /* @__PURE__ */ Symbol.for("~effect/http/Headers");
+var isHeaders = (u) => hasProperty(u, TypeId44);
 var Proto8 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.create(null), {
   [TypeId44]: {
     value: TypeId44
@@ -30004,6 +30660,25 @@ var Proto8 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.crea
 });
 var make46 = (input) => Object.assign(Object.create(Proto8), input);
 var Equivalence6 = /* @__PURE__ */ makeEquivalence4(/* @__PURE__ */ strictEqual());
+var HeadersSchema = /* @__PURE__ */ declare(isHeaders, {
+  representation: {
+    id: "effect/http/Headers",
+    payload: null
+  },
+  toCode: () => ({
+    runtime: "Headers.HeadersSchema",
+    Type: "Headers.Headers",
+    importDeclarations: [`import * as Headers from "effect/unstable/http/Headers"`]
+  }),
+  expected: "Headers",
+  toEquivalence: () => Equivalence6,
+  toCodec: () => link3()(Record(String6, String6), transform2({
+    decode: (input) => fromInput2(input),
+    encode: (headers) => ({
+      ...headers
+    })
+  }))
+});
 var empty12 = /* @__PURE__ */ Object.create(Proto8);
 var fromInput2 = (input) => {
   if (input === undefined) {
@@ -30026,6 +30701,8 @@ var fromInput2 = (input) => {
   return out;
 };
 var fromRecordUnsafe = (input) => Object.setPrototypeOf(input, Proto8);
+var has6 = /* @__PURE__ */ dual(2, (self, key) => (key.toLowerCase() in self));
+var get10 = /* @__PURE__ */ dual(2, (self, key) => fromUndefinedOr(self[key.toLowerCase()]));
 var set5 = /* @__PURE__ */ dual(3, (self, key, value4) => {
   const out = make46(self);
   out[key.toLowerCase()] = value4;
@@ -30043,6 +30720,13 @@ var merge6 = /* @__PURE__ */ dual(2, (self, headers) => {
 var remove7 = /* @__PURE__ */ dual(2, (self, key) => {
   const out = make46(self);
   delete out[key.toLowerCase()];
+  return out;
+});
+var removeMany2 = /* @__PURE__ */ dual(2, (self, keys4) => {
+  const out = make46(self);
+  for (const key of keys4) {
+    delete out[key.toLowerCase()];
+  }
   return out;
 });
 var redact2 = /* @__PURE__ */ dual(2, (self, key) => {
@@ -30107,8 +30791,8 @@ __export(exports_HttpClient, {
   filterStatus: () => filterStatus2,
   filterStatusOk: () => filterStatusOk2,
   followRedirects: () => followRedirects,
-  get: () => get11,
-  head: () => head4,
+  get: () => get12,
+  head: () => head5,
   isHttpClient: () => isHttpClient,
   layerMergedContext: () => layerMergedContext,
   make: () => make50,
@@ -30715,6 +31399,20 @@ class EmptyBodyError extends (/* @__PURE__ */ TaggedError2("EmptyBodyError")) {
   }
 }
 
+class HttpClientErrorSchema extends (/* @__PURE__ */ Error4(TypeId48)({
+  _tag: /* @__PURE__ */ tag("HttpError"),
+  kind: /* @__PURE__ */ Literals(["EncodeError", "DecodeError", "TransportError", "InvalidUrlError", "StatusCodeError", "EmptyBodyError"]),
+  cause: /* @__PURE__ */ optional2(/* @__PURE__ */ Defect())
+})) {
+  static fromHttpClientError(error2) {
+    return new HttpClientErrorSchema({
+      _tag: "HttpError",
+      kind: error2.reason._tag,
+      cause: error2.reason
+    });
+  }
+}
+
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/http/HttpClientRequest.js
 var exports_HttpClientRequest = {};
 __export(exports_HttpClientRequest, {
@@ -30737,8 +31435,8 @@ __export(exports_HttpClientRequest, {
   delete: () => del,
   empty: () => empty15,
   fromWeb: () => fromWeb,
-  get: () => get10,
-  head: () => head3,
+  get: () => get11,
+  head: () => head4,
   isHttpClientRequest: () => isHttpClientRequest,
   make: () => make49,
   makeWith: () => makeWith,
@@ -30845,12 +31543,12 @@ var make49 = (method) => (url2, options) => modify5(empty15, {
   url: url2,
   ...options ?? undefined
 });
-var get10 = /* @__PURE__ */ make49("GET");
+var get11 = /* @__PURE__ */ make49("GET");
 var post = /* @__PURE__ */ make49("POST");
 var patch = /* @__PURE__ */ make49("PATCH");
 var put = /* @__PURE__ */ make49("PUT");
 var del = /* @__PURE__ */ make49("DELETE");
-var head3 = /* @__PURE__ */ make49("HEAD");
+var head4 = /* @__PURE__ */ make49("HEAD");
 var options = /* @__PURE__ */ make49("OPTIONS");
 var trace2 = /* @__PURE__ */ make49("TRACE");
 var modify5 = /* @__PURE__ */ dual(2, (self, options2) => {
@@ -31264,8 +31962,8 @@ var isHttpClient = (u) => hasProperty(u, TypeId52);
 var HttpClient = /* @__PURE__ */ Service("effect/HttpClient");
 var accessor = (method) => (...args2) => flatMap5(HttpClient, (client) => client[method](...args2));
 var execute = /* @__PURE__ */ accessor("execute");
-var get11 = /* @__PURE__ */ accessor("get");
-var head4 = /* @__PURE__ */ accessor("head");
+var get12 = /* @__PURE__ */ accessor("get");
+var head5 = /* @__PURE__ */ accessor("head");
 var post2 = /* @__PURE__ */ accessor("post");
 var patch2 = /* @__PURE__ */ accessor("patch");
 var put2 = /* @__PURE__ */ accessor("put");
@@ -31519,13 +32217,13 @@ var resolveRateLimiterHeaderNames = (responseHeaders) => ({
 });
 var parseRateLimiterState = (state, clock, headers, tokens, headerNames) => {
   const limit = parseRateLimitLimit(state, headers, tokens, headerNames) ?? state.limit;
-  const window = parseRateLimitWindow(clock, headers, headerNames) ?? state.window;
-  if (limit === state.limit && equals2(window, state.window)) {
+  const window2 = parseRateLimitWindow(clock, headers, headerNames) ?? state.window;
+  if (limit === state.limit && equals2(window2, state.window)) {
     return state;
   }
   return {
     limit,
-    window,
+    window: window2,
     initial: false
   };
 };
@@ -32152,7 +32850,7 @@ var applyToolResultBounds = (encodedJson, bounds) => {
   const originalBytes = utf8ByteLength(encodedJson);
   if (originalBytes <= bounds.maxBytes)
     return encodedJson;
-  const render = (head5, tail) => JSON.stringify(exports_Schema.encodeSync(TruncatedToolResult)(TruncatedToolResult.make({ truncatedToolResult: true, originalBytes, head: head5, tail })));
+  const render = (head6, tail) => JSON.stringify(exports_Schema.encodeSync(TruncatedToolResult)(TruncatedToolResult.make({ truncatedToolResult: true, originalBytes, head: head6, tail })));
   const minimal = render("", "");
   const contentBudget = bounds.maxBytes - utf8ByteLength(minimal);
   if (contentBudget <= 0)
@@ -32160,9 +32858,9 @@ var applyToolResultBounds = (encodedJson, bounds) => {
   let headBudget = Math.floor(contentBudget / 2);
   let tailBudget = contentBudget - headBudget;
   for (;; ) {
-    const head5 = takePrefixWithinBytes(encodedJson, headBudget);
+    const head6 = takePrefixWithinBytes(encodedJson, headBudget);
     const tail = takeSuffixWithinBytes(encodedJson, tailBudget);
-    const output = render(head5, tail);
+    const output = render(head6, tail);
     const outputBytes = utf8ByteLength(output);
     if (outputBytes <= bounds.maxBytes)
       return output;
@@ -33750,7 +34448,7 @@ var ToolParamsStartPart = /* @__PURE__ */ Struct2({
   type: tag("tool-params-start"),
   id: String6,
   name: String6,
-  providerExecuted: Boolean3.pipe(withDecodingDefaultKey(succeed7(false)))
+  providerExecuted: Boolean4.pipe(withDecodingDefaultKey(succeed7(false)))
 }).annotate({
   identifier: "ToolParamsStartPart"
 });
@@ -33775,7 +34473,7 @@ var ToolCallPart = (name, params) => Struct2({
   id: String6,
   name: Literal2(name),
   params,
-  providerExecuted: Boolean3.pipe(withDecodingDefaultKey(succeed7(false)))
+  providerExecuted: Boolean4.pipe(withDecodingDefaultKey(succeed7(false)))
 }).annotate({
   identifier: "ToolCallPart"
 });
@@ -33785,24 +34483,24 @@ var ToolResultPart = (name, success, failure) => {
   const Common = {
     id: String6,
     type: Literal2("tool-result"),
-    isFailure: Boolean3,
+    isFailure: Boolean4,
     name: Literal2(name)
   };
   const Decoded = Struct2({
     ...Common,
     [PartTypeId]: Literal2(PartTypeId),
     result: ResultSchema,
-    providerExecuted: Boolean3,
+    providerExecuted: Boolean4,
     metadata: ProviderMetadata,
     encodedResult: toEncoded2(ResultSchema),
-    preliminary: Boolean3
+    preliminary: Boolean4
   });
   const Encoded = Struct2({
     ...Common,
     result: toEncoded2(ResultSchema),
-    providerExecuted: optional2(Boolean3),
+    providerExecuted: optional2(Boolean4),
     metadata: optional2(ProviderMetadata),
-    preliminary: optional2(Boolean3)
+    preliminary: optional2(Boolean4)
   });
   return Decoded.pipe(encodeTo(Encoded, transform2({
     decode: (encoded) => ({
@@ -34778,7 +35476,7 @@ var ToolCallPart2 = /* @__PURE__ */ Struct2({
   id: String6,
   name: String6,
   params: Unknown2,
-  providerExecuted: Boolean3.pipe(withDecodingDefault(succeed7(false)))
+  providerExecuted: Boolean4.pipe(withDecodingDefault(succeed7(false)))
 }).annotate({
   identifier: "ToolCallPart"
 });
@@ -34788,9 +35486,9 @@ var ToolResultPart2 = /* @__PURE__ */ Struct2({
   type: Literal2("tool-result"),
   id: String6,
   name: String6,
-  isFailure: Boolean3,
+  isFailure: Boolean4,
   result: Unknown2,
-  providerExecuted: Boolean3.pipe(withDecodingDefault(succeed7(false)))
+  providerExecuted: Boolean4.pipe(withDecodingDefault(succeed7(false)))
 }).annotate({
   identifier: "ToolResultPart"
 });
@@ -34799,7 +35497,7 @@ var ToolApprovalResponsePart = /* @__PURE__ */ Struct2({
   ...BasePart2.fields,
   type: Literal2("tool-approval-response"),
   approvalId: String6,
-  approved: Boolean3,
+  approved: Boolean4,
   reason: optional2(String6)
 }).annotate({
   identifier: "ToolApprovalResponsePart"
@@ -38320,7 +39018,7 @@ ${previousSummary}`;
     total += block.length + joiner.length;
   }
   if (total > budget) {
-    const head5 = [];
+    const head6 = [];
     const tail = [];
     let headLength = 0;
     let tailLength = 0;
@@ -38331,7 +39029,7 @@ ${previousSummary}`;
       const candidate = blocks[start];
       if (candidate === undefined || headLength + candidate.length + joiner.length > half)
         break;
-      head5.push(candidate);
+      head6.push(candidate);
       headLength += candidate.length + joiner.length;
       start += 1;
     }
@@ -38345,7 +39043,7 @@ ${previousSummary}`;
       end3 -= 1;
     }
     const omitted = end3 - start + 1;
-    selected = omitted > 0 ? [...head5, `[… ${omitted} messages omitted from summary input …]`, ...tail] : [...head5, ...tail];
+    selected = omitted > 0 ? [...head6, `[… ${omitted} messages omitted from summary input …]`, ...tail] : [...head6, ...tail];
   }
   const lines = [];
   if (previousBlock !== undefined) {
@@ -43589,6 +44287,15 @@ var RunApprovalAdapterPolicySchema = exports_Schema.Struct({
 });
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/RpcSchema.js
 var StreamSchemaTypeId = "~effect/rpc/RpcSchema/StreamSchema";
+function isStreamSchema(schema2) {
+  return hasProperty(schema2, StreamSchemaTypeId);
+}
+function getStreamSchemas(schema2) {
+  return isStreamSchema(schema2) ? some3({
+    success: schema2.success,
+    error: schema2.error
+  }) : none2();
+}
 var schema2 = /* @__PURE__ */ declare(isStream);
 function Stream2(success, error2) {
   return make39(schema2.ast, {
@@ -43714,6 +44421,192 @@ var make62 = (tag2, options3) => {
     middlewares: new Set
   });
 };
+var exitSchemaCache = /* @__PURE__ */ new WeakMap;
+var exitSchema = (self) => {
+  if (exitSchemaCache.has(self)) {
+    return exitSchemaCache.get(self);
+  }
+  const rpc = self;
+  const failures = new Set([rpc.errorSchema]);
+  const streamSchemas = getStreamSchemas(rpc.successSchema);
+  if (isSome2(streamSchemas)) {
+    failures.add(streamSchemas.value.error);
+  }
+  for (const middleware of rpc.middlewares) {
+    failures.add(middleware.error);
+  }
+  const schema3 = Exit(isSome2(streamSchemas) ? Void2 : rpc.successSchema, Union2([...failures]), rpc.defectSchema);
+  exitSchemaCache.set(self, schema3);
+  return schema3;
+};
+var WrapperTypeId = "~effect/rpc/Rpc/Wrapper";
+var isWrapper = (u) => (WrapperTypeId in u);
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/RpcGroup.js
+var RpcGroupProto = {
+  add(...rpcs) {
+    const requests = new Map(this.requests);
+    for (const rpc of rpcs) {
+      requests.set(rpc._tag, rpc);
+    }
+    return makeProto4({
+      requests,
+      annotations: this.annotations
+    });
+  },
+  merge(...groups) {
+    const requests = new Map(this.requests);
+    const annotations2 = new Map(this.annotations.mapUnsafe);
+    for (const group2 of groups) {
+      for (const [tag2, rpc] of group2.requests) {
+        requests.set(tag2, rpc);
+      }
+      for (const [key, value4] of group2.annotations.mapUnsafe) {
+        annotations2.set(key, value4);
+      }
+    }
+    return makeProto4({
+      requests,
+      annotations: makeUnsafe(annotations2)
+    });
+  },
+  omit(...tags) {
+    const requests = new Map(this.requests);
+    for (const tag2 of tags) {
+      requests.delete(tag2);
+    }
+    return makeProto4({
+      requests,
+      annotations: this.annotations
+    });
+  },
+  middleware(middleware) {
+    const requests = new Map;
+    for (const [tag2, rpc] of this.requests) {
+      requests.set(tag2, rpc.middleware(middleware));
+    }
+    return makeProto4({
+      requests,
+      annotations: this.annotations
+    });
+  },
+  toHandlers(build2) {
+    const self = this;
+    return gen4(function* () {
+      const services2 = yield* context2();
+      const handlers = isEffect2(build2) ? yield* build2 : build2;
+      const contextMap = new Map;
+      self.requests.forEach((rpc, tag2) => {
+        contextMap.set(rpc.key, {
+          tag: rpc._tag,
+          handler: handlers[tag2],
+          context: services2
+        });
+      });
+      return makeUnsafe(contextMap);
+    });
+  },
+  prefix(prefix3) {
+    const requests = new Map;
+    for (const rpc of this.requests.values()) {
+      const newRpc = rpc.prefix(prefix3);
+      requests.set(newRpc._tag, newRpc);
+    }
+    return makeProto4({
+      requests,
+      annotations: this.annotations
+    });
+  },
+  toLayer(build2) {
+    return effectContext(this.toHandlers(build2));
+  },
+  of: identity,
+  toLayerHandler(service4, build2) {
+    const self = this;
+    return effectContext(gen4(function* () {
+      const services2 = yield* context2();
+      const handler = isEffect2(build2) ? yield* build2 : build2;
+      const contextMap = new Map;
+      const rpc = self.requests.get(service4);
+      contextMap.set(rpc.key, {
+        handler,
+        context: services2
+      });
+      return makeUnsafe(contextMap);
+    }));
+  },
+  accessHandler(service4) {
+    return contextWith2((parentContext) => {
+      const rpc = this.requests.get(service4);
+      const {
+        handler,
+        context: context3
+      } = getOrUndefinedUnsafe(parentContext, rpc.key);
+      return succeed7((payload, options3) => {
+        options3.rpc = rpc;
+        const result4 = handler(payload, options3);
+        const effectOrStream = isWrapper(result4) ? result4.value : result4;
+        return isEffect2(effectOrStream) ? provide4(effectOrStream, context3) : provideContext4(effectOrStream, context3);
+      });
+    });
+  },
+  annotate(service4, value4) {
+    return makeProto4({
+      requests: this.requests,
+      annotations: add(this.annotations, service4, value4)
+    });
+  },
+  annotateRpcs(service4, value4) {
+    return this.annotateRpcsMerge(make5(service4, value4));
+  },
+  annotateMerge(context3) {
+    return makeProto4({
+      requests: this.requests,
+      annotations: merge(this.annotations, context3)
+    });
+  },
+  annotateRpcsMerge(context3) {
+    const requests = new Map;
+    for (const [tag2, rpc] of this.requests) {
+      requests.set(tag2, rpc.annotateMerge(merge(context3, rpc.annotations)));
+    }
+    return makeProto4({
+      requests,
+      annotations: this.annotations
+    });
+  }
+};
+var makeProto4 = (options3) => Object.assign(function() {}, RpcGroupProto, {
+  requests: options3.requests,
+  annotations: options3.annotations
+});
+var make63 = (...rpcs) => makeProto4({
+  requests: new Map(rpcs.map((rpc) => [rpc._tag, rpc])),
+  annotations: empty()
+});
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/RpcMiddleware.js
+var TypeId61 = "~effect/rpc/RpcMiddleware";
+var Service2 = () => (id2, options3) => {
+  const Err = globalThis.Error;
+  const limit = getStackTraceLimit();
+  setStackTraceLimit(2);
+  const creationError = new Err;
+  setStackTraceLimit(limit);
+  function ServiceClass() {}
+  const ServiceClass_ = ServiceClass;
+  Object.setPrototypeOf(ServiceClass, Object.getPrototypeOf(Service(id2)));
+  ServiceClass.key = id2;
+  Object.defineProperty(ServiceClass, "stack", {
+    get() {
+      return creationError.stack;
+    }
+  });
+  ServiceClass_[TypeId61] = TypeId61;
+  ServiceClass_.error = options3?.error ?? Never2;
+  ServiceClass_.requiredForClient = options3?.requiredForClient ?? false;
+  return ServiceClass;
+};
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/McpSchema.js
 var optionalWithDefault = (schema3, defaultValue) => {
@@ -43793,7 +44686,7 @@ class ClientCapabilities extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/C
   experimental: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Struct2({}))),
   extensions: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(/* @__PURE__ */ TemplateLiteral2([String6, "/", String6]), Json2)),
   roots: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
-    listChanged: /* @__PURE__ */ optional3(Boolean3)
+    listChanged: /* @__PURE__ */ optional3(Boolean4)
   })),
   sampling: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
     context: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({})),
@@ -43812,14 +44705,14 @@ class ServerCapabilities extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struc
   logging: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({})),
   completions: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({})),
   prompts: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
-    listChanged: /* @__PURE__ */ optional3(Boolean3)
+    listChanged: /* @__PURE__ */ optional3(Boolean4)
   })),
   resources: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
-    subscribe: /* @__PURE__ */ optional3(Boolean3),
-    listChanged: /* @__PURE__ */ optional3(Boolean3)
+    subscribe: /* @__PURE__ */ optional3(Boolean4),
+    listChanged: /* @__PURE__ */ optional3(Boolean4)
   })),
   tools: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
-    listChanged: /* @__PURE__ */ optional3(Boolean3)
+    listChanged: /* @__PURE__ */ optional3(Boolean4)
   }))
 }))) {
 }
@@ -43874,6 +44767,14 @@ class InternalError extends (/* @__PURE__ */ Error4("effect/ai/McpSchema/Interna
   });
 }
 var McpError = /* @__PURE__ */ Union2([ParseError, InvalidRequest, MethodNotFound, InvalidParams, InternalError, McpErrorBase]);
+
+class Ping extends (/* @__PURE__ */ make62("ping", {
+  success: /* @__PURE__ */ Struct2({}),
+  error: McpError,
+  payload: /* @__PURE__ */ UndefinedOr(RequestMeta)
+})) {
+}
+
 class InitializeResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   ...ResultMeta.fields,
   protocolVersion: String6,
@@ -43894,6 +44795,12 @@ class Initialize extends (/* @__PURE__ */ make62("initialize", {
   }
 })) {
 }
+
+class InitializedNotification extends (/* @__PURE__ */ make62("notifications/initialized", {
+  payload: /* @__PURE__ */ UndefinedOr(NotificationMeta)
+})) {
+}
+
 class CancelledNotification extends (/* @__PURE__ */ make62("notifications/cancelled", {
   payload: {
     ...NotificationMeta.fields,
@@ -43963,11 +44870,27 @@ class ListResourcesResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/
   resources: /* @__PURE__ */ ArraySchema(Resource2)
 })) {
 }
+
+class ListResources extends (/* @__PURE__ */ make62("resources/list", {
+  success: ListResourcesResult,
+  error: McpError,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequestMeta)
+})) {
+}
+
 class ListResourceTemplatesResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ListResourceTemplatesResult")({
   ...PaginatedResultMeta.fields,
   resourceTemplates: /* @__PURE__ */ ArraySchema(ResourceTemplate)
 })) {
 }
+
+class ListResourceTemplates extends (/* @__PURE__ */ make62("resources/templates/list", {
+  success: ListResourceTemplatesResult,
+  error: McpError,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequestMeta)
+})) {
+}
+
 class ReadResourceResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   ...ResultMeta.fields,
   contents: /* @__PURE__ */ ArraySchema(/* @__PURE__ */ Union2([TextResourceContents, BlobResourceContents]))
@@ -43983,6 +44906,12 @@ class ReadResource extends (/* @__PURE__ */ make62("resources/read", {
   }
 })) {
 }
+
+class ResourceListChangedNotification extends (/* @__PURE__ */ make62("notifications/resources/list_changed", {
+  payload: /* @__PURE__ */ UndefinedOr(NotificationMeta)
+})) {
+}
+
 class Subscribe extends (/* @__PURE__ */ make62("resources/subscribe", {
   success: /* @__PURE__ */ Struct2({}),
   error: McpError,
@@ -44015,7 +44944,7 @@ class PromptArgument extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   name: String6,
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
-  required: /* @__PURE__ */ optional3(Boolean3)
+  required: /* @__PURE__ */ optional3(Boolean4)
 }))) {
 }
 
@@ -44081,6 +45010,14 @@ class ListPromptsResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/Li
   prompts: /* @__PURE__ */ ArraySchema(Prompt2)
 })) {
 }
+
+class ListPrompts extends (/* @__PURE__ */ make62("prompts/list", {
+  success: ListPromptsResult,
+  error: McpError,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequestMeta)
+})) {
+}
+
 class GetPromptResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/GetPromptResult")({
   ...ResultMeta.fields,
   messages: /* @__PURE__ */ ArraySchema(PromptMessage),
@@ -44099,12 +45036,18 @@ class GetPrompt extends (/* @__PURE__ */ make62("prompts/get", {
   }
 })) {
 }
+
+class PromptListChangedNotification extends (/* @__PURE__ */ make62("notifications/prompts/list_changed", {
+  payload: /* @__PURE__ */ UndefinedOr(NotificationMeta)
+})) {
+}
+
 class ToolAnnotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   title: /* @__PURE__ */ optional3(String6),
-  readOnlyHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constFalse),
-  destructiveHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constTrue),
-  idempotentHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constFalse),
-  openWorldHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constTrue)
+  readOnlyHint: /* @__PURE__ */ optionalWithDefault(Boolean4, constFalse),
+  destructiveHint: /* @__PURE__ */ optionalWithDefault(Boolean4, constTrue),
+  idempotentHint: /* @__PURE__ */ optionalWithDefault(Boolean4, constFalse),
+  openWorldHint: /* @__PURE__ */ optionalWithDefault(Boolean4, constTrue)
 }))) {
 }
 var ToolJsonSchema = /* @__PURE__ */ StructWithRest(/* @__PURE__ */ Struct2({
@@ -44130,11 +45073,19 @@ class ListToolsResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/List
   tools: /* @__PURE__ */ ArraySchema(Tool)
 })) {
 }
+
+class ListTools extends (/* @__PURE__ */ make62("tools/list", {
+  success: ListToolsResult,
+  error: McpError,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequestMeta)
+})) {
+}
+
 class CallToolResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/CallToolResult")({
   ...ResultMeta.fields,
   content: /* @__PURE__ */ ArraySchema(ContentBlock),
   structuredContent: /* @__PURE__ */ optional3(Json2),
-  isError: /* @__PURE__ */ optional3(Boolean3)
+  isError: /* @__PURE__ */ optional3(Boolean4)
 })) {
 }
 
@@ -44146,6 +45097,11 @@ class CallTool extends (/* @__PURE__ */ make62("tools/call", {
     name: String6,
     arguments: /* @__PURE__ */ optionalWithDefault(/* @__PURE__ */ Record(String6, Any2), () => ({}))
   }
+})) {
+}
+
+class ToolListChangedNotification extends (/* @__PURE__ */ make62("notifications/tools/list_changed", {
+  payload: /* @__PURE__ */ UndefinedOr(NotificationMeta)
 })) {
 }
 var LoggingLevel = /* @__PURE__ */ Literals(["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]);
@@ -44184,7 +45140,7 @@ class ToolResultContent extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/To
   toolUseId: String6,
   content: /* @__PURE__ */ ArraySchema(ContentBlock),
   structuredContent: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Unknown2)),
-  isError: /* @__PURE__ */ optional3(Boolean3),
+  isError: /* @__PURE__ */ optional3(Boolean4),
   _meta: /* @__PURE__ */ optional3(JsonObject)
 })) {
 }
@@ -44250,12 +45206,26 @@ class CreateMessage extends (/* @__PURE__ */ make62("sampling/createMessage", {
   }
 })) {
 }
+
+class ResourceReference extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ tag("ref/resource"),
+  uri: String6
+}))) {
+}
+
+class PromptReference extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ tag("ref/prompt"),
+  name: String6,
+  title: /* @__PURE__ */ optional3(String6)
+}))) {
+}
+
 class CompleteResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   ...ResultMeta.fields,
   completion: /* @__PURE__ */ Struct2({
     values: /* @__PURE__ */ ArraySchema(String6),
     total: /* @__PURE__ */ optional3(Int),
-    hasMore: /* @__PURE__ */ optional3(Boolean3)
+    hasMore: /* @__PURE__ */ optional3(Boolean4)
   })
 }))) {
   static empty = /* @__PURE__ */ CompleteResult.make({
@@ -44266,6 +45236,49 @@ class CompleteResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
     }
   });
 }
+
+class Complete extends (/* @__PURE__ */ make62("completion/complete", {
+  success: CompleteResult,
+  error: McpError,
+  payload: /* @__PURE__ */ Struct2({
+    ref: /* @__PURE__ */ Union2([PromptReference, ResourceReference]),
+    argument: /* @__PURE__ */ Struct2({
+      name: String6,
+      value: String6
+    }),
+    context: /* @__PURE__ */ optionalWithDefault(/* @__PURE__ */ Struct2({
+      arguments: /* @__PURE__ */ optionalWithDefault(/* @__PURE__ */ Record(String6, String6), () => ({}))
+    }), () => ({
+      arguments: {}
+    }))
+  })
+})) {
+}
+
+class Root extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/Root")({
+  uri: String6,
+  name: /* @__PURE__ */ optional3(String6),
+  _meta: /* @__PURE__ */ optional3(JsonObject)
+})) {
+}
+
+class ListRootsResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ListRootsResult")({
+  roots: /* @__PURE__ */ ArraySchema(Root)
+})) {
+}
+
+class ListRoots extends (/* @__PURE__ */ make62("roots/list", {
+  success: ListRootsResult,
+  error: McpError,
+  payload: /* @__PURE__ */ UndefinedOr(RequestMeta)
+})) {
+}
+
+class RootsListChangedNotification extends (/* @__PURE__ */ make62("notifications/roots/list_changed", {
+  payload: /* @__PURE__ */ UndefinedOr(NotificationMeta)
+})) {
+}
+
 class StringSchema extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/StringSchema")({
   type: /* @__PURE__ */ tag("string"),
   title: /* @__PURE__ */ optional3(String6),
@@ -44291,7 +45304,7 @@ class BooleanSchema extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/Boolea
   type: /* @__PURE__ */ tag("boolean"),
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
-  default: /* @__PURE__ */ optional3(Boolean3)
+  default: /* @__PURE__ */ optional3(Boolean4)
 })) {
 }
 
@@ -44387,7 +45400,7 @@ var ElicitRequestParams = /* @__PURE__ */ Union2([ElicitRequestFormParams, Elici
 class ElicitAcceptResult extends (/* @__PURE__ */ Class5("@effect/ai/McpSchema/ElicitAcceptResult")({
   ...ResultMeta.fields,
   action: /* @__PURE__ */ Literal2("accept"),
-  content: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Union2([String6, Finite, Boolean3, /* @__PURE__ */ ArraySchema(String6)])))
+  content: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Union2([String6, Finite, Boolean4, /* @__PURE__ */ ArraySchema(String6)])))
 })) {
 }
 
@@ -44411,6 +45424,27 @@ class ElicitationDeclined extends (/* @__PURE__ */ Error4("@effect/ai/McpSchema/
 })) {
 }
 
+class McpReverseOperationUnsupported extends (/* @__PURE__ */ TaggedError2("McpReverseOperationUnsupported")) {
+}
+
+class McpReverseOperationError extends (/* @__PURE__ */ TaggedError2("McpReverseOperationError")) {
+}
+
+class McpServerClient extends (/* @__PURE__ */ Service()("effect/ai/McpSchema/McpServerClient")) {
+}
+
+class McpServerClientMiddleware extends (/* @__PURE__ */ Service2()("effect/ai/McpSchema/McpServerClientMiddleware")) {
+}
+
+class ClientRequestRpcs extends (/* @__PURE__ */ make63(Ping, Initialize, Complete, SetLevel, GetPrompt, ListPrompts, ListResources, ListResourceTemplates, ReadResource, Subscribe, Unsubscribe, CallTool, ListTools).middleware(McpServerClientMiddleware)) {
+}
+
+class ClientNotificationRpcs extends (/* @__PURE__ */ make63(CancelledNotification, ProgressNotification, InitializedNotification, RootsListChangedNotification)) {
+}
+
+class ClientRpcs extends (/* @__PURE__ */ ClientRequestRpcs.merge(ClientNotificationRpcs)) {
+}
+
 // packages/capabilities/src/mcp.ts
 var MAX_MCP_TOOLS = 128;
 var MAX_MCP_DISCOVERY_BYTES = 1024 * 1024;
@@ -44430,8 +45464,12 @@ class McpConnectionRequest extends exports_Schema.Class("@effect-agent/capabilit
   maxToolCount: PositiveInt9.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
   maxToolDescriptionBytes: PositiveInt9,
   maxDiscoveryBytes: PositiveInt9.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
-  connectTimeoutMillis: PositiveInt9
+  connectTimeoutMillis: PositiveInt9,
+  expectedToolkitSchemaDigest: exports_Schema.optionalKey(Sha256Digest)
 }) {
+}
+
+class McpToolOutputSchema extends exports_Context.Service()("@effect-agent/capabilities/McpToolOutputSchema") {
 }
 
 class McpConnectionError extends exports_Schema.TaggedError()("McpConnectionError", {
@@ -44495,6 +45533,13 @@ var utf8 = (value4) => {
   }
   return bytes2;
 };
+var toolkitOutputSchema = (tool) => {
+  if (exports_Tool.isDynamic(tool)) {
+    return exports_Option.getOrUndefined(exports_Context.getOption(tool.annotations, McpToolOutputSchema));
+  }
+  const derived = flattenTopLevelRef(exports_Tool.getJsonSchemaFromSchema(tool.successSchema));
+  return derived.type === "object" ? derived : undefined;
+};
 var digestJson = exports_Effect.fn("digestMcpSchema")(function* (serverId, value4) {
   const json2 = yield* exports_Schema.decodeUnknownEffect(exports_Schema.Json)(value4).pipe(exports_Effect.mapError((error2) => McpToolkitMismatch.make({
     cause: error2,
@@ -44555,11 +45600,11 @@ var validateMcpDiscovery = exports_Effect.fn("validateMcpDiscovery")(function* (
   })).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
   const toolkitSchemas = yield* exports_Effect.try({
     try: () => Object.values(server.toolkit.tools).map((tool) => {
-      const outputSchema = flattenTopLevelRef(exports_Tool.getJsonSchemaFromSchema(tool.successSchema));
+      const outputSchema = toolkitOutputSchema(tool);
       return {
         name: tool.name,
         inputSchema: flattenTopLevelRef(exports_Tool.getJsonSchema(tool)),
-        ...outputSchema.type === "object" ? { outputSchema } : {}
+        ...outputSchema === undefined ? {} : { outputSchema }
       };
     }).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0),
     catch: (cause) => McpToolkitMismatch.make({
@@ -44574,6 +45619,12 @@ var validateMcpDiscovery = exports_Effect.fn("validateMcpDiscovery")(function* (
     return yield* McpToolkitMismatch.make({
       serverId: request3.serverId,
       message: "Native Effect AI Toolkit schemas do not match MCP tool discovery"
+    });
+  }
+  if (request3.expectedToolkitSchemaDigest !== undefined && request3.expectedToolkitSchemaDigest !== toolkitDigest) {
+    return yield* McpToolkitMismatch.make({
+      serverId: request3.serverId,
+      message: `MCP tool discovery digest ${toolkitDigest} does not match the expected ${request3.expectedToolkitSchemaDigest}`
     });
   }
   const encoded = yield* exports_Schema.encodeEffect(exports_Schema.Struct({
@@ -44628,7 +45679,7109 @@ var connectMcp = exports_Effect.fn("connectMcp")(function* (request3) {
   const discovery = yield* validateMcpDiscovery(request3, server);
   return {
     discovery,
-    toolkit: server.toolkit
+    toolkit: server.toolkit,
+    ...server.handlers === undefined ? {} : { handlers: server.handlers }
+  };
+});
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/internal/matcher.js
+var TypeId62 = "~effect/match/Match/Matcher";
+var TypeMatcherProto = {
+  [TypeId62]: {
+    _input: identity,
+    _filters: identity,
+    _remaining: identity,
+    _result: identity,
+    _return: identity,
+    _args: identity
+  },
+  _tag: "TypeMatcher",
+  add(_case) {
+    return makeTypeMatcher(this.select, [...this.cases, _case]);
+  },
+  pipe() {
+    return pipeArguments(this, arguments);
+  }
+};
+function makeTypeMatcher(select, cases) {
+  const matcher = Object.create(TypeMatcherProto);
+  matcher.select = select;
+  matcher.cases = cases;
+  return matcher;
+}
+var ValueMatcherProto = {
+  [TypeId62]: {
+    _input: identity,
+    _filters: identity,
+    _result: identity,
+    _return: identity,
+    _flavor: identity
+  },
+  _tag: "ValueMatcher",
+  add(_case) {
+    if (isSuccess2(this.value)) {
+      return this;
+    }
+    if (_case._tag === "When" && _case.guard(this.provided) === true) {
+      return makeValueMatcher(this.provided, succeed2(_case.evaluate(this.provided)));
+    } else if (_case._tag === "Not" && _case.guard(this.provided) === false) {
+      return makeValueMatcher(this.provided, succeed2(_case.evaluate(this.provided)));
+    }
+    return this;
+  },
+  pipe() {
+    return pipeArguments(this, arguments);
+  }
+};
+function makeValueMatcher(provided, value4) {
+  const matcher = Object.create(ValueMatcherProto);
+  matcher.provided = provided;
+  matcher.value = value4;
+  return matcher;
+}
+var makeWhen = (guard, evaluate2) => ({
+  _tag: "When",
+  guard,
+  evaluate: evaluate2
+});
+var makePredicate = (pattern) => {
+  if (typeof pattern === "function") {
+    return pattern;
+  } else if (Array.isArray(pattern)) {
+    const predicates = pattern.map(makePredicate);
+    const len = predicates.length;
+    return (u) => {
+      if (!Array.isArray(u)) {
+        return false;
+      }
+      for (let i = 0;i < len; i++) {
+        if (predicates[i](u[i]) === false) {
+          return false;
+        }
+      }
+      return true;
+    };
+  } else if (pattern !== null && typeof pattern === "object") {
+    const keysAndPredicates = Reflect.ownKeys(pattern).map((key) => [key, makePredicate(pattern[key])]);
+    const len = keysAndPredicates.length;
+    return (u) => {
+      if (typeof u !== "object" || u === null) {
+        return false;
+      }
+      for (let i = 0;i < len; i++) {
+        const [key, predicate] = keysAndPredicates[i];
+        if (!(key in u) || predicate(u[key]) === false) {
+          return false;
+        }
+      }
+      return true;
+    };
+  }
+  return (u) => u === pattern;
+};
+var value4 = (i) => makeValueMatcher(i, fail2(i));
+var when4 = (pattern, f) => (self) => self.add(makeWhen(makePredicate(pattern), f));
+var discriminator = (field) => (...pattern) => {
+  const f = pattern[pattern.length - 1];
+  const values3 = pattern.slice(0, -1);
+  const pred = values3.length === 1 ? (_) => _ != null && _[field] === values3[0] : (_) => _ != null && values3.includes(_[field]);
+  return (self) => self.add(makeWhen(pred, f));
+};
+var discriminators = (field) => (fields) => {
+  const predicate = makeWhen((arg) => arg != null && Object.hasOwn(fields, arg[field]), (data) => fields[data[field]](data));
+  return (self) => self.add(predicate);
+};
+var tag2 = /* @__PURE__ */ discriminator("_tag");
+var tags = /* @__PURE__ */ discriminators("_tag");
+var is3 = (...literals2) => {
+  const len = literals2.length;
+  return (u) => {
+    for (let i = 0;i < len; i++) {
+      if (u === literals2[i]) {
+        return true;
+      }
+    }
+    return false;
+  };
+};
+var result4 = (self) => {
+  if (self._tag === "ValueMatcher") {
+    return self.value;
+  }
+  const len = self.cases.length;
+  if (len === 1) {
+    const _case = self.cases[0];
+    return (...args2) => {
+      const input = self.select(...args2);
+      if (_case._tag === "When" && _case.guard(input) === true) {
+        return succeed2(_case.evaluate(input, ...args2));
+      } else if (_case._tag === "Not" && _case.guard(input) === false) {
+        return succeed2(_case.evaluate(input, ...args2));
+      }
+      return fail2(input);
+    };
+  }
+  return (...args2) => {
+    const input = self.select(...args2);
+    for (let i = 0;i < len; i++) {
+      const _case = self.cases[i];
+      if (_case._tag === "When" && _case.guard(input) === true) {
+        return succeed2(_case.evaluate(input, ...args2));
+      } else if (_case._tag === "Not" && _case.guard(input) === false) {
+        return succeed2(_case.evaluate(input, ...args2));
+      }
+    }
+    return fail2(input);
+  };
+};
+var getExhaustiveAbsurdErrorMessage = "effect/match/Match/exhaustive: absurd";
+var exhaustive = (self) => {
+  const toResult = result4(self);
+  if (isResult2(toResult)) {
+    if (isSuccess2(toResult)) {
+      return toResult.success;
+    }
+    throw new Error(getExhaustiveAbsurdErrorMessage);
+  }
+  return (...args2) => {
+    const result5 = toResult(...args2);
+    if (isSuccess2(result5)) {
+      return result5.success;
+    }
+    throw new Error(getExhaustiveAbsurdErrorMessage);
+  };
+};
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Match.js
+var value5 = value4;
+var when5 = when4;
+var tag3 = tag2;
+var tags2 = tags;
+var is4 = is3;
+var exhaustive2 = exhaustive;
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/internal/mcpCore.js
+class ResourceNotFound extends (/* @__PURE__ */ TaggedError2("ResourceNotFound")) {
+}
+class UnsupportedByProtocol extends (/* @__PURE__ */ TaggedError2("UnsupportedByProtocol")) {
+}
+
+class PromptNotFound extends (/* @__PURE__ */ TaggedError2("PromptNotFound")) {
+}
+var ClientNotification = /* @__PURE__ */ taggedEnum();
+var ServerNotification = /* @__PURE__ */ taggedEnum();
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/RpcClient.js
+var exports_RpcClient = {};
+__export(exports_RpcClient, {
+  ConnectionHooks: () => ConnectionHooks,
+  CurrentHeaders: () => CurrentHeaders,
+  Protocol: () => Protocol,
+  layerProtocolHttp: () => layerProtocolHttp,
+  layerProtocolSocket: () => layerProtocolSocket,
+  layerProtocolWorker: () => layerProtocolWorker,
+  make: () => make66,
+  makeNoSerialization: () => makeNoSerialization,
+  makeProtocolHttp: () => makeProtocolHttp,
+  makeProtocolSocket: () => makeProtocolSocket,
+  makeProtocolWorker: () => makeProtocolWorker,
+  withHeaders: () => withHeaders
+});
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/Pool.js
+var TypeId63 = "~effect/Pool";
+var make64 = (options3) => makeWithStrategy({
+  ...options3,
+  min: options3.size,
+  max: options3.size,
+  strategy: strategyNoop()
+});
+var makeWithTTL = (options3) => flatMap5(options3.timeToLiveStrategy === "creation" ? strategyCreationTTL(options3.timeToLive) : strategyUsageTTL(options3.timeToLive), (strategy) => makeWithStrategy({
+  ...options3,
+  strategy
+}));
+var makeWithStrategy = (options3) => uninterruptibleMask2(fnUntraced2(function* (restore) {
+  const services2 = yield* context2();
+  const scope3 = get(services2, Scope);
+  const acquire = updateContext2(options3.acquire, (input) => merge(services2, input));
+  const concurrency = options3.concurrency ?? 1;
+  const config = {
+    acquire,
+    concurrency,
+    minSize: options3.min,
+    maxSize: options3.max,
+    strategy: options3.strategy,
+    targetUtilization: Math.min(Math.max(options3.targetUtilization ?? 1, 0.1), 1)
+  };
+  const state = {
+    scope: scope3,
+    isShuttingDown: false,
+    semaphore: makeUnsafe6(concurrency * options3.max),
+    resizeSemaphore: makeUnsafe6(1),
+    items: new Set,
+    available: new Set,
+    availableLatch: makeUnsafe5(false),
+    invalidated: new Set,
+    waiters: 0
+  };
+  const self = {
+    [TypeId63]: TypeId63,
+    config,
+    state,
+    pipe() {
+      return pipeArguments(this, arguments);
+    }
+  };
+  yield* addFinalizer2(scope3, shutdown3(self));
+  yield* tap5(forkDetach2(restore(resize2(self))), (fiber3) => addFinalizer2(scope3, interrupt6(fiber3)));
+  yield* tap5(forkDetach2(restore(options3.strategy.run(self))), (fiber3) => addFinalizer2(scope3, interrupt6(fiber3)));
+  return self;
+}));
+var shutdown3 = /* @__PURE__ */ fnUntraced2(function* (self) {
+  if (self.state.isShuttingDown)
+    return;
+  self.state.isShuttingDown = true;
+  const size9 = self.state.items.size;
+  const semaphore = makeUnsafe6(size9);
+  for (const item of self.state.items) {
+    if (item.refCount > 0) {
+      item.finalizer = tap5(item.finalizer, semaphore.release(1));
+      self.state.invalidated.add(item);
+      yield* semaphore.take(1);
+    } else {
+      self.state.items.delete(item);
+      self.state.available.delete(item);
+      self.state.invalidated.delete(item);
+      yield* item.finalizer;
+    }
+  }
+  yield* semaphore.releaseAll;
+  self.state.availableLatch.openUnsafe();
+  yield* semaphore.take(size9);
+});
+var get13 = (self) => suspend3(() => {
+  if (self.state.isShuttingDown) {
+    return interrupt5;
+  }
+  return flatMap5(getPoolItem(self), (item) => item.exit);
+});
+var getPoolItem = (self) => uninterruptibleMask2((restore) => restore(self.state.semaphore.take(1)).pipe(flatMap5(() => scope2), flatMap5((scope3) => getPoolItemInner(self).pipe(ensuring2(sync4(() => self.state.waiters--)), tap5((item) => {
+  if (item.exit._tag === "Failure") {
+    self.state.items.delete(item);
+    self.state.invalidated.delete(item);
+    self.state.available.delete(item);
+    return self.state.semaphore.release(1);
+  }
+  item.refCount++;
+  self.state.available.delete(item);
+  if (item.refCount < self.config.concurrency) {
+    self.state.available.add(item);
+  }
+  return addFinalizerExit(scope3, () => flatMap5(suspend3(() => {
+    item.refCount--;
+    if (self.state.invalidated.has(item)) {
+      return invalidatePoolItem(self, item);
+    }
+    self.state.available.add(item);
+    return void_5;
+  }), () => self.state.semaphore.release(1)));
+}), onInterrupt2(() => self.state.semaphore.release(1))))));
+var getPoolItemInner = /* @__PURE__ */ fnUntraced2(function* (self) {
+  self.state.waiters++;
+  if (self.state.isShuttingDown) {
+    return yield* interrupt5;
+  } else if (targetSize(self) > activeSize(self)) {
+    while (true) {
+      yield* self.state.resizeSemaphore.withPermitsIfAvailable(1)(forkIn2(interruptible2(resize2(self)), self.state.scope));
+      if (self.state.isShuttingDown) {
+        return yield* interrupt5;
+      } else if (self.state.available.size > 0) {
+        return headUnsafe(self.state.available);
+      }
+      self.state.availableLatch.closeUnsafe();
+      yield* self.state.availableLatch.await;
+    }
+  }
+  return headUnsafe(self.state.available);
+});
+var invalidatePoolItem = (self, poolItem) => suspend3(() => {
+  if (!self.state.items.has(poolItem)) {
+    return void_5;
+  } else if (poolItem.refCount === 0) {
+    self.state.items.delete(poolItem);
+    self.state.available.delete(poolItem);
+    self.state.invalidated.delete(poolItem);
+    return asVoid4(flatMap5(poolItem.finalizer, () => forkIn2(interruptible2(resize2(self)), self.state.scope)));
+  }
+  self.state.invalidated.add(poolItem);
+  self.state.available.delete(poolItem);
+  return void_5;
+});
+var resize2 = (self) => self.state.resizeSemaphore.withPermits(1)(resizeLoop(self));
+var resizeLoop = (self) => suspend3(() => {
+  const active = activeSize(self);
+  const target = targetSize(self);
+  if (active >= target) {
+    return void_5;
+  }
+  const toAcquire = target - active;
+  return self.config.strategy.reclaim(self).pipe(flatMap5((item) => item ? succeed7(item) : allocate2(self)), replicateEffect2(toAcquire, {
+    concurrency: toAcquire
+  }), tap5(self.state.availableLatch.open), flatMap5((items) => items.some((_) => _.exit._tag === "Failure") ? void_5 : resizeLoop(self)));
+});
+var allocate2 = (self) => acquireUseRelease2(make9(), (scope3) => self.config.acquire.pipe(provide(scope3), exit2, flatMap5((exit3) => {
+  const item = {
+    exit: exit3,
+    finalizer: catchCause3(close(scope3, exit3), reportUnhandledError),
+    refCount: 0,
+    disableReclaim: false
+  };
+  self.state.items.add(item);
+  self.state.available.add(item);
+  return as3(exit3._tag === "Success" ? self.config.strategy.onAcquire(item) : flatMap5(item.finalizer, () => self.config.strategy.onAcquire(item)), item);
+})), (scope3, exit3) => exit3._tag === "Failure" ? close(scope3, exit3) : void_5);
+var currentUsage = (self) => {
+  let count2 = self.state.waiters;
+  for (const item of self.state.items) {
+    count2 += item.refCount;
+  }
+  return count2;
+};
+var targetSize = (self) => {
+  if (self.state.isShuttingDown)
+    return 0;
+  const utilization = currentUsage(self) / self.config.targetUtilization;
+  const target = Math.ceil(utilization / self.config.concurrency);
+  return Math.min(Math.max(self.config.minSize, target), self.config.maxSize);
+};
+var activeSize = (self) => {
+  return self.state.items.size - self.state.invalidated.size;
+};
+var strategyNoop = () => ({
+  run: (_) => void_5,
+  onAcquire: (_) => void_5,
+  reclaim: (_) => undefined_2
+});
+var strategyCreationTTL = /* @__PURE__ */ fnUntraced2(function* (ttl) {
+  const clock = yield* Clock;
+  const queue = yield* unbounded2();
+  const ttlMillis = toMillis(fromInputUnsafe(ttl));
+  const creationTimes = new WeakMap;
+  return identity({
+    run: (pool) => {
+      const process2 = (item) => suspend3(() => {
+        if (!pool.state.items.has(item) || pool.state.invalidated.has(item)) {
+          return void_5;
+        }
+        const now3 = clock.currentTimeMillisUnsafe();
+        const created = creationTimes.get(item);
+        const remaining2 = ttlMillis - (now3 - created);
+        return remaining2 > 0 ? delay2(process2(item), remaining2) : invalidatePoolItem(pool, item);
+      });
+      return take3(queue).pipe(tap5(process2), forever4({
+        disableYield: true
+      }));
+    },
+    onAcquire: (item) => suspend3(() => {
+      creationTimes.set(item, clock.currentTimeMillisUnsafe());
+      return offer(queue, item);
+    }),
+    reclaim: (_) => undefined_2
+  });
+});
+var strategyUsageTTL = /* @__PURE__ */ fnUntraced2(function* (ttl) {
+  const queue = yield* unbounded2();
+  return identity({
+    run: (pool) => {
+      const process2 = suspend3(() => {
+        const excess = activeSize(pool) - targetSize(pool);
+        if (excess <= 0)
+          return void_5;
+        return take3(queue).pipe(tap5((item) => invalidatePoolItem(pool, item)), flatMap5(() => process2));
+      });
+      return process2.pipe(delay2(ttl), forever4({
+        disableYield: true
+      }));
+    },
+    onAcquire: (item) => offer(queue, item),
+    reclaim(pool) {
+      return suspend3(() => {
+        if (pool.state.invalidated.size === 0) {
+          return undefined_2;
+        }
+        const item = head(filter2(pool.state.invalidated, (item2) => !item2.disableReclaim));
+        if (item._tag === "None") {
+          return undefined_2;
+        }
+        pool.state.invalidated.delete(item.value);
+        if (item.value.refCount < pool.config.concurrency) {
+          pool.state.available.add(item.value);
+        }
+        return as3(offer(queue, item.value), item.value);
+      });
+    }
+  });
+});
+var reportUnhandledError = (cause) => withFiber2((fiber3) => {
+  const unhandledLogLevel = fiber3.getRef(UnhandledLogLevel2);
+  if (unhandledLogLevel) {
+    return logWithLevel2(unhandledLogLevel)("Unhandled error in pool finalizer", cause);
+  }
+  return void_5;
+});
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/socket/Socket.js
+var TypeId64 = "~effect/socket/Socket";
+var Socket = /* @__PURE__ */ Service("effect/socket/Socket");
+var make65 = (options3) => Socket.of({
+  [TypeId64]: TypeId64,
+  runRaw: options3.runRaw,
+  run: options3.run ?? ((handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(encoder3.encode(data)) : data instanceof Uint8Array ? handler(data) : handler(new Uint8Array(data)), opts)),
+  runString: options3.runString ?? (options3.run ? (handler, opts) => options3.run((data) => handler(decoder2.decode(data)), opts) : (handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(data) : data instanceof Uint8Array ? handler(decoder2.decode(data)) : handler(decoder2.decode(new Uint8Array(data))), opts)),
+  writer: options3.writer
+});
+var encoder3 = /* @__PURE__ */ new TextEncoder;
+var decoder2 = /* @__PURE__ */ new TextDecoder;
+var CloseEventTypeId = "~effect/socket/Socket/CloseEvent";
+
+class CloseEvent {
+  [CloseEventTypeId];
+  code;
+  reason;
+  constructor(code = 1000, reason) {
+    this[CloseEventTypeId] = CloseEventTypeId;
+    this.code = code;
+    this.reason = reason;
+  }
+  toString() {
+    return this.reason ? `${this.code}: ${this.reason}` : `${this.code}`;
+  }
+}
+var isCloseEvent = (u) => hasProperty(u, CloseEventTypeId);
+var SocketErrorTypeId = "~effect/socket/Socket/SocketError";
+var isSocketError = (u) => hasProperty(u, SocketErrorTypeId);
+
+class SocketReadError extends (/* @__PURE__ */ Error4("effect/socket/Socket/SocketReadError")({
+  _tag: /* @__PURE__ */ tag("SocketReadError"),
+  cause: /* @__PURE__ */ Defect()
+})) {
+  message = `An error occurred during Read`;
+}
+
+class SocketWriteError extends (/* @__PURE__ */ Error4("effect/socket/Socket/SocketWriteError")({
+  _tag: /* @__PURE__ */ tag("SocketWriteError"),
+  cause: /* @__PURE__ */ Defect()
+})) {
+  message = `An error occurred during Write`;
+}
+
+class SocketOpenError extends (/* @__PURE__ */ Error4("effect/socket/Socket/SocketOpenError")({
+  _tag: /* @__PURE__ */ tag("SocketOpenError"),
+  kind: /* @__PURE__ */ Literals(["Unknown", "Timeout"]),
+  cause: /* @__PURE__ */ Defect()
+})) {
+  get message() {
+    return this.kind === "Timeout" ? `timeout waiting for "open"` : `An error occurred during Open`;
+  }
+}
+
+class SocketCloseError extends (/* @__PURE__ */ Error4("effect/socket/Socket/SocketCloseError")({
+  _tag: /* @__PURE__ */ tag("SocketCloseError"),
+  code: Int,
+  closeReason: /* @__PURE__ */ optional2(String6)
+})) {
+  static filterClean(isClean) {
+    return function(u) {
+      return SocketError.is(u) && u.reason._tag === "SocketCloseError" && isClean(u.reason.code) ? succeed2(u.reason) : fail2(u);
+    };
+  }
+  get message() {
+    if (this.closeReason) {
+      return `${this.code}: ${this.closeReason}`;
+    }
+    return `${this.code}`;
+  }
+}
+var SocketErrorReason = /* @__PURE__ */ Union2([SocketReadError, SocketWriteError, SocketOpenError, SocketCloseError]);
+
+class SocketError extends (/* @__PURE__ */ TaggedError3(SocketErrorTypeId)("SocketError", {
+  _tag: /* @__PURE__ */ tag("SocketError"),
+  reason: SocketErrorReason
+})) {
+  constructor(props) {
+    if ("cause" in props.reason) {
+      super({
+        ...props,
+        cause: props.reason.cause
+      });
+    } else {
+      super(props);
+    }
+  }
+  [SocketErrorTypeId] = SocketErrorTypeId;
+  static is(u) {
+    return isSocketError(u);
+  }
+  message = this.reason.message;
+}
+var defaultCloseCodeIsError = (_code) => true;
+
+class WebSocket extends (/* @__PURE__ */ Service()("~effect/socket/Socket/WebSocket")) {
+}
+
+class WebSocketConstructor extends (/* @__PURE__ */ Service()("@effect/platform/Socket/WebSocketConstructor")) {
+}
+var makeWebSocket = (url2, options3) => WebSocketConstructor.use((makeWs) => fromWebSocket(acquireRelease2((typeof url2 === "string" ? succeed7(url2) : url2).pipe(map8((url3) => makeWs(url3, options3?.protocols))), (ws) => sync4(() => ws.close(1000))), options3));
+var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
+  let currentWS;
+  let initial = true;
+  const latch = makeUnsafe5(false);
+  const acquireContext = fiber3.context;
+  const closeCodeIsError = options3?.closeCodeIsError ?? defaultCloseCodeIsError;
+  const runRaw = (handler, opts) => scopedWith2(fnUntraced2(function* (scope3) {
+    const fiberSet = yield* make55().pipe(provide(scope3));
+    const ws = yield* provide(acquire, scope3);
+    const run5 = yield* provideService2(runtime(fiberSet)(), WebSocket, ws);
+    let open3 = false;
+    function onMessage(event) {
+      if (event.data instanceof Blob) {
+        const effect2 = flatMap5(promise2(() => event.data.arrayBuffer()), (buffer3) => {
+          const result6 = handler(new Uint8Array(buffer3));
+          return isEffect2(result6) ? result6 : void_5;
+        });
+        return run5(effect2);
+      }
+      const result5 = handler(event.data instanceof ArrayBuffer ? new Uint8Array(event.data) : event.data);
+      if (isEffect2(result5)) {
+        run5(result5);
+      }
+    }
+    function onError5(cause) {
+      ws.removeEventListener("message", onMessage);
+      ws.removeEventListener("close", onClose);
+      doneUnsafe(fiberSet.deferred, fail7(new SocketError({
+        reason: open3 ? new SocketReadError({
+          cause
+        }) : new SocketOpenError({
+          kind: "Unknown",
+          cause
+        })
+      })));
+    }
+    function onClose(event) {
+      const code = typeof event.code === "number" ? event.code : 1001;
+      ws.removeEventListener("message", onMessage);
+      ws.removeEventListener("error", onError5);
+      doneUnsafe(fiberSet.deferred, fail7(new SocketError({
+        reason: new SocketCloseError({
+          code,
+          closeReason: event.reason
+        })
+      })));
+    }
+    ws.addEventListener("close", onClose, {
+      once: true
+    });
+    ws.addEventListener("error", onError5, {
+      once: true
+    });
+    ws.addEventListener("message", onMessage);
+    if (ws.readyState !== 1) {
+      const openDeferred = makeUnsafe2();
+      ws.addEventListener("open", () => {
+        open3 = true;
+        doneUnsafe(openDeferred, void_5);
+      }, {
+        once: true
+      });
+      yield* _await(openDeferred).pipe(timeoutOrElse2({
+        duration: options3?.openTimeout ?? 1e4,
+        orElse: () => fail7(new SocketError({
+          reason: new SocketOpenError({
+            kind: "Timeout",
+            cause: new Error('timeout waiting for "open"')
+          })
+        }))
+      }), raceFirst2(join4(fiberSet)));
+    }
+    open3 = true;
+    currentWS = ws;
+    latch.openUnsafe();
+    if (initial && options3?.onInitialRun) {
+      initial = false;
+      for (const event of options3.onInitialRun(ws))
+        onMessage(event);
+    }
+    if (opts?.onOpen)
+      yield* opts.onOpen;
+    return yield* catchFilter2(join4(fiberSet), SocketCloseError.filterClean((_) => !closeCodeIsError(_)), () => void_5);
+  })).pipe(updateContext2((input) => merge(acquireContext, input)), ensuring2(sync4(() => {
+    latch.closeUnsafe();
+    currentWS = undefined;
+  })));
+  const write2 = (chunk) => latch.whenOpen(suspend3(() => {
+    try {
+      const ws = currentWS;
+      if (isCloseEvent(chunk)) {
+        ws.close(chunk.code, chunk.reason);
+      } else {
+        ws.send(chunk);
+      }
+      return void_5;
+    } catch (cause) {
+      return fail7(new SocketError({
+        reason: new SocketWriteError({
+          cause
+        })
+      }));
+    }
+  }));
+  const writer = succeed7(write2);
+  return succeed7(make65({
+    runRaw,
+    writer
+  }));
+});
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/workers/Transferable.js
+class Collector extends (/* @__PURE__ */ Service()("effect/workers/Transferable/Collector")) {
+}
+var makeCollectorUnsafe = () => {
+  let tranferables = [];
+  const unsafeAddAll = (transfers) => {
+    tranferables.push(...transfers);
+  };
+  const unsafeRead = () => tranferables;
+  const unsafeClear = () => {
+    const prev = tranferables;
+    tranferables = [];
+    return prev;
+  };
+  return Collector.of({
+    addAllUnsafe: unsafeAddAll,
+    addAll: (transferables) => sync4(() => unsafeAddAll(transferables)),
+    readUnsafe: unsafeRead,
+    read: sync4(unsafeRead),
+    clearUnsafe: unsafeClear,
+    clear: sync4(unsafeClear)
+  });
+};
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/workers/WorkerError.js
+var TypeId65 = "~effect/workers/WorkerError";
+class WorkerSpawnError extends (/* @__PURE__ */ Error4("effect/workers/WorkerError/WorkerSpawnError")({
+  _tag: /* @__PURE__ */ tag("WorkerSpawnError"),
+  message: String6,
+  cause: /* @__PURE__ */ optional2(/* @__PURE__ */ Defect())
+})) {
+}
+
+class WorkerSendError extends (/* @__PURE__ */ Error4("effect/workers/WorkerError/WorkerSendError")({
+  _tag: /* @__PURE__ */ tag("WorkerSendError"),
+  message: String6,
+  cause: /* @__PURE__ */ optional2(/* @__PURE__ */ Defect())
+})) {
+}
+
+class WorkerReceiveError extends (/* @__PURE__ */ Error4("effect/workers/WorkerError/WorkerReceiveError")({
+  _tag: /* @__PURE__ */ tag("WorkerReceiveError"),
+  message: String6,
+  cause: /* @__PURE__ */ optional2(/* @__PURE__ */ Defect())
+})) {
+}
+
+class WorkerUnknownError extends (/* @__PURE__ */ Error4("effect/workers/WorkerError/WorkerUnknownError")({
+  _tag: /* @__PURE__ */ tag("WorkerUnknownError"),
+  message: String6,
+  cause: /* @__PURE__ */ optional2(/* @__PURE__ */ Defect())
+})) {
+}
+var WorkerErrorReason = /* @__PURE__ */ Union2([WorkerSpawnError, WorkerSendError, WorkerReceiveError, WorkerUnknownError]);
+
+class WorkerError extends (/* @__PURE__ */ Error4(TypeId65)({
+  _tag: /* @__PURE__ */ tag("WorkerError"),
+  reason: WorkerErrorReason
+})) {
+  constructor(props) {
+    super({
+      ...props,
+      cause: props.reason.cause
+    });
+  }
+  [TypeId65] = TypeId65;
+  get message() {
+    return this.reason.message;
+  }
+}
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/workers/Worker.js
+class WorkerPlatform extends (/* @__PURE__ */ Service()("effect/workers/Worker/WorkerPlatform")) {
+}
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/RpcClientError.js
+var exports_RpcClientError = {};
+__export(exports_RpcClientError, {
+  RpcClientDefect: () => RpcClientDefect,
+  RpcClientError: () => RpcClientError
+});
+var TypeId66 = "~effect/rpc/RpcClientError";
+
+class RpcClientDefect extends (/* @__PURE__ */ Error4("effect/rpc/RpcClientError/RpcClientDefect")({
+  _tag: /* @__PURE__ */ tag("RpcClientDefect"),
+  message: String6,
+  cause: /* @__PURE__ */ Defect()
+})) {
+}
+
+class RpcClientError extends (/* @__PURE__ */ Error4(TypeId66)({
+  _tag: /* @__PURE__ */ tag("RpcClientError"),
+  reason: /* @__PURE__ */ Union2([WorkerErrorReason, SocketErrorReason, HttpClientErrorSchema, RpcClientDefect])
+})) {
+  [TypeId66] = TypeId66;
+  get message() {
+    return `${this.reason._tag}: ${this.reason.message}`;
+  }
+}
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/RpcMessage.js
+var RequestId2 = (id2) => id2;
+var constPing = {
+  _tag: "Ping"
+};
+var isTerminalResponse = (response) => {
+  switch (response._tag) {
+    case "Exit":
+    case "Defect":
+    case "ClientProtocolError": {
+      return true;
+    }
+    default: {
+      return false;
+    }
+  }
+};
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/RpcSerialization.js
+var exports_RpcSerialization = {};
+__export(exports_RpcSerialization, {
+  MaxBufferSizeExceeded: () => MaxBufferSizeExceeded,
+  RpcSerialization: () => RpcSerialization,
+  json: () => json2,
+  jsonRpc: () => jsonRpc,
+  layerJson: () => layerJson,
+  layerJsonRpc: () => layerJsonRpc,
+  layerMsgPack: () => layerMsgPack,
+  layerMsgPackWith: () => layerMsgPackWith,
+  layerNdJsonRpc: () => layerNdJsonRpc,
+  layerNdjson: () => layerNdjson,
+  layerNdjsonWith: () => layerNdjsonWith,
+  makeMsgPack: () => makeMsgPack,
+  makeNdjson: () => makeNdjson,
+  msgPack: () => msgPack,
+  ndJsonRpc: () => ndJsonRpc,
+  ndjson: () => ndjson
+});
+
+// node_modules/.bun/msgpackr@2.0.5/node_modules/msgpackr/unpack.js
+var decoder3;
+try {
+  decoder3 = new TextDecoder;
+} catch (error2) {}
+var src;
+var srcEnd;
+var position = 0;
+var EMPTY_ARRAY = [];
+var strings = EMPTY_ARRAY;
+var stringPosition = 0;
+var currentUnpackr = {};
+var currentStructures;
+var srcString;
+var srcStringStart = 0;
+var srcStringEnd = 0;
+var bundledStrings;
+var referenceMap;
+var currentExtensions = [];
+var dataView;
+var defaultOptions = {
+  useRecords: false,
+  mapsAsObjects: true
+};
+
+class C1Type {
+}
+var C1 = new C1Type;
+C1.name = "MessagePack 0xC1";
+var sequentialMode = false;
+var inlineObjectReadThreshold = 2;
+class Unpackr {
+  constructor(options3) {
+    if (options3) {
+      if (options3.useRecords === false && options3.mapsAsObjects === undefined)
+        options3.mapsAsObjects = true;
+      if (options3.sequential && options3.trusted !== false) {
+        options3.trusted = true;
+        if (!options3.structures && options3.useRecords != false) {
+          options3.structures = [];
+          if (!options3.maxSharedStructures)
+            options3.maxSharedStructures = 0;
+        }
+      }
+      if (options3.structures)
+        options3.structures.sharedLength = options3.structures.length;
+      else if (options3.getStructures) {
+        (options3.structures = []).uninitialized = true;
+        options3.structures.sharedLength = 0;
+      }
+      if (options3.int64AsNumber) {
+        options3.int64AsType = "number";
+      }
+    }
+    Object.assign(this, options3);
+  }
+  unpack(source, options3) {
+    if (src) {
+      return saveState(() => {
+        clearSource();
+        return this ? this.unpack(source, options3) : Unpackr.prototype.unpack.call(defaultOptions, source, options3);
+      });
+    }
+    if (!source.buffer && source.constructor === ArrayBuffer)
+      source = typeof Buffer !== "undefined" ? Buffer.from(source) : new Uint8Array(source);
+    if (typeof options3 === "object") {
+      srcEnd = options3.end || source.length;
+      position = options3.start || 0;
+    } else {
+      position = 0;
+      srcEnd = options3 > -1 ? options3 : source.length;
+    }
+    stringPosition = 0;
+    srcStringEnd = 0;
+    srcString = null;
+    strings = EMPTY_ARRAY;
+    bundledStrings = null;
+    src = source;
+    try {
+      dataView = source.dataView || (source.dataView = new DataView(source.buffer, source.byteOffset, source.byteLength));
+    } catch (error2) {
+      src = null;
+      if (source instanceof Uint8Array)
+        throw error2;
+      throw new Error("Source must be a Uint8Array or Buffer but was a " + (source && typeof source == "object" ? source.constructor.name : typeof source));
+    }
+    if (this instanceof Unpackr) {
+      currentUnpackr = this;
+      if (this.structures) {
+        currentStructures = this.structures;
+        return checkedRead(options3);
+      } else if (!currentStructures || currentStructures.length > 0) {
+        currentStructures = [];
+      }
+    } else {
+      currentUnpackr = defaultOptions;
+      if (!currentStructures || currentStructures.length > 0)
+        currentStructures = [];
+    }
+    return checkedRead(options3);
+  }
+  unpackMultiple(source, forEach5) {
+    let values3, lastPosition = 0;
+    try {
+      sequentialMode = true;
+      let size9 = source.length;
+      let value6 = this ? this.unpack(source, size9) : defaultUnpackr.unpack(source, size9);
+      if (forEach5) {
+        if (forEach5(value6, lastPosition, position) === false)
+          return;
+        while (position < size9) {
+          lastPosition = position;
+          if (forEach5(checkedRead(), lastPosition, position) === false) {
+            return;
+          }
+        }
+      } else {
+        values3 = [value6];
+        while (position < size9) {
+          lastPosition = position;
+          values3.push(checkedRead());
+        }
+        return values3;
+      }
+    } catch (error2) {
+      error2.lastPosition = lastPosition;
+      error2.values = values3;
+      throw error2;
+    } finally {
+      sequentialMode = false;
+      clearSource();
+    }
+  }
+  _mergeStructures(loadedStructures, existingStructures) {
+    if (this._onLoadedStructures)
+      loadedStructures = this._onLoadedStructures(loadedStructures);
+    loadedStructures = loadedStructures || [];
+    if (Object.isFrozen(loadedStructures))
+      loadedStructures = loadedStructures.map((structure2) => structure2.slice(0));
+    for (let i = 0, l = loadedStructures.length;i < l; i++) {
+      let structure2 = loadedStructures[i];
+      if (structure2) {
+        structure2.isShared = true;
+        if (i >= 32)
+          structure2.highByte = i - 32 >> 5;
+      }
+    }
+    loadedStructures.sharedLength = loadedStructures.length;
+    for (let id2 in existingStructures || []) {
+      if (id2 >= 0) {
+        let structure2 = loadedStructures[id2];
+        let existing = existingStructures[id2];
+        if (existing) {
+          if (structure2)
+            (loadedStructures.restoreStructures || (loadedStructures.restoreStructures = []))[id2] = structure2;
+          loadedStructures[id2] = existing;
+        }
+      }
+    }
+    return this.structures = loadedStructures;
+  }
+  decode(source, options3) {
+    return this.unpack(source, options3);
+  }
+}
+function checkedRead(options3) {
+  try {
+    if (!currentUnpackr.trusted && !sequentialMode) {
+      let sharedLength = currentStructures.sharedLength || 0;
+      if (sharedLength < currentStructures.length)
+        currentStructures.length = sharedLength;
+    }
+    let result5;
+    if (currentUnpackr._readStruct && src[position] < 64 && src[position] >= 32) {
+      result5 = currentUnpackr._readStruct(src, position, srcEnd);
+      src = null;
+      if (!(options3 && options3.lazy) && result5)
+        result5 = result5.toJSON();
+      position = srcEnd;
+    } else
+      result5 = read2();
+    if (bundledStrings) {
+      position = bundledStrings.postBundlePosition;
+      bundledStrings = null;
+    }
+    if (sequentialMode)
+      currentStructures.restoreStructures = null;
+    if (position == srcEnd) {
+      if (currentStructures && currentStructures.restoreStructures)
+        restoreStructures();
+      currentStructures = null;
+      src = null;
+      if (referenceMap)
+        referenceMap = null;
+    } else if (position > srcEnd) {
+      throw new Error("Unexpected end of MessagePack data");
+    } else if (!sequentialMode) {
+      let jsonView;
+      try {
+        jsonView = JSON.stringify(result5, (_, value6) => typeof value6 === "bigint" ? `${value6}n` : value6).slice(0, 100);
+      } catch (error2) {
+        jsonView = "(JSON view not available " + error2 + ")";
+      }
+      throw new Error("Data read, but end of buffer not reached " + jsonView);
+    }
+    return result5;
+  } catch (error2) {
+    if (currentStructures && currentStructures.restoreStructures)
+      restoreStructures();
+    clearSource();
+    if (error2 instanceof RangeError || error2.message.startsWith("Unexpected end of buffer") || position > srcEnd) {
+      error2.incomplete = true;
+    }
+    throw error2;
+  }
+}
+function restoreStructures() {
+  for (let id2 in currentStructures.restoreStructures) {
+    currentStructures[id2] = currentStructures.restoreStructures[id2];
+  }
+  currentStructures.restoreStructures = null;
+}
+function read2() {
+  let token = src[position++];
+  if (token < 160) {
+    if (token < 128) {
+      if (token < 64)
+        return token;
+      else {
+        let structure2 = currentStructures[token & 63] || currentUnpackr.getStructures && loadStructures()[token & 63];
+        if (structure2) {
+          if (!structure2.read) {
+            structure2.read = createStructureReader(structure2, token & 63);
+          }
+          return structure2.read();
+        } else
+          return token;
+      }
+    } else if (token < 144) {
+      token -= 128;
+      if (currentUnpackr.mapsAsObjects) {
+        let object = {};
+        for (let i = 0;i < token; i++) {
+          let key = readKey();
+          if (key === "__proto__")
+            key = "__proto_";
+          object[key] = read2();
+        }
+        return object;
+      } else {
+        let map14 = new Map;
+        for (let i = 0;i < token; i++) {
+          map14.set(read2(), read2());
+        }
+        return map14;
+      }
+    } else {
+      token -= 144;
+      let array3 = new Array(token);
+      for (let i = 0;i < token; i++) {
+        array3[i] = read2();
+      }
+      if (currentUnpackr.freezeData)
+        return Object.freeze(array3);
+      return array3;
+    }
+  } else if (token < 192) {
+    let length = token - 160;
+    if (srcStringEnd >= position) {
+      return srcString.slice(position - srcStringStart, (position += length) - srcStringStart);
+    }
+    if (srcStringEnd == 0 && srcEnd < 140) {
+      let string4 = length < 16 ? shortStringInJS(length) : longStringInJS(length);
+      if (string4 != null)
+        return string4;
+    }
+    return readFixedString(length);
+  } else {
+    let value6;
+    switch (token) {
+      case 192:
+        return null;
+      case 193:
+        if (bundledStrings) {
+          value6 = read2();
+          if (value6 > 0)
+            return bundledStrings[1].slice(bundledStrings.position1, bundledStrings.position1 += value6);
+          else
+            return bundledStrings[0].slice(bundledStrings.position0, bundledStrings.position0 -= value6);
+        }
+        return C1;
+      case 194:
+        return false;
+      case 195:
+        return true;
+      case 196:
+        value6 = src[position++];
+        if (value6 === undefined)
+          throw new Error("Unexpected end of buffer");
+        return readBin(value6);
+      case 197:
+        value6 = dataView.getUint16(position);
+        position += 2;
+        return readBin(value6);
+      case 198:
+        value6 = dataView.getUint32(position);
+        position += 4;
+        return readBin(value6);
+      case 199:
+        return readExt(src[position++]);
+      case 200:
+        value6 = dataView.getUint16(position);
+        position += 2;
+        return readExt(value6);
+      case 201:
+        value6 = dataView.getUint32(position);
+        position += 4;
+        return readExt(value6);
+      case 202:
+        value6 = dataView.getFloat32(position);
+        if (currentUnpackr.useFloat32 > 2) {
+          let multiplier = mult10[(src[position] & 127) << 1 | src[position + 1] >> 7];
+          position += 4;
+          return (multiplier * value6 + (value6 > 0 ? 0.5 : -0.5) >> 0) / multiplier;
+        }
+        position += 4;
+        return value6;
+      case 203:
+        value6 = dataView.getFloat64(position);
+        position += 8;
+        return value6;
+      case 204:
+        return src[position++];
+      case 205:
+        value6 = dataView.getUint16(position);
+        position += 2;
+        return value6;
+      case 206:
+        value6 = dataView.getUint32(position);
+        position += 4;
+        return value6;
+      case 207:
+        if (currentUnpackr.int64AsType === "number") {
+          value6 = dataView.getUint32(position) * 4294967296;
+          value6 += dataView.getUint32(position + 4);
+        } else if (currentUnpackr.int64AsType === "string") {
+          value6 = dataView.getBigUint64(position).toString();
+        } else if (currentUnpackr.int64AsType === "auto") {
+          value6 = dataView.getBigUint64(position);
+          if (value6 <= BigInt(2) << BigInt(52))
+            value6 = Number(value6);
+        } else
+          value6 = dataView.getBigUint64(position);
+        position += 8;
+        return value6;
+      case 208:
+        return dataView.getInt8(position++);
+      case 209:
+        value6 = dataView.getInt16(position);
+        position += 2;
+        return value6;
+      case 210:
+        value6 = dataView.getInt32(position);
+        position += 4;
+        return value6;
+      case 211:
+        if (currentUnpackr.int64AsType === "number") {
+          value6 = dataView.getInt32(position) * 4294967296;
+          value6 += dataView.getUint32(position + 4);
+        } else if (currentUnpackr.int64AsType === "string") {
+          value6 = dataView.getBigInt64(position).toString();
+        } else if (currentUnpackr.int64AsType === "auto") {
+          value6 = dataView.getBigInt64(position);
+          if (value6 >= BigInt(-2) << BigInt(52) && value6 <= BigInt(2) << BigInt(52))
+            value6 = Number(value6);
+        } else
+          value6 = dataView.getBigInt64(position);
+        position += 8;
+        return value6;
+      case 212:
+        value6 = src[position++];
+        if (value6 == 114) {
+          return recordDefinition(src[position++] & 63);
+        } else {
+          let extension = currentExtensions[value6];
+          if (extension) {
+            if (extension.read) {
+              position++;
+              return extension.read(read2());
+            } else if (extension.noBuffer) {
+              position++;
+              return extension();
+            } else
+              return extension(src.subarray(position, ++position));
+          } else
+            throw new Error("Unknown extension " + value6);
+        }
+      case 213:
+        value6 = src[position];
+        if (value6 == 114) {
+          position++;
+          return recordDefinition(src[position++] & 63, src[position++]);
+        } else
+          return readExt(2);
+      case 214:
+        return readExt(4);
+      case 215:
+        return readExt(8);
+      case 216:
+        return readExt(16);
+      case 217:
+        value6 = src[position++];
+        if (srcStringEnd >= position) {
+          return srcString.slice(position - srcStringStart, (position += value6) - srcStringStart);
+        }
+        return readString8(value6);
+      case 218:
+        value6 = dataView.getUint16(position);
+        position += 2;
+        if (srcStringEnd >= position) {
+          return srcString.slice(position - srcStringStart, (position += value6) - srcStringStart);
+        }
+        return readString16(value6);
+      case 219:
+        value6 = dataView.getUint32(position);
+        position += 4;
+        if (srcStringEnd >= position) {
+          return srcString.slice(position - srcStringStart, (position += value6) - srcStringStart);
+        }
+        return readString32(value6);
+      case 220:
+        value6 = dataView.getUint16(position);
+        position += 2;
+        return readArray(value6);
+      case 221:
+        value6 = dataView.getUint32(position);
+        position += 4;
+        return readArray(value6);
+      case 222:
+        value6 = dataView.getUint16(position);
+        position += 2;
+        return readMap(value6);
+      case 223:
+        value6 = dataView.getUint32(position);
+        position += 4;
+        return readMap(value6);
+      default:
+        if (token >= 224)
+          return token - 256;
+        if (token === undefined) {
+          let error2 = new Error("Unexpected end of MessagePack data");
+          error2.incomplete = true;
+          throw error2;
+        }
+        throw new Error("Unknown MessagePack token " + token);
+    }
+  }
+}
+var validName = /^[a-zA-Z_$][a-zA-Z\d_$]*$/;
+function createStructureReader(structure2, firstId) {
+  function readObject() {
+    if (readObject.count++ > inlineObjectReadThreshold) {
+      let optimizedReadObject;
+      try {
+        optimizedReadObject = structure2.read = new Function("r", "return function(){return " + (currentUnpackr.freezeData ? "Object.freeze" : "") + "({" + structure2.map((key) => key === "__proto__" ? "__proto_:r()" : validName.test(key) ? key + ":r()" : "[" + JSON.stringify(key) + "]:r()").join(",") + "})}")(read2);
+      } catch (error2) {
+        inlineObjectReadThreshold = Infinity;
+        return readObject();
+      }
+      structure2.read0 = optimizedReadObject;
+      if (structure2.highByte === 0)
+        structure2.read = createSecondByteReader(firstId, structure2.read);
+      return optimizedReadObject();
+    }
+    let object = {};
+    for (let i = 0, l = structure2.length;i < l; i++) {
+      let key = structure2[i];
+      if (key === "__proto__")
+        key = "__proto_";
+      object[key] = read2();
+    }
+    if (currentUnpackr.freezeData)
+      return Object.freeze(object);
+    return object;
+  }
+  readObject.count = 0;
+  structure2.read0 = readObject;
+  if (structure2.highByte === 0) {
+    return createSecondByteReader(firstId, readObject);
+  }
+  return readObject;
+}
+var createSecondByteReader = (firstId, read0) => {
+  return function() {
+    let highByte = src[position++];
+    if (highByte === 0)
+      return read0();
+    let id2 = firstId < 32 ? -(firstId + (highByte << 5)) : firstId + (highByte << 5);
+    let structure2 = currentStructures[id2] || loadStructures()[id2];
+    if (!structure2) {
+      throw new Error("Record id is not defined for " + id2);
+    }
+    if (!structure2.read)
+      structure2.read = createStructureReader(structure2, firstId);
+    return structure2.read();
+  };
+};
+function loadStructures() {
+  let loadedStructures = saveState(() => {
+    src = null;
+    return currentUnpackr.getStructures();
+  });
+  return currentStructures = currentUnpackr._mergeStructures(loadedStructures, currentStructures);
+}
+var readFixedString = readStringJS;
+var readString8 = readStringJS;
+var readString16 = readStringJS;
+var readString32 = readStringJS;
+var isNativeAccelerationEnabled = false;
+function setExtractor(extractStrings) {
+  isNativeAccelerationEnabled = true;
+  readFixedString = readString(1);
+  readString8 = readString(2);
+  readString16 = readString(3);
+  readString32 = readString(5);
+  function readString(headerLength) {
+    return function readString2(length) {
+      let string4 = strings[stringPosition++];
+      if (string4 == null) {
+        if (bundledStrings)
+          return readStringJS(length);
+        let byteOffset = src.byteOffset;
+        let extraction = extractStrings(position - headerLength + byteOffset, srcEnd + byteOffset, src.buffer);
+        if (typeof extraction == "string") {
+          string4 = extraction;
+          strings = EMPTY_ARRAY;
+        } else {
+          strings = extraction;
+          stringPosition = 1;
+          srcStringEnd = 1;
+          string4 = strings[0];
+          if (string4 === undefined)
+            throw new Error("Unexpected end of buffer");
+        }
+      }
+      let srcStringLength = string4.length;
+      if (srcStringLength <= length) {
+        position += length;
+        return string4;
+      }
+      srcString = string4;
+      srcStringStart = position;
+      srcStringEnd = position + srcStringLength;
+      position += length;
+      return string4.slice(0, length);
+    };
+  }
+}
+function readStringJS(length) {
+  let result5;
+  if (length < 16) {
+    if (result5 = shortStringInJS(length))
+      return result5;
+  }
+  if (length > 64 && decoder3)
+    return decoder3.decode(src.subarray(position, position += length));
+  const end3 = position + length;
+  const units = [];
+  result5 = "";
+  while (position < end3) {
+    const byte1 = src[position++];
+    if ((byte1 & 128) === 0) {
+      units.push(byte1);
+    } else if ((byte1 & 224) === 192) {
+      if (byte1 < 194 || position >= end3 || (src[position] & 192) !== 128) {
+        units.push(65533);
+      } else {
+        const byte2 = src[position++] & 63;
+        units.push((byte1 & 31) << 6 | byte2);
+      }
+    } else if ((byte1 & 240) === 224) {
+      const byte2 = position < end3 ? src[position] : 0;
+      if (position >= end3 || (byte2 & 192) !== 128 || byte1 === 224 && byte2 < 160 || byte1 === 237 && byte2 >= 160) {
+        units.push(65533);
+      } else {
+        position++;
+        if (position >= end3 || (src[position] & 192) !== 128) {
+          units.push(65533);
+        } else {
+          const byte3 = src[position++] & 63;
+          units.push((byte1 & 31) << 12 | (byte2 & 63) << 6 | byte3);
+        }
+      }
+    } else if ((byte1 & 248) === 240) {
+      const byte2 = position < end3 ? src[position] : 0;
+      if (byte1 > 244 || position >= end3 || (byte2 & 192) !== 128 || byte1 === 240 && byte2 < 144 || byte1 === 244 && byte2 >= 144) {
+        units.push(65533);
+      } else {
+        position++;
+        if (position >= end3 || (src[position] & 192) !== 128) {
+          units.push(65533);
+        } else {
+          const byte3 = src[position++] & 63;
+          if (position >= end3 || (src[position] & 192) !== 128) {
+            units.push(65533);
+          } else {
+            const byte4 = src[position++] & 63;
+            let unit = (byte1 & 7) << 18 | (byte2 & 63) << 12 | byte3 << 6 | byte4;
+            unit -= 65536;
+            units.push(unit >>> 10 & 1023 | 55296);
+            units.push(56320 | unit & 1023);
+          }
+        }
+      }
+    } else {
+      units.push(65533);
+    }
+    if (units.length >= 4096) {
+      result5 += fromCharCode.apply(String, units);
+      units.length = 0;
+    }
+  }
+  if (units.length > 0) {
+    result5 += fromCharCode.apply(String, units);
+  }
+  return result5;
+}
+function readArray(length) {
+  let array3 = new Array(length);
+  for (let i = 0;i < length; i++) {
+    array3[i] = read2();
+  }
+  if (currentUnpackr.freezeData)
+    return Object.freeze(array3);
+  return array3;
+}
+function readMap(length) {
+  if (currentUnpackr.mapsAsObjects) {
+    let object = {};
+    for (let i = 0;i < length; i++) {
+      let key = readKey();
+      if (key === "__proto__")
+        key = "__proto_";
+      object[key] = read2();
+    }
+    return object;
+  } else {
+    let map14 = new Map;
+    for (let i = 0;i < length; i++) {
+      map14.set(read2(), read2());
+    }
+    return map14;
+  }
+}
+var fromCharCode = String.fromCharCode;
+function longStringInJS(length) {
+  let start2 = position;
+  let bytes2 = new Array(length);
+  for (let i = 0;i < length; i++) {
+    const byte = src[position++];
+    if ((byte & 128) > 0) {
+      position = start2;
+      return;
+    }
+    bytes2[i] = byte;
+  }
+  return fromCharCode.apply(String, bytes2);
+}
+function shortStringInJS(length) {
+  if (length < 4) {
+    if (length < 2) {
+      if (length === 0)
+        return "";
+      else {
+        let a = src[position++];
+        if ((a & 128) > 1) {
+          position -= 1;
+          return;
+        }
+        return fromCharCode(a);
+      }
+    } else {
+      let a = src[position++];
+      let b = src[position++];
+      if ((a & 128) > 0 || (b & 128) > 0) {
+        position -= 2;
+        return;
+      }
+      if (length < 3)
+        return fromCharCode(a, b);
+      let c = src[position++];
+      if ((c & 128) > 0) {
+        position -= 3;
+        return;
+      }
+      return fromCharCode(a, b, c);
+    }
+  } else {
+    let a = src[position++];
+    let b = src[position++];
+    let c = src[position++];
+    let d = src[position++];
+    if ((a & 128) > 0 || (b & 128) > 0 || (c & 128) > 0 || (d & 128) > 0) {
+      position -= 4;
+      return;
+    }
+    if (length < 6) {
+      if (length === 4)
+        return fromCharCode(a, b, c, d);
+      else {
+        let e = src[position++];
+        if ((e & 128) > 0) {
+          position -= 5;
+          return;
+        }
+        return fromCharCode(a, b, c, d, e);
+      }
+    } else if (length < 8) {
+      let e = src[position++];
+      let f = src[position++];
+      if ((e & 128) > 0 || (f & 128) > 0) {
+        position -= 6;
+        return;
+      }
+      if (length < 7)
+        return fromCharCode(a, b, c, d, e, f);
+      let g = src[position++];
+      if ((g & 128) > 0) {
+        position -= 7;
+        return;
+      }
+      return fromCharCode(a, b, c, d, e, f, g);
+    } else {
+      let e = src[position++];
+      let f = src[position++];
+      let g = src[position++];
+      let h = src[position++];
+      if ((e & 128) > 0 || (f & 128) > 0 || (g & 128) > 0 || (h & 128) > 0) {
+        position -= 8;
+        return;
+      }
+      if (length < 10) {
+        if (length === 8)
+          return fromCharCode(a, b, c, d, e, f, g, h);
+        else {
+          let i = src[position++];
+          if ((i & 128) > 0) {
+            position -= 9;
+            return;
+          }
+          return fromCharCode(a, b, c, d, e, f, g, h, i);
+        }
+      } else if (length < 12) {
+        let i = src[position++];
+        let j = src[position++];
+        if ((i & 128) > 0 || (j & 128) > 0) {
+          position -= 10;
+          return;
+        }
+        if (length < 11)
+          return fromCharCode(a, b, c, d, e, f, g, h, i, j);
+        let k = src[position++];
+        if ((k & 128) > 0) {
+          position -= 11;
+          return;
+        }
+        return fromCharCode(a, b, c, d, e, f, g, h, i, j, k);
+      } else {
+        let i = src[position++];
+        let j = src[position++];
+        let k = src[position++];
+        let l = src[position++];
+        if ((i & 128) > 0 || (j & 128) > 0 || (k & 128) > 0 || (l & 128) > 0) {
+          position -= 12;
+          return;
+        }
+        if (length < 14) {
+          if (length === 12)
+            return fromCharCode(a, b, c, d, e, f, g, h, i, j, k, l);
+          else {
+            let m = src[position++];
+            if ((m & 128) > 0) {
+              position -= 13;
+              return;
+            }
+            return fromCharCode(a, b, c, d, e, f, g, h, i, j, k, l, m);
+          }
+        } else {
+          let m = src[position++];
+          let n = src[position++];
+          if ((m & 128) > 0 || (n & 128) > 0) {
+            position -= 14;
+            return;
+          }
+          if (length < 15)
+            return fromCharCode(a, b, c, d, e, f, g, h, i, j, k, l, m, n);
+          let o = src[position++];
+          if ((o & 128) > 0) {
+            position -= 15;
+            return;
+          }
+          return fromCharCode(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o);
+        }
+      }
+    }
+  }
+}
+function readOnlyJSString() {
+  let token = src[position++];
+  let length;
+  if (token < 192) {
+    length = token - 160;
+  } else {
+    switch (token) {
+      case 217:
+        length = src[position++];
+        break;
+      case 218:
+        length = dataView.getUint16(position);
+        position += 2;
+        break;
+      case 219:
+        length = dataView.getUint32(position);
+        position += 4;
+        break;
+      default:
+        throw new Error("Expected string");
+    }
+  }
+  return readStringJS(length);
+}
+function readBin(length) {
+  return currentUnpackr.copyBuffers ? Uint8Array.prototype.slice.call(src, position, position += length) : src.subarray(position, position += length);
+}
+function readExt(length) {
+  let type2 = src[position++];
+  if (currentExtensions[type2]) {
+    let end3;
+    return currentExtensions[type2](src.subarray(position, end3 = position += length), (readPosition) => {
+      position = readPosition;
+      try {
+        return read2();
+      } finally {
+        position = end3;
+      }
+    });
+  } else
+    throw new Error("Unknown extension type " + type2);
+}
+var keyCache = new Array(4096);
+function readKey() {
+  let length = src[position++];
+  if (length >= 160 && length < 192) {
+    length = length - 160;
+    if (srcStringEnd >= position)
+      return srcString.slice(position - srcStringStart, (position += length) - srcStringStart);
+    else if (!(srcStringEnd == 0 && srcEnd < 180))
+      return readFixedString(length);
+  } else {
+    position--;
+    return asSafeString(read2());
+  }
+  let key = (length << 5 ^ (length > 1 ? dataView.getUint16(position) : length > 0 ? src[position] : 0)) & 4095;
+  let entry = keyCache[key];
+  let checkPosition = position;
+  let end3 = position + length - 3;
+  let chunk;
+  let i = 0;
+  if (entry && entry.bytes == length) {
+    while (checkPosition < end3) {
+      chunk = dataView.getUint32(checkPosition);
+      if (chunk != entry[i++]) {
+        checkPosition = 1879048192;
+        break;
+      }
+      checkPosition += 4;
+    }
+    end3 += 3;
+    while (checkPosition < end3) {
+      chunk = src[checkPosition++];
+      if (chunk != entry[i++]) {
+        checkPosition = 1879048192;
+        break;
+      }
+    }
+    if (checkPosition === end3) {
+      position = checkPosition;
+      return entry.string;
+    }
+    end3 -= 3;
+    checkPosition = position;
+  }
+  entry = [];
+  keyCache[key] = entry;
+  entry.bytes = length;
+  while (checkPosition < end3) {
+    chunk = dataView.getUint32(checkPosition);
+    entry.push(chunk);
+    checkPosition += 4;
+  }
+  end3 += 3;
+  while (checkPosition < end3) {
+    chunk = src[checkPosition++];
+    entry.push(chunk);
+  }
+  let string4 = length < 16 ? shortStringInJS(length) : longStringInJS(length);
+  if (string4 != null)
+    return entry.string = string4;
+  return entry.string = readFixedString(length);
+}
+function asSafeString(property) {
+  if (typeof property === "string")
+    return property;
+  if (typeof property === "number" || typeof property === "boolean" || typeof property === "bigint")
+    return property.toString();
+  if (property == null)
+    return property + "";
+  if (currentUnpackr.allowArraysInMapKeys && Array.isArray(property) && property.flat().every((item) => ["string", "number", "boolean", "bigint"].includes(typeof item))) {
+    return property.flat().toString();
+  }
+  throw new Error(`Invalid property type for record: ${typeof property}`);
+}
+var recordDefinition = (id2, highByte) => {
+  let structure2 = read2().map(asSafeString);
+  let firstByte = id2;
+  if (highByte !== undefined) {
+    id2 = id2 < 32 ? -((highByte << 5) + id2) : (highByte << 5) + id2;
+    structure2.highByte = highByte;
+  }
+  let existingStructure = currentStructures[id2];
+  if (existingStructure && (existingStructure.isShared || sequentialMode)) {
+    (currentStructures.restoreStructures || (currentStructures.restoreStructures = []))[id2] = existingStructure;
+  }
+  currentStructures[id2] = structure2;
+  structure2.read = createStructureReader(structure2, firstByte);
+  return (structure2.read0 || structure2.read)();
+};
+currentExtensions[0] = () => {};
+currentExtensions[0].noBuffer = true;
+currentExtensions[66] = (data) => {
+  let headLength = data.byteLength % 8 || 8;
+  let head6 = BigInt(data[0] & 128 ? data[0] - 256 : data[0]);
+  for (let i = 1;i < headLength; i++) {
+    head6 <<= BigInt(8);
+    head6 += BigInt(data[i]);
+  }
+  if (data.byteLength !== headLength) {
+    let view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    let decode2 = (start2, end3) => {
+      let length = end3 - start2;
+      if (length <= 40) {
+        let out = view.getBigUint64(start2);
+        for (let i = start2 + 8;i < end3; i += 8) {
+          out <<= BigInt(64);
+          out |= view.getBigUint64(i);
+        }
+        return out;
+      }
+      let middle = start2 + (length >> 4 << 3);
+      let left = decode2(start2, middle);
+      let right = decode2(middle, end3);
+      return left << BigInt((end3 - middle) * 8) | right;
+    };
+    head6 = head6 << BigInt((view.byteLength - headLength) * 8) | decode2(headLength, view.byteLength);
+  }
+  return head6;
+};
+var errors2 = {
+  Error,
+  EvalError,
+  RangeError,
+  ReferenceError,
+  SyntaxError,
+  TypeError,
+  URIError,
+  AggregateError: typeof AggregateError === "function" ? AggregateError : null
+};
+currentExtensions[101] = () => {
+  let data = read2();
+  if (!errors2[data[0]]) {
+    let error2 = Error(data[1], { cause: data[2] });
+    error2.name = data[0];
+    return error2;
+  }
+  return errors2[data[0]](data[1], { cause: data[2] });
+};
+currentExtensions[105] = (data) => {
+  if (currentUnpackr.structuredClone === false)
+    throw new Error("Structured clone extension is disabled");
+  let id2 = dataView.getUint32(position - 4);
+  if (!referenceMap)
+    referenceMap = new Map;
+  let token = src[position];
+  let target;
+  if (token >= 144 && token < 160 || token == 220 || token == 221)
+    target = [];
+  else if (token >= 128 && token < 144 || token == 222 || token == 223)
+    target = new Map;
+  else if ((token >= 199 && token <= 201 || token >= 212 && token <= 216) && src[position + 1] === 115)
+    target = new Set;
+  else
+    target = {};
+  let refEntry = { target };
+  referenceMap.set(id2, refEntry);
+  let targetProperties = read2();
+  if (!refEntry.used) {
+    return refEntry.target = targetProperties;
+  } else {
+    Object.assign(target, targetProperties);
+  }
+  if (target instanceof Map)
+    for (let [k, v] of targetProperties.entries())
+      target.set(k, v);
+  if (target instanceof Set)
+    for (let i of Array.from(targetProperties))
+      target.add(i);
+  return target;
+};
+currentExtensions[112] = (data) => {
+  if (currentUnpackr.structuredClone === false)
+    throw new Error("Structured clone extension is disabled");
+  let id2 = dataView.getUint32(position - 4);
+  let refEntry = referenceMap.get(id2);
+  refEntry.used = true;
+  return refEntry.target;
+};
+currentExtensions[115] = () => new Set(read2());
+var typedArrays = ["Int8", "Uint8", "Uint8Clamped", "Int16", "Uint16", "Int32", "Uint32", "Float32", "Float64", "BigInt64", "BigUint64"].map((type2) => type2 + "Array");
+var glbl = typeof globalThis === "object" ? globalThis : window;
+currentExtensions[116] = (data) => {
+  let typeCode = data[0];
+  let buffer3 = Uint8Array.prototype.slice.call(data, 1).buffer;
+  let typedArrayName = typedArrays[typeCode];
+  if (!typedArrayName) {
+    if (typeCode === 16)
+      return buffer3;
+    if (typeCode === 17)
+      return new DataView(buffer3);
+    throw new Error("Could not find typed array for code " + typeCode);
+  }
+  return new glbl[typedArrayName](buffer3);
+};
+currentExtensions[120] = () => {
+  let data = read2();
+  return new RegExp(data[0], data[1]);
+};
+var TEMP_BUNDLE = [];
+currentExtensions[98] = (data) => {
+  let dataSize = (data[0] << 24) + (data[1] << 16) + (data[2] << 8) + data[3];
+  let dataPosition = position;
+  position += dataSize - data.length;
+  bundledStrings = TEMP_BUNDLE;
+  bundledStrings = [readOnlyJSString(), readOnlyJSString()];
+  bundledStrings.position0 = 0;
+  bundledStrings.position1 = 0;
+  bundledStrings.postBundlePosition = position;
+  position = dataPosition;
+  return read2();
+};
+currentExtensions[255] = (data) => {
+  if (data.length == 4)
+    return new Date((data[0] * 16777216 + (data[1] << 16) + (data[2] << 8) + data[3]) * 1000);
+  else if (data.length == 8)
+    return new Date(((data[0] << 22) + (data[1] << 14) + (data[2] << 6) + (data[3] >> 2)) / 1e6 + ((data[3] & 3) * 4294967296 + data[4] * 16777216 + (data[5] << 16) + (data[6] << 8) + data[7]) * 1000);
+  else if (data.length == 12)
+    return new Date(((data[0] << 24) + (data[1] << 16) + (data[2] << 8) + data[3]) / 1e6 + ((data[4] & 128 ? -281474976710656 : 0) + data[6] * 1099511627776 + data[7] * 4294967296 + data[8] * 16777216 + (data[9] << 16) + (data[10] << 8) + data[11]) * 1000);
+  else
+    return new Date("invalid");
+};
+function saveState(callback4) {
+  if (currentUnpackr && currentUnpackr._onSaveState)
+    currentUnpackr._onSaveState();
+  let savedSrcEnd = srcEnd;
+  let savedPosition = position;
+  let savedStringPosition = stringPosition;
+  let savedSrcStringStart = srcStringStart;
+  let savedSrcStringEnd = srcStringEnd;
+  let savedSrcString = srcString;
+  let savedStrings = strings;
+  let savedReferenceMap = referenceMap;
+  let savedBundledStrings = bundledStrings;
+  let savedSrc = new Uint8Array(src.slice(0, srcEnd));
+  let savedStructures = currentStructures;
+  let savedStructuresContents = currentStructures.slice(0, currentStructures.length);
+  let savedPackr = currentUnpackr;
+  let savedSequentialMode = sequentialMode;
+  let value6 = callback4();
+  srcEnd = savedSrcEnd;
+  position = savedPosition;
+  stringPosition = savedStringPosition;
+  srcStringStart = savedSrcStringStart;
+  srcStringEnd = savedSrcStringEnd;
+  srcString = savedSrcString;
+  strings = savedStrings;
+  referenceMap = savedReferenceMap;
+  bundledStrings = savedBundledStrings;
+  src = savedSrc;
+  sequentialMode = savedSequentialMode;
+  currentStructures = savedStructures;
+  currentStructures.splice(0, currentStructures.length, ...savedStructuresContents);
+  currentUnpackr = savedPackr;
+  dataView = new DataView(src.buffer, src.byteOffset, src.byteLength);
+  return value6;
+}
+function clearSource() {
+  src = null;
+  referenceMap = null;
+  currentStructures = null;
+}
+var mult10 = new Array(147);
+for (let i = 0;i < 256; i++) {
+  mult10[i] = +("1e" + Math.floor(45.15 - i * 0.30103));
+}
+var defaultUnpackr = new Unpackr({ useRecords: false });
+var unpack = defaultUnpackr.unpack;
+var unpackMultiple = defaultUnpackr.unpackMultiple;
+var decode2 = defaultUnpackr.unpack;
+var f32Array = new Float32Array(1);
+var u8Array = new Uint8Array(f32Array.buffer, 0, 4);
+Unpackr.SUPPORTS_STRUCT_HOOKS = true;
+// node_modules/.bun/msgpackr@2.0.5/node_modules/msgpackr/pack.js
+var textEncoder;
+try {
+  textEncoder = new TextEncoder;
+} catch (error2) {}
+var extensions;
+var extensionClasses;
+var hasNodeBuffer = typeof Buffer !== "undefined";
+var ByteArrayAllocate = hasNodeBuffer ? function(length) {
+  return Buffer.allocUnsafeSlow(length);
+} : Uint8Array;
+var ByteArray = hasNodeBuffer ? Buffer : Uint8Array;
+var MAX_BUFFER_SIZE = hasNodeBuffer ? 4294967296 : 2144337920;
+var target;
+var keysTarget;
+var targetView;
+var position2 = 0;
+var safeEnd;
+var bundledStrings2 = null;
+var MAX_BUNDLE_SIZE = 21760;
+var hasNonLatin = /[\u0080-\uFFFF]/;
+var RECORD_SYMBOL = Symbol("record-id");
+
+class Packr extends Unpackr {
+  constructor(options3) {
+    super(options3);
+    this.offset = 0;
+    let typeBuffer;
+    let start2;
+    let hasSharedUpdate;
+    let structures;
+    let referenceMap2;
+    let encodeUtf8 = ByteArray.prototype.utf8Write ? function(string4, position3) {
+      return target.utf8Write(string4, position3, target.byteLength - position3);
+    } : textEncoder && textEncoder.encodeInto ? function(string4, position3) {
+      return textEncoder.encodeInto(string4, target.subarray(position3)).written;
+    } : false;
+    let packr = this;
+    if (!options3)
+      options3 = {};
+    let isSequential = options3 && options3.sequential;
+    let hasSharedStructures = options3.structures || options3.saveStructures;
+    let maxSharedStructures = options3.maxSharedStructures;
+    if (maxSharedStructures == null)
+      maxSharedStructures = hasSharedStructures ? 32 : 0;
+    if (maxSharedStructures > 8160)
+      throw new Error("Maximum maxSharedStructure is 8160");
+    if (options3.structuredClone && options3.moreTypes == undefined) {
+      this.moreTypes = true;
+    }
+    let maxOwnStructures = options3.maxOwnStructures;
+    if (maxOwnStructures == null)
+      maxOwnStructures = hasSharedStructures ? 32 : 64;
+    if (!this.structures && options3.useRecords != false)
+      this.structures = [];
+    let useTwoByteRecords = maxSharedStructures > 32 || maxOwnStructures + maxSharedStructures > 64;
+    let sharedLimitId = maxSharedStructures + 64;
+    let maxStructureId = maxSharedStructures + maxOwnStructures + 64;
+    if (maxStructureId > 8256) {
+      throw new Error("Maximum maxSharedStructure + maxOwnStructure is 8192");
+    }
+    let recordIdsToRemove = [];
+    let transitionsCount = 0;
+    let serializationsSinceTransitionRebuild = 0;
+    this.pack = this.encode = function(value6, encodeOptions) {
+      if (!target) {
+        target = new ByteArrayAllocate(8192);
+        targetView = target.dataView || (target.dataView = new DataView(target.buffer, 0, 8192));
+        position2 = 0;
+      }
+      safeEnd = target.length - 10;
+      if (safeEnd - position2 < 2048) {
+        target = new ByteArrayAllocate(target.length);
+        targetView = target.dataView || (target.dataView = new DataView(target.buffer, 0, target.length));
+        safeEnd = target.length - 10;
+        position2 = 0;
+      } else
+        position2 = position2 + 7 & 2147483640;
+      start2 = position2;
+      if (encodeOptions & RESERVE_START_SPACE)
+        position2 += encodeOptions & 255;
+      referenceMap2 = packr.structuredClone ? new Map : null;
+      if (packr.bundleStrings && typeof value6 !== "string") {
+        bundledStrings2 = [];
+        bundledStrings2.size = Infinity;
+      } else
+        bundledStrings2 = null;
+      structures = packr.structures;
+      if (structures) {
+        if (structures.uninitialized)
+          structures = packr._mergeStructures(packr.getStructures());
+        let sharedLength = structures.sharedLength || 0;
+        if (sharedLength > maxSharedStructures) {
+          throw new Error("Shared structures is larger than maximum shared structures, try increasing maxSharedStructures to " + structures.sharedLength);
+        }
+        if (!structures.transitions) {
+          structures.transitions = Object.create(null);
+          for (let i = 0;i < sharedLength; i++) {
+            let keys4 = structures[i];
+            if (!keys4)
+              continue;
+            let nextTransition, transition = structures.transitions;
+            for (let j = 0, l = keys4.length;j < l; j++) {
+              let key = keys4[j];
+              nextTransition = transition[key];
+              if (!nextTransition) {
+                nextTransition = transition[key] = Object.create(null);
+              }
+              transition = nextTransition;
+            }
+            transition[RECORD_SYMBOL] = i + 64;
+          }
+          this.lastNamedStructuresLength = sharedLength;
+        }
+        if (!isSequential) {
+          structures.nextId = sharedLength + 64;
+        }
+      }
+      if (hasSharedUpdate)
+        hasSharedUpdate = false;
+      let encodingError;
+      try {
+        if (packr._writeStruct && value6 && typeof value6 === "object") {
+          if (value6.constructor === Object)
+            writeStruct(value6);
+          else if (value6.constructor !== Map && !Array.isArray(value6) && !extensionClasses.some((extClass) => value6 instanceof extClass)) {
+            writeStruct(value6.toJSON ? value6.toJSON() : value6);
+          } else
+            pack(value6);
+        } else
+          pack(value6);
+        let lastBundle = bundledStrings2;
+        if (bundledStrings2)
+          writeBundles(start2, pack, 0);
+        if (referenceMap2 && referenceMap2.idsToInsert) {
+          let idsToInsert = referenceMap2.idsToInsert.sort((a, b) => a.offset > b.offset ? 1 : -1);
+          let i = idsToInsert.length;
+          let incrementPosition = -1;
+          while (lastBundle && i > 0) {
+            let insertionPoint = idsToInsert[--i].offset + start2;
+            if (insertionPoint < lastBundle.stringsPosition + start2 && incrementPosition === -1)
+              incrementPosition = 0;
+            if (insertionPoint > lastBundle.position + start2) {
+              if (incrementPosition >= 0)
+                incrementPosition += 6;
+            } else {
+              if (incrementPosition >= 0) {
+                targetView.setUint32(lastBundle.position + start2, targetView.getUint32(lastBundle.position + start2) + incrementPosition);
+                incrementPosition = -1;
+              }
+              lastBundle = lastBundle.previous;
+              i++;
+            }
+          }
+          if (incrementPosition >= 0 && lastBundle) {
+            targetView.setUint32(lastBundle.position + start2, targetView.getUint32(lastBundle.position + start2) + incrementPosition);
+          }
+          position2 += idsToInsert.length * 6;
+          if (position2 > safeEnd)
+            makeRoom(position2);
+          packr.offset = position2;
+          let serialized = insertIds(target.subarray(start2, position2), idsToInsert);
+          referenceMap2 = null;
+          return serialized;
+        }
+        packr.offset = position2;
+        if (encodeOptions & REUSE_BUFFER_MODE) {
+          target.start = start2;
+          target.end = position2;
+          return target;
+        }
+        return target.subarray(start2, position2);
+      } catch (error2) {
+        encodingError = error2;
+        throw error2;
+      } finally {
+        if (structures) {
+          resetStructures();
+          if (hasSharedUpdate && packr.saveStructures) {
+            let sharedLength = structures.sharedLength || 0;
+            let returnBuffer = target.subarray(start2, position2);
+            let newSharedData = (packr._prepareStructures || prepareStructures)(structures, packr);
+            if (!encodingError) {
+              if (packr.saveStructures(newSharedData, newSharedData.isCompatible) === false) {
+                structures.uninitialized = true;
+                return packr.pack(value6, encodeOptions);
+              }
+              packr.lastNamedStructuresLength = sharedLength;
+              if (target.length > 1073741824)
+                target = null;
+              return returnBuffer;
+            }
+          }
+        }
+        if (target.length > 1073741824)
+          target = null;
+        if (encodeOptions & RESET_BUFFER_MODE)
+          position2 = start2;
+      }
+    };
+    const resetStructures = () => {
+      if (serializationsSinceTransitionRebuild < 10)
+        serializationsSinceTransitionRebuild++;
+      let sharedLength = structures.sharedLength || 0;
+      if (structures.length > sharedLength && !isSequential)
+        structures.length = sharedLength;
+      if (transitionsCount > 1e4) {
+        structures.transitions = null;
+        serializationsSinceTransitionRebuild = 0;
+        transitionsCount = 0;
+        if (recordIdsToRemove.length > 0)
+          recordIdsToRemove = [];
+      } else if (recordIdsToRemove.length > 0 && !isSequential) {
+        for (let i = 0, l = recordIdsToRemove.length;i < l; i++) {
+          recordIdsToRemove[i][RECORD_SYMBOL] = 0;
+        }
+        recordIdsToRemove = [];
+      }
+    };
+    const packArray = (value6) => {
+      var length = value6.length;
+      if (length < 16) {
+        target[position2++] = 144 | length;
+      } else if (length < 65536) {
+        target[position2++] = 220;
+        target[position2++] = length >> 8;
+        target[position2++] = length & 255;
+      } else {
+        target[position2++] = 221;
+        targetView.setUint32(position2, length);
+        position2 += 4;
+      }
+      for (let i = 0;i < length; i++) {
+        pack(value6[i]);
+      }
+    };
+    const pack = (value6) => {
+      if (position2 > safeEnd)
+        target = makeRoom(position2);
+      var type2 = typeof value6;
+      var length;
+      if (type2 === "string") {
+        let strLength = value6.length;
+        if (bundledStrings2 && strLength >= 4 && strLength < 4096) {
+          if ((bundledStrings2.size += strLength) > MAX_BUNDLE_SIZE) {
+            let extStart;
+            let maxBytes2 = (bundledStrings2[0] ? bundledStrings2[0].length * 3 + bundledStrings2[1].length : 0) + 10;
+            if (position2 + maxBytes2 > safeEnd)
+              target = makeRoom(position2 + maxBytes2);
+            let lastBundle;
+            if (bundledStrings2.position) {
+              lastBundle = bundledStrings2;
+              target[position2] = 200;
+              position2 += 3;
+              target[position2++] = 98;
+              extStart = position2 - start2;
+              position2 += 4;
+              writeBundles(start2, pack, 0);
+              targetView.setUint16(extStart + start2 - 3, position2 - start2 - extStart);
+            } else {
+              target[position2++] = 214;
+              target[position2++] = 98;
+              extStart = position2 - start2;
+              position2 += 4;
+            }
+            bundledStrings2 = ["", ""];
+            bundledStrings2.previous = lastBundle;
+            bundledStrings2.size = 0;
+            bundledStrings2.position = extStart;
+          }
+          let twoByte = hasNonLatin.test(value6);
+          bundledStrings2[twoByte ? 0 : 1] += value6;
+          target[position2++] = 193;
+          pack(twoByte ? -strLength : strLength);
+          return;
+        }
+        let headerSize;
+        if (strLength < 32) {
+          headerSize = 1;
+        } else if (strLength < 256) {
+          headerSize = 2;
+        } else if (strLength < 65536) {
+          headerSize = 3;
+        } else {
+          headerSize = 5;
+        }
+        let maxBytes = strLength * 3;
+        if (position2 + maxBytes > safeEnd)
+          target = makeRoom(position2 + maxBytes);
+        if (strLength < 64 || !encodeUtf8) {
+          let i, c1, c2, strPosition = position2 + headerSize;
+          for (i = 0;i < strLength; i++) {
+            c1 = value6.charCodeAt(i);
+            if (c1 < 128) {
+              target[strPosition++] = c1;
+            } else if (c1 < 2048) {
+              target[strPosition++] = c1 >> 6 | 192;
+              target[strPosition++] = c1 & 63 | 128;
+            } else if ((c1 & 64512) === 55296 && ((c2 = value6.charCodeAt(i + 1)) & 64512) === 56320) {
+              c1 = 65536 + ((c1 & 1023) << 10) + (c2 & 1023);
+              i++;
+              target[strPosition++] = c1 >> 18 | 240;
+              target[strPosition++] = c1 >> 12 & 63 | 128;
+              target[strPosition++] = c1 >> 6 & 63 | 128;
+              target[strPosition++] = c1 & 63 | 128;
+            } else {
+              target[strPosition++] = c1 >> 12 | 224;
+              target[strPosition++] = c1 >> 6 & 63 | 128;
+              target[strPosition++] = c1 & 63 | 128;
+            }
+          }
+          length = strPosition - position2 - headerSize;
+        } else {
+          length = encodeUtf8(value6, position2 + headerSize);
+        }
+        if (length < 32) {
+          target[position2++] = 160 | length;
+        } else if (length < 256) {
+          if (headerSize < 2) {
+            target.copyWithin(position2 + 2, position2 + 1, position2 + 1 + length);
+          }
+          target[position2++] = 217;
+          target[position2++] = length;
+        } else if (length < 65536) {
+          if (headerSize < 3) {
+            target.copyWithin(position2 + 3, position2 + 2, position2 + 2 + length);
+          }
+          target[position2++] = 218;
+          target[position2++] = length >> 8;
+          target[position2++] = length & 255;
+        } else {
+          if (headerSize < 5) {
+            target.copyWithin(position2 + 5, position2 + 3, position2 + 3 + length);
+          }
+          target[position2++] = 219;
+          targetView.setUint32(position2, length);
+          position2 += 4;
+        }
+        position2 += length;
+      } else if (type2 === "number") {
+        if (value6 >>> 0 === value6) {
+          if (value6 < 32 || value6 < 128 && this.useRecords === false || value6 < 64 && !this._writeStruct) {
+            target[position2++] = value6;
+          } else if (value6 < 256) {
+            target[position2++] = 204;
+            target[position2++] = value6;
+          } else if (value6 < 65536) {
+            target[position2++] = 205;
+            target[position2++] = value6 >> 8;
+            target[position2++] = value6 & 255;
+          } else {
+            target[position2++] = 206;
+            targetView.setUint32(position2, value6);
+            position2 += 4;
+          }
+        } else if (value6 >> 0 === value6) {
+          if (value6 >= -32) {
+            target[position2++] = 256 + value6;
+          } else if (value6 >= -128) {
+            target[position2++] = 208;
+            target[position2++] = value6 + 256;
+          } else if (value6 >= -32768) {
+            target[position2++] = 209;
+            targetView.setInt16(position2, value6);
+            position2 += 2;
+          } else {
+            target[position2++] = 210;
+            targetView.setInt32(position2, value6);
+            position2 += 4;
+          }
+        } else {
+          let useFloat32;
+          if ((useFloat32 = this.useFloat32) > 0 && value6 < 4294967296 && value6 >= -2147483648) {
+            target[position2++] = 202;
+            targetView.setFloat32(position2, value6);
+            let xShifted;
+            if (useFloat32 < 4 || (xShifted = value6 * mult10[(target[position2] & 127) << 1 | target[position2 + 1] >> 7]) >> 0 === xShifted) {
+              position2 += 4;
+              return;
+            } else
+              position2--;
+          }
+          target[position2++] = 203;
+          targetView.setFloat64(position2, value6);
+          position2 += 8;
+        }
+      } else if (type2 === "object" || type2 === "function") {
+        if (!value6)
+          target[position2++] = 192;
+        else {
+          if (referenceMap2) {
+            let referee = referenceMap2.get(value6);
+            if (referee) {
+              if (!referee.id) {
+                let idsToInsert = referenceMap2.idsToInsert || (referenceMap2.idsToInsert = []);
+                referee.id = idsToInsert.push(referee);
+              }
+              target[position2++] = 214;
+              target[position2++] = 112;
+              targetView.setUint32(position2, referee.id);
+              position2 += 4;
+              return;
+            } else
+              referenceMap2.set(value6, { offset: position2 - start2 });
+          }
+          let constructor = value6.constructor;
+          if (constructor === Object) {
+            writeObject(value6);
+          } else if (constructor === Array) {
+            packArray(value6);
+          } else if (constructor === Map) {
+            if (this.mapAsEmptyObject)
+              target[position2++] = 128;
+            else {
+              length = value6.size;
+              if (length < 16) {
+                target[position2++] = 128 | length;
+              } else if (length < 65536) {
+                target[position2++] = 222;
+                target[position2++] = length >> 8;
+                target[position2++] = length & 255;
+              } else {
+                target[position2++] = 223;
+                targetView.setUint32(position2, length);
+                position2 += 4;
+              }
+              for (let [key, entryValue] of value6) {
+                pack(key);
+                pack(entryValue);
+              }
+            }
+          } else {
+            for (let i = 0, l = extensions.length;i < l; i++) {
+              let extensionClass = extensionClasses[i];
+              if (value6 instanceof extensionClass) {
+                let extension = extensions[i];
+                if (extension.write) {
+                  if (extension.type) {
+                    target[position2++] = 212;
+                    target[position2++] = extension.type;
+                    target[position2++] = 0;
+                  }
+                  let writeResult = extension.write.call(this, value6);
+                  if (writeResult === value6) {
+                    if (Array.isArray(value6)) {
+                      packArray(value6);
+                    } else {
+                      writeObject(value6);
+                    }
+                  } else {
+                    pack(writeResult);
+                  }
+                  return;
+                }
+                let currentTarget = target;
+                let currentTargetView = targetView;
+                let currentPosition = position2;
+                target = null;
+                let result5;
+                try {
+                  result5 = extension.pack.call(this, value6, (size9) => {
+                    target = currentTarget;
+                    currentTarget = null;
+                    position2 += size9;
+                    if (position2 > safeEnd)
+                      makeRoom(position2);
+                    return {
+                      target,
+                      targetView,
+                      position: position2 - size9
+                    };
+                  }, pack);
+                } finally {
+                  if (currentTarget) {
+                    target = currentTarget;
+                    targetView = currentTargetView;
+                    position2 = currentPosition;
+                    safeEnd = target.length - 10;
+                  }
+                }
+                if (result5) {
+                  if (result5.length + position2 > safeEnd)
+                    makeRoom(result5.length + position2);
+                  position2 = writeExtensionData(result5, target, position2, extension.type);
+                }
+                return;
+              }
+            }
+            if (Array.isArray(value6)) {
+              packArray(value6);
+            } else {
+              if (value6.toJSON) {
+                const json2 = value6.toJSON();
+                if (json2 !== value6)
+                  return pack(json2);
+              }
+              if (type2 === "function")
+                return pack(this.writeFunction && this.writeFunction(value6));
+              writeObject(value6);
+            }
+          }
+        }
+      } else if (type2 === "boolean") {
+        target[position2++] = value6 ? 195 : 194;
+      } else if (type2 === "bigint") {
+        if (value6 < 9223372036854776000 && value6 >= -9223372036854776000) {
+          target[position2++] = 211;
+          targetView.setBigInt64(position2, value6);
+        } else if (value6 < 18446744073709552000 && value6 > 0) {
+          target[position2++] = 207;
+          targetView.setBigUint64(position2, value6);
+        } else {
+          if (this.largeBigIntToFloat) {
+            target[position2++] = 203;
+            targetView.setFloat64(position2, Number(value6));
+          } else if (this.largeBigIntToString) {
+            return pack(value6.toString());
+          } else if (this.useBigIntExtension || this.moreTypes) {
+            let empty18 = value6 < 0 ? BigInt(-1) : BigInt(0);
+            let array3;
+            if (value6 >> BigInt(65536) === empty18) {
+              let mask2 = BigInt(18446744073709552000) - BigInt(1);
+              let chunks2 = [];
+              while (true) {
+                chunks2.push(value6 & mask2);
+                if (value6 >> BigInt(63) === empty18)
+                  break;
+                value6 >>= BigInt(64);
+              }
+              array3 = new Uint8Array(new BigUint64Array(chunks2).buffer);
+              array3.reverse();
+            } else {
+              let invert = value6 < 0;
+              let string4 = (invert ? ~value6 : value6).toString(16);
+              if (string4.length % 2) {
+                string4 = "0" + string4;
+              } else if (parseInt(string4.charAt(0), 16) >= 8) {
+                string4 = "00" + string4;
+              }
+              if (hasNodeBuffer) {
+                array3 = Buffer.from(string4, "hex");
+              } else {
+                array3 = new Uint8Array(string4.length / 2);
+                for (let i = 0;i < array3.length; i++) {
+                  array3[i] = parseInt(string4.slice(i * 2, i * 2 + 2), 16);
+                }
+              }
+              if (invert) {
+                for (let i = 0;i < array3.length; i++)
+                  array3[i] = ~array3[i];
+              }
+            }
+            if (array3.length + position2 > safeEnd)
+              makeRoom(array3.length + position2);
+            position2 = writeExtensionData(array3, target, position2, 66);
+            return;
+          } else {
+            throw new RangeError(value6 + " was too large to fit in MessagePack 64-bit integer format, use" + " useBigIntExtension, or set largeBigIntToFloat to convert to float-64, or set" + " largeBigIntToString to convert to string");
+          }
+        }
+        position2 += 8;
+      } else if (type2 === "undefined") {
+        if (this.encodeUndefinedAsNil)
+          target[position2++] = 192;
+        else {
+          target[position2++] = 212;
+          target[position2++] = 0;
+          target[position2++] = 0;
+        }
+      } else {
+        throw new Error("Unknown type: " + type2);
+      }
+    };
+    const writePlainObject = this.variableMapSize || this.coercibleKeyAsNumber || this.skipValues ? (object) => {
+      let keys4;
+      if (this.skipValues) {
+        keys4 = [];
+        for (let key2 in object) {
+          if ((typeof object.hasOwnProperty !== "function" || object.hasOwnProperty(key2)) && !this.skipValues.includes(object[key2]))
+            keys4.push(key2);
+        }
+      } else {
+        keys4 = Object.keys(object);
+      }
+      let length = keys4.length;
+      if (length < 16) {
+        target[position2++] = 128 | length;
+      } else if (length < 65536) {
+        target[position2++] = 222;
+        target[position2++] = length >> 8;
+        target[position2++] = length & 255;
+      } else {
+        target[position2++] = 223;
+        targetView.setUint32(position2, length);
+        position2 += 4;
+      }
+      let key;
+      if (this.coercibleKeyAsNumber) {
+        for (let i = 0;i < length; i++) {
+          key = keys4[i];
+          let num = Number(key);
+          pack(isNaN(num) ? key : num);
+          pack(object[key]);
+        }
+      } else {
+        for (let i = 0;i < length; i++) {
+          pack(key = keys4[i]);
+          pack(object[key]);
+        }
+      }
+    } : (object) => {
+      target[position2++] = 222;
+      let objectOffset = position2 - start2;
+      position2 += 2;
+      let size9 = 0;
+      for (let key in object) {
+        if (typeof object.hasOwnProperty !== "function" || object.hasOwnProperty(key)) {
+          pack(key);
+          pack(object[key]);
+          size9++;
+        }
+      }
+      if (size9 > 65535) {
+        throw new Error("Object is too large to serialize with fast 16-bit map size," + ' use the "variableMapSize" option to serialize this object');
+      }
+      target[objectOffset++ + start2] = size9 >> 8;
+      target[objectOffset + start2] = size9 & 255;
+    };
+    const writeRecord = this.useRecords === false ? writePlainObject : options3.progressiveRecords && !useTwoByteRecords ? (object) => {
+      let nextTransition, transition = structures.transitions || (structures.transitions = Object.create(null));
+      let objectOffset = position2++ - start2;
+      let wroteKeys;
+      for (let key in object) {
+        if (typeof object.hasOwnProperty !== "function" || object.hasOwnProperty(key)) {
+          nextTransition = transition[key];
+          if (nextTransition)
+            transition = nextTransition;
+          else {
+            let keys4 = Object.keys(object);
+            let lastTransition = transition;
+            transition = structures.transitions;
+            let newTransitions = 0;
+            for (let i = 0, l = keys4.length;i < l; i++) {
+              let key2 = keys4[i];
+              nextTransition = transition[key2];
+              if (!nextTransition) {
+                nextTransition = transition[key2] = Object.create(null);
+                newTransitions++;
+              }
+              transition = nextTransition;
+            }
+            if (objectOffset + start2 + 1 == position2) {
+              position2--;
+              newRecord(transition, keys4, newTransitions);
+            } else
+              insertNewRecord(transition, keys4, objectOffset, newTransitions);
+            wroteKeys = true;
+            transition = lastTransition[key];
+          }
+          pack(object[key]);
+        }
+      }
+      if (!wroteKeys) {
+        let recordId = transition[RECORD_SYMBOL];
+        if (recordId)
+          target[objectOffset + start2] = recordId;
+        else
+          insertNewRecord(transition, Object.keys(object), objectOffset, 0);
+      }
+    } : (object) => {
+      let nextTransition, transition = structures.transitions || (structures.transitions = Object.create(null));
+      let newTransitions = 0;
+      for (let key in object)
+        if (typeof object.hasOwnProperty !== "function" || object.hasOwnProperty(key)) {
+          nextTransition = transition[key];
+          if (!nextTransition) {
+            nextTransition = transition[key] = Object.create(null);
+            newTransitions++;
+          }
+          transition = nextTransition;
+        }
+      let recordId = transition[RECORD_SYMBOL];
+      if (recordId) {
+        if (recordId >= 96 && useTwoByteRecords) {
+          target[position2++] = ((recordId -= 96) & 31) + 96;
+          target[position2++] = recordId >> 5;
+        } else
+          target[position2++] = recordId;
+      } else {
+        newRecord(transition, transition.__keys__ || Object.keys(object), newTransitions);
+      }
+      for (let key in object)
+        if (typeof object.hasOwnProperty !== "function" || object.hasOwnProperty(key)) {
+          pack(object[key]);
+        }
+    };
+    const checkUseRecords = typeof this.useRecords == "function" && this.useRecords;
+    const writeObject = checkUseRecords ? (object) => {
+      checkUseRecords(object) ? writeRecord(object) : writePlainObject(object);
+    } : writeRecord;
+    const writeStruct = (object) => {
+      let newPosition = packr._writeStruct(object, target, start2, position2, structures, makeRoom, (value6, newPosition2, notifySharedUpdate) => {
+        if (notifySharedUpdate)
+          return hasSharedUpdate = true;
+        position2 = newPosition2;
+        let startTarget = target;
+        pack(value6);
+        resetStructures();
+        if (startTarget !== target) {
+          return { position: position2, targetView, target };
+        }
+        return position2;
+      });
+      if (newPosition === 0)
+        return writeObject(object);
+      position2 = newPosition;
+    };
+    const makeRoom = (end3) => {
+      let newSize;
+      if (end3 > 16777216) {
+        if (end3 - start2 > MAX_BUFFER_SIZE)
+          throw new Error("Packed buffer would be larger than maximum buffer size");
+        newSize = Math.min(MAX_BUFFER_SIZE, Math.round(Math.max((end3 - start2) * (end3 > 67108864 ? 1.25 : 2), 4194304) / 4096) * 4096);
+      } else
+        newSize = (Math.max(end3 - start2 << 2, target.length - 1) >> 12) + 1 << 12;
+      let newBuffer = new ByteArrayAllocate(newSize);
+      targetView = newBuffer.dataView || (newBuffer.dataView = new DataView(newBuffer.buffer, 0, newSize));
+      end3 = Math.min(end3, target.length);
+      if (target.copy)
+        target.copy(newBuffer, 0, start2, end3);
+      else
+        newBuffer.set(target.slice(start2, end3));
+      position2 -= start2;
+      start2 = 0;
+      safeEnd = newBuffer.length - 10;
+      return target = newBuffer;
+    };
+    const newRecord = (transition, keys4, newTransitions) => {
+      let recordId = structures.nextId;
+      if (!recordId)
+        recordId = 64;
+      if (recordId < sharedLimitId && this.shouldShareStructure && !this.shouldShareStructure(keys4)) {
+        recordId = structures.nextOwnId;
+        if (!(recordId < maxStructureId))
+          recordId = sharedLimitId;
+        structures.nextOwnId = recordId + 1;
+      } else {
+        if (recordId >= maxStructureId)
+          recordId = sharedLimitId;
+        structures.nextId = recordId + 1;
+      }
+      let highByte = keys4.highByte = recordId >= 96 && useTwoByteRecords ? recordId - 96 >> 5 : -1;
+      transition[RECORD_SYMBOL] = recordId;
+      transition.__keys__ = keys4;
+      structures[recordId - 64] = keys4;
+      if (recordId < sharedLimitId) {
+        keys4.isShared = true;
+        structures.sharedLength = recordId - 63;
+        hasSharedUpdate = true;
+        if (highByte >= 0) {
+          target[position2++] = (recordId & 31) + 96;
+          target[position2++] = highByte;
+        } else {
+          target[position2++] = recordId;
+        }
+      } else {
+        if (highByte >= 0) {
+          target[position2++] = 213;
+          target[position2++] = 114;
+          target[position2++] = (recordId & 31) + 96;
+          target[position2++] = highByte;
+        } else {
+          target[position2++] = 212;
+          target[position2++] = 114;
+          target[position2++] = recordId;
+        }
+        if (newTransitions)
+          transitionsCount += serializationsSinceTransitionRebuild * newTransitions;
+        if (recordIdsToRemove.length >= maxOwnStructures)
+          recordIdsToRemove.shift()[RECORD_SYMBOL] = 0;
+        recordIdsToRemove.push(transition);
+        pack(keys4);
+      }
+    };
+    const insertNewRecord = (transition, keys4, insertionOffset, newTransitions) => {
+      let mainTarget = target;
+      let mainPosition = position2;
+      let mainSafeEnd = safeEnd;
+      let mainStart = start2;
+      target = keysTarget;
+      position2 = 0;
+      start2 = 0;
+      if (!target)
+        keysTarget = target = new ByteArrayAllocate(8192);
+      safeEnd = target.length - 10;
+      newRecord(transition, keys4, newTransitions);
+      keysTarget = target;
+      let keysPosition = position2;
+      target = mainTarget;
+      position2 = mainPosition;
+      safeEnd = mainSafeEnd;
+      start2 = mainStart;
+      if (keysPosition > 1) {
+        let newEnd = position2 + keysPosition - 1;
+        if (newEnd > safeEnd)
+          makeRoom(newEnd);
+        let insertionPosition = insertionOffset + start2;
+        target.copyWithin(insertionPosition + keysPosition, insertionPosition + 1, position2);
+        target.set(keysTarget.slice(0, keysPosition), insertionPosition);
+        position2 = newEnd;
+      } else {
+        target[insertionOffset + start2] = keysTarget[0];
+      }
+    };
+  }
+  useBuffer(buffer3) {
+    target = buffer3;
+    target.dataView || (target.dataView = new DataView(target.buffer, target.byteOffset, target.byteLength));
+    targetView = target.dataView;
+    position2 = 0;
+  }
+  set position(value6) {
+    position2 = value6;
+  }
+  get position() {
+    return position2;
+  }
+  clearSharedData() {
+    if (this.structures)
+      this.structures = [];
+    if (this.typedStructs)
+      this.typedStructs = [];
+  }
+}
+extensionClasses = [Date, Set, Error, RegExp, ArrayBuffer, Object.getPrototypeOf(Uint8Array.prototype).constructor, DataView, C1Type];
+extensions = [{
+  pack(date2, allocateForWrite, pack) {
+    let seconds2 = date2.getTime() / 1000;
+    if ((this.useTimestamp32 || date2.getMilliseconds() === 0) && seconds2 >= 0 && seconds2 < 4294967296) {
+      let { target: target2, targetView: targetView2, position: position3 } = allocateForWrite(6);
+      target2[position3++] = 214;
+      target2[position3++] = 255;
+      targetView2.setUint32(position3, seconds2);
+    } else if (seconds2 > 0 && seconds2 < 4294967296) {
+      let { target: target2, targetView: targetView2, position: position3 } = allocateForWrite(10);
+      target2[position3++] = 215;
+      target2[position3++] = 255;
+      targetView2.setUint32(position3, date2.getMilliseconds() * 4000000 + (seconds2 / 1000 / 4294967296 >> 0));
+      targetView2.setUint32(position3 + 4, seconds2);
+    } else if (isNaN(seconds2)) {
+      if (this.onInvalidDate) {
+        allocateForWrite(0);
+        return pack(this.onInvalidDate());
+      }
+      let { target: target2, targetView: targetView2, position: position3 } = allocateForWrite(3);
+      target2[position3++] = 212;
+      target2[position3++] = 255;
+      target2[position3++] = 255;
+    } else {
+      let { target: target2, targetView: targetView2, position: position3 } = allocateForWrite(15);
+      target2[position3++] = 199;
+      target2[position3++] = 12;
+      target2[position3++] = 255;
+      targetView2.setUint32(position3, date2.getMilliseconds() * 1e6);
+      targetView2.setBigInt64(position3 + 4, BigInt(Math.floor(seconds2)));
+    }
+  }
+}, {
+  pack(set8, allocateForWrite, pack) {
+    if (this.setAsEmptyObject) {
+      allocateForWrite(0);
+      return pack({});
+    }
+    let array3 = Array.from(set8);
+    let { target: target2, position: position3 } = allocateForWrite(this.moreTypes ? 3 : 0);
+    if (this.moreTypes) {
+      target2[position3++] = 212;
+      target2[position3++] = 115;
+      target2[position3++] = 0;
+    }
+    pack(array3);
+  }
+}, {
+  pack(error2, allocateForWrite, pack) {
+    let { target: target2, position: position3 } = allocateForWrite(this.moreTypes ? 3 : 0);
+    if (this.moreTypes) {
+      target2[position3++] = 212;
+      target2[position3++] = 101;
+      target2[position3++] = 0;
+    }
+    pack([error2.name, error2.message, error2.cause]);
+  }
+}, {
+  pack(regex, allocateForWrite, pack) {
+    let { target: target2, position: position3 } = allocateForWrite(this.moreTypes ? 3 : 0);
+    if (this.moreTypes) {
+      target2[position3++] = 212;
+      target2[position3++] = 120;
+      target2[position3++] = 0;
+    }
+    pack([regex.source, regex.flags]);
+  }
+}, {
+  pack(arrayBuffer, allocateForWrite) {
+    if (this.moreTypes)
+      writeExtBuffer(arrayBuffer, 16, allocateForWrite);
+    else
+      writeBuffer(hasNodeBuffer ? Buffer.from(arrayBuffer) : new Uint8Array(arrayBuffer), allocateForWrite);
+  }
+}, {
+  pack(typedArray, allocateForWrite) {
+    let constructor = typedArray.constructor;
+    if (constructor !== ByteArray && this.moreTypes)
+      writeExtBuffer(typedArray, typedArrays.indexOf(constructor.name), allocateForWrite);
+    else
+      writeBuffer(typedArray, allocateForWrite);
+  }
+}, {
+  pack(arrayBuffer, allocateForWrite) {
+    if (this.moreTypes)
+      writeExtBuffer(arrayBuffer, 17, allocateForWrite);
+    else
+      writeBuffer(hasNodeBuffer ? Buffer.from(arrayBuffer) : new Uint8Array(arrayBuffer), allocateForWrite);
+  }
+}, {
+  pack(c1, allocateForWrite) {
+    let { target: target2, position: position3 } = allocateForWrite(1);
+    target2[position3] = 193;
+  }
+}];
+function writeExtBuffer(typedArray, type2, allocateForWrite, encode2) {
+  let length = typedArray.byteLength;
+  if (length + 1 < 256) {
+    var { target: target2, position: position3 } = allocateForWrite(4 + length);
+    target2[position3++] = 199;
+    target2[position3++] = length + 1;
+  } else if (length + 1 < 65536) {
+    var { target: target2, position: position3 } = allocateForWrite(5 + length);
+    target2[position3++] = 200;
+    target2[position3++] = length + 1 >> 8;
+    target2[position3++] = length + 1 & 255;
+  } else {
+    var { target: target2, position: position3, targetView: targetView2 } = allocateForWrite(7 + length);
+    target2[position3++] = 201;
+    targetView2.setUint32(position3, length + 1);
+    position3 += 4;
+  }
+  target2[position3++] = 116;
+  target2[position3++] = type2;
+  if (!typedArray.buffer)
+    typedArray = new Uint8Array(typedArray);
+  target2.set(new Uint8Array(typedArray.buffer, typedArray.byteOffset, typedArray.byteLength), position3);
+}
+function writeBuffer(buffer3, allocateForWrite) {
+  let length = buffer3.byteLength;
+  var target2, position3;
+  if (length < 256) {
+    var { target: target2, position: position3 } = allocateForWrite(length + 2);
+    target2[position3++] = 196;
+    target2[position3++] = length;
+  } else if (length < 65536) {
+    var { target: target2, position: position3 } = allocateForWrite(length + 3);
+    target2[position3++] = 197;
+    target2[position3++] = length >> 8;
+    target2[position3++] = length & 255;
+  } else {
+    var { target: target2, position: position3, targetView: targetView2 } = allocateForWrite(length + 5);
+    target2[position3++] = 198;
+    targetView2.setUint32(position3, length);
+    position3 += 4;
+  }
+  target2.set(buffer3, position3);
+}
+function writeExtensionData(result5, target2, position3, type2) {
+  let length = result5.length;
+  switch (length) {
+    case 1:
+      target2[position3++] = 212;
+      break;
+    case 2:
+      target2[position3++] = 213;
+      break;
+    case 4:
+      target2[position3++] = 214;
+      break;
+    case 8:
+      target2[position3++] = 215;
+      break;
+    case 16:
+      target2[position3++] = 216;
+      break;
+    default:
+      if (length < 256) {
+        target2[position3++] = 199;
+        target2[position3++] = length;
+      } else if (length < 65536) {
+        target2[position3++] = 200;
+        target2[position3++] = length >> 8;
+        target2[position3++] = length & 255;
+      } else {
+        target2[position3++] = 201;
+        target2[position3++] = length >> 24;
+        target2[position3++] = length >> 16 & 255;
+        target2[position3++] = length >> 8 & 255;
+        target2[position3++] = length & 255;
+      }
+  }
+  target2[position3++] = type2;
+  target2.set(result5, position3);
+  position3 += length;
+  return position3;
+}
+function insertIds(serialized, idsToInsert) {
+  let nextId;
+  let distanceToMove = idsToInsert.length * 6;
+  let lastEnd = serialized.length - distanceToMove;
+  while (nextId = idsToInsert.pop()) {
+    let offset = nextId.offset;
+    let id2 = nextId.id;
+    serialized.copyWithin(offset + distanceToMove, offset, lastEnd);
+    distanceToMove -= 6;
+    let position3 = offset + distanceToMove;
+    serialized[position3++] = 214;
+    serialized[position3++] = 105;
+    serialized[position3++] = id2 >> 24;
+    serialized[position3++] = id2 >> 16 & 255;
+    serialized[position3++] = id2 >> 8 & 255;
+    serialized[position3++] = id2 & 255;
+    lastEnd = offset;
+  }
+  return serialized;
+}
+function writeBundles(start2, pack, incrementPosition) {
+  if (bundledStrings2.length > 0) {
+    targetView.setUint32(bundledStrings2.position + start2, position2 + incrementPosition - bundledStrings2.position - start2);
+    bundledStrings2.stringsPosition = position2 - start2;
+    let writeStrings = bundledStrings2;
+    bundledStrings2 = null;
+    pack(writeStrings[0]);
+    pack(writeStrings[1]);
+  }
+}
+function prepareStructures(structures, packr) {
+  structures.isCompatible = (existingStructures) => {
+    let compatible = !existingStructures || (packr.lastNamedStructuresLength || 0) === existingStructures.length;
+    if (!compatible)
+      packr._mergeStructures(existingStructures);
+    return compatible;
+  };
+  return structures;
+}
+Packr.SUPPORTS_STRUCT_HOOKS = true;
+var defaultPackr = new Packr({ useRecords: false });
+var pack = defaultPackr.pack;
+var encode2 = defaultPackr.pack;
+var REUSE_BUFFER_MODE = 512;
+var RESET_BUFFER_MODE = 1024;
+var RESERVE_START_SPACE = 2048;
+// node_modules/.bun/msgpackr@2.0.5/node_modules/msgpackr/node-index.js
+var nativeAccelerationDisabled = process.env.MSGPACKR_NATIVE_ACCELERATION_DISABLED !== undefined && process.env.MSGPACKR_NATIVE_ACCELERATION_DISABLED.toLowerCase() === "true";
+if (!nativeAccelerationDisabled) {
+  let extractor;
+  try {
+    if (true)
+      extractor = require_msgpackr_extract();
+    if (extractor)
+      setExtractor(extractor.extractStrings);
+  } catch (error2) {}
+}
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/RpcSerialization.js
+class RpcSerialization extends (/* @__PURE__ */ Service()("effect/rpc/RpcSerialization")) {
+}
+
+class MaxBufferSizeExceeded extends (/* @__PURE__ */ TaggedError2("MaxBufferSizeExceeded")) {
+  get message() {
+    return `RPC serialization buffer exceeded the maximum size of ${this.maxBufferSize}`;
+  }
+}
+var defaultMaxBufferSize = 16 * 1024 * 1024;
+var isBufferSizeExceeded = (bufferSize, maxBufferSize) => maxBufferSize !== "unbounded" && bufferSize > maxBufferSize;
+var json2 = /* @__PURE__ */ RpcSerialization.of({
+  contentType: "application/json",
+  includesFraming: false,
+  makeUnsafe: () => {
+    const decoder4 = new TextDecoder;
+    return {
+      decode: (bytes2) => {
+        const decoded = JSON.parse(typeof bytes2 === "string" ? bytes2 : decoder4.decode(bytes2));
+        return Array.isArray(decoded) ? decoded : [decoded];
+      },
+      encode: (response) => JSON.stringify(response)
+    };
+  }
+});
+var makeNdjson = (options3) => {
+  const maxBufferSize = options3?.maxBufferSize ?? defaultMaxBufferSize;
+  return RpcSerialization.of({
+    contentType: "application/ndjson",
+    includesFraming: true,
+    makeUnsafe: () => {
+      const decoder4 = new TextDecoder;
+      let buffer3 = "";
+      const failMaxBufferSize = (maxBufferSize2) => {
+        buffer3 = "";
+        throw new MaxBufferSizeExceeded({
+          maxBufferSize: maxBufferSize2
+        });
+      };
+      return {
+        decode: (bytes2) => {
+          buffer3 += typeof bytes2 === "string" ? bytes2 : decoder4.decode(bytes2, {
+            stream: true
+          });
+          let position3 = 0;
+          let nlIndex = buffer3.indexOf(`
+`, position3);
+          const items = [];
+          while (nlIndex !== -1) {
+            if (isBufferSizeExceeded(nlIndex - position3, maxBufferSize)) {
+              failMaxBufferSize(maxBufferSize);
+            }
+            const item = JSON.parse(buffer3.slice(position3, nlIndex));
+            items.push(item);
+            position3 = nlIndex + 1;
+            nlIndex = buffer3.indexOf(`
+`, position3);
+          }
+          buffer3 = buffer3.slice(position3);
+          if (isBufferSizeExceeded(buffer3.length, maxBufferSize)) {
+            failMaxBufferSize(maxBufferSize);
+          }
+          return items;
+        },
+        encode: (response) => {
+          if (Array.isArray(response)) {
+            if (response.length === 0)
+              return;
+            let data = "";
+            for (let i = 0;i < response.length; i++) {
+              data += JSON.stringify(response[i]) + `
+`;
+            }
+            return data;
+          }
+          return JSON.stringify(response) + `
+`;
+        }
+      };
+    }
+  });
+};
+var ndjson = /* @__PURE__ */ makeNdjson();
+var jsonRpc = (options3) => RpcSerialization.of({
+  contentType: options3?.contentType ?? "application/json",
+  includesFraming: false,
+  makeUnsafe: () => {
+    const decoder4 = new TextDecoder;
+    const batches = new Map;
+    return {
+      decode: (bytes2) => {
+        const decoded = JSON.parse(typeof bytes2 === "string" ? bytes2 : decoder4.decode(bytes2));
+        return decodeJsonRpcRaw(decoded, batches);
+      },
+      encode: (response) => {
+        const encoded = encodeJsonRpcResponse(response, batches);
+        return encoded && JSON.stringify(encoded);
+      }
+    };
+  }
+});
+var ndJsonRpc = (options3) => RpcSerialization.of({
+  contentType: options3?.contentType ?? "application/json-rpc",
+  includesFraming: true,
+  makeUnsafe: () => {
+    const parser = makeNdjson({
+      maxBufferSize: options3?.maxBufferSize
+    }).makeUnsafe();
+    const batches = new Map;
+    return {
+      decode: (bytes2) => {
+        const frames = parser.decode(bytes2);
+        if (frames.length === 0)
+          return [];
+        const messages = [];
+        for (let i = 0;i < frames.length; i++) {
+          const frame = frames[i];
+          messages.push(...decodeJsonRpcRaw(frame, batches));
+        }
+        return messages;
+      },
+      encode: (response) => {
+        const encoded = encodeJsonRpcResponse(response, batches);
+        return encoded && parser.encode(encoded);
+      }
+    };
+  }
+});
+function decodeJsonRpcRaw(decoded, batches) {
+  if (Array.isArray(decoded)) {
+    const batch = {
+      size: 0,
+      responses: new Map
+    };
+    const messages = [];
+    for (let i = 0;i < decoded.length; i++) {
+      const message = decodeJsonRpcMessage(decoded[i]);
+      messages.push(message);
+      if (message._tag === "Request" && !message.isNotification) {
+        batch.size++;
+        batches.set(message.id, batch);
+      }
+    }
+    return messages;
+  }
+  return [decodeJsonRpcMessage(decoded)];
+}
+function decodeJsonRpcMessage(decoded) {
+  if (Object.hasOwn(decoded, "method")) {
+    const request3 = decoded;
+    if (isNullish(request3.id) && request3.method.startsWith("@effect/rpc/")) {
+      const tag4 = request3.method.slice("@effect/rpc/".length);
+      const requestId = request3.params?.requestId;
+      return requestId ? {
+        _tag: tag4,
+        requestId
+      } : {
+        _tag: tag4
+      };
+    }
+    return {
+      _tag: "Request",
+      id: request3.id ?? "",
+      tag: request3.method,
+      payload: request3.params ?? null,
+      headers: request3.headers ?? [],
+      ...hasProperty(request3, "id") ? {} : {
+        isNotification: true
+      },
+      ...request3.spanId ? {
+        traceId: request3.traceId,
+        spanId: request3.spanId,
+        sampled: request3.sampled
+      } : {}
+    };
+  }
+  const response = decoded;
+  const hasError = Object.hasOwn(response, "error");
+  if (hasError && response.error && response.error._tag === "Defect") {
+    return {
+      _tag: "Defect",
+      defect: response.error.data
+    };
+  } else if (Object.hasOwn(response, "chunk") && response.chunk === true) {
+    return {
+      _tag: "Chunk",
+      requestId: response.id ?? "",
+      values: response.result
+    };
+  }
+  return {
+    _tag: "Exit",
+    requestId: response.id ?? "",
+    exit: hasError && response.error != null ? {
+      _tag: "Failure",
+      cause: response.error._tag === "Cause" ? response.error.data : [{
+        _tag: "Die",
+        defect: response.error
+      }]
+    } : {
+      _tag: "Success",
+      value: response.result
+    }
+  };
+}
+function encodeJsonRpcRaw(response, batches) {
+  if (!("requestId" in response)) {
+    return encodeJsonRpcMessage(response);
+  }
+  const batch = batches.get(response.requestId);
+  if (batch) {
+    batches.delete(response.requestId);
+    batch.responses.set(response.requestId, response);
+    if (batch.size === batch.responses.size) {
+      return Array.from(batch.responses.values(), encodeJsonRpcMessage);
+    }
+    return;
+  }
+  return encodeJsonRpcMessage(response);
+}
+function encodeJsonRpcResponse(response, batches) {
+  if (Array.isArray(response) === false) {
+    return encodeJsonRpcRaw(response, batches);
+  }
+  if (response.length === 0) {
+    return;
+  }
+  const encoded = [];
+  for (let i = 0;i < response.length; i++) {
+    const current = encodeJsonRpcRaw(response[i], batches);
+    if (current !== undefined) {
+      encoded.push(current);
+    }
+  }
+  if (encoded.length === 0) {
+    return;
+  }
+  if (encoded.length === 1) {
+    return encoded[0];
+  }
+  const messages = [];
+  for (let i = 0;i < encoded.length; i++) {
+    const current = encoded[i];
+    if (Array.isArray(current)) {
+      messages.push(...current);
+    } else {
+      messages.push(current);
+    }
+  }
+  return messages;
+}
+function encodeJsonRpcMessage(response) {
+  switch (response._tag) {
+    case "Request":
+      return {
+        jsonrpc: "2.0",
+        method: response.tag,
+        params: response.payload,
+        ...response.isNotification ? {} : {
+          id: response.id
+        },
+        ...response.headers?.length > 0 ? {
+          headers: response.headers
+        } : {},
+        traceId: response.traceId,
+        spanId: response.spanId,
+        sampled: response.sampled
+      };
+    case "Ping":
+    case "Pong":
+    case "Interrupt":
+    case "Ack":
+    case "Eof":
+      return {
+        jsonrpc: "2.0",
+        method: `@effect/rpc/${response._tag}`,
+        params: "requestId" in response ? {
+          requestId: response.requestId
+        } : undefined
+      };
+    case "Chunk":
+      return {
+        jsonrpc: "2.0",
+        chunk: true,
+        id: response.requestId,
+        result: response.values
+      };
+    case "Exit": {
+      if (response.exit._tag === "Success") {
+        return {
+          jsonrpc: "2.0",
+          id: response.requestId ?? undefined,
+          result: response.exit.value
+        };
+      }
+      const failure = response.exit.cause.find((failure2) => failure2._tag === "Fail");
+      const error2 = failure?._tag === "Fail" ? failure.error : undefined;
+      return {
+        jsonrpc: "2.0",
+        id: response.requestId ?? undefined,
+        error: response.exit._tag === "Failure" ? {
+          _tag: "Cause",
+          code: error2 && hasProperty(error2, "code") ? Number(error2.code) : 0,
+          message: error2 && hasProperty(error2, "message") ? error2.message : JSON.stringify(response.exit.cause),
+          data: response.exit.cause
+        } : undefined
+      };
+    }
+    case "Defect":
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcInternalError,
+        error: {
+          _tag: "Defect",
+          code: 1,
+          message: "A defect occurred",
+          data: response.defect
+        }
+      };
+    case "ClientProtocolError":
+      return {};
+  }
+}
+var jsonRpcInternalError = -32603;
+var makeMsgPack = (options3) => {
+  const {
+    maxBufferSize = defaultMaxBufferSize,
+    ...msgpackOptions
+  } = options3 ?? {};
+  return RpcSerialization.of({
+    contentType: "application/msgpack",
+    includesFraming: true,
+    makeUnsafe: () => {
+      const unpackr = new Unpackr(msgpackOptions);
+      const packr = new Packr(msgpackOptions);
+      const encoder4 = new TextEncoder;
+      let incomplete = undefined;
+      const failMaxBufferSize = (maxBufferSize2) => {
+        incomplete = undefined;
+        throw new MaxBufferSizeExceeded({
+          maxBufferSize: maxBufferSize2
+        });
+      };
+      return {
+        decode(bytes2) {
+          let buf = typeof bytes2 === "string" ? encoder4.encode(bytes2) : bytes2;
+          if (incomplete !== undefined) {
+            if (isBufferSizeExceeded(incomplete.length + buf.length, maxBufferSize)) {
+              failMaxBufferSize(maxBufferSize);
+            }
+            const prev = buf;
+            bytes2 = new Uint8Array(incomplete.length + buf.length);
+            bytes2.set(incomplete);
+            bytes2.set(prev, incomplete.length);
+            buf = bytes2;
+            incomplete = undefined;
+          }
+          try {
+            return unpackr.unpackMultiple(buf);
+          } catch (error_) {
+            const error2 = error_;
+            if (error2.incomplete) {
+              incomplete = buf.subarray(error2.lastPosition);
+              if (isBufferSizeExceeded(incomplete.length, maxBufferSize)) {
+                failMaxBufferSize(maxBufferSize);
+              }
+              return error2.values ?? [];
+            }
+            throw error_;
+          }
+        },
+        encode: (response) => packr.pack(response)
+      };
+    }
+  });
+};
+var msgPack = /* @__PURE__ */ makeMsgPack({
+  useRecords: true
+});
+var layerJson = /* @__PURE__ */ succeed6(RpcSerialization)(json2);
+var layerNdjson = /* @__PURE__ */ succeed6(RpcSerialization)(ndjson);
+var layerNdjsonWith = (options3) => succeed6(RpcSerialization)(makeNdjson(options3));
+var layerJsonRpc = (options3) => succeed6(RpcSerialization)(jsonRpc(options3));
+var layerNdJsonRpc = (options3) => succeed6(RpcSerialization)(ndJsonRpc(options3));
+var layerMsgPack = /* @__PURE__ */ succeed6(RpcSerialization)(msgPack);
+var layerMsgPackWith = (options3) => succeed6(RpcSerialization)(makeMsgPack(options3));
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/RpcWorker.js
+class InitialMessage extends (/* @__PURE__ */ Service()("effect/rpc/RpcWorker/InitialMessage")) {
+}
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/Utils.js
+var withRunClient = (f) => suspend3(() => {
+  const clientIds = new Set;
+  const clientBuffers = new Map;
+  const clientWrites = new Map;
+  let write2 = (clientId, data) => contextWith2((context3) => {
+    let buffer3 = clientBuffers.get(clientId);
+    if (!buffer3) {
+      buffer3 = [];
+      clientBuffers.set(clientId, buffer3);
+    }
+    buffer3.push([data, context3]);
+    return void_5;
+  });
+  return map8(f((clientId, data) => {
+    const clientWrite = clientWrites.get(clientId);
+    if (clientWrite) {
+      return clientWrite(data);
+    }
+    return write2(clientId, data);
+  }, clientIds), (a) => ({
+    ...a,
+    run(clientId, f2) {
+      return gen4(function* () {
+        clientIds.add(clientId);
+        clientWrites.set(clientId, f2);
+        const buffer3 = clientBuffers.get(clientId);
+        if (buffer3) {
+          clientBuffers.delete(clientId);
+          for (const [args2, context3] of buffer3) {
+            yield* provideContext2(suspend3(() => f2(args2)), context3);
+          }
+        }
+        return yield* onExit2(never2, () => {
+          clientIds.delete(clientId);
+          clientWrites.delete(clientId);
+          return void_5;
+        });
+      });
+    }
+  }));
+});
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/rpc/RpcClient.js
+var isRpcClientError = (u) => isTagged(u, "RpcClientError");
+var requestIdCounter = 0;
+var makeNoSerialization = /* @__PURE__ */ fnUntraced2(function* (group2, options3) {
+  const spanPrefix = options3?.spanPrefix ?? "RpcClient";
+  const supportsAck = options3?.supportsAck ?? true;
+  const disableTracing = options3?.disableTracing ?? false;
+  const generateRequestId = options3?.generateRequestId ?? (() => requestIdCounter++);
+  const services2 = yield* context2();
+  const scope3 = get(services2, Scope);
+  const entries3 = new Map;
+  let isShutdown2 = false;
+  yield* addFinalizer2(scope3, withFiber2((parent) => {
+    isShutdown2 = true;
+    return clearEntries(interrupt3(parent.id));
+  }));
+  const clearEntries = fnUntraced2(function* (exit3) {
+    for (const [id2, entry] of entries3) {
+      entries3.delete(id2);
+      if (entry._tag === "Queue") {
+        yield* exit3._tag === "Success" ? end(entry.queue) : failCause5(entry.queue, exit3.cause);
+      } else {
+        entry.resume(exit3);
+      }
+    }
+  });
+  const onRequest = (rpc) => {
+    const isStream2 = isStreamSchema(rpc.successSchema);
+    const middleware = getRpcClientMiddleware(rpc);
+    return (payload, opts) => {
+      const headers = opts?.headers ? fromInput2(opts.headers) : empty12;
+      const context3 = opts?.context ?? empty();
+      if (!isStream2) {
+        const onRequest2 = (span2) => onEffectRequest(rpc, middleware, span2, rpc.payloadSchema.make(payload), headers, context3, opts?.discard ?? false);
+        return disableTracing ? onRequest2(undefined) : useSpan2(`${spanPrefix}.${rpc._tag}`, {
+          attributes: options3.spanAttributes
+        }, onRequest2);
+      }
+      const queue = onStreamRequest(rpc, middleware, rpc.payloadSchema.make(payload), headers, opts?.streamBufferSize ?? 16, context3);
+      if (opts?.asQueue)
+        return queue;
+      return unwrap4(map8(queue, fromQueue));
+    };
+  };
+  const onEffectRequest = (rpc, middleware, span2, payload, headers, context3, discard) => withFiber2((parentFiber) => {
+    if (isShutdown2) {
+      return interrupt5;
+    }
+    const id2 = generateRequestId();
+    const send = middleware((message) => options3.onFromClient({
+      message,
+      context: context3,
+      discard
+    }), {
+      _tag: "Request",
+      id: id2,
+      tag: rpc._tag,
+      payload,
+      ...span2 ? {
+        traceId: span2.traceId,
+        spanId: span2.spanId,
+        sampled: span2.sampled
+      } : {},
+      headers: merge6(parentFiber.getRef(CurrentHeaders), headers)
+    });
+    if (discard) {
+      return send;
+    }
+    let fiber3;
+    return onInterrupt2(callback2((resume) => {
+      const entry = {
+        _tag: "Effect",
+        rpc,
+        context: context3,
+        resume(exit3) {
+          resume(exit3);
+          if (fiber3 && !fiber3.pollUnsafe()) {
+            parentFiber.currentDispatcher.scheduleTask(() => {
+              fiber3.interruptUnsafe(parentFiber.id);
+            }, 0);
+          }
+        }
+      };
+      entries3.set(id2, entry);
+      fiber3 = send.pipe(span2 ? withParentSpan3(span2, {
+        captureStackTrace: false
+      }) : identity, runForkWith2(parentFiber.context));
+      fiber3.addObserver((exit3) => {
+        if (exit3._tag === "Failure") {
+          return resume(exit3);
+        }
+      });
+    }), (interruptors2) => {
+      entries3.delete(id2);
+      return andThen4(interrupt6(fiber3), sendInterrupt(id2, Array.from(interruptors2), context3));
+    });
+  });
+  const onStreamRequest = fnUntraced2(function* (rpc, middleware, payload, headers, streamBufferSize, context3) {
+    if (isShutdown2) {
+      return yield* interrupt5;
+    }
+    const span2 = disableTracing ? undefined : yield* makeSpanScoped2(`${spanPrefix}.${rpc._tag}`, {
+      attributes: options3.spanAttributes
+    });
+    const fiber3 = getCurrent();
+    const id2 = generateRequestId();
+    const scope4 = getUnsafe(fiber3.context, Scope);
+    yield* addFinalizerExit(scope4, (exit3) => {
+      if (!entries3.has(id2))
+        return void_5;
+      entries3.delete(id2);
+      return sendInterrupt(id2, isFailure4(exit3) ? Array.from(interruptors(exit3.cause)) : [], context3);
+    });
+    const queue = yield* bounded2(streamBufferSize);
+    entries3.set(id2, {
+      _tag: "Queue",
+      rpc,
+      queue,
+      scope: scope4,
+      context: context3
+    });
+    yield* middleware((message) => options3.onFromClient({
+      message,
+      context: context3,
+      discard: false
+    }), {
+      _tag: "Request",
+      id: id2,
+      tag: rpc._tag,
+      payload,
+      ...span2 ? {
+        traceId: span2.traceId,
+        spanId: span2.spanId,
+        sampled: span2.sampled
+      } : {},
+      headers: merge6(fiber3.getRef(CurrentHeaders), headers)
+    }).pipe(span2 ? withParentSpan3(span2, {
+      captureStackTrace: false
+    }) : identity, catchCause3((error2) => failCause5(queue, error2)), interruptible2, forkIn2(scope4, {
+      startImmediately: true
+    }));
+    return queue;
+  });
+  const getRpcClientMiddleware = (rpc) => {
+    const middlewares = [];
+    for (const tag4 of rpc.middlewares.values()) {
+      const middleware = getOrUndefinedUnsafe(services2, `${tag4.key}/Client`);
+      if (!middleware)
+        continue;
+      middlewares.push(middleware);
+    }
+    if (middlewares.length === 0) {
+      return (send, request3) => send(request3);
+    }
+    return function loop(send, request3, index2 = middlewares.length - 1) {
+      if (index2 === -1) {
+        return send(request3);
+      }
+      return middlewares[index2]({
+        rpc,
+        request: request3,
+        next(request4) {
+          return loop(send, request4, index2 - 1);
+        }
+      });
+    };
+  };
+  const sendInterrupt = (requestId, interruptors2, context3) => callback2((resume) => {
+    const parentFiber = getCurrent();
+    const fiber3 = options3.onFromClient({
+      message: {
+        _tag: "Interrupt",
+        requestId,
+        interruptors: interruptors2
+      },
+      context: context3,
+      discard: false
+    }).pipe(timeout2(1000), runForkWith2(parentFiber.context));
+    fiber3.addObserver(() => {
+      resume(void_5);
+    });
+  });
+  const write2 = (message) => {
+    switch (message._tag) {
+      case "Chunk": {
+        const requestId = message.requestId;
+        const entry = entries3.get(requestId);
+        if (!entry || entry._tag !== "Queue")
+          return void_5;
+        return offerAll(entry.queue, message.values).pipe(supportsAck ? flatMap5(() => options3.onFromClient({
+          message: {
+            _tag: "Ack",
+            requestId: message.requestId
+          },
+          context: entry.context,
+          discard: false
+        })) : identity, catchCause3((cause) => failCause5(entry.queue, cause)));
+      }
+      case "Exit": {
+        const requestId = message.requestId;
+        const entry = entries3.get(requestId);
+        if (!entry)
+          return void_5;
+        entries3.delete(requestId);
+        if (entry._tag === "Effect") {
+          entry.resume(message.exit);
+          return void_5;
+        }
+        return message.exit._tag === "Success" ? end(entry.queue) : failCause5(entry.queue, message.exit.cause);
+      }
+      case "Defect": {
+        return clearEntries(die3(message.defect));
+      }
+      case "ClientEnd": {
+        return void_5;
+      }
+    }
+  };
+  let client;
+  if (options3.flatten) {
+    const fns = new Map;
+    client = function client2(tag4, payload, options4) {
+      let fn4 = fns.get(tag4);
+      if (!fn4) {
+        fn4 = onRequest(group2.requests.get(tag4));
+        fns.set(tag4, fn4);
+      }
+      return fn4(payload, options4);
+    };
+  } else {
+    client = {};
+    group2.requests.forEach((rpc) => {
+      assignProperty(client, rpc._tag, onRequest(rpc));
+    });
+  }
+  return {
+    client,
+    write: write2
+  };
+});
+var clientIdCounter = 0;
+var make66 = /* @__PURE__ */ fnUntraced2(function* (group2, options3) {
+  const clientId = clientIdCounter++;
+  const {
+    run: run5,
+    send,
+    supportsAck,
+    supportsTransferables
+  } = yield* Protocol;
+  const entries3 = new Map;
+  const {
+    client,
+    write: write2
+  } = yield* makeNoSerialization(group2, {
+    ...options3,
+    supportsAck,
+    onFromClient({
+      message
+    }) {
+      switch (message._tag) {
+        case "Request": {
+          const rpc = group2.requests.get(message.tag);
+          const collector = supportsTransferables ? makeCollectorUnsafe() : undefined;
+          const fiber3 = getCurrent();
+          const entry = {
+            rpc,
+            context: collector ? add(fiber3.context, Collector, collector) : fiber3.context,
+            schemas: rpcSchemas(rpc)
+          };
+          entries3.set(message.id, entry);
+          return entry.schemas.encodePayload(message.payload).pipe(provideContext2(entry.context), orDie3, flatMap5((payload) => send(clientId, {
+            ...message,
+            id: message.id,
+            payload,
+            headers: Object.entries(message.headers)
+          }, collector && collector.readUnsafe())));
+        }
+        case "Ack": {
+          const entry = entries3.get(message.requestId);
+          if (!entry)
+            return void_5;
+          return send(clientId, {
+            _tag: "Ack",
+            requestId: message.requestId
+          });
+        }
+        case "Interrupt": {
+          const entry = entries3.get(message.requestId);
+          if (!entry)
+            return void_5;
+          entries3.delete(message.requestId);
+          return send(clientId, {
+            _tag: "Interrupt",
+            requestId: message.requestId
+          });
+        }
+        case "Eof": {
+          return void_5;
+        }
+      }
+    }
+  });
+  yield* run5(clientId, (message) => {
+    switch (message._tag) {
+      case "Chunk": {
+        const requestId = RequestId2(message.requestId);
+        const entry = entries3.get(requestId);
+        if (!entry || isNone2(entry.schemas.decodeChunk))
+          return void_5;
+        return entry.schemas.decodeChunk.value(message.values).pipe(provideContext2(entry.context), orDie3, flatMap5((chunk) => write2({
+          _tag: "Chunk",
+          clientId: 0,
+          requestId: RequestId2(message.requestId),
+          values: chunk
+        })), onError2((cause) => write2({
+          _tag: "Exit",
+          clientId: 0,
+          requestId: RequestId2(message.requestId),
+          exit: failCause2(cause)
+        })));
+      }
+      case "Exit": {
+        const requestId = RequestId2(message.requestId);
+        const entry = entries3.get(requestId);
+        if (!entry)
+          return void_5;
+        entries3.delete(requestId);
+        return entry.schemas.decodeExit(message.exit).pipe(provideContext2(entry.context), orDie3, matchCauseEffect2({
+          onSuccess: (exit3) => write2({
+            _tag: "Exit",
+            clientId: 0,
+            requestId,
+            exit: exit3
+          }),
+          onFailure: (cause) => write2({
+            _tag: "Exit",
+            clientId: 0,
+            requestId,
+            exit: failCause2(cause)
+          })
+        }));
+      }
+      case "Defect": {
+        return write2({
+          _tag: "Defect",
+          clientId: 0,
+          defect: decodeDefect2(message.defect)
+        });
+      }
+      case "ClientProtocolError": {
+        const exit3 = fail5(message.error);
+        return forEach2(entries3.keys(), (requestId) => write2({
+          _tag: "Exit",
+          clientId: 0,
+          requestId,
+          exit: exit3
+        }));
+      }
+      default: {
+        return void_5;
+      }
+    }
+  }).pipe(catchCause3(logError), interruptible2, forkScoped2);
+  return client;
+});
+var rpcSchemasCache = /* @__PURE__ */ new WeakMap;
+var rpcSchemas = (rpc) => {
+  let entry = rpcSchemasCache.get(rpc);
+  if (entry !== undefined) {
+    return entry;
+  }
+  const streamSchemas = getStreamSchemas(rpc.successSchema);
+  entry = {
+    decodeChunk: map(streamSchemas, (streamSchemas2) => decodeUnknownEffect2(toCodecJson(NonEmptyArray(streamSchemas2.success)))),
+    encodePayload: encodeEffect2(toCodecJson(rpc.payloadSchema)),
+    decodeExit: decodeUnknownEffect2(toCodecJson(exitSchema(rpc)))
+  };
+  rpcSchemasCache.set(rpc, entry);
+  return entry;
+};
+var CurrentHeaders = /* @__PURE__ */ Reference("effect/rpc/RpcClient/CurrentHeaders", {
+  defaultValue: () => empty12
+});
+var withHeaders = /* @__PURE__ */ dual(2, (effect2, headers) => updateService3(effect2, CurrentHeaders, merge6(fromInput2(headers))));
+
+class Protocol extends (/* @__PURE__ */ Service()("effect/rpc/RpcClient/Protocol")) {
+  static make = withRunClient;
+}
+var makeProtocolHttp = (client) => Protocol.make(fnUntraced2(function* (writeResponse) {
+  const serialization = yield* RpcSerialization;
+  const isFramed = serialization.includesFraming;
+  const httpClientError = (cause) => new RpcClientError({
+    reason: HttpClientErrorSchema.fromHttpClientError(cause)
+  });
+  const protocolDefect = (message, cause) => new RpcClientError({
+    reason: new RpcClientDefect({
+      message,
+      cause
+    })
+  });
+  const emptyResponseError = (request3) => protocolDefect("Received empty HTTP response from RPC server", request3);
+  const incompleteResponseError = (request3) => protocolDefect("HTTP response ended before RPC request completed", request3);
+  const send = fnUntraced2(function* (clientId, request3) {
+    if (request3._tag !== "Request") {
+      return;
+    }
+    const parser = serialization.makeUnsafe();
+    const encoded = parser.encode(request3);
+    const body = typeof encoded === "string" ? text(encoded, serialization.contentType) : uint8Array(encoded, serialization.contentType);
+    const response = yield* client.post("", {
+      body
+    }).pipe(mapError4(httpClientError));
+    if (!isFramed) {
+      const text2 = yield* response.text.pipe(mapError4(httpClientError));
+      const responses = yield* try_3({
+        try: () => parser.decode(text2),
+        catch: (cause) => protocolDefect("Error decoding HTTP response", cause)
+      });
+      if (!Array.isArray(responses)) {
+        return yield* protocolDefect("Expected an array of responses", responses);
+      }
+      if (responses.length === 0) {
+        return yield* emptyResponseError(request3);
+      }
+      let completed2 = false;
+      let i = 0;
+      yield* whileLoop2({
+        while: () => i < responses.length,
+        body: () => {
+          const response2 = responses[i++];
+          if (isTerminalResponse(response2)) {
+            completed2 = true;
+          }
+          return writeResponse(clientId, response2);
+        },
+        step: constVoid
+      });
+      if (!completed2) {
+        return yield* incompleteResponseError(request3);
+      }
+      return;
+    }
+    let hasResponse = false;
+    let completed = false;
+    yield* runForEachArray(response.stream, (chunk) => try_3({
+      try: () => chunk.flatMap(parser.decode),
+      catch: (cause) => protocolDefect("Error decoding HTTP response", cause)
+    }).pipe(flatMap5((responses) => {
+      if (responses.length === 0)
+        return void_5;
+      hasResponse = true;
+      let i = 0;
+      return whileLoop2({
+        while: () => i < responses.length,
+        body: () => {
+          const response2 = responses[i++];
+          if (isTerminalResponse(response2)) {
+            completed = true;
+          }
+          return writeResponse(clientId, response2);
+        },
+        step: constVoid
+      });
+    }))).pipe(mapError4((cause) => isRpcClientError(cause) ? cause : httpClientError(cause)));
+    if (!hasResponse) {
+      return yield* emptyResponseError(request3);
+    } else if (!completed) {
+      return yield* incompleteResponseError(request3);
+    }
+  });
+  return {
+    send,
+    supportsAck: false,
+    supportsTransferables: false
+  };
+}));
+var layerProtocolHttp = (options3) => effect(Protocol)(flatMap5(HttpClient, (client) => {
+  client = mapRequest(client, prependUrl(options3.url));
+  return makeProtocolHttp(options3.transformClient ? options3.transformClient(client) : client);
+}));
+var makeProtocolSocket = (options3) => Protocol.make(fnUntraced2(function* (writeResponse, clientIds) {
+  const socket = yield* Socket;
+  const serialization = yield* RpcSerialization;
+  const hooks = yield* serviceOption2(ConnectionHooks);
+  const requestClientMap = new Map;
+  const write2 = yield* socket.writer;
+  let parser = serialization.makeUnsafe();
+  const pinger = yield* makePinger(write2(parser.encode(constPing)));
+  let currentError;
+  const onOpen = suspend3(() => {
+    currentError = undefined;
+    return isSome2(hooks) ? hooks.value.onConnect : void_5;
+  });
+  const broadcast2 = (response) => forEach2(clientIds, (clientId) => writeResponse(clientId, response));
+  const broadcastError = (error2) => {
+    currentError = error2;
+    return broadcast2({
+      _tag: "ClientProtocolError",
+      error: error2
+    });
+  };
+  yield* suspend3(() => {
+    parser = serialization.makeUnsafe();
+    pinger.reset();
+    return socket.runRaw((message) => {
+      try {
+        const responses = parser.decode(message);
+        if (responses.length === 0)
+          return;
+        let i = 0;
+        return whileLoop2({
+          while: () => i < responses.length,
+          body: () => {
+            const response = responses[i++];
+            if (response._tag === "Pong") {
+              pinger.onPong();
+              return void_5;
+            }
+            if (Object.hasOwn(response, "requestId")) {
+              const requestId = response.requestId;
+              const clientId = requestClientMap.get(requestId);
+              if (clientId !== undefined) {
+                if (response._tag === "Exit") {
+                  requestClientMap.delete(requestId);
+                }
+                return writeResponse(clientId, response);
+              }
+            }
+            return broadcast2(response);
+          },
+          step: constVoid
+        });
+      } catch (defect) {
+        return broadcast2({
+          _tag: "ClientProtocolError",
+          error: new RpcClientError({
+            reason: new RpcClientDefect({
+              message: "Error decoding message",
+              cause: defect
+            })
+          })
+        });
+      }
+    }, {
+      onOpen
+    }).pipe(raceFirst2(flatMap5(pinger.timeout, () => fail7(new SocketError({
+      reason: new SocketOpenError({
+        kind: "Timeout",
+        cause: new Error("ping timeout")
+      })
+    })))));
+  }).pipe(flatMap5(() => fail7(new SocketError({
+    reason: new SocketCloseError({
+      code: 1000
+    })
+  }))), isSome2(hooks) ? ensuring2(hooks.value.onDisconnect) : identity, tapCause3((cause) => {
+    const error2 = findError2(cause);
+    const hasError = isSuccess2(error2);
+    const rpcError = new RpcClientError({
+      reason: hasError ? error2.success.reason : new RpcClientDefect({
+        message: "Unknown socket error",
+        cause: squash(cause)
+      })
+    });
+    if (options3?.retryTransientErrors && hasError && error2.success.reason._tag === "SocketOpenError") {
+      return (options3.onTransientError?.(rpcError) ?? void_5).pipe(ignoreCause2({
+        log: true,
+        message: "RpcClient onTransientError hook failed"
+      }));
+    }
+    return broadcastError(rpcError);
+  }), retryOrElse2(options3?.retryPolicy ?? defaultRetryPolicy, (error2) => broadcastError(new RpcClientError({
+    reason: error2.reason
+  }))), annotateLogs({
+    module: "RpcClient",
+    method: "makeProtocolSocket"
+  }), forkScoped2);
+  return {
+    send(clientId, request3) {
+      if (currentError) {
+        return fail7(currentError);
+      }
+      if (request3._tag === "Request") {
+        requestClientMap.set(request3.id, clientId);
+      }
+      const encoded = parser.encode(request3);
+      if (encoded === undefined)
+        return void_5;
+      return orDie3(write2(encoded));
+    },
+    supportsAck: true,
+    supportsTransferables: false
+  };
+}));
+var defaultRetryPolicy = /* @__PURE__ */ min5([/* @__PURE__ */ exponential(500, 1.5), /* @__PURE__ */ spaced(5000)]);
+var makePinger = /* @__PURE__ */ fnUntraced2(function* (writePing) {
+  let recievedPong = true;
+  const latch = makeUnsafe5();
+  const reset = () => {
+    recievedPong = true;
+    latch.closeUnsafe();
+  };
+  const onPong = () => {
+    recievedPong = true;
+  };
+  yield* suspend3(() => {
+    if (!recievedPong)
+      return latch.open;
+    recievedPong = false;
+    return writePing;
+  }).pipe(delay2("5 seconds"), ignore2, forever4, interruptible2, forkScoped2);
+  return {
+    timeout: latch.await,
+    reset,
+    onPong
+  };
+});
+var layerProtocolSocket = (options3) => effect(Protocol)(makeProtocolSocket(options3));
+var makeProtocolWorker = (options3) => Protocol.make(fnUntraced2(function* (writeResponse, clientIds) {
+  const worker = yield* WorkerPlatform;
+  const scope3 = yield* scope2;
+  let workerId = 0;
+  const initialMessage = yield* serviceOption2(InitialMessage);
+  const hooks = yield* serviceOption2(ConnectionHooks);
+  const entries3 = new Map;
+  const broadcast2 = (response) => forEach2(clientIds, (clientId) => writeResponse(clientId, response));
+  const acquire = gen4(function* () {
+    const id2 = workerId++;
+    const backing = yield* worker.spawn(id2);
+    yield* backing.run((response) => {
+      if (response._tag === "Exit") {
+        const entry = entries3.get(response.requestId);
+        if (entry) {
+          entries3.delete(response.requestId);
+          entry.latch.openUnsafe();
+          return writeResponse(entry.clientId, response);
+        }
+      } else if (response._tag === "Defect") {
+        for (const [requestId, entry] of entries3) {
+          entries3.delete(requestId);
+          entry.latch.openUnsafe();
+        }
+        return broadcast2(response);
+      } else if ("requestId" in response) {
+        const entry = entries3.get(response.requestId);
+        if (entry) {
+          return writeResponse(entry.clientId, response);
+        }
+      }
+      return broadcast2(response);
+    }, {
+      onSpawn: isSome2(initialMessage) ? flatMap5(initialMessage.value, ([value6, transfers]) => orDie3(backing.send({
+        _tag: "InitialMessage",
+        value: value6
+      }, transfers))) : undefined
+    }).pipe(tapCause3((cause) => {
+      for (const [requestId, entry] of entries3) {
+        if (entry.worker !== backing)
+          continue;
+        entries3.delete(requestId);
+        entry.latch.openUnsafe();
+      }
+      const error2 = findError2(cause);
+      return broadcast2({
+        _tag: "ClientProtocolError",
+        error: new RpcClientError({
+          reason: isSuccess2(error2) ? error2.success.reason : new RpcClientDefect({
+            message: "Error in worker",
+            cause: squash(cause)
+          })
+        })
+      });
+    }), retry2(spaced(1000)), annotateLogs({
+      module: "RpcClient",
+      method: "makeProtocolWorker"
+    }), interruptible2, forkScoped2);
+    return backing;
+  });
+  const pool = "minSize" in options3 ? yield* makeWithTTL({
+    acquire,
+    min: options3.minSize,
+    max: options3.maxSize,
+    concurrency: options3.concurrency,
+    targetUtilization: options3.targetUtilization,
+    timeToLive: options3.timeToLive
+  }) : yield* make64({
+    acquire,
+    size: options3.size,
+    concurrency: options3.concurrency,
+    targetUtilization: options3.targetUtilization
+  });
+  yield* addFinalizer2(scope3, sync4(() => {
+    for (const entry of entries3.values()) {
+      entry.latch.openUnsafe();
+    }
+    entries3.clear();
+  }));
+  const send = (clientId, request3, transferables) => {
+    switch (request3._tag) {
+      case "Request": {
+        return get13(pool).pipe(flatMap5((worker2) => {
+          const latch = makeUnsafe5(false);
+          entries3.set(request3.id, {
+            clientId,
+            worker: worker2,
+            latch
+          });
+          return flatMap5(worker2.send(request3, transferables), () => latch.await);
+        }), scoped2, orDie3);
+      }
+      case "Interrupt": {
+        const entry = entries3.get(request3.requestId);
+        if (!entry)
+          return void_5;
+        entries3.delete(request3.requestId);
+        entry.latch.openUnsafe();
+        return orDie3(entry.worker.send(request3));
+      }
+      case "Ack": {
+        const entry = entries3.get(request3.requestId);
+        if (!entry)
+          return void_5;
+        return orDie3(entry.worker.send(request3));
+      }
+    }
+    return void_5;
+  };
+  yield* scoped2(get13(pool));
+  if (isSome2(hooks))
+    yield* hooks.value.onConnect;
+  return {
+    send,
+    supportsAck: true,
+    supportsTransferables: true
+  };
+}));
+var layerProtocolWorker = /* @__PURE__ */ flow(makeProtocolWorker, /* @__PURE__ */ effect(Protocol));
+
+class ConnectionHooks extends (/* @__PURE__ */ Service()("effect/rpc/RpcClient/ConnectionHooks")) {
+}
+var decodeDefect2 = /* @__PURE__ */ decodeSync2(/* @__PURE__ */ Defect());
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/internal/mcpProtocol.js
+var profileFromClient = (request3) => ({
+  protocolVersion: request3.protocolVersion,
+  clientCapabilities: request3.clientCapabilities,
+  clientInfo: request3.clientInfo,
+  requestMetadata: request3.initializePayload._meta
+});
+var invocationFromClient = (request3) => ({
+  clientId: request3.clientId,
+  protocol: profileFromClient(request3),
+  requestContext: request3
+});
+
+class ProtocolError extends (/* @__PURE__ */ TaggedError2("ProtocolError")) {
+  static fromTool(error2) {
+    const message = value5(error2).pipe(tag3("ToolNotFound", (error3) => `Tool '${error3.name}' not found`), tag3("UnsupportedByProtocol", (error3) => `${error3.feature} is not supported by MCP ${error3.protocolVersion}`), tags2({
+      InvalidToolInput: (error3) => error3.message,
+      ToolExecutionError: (error3) => error3.message,
+      ToolResultProjectionError: (error3) => error3.message
+    }), exhaustive2);
+    return new ProtocolError({
+      code: -32602,
+      message
+    });
+  }
+  static fromFeature(error2) {
+    if (error2 instanceof PromptNotFound) {
+      return new ProtocolError({
+        code: -32602,
+        message: `Prompt '${error2.name}' not found`
+      });
+    }
+    if (error2 instanceof ResourceNotFound) {
+      return new ProtocolError({
+        code: -32002,
+        message: `Resource '${error2.uri}' not found`
+      });
+    }
+    const decoded = decodeUnknownResult2(ProtocolErrorFields)(error2);
+    if (isSuccess2(decoded)) {
+      return new ProtocolError(decoded.success);
+    }
+    return new ProtocolError({
+      code: -32603,
+      message: "MCP feature handler failed"
+    });
+  }
+}
+var ProtocolErrorFields = /* @__PURE__ */ Struct2({
+  code: Number6,
+  message: String6,
+  data: /* @__PURE__ */ optionalKey2(Unknown2)
+});
+var reverseError = (operation) => (cause) => cause instanceof McpReverseOperationUnsupported ? cause : new McpReverseOperationError({
+  operation,
+  cause
+});
+var transcode = (from, to, input) => encodeEffect2(from)(input).pipe(flatMap5(decodeUnknownEffect2(to)));
+var transcodeStrict = (from, to, input) => encodeEffect2(from)(input).pipe(flatMap5(decodeUnknownEffect2(to, {
+  onExcessProperty: "error"
+})));
+var makeNotificationProjector = /* @__PURE__ */ fn2(function* (options3, notification) {
+  return ServerNotification.$match(notification, {
+    Cancelled: (notification2) => ({
+      tag: CancelledNotification._tag,
+      payload: CancelledNotification.payloadSchema.make({
+        _meta: notification2.metadata,
+        requestId: notification2.requestId,
+        reason: notification2.reason
+      })
+    }),
+    Progress: (notification2) => ({
+      tag: ProgressNotification._tag,
+      payload: ProgressNotification.payloadSchema.make({
+        _meta: notification2.metadata,
+        progressToken: notification2.progressToken,
+        progress: notification2.progress,
+        total: notification2.total,
+        message: options3.supportsProgressMessage ? notification2.message : undefined
+      })
+    }),
+    LoggingMessage: (notification2) => ({
+      tag: LoggingMessageNotification._tag,
+      payload: LoggingMessageNotification.payloadSchema.make({
+        _meta: notification2.metadata,
+        level: notification2.level,
+        logger: notification2.logger,
+        data: notification2.data
+      })
+    }),
+    ResourceUpdated: (notification2) => ({
+      tag: ResourceUpdatedNotification._tag,
+      payload: ResourceUpdatedNotification.payloadSchema.make({
+        _meta: notification2.metadata,
+        uri: notification2.uri
+      })
+    }),
+    ResourcesChanged: (notification2) => ({
+      tag: ResourceListChangedNotification._tag,
+      payload: ResourceListChangedNotification.payloadSchema.make({
+        _meta: notification2.metadata
+      })
+    }),
+    ToolsChanged: (notification2) => ({
+      tag: ToolListChangedNotification._tag,
+      payload: ToolListChangedNotification.payloadSchema.make({
+        _meta: notification2.metadata
+      })
+    }),
+    PromptsChanged: (notification2) => ({
+      tag: PromptListChangedNotification._tag,
+      payload: PromptListChangedNotification.payloadSchema.make({
+        _meta: notification2.metadata
+      })
+    }),
+    ElicitationComplete: () => {
+      return;
+    }
+  });
+});
+var make67 = (options3) => {
+  const payloadCodecsCache = new WeakMap;
+  const payloadCodecs = (rpc) => {
+    let codecs = payloadCodecsCache.get(rpc);
+    if (codecs === undefined) {
+      const schema3 = toCodecJson(rpc.payloadSchema);
+      codecs = {
+        decode: decodeUnknownEffect2(schema3),
+        encode: encodeUnknownEffect2(schema3)
+      };
+      payloadCodecsCache.set(rpc, codecs);
+    }
+    return codecs;
+  };
+  const installHandlers = (core, lifecycle, target2) => options3.handlerRpcs === undefined || options3.makeHandlers === undefined ? void_5 : target2.install(options3, options3.handlerRpcs, options3.makeHandlers(core, lifecycle));
+  const makeReverseClient = (profile) => make66(options3.serverRequestRpcs, {
+    spanPrefix: "McpServer/Client"
+  }).pipe(map8((client) => options3.toReverseClient(profile, client)));
+  return {
+    ...options3,
+    payloadCodecs,
+    installHandlers,
+    makeReverseClient
+  };
+};
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/internal/mcpSchema/v2024_11_05.js
+var protocolVersion = "2024-11-05";
+var optional4 = (schema3) => optionalKey2(schema3).pipe(decodeTo2(optional2(schema3), {
+  decode: passthrough2(),
+  encode: transformOptional(flatMap(fromUndefinedOr))
+}));
+var JsonObject2 = JsonObject;
+var RequestId3 = /* @__PURE__ */ Union2([String6, Finite]);
+var ProgressToken2 = /* @__PURE__ */ Union2([String6, Finite]);
+var Role2 = /* @__PURE__ */ Literals(["user", "assistant"]);
+var LoggingLevel2 = /* @__PURE__ */ Literals(["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]);
+var RequestMeta2 = /* @__PURE__ */ Struct2({
+  _meta: /* @__PURE__ */ optional4(/* @__PURE__ */ Struct2({
+    progressToken: /* @__PURE__ */ optional4(ProgressToken2)
+  }))
+});
+var NotificationMeta2 = /* @__PURE__ */ Struct2({
+  _meta: /* @__PURE__ */ optional4(JsonObject2)
+});
+var ResultMeta2 = /* @__PURE__ */ Struct2({
+  _meta: /* @__PURE__ */ optional4(JsonObject2)
+});
+var PaginatedRequest = /* @__PURE__ */ Struct2({
+  ...RequestMeta2.fields,
+  cursor: /* @__PURE__ */ optional4(String6)
+});
+var PaginatedResult = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  nextCursor: /* @__PURE__ */ optional4(String6)
+});
+var Implementation2 = /* @__PURE__ */ Struct2({
+  name: String6,
+  version: String6
+});
+var ClientCapabilities2 = /* @__PURE__ */ Struct2({
+  experimental: /* @__PURE__ */ optional4(/* @__PURE__ */ Record(String6, JsonObject2)),
+  roots: /* @__PURE__ */ optional4(/* @__PURE__ */ Struct2({
+    listChanged: /* @__PURE__ */ optional4(Boolean4)
+  })),
+  sampling: /* @__PURE__ */ optional4(JsonObject2)
+});
+var ServerCapabilities2 = /* @__PURE__ */ Struct2({
+  experimental: /* @__PURE__ */ optional4(/* @__PURE__ */ Record(String6, JsonObject2)),
+  logging: /* @__PURE__ */ optional4(JsonObject2),
+  prompts: /* @__PURE__ */ optional4(/* @__PURE__ */ Struct2({
+    listChanged: /* @__PURE__ */ optional4(Boolean4)
+  })),
+  resources: /* @__PURE__ */ optional4(/* @__PURE__ */ Struct2({
+    subscribe: /* @__PURE__ */ optional4(Boolean4),
+    listChanged: /* @__PURE__ */ optional4(Boolean4)
+  })),
+  tools: /* @__PURE__ */ optional4(/* @__PURE__ */ Struct2({
+    listChanged: /* @__PURE__ */ optional4(Boolean4)
+  }))
+});
+var McpError2 = /* @__PURE__ */ Struct2({
+  code: Int,
+  message: String6,
+  data: /* @__PURE__ */ optional4(Any2)
+});
+var Annotation = /* @__PURE__ */ Struct2({
+  audience: /* @__PURE__ */ optional4(/* @__PURE__ */ ArraySchema(Role2)),
+  priority: /* @__PURE__ */ optional4(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
+    minimum: 0,
+    maximum: 1
+  })))
+});
+var TextResourceContents2 = /* @__PURE__ */ Struct2({
+  uri: String6,
+  mimeType: /* @__PURE__ */ optional4(String6),
+  text: String6
+});
+var BlobResourceContents2 = /* @__PURE__ */ Struct2({
+  uri: String6,
+  mimeType: /* @__PURE__ */ optional4(String6),
+  blob: String6
+});
+var ResourceContents2 = /* @__PURE__ */ Union2([TextResourceContents2, BlobResourceContents2]);
+var TextContent2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("text"),
+  text: String6,
+  annotations: /* @__PURE__ */ optional4(Annotation)
+});
+var ImageContent2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("image"),
+  data: String6,
+  mimeType: String6,
+  annotations: /* @__PURE__ */ optional4(Annotation)
+});
+var EmbeddedResource2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("resource"),
+  resource: ResourceContents2,
+  annotations: /* @__PURE__ */ optional4(Annotation)
+});
+var PromptOrToolContent = /* @__PURE__ */ Union2([TextContent2, ImageContent2, EmbeddedResource2]);
+var SamplingContent = /* @__PURE__ */ Union2([TextContent2, ImageContent2]);
+var Resource3 = /* @__PURE__ */ Struct2({
+  uri: String6,
+  name: String6,
+  description: /* @__PURE__ */ optional4(String6),
+  mimeType: /* @__PURE__ */ optional4(String6),
+  size: /* @__PURE__ */ optional4(Finite),
+  annotations: /* @__PURE__ */ optional4(Annotation)
+});
+var ResourceTemplate2 = /* @__PURE__ */ Struct2({
+  uriTemplate: String6,
+  name: String6,
+  description: /* @__PURE__ */ optional4(String6),
+  mimeType: /* @__PURE__ */ optional4(String6),
+  annotations: /* @__PURE__ */ optional4(Annotation)
+});
+var PromptArgument2 = /* @__PURE__ */ Struct2({
+  name: String6,
+  description: /* @__PURE__ */ optional4(String6),
+  required: /* @__PURE__ */ optional4(Boolean4)
+});
+var Prompt3 = /* @__PURE__ */ Struct2({
+  name: String6,
+  description: /* @__PURE__ */ optional4(String6),
+  arguments: /* @__PURE__ */ optional4(/* @__PURE__ */ ArraySchema(PromptArgument2))
+});
+var PromptMessage2 = /* @__PURE__ */ Struct2({
+  role: Role2,
+  content: PromptOrToolContent
+});
+var ToolInputSchema = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("object"),
+  properties: /* @__PURE__ */ optional4(/* @__PURE__ */ Record(String6, JsonObject2)),
+  required: /* @__PURE__ */ optional4(/* @__PURE__ */ ArraySchema(String6))
+});
+var Tool2 = /* @__PURE__ */ Struct2({
+  name: String6,
+  description: /* @__PURE__ */ optional4(String6),
+  inputSchema: ToolInputSchema
+});
+var ModelHint2 = /* @__PURE__ */ Struct2({
+  name: /* @__PURE__ */ optional4(String6)
+});
+var ModelPreferences2 = /* @__PURE__ */ Struct2({
+  hints: /* @__PURE__ */ optional4(/* @__PURE__ */ ArraySchema(ModelHint2)),
+  costPriority: /* @__PURE__ */ optional4(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
+    minimum: 0,
+    maximum: 1
+  }))),
+  speedPriority: /* @__PURE__ */ optional4(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
+    minimum: 0,
+    maximum: 1
+  }))),
+  intelligencePriority: /* @__PURE__ */ optional4(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
+    minimum: 0,
+    maximum: 1
+  })))
+});
+var SamplingMessage2 = /* @__PURE__ */ Struct2({
+  role: Role2,
+  content: SamplingContent
+});
+var ResourceReference2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("ref/resource"),
+  uri: String6
+});
+var PromptReference2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("ref/prompt"),
+  name: String6
+});
+var Root2 = /* @__PURE__ */ Struct2({
+  uri: String6,
+  name: /* @__PURE__ */ optional4(String6)
+});
+var InitializeResult2 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  protocolVersion: String6,
+  capabilities: ServerCapabilities2,
+  serverInfo: Implementation2,
+  instructions: /* @__PURE__ */ optional4(String6)
+});
+var ListResourcesResult2 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  resources: /* @__PURE__ */ ArraySchema(Resource3)
+});
+var ListResourceTemplatesResult2 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  resourceTemplates: /* @__PURE__ */ ArraySchema(ResourceTemplate2)
+});
+var ReadResourceResult2 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  contents: /* @__PURE__ */ ArraySchema(ResourceContents2)
+});
+var ListPromptsResult2 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  prompts: /* @__PURE__ */ ArraySchema(Prompt3)
+});
+var GetPromptResult2 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  description: /* @__PURE__ */ optional4(String6),
+  messages: /* @__PURE__ */ ArraySchema(PromptMessage2)
+});
+var ListToolsResult2 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  tools: /* @__PURE__ */ ArraySchema(Tool2)
+});
+var CallToolResult2 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  content: /* @__PURE__ */ ArraySchema(PromptOrToolContent),
+  isError: /* @__PURE__ */ optional4(Boolean4)
+});
+var CreateMessageResult2 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  role: Role2,
+  content: SamplingContent,
+  model: String6,
+  stopReason: /* @__PURE__ */ optional4(String6)
+});
+var CompleteResult2 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  completion: /* @__PURE__ */ Struct2({
+    values: /* @__PURE__ */ ArraySchema(String6),
+    total: /* @__PURE__ */ optional4(Finite),
+    hasMore: /* @__PURE__ */ optional4(Boolean4)
+  })
+});
+var ListRootsResult2 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  roots: /* @__PURE__ */ ArraySchema(Root2)
+});
+
+class Ping2 extends (/* @__PURE__ */ make62("ping", {
+  success: ResultMeta2,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(RequestMeta2)
+})) {
+}
+
+class Initialize2 extends (/* @__PURE__ */ make62("initialize", {
+  success: InitializeResult2,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    protocolVersion: String6,
+    capabilities: ClientCapabilities2,
+    clientInfo: Implementation2
+  }
+})) {
+}
+
+class Complete2 extends (/* @__PURE__ */ make62("completion/complete", {
+  success: CompleteResult2,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    ref: /* @__PURE__ */ Union2([PromptReference2, ResourceReference2]),
+    argument: /* @__PURE__ */ Struct2({
+      name: String6,
+      value: String6
+    })
+  }
+})) {
+}
+
+class SetLevel2 extends (/* @__PURE__ */ make62("logging/setLevel", {
+  success: ResultMeta2,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    level: LoggingLevel2
+  }
+})) {
+}
+
+class GetPrompt2 extends (/* @__PURE__ */ make62("prompts/get", {
+  success: GetPromptResult2,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    name: String6,
+    arguments: /* @__PURE__ */ optional4(/* @__PURE__ */ Record(String6, String6))
+  }
+})) {
+}
+
+class ListPrompts2 extends (/* @__PURE__ */ make62("prompts/list", {
+  success: ListPromptsResult2,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class ListResources2 extends (/* @__PURE__ */ make62("resources/list", {
+  success: ListResourcesResult2,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class ListResourceTemplates2 extends (/* @__PURE__ */ make62("resources/templates/list", {
+  success: ListResourceTemplatesResult2,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class ReadResource2 extends (/* @__PURE__ */ make62("resources/read", {
+  success: ReadResourceResult2,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    uri: String6
+  }
+})) {
+}
+
+class Subscribe2 extends (/* @__PURE__ */ make62("resources/subscribe", {
+  success: ResultMeta2,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    uri: String6
+  }
+})) {
+}
+
+class Unsubscribe2 extends (/* @__PURE__ */ make62("resources/unsubscribe", {
+  success: ResultMeta2,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    uri: String6
+  }
+})) {
+}
+
+class CallTool2 extends (/* @__PURE__ */ make62("tools/call", {
+  success: CallToolResult2,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    name: String6,
+    arguments: /* @__PURE__ */ optional4(JsonObject2)
+  }
+})) {
+}
+
+class ListTools2 extends (/* @__PURE__ */ make62("tools/list", {
+  success: ListToolsResult2,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class CreateMessage2 extends (/* @__PURE__ */ make62("sampling/createMessage", {
+  success: CreateMessageResult2,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    messages: /* @__PURE__ */ ArraySchema(SamplingMessage2),
+    modelPreferences: /* @__PURE__ */ optional4(ModelPreferences2),
+    systemPrompt: /* @__PURE__ */ optional4(String6),
+    includeContext: /* @__PURE__ */ optional4(/* @__PURE__ */ Literals(["none", "thisServer", "allServers"])),
+    temperature: /* @__PURE__ */ optional4(Finite),
+    maxTokens: Finite,
+    stopSequences: /* @__PURE__ */ optional4(/* @__PURE__ */ ArraySchema(String6)),
+    metadata: /* @__PURE__ */ optional4(JsonObject2)
+  }
+})) {
+}
+
+class ListRoots2 extends (/* @__PURE__ */ make62("roots/list", {
+  success: ListRootsResult2,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(RequestMeta2)
+})) {
+}
+
+class CancelledNotification2 extends (/* @__PURE__ */ make62("notifications/cancelled", {
+  payload: {
+    ...NotificationMeta2.fields,
+    requestId: RequestId3,
+    reason: /* @__PURE__ */ optional4(String6)
+  }
+})) {
+}
+
+class ProgressNotification2 extends (/* @__PURE__ */ make62("notifications/progress", {
+  payload: {
+    ...NotificationMeta2.fields,
+    progressToken: ProgressToken2,
+    progress: Finite,
+    total: /* @__PURE__ */ optional4(Finite)
+  }
+})) {
+}
+
+class InitializedNotification2 extends (/* @__PURE__ */ make62("notifications/initialized", {
+  payload: /* @__PURE__ */ UndefinedOr(NotificationMeta2)
+})) {
+}
+
+class RootsListChangedNotification2 extends (/* @__PURE__ */ make62("notifications/roots/list_changed", {
+  payload: /* @__PURE__ */ UndefinedOr(NotificationMeta2)
+})) {
+}
+
+class LoggingMessageNotification2 extends (/* @__PURE__ */ make62("notifications/message", {
+  payload: {
+    ...NotificationMeta2.fields,
+    level: LoggingLevel2,
+    logger: /* @__PURE__ */ optional4(String6),
+    data: Any2
+  }
+})) {
+}
+
+class ResourceUpdatedNotification2 extends (/* @__PURE__ */ make62("notifications/resources/updated", {
+  payload: {
+    ...NotificationMeta2.fields,
+    uri: String6
+  }
+})) {
+}
+
+class ResourceListChangedNotification2 extends (/* @__PURE__ */ make62("notifications/resources/list_changed", {
+  payload: /* @__PURE__ */ UndefinedOr(NotificationMeta2)
+})) {
+}
+
+class ToolListChangedNotification2 extends (/* @__PURE__ */ make62("notifications/tools/list_changed", {
+  payload: /* @__PURE__ */ UndefinedOr(NotificationMeta2)
+})) {
+}
+
+class PromptListChangedNotification2 extends (/* @__PURE__ */ make62("notifications/prompts/list_changed", {
+  payload: /* @__PURE__ */ UndefinedOr(NotificationMeta2)
+})) {
+}
+
+class ClientRequestRpcs2 extends (/* @__PURE__ */ make63(Ping2, Initialize2, Complete2, SetLevel2, GetPrompt2, ListPrompts2, ListResources2, ListResourceTemplates2, ReadResource2, Subscribe2, Unsubscribe2, CallTool2, ListTools2)) {
+}
+
+class ClientNotificationRpcs2 extends (/* @__PURE__ */ make63(CancelledNotification2, ProgressNotification2, InitializedNotification2, RootsListChangedNotification2)) {
+}
+class ServerRequestRpcs extends (/* @__PURE__ */ make63(Ping2, CreateMessage2, ListRoots2)) {
+}
+
+class ServerNotificationRpcs extends (/* @__PURE__ */ make63(CancelledNotification2, ProgressNotification2, LoggingMessageNotification2, ResourceUpdatedNotification2, ResourceListChangedNotification2, ToolListChangedNotification2, PromptListChangedNotification2)) {
+}
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/internal/mcpProtocol/v2024_11_05.js
+var ClientRequestRpcs3 = /* @__PURE__ */ ClientRequestRpcs2.middleware(McpServerClientMiddleware);
+var ClientRpcs2 = /* @__PURE__ */ ClientRequestRpcs3.merge(ClientNotificationRpcs2);
+var AdapterRpcs = /* @__PURE__ */ ClientRpcs2.omit("ping");
+var profileFromInitialize = (initialize) => ({
+  protocolVersion,
+  clientCapabilities: ClientCapabilities.make(initialize.capabilities),
+  clientInfo: Implementation.make(initialize.clientInfo),
+  requestMetadata: initialize._meta
+});
+var unsupported = (operation, reason) => new McpReverseOperationUnsupported({
+  operation,
+  protocolVersion,
+  reason
+});
+var requireCapability = (profile, operation, capability) => Object.hasOwn(profile.clientCapabilities, capability) && profile.clientCapabilities[capability] !== undefined ? void_5 : fail7(unsupported(operation, `Client did not advertise the ${capability} capability`));
+var projectCapabilities = (capabilities) => ({
+  experimental: capabilities.experimental,
+  logging: capabilities.logging ? {} : undefined,
+  prompts: capabilities.prompts,
+  resources: capabilities.resources,
+  tools: capabilities.tools
+});
+var projectContent = /* @__PURE__ */ fnUntraced2(function* (content) {
+  const projected = value5(content).pipe(when5({
+    type: "text"
+  }, (content2) => ({
+    ...content2,
+    annotations: content2.annotations
+  })), when5({
+    type: "image"
+  }, (content2) => ImageContent2.make({
+    type: "image",
+    mimeType: content2.mimeType,
+    data: encodeBase64(content2.data),
+    annotations: content2.annotations
+  })), when5({
+    type: "resource"
+  }, (content2) => {
+    const resource = content2.resource;
+    if ("text" in resource) {
+      return EmbeddedResource2.make({
+        type: "resource",
+        resource: {
+          uri: resource.uri,
+          mimeType: resource.mimeType,
+          text: resource.text
+        },
+        annotations: content2.annotations
+      });
+    }
+    return EmbeddedResource2.make({
+      type: "resource",
+      resource: {
+        uri: resource.uri,
+        mimeType: resource.mimeType,
+        blob: encodeBase64(resource.blob)
+      },
+      annotations: content2.annotations
+    });
+  }), when5({
+    type: is4("audio", "resource_link")
+  }, (content2) => new UnsupportedByProtocol({
+    protocolVersion,
+    feature: `${content2.type} tool content`
+  })), exhaustive2);
+  return projected instanceof UnsupportedByProtocol ? yield* projected : projected;
+});
+var protocol = /* @__PURE__ */ make67({
+  protocolVersion,
+  transport: {
+    acceptsJsonRpcBatches: false,
+    requiresVersionHeader: false
+  },
+  clientRpcs: ClientRpcs2,
+  clientNotificationRpcs: ClientNotificationRpcs2,
+  serverRequestRpcs: ServerRequestRpcs,
+  serverNotificationRpcs: ServerNotificationRpcs,
+  handlerRpcs: AdapterRpcs,
+  makeHandlers: (core, lifecycle) => AdapterRpcs.of({
+    initialize: (request3, {
+      client
+    }) => lifecycle.initialize(protocolVersion, profileFromInitialize(request3), client.id).pipe(map8((result5) => InitializeResult2.make({
+      protocolVersion,
+      capabilities: projectCapabilities(result5.capabilities),
+      serverInfo: result5.serverInfo,
+      instructions: result5.instructions
+    }))),
+    "logging/setLevel": ({
+      level
+    }, {
+      client,
+      headers
+    }) => lifecycle.setLogLevel(level, client.id, headers).pipe(as3({})),
+    "notifications/cancelled": () => void_5,
+    "notifications/initialized": (_, {
+      client,
+      headers
+    }) => lifecycle.clientNotification(ClientNotification.Initialized(), client.id, headers),
+    "notifications/progress": (progress, {
+      client,
+      headers
+    }) => lifecycle.clientNotification(ClientNotification.Progress({
+      progressToken: progress.progressToken,
+      progress: progress.progress,
+      total: progress.total,
+      metadata: progress._meta
+    }), client.id, headers),
+    "notifications/roots/list_changed": (_, {
+      client,
+      headers
+    }) => lifecycle.clientNotification(ClientNotification.RootsChanged(), client.id, headers),
+    "resources/list": (_pageRequest) => McpServerClient.use((request3) => core.resources.list(profileFromClient(request3))).pipe(map8((resources) => ListResourcesResult2.make({
+      resources
+    }))),
+    "resources/templates/list": (_pageRequest) => McpServerClient.use((request3) => core.resources.listTemplates(profileFromClient(request3))).pipe(map8((resourceTemplates) => ListResourceTemplatesResult2.make({
+      resourceTemplates
+    }))),
+    "resources/read": fnUntraced2(function* ({
+      uri
+    }) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.resources.read(uri, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromFeature));
+      return ReadResourceResult2.make({
+        contents: result5.contents.map((content) => ("text" in content) ? {
+          uri: content.uri,
+          mimeType: content.mimeType,
+          text: content.text
+        } : {
+          uri: content.uri,
+          mimeType: content.mimeType,
+          blob: encodeBase64(content.blob)
+        }),
+        _meta: result5._meta
+      });
+    }),
+    "resources/subscribe": ({
+      uri
+    }, {
+      client,
+      headers
+    }) => lifecycle.subscribe(uri, client.id, headers).pipe(as3({})),
+    "resources/unsubscribe": ({
+      uri
+    }, {
+      client,
+      headers
+    }) => lifecycle.unsubscribe(uri, client.id, headers).pipe(as3({})),
+    "prompts/list": () => McpServerClient.use((request3) => core.prompts.list(profileFromClient(request3))).pipe(map8((prompts) => ListPromptsResult2.make({
+      prompts: prompts.map((prompt) => ({
+        name: prompt.name,
+        description: prompt.description,
+        arguments: prompt.arguments?.map((argument) => ({
+          name: argument.name,
+          description: argument.description,
+          required: argument.required
+        }))
+      }))
+    }))),
+    "prompts/get": fnUntraced2(function* ({
+      arguments: args2,
+      name
+    }) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.prompts.get(name, args2 ?? {}, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromFeature));
+      const messages = yield* forEach2(result5.messages, (message) => projectContent(message.content).pipe(map8((content) => ({
+        role: message.role,
+        content
+      })), mapError4(ProtocolError.fromTool)));
+      return GetPromptResult2.make({
+        description: result5.description,
+        messages,
+        _meta: result5._meta
+      });
+    }),
+    "completion/complete": fnUntraced2(function* (completeRequest) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.completions.complete({
+        reference: completeRequest.ref.type === "ref/prompt" ? {
+          type: "prompt",
+          name: completeRequest.ref.name
+        } : {
+          type: "resourceTemplate",
+          uriTemplate: completeRequest.ref.uri
+        },
+        argument: completeRequest.argument,
+        metadata: completeRequest._meta
+      }, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromFeature));
+      return CompleteResult2.make({
+        completion: {
+          values: Array.from(result5.values),
+          total: result5.total,
+          hasMore: result5.hasMore
+        },
+        _meta: result5.metadata
+      });
+    }),
+    "tools/list": fnUntraced2(function* () {
+      const request3 = yield* McpServerClient;
+      return yield* core.tools.list(profileFromClient(request3)).pipe(map8((tools) => ListToolsResult2.make({
+        tools: tools.map((tool) => Tool2.make({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema
+        }))
+      })));
+    }),
+    "tools/call": fnUntraced2(function* (call) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.tools.call({
+        ...call,
+        arguments: call.arguments ?? {}
+      }, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromTool));
+      const content = yield* forEach2(result5.content, projectContent).pipe(mapError4(ProtocolError.fromTool));
+      return CallToolResult2.make({
+        content,
+        isError: result5.isError,
+        _meta: result5._meta
+      });
+    })
+  }),
+  toReverseClient: (profile, client) => ({
+    listRoots: fnUntraced2(function* (request3) {
+      yield* requireCapability(profile, "roots/list", "roots");
+      const wireRequest = yield* transcode(ListRoots.payloadSchema, ListRoots2.payloadSchema, request3).pipe(mapError4(() => unsupported("roots/list", "Request is not representable by this protocol")));
+      const {
+        roots
+      } = yield* client["roots/list"](wireRequest).pipe(mapError4(reverseError("roots/list")));
+      return new ListRootsResult({
+        roots
+      });
+    }),
+    createMessage: fnUntraced2(function* (request3) {
+      yield* requireCapability(profile, "sampling/createMessage", "sampling");
+      const wireRequest = yield* transcodeStrict(CreateMessage.payloadSchema, CreateMessage2.payloadSchema, request3).pipe(mapError4(() => unsupported("sampling/createMessage", "Request is not representable by this protocol")));
+      const result5 = yield* client["sampling/createMessage"](wireRequest).pipe(mapError4(reverseError("sampling/createMessage")));
+      return yield* transcode(CreateMessage2.successSchema, CreateMessage.successSchema, result5).pipe(mapError4(() => unsupported("sampling/createMessage", "Response is not representable by the canonical model")));
+    }),
+    elicit: () => fail7(unsupported("elicitation/create", "Elicitation was introduced after this protocol revision"))
+  }),
+  projectNotification: (notification) => makeNotificationProjector({
+    supportsProgressMessage: false
+  }, notification),
+  normalizeCancellation: (payload) => decodeUnknownEffect2(CancelledNotification2.payloadSchema)(payload).pipe(map8((request3) => ({
+    requestId: request3.requestId,
+    reason: request3.reason,
+    metadata: request3._meta
+  })))
+});
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/internal/mcpSchema/v2025_03_26.js
+var protocolVersion2 = "2025-03-26";
+var optional5 = optional4;
+var ServerCapabilities3 = /* @__PURE__ */ Struct2({
+  ...ServerCapabilities2.fields,
+  completions: /* @__PURE__ */ optional5(/* @__PURE__ */ Struct2({}))
+});
+var AudioContent2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("audio"),
+  data: String6,
+  mimeType: String6,
+  annotations: /* @__PURE__ */ optional5(Annotation)
+});
+var PromptOrToolContent2 = /* @__PURE__ */ Union2([TextContent2, ImageContent2, AudioContent2, EmbeddedResource2]);
+var SamplingContent2 = /* @__PURE__ */ Union2([TextContent2, ImageContent2, AudioContent2]);
+var PromptMessage3 = /* @__PURE__ */ Struct2({
+  role: Role2,
+  content: PromptOrToolContent2
+});
+var SamplingMessage3 = /* @__PURE__ */ Struct2({
+  role: Role2,
+  content: SamplingContent2
+});
+var ToolAnnotations2 = /* @__PURE__ */ Struct2({
+  title: /* @__PURE__ */ optional5(String6),
+  readOnlyHint: /* @__PURE__ */ optional5(Boolean4),
+  destructiveHint: /* @__PURE__ */ optional5(Boolean4),
+  idempotentHint: /* @__PURE__ */ optional5(Boolean4),
+  openWorldHint: /* @__PURE__ */ optional5(Boolean4)
+});
+var Tool3 = /* @__PURE__ */ Struct2({
+  ...Tool2.fields,
+  annotations: /* @__PURE__ */ optional5(ToolAnnotations2)
+});
+var InitializeResult3 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  protocolVersion: String6,
+  capabilities: ServerCapabilities3,
+  serverInfo: Implementation2,
+  instructions: /* @__PURE__ */ optional5(String6)
+});
+var GetPromptResult3 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  description: /* @__PURE__ */ optional5(String6),
+  messages: /* @__PURE__ */ ArraySchema(PromptMessage3)
+});
+var ListToolsResult3 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  tools: /* @__PURE__ */ ArraySchema(Tool3)
+});
+var CallToolResult3 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  content: /* @__PURE__ */ ArraySchema(PromptOrToolContent2),
+  isError: /* @__PURE__ */ optional5(Boolean4)
+});
+var CreateMessageResult3 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  role: Role2,
+  content: SamplingContent2,
+  model: String6,
+  stopReason: /* @__PURE__ */ optional5(String6)
+});
+
+class Initialize3 extends (/* @__PURE__ */ make62("initialize", {
+  success: InitializeResult3,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    protocolVersion: String6,
+    capabilities: ClientCapabilities2,
+    clientInfo: Implementation2
+  }
+})) {
+}
+
+class GetPrompt3 extends (/* @__PURE__ */ make62("prompts/get", {
+  success: GetPromptResult3,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    name: String6,
+    arguments: /* @__PURE__ */ optional5(/* @__PURE__ */ Record(String6, String6))
+  }
+})) {
+}
+
+class ListTools3 extends (/* @__PURE__ */ make62("tools/list", {
+  success: ListToolsResult3,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class CallTool3 extends (/* @__PURE__ */ make62("tools/call", {
+  success: CallToolResult3,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    name: String6,
+    arguments: /* @__PURE__ */ optional5(JsonObject)
+  }
+})) {
+}
+
+class CreateMessage3 extends (/* @__PURE__ */ make62("sampling/createMessage", {
+  success: CreateMessageResult3,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    messages: /* @__PURE__ */ ArraySchema(SamplingMessage3),
+    modelPreferences: /* @__PURE__ */ optional5(ModelPreferences2),
+    systemPrompt: /* @__PURE__ */ optional5(String6),
+    includeContext: /* @__PURE__ */ optional5(/* @__PURE__ */ Literals(["none", "thisServer", "allServers"])),
+    temperature: /* @__PURE__ */ optional5(Finite),
+    maxTokens: Finite,
+    stopSequences: /* @__PURE__ */ optional5(/* @__PURE__ */ ArraySchema(String6)),
+    metadata: /* @__PURE__ */ optional5(JsonObject)
+  }
+})) {
+}
+
+class ProgressNotification3 extends (/* @__PURE__ */ make62("notifications/progress", {
+  payload: {
+    ...NotificationMeta2.fields,
+    progressToken: ProgressToken2,
+    progress: Finite,
+    total: /* @__PURE__ */ optional5(Finite),
+    message: /* @__PURE__ */ optional5(String6)
+  }
+})) {
+}
+
+class ClientRequestRpcs4 extends (/* @__PURE__ */ make63(Ping2, Initialize3, Complete2, SetLevel2, GetPrompt3, ListPrompts2, ListResources2, ListResourceTemplates2, ReadResource2, Subscribe2, Unsubscribe2, CallTool3, ListTools3)) {
+}
+
+class ClientNotificationRpcs3 extends (/* @__PURE__ */ make63(CancelledNotification2, ProgressNotification3, InitializedNotification2, RootsListChangedNotification2)) {
+}
+class ServerRequestRpcs2 extends (/* @__PURE__ */ make63(Ping2, CreateMessage3, ListRoots2)) {
+}
+
+class ServerNotificationRpcs2 extends (/* @__PURE__ */ make63(CancelledNotification2, ProgressNotification3, LoggingMessageNotification2, ResourceUpdatedNotification2, ResourceListChangedNotification2, ToolListChangedNotification2, PromptListChangedNotification2)) {
+}
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/internal/mcpProtocol/v2025_03_26.js
+var ClientRequestRpcs5 = /* @__PURE__ */ ClientRequestRpcs4.middleware(McpServerClientMiddleware);
+var ClientRpcs3 = /* @__PURE__ */ ClientRequestRpcs5.merge(ClientNotificationRpcs3);
+var AdapterRpcs2 = /* @__PURE__ */ ClientRpcs3.omit("ping");
+var profileFromInitialize2 = (initialize) => ({
+  protocolVersion: protocolVersion2,
+  clientCapabilities: ClientCapabilities.make(initialize.capabilities),
+  clientInfo: Implementation.make(initialize.clientInfo),
+  requestMetadata: initialize._meta
+});
+var unsupported2 = (operation, reason) => new McpReverseOperationUnsupported({
+  operation,
+  protocolVersion: protocolVersion2,
+  reason
+});
+var requireCapability2 = (profile, operation, capability) => Object.hasOwn(profile.clientCapabilities, capability) && profile.clientCapabilities[capability] !== undefined ? void_5 : fail7(unsupported2(operation, `Client did not advertise the ${capability} capability`));
+var projectContent2 = /* @__PURE__ */ fnUntraced2(function* (content) {
+  const projected = value5(content).pipe(when5({
+    type: "text"
+  }, (content2) => ({
+    ...content2,
+    annotations: content2.annotations
+  })), when5({
+    type: is4("image", "audio")
+  }, (content2) => ({
+    type: content2.type,
+    mimeType: content2.mimeType,
+    data: encodeBase64(content2.data),
+    annotations: content2.annotations
+  })), when5({
+    type: "resource"
+  }, (content2) => {
+    const resource = content2.resource;
+    if ("text" in resource) {
+      return EmbeddedResource2.make({
+        type: "resource",
+        resource: {
+          uri: resource.uri,
+          mimeType: resource.mimeType,
+          text: resource.text
+        },
+        annotations: content2.annotations
+      });
+    }
+    return EmbeddedResource2.make({
+      type: "resource",
+      resource: {
+        uri: resource.uri,
+        mimeType: resource.mimeType,
+        blob: encodeBase64(resource.blob)
+      },
+      annotations: content2.annotations
+    });
+  }), when5({
+    type: "resource_link"
+  }, () => new UnsupportedByProtocol({
+    protocolVersion: protocolVersion2,
+    feature: "resource_link tool content"
+  })), exhaustive2);
+  return projected instanceof UnsupportedByProtocol ? yield* projected : projected;
+});
+var projectResourceContents = (content) => ("text" in content) ? {
+  uri: content.uri,
+  mimeType: content.mimeType,
+  text: content.text
+} : {
+  uri: content.uri,
+  mimeType: content.mimeType,
+  blob: encodeBase64(content.blob)
+};
+var protocol2 = /* @__PURE__ */ make67({
+  protocolVersion: protocolVersion2,
+  transport: {
+    acceptsJsonRpcBatches: true,
+    requiresVersionHeader: false
+  },
+  clientRpcs: ClientRpcs3,
+  clientNotificationRpcs: ClientNotificationRpcs3,
+  serverRequestRpcs: ServerRequestRpcs2,
+  serverNotificationRpcs: ServerNotificationRpcs2,
+  handlerRpcs: AdapterRpcs2,
+  makeHandlers: (core, lifecycle) => AdapterRpcs2.of({
+    initialize: (request3, {
+      client
+    }) => lifecycle.initialize(protocolVersion2, profileFromInitialize2(request3), client.id).pipe(map8((result5) => InitializeResult3.make({
+      protocolVersion: protocolVersion2,
+      capabilities: {
+        experimental: result5.capabilities.experimental,
+        logging: result5.capabilities.logging ? {} : undefined,
+        completions: result5.capabilities.completions ? {} : undefined,
+        prompts: result5.capabilities.prompts,
+        resources: result5.capabilities.resources,
+        tools: result5.capabilities.tools
+      },
+      serverInfo: result5.serverInfo,
+      instructions: result5.instructions
+    }))),
+    "logging/setLevel": ({
+      level
+    }, {
+      client,
+      headers
+    }) => lifecycle.setLogLevel(level, client.id, headers).pipe(as3({})),
+    "notifications/cancelled": () => void_5,
+    "notifications/initialized": (_, {
+      client,
+      headers
+    }) => lifecycle.clientNotification(ClientNotification.Initialized(), client.id, headers),
+    "notifications/progress": (progress, {
+      client,
+      headers
+    }) => lifecycle.clientNotification(ClientNotification.Progress({
+      progressToken: progress.progressToken,
+      progress: progress.progress,
+      total: progress.total,
+      message: progress.message,
+      metadata: progress._meta
+    }), client.id, headers),
+    "notifications/roots/list_changed": (_, {
+      client,
+      headers
+    }) => lifecycle.clientNotification(ClientNotification.RootsChanged(), client.id, headers),
+    "resources/list": (_pageRequest) => McpServerClient.use((request3) => core.resources.list(profileFromClient(request3))).pipe(map8((resources) => ListResourcesResult2.make({
+      resources: resources.map((resource) => ({
+        uri: resource.uri,
+        name: resource.name,
+        description: resource.description,
+        mimeType: resource.mimeType,
+        size: resource.size,
+        annotations: resource.annotations
+      }))
+    }))),
+    "resources/templates/list": (_pageRequest) => McpServerClient.use((request3) => core.resources.listTemplates(profileFromClient(request3))).pipe(map8((resourceTemplates) => ListResourceTemplatesResult2.make({
+      resourceTemplates: resourceTemplates.map((template) => ({
+        uriTemplate: template.uriTemplate,
+        name: template.name,
+        description: template.description,
+        mimeType: template.mimeType,
+        annotations: template.annotations
+      }))
+    }))),
+    "resources/read": fnUntraced2(function* ({
+      uri
+    }) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.resources.read(uri, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromFeature));
+      return ReadResourceResult2.make({
+        contents: result5.contents.map(projectResourceContents),
+        _meta: result5._meta
+      });
+    }),
+    "resources/subscribe": ({
+      uri
+    }, {
+      client,
+      headers
+    }) => lifecycle.subscribe(uri, client.id, headers).pipe(as3({})),
+    "resources/unsubscribe": ({
+      uri
+    }, {
+      client,
+      headers
+    }) => lifecycle.unsubscribe(uri, client.id, headers).pipe(as3({})),
+    "prompts/list": (_pageRequest) => McpServerClient.use((request3) => core.prompts.list(profileFromClient(request3))).pipe(map8((prompts) => ListPromptsResult2.make({
+      prompts: prompts.map((prompt) => ({
+        name: prompt.name,
+        description: prompt.description,
+        arguments: prompt.arguments?.map((argument) => ({
+          name: argument.name,
+          description: argument.description,
+          required: argument.required
+        }))
+      }))
+    }))),
+    "prompts/get": fnUntraced2(function* ({
+      arguments: args2,
+      name
+    }) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.prompts.get(name, args2 ?? {}, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromFeature));
+      const messages = yield* forEach2(result5.messages, (message) => projectContent2(message.content).pipe(map8((content) => ({
+        role: message.role,
+        content
+      })), mapError4(ProtocolError.fromTool)));
+      return GetPromptResult3.make({
+        description: result5.description,
+        messages,
+        _meta: result5._meta
+      });
+    }),
+    "completion/complete": fnUntraced2(function* (completeRequest) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.completions.complete({
+        reference: completeRequest.ref.type === "ref/prompt" ? {
+          type: "prompt",
+          name: completeRequest.ref.name
+        } : {
+          type: "resourceTemplate",
+          uriTemplate: completeRequest.ref.uri
+        },
+        argument: completeRequest.argument,
+        metadata: completeRequest._meta
+      }, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromFeature));
+      return CompleteResult2.make({
+        completion: {
+          values: Array.from(result5.values),
+          total: result5.total,
+          hasMore: result5.hasMore
+        },
+        _meta: result5.metadata
+      });
+    }),
+    "tools/list": fnUntraced2(function* () {
+      const request3 = yield* McpServerClient;
+      const tools = yield* core.tools.list(profileFromClient(request3));
+      return ListToolsResult3.make({
+        tools: tools.map((tool) => Tool3.make({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          annotations: tool.title === undefined && tool.annotations === undefined ? undefined : ToolAnnotations2.make({
+            ...tool.annotations,
+            title: tool.title
+          })
+        }))
+      });
+    }),
+    "tools/call": fnUntraced2(function* (call) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.tools.call({
+        ...call,
+        arguments: call.arguments ?? {}
+      }, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromTool));
+      const content = yield* forEach2(result5.content, projectContent2).pipe(mapError4(ProtocolError.fromTool));
+      return CallToolResult3.make({
+        content,
+        isError: result5.isError,
+        _meta: result5._meta
+      });
+    })
+  }),
+  toReverseClient: (profile, client) => ({
+    listRoots: fnUntraced2(function* (request3) {
+      yield* requireCapability2(profile, "roots/list", "roots");
+      const wireRequest = yield* transcode(ListRoots.payloadSchema, ListRoots2.payloadSchema, request3).pipe(mapError4(() => unsupported2("roots/list", "Request is not representable by this protocol")));
+      const {
+        roots
+      } = yield* client["roots/list"](wireRequest).pipe(mapError4(reverseError("roots/list")));
+      return new ListRootsResult({
+        roots
+      });
+    }),
+    createMessage: fnUntraced2(function* (request3) {
+      yield* requireCapability2(profile, "sampling/createMessage", "sampling");
+      const wireRequest = yield* transcodeStrict(CreateMessage.payloadSchema, CreateMessage3.payloadSchema, request3).pipe(mapError4(() => unsupported2("sampling/createMessage", "Request is not representable by this protocol")));
+      const result5 = yield* client["sampling/createMessage"](wireRequest).pipe(mapError4(reverseError("sampling/createMessage")));
+      return yield* transcode(CreateMessage3.successSchema, CreateMessage.successSchema, result5).pipe(mapError4(() => unsupported2("sampling/createMessage", "Response is not representable by the canonical model")));
+    }),
+    elicit: () => fail7(unsupported2("elicitation/create", "Elicitation was introduced after this protocol revision"))
+  }),
+  projectNotification: (notification) => makeNotificationProjector({
+    supportsProgressMessage: true
+  }, notification),
+  normalizeCancellation: (payload) => decodeUnknownEffect2(CancelledNotification2.payloadSchema)(payload).pipe(map8((request3) => ({
+    requestId: request3.requestId,
+    reason: request3.reason,
+    metadata: request3._meta
+  })))
+});
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/internal/mcpSchema/v2025_06_18.js
+var protocolVersion3 = "2025-06-18";
+var optional6 = optional4;
+var JsonObject3 = JsonObject;
+var Meta2 = /* @__PURE__ */ optional6(JsonObject3);
+var Implementation3 = /* @__PURE__ */ Struct2({
+  name: String6,
+  title: /* @__PURE__ */ optional6(String6),
+  version: String6
+});
+var ClientCapabilities3 = /* @__PURE__ */ Struct2({
+  ...ClientCapabilities2.fields,
+  elicitation: /* @__PURE__ */ optional6(/* @__PURE__ */ Struct2({}))
+});
+var Annotations2 = /* @__PURE__ */ Struct2({
+  audience: /* @__PURE__ */ optional6(/* @__PURE__ */ ArraySchema(Role2)),
+  priority: /* @__PURE__ */ optional6(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
+    minimum: 0,
+    maximum: 1
+  })))
+});
+var Resource4 = /* @__PURE__ */ Struct2({
+  ...Resource3.fields,
+  title: /* @__PURE__ */ optional6(String6),
+  annotations: /* @__PURE__ */ optional6(Annotations2),
+  _meta: Meta2
+});
+var ResourceTemplate3 = /* @__PURE__ */ Struct2({
+  ...ResourceTemplate2.fields,
+  title: /* @__PURE__ */ optional6(String6),
+  annotations: /* @__PURE__ */ optional6(Annotations2),
+  _meta: Meta2
+});
+var TextResourceContents3 = /* @__PURE__ */ Struct2({
+  ...TextResourceContents2.fields,
+  _meta: Meta2
+});
+var BlobResourceContents3 = /* @__PURE__ */ Struct2({
+  ...BlobResourceContents2.fields,
+  _meta: Meta2
+});
+var ResourceContents3 = /* @__PURE__ */ Union2([TextResourceContents3, BlobResourceContents3]);
+var PromptArgument3 = /* @__PURE__ */ Struct2({
+  ...PromptArgument2.fields,
+  title: /* @__PURE__ */ optional6(String6)
+});
+var Prompt4 = /* @__PURE__ */ Struct2({
+  ...Prompt3.fields,
+  title: /* @__PURE__ */ optional6(String6),
+  arguments: /* @__PURE__ */ optional6(/* @__PURE__ */ ArraySchema(PromptArgument3)),
+  _meta: Meta2
+});
+var EmbeddedResource3 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("resource"),
+  resource: ResourceContents3,
+  annotations: /* @__PURE__ */ optional6(Annotations2),
+  _meta: Meta2
+});
+var ResourceLink2 = /* @__PURE__ */ Struct2({
+  ...Resource4.fields,
+  type: /* @__PURE__ */ Literal2("resource_link")
+});
+var TextContent3 = /* @__PURE__ */ Struct2({
+  ...TextContent2.fields,
+  annotations: /* @__PURE__ */ optional6(Annotations2),
+  _meta: Meta2
+});
+var ImageContent3 = /* @__PURE__ */ Struct2({
+  ...ImageContent2.fields,
+  annotations: /* @__PURE__ */ optional6(Annotations2),
+  _meta: Meta2
+});
+var AudioContent3 = /* @__PURE__ */ Struct2({
+  ...AudioContent2.fields,
+  annotations: /* @__PURE__ */ optional6(Annotations2),
+  _meta: Meta2
+});
+var ContentBlock2 = /* @__PURE__ */ Union2([TextContent3, ImageContent3, AudioContent3, EmbeddedResource3, ResourceLink2]);
+var SamplingContent3 = /* @__PURE__ */ Union2([TextContent3, ImageContent3, AudioContent3]);
+var PromptMessage4 = /* @__PURE__ */ Struct2({
+  role: Role2,
+  content: ContentBlock2
+});
+var SamplingMessage4 = /* @__PURE__ */ Struct2({
+  role: Role2,
+  content: SamplingContent3
+});
+var ServerCapabilities4 = /* @__PURE__ */ Struct2({
+  ...ServerCapabilities3.fields
+});
+var InitializeResult4 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  protocolVersion: String6,
+  capabilities: ServerCapabilities4,
+  serverInfo: Implementation3,
+  instructions: /* @__PURE__ */ optional6(String6)
+});
+
+class Initialize4 extends (/* @__PURE__ */ make62("initialize", {
+  success: InitializeResult4,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    protocolVersion: String6,
+    capabilities: ClientCapabilities3,
+    clientInfo: Implementation3
+  }
+})) {
+}
+var ToolJsonSchema2 = /* @__PURE__ */ StructWithRest(/* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("object"),
+  properties: /* @__PURE__ */ optional6(/* @__PURE__ */ Record(String6, JsonObject3)),
+  required: /* @__PURE__ */ optional6(/* @__PURE__ */ ArraySchema(String6))
+}), [JsonObject]);
+var Tool4 = /* @__PURE__ */ Struct2({
+  name: String6,
+  title: /* @__PURE__ */ optional6(String6),
+  description: /* @__PURE__ */ optional6(String6),
+  inputSchema: ToolJsonSchema2,
+  outputSchema: /* @__PURE__ */ optional6(ToolJsonSchema2),
+  annotations: /* @__PURE__ */ optional6(ToolAnnotations2),
+  _meta: Meta2
+});
+var CallToolResult4 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  content: /* @__PURE__ */ ArraySchema(ContentBlock2),
+  structuredContent: /* @__PURE__ */ optional6(JsonObject3),
+  isError: /* @__PURE__ */ optional6(Boolean4)
+});
+var CreateMessageResult4 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  role: Role2,
+  content: SamplingContent3,
+  model: String6,
+  stopReason: /* @__PURE__ */ optional6(String6)
+});
+
+class CreateMessage4 extends (/* @__PURE__ */ make62("sampling/createMessage", {
+  success: CreateMessageResult4,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    messages: /* @__PURE__ */ ArraySchema(SamplingMessage4),
+    modelPreferences: /* @__PURE__ */ optional6(ModelPreferences2),
+    systemPrompt: /* @__PURE__ */ optional6(String6),
+    includeContext: /* @__PURE__ */ optional6(/* @__PURE__ */ Literals(["none", "thisServer", "allServers"])),
+    temperature: /* @__PURE__ */ optional6(Finite),
+    maxTokens: Finite,
+    stopSequences: /* @__PURE__ */ optional6(/* @__PURE__ */ ArraySchema(String6)),
+    metadata: /* @__PURE__ */ optional6(JsonObject3)
+  }
+})) {
+}
+var PromptReference3 = /* @__PURE__ */ Struct2({
+  ...PromptReference2.fields,
+  title: /* @__PURE__ */ optional6(String6)
+});
+var ResourceTemplateReference = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("ref/resource"),
+  uri: String6
+});
+var CompleteResult3 = CompleteResult2;
+
+class Complete3 extends (/* @__PURE__ */ make62("completion/complete", {
+  success: CompleteResult3,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    ref: /* @__PURE__ */ Union2([PromptReference3, ResourceTemplateReference]),
+    argument: /* @__PURE__ */ Struct2({
+      name: String6,
+      value: String6
+    }),
+    context: /* @__PURE__ */ optional6(/* @__PURE__ */ Struct2({
+      arguments: /* @__PURE__ */ optional6(/* @__PURE__ */ Record(String6, String6))
+    }))
+  }
+})) {
+}
+var ListResourcesResult3 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  resources: /* @__PURE__ */ ArraySchema(Resource4)
+});
+var ListResourceTemplatesResult3 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  resourceTemplates: /* @__PURE__ */ ArraySchema(ResourceTemplate3)
+});
+var ReadResourceResult3 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  contents: /* @__PURE__ */ ArraySchema(ResourceContents3)
+});
+var ListPromptsResult3 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  prompts: /* @__PURE__ */ ArraySchema(Prompt4)
+});
+var GetPromptResult4 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  description: /* @__PURE__ */ optional6(String6),
+  messages: /* @__PURE__ */ ArraySchema(PromptMessage4)
+});
+var ListToolsResult4 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  tools: /* @__PURE__ */ ArraySchema(Tool4)
+});
+
+class ListResources3 extends (/* @__PURE__ */ make62("resources/list", {
+  success: ListResourcesResult3,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class ListResourceTemplates3 extends (/* @__PURE__ */ make62("resources/templates/list", {
+  success: ListResourceTemplatesResult3,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class ReadResource3 extends (/* @__PURE__ */ make62("resources/read", {
+  success: ReadResourceResult3,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    uri: String6
+  }
+})) {
+}
+
+class ListPrompts3 extends (/* @__PURE__ */ make62("prompts/list", {
+  success: ListPromptsResult3,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class GetPrompt4 extends (/* @__PURE__ */ make62("prompts/get", {
+  success: GetPromptResult4,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    name: String6,
+    arguments: /* @__PURE__ */ optional6(/* @__PURE__ */ Record(String6, String6))
+  }
+})) {
+}
+
+class ListTools4 extends (/* @__PURE__ */ make62("tools/list", {
+  success: ListToolsResult4,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class CallTool4 extends (/* @__PURE__ */ make62("tools/call", {
+  success: CallToolResult4,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    name: String6,
+    arguments: /* @__PURE__ */ optional6(JsonObject3)
+  }
+})) {
+}
+var ElicitResult2 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  action: /* @__PURE__ */ Literals(["accept", "decline", "cancel"]),
+  content: /* @__PURE__ */ optional6(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Union2([String6, Finite, Boolean4])))
+});
+var StringSchema2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("string"),
+  title: /* @__PURE__ */ optional6(String6),
+  description: /* @__PURE__ */ optional6(String6),
+  minLength: /* @__PURE__ */ optional6(Int),
+  maxLength: /* @__PURE__ */ optional6(Int),
+  format: /* @__PURE__ */ optional6(/* @__PURE__ */ Literals(["email", "uri", "date", "date-time"]))
+});
+var NumberSchema2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literals(["number", "integer"]),
+  title: /* @__PURE__ */ optional6(String6),
+  description: /* @__PURE__ */ optional6(String6),
+  minimum: /* @__PURE__ */ optional6(Finite),
+  maximum: /* @__PURE__ */ optional6(Finite)
+});
+var BooleanSchema2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("boolean"),
+  title: /* @__PURE__ */ optional6(String6),
+  description: /* @__PURE__ */ optional6(String6),
+  default: /* @__PURE__ */ optional6(Boolean4)
+});
+var EnumSchema2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("string"),
+  title: /* @__PURE__ */ optional6(String6),
+  description: /* @__PURE__ */ optional6(String6),
+  enum: /* @__PURE__ */ ArraySchema(String6),
+  enumNames: /* @__PURE__ */ optional6(/* @__PURE__ */ ArraySchema(String6))
+});
+var RequestedSchema = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("object"),
+  properties: /* @__PURE__ */ Record(String6, /* @__PURE__ */ Union2([StringSchema2, NumberSchema2, BooleanSchema2, EnumSchema2])),
+  required: /* @__PURE__ */ optional6(/* @__PURE__ */ ArraySchema(String6))
+});
+
+class Elicit2 extends (/* @__PURE__ */ make62("elicitation/create", {
+  success: ElicitResult2,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    message: String6,
+    requestedSchema: RequestedSchema
+  }
+})) {
+}
+
+class ClientRequestRpcs6 extends (/* @__PURE__ */ make63(Ping2, Initialize4, Complete3, SetLevel2, GetPrompt4, ListPrompts3, ListResources3, ListResourceTemplates3, ReadResource3, Subscribe2, Unsubscribe2, CallTool4, ListTools4)) {
+}
+
+class ClientNotificationRpcs4 extends (/* @__PURE__ */ make63(CancelledNotification2, ProgressNotification3, InitializedNotification2, RootsListChangedNotification2)) {
+}
+class ServerRequestRpcs3 extends (/* @__PURE__ */ make63(Ping2, CreateMessage4, ListRoots2, Elicit2)) {
+}
+
+class ServerNotificationRpcs3 extends (/* @__PURE__ */ make63(CancelledNotification2, ProgressNotification3, LoggingMessageNotification2, ResourceUpdatedNotification2, ResourceListChangedNotification2, ToolListChangedNotification2, PromptListChangedNotification2)) {
+}
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/internal/mcpProtocol/v2025_06_18.js
+var ClientRequestRpcs7 = /* @__PURE__ */ ClientRequestRpcs6.middleware(McpServerClientMiddleware);
+var ClientRpcs4 = /* @__PURE__ */ ClientRequestRpcs7.merge(ClientNotificationRpcs4);
+var AdapterRpcs3 = /* @__PURE__ */ ClientRpcs4.omit("ping");
+var profileFromInitialize3 = (initialize) => ({
+  protocolVersion: protocolVersion3,
+  clientCapabilities: ClientCapabilities.make(initialize.capabilities),
+  clientInfo: Implementation.make(initialize.clientInfo),
+  requestMetadata: initialize._meta
+});
+var unsupported3 = (operation, reason) => new McpReverseOperationUnsupported({
+  operation,
+  protocolVersion: protocolVersion3,
+  reason
+});
+var requireCapability3 = (profile, operation, capability) => Object.hasOwn(profile.clientCapabilities, capability) && profile.clientCapabilities[capability] !== undefined ? void_5 : fail7(unsupported3(operation, `Client did not advertise the ${capability} capability`));
+var projectContent3 = /* @__PURE__ */ fnUntraced2(function* (content) {
+  return value5(content).pipe(when5({
+    type: is4("text", "resource_link")
+  }, (content2) => content2), when5({
+    type: is4("image", "audio")
+  }, (content2) => ({
+    type: content2.type,
+    mimeType: content2.mimeType,
+    data: encodeBase64(content2.data),
+    annotations: content2.annotations,
+    _meta: content2._meta
+  })), when5({
+    type: "resource"
+  }, (content2) => {
+    const resource = content2.resource;
+    if ("text" in resource) {
+      return EmbeddedResource3.make({
+        type: "resource",
+        resource: {
+          uri: resource.uri,
+          mimeType: resource.mimeType,
+          _meta: resource._meta,
+          text: resource.text
+        },
+        annotations: content2.annotations,
+        _meta: content2._meta
+      });
+    }
+    return EmbeddedResource3.make({
+      type: "resource",
+      resource: {
+        uri: resource.uri,
+        mimeType: resource.mimeType,
+        _meta: resource._meta,
+        blob: encodeBase64(resource.blob)
+      },
+      annotations: content2.annotations,
+      _meta: content2._meta
+    });
+  }), exhaustive2);
+});
+var projectResourceContents2 = (content) => ("text" in content) ? {
+  uri: content.uri,
+  mimeType: content.mimeType,
+  _meta: content._meta,
+  text: content.text
+} : {
+  uri: content.uri,
+  mimeType: content.mimeType,
+  _meta: content._meta,
+  blob: encodeBase64(content.blob)
+};
+var projectStructuredContent = /* @__PURE__ */ fnUntraced2(function* (content) {
+  if (content === undefined || isJsonObject2(content)) {
+    return content;
+  }
+  return yield* new UnsupportedByProtocol({
+    protocolVersion: protocolVersion3,
+    feature: "non-object structured tool content"
+  });
+});
+var isJsonObject2 = (value6) => typeof value6 === "object" && value6 !== null && !Array.isArray(value6);
+var protocol3 = /* @__PURE__ */ make67({
+  protocolVersion: protocolVersion3,
+  transport: {
+    acceptsJsonRpcBatches: false,
+    requiresVersionHeader: true
+  },
+  clientRpcs: ClientRpcs4,
+  clientNotificationRpcs: ClientNotificationRpcs4,
+  serverRequestRpcs: ServerRequestRpcs3,
+  serverNotificationRpcs: ServerNotificationRpcs3,
+  handlerRpcs: AdapterRpcs3,
+  makeHandlers: (core, lifecycle) => AdapterRpcs3.of({
+    initialize: (request3, {
+      client
+    }) => lifecycle.initialize(protocolVersion3, profileFromInitialize3(request3), client.id).pipe(map8((result5) => InitializeResult4.make({
+      protocolVersion: protocolVersion3,
+      capabilities: {
+        experimental: result5.capabilities.experimental,
+        logging: result5.capabilities.logging ? {} : undefined,
+        completions: result5.capabilities.completions ? {} : undefined,
+        prompts: result5.capabilities.prompts,
+        resources: result5.capabilities.resources,
+        tools: result5.capabilities.tools
+      },
+      serverInfo: result5.serverInfo,
+      instructions: result5.instructions
+    }))),
+    "logging/setLevel": ({
+      level
+    }, {
+      client,
+      headers
+    }) => lifecycle.setLogLevel(level, client.id, headers).pipe(as3({})),
+    "notifications/cancelled": () => void_5,
+    "notifications/initialized": (_, {
+      client,
+      headers
+    }) => lifecycle.clientNotification(ClientNotification.Initialized(), client.id, headers),
+    "notifications/progress": (progress, {
+      client,
+      headers
+    }) => lifecycle.clientNotification(ClientNotification.Progress({
+      progressToken: progress.progressToken,
+      progress: progress.progress,
+      total: progress.total,
+      message: progress.message,
+      metadata: progress._meta
+    }), client.id, headers),
+    "notifications/roots/list_changed": (_, {
+      client,
+      headers
+    }) => lifecycle.clientNotification(ClientNotification.RootsChanged(), client.id, headers),
+    "resources/list": (_pageRequest) => McpServerClient.use((request3) => core.resources.list(profileFromClient(request3))).pipe(map8((resources) => ListResourcesResult3.make({
+      resources
+    }))),
+    "resources/templates/list": (_pageRequest) => McpServerClient.use((request3) => core.resources.listTemplates(profileFromClient(request3))).pipe(map8((resourceTemplates) => ListResourceTemplatesResult3.make({
+      resourceTemplates
+    }))),
+    "resources/read": fnUntraced2(function* ({
+      uri
+    }) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.resources.read(uri, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromFeature));
+      return ReadResourceResult3.make({
+        contents: result5.contents.map(projectResourceContents2),
+        _meta: result5._meta
+      });
+    }),
+    "resources/subscribe": ({
+      uri
+    }, {
+      client,
+      headers
+    }) => lifecycle.subscribe(uri, client.id, headers).pipe(as3({})),
+    "resources/unsubscribe": ({
+      uri
+    }, {
+      client,
+      headers
+    }) => lifecycle.unsubscribe(uri, client.id, headers).pipe(as3({})),
+    "prompts/list": (_pageRequest) => McpServerClient.use((request3) => core.prompts.list(profileFromClient(request3))).pipe(map8((prompts) => ListPromptsResult3.make({
+      prompts
+    }))),
+    "prompts/get": fnUntraced2(function* ({
+      arguments: args2,
+      name
+    }) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.prompts.get(name, args2 ?? {}, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromFeature));
+      const messages = yield* forEach2(result5.messages, (message) => projectContent3(message.content).pipe(map8((content) => ({
+        role: message.role,
+        content
+      })), mapError4(ProtocolError.fromTool)));
+      return GetPromptResult4.make({
+        description: result5.description,
+        messages,
+        _meta: result5._meta
+      });
+    }),
+    "completion/complete": fnUntraced2(function* (completeRequest) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.completions.complete({
+        reference: completeRequest.ref.type === "ref/prompt" ? {
+          type: "prompt",
+          name: completeRequest.ref.name,
+          title: completeRequest.ref.title
+        } : {
+          type: "resourceTemplate",
+          uriTemplate: completeRequest.ref.uri
+        },
+        argument: completeRequest.argument,
+        context: completeRequest.context?.arguments === undefined ? undefined : {
+          arguments: completeRequest.context.arguments
+        },
+        metadata: completeRequest._meta
+      }, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromFeature));
+      return CompleteResult3.make({
+        completion: {
+          values: Array.from(result5.values),
+          total: result5.total,
+          hasMore: result5.hasMore
+        },
+        _meta: result5.metadata
+      });
+    }),
+    "tools/list": fnUntraced2(function* () {
+      const request3 = yield* McpServerClient;
+      const tools = yield* core.tools.list(profileFromClient(request3));
+      return ListToolsResult4.make({
+        tools: tools.map((tool) => Tool4.make({
+          name: tool.name,
+          title: tool.title,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          outputSchema: tool.outputSchema,
+          annotations: tool.annotations === undefined ? undefined : ToolAnnotations2.make({
+            readOnlyHint: tool.annotations.readOnlyHint,
+            destructiveHint: tool.annotations.destructiveHint,
+            idempotentHint: tool.annotations.idempotentHint,
+            openWorldHint: tool.annotations.openWorldHint
+          }),
+          _meta: tool._meta
+        }))
+      });
+    }),
+    "tools/call": fnUntraced2(function* (call) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.tools.call({
+        ...call,
+        arguments: call.arguments ?? {}
+      }, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromTool));
+      const content = yield* forEach2(result5.content, projectContent3).pipe(mapError4(ProtocolError.fromTool));
+      const structuredContent = yield* projectStructuredContent(result5.structuredContent).pipe(mapError4(ProtocolError.fromTool));
+      return CallToolResult4.make({
+        content,
+        structuredContent,
+        isError: result5.isError,
+        _meta: result5._meta
+      });
+    })
+  }),
+  toReverseClient: (profile, client) => ({
+    listRoots: fnUntraced2(function* (request3) {
+      yield* requireCapability3(profile, "roots/list", "roots");
+      const wireRequest = yield* transcode(ListRoots.payloadSchema, ListRoots2.payloadSchema, request3).pipe(mapError4(() => unsupported3("roots/list", "Request is not representable by this protocol")));
+      const {
+        roots
+      } = yield* client["roots/list"](wireRequest).pipe(mapError4(reverseError("roots/list")));
+      return new ListRootsResult({
+        roots
+      });
+    }),
+    createMessage: fnUntraced2(function* (request3) {
+      yield* requireCapability3(profile, "sampling/createMessage", "sampling");
+      const wireRequest = yield* transcodeStrict(CreateMessage.payloadSchema, CreateMessage4.payloadSchema, request3).pipe(mapError4(() => unsupported3("sampling/createMessage", "Request is not representable by this protocol")));
+      const result5 = yield* client["sampling/createMessage"](wireRequest).pipe(mapError4(reverseError("sampling/createMessage")));
+      return yield* transcode(CreateMessage4.successSchema, CreateMessage.successSchema, result5).pipe(mapError4(() => unsupported3("sampling/createMessage", "Response is not representable by the canonical model")));
+    }),
+    elicit: fnUntraced2(function* (request3) {
+      yield* requireCapability3(profile, "elicitation/create", "elicitation");
+      const projected = request3.mode === "form" ? omit3(request3, ["mode"]) : request3;
+      const wireRequest = yield* decodeUnknownEffect2(Elicit2.payloadSchema, {
+        onExcessProperty: "error"
+      })(projected).pipe(mapError4(() => unsupported3("elicitation/create", "Request is not representable by this protocol")));
+      const result5 = yield* client["elicitation/create"](wireRequest).pipe(mapError4(reverseError("elicitation/create")));
+      return yield* transcode(Elicit2.successSchema, Elicit.successSchema, result5).pipe(mapError4(() => unsupported3("elicitation/create", "Response is not representable by the canonical model")));
+    })
+  }),
+  projectNotification: (notification) => makeNotificationProjector({
+    supportsProgressMessage: true
+  }, notification),
+  normalizeCancellation: (payload) => decodeUnknownEffect2(CancelledNotification2.payloadSchema)(payload).pipe(map8((request3) => ({
+    requestId: request3.requestId,
+    reason: request3.reason,
+    metadata: request3._meta
+  })))
+});
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/internal/mcpSchema/v2025_11_25.js
+var protocolVersion4 = "2025-11-25";
+var optional7 = optional4;
+var JsonObject4 = JsonObject;
+var Meta3 = /* @__PURE__ */ optional7(JsonObject4);
+var Icon2 = /* @__PURE__ */ Struct2({
+  src: String6,
+  mimeType: /* @__PURE__ */ optional7(String6),
+  sizes: /* @__PURE__ */ optional7(/* @__PURE__ */ ArraySchema(String6)),
+  theme: /* @__PURE__ */ optional7(/* @__PURE__ */ Literals(["light", "dark"]))
+});
+var Implementation4 = /* @__PURE__ */ Struct2({
+  ...Implementation3.fields,
+  description: /* @__PURE__ */ optional7(String6),
+  websiteUrl: /* @__PURE__ */ optional7(String6),
+  icons: /* @__PURE__ */ optional7(/* @__PURE__ */ ArraySchema(Icon2))
+});
+var ClientCapabilities4 = /* @__PURE__ */ Struct2({
+  ...ClientCapabilities3.fields,
+  sampling: /* @__PURE__ */ optional7(/* @__PURE__ */ Struct2({
+    context: /* @__PURE__ */ optional7(JsonObject4),
+    tools: /* @__PURE__ */ optional7(JsonObject4)
+  })),
+  elicitation: /* @__PURE__ */ optional7(/* @__PURE__ */ Struct2({
+    form: /* @__PURE__ */ optional7(JsonObject4),
+    url: /* @__PURE__ */ optional7(JsonObject4)
+  }))
+});
+var Annotations3 = /* @__PURE__ */ Struct2({
+  ...Annotations2.fields,
+  lastModified: /* @__PURE__ */ optional7(String6)
+});
+var Resource5 = /* @__PURE__ */ Struct2({
+  ...Resource4.fields,
+  annotations: /* @__PURE__ */ optional7(Annotations3),
+  icons: /* @__PURE__ */ optional7(/* @__PURE__ */ ArraySchema(Icon2))
+});
+var ResourceTemplate4 = /* @__PURE__ */ Struct2({
+  ...ResourceTemplate3.fields,
+  annotations: /* @__PURE__ */ optional7(Annotations3),
+  icons: /* @__PURE__ */ optional7(/* @__PURE__ */ ArraySchema(Icon2))
+});
+var Prompt5 = /* @__PURE__ */ Struct2({
+  ...Prompt4.fields,
+  icons: /* @__PURE__ */ optional7(/* @__PURE__ */ ArraySchema(Icon2))
+});
+var TextContent4 = /* @__PURE__ */ Struct2({
+  ...TextContent3.fields,
+  annotations: /* @__PURE__ */ optional7(Annotations3)
+});
+var ImageContent4 = /* @__PURE__ */ Struct2({
+  ...ImageContent3.fields,
+  annotations: /* @__PURE__ */ optional7(Annotations3)
+});
+var AudioContent4 = /* @__PURE__ */ Struct2({
+  ...AudioContent3.fields,
+  annotations: /* @__PURE__ */ optional7(Annotations3)
+});
+var EmbeddedResource4 = /* @__PURE__ */ Struct2({
+  ...EmbeddedResource3.fields,
+  annotations: /* @__PURE__ */ optional7(Annotations3)
+});
+var ResourceLink3 = /* @__PURE__ */ Struct2({
+  ...Resource5.fields,
+  type: /* @__PURE__ */ Literal2("resource_link")
+});
+var ContentBlock3 = /* @__PURE__ */ Union2([TextContent4, ImageContent4, AudioContent4, ResourceLink3, EmbeddedResource4]);
+var PromptMessage5 = /* @__PURE__ */ Struct2({
+  role: Role2,
+  content: ContentBlock3
+});
+var Tool5 = /* @__PURE__ */ Struct2({
+  ...Tool4.fields,
+  icons: /* @__PURE__ */ optional7(/* @__PURE__ */ ArraySchema(Icon2))
+});
+var CallToolResult5 = /* @__PURE__ */ Struct2({
+  ...CallToolResult4.fields,
+  content: /* @__PURE__ */ ArraySchema(ContentBlock3)
+});
+
+class CallTool5 extends (/* @__PURE__ */ make62("tools/call", {
+  success: CallToolResult5,
+  error: McpError2,
+  payload: CallTool4.payloadSchema
+})) {
+}
+var ToolUseContent2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("tool_use"),
+  id: String6,
+  name: String6,
+  input: JsonObject4,
+  _meta: Meta3
+});
+var ToolResultContent2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("tool_result"),
+  toolUseId: String6,
+  content: /* @__PURE__ */ ArraySchema(ContentBlock3),
+  structuredContent: /* @__PURE__ */ optional7(JsonObject4),
+  isError: /* @__PURE__ */ optional7(Boolean4),
+  _meta: Meta3
+});
+var SamplingMessageContentBlock2 = /* @__PURE__ */ Union2([TextContent4, ImageContent4, AudioContent4, ToolUseContent2, ToolResultContent2]);
+var SamplingMessage5 = /* @__PURE__ */ Struct2({
+  role: Role2,
+  content: /* @__PURE__ */ Union2([SamplingMessageContentBlock2, /* @__PURE__ */ ArraySchema(SamplingMessageContentBlock2)]),
+  _meta: Meta3
+});
+var ToolChoice2 = /* @__PURE__ */ Struct2({
+  mode: /* @__PURE__ */ optional7(/* @__PURE__ */ Literals(["auto", "required", "none"]))
+});
+var CreateMessageResult5 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  ...SamplingMessage5.fields,
+  model: String6,
+  stopReason: /* @__PURE__ */ optional7(String6)
+});
+
+class CreateMessage5 extends (/* @__PURE__ */ make62("sampling/createMessage", {
+  success: CreateMessageResult5,
+  error: McpError2,
+  payload: {
+    ...CreateMessage4.payloadSchema.fields,
+    messages: /* @__PURE__ */ ArraySchema(SamplingMessage5),
+    maxTokens: Int,
+    tools: /* @__PURE__ */ optional7(/* @__PURE__ */ ArraySchema(Tool5)),
+    toolChoice: /* @__PURE__ */ optional7(ToolChoice2)
+  }
+})) {
+}
+var Root3 = /* @__PURE__ */ Struct2({
+  ...Root2.fields,
+  _meta: Meta3
+});
+var ListRootsResult3 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  roots: /* @__PURE__ */ ArraySchema(Root3)
+});
+
+class ListRoots3 extends (/* @__PURE__ */ make62("roots/list", {
+  success: ListRootsResult3,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(RequestMeta2)
+})) {
+}
+var StringSchema3 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("string"),
+  title: /* @__PURE__ */ optional7(String6),
+  description: /* @__PURE__ */ optional7(String6),
+  minLength: /* @__PURE__ */ optional7(Int),
+  maxLength: /* @__PURE__ */ optional7(Int),
+  format: /* @__PURE__ */ optional7(/* @__PURE__ */ Literals(["email", "uri", "date", "date-time"])),
+  default: /* @__PURE__ */ optional7(String6)
+});
+var NumberSchema3 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literals(["number", "integer"]),
+  title: /* @__PURE__ */ optional7(String6),
+  description: /* @__PURE__ */ optional7(String6),
+  minimum: /* @__PURE__ */ optional7(Finite),
+  maximum: /* @__PURE__ */ optional7(Finite),
+  default: /* @__PURE__ */ optional7(Finite)
+});
+var BooleanSchema3 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("boolean"),
+  title: /* @__PURE__ */ optional7(String6),
+  description: /* @__PURE__ */ optional7(String6),
+  default: /* @__PURE__ */ optional7(Boolean4)
+});
+var EnumOption = /* @__PURE__ */ Struct2({
+  const: String6,
+  title: String6
+});
+var UntitledSingleSelectEnumSchema2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("string"),
+  title: /* @__PURE__ */ optional7(String6),
+  description: /* @__PURE__ */ optional7(String6),
+  enum: /* @__PURE__ */ ArraySchema(String6),
+  default: /* @__PURE__ */ optional7(String6)
+});
+var TitledSingleSelectEnumSchema2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("string"),
+  title: /* @__PURE__ */ optional7(String6),
+  description: /* @__PURE__ */ optional7(String6),
+  oneOf: /* @__PURE__ */ ArraySchema(EnumOption),
+  default: /* @__PURE__ */ optional7(String6)
+});
+var SingleSelectEnumSchema2 = /* @__PURE__ */ Union2([UntitledSingleSelectEnumSchema2, TitledSingleSelectEnumSchema2]);
+var UntitledMultiSelectEnumSchema2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("array"),
+  title: /* @__PURE__ */ optional7(String6),
+  description: /* @__PURE__ */ optional7(String6),
+  minItems: /* @__PURE__ */ optional7(Int),
+  maxItems: /* @__PURE__ */ optional7(Int),
+  items: /* @__PURE__ */ Struct2({
+    type: /* @__PURE__ */ Literal2("string"),
+    enum: /* @__PURE__ */ ArraySchema(String6)
+  }),
+  default: /* @__PURE__ */ optional7(/* @__PURE__ */ ArraySchema(String6))
+});
+var TitledMultiSelectEnumSchema2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("array"),
+  title: /* @__PURE__ */ optional7(String6),
+  description: /* @__PURE__ */ optional7(String6),
+  minItems: /* @__PURE__ */ optional7(Int),
+  maxItems: /* @__PURE__ */ optional7(Int),
+  items: /* @__PURE__ */ Struct2({
+    anyOf: /* @__PURE__ */ ArraySchema(EnumOption)
+  }),
+  default: /* @__PURE__ */ optional7(/* @__PURE__ */ ArraySchema(String6))
+});
+var MultiSelectEnumSchema2 = /* @__PURE__ */ Union2([UntitledMultiSelectEnumSchema2, TitledMultiSelectEnumSchema2]);
+var LegacyTitledEnumSchema2 = /* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("string"),
+  title: /* @__PURE__ */ optional7(String6),
+  description: /* @__PURE__ */ optional7(String6),
+  enum: /* @__PURE__ */ ArraySchema(String6),
+  enumNames: /* @__PURE__ */ optional7(/* @__PURE__ */ ArraySchema(String6)),
+  default: /* @__PURE__ */ optional7(String6)
+});
+var EnumSchema3 = /* @__PURE__ */ Union2([SingleSelectEnumSchema2, MultiSelectEnumSchema2, LegacyTitledEnumSchema2]);
+var PrimitiveSchemaDefinition2 = /* @__PURE__ */ Union2([StringSchema3, NumberSchema3, BooleanSchema3, EnumSchema3]);
+var RequestedSchema2 = /* @__PURE__ */ Struct2({
+  $schema: /* @__PURE__ */ optional7(String6),
+  type: /* @__PURE__ */ Literal2("object"),
+  properties: /* @__PURE__ */ Record(String6, PrimitiveSchemaDefinition2),
+  required: /* @__PURE__ */ optional7(/* @__PURE__ */ ArraySchema(String6))
+});
+var ElicitRequestFormParams2 = /* @__PURE__ */ Struct2({
+  ...RequestMeta2.fields,
+  mode: /* @__PURE__ */ optional7(/* @__PURE__ */ Literal2("form")),
+  message: String6,
+  requestedSchema: RequestedSchema2
+});
+var ElicitRequestURLParams2 = /* @__PURE__ */ Struct2({
+  ...RequestMeta2.fields,
+  mode: /* @__PURE__ */ Literal2("url"),
+  message: String6,
+  elicitationId: String6,
+  url: String6
+});
+var ElicitRequestParams2 = /* @__PURE__ */ Union2([ElicitRequestFormParams2, ElicitRequestURLParams2]);
+var ElicitResult3 = /* @__PURE__ */ Struct2({
+  ...ResultMeta2.fields,
+  action: /* @__PURE__ */ Literals(["accept", "decline", "cancel"]),
+  content: /* @__PURE__ */ optional7(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Union2([String6, Finite, Boolean4, /* @__PURE__ */ ArraySchema(String6)])))
+});
+
+class Elicit3 extends (/* @__PURE__ */ make62("elicitation/create", {
+  success: ElicitResult3,
+  error: McpError2,
+  payload: ElicitRequestParams2
+})) {
+}
+
+class ElicitationCompleteNotification extends (/* @__PURE__ */ make62("notifications/elicitation/complete", {
+  payload: {
+    elicitationId: String6
+  }
+})) {
+}
+var InitializeResult5 = /* @__PURE__ */ Struct2({
+  ...InitializeResult4.fields,
+  serverInfo: Implementation4
+});
+
+class Initialize5 extends (/* @__PURE__ */ make62("initialize", {
+  success: InitializeResult5,
+  error: McpError2,
+  payload: {
+    ...Initialize4.payloadSchema.fields,
+    capabilities: ClientCapabilities4,
+    clientInfo: Implementation4
+  }
+})) {
+}
+var ListResourcesResult4 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  resources: /* @__PURE__ */ ArraySchema(Resource5)
+});
+var ListResourceTemplatesResult4 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  resourceTemplates: /* @__PURE__ */ ArraySchema(ResourceTemplate4)
+});
+var ListPromptsResult4 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  prompts: /* @__PURE__ */ ArraySchema(Prompt5)
+});
+var GetPromptResult5 = /* @__PURE__ */ Struct2({
+  ...GetPromptResult4.fields,
+  messages: /* @__PURE__ */ ArraySchema(PromptMessage5)
+});
+var ListToolsResult5 = /* @__PURE__ */ Struct2({
+  ...PaginatedResult.fields,
+  tools: /* @__PURE__ */ ArraySchema(Tool5)
+});
+
+class ListResources4 extends (/* @__PURE__ */ make62("resources/list", {
+  success: ListResourcesResult4,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class ListResourceTemplates4 extends (/* @__PURE__ */ make62("resources/templates/list", {
+  success: ListResourceTemplatesResult4,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class ListPrompts4 extends (/* @__PURE__ */ make62("prompts/list", {
+  success: ListPromptsResult4,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class GetPrompt5 extends (/* @__PURE__ */ make62("prompts/get", {
+  success: GetPromptResult5,
+  error: McpError2,
+  payload: {
+    ...RequestMeta2.fields,
+    name: String6,
+    arguments: /* @__PURE__ */ optional7(/* @__PURE__ */ Record(String6, String6))
+  }
+})) {
+}
+
+class ListTools5 extends (/* @__PURE__ */ make62("tools/list", {
+  success: ListToolsResult5,
+  error: McpError2,
+  payload: /* @__PURE__ */ UndefinedOr(PaginatedRequest)
+})) {
+}
+
+class ClientRequestRpcs8 extends (/* @__PURE__ */ make63(Ping2, Initialize5, Complete3, SetLevel2, GetPrompt5, ListPrompts4, ListResources4, ListResourceTemplates4, ReadResource3, Subscribe2, Unsubscribe2, CallTool5, ListTools5)) {
+}
+
+class ClientNotificationRpcs5 extends (/* @__PURE__ */ make63(CancelledNotification2, ProgressNotification3, InitializedNotification2, RootsListChangedNotification2)) {
+}
+class ServerRequestRpcs4 extends (/* @__PURE__ */ make63(Ping2, CreateMessage5, ListRoots3, Elicit3)) {
+}
+
+class ServerNotificationRpcs4 extends (/* @__PURE__ */ make63(CancelledNotification2, ProgressNotification3, LoggingMessageNotification2, ResourceUpdatedNotification2, ResourceListChangedNotification2, ToolListChangedNotification2, PromptListChangedNotification2, ElicitationCompleteNotification)) {
+}
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/internal/mcpProtocol/v2025_11_25.js
+var ClientRequestRpcs9 = /* @__PURE__ */ ClientRequestRpcs8.middleware(McpServerClientMiddleware);
+var ClientRpcs5 = /* @__PURE__ */ ClientRequestRpcs9.merge(ClientNotificationRpcs5);
+var AdapterRpcs4 = /* @__PURE__ */ ClientRpcs5.omit("ping");
+var unsupported4 = (operation, reason) => new McpReverseOperationUnsupported({
+  operation,
+  protocolVersion: protocolVersion4,
+  reason
+});
+var requireCapability4 = (profile, operation, capability) => Object.hasOwn(profile.clientCapabilities, capability) && profile.clientCapabilities[capability] !== undefined ? void_5 : fail7(unsupported4(operation, `Client did not advertise the ${capability} capability`));
+var requiresSamplingTools = (request3) => request3.tools !== undefined || request3.toolChoice !== undefined || request3.messages.some((message) => {
+  const content = message.content;
+  return "type" in content ? content.type === "tool_use" || content.type === "tool_result" : content.some((block) => block.type === "tool_use" || block.type === "tool_result");
+});
+var resultRequiresSamplingTools = (result5) => result5.stopReason === "toolUse" || ("type" in result5.content ? result5.content.type === "tool_use" || result5.content.type === "tool_result" : result5.content.some((block) => block.type === "tool_use" || block.type === "tool_result"));
+var hasElicitationModeCapability = (profile, mode) => {
+  const elicitation = profile.clientCapabilities.elicitation;
+  if (elicitation === undefined)
+    return false;
+  return mode === "form" ? elicitation.form !== undefined || elicitation.url === undefined : elicitation.url !== undefined;
+};
+var projectContent4 = /* @__PURE__ */ fnUntraced2(function* (content) {
+  return value5(content).pipe(when5({
+    type: is4("text", "resource_link")
+  }, (content2) => content2), when5({
+    type: is4("image", "audio")
+  }, (content2) => ({
+    type: content2.type,
+    mimeType: content2.mimeType,
+    data: encodeBase64(content2.data),
+    annotations: content2.annotations,
+    _meta: content2._meta
+  })), when5({
+    type: "resource"
+  }, (content2) => {
+    const resource = content2.resource;
+    if ("text" in resource) {
+      return EmbeddedResource4.make({
+        type: "resource",
+        resource: {
+          uri: resource.uri,
+          mimeType: resource.mimeType,
+          _meta: resource._meta,
+          text: resource.text
+        },
+        annotations: content2.annotations,
+        _meta: content2._meta
+      });
+    }
+    return EmbeddedResource4.make({
+      type: "resource",
+      resource: {
+        uri: resource.uri,
+        mimeType: resource.mimeType,
+        _meta: resource._meta,
+        blob: encodeBase64(resource.blob)
+      },
+      annotations: content2.annotations,
+      _meta: content2._meta
+    });
+  }), exhaustive2);
+});
+var projectStructuredContent2 = /* @__PURE__ */ fnUntraced2(function* (content) {
+  if (content === undefined || is2(JsonObject)(content)) {
+    return content;
+  }
+  return yield* new UnsupportedByProtocol({
+    protocolVersion: protocolVersion4,
+    feature: "non-object structured tool content"
+  });
+});
+var protocol4 = /* @__PURE__ */ make67({
+  protocolVersion: protocolVersion4,
+  transport: {
+    acceptsJsonRpcBatches: false,
+    requiresVersionHeader: true
+  },
+  clientRpcs: ClientRpcs5,
+  clientNotificationRpcs: ClientNotificationRpcs5,
+  serverRequestRpcs: ServerRequestRpcs4,
+  serverNotificationRpcs: ServerNotificationRpcs4,
+  handlerRpcs: AdapterRpcs4,
+  makeHandlers: (core, lifecycle) => AdapterRpcs4.of({
+    initialize: (request3, {
+      client
+    }) => lifecycle.initialize(protocolVersion4, {
+      protocolVersion: protocolVersion4,
+      clientCapabilities: ClientCapabilities.make(request3.capabilities),
+      clientInfo: Implementation.make(request3.clientInfo),
+      requestMetadata: request3._meta
+    }, client.id).pipe(map8((result5) => InitializeResult5.make({
+      protocolVersion: protocolVersion4,
+      capabilities: {
+        experimental: result5.capabilities.experimental,
+        logging: result5.capabilities.logging ? {} : undefined,
+        completions: result5.capabilities.completions ? {} : undefined,
+        prompts: result5.capabilities.prompts,
+        resources: result5.capabilities.resources,
+        tools: result5.capabilities.tools
+      },
+      serverInfo: result5.serverInfo,
+      instructions: result5.instructions
+    }))),
+    "logging/setLevel": ({
+      level
+    }, {
+      client,
+      headers
+    }) => lifecycle.setLogLevel(level, client.id, headers).pipe(as3({})),
+    "notifications/cancelled": () => void_5,
+    "notifications/initialized": (_, {
+      client,
+      headers
+    }) => lifecycle.clientNotification(ClientNotification.Initialized(), client.id, headers),
+    "notifications/progress": (progress, {
+      client,
+      headers
+    }) => lifecycle.clientNotification(ClientNotification.Progress({
+      progressToken: progress.progressToken,
+      progress: progress.progress,
+      total: progress.total,
+      message: progress.message,
+      metadata: progress._meta
+    }), client.id, headers),
+    "notifications/roots/list_changed": (_, {
+      client,
+      headers
+    }) => lifecycle.clientNotification(ClientNotification.RootsChanged(), client.id, headers),
+    "resources/list": () => McpServerClient.use((request3) => core.resources.list(profileFromClient(request3))).pipe(map8((resources) => ListResourcesResult4.make({
+      resources: resources.map((resource) => Resource5.make(resource))
+    }))),
+    "resources/templates/list": () => McpServerClient.use((request3) => core.resources.listTemplates(profileFromClient(request3))).pipe(map8((resourceTemplates) => ListResourceTemplatesResult4.make({
+      resourceTemplates: resourceTemplates.map((resourceTemplate) => ResourceTemplate4.make(resourceTemplate))
+    }))),
+    "resources/read": fnUntraced2(function* ({
+      uri
+    }) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.resources.read(uri, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromFeature));
+      return ReadResourceResult3.make({
+        contents: result5.contents.map((content) => ("text" in content) ? {
+          uri: content.uri,
+          mimeType: content.mimeType,
+          _meta: content._meta,
+          text: content.text
+        } : {
+          uri: content.uri,
+          mimeType: content.mimeType,
+          _meta: content._meta,
+          blob: encodeBase64(content.blob)
+        }),
+        _meta: result5._meta
+      });
+    }),
+    "resources/subscribe": ({
+      uri
+    }, {
+      client,
+      headers
+    }) => lifecycle.subscribe(uri, client.id, headers).pipe(as3({})),
+    "resources/unsubscribe": ({
+      uri
+    }, {
+      client,
+      headers
+    }) => lifecycle.unsubscribe(uri, client.id, headers).pipe(as3({})),
+    "prompts/list": () => McpServerClient.use((request3) => core.prompts.list(profileFromClient(request3))).pipe(map8((prompts) => ListPromptsResult4.make({
+      prompts: prompts.map((prompt) => Prompt5.make(prompt))
+    }))),
+    "prompts/get": fnUntraced2(function* ({
+      arguments: args2,
+      name
+    }) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.prompts.get(name, args2 ?? {}, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromFeature));
+      const messages = yield* forEach2(result5.messages, (message) => projectContent4(message.content).pipe(map8((content) => ({
+        role: message.role,
+        content
+      })), mapError4(ProtocolError.fromTool)));
+      return GetPromptResult5.make({
+        description: result5.description,
+        messages,
+        _meta: result5._meta
+      });
+    }),
+    "completion/complete": fnUntraced2(function* (completeRequest) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.completions.complete({
+        reference: completeRequest.ref.type === "ref/prompt" ? {
+          type: "prompt",
+          name: completeRequest.ref.name,
+          title: completeRequest.ref.title
+        } : {
+          type: "resourceTemplate",
+          uriTemplate: completeRequest.ref.uri
+        },
+        argument: completeRequest.argument,
+        context: completeRequest.context?.arguments === undefined ? undefined : {
+          arguments: completeRequest.context.arguments
+        },
+        metadata: completeRequest._meta
+      }, invocationFromClient(request3)).pipe(mapError4(ProtocolError.fromFeature));
+      return CompleteResult3.make({
+        completion: {
+          values: Array.from(result5.values),
+          total: result5.total,
+          hasMore: result5.hasMore
+        },
+        _meta: result5.metadata
+      });
+    }),
+    "tools/list": fnUntraced2(function* () {
+      const request3 = yield* McpServerClient;
+      const tools = yield* core.tools.list(profileFromClient(request3));
+      return ListToolsResult5.make({
+        tools: tools.map((tool) => Tool5.make({
+          name: tool.name,
+          title: tool.title,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          outputSchema: tool.outputSchema,
+          icons: tool.icons,
+          annotations: tool.annotations === undefined ? undefined : ToolAnnotations2.make({
+            readOnlyHint: tool.annotations.readOnlyHint,
+            destructiveHint: tool.annotations.destructiveHint,
+            idempotentHint: tool.annotations.idempotentHint,
+            openWorldHint: tool.annotations.openWorldHint
+          }),
+          _meta: tool._meta
+        }))
+      });
+    }),
+    "tools/call": fnUntraced2(function* (call) {
+      const request3 = yield* McpServerClient;
+      const result5 = yield* core.tools.call({
+        ...call,
+        arguments: call.arguments ?? {}
+      }, invocationFromClient(request3)).pipe(catchTag3("InvalidToolInput", (error2) => succeed7(CallToolResult.make({
+        content: [TextContent.make({
+          type: "text",
+          text: error2.message
+        })],
+        isError: true
+      }))), mapError4(ProtocolError.fromTool));
+      const content = yield* forEach2(result5.content, projectContent4).pipe(mapError4(ProtocolError.fromTool));
+      const structuredContent = yield* projectStructuredContent2(result5.structuredContent).pipe(mapError4(ProtocolError.fromTool));
+      return CallToolResult5.make({
+        content,
+        structuredContent,
+        isError: result5.isError,
+        _meta: result5._meta
+      });
+    })
+  }),
+  toReverseClient: (profile, client) => ({
+    listRoots: fnUntraced2(function* (request3) {
+      yield* requireCapability4(profile, "roots/list", "roots");
+      const wireRequest = yield* transcode(ListRoots.payloadSchema, ListRoots3.payloadSchema, request3).pipe(mapError4(() => unsupported4("roots/list", "Request is not representable by this protocol")));
+      const {
+        roots
+      } = yield* client["roots/list"](wireRequest).pipe(mapError4(reverseError("roots/list")));
+      return new ListRootsResult({
+        roots
+      });
+    }),
+    createMessage: fnUntraced2(function* (request3) {
+      yield* requireCapability4(profile, "sampling/createMessage", "sampling");
+      if (requiresSamplingTools(request3) && profile.clientCapabilities.sampling?.tools == undefined) {
+        return yield* unsupported4("sampling/createMessage", "Client did not advertise the sampling.tools capability");
+      }
+      if ((request3.includeContext === "thisServer" || request3.includeContext === "allServers") && profile.clientCapabilities.sampling?.context == undefined) {
+        return yield* unsupported4("sampling/createMessage", "Client did not advertise the sampling.context capability");
+      }
+      const wireRequest = yield* transcode(CreateMessage.payloadSchema, CreateMessage5.payloadSchema, request3).pipe(mapError4(() => unsupported4("sampling/createMessage", "Request is not representable by this protocol")));
+      const result5 = yield* client["sampling/createMessage"](wireRequest).pipe(mapError4(reverseError("sampling/createMessage")));
+      if (resultRequiresSamplingTools(result5) && profile.clientCapabilities.sampling?.tools == undefined) {
+        return yield* unsupported4("sampling/createMessage", "Client did not advertise the sampling.tools capability");
+      }
+      return yield* transcode(CreateMessage5.successSchema, CreateMessage.successSchema, result5).pipe(mapError4(() => unsupported4("sampling/createMessage", "Response is not representable by the canonical model")));
+    }),
+    elicit: fnUntraced2(function* (request3) {
+      yield* requireCapability4(profile, "elicitation/create", "elicitation");
+      const mode = request3.mode === "url" ? "url" : "form";
+      if (!hasElicitationModeCapability(profile, mode)) {
+        return yield* unsupported4("elicitation/create", `Client did not advertise the elicitation.${mode} capability`);
+      }
+      const wireRequest = yield* transcode(Elicit.payloadSchema, Elicit3.payloadSchema, request3).pipe(mapError4(() => unsupported4("elicitation/create", "Request is not representable by this protocol")));
+      const result5 = yield* client["elicitation/create"](wireRequest).pipe(mapError4(reverseError("elicitation/create")));
+      return yield* transcode(Elicit3.successSchema, Elicit.successSchema, result5).pipe(mapError4(() => unsupported4("elicitation/create", "Response is not representable by the canonical model")));
+    })
+  }),
+  projectNotification: (notification) => notification._tag === "ElicitationComplete" ? succeed7({
+    tag: "notifications/elicitation/complete",
+    payload: {
+      elicitationId: notification.elicitationId
+    }
+  }) : makeNotificationProjector({
+    supportsProgressMessage: true
+  }, notification),
+  normalizeCancellation: (payload) => decodeUnknownEffect2(CancelledNotification2.payloadSchema)(payload).pipe(map8((request3) => ({
+    requestId: request3.requestId,
+    reason: request3.reason,
+    metadata: request3._meta
+  })))
+});
+
+// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/ai/McpProtocol.js
+var v2025_11_25 = protocol4;
+var v2025_06_182 = protocol3;
+var v2025_03_262 = protocol2;
+var v2024_11_052 = protocol;
+// packages/capabilities/src/mcp-client.ts
+var DEFAULT_MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
+var MAX_TOOL_LIST_PAGES = 64;
+var MCP_SESSION_ID_HEADER = "mcp-session-id";
+var MCP_PROTOCOL_VERSION_HEADER = "mcp-protocol-version";
+var JSON_RPC_METHOD_NOT_FOUND = -32601;
+var McpClientProtocolVersion = exports_Schema.Literals([
+  v2025_11_25.protocolVersion,
+  v2025_06_182.protocolVersion,
+  v2025_03_262.protocolVersion,
+  v2024_11_052.protocolVersion
+]);
+var OFFERED_PROTOCOL_VERSION = v2025_11_25.protocolVersion;
+var defaultMcpClientInfo = Implementation.make({
+  name: "effect-agent",
+  version: "1.0.0"
+});
+
+class McpToolResult extends exports_Schema.Class("@effect-agent/capabilities/McpToolResult")({
+  content: exports_Schema.Array(ContentBlock),
+  structuredContent: exports_Schema.optionalKey(exports_Schema.Json)
+}) {
+}
+
+class McpToolCallFailed extends exports_Schema.TaggedError()("McpToolCallFailed", {
+  serverId: exports_Schema.NonEmptyString,
+  tool: exports_Schema.NonEmptyString,
+  reason: exports_Schema.Literals(["tool-error", "invalid-arguments", "protocol-error", "transport"]),
+  message: exports_Schema.String,
+  content: exports_Schema.optionalKey(exports_Schema.Array(ContentBlock))
+}) {
+}
+var isNotificationTag = (tag4) => tag4.startsWith("notifications/");
+var isRpcClientError2 = exports_Schema.is(exports_RpcClientError.RpcClientError);
+var protocolDefect = (message, cause) => new exports_RpcClientError.RpcClientError({
+  reason: new exports_RpcClientError.RpcClientDefect({ message, cause })
+});
+var InitializeProtocolVersion = exports_Schema.Struct({ protocolVersion: exports_Schema.String });
+var decodeInitializeProtocolVersion = exports_Schema.decodeUnknownOption(InitializeProtocolVersion);
+var ServerRequest = exports_Schema.Struct({ _tag: exports_Schema.Literal("Request"), tag: exports_Schema.String });
+var isServerRequest = exports_Schema.is(ServerRequest);
+var isJsonRpcRequest = (message) => isServerRequest(message);
+var declineServerRequest = (request3) => ({
+  _tag: "Exit",
+  requestId: request3.id,
+  exit: {
+    _tag: "Failure",
+    cause: [
+      {
+        _tag: "Fail",
+        error: {
+          code: JSON_RPC_METHOD_NOT_FOUND,
+          message: `Client does not serve ${request3.tag}`
+        }
+      }
+    ]
+  }
+});
+var routeMessage = (message, options3) => {
+  if (isJsonRpcRequest(message)) {
+    if (message.isNotification === true) {
+      return exports_Effect.logDebug("Ignoring MCP server notification").pipe(exports_Effect.annotateLogs({ method: message.tag }));
+    }
+    return options3.respond(declineServerRequest(message));
+  }
+  if (exports_Predicate.hasProperty(message, "_tag") && message._tag === "Exit") {
+    options3.onExit(message);
+  }
+  return options3.writeResponse(options3.clientId, message);
+};
+var byteLength2 = (text2) => exports_Encoding.encodeHex(text2).length / 2;
+var readBoundedText = exports_Effect.fn("McpHttpTransport.readBoundedText")(function* (response, maxBytes) {
+  const declared = Number(response.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    return yield* protocolDefect(`MCP response of ${declared} bytes exceeds the ${maxBytes} byte message bound`);
+  }
+  const chunks2 = [];
+  let received = 0;
+  yield* response.stream.pipe(exports_Stream.decodeText(), exports_Stream.runForEach((chunk) => {
+    received += byteLength2(chunk);
+    if (received > maxBytes) {
+      return exports_Effect.fail(protocolDefect(`MCP response exceeds the ${maxBytes} byte message bound`));
+    }
+    chunks2.push(chunk);
+    return exports_Effect.void;
+  }), exports_Effect.mapError((error2) => isRpcClientError2(error2) ? error2 : protocolDefect("Could not read the MCP HTTP response", error2)));
+  return chunks2.join("");
+});
+var consumeEventStream = exports_Effect.fn("McpHttpTransport.consumeEventStream")(function* (response, maxBytes, deliver) {
+  let buffer3 = "";
+  let pendingBytes = 0;
+  const dispatchEvent = (block) => {
+    const data = block.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice("data:".length).replace(/^ /, "")).join(`
+`);
+    return data.length === 0 ? exports_Effect.void : deliver(data);
+  };
+  const drain4 = (final) => exports_Effect.suspend(() => {
+    const blocks = [];
+    while (true) {
+      const match9 = /\r?\n\r?\n/.exec(buffer3);
+      if (match9 === null)
+        break;
+      blocks.push(buffer3.slice(0, match9.index));
+      buffer3 = buffer3.slice(match9.index + match9[0].length);
+    }
+    if (final && buffer3.length > 0) {
+      blocks.push(buffer3);
+      buffer3 = "";
+    }
+    pendingBytes = byteLength2(buffer3);
+    return exports_Effect.forEach(blocks, dispatchEvent, { discard: true });
+  });
+  yield* response.stream.pipe(exports_Stream.decodeText(), exports_Stream.runForEach((chunk) => {
+    buffer3 += chunk;
+    pendingBytes += byteLength2(chunk);
+    if (pendingBytes > maxBytes) {
+      return exports_Effect.fail(protocolDefect(`MCP event stream buffered more than ${maxBytes} bytes`));
+    }
+    return drain4(false);
+  }), exports_Effect.mapError((error2) => isRpcClientError2(error2) ? error2 : protocolDefect("Could not read the MCP event stream", error2)));
+  yield* drain4(true);
+});
+var makeHttpProtocol = exports_Effect.fn("McpHttpTransport.protocol")(function* (options3) {
+  const client = yield* exports_HttpClient.HttpClient;
+  const serialization = exports_RpcSerialization.jsonRpc();
+  const parser = serialization.makeUnsafe();
+  const maxMessageBytes = options3.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES;
+  const configuredHeaders = exports_Headers.fromInput(options3.headers);
+  const url2 = options3.url;
+  let sessionId;
+  let protocolVersion5;
+  let initializeRequestId;
+  const answered = new Set;
+  const transportHeaders = () => exports_Headers.merge(configuredHeaders, exports_Headers.fromInput({
+    accept: "application/json, text/event-stream",
+    ...sessionId === undefined ? {} : { [MCP_SESSION_ID_HEADER]: sessionId },
+    ...protocolVersion5 === undefined ? {} : { [MCP_PROTOCOL_VERSION_HEADER]: protocolVersion5 }
+  }));
+  const post3 = (body) => client.execute(exports_HttpClientRequest.post(url2).pipe(exports_HttpClientRequest.setHeaders(transportHeaders()), exports_HttpClientRequest.bodyText(body, "application/json"))).pipe(exports_Effect.mapError((error2) => protocolDefect(`MCP HTTP request to ${options3.serverId} failed`, error2)));
+  yield* exports_Effect.addFinalizer(() => sessionId === undefined ? exports_Effect.void : client.execute(exports_HttpClientRequest.delete(url2).pipe(exports_HttpClientRequest.setHeaders(transportHeaders()))).pipe(exports_Effect.ignore));
+  return yield* exports_RpcClient.Protocol.make((writeResponse) => exports_Effect.sync(() => {
+    const encode3 = (message) => exports_Effect.suspend(() => {
+      const encoded = parser.encode(message);
+      return typeof encoded === "string" ? exports_Effect.succeed(encoded) : exports_Effect.fail(protocolDefect("Could not encode an MCP JSON-RPC message"));
+    });
+    const deliver = (clientId, data) => exports_Effect.suspend(() => {
+      let messages;
+      try {
+        messages = parser.decode(data);
+      } catch (cause) {
+        return writeResponse(clientId, {
+          _tag: "ClientProtocolError",
+          error: protocolDefect("Could not decode an MCP JSON-RPC message", cause)
+        });
+      }
+      return exports_Effect.forEach(messages, (message) => routeMessage(message, {
+        clientId,
+        writeResponse,
+        respond: (response) => encode3(response).pipe(exports_Effect.flatMap(post3), exports_Effect.ignore),
+        onExit: (exit3) => {
+          answered.add(exit3.requestId);
+          if (exit3.requestId !== initializeRequestId || exit3.exit._tag !== "Success") {
+            return;
+          }
+          const decoded = decodeInitializeProtocolVersion(exit3.exit.value);
+          if (exports_Option.isSome(decoded))
+            protocolVersion5 = decoded.value.protocolVersion;
+        }
+      }), { discard: true });
+    });
+    const dispatch = exports_Effect.fn("McpHttpTransport.dispatch")(function* (clientId, message, requestId) {
+      const response = yield* post3(yield* encode3(message));
+      const responseSession = response.headers[MCP_SESSION_ID_HEADER];
+      if (responseSession !== undefined)
+        sessionId = responseSession;
+      if (response.status < 200 || response.status >= 300) {
+        return yield* protocolDefect(`MCP server ${options3.serverId} answered HTTP ${response.status}`);
+      }
+      const contentType = response.headers["content-type"] ?? "";
+      if (response.status !== 202 && response.status !== 204) {
+        if (contentType.startsWith("text/event-stream")) {
+          yield* consumeEventStream(response, maxMessageBytes, (data) => deliver(clientId, data));
+        } else {
+          const text2 = yield* readBoundedText(response, maxMessageBytes);
+          if (text2.length > 0)
+            yield* deliver(clientId, text2);
+        }
+      }
+      if (requestId !== undefined && !answered.has(requestId)) {
+        yield* writeResponse(clientId, {
+          _tag: "Exit",
+          requestId,
+          exit: {
+            _tag: "Failure",
+            cause: [
+              {
+                _tag: "Die",
+                defect: `MCP server ${options3.serverId} closed the HTTP exchange without answering request ${String(requestId)}`
+              }
+            ]
+          }
+        });
+      }
+      answered.delete(requestId ?? "");
+    });
+    const send = (clientId, request3) => {
+      switch (request3._tag) {
+        case "Request": {
+          if (isNotificationTag(request3.tag)) {
+            return dispatch(clientId, { ...request3, isNotification: true });
+          }
+          if (request3.tag === "initialize")
+            initializeRequestId = request3.id;
+          return dispatch(clientId, request3, request3.id);
+        }
+        case "Interrupt": {
+          return dispatch(clientId, {
+            _tag: "Request",
+            id: request3.requestId,
+            tag: "notifications/cancelled",
+            payload: { requestId: request3.requestId },
+            headers: [],
+            isNotification: true
+          });
+        }
+        case "Ack":
+        case "Ping":
+        case "Eof": {
+          return exports_Effect.void;
+        }
+      }
+    };
+    return { send, supportsAck: false, supportsTransferables: false };
+  }));
+});
+var makeStdioProtocol = exports_Effect.fn("McpStdioTransport.protocol")(function* (options3) {
+  const spawner = yield* exports_ChildProcessSpawner.ChildProcessSpawner;
+  const maxMessageBytes = options3.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES;
+  const serialization = exports_RpcSerialization.ndJsonRpc({ maxBufferSize: maxMessageBytes });
+  const parser = serialization.makeUnsafe();
+  const handle = yield* spawner.spawn(exports_ChildProcess.make(options3.command, [...options3.args ?? []], {
+    ...options3.cwd === undefined ? {} : { cwd: options3.cwd },
+    ...options3.env === undefined ? {} : { env: options3.env, extendEnv: true }
+  })).pipe(exports_Effect.mapError((cause) => McpConnectionError.make({
+    serverId: options3.serverId,
+    message: `Could not start the MCP server process for ${options3.serverId}`,
+    cause
+  })));
+  const outbound = yield* exports_Queue.unbounded();
+  let closed;
+  const closedWith = (message, cause) => closed ??= protocolDefect(message, cause);
+  yield* exports_Stream.fromQueue(outbound).pipe(exports_Stream.encodeText, exports_Stream.run(handle.stdin), exports_Effect.matchCauseEffect({
+    onSuccess: () => exports_Effect.sync(() => closedWith(`MCP server process ${options3.serverId} closed stdin`)),
+    onFailure: (cause) => exports_Cause.hasInterruptsOnly(cause) ? exports_Effect.void : exports_Effect.sync(() => closedWith(`Writing to MCP server process ${options3.serverId} failed`, exports_Cause.squash(cause)))
+  }), exports_Effect.forkScoped);
+  yield* handle.stderr.pipe(exports_Stream.decodeText(), exports_Stream.splitLines, exports_Stream.runForEach((line) => exports_Effect.logDebug(line)), exports_Effect.ignore, exports_Effect.annotateLogs({ mcpServerId: options3.serverId, stream: "stderr" }), exports_Effect.forkScoped);
+  return yield* exports_RpcClient.Protocol.make(exports_Effect.fnUntraced(function* (writeResponse, clientIds) {
+    const broadcast2 = (error2) => exports_Effect.forEach(clientIds, (clientId) => writeResponse(clientId, { _tag: "ClientProtocolError", error: error2 }), { discard: true });
+    const deliver = (chunk) => exports_Effect.suspend(() => {
+      let messages;
+      try {
+        messages = parser.decode(chunk);
+      } catch (cause) {
+        return broadcast2(protocolDefect("Could not decode an MCP stdio frame", cause));
+      }
+      return exports_Effect.forEach(messages, (message) => exports_Effect.forEach(clientIds, (clientId) => routeMessage(message, {
+        clientId,
+        writeResponse,
+        respond: (response) => enqueue(response).pipe(exports_Effect.ignore),
+        onExit: () => {}
+      }), { discard: true }), { discard: true });
+    });
+    const enqueue = (message) => exports_Effect.suspend(() => {
+      if (closed !== undefined)
+        return exports_Effect.fail(closed);
+      const encoded = parser.encode(message);
+      if (typeof encoded !== "string") {
+        return exports_Effect.fail(protocolDefect("Could not encode an MCP JSON-RPC message"));
+      }
+      return exports_Queue.offer(outbound, encoded).pipe(exports_Effect.asVoid);
+    });
+    yield* handle.stdout.pipe(exports_Stream.runForEach(deliver), exports_Effect.matchCauseEffect({
+      onSuccess: () => broadcast2(closedWith(`MCP server process ${options3.serverId} closed stdout`)),
+      onFailure: (cause) => exports_Cause.hasInterruptsOnly(cause) ? exports_Effect.void : broadcast2(closedWith(`Reading MCP server process ${options3.serverId} failed`, exports_Cause.squash(cause)))
+    }), exports_Effect.forkScoped);
+    const send = (_clientId, request3) => {
+      switch (request3._tag) {
+        case "Request": {
+          return enqueue(isNotificationTag(request3.tag) ? { ...request3, isNotification: true } : request3);
+        }
+        case "Interrupt": {
+          return enqueue({
+            _tag: "Request",
+            id: request3.requestId,
+            tag: "notifications/cancelled",
+            payload: { requestId: request3.requestId },
+            headers: [],
+            isNotification: true
+          });
+        }
+        case "Ack":
+        case "Ping":
+        case "Eof": {
+          return exports_Effect.void;
+        }
+      }
+    };
+    return { send, supportsAck: false, supportsTransferables: false };
+  }));
+});
+var executionClassFor = (annotations2) => {
+  if (annotations2 === undefined)
+    return "uncertain";
+  if (annotations2.readOnlyHint)
+    return "readonly";
+  if (annotations2.idempotentHint && !annotations2.destructiveHint)
+    return "idempotent";
+  return "uncertain";
+};
+var makeMcpTool = (tool, trustToolAnnotations) => {
+  let dynamic2 = exports_Tool.dynamic(tool.name, {
+    ...tool.description === undefined ? {} : { description: tool.description },
+    parameters: tool.inputSchema,
+    success: McpToolResult,
+    failure: McpToolCallFailed,
+    failureMode: "return"
+  });
+  const title = tool.title ?? tool.annotations?.title;
+  if (title !== undefined)
+    dynamic2 = dynamic2.annotate(exports_Tool.Title, title);
+  if (tool.outputSchema !== undefined) {
+    dynamic2 = dynamic2.annotate(McpToolOutputSchema, tool.outputSchema);
+  }
+  if (tool.annotations !== undefined) {
+    dynamic2 = dynamic2.annotate(exports_Tool.Readonly, tool.annotations.readOnlyHint).annotate(exports_Tool.Destructive, tool.annotations.destructiveHint).annotate(exports_Tool.Idempotent, tool.annotations.idempotentHint).annotate(exports_Tool.OpenWorld, tool.annotations.openWorldHint);
+  }
+  if (trustToolAnnotations) {
+    dynamic2 = dynamic2.annotate(ToolExecutionClass, executionClassFor(tool.annotations));
+  }
+  return dynamic2;
+};
+var ToolArguments = exports_Schema.Record(exports_Schema.String, exports_Schema.Json);
+var decodeToolArguments = exports_Schema.decodeUnknownEffect(ToolArguments);
+var errorText = (content) => content.flatMap((block) => block.type === "text" ? [block.text] : []).join(`
+`).slice(0, 4 * 1024);
+var describeDefect = (defect) => (exports_Predicate.hasProperty(defect, "message") && exports_Predicate.isString(defect.message) ? defect.message : String(defect)).slice(0, 4 * 1024);
+var connectionError = (serverId, message) => (cause) => McpConnectionError.make({ serverId, message, cause });
+var failClosed = (serverId, message) => (self) => self.pipe(exports_Effect.mapError(connectionError(serverId, message)), exports_Effect.catchDefect((defect) => exports_Effect.fail(connectionError(serverId, message)(defect))));
+var connectServer = exports_Effect.fn("McpClient.connect")(function* (transport, request3, clientInfo) {
+  const serverId = transport.serverId;
+  const protocol5 = yield* transport.protocol;
+  const client = yield* exports_RpcClient.make(ClientRpcs, {
+    spanPrefix: "McpClient",
+    spanAttributes: { "mcp.server_id": serverId }
+  }).pipe(exports_Effect.provideService(exports_RpcClient.Protocol, protocol5));
+  const initialized = yield* client.initialize({
+    protocolVersion: OFFERED_PROTOCOL_VERSION,
+    capabilities: ClientCapabilities.make({}),
+    clientInfo
+  }).pipe(failClosed(serverId, `MCP initialize with ${serverId} failed`));
+  const negotiated = yield* exports_Schema.decodeUnknownEffect(McpClientProtocolVersion)(initialized.protocolVersion).pipe(exports_Effect.mapError(connectionError(serverId, `MCP server ${serverId} negotiated unsupported protocol version '${initialized.protocolVersion}'`)));
+  yield* exports_Effect.annotateCurrentSpan({ "mcp.protocol_version": negotiated });
+  yield* client["notifications/initialized"](undefined, { discard: true }).pipe(failClosed(serverId, `Could not acknowledge MCP initialization with ${serverId}`));
+  const tools = [];
+  let cursor;
+  let pages = 0;
+  do {
+    const page = yield* client["tools/list"](cursor === undefined ? undefined : PaginatedRequestMeta.make({ cursor })).pipe(failClosed(serverId, `MCP tools/list with ${serverId} failed`));
+    tools.push(...page.tools);
+    cursor = page.nextCursor;
+    pages += 1;
+    if (tools.length > request3.maxToolCount)
+      break;
+    if (cursor !== undefined && pages >= MAX_TOOL_LIST_PAGES) {
+      return yield* McpConnectionError.make({
+        serverId,
+        message: `MCP server ${serverId} paginated tools/list beyond ${MAX_TOOL_LIST_PAGES} pages`
+      });
+    }
+  } while (cursor !== undefined);
+  const callTool = exports_Effect.fn("McpClient.callTool")(function* (name, params) {
+    const args2 = yield* decodeToolArguments(params ?? {}).pipe(exports_Effect.mapError((cause) => McpToolCallFailed.make({
+      serverId,
+      tool: name,
+      reason: "invalid-arguments",
+      message: `MCP tool arguments must be a JSON object: ${cause.message}`
+    })));
+    const result5 = yield* client["tools/call"]({ name, arguments: args2 }).pipe(exports_Effect.mapError((error2) => McpToolCallFailed.make({
+      serverId,
+      tool: name,
+      reason: isRpcClientError2(error2) ? "transport" : "protocol-error",
+      message: error2.message
+    })), exports_Effect.catchDefect((defect) => exports_Effect.fail(McpToolCallFailed.make({
+      serverId,
+      tool: name,
+      reason: "protocol-error",
+      message: describeDefect(defect)
+    }))));
+    if (result5.isError === true) {
+      return yield* McpToolCallFailed.make({
+        serverId,
+        tool: name,
+        reason: "tool-error",
+        message: errorText(result5.content),
+        content: result5.content
+      });
+    }
+    return McpToolResult.make({
+      content: result5.content,
+      ...result5.structuredContent === undefined ? {} : { structuredContent: result5.structuredContent }
+    });
+  });
+  const toolkit = yield* exports_Effect.try({
+    try: () => exports_Toolkit.make(...tools.map((tool) => makeMcpTool(tool, transport.trustToolAnnotations))),
+    catch: connectionError(serverId, `MCP server ${serverId} advertised tools that cannot form a Toolkit`)
+  });
+  const handlers = toolkit.toLayer(Object.fromEntries(tools.map((tool) => [tool.name, (params) => callTool(tool.name, params)])));
+  return {
+    identity: McpServerIdentity.make({ serverId, implementation: initialized.serverInfo }),
+    capabilities: initialized.capabilities,
+    tools,
+    toolkit,
+    handlers
   };
 });
 // packages/capabilities/src/semantic-memory.ts
@@ -44685,7 +52838,7 @@ var utf82 = (text2) => {
   const hex2 = exports_Encoding.encodeHex(text2);
   return Uint8Array.from({ length: hex2.length / 2 }, (_, index2) => Number.parseInt(hex2.slice(index2 * 2, index2 * 2 + 2), 16));
 };
-var byteLength2 = (text2) => exports_Encoding.encodeHex(text2).length / 2;
+var byteLength3 = (text2) => exports_Encoding.encodeHex(text2).length / 2;
 var invalid2 = (operation) => SemanticMemoryError.make({ operation, reason: "invalid-input" });
 var asSource = (document) => MemoryIndexSource.make({
   key: document.key,
@@ -44709,7 +52862,7 @@ var embeddings = exports_Effect.fn("semanticMemory.embeddings")(function* (input
   const response = yield* model.embedMany(inputs).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(exports_EmbeddingModel.EmbedManyResponse)), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(SemanticMemoryError.make({ operation: "decode embeddings", reason: "invalid-embedding" }))));
   const tokens = response.usage.inputTokens;
   if (response.embeddings.length !== inputs.length || tokens !== undefined && (!Number.isSafeInteger(tokens) || tokens < 0) || response.embeddings.some(({ vector }) => {
-    const norm = vector.reduce((sum3, value4) => sum3 + value4 * value4, 0);
+    const norm = vector.reduce((sum3, value6) => sum3 + value6 * value6, 0);
     return vector.length !== profile.dimensions || norm <= 0 || !Number.isFinite(norm);
   })) {
     return yield* SemanticMemoryError.make({
@@ -44720,7 +52873,7 @@ var embeddings = exports_Effect.fn("semanticMemory.embeddings")(function* (input
   return response;
 });
 var chunkText = exports_Effect.fn("semanticMemory.chunkText")(function* (text2, profile, limits) {
-  if (byteLength2(text2) > limits.maxSourceBytes) {
+  if (byteLength3(text2) > limits.maxSourceBytes) {
     return yield* SemanticMemoryError.make({ operation: "chunk source", reason: "budget" });
   }
   const chunks2 = [];
@@ -44728,7 +52881,7 @@ var chunkText = exports_Effect.fn("semanticMemory.chunkText")(function* (text2, 
   let startByte = 0;
   let currentBytes = 0;
   for (const codepoint of text2) {
-    const size9 = byteLength2(codepoint);
+    const size9 = byteLength3(codepoint);
     if (currentBytes + size9 > profile.maxChunkBytes) {
       chunks2.push({
         ordinal: chunks2.length,
@@ -44812,7 +52965,7 @@ var indexMemorySource = exports_Effect.fn("indexMemorySource")(function* (key, l
       key: checkedKey,
       status: "Indexed",
       embeddedChunks: chunks2.length,
-      embeddedBytes: byteLength2(document.content.text),
+      embeddedBytes: byteLength3(document.content.text),
       inputTokens: response.usage.inputTokens ?? null,
       startedAt,
       finishedAt: yield* exports_Clock.currentTimeMillis
@@ -44826,7 +52979,7 @@ var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (qu
   const checkedQuery = yield* exports_Schema.decodeUnknownEffect(exports_Schema.NonEmptyString)(query).pipe(exports_Effect.mapError(() => invalid2("query text")));
   const checkedAccess = yield* exports_Schema.decodeUnknownEffect(MemoryAccess.Wire)(access3).pipe(exports_Effect.mapError(() => invalid2("query access")));
   const checkedLimits = yield* exports_Schema.decodeUnknownEffect(SemanticQueryLimits)(limits).pipe(exports_Effect.mapError(() => invalid2("query limits")));
-  const queryBytes = byteLength2(checkedQuery);
+  const queryBytes = byteLength3(checkedQuery);
   if (queryBytes > checkedLimits.maxQueryBytes)
     return yield* SemanticMemoryError.make({ operation: "query bytes", reason: "budget" });
   return yield* exports_Effect.gen(function* () {
@@ -44990,16 +53143,16 @@ var zeroAmounts = {
   costMicrousd: 0,
   resultBytes: 0
 };
-var ok = (value4) => ({ _tag: "ok", value: value4 });
+var ok = (value6) => ({ _tag: "ok", value: value6 });
 var fail14 = (error2) => ({ _tag: "error", error: error2 });
-var resolve4 = (result4) => {
-  switch (result4._tag) {
+var resolve4 = (result5) => {
+  switch (result5._tag) {
     case "ok":
-      return exports_Effect.succeed(result4.value);
+      return exports_Effect.succeed(result5.value);
     case "error":
-      return exports_Effect.fail(result4.error);
+      return exports_Effect.fail(result5.error);
     case "corrupt":
-      return exports_Effect.die(new Error(result4.message));
+      return exports_Effect.die(new Error(result5.message));
   }
 };
 var sameCaps = (a, b) => a.maxTotalChildInvocations === b.maxTotalChildInvocations && a.maxConcurrentChildren === b.maxConcurrentChildren && a.maxTurns === b.maxTurns && a.maxToolCalls === b.maxToolCalls && a.maxDurationMillis === b.maxDurationMillis && a.maxInputTokens === b.maxInputTokens && a.maxOutputTokens === b.maxOutputTokens && a.maxCostMicrousd === b.maxCostMicrousd && a.maxResultBytes === b.maxResultBytes;
@@ -45007,9 +53160,9 @@ var sameAmounts = (a, b) => dimensionSpecs.every((spec) => a[spec.key] === b[spe
 var optionalAmounts = (partial) => {
   const out = {};
   for (const spec of dimensionSpecs) {
-    const value4 = partial[spec.key];
-    if (value4 !== undefined) {
-      out[spec.key] = value4;
+    const value6 = partial[spec.key];
+    if (value6 !== undefined) {
+      out[spec.key] = value6;
     }
   }
   return out;
@@ -45272,24 +53425,24 @@ var SubagentReservationsMemoryLive = exports_Layer.effect(SubagentReservations, 
   return SubagentReservations.of({
     registerParent: exports_Effect.fn("SubagentReservations.registerParent")(function* (parentRunId, caps) {
       const gate = caps.maxConcurrentChildren !== undefined && caps.maxConcurrentChildren > 0 ? yield* exports_Semaphore.make(caps.maxConcurrentChildren) : undefined;
-      const result4 = yield* exports_Ref.modify(state, (ledger) => registerTransition(ledger, parentRunId, caps, gate));
-      return yield* resolve4(result4);
+      const result5 = yield* exports_Ref.modify(state, (ledger) => registerTransition(ledger, parentRunId, caps, gate));
+      return yield* resolve4(result5);
     }),
     reserve: exports_Effect.fn("SubagentReservations.reserve")(function* (request3) {
-      const result4 = yield* exports_Ref.modify(state, (ledger) => reserveTransition(ledger, request3));
-      return yield* resolve4(result4);
+      const result5 = yield* exports_Ref.modify(state, (ledger) => reserveTransition(ledger, request3));
+      return yield* resolve4(result5);
     }),
     observe: exports_Effect.fn("SubagentReservations.observe")(function* (reservationId, usage2) {
-      const result4 = yield* exports_Ref.modify(state, (ledger) => observeTransition(ledger, reservationId, usage2));
-      return yield* resolve4(result4);
+      const result5 = yield* exports_Ref.modify(state, (ledger) => observeTransition(ledger, reservationId, usage2));
+      return yield* resolve4(result5);
     }),
     beginRelease: exports_Effect.fn("SubagentReservations.beginRelease")(function* (reservationId) {
-      const result4 = yield* exports_Ref.modify(state, (ledger) => beginReleaseTransition(ledger, reservationId));
-      return yield* resolve4(result4);
+      const result5 = yield* exports_Ref.modify(state, (ledger) => beginReleaseTransition(ledger, reservationId));
+      return yield* resolve4(result5);
     }),
     release: exports_Effect.fn("SubagentReservations.release")(function* (reservationId) {
-      const result4 = yield* exports_Ref.modify(state, (ledger) => releaseTransition(ledger, reservationId));
-      return yield* resolve4(result4);
+      const result5 = yield* exports_Ref.modify(state, (ledger) => releaseTransition(ledger, reservationId));
+      return yield* resolve4(result5);
     }),
     acquireChildSlot: exports_Effect.fn("SubagentReservations.acquireChildSlot")(function* (parentRunId) {
       const ledger = yield* exports_Ref.get(state);
@@ -45313,8 +53466,8 @@ var SubagentReservationsMemoryLive = exports_Layer.effect(SubagentReservations, 
       yield* exports_Effect.acquireRelease(gate.take(1), (permits) => gate.release(permits).pipe(exports_Effect.asVoid), { interruptible: true });
     }),
     retireParent: exports_Effect.fn("SubagentReservations.retireParent")(function* (parentRunId) {
-      const result4 = yield* exports_Ref.modify(state, (ledger) => retireParentTransition(ledger, parentRunId));
-      return yield* resolve4(result4);
+      const result5 = yield* exports_Ref.modify(state, (ledger) => retireParentTransition(ledger, parentRunId));
+      return yield* resolve4(result5);
     }),
     parentSnapshot: exports_Effect.fn("SubagentReservations.parentSnapshot")(function* (parentRunId) {
       const ledger = yield* exports_Ref.get(state);
@@ -45678,8 +53831,8 @@ var PullRequestImplementer = Agent.make("pr-work-order-implementer", {
 var makeImplementationAgent = (model) => {
   const binding = Object.freeze({ definition: PullRequestImplementer, model });
   const run5 = (mission, workspace) => exports_Effect.gen(function* () {
-    const result4 = yield* AgentRuntime.run(binding, mission);
-    return yield* exports_Schema.decodeUnknownEffect(WorkOrderReport)(result4.output);
+    const result5 = yield* AgentRuntime.run(binding, mission);
+    return yield* exports_Schema.decodeUnknownEffect(WorkOrderReport)(result5.output);
   }).pipe(exports_Effect.provide(ImplementationToolkitLayer), exports_Effect.provideService(ImplementationWorkspaceService, ImplementationWorkspaceService.of(workspace)), exports_Effect.provide([
     IdGenerator2.layer,
     ThreadHistory.layerTransient,
@@ -45917,14 +54070,14 @@ var makeWorkspace = exports_Effect.fn("LocalGitWorkOrderHost.makeWorkspace")(fun
     return { relative, full };
   });
   const readFile3 = exports_Effect.fn("ImplementationWorkspace.readFile")(function* (requested) {
-    const target = yield* resolve5(requested);
-    const contents = yield* fs.readFileString(target.full).pipe(exports_Effect.mapError((error2) => WorkspaceOperationFailure.make({
-      operation: `read ${target.relative}`,
+    const target2 = yield* resolve5(requested);
+    const contents = yield* fs.readFileString(target2.full).pipe(exports_Effect.mapError((error2) => WorkspaceOperationFailure.make({
+      operation: `read ${target2.relative}`,
       reason: String(error2).slice(0, 4096)
     })));
     if (contents.length > MAX_FILE_CHARS) {
       return yield* WorkspaceOperationFailure.make({
-        operation: `read ${target.relative}`,
+        operation: `read ${target2.relative}`,
         reason: `file exceeds the ${MAX_FILE_CHARS}-character bound`
       });
     }
@@ -45956,24 +54109,24 @@ var makeWorkspace = exports_Effect.fn("LocalGitWorkOrderHost.makeWorkspace")(fun
         reason: "edit input is empty or exceeds the 100,000-character bound"
       });
     }
-    const target = yield* resolve5(edit.path);
-    const contents = yield* readFile3(target.relative);
+    const target2 = yield* resolve5(edit.path);
+    const contents = yield* readFile3(target2.relative);
     const first = contents.indexOf(edit.expected);
     if (first < 0 || contents.indexOf(edit.expected, first + edit.expected.length) >= 0) {
       return yield* WorkspaceOperationFailure.make({
-        operation: `edit ${target.relative}`,
+        operation: `edit ${target2.relative}`,
         reason: "expected text must occur exactly once"
       });
     }
     const updated = `${contents.slice(0, first)}${edit.replacement}${contents.slice(first + edit.expected.length)}`;
     if (updated.length > MAX_FILE_CHARS) {
       return yield* WorkspaceOperationFailure.make({
-        operation: `edit ${target.relative}`,
+        operation: `edit ${target2.relative}`,
         reason: `edited file exceeds the ${MAX_FILE_CHARS}-character bound`
       });
     }
-    yield* fs.writeFileString(target.full, updated).pipe(exports_Effect.mapError((error2) => WorkspaceOperationFailure.make({
-      operation: `edit ${target.relative}`,
+    yield* fs.writeFileString(target2.full, updated).pipe(exports_Effect.mapError((error2) => WorkspaceOperationFailure.make({
+      operation: `edit ${target2.relative}`,
       reason: String(error2).slice(0, 4096)
     })));
   });
@@ -46014,9 +54167,9 @@ var makeWorkspace = exports_Effect.fn("LocalGitWorkOrderHost.makeWorkspace")(fun
         reason: `unknown host-configured check '${name}'`
       });
     }
-    const result4 = yield* check2.run(realRoot);
-    yield* exports_Ref.update(observedChecks, (previous) => [...previous, result4]);
-    return result4;
+    const result5 = yield* check2.run(realRoot);
+    yield* exports_Ref.update(observedChecks, (previous) => [...previous, result5]);
+    return result5;
   });
   const modelWorkspace = {
     readFile: readFile3,
@@ -46186,13 +54339,13 @@ __export(exports_AnthropicClient, {
   AnthropicClient: () => AnthropicClient,
   layer: () => layer17,
   layerConfig: () => layerConfig,
-  make: () => make64
+  make: () => make69
 });
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/ChannelSchema.js
-var decode2 = (schema3) => () => {
-  const decode3 = decodeEffect2(NonEmptyArray(schema3));
-  return fromTransform((upstream, _scope) => succeed7(flatMap5(upstream, (chunk) => decode3(chunk))));
+var decode3 = (schema3) => () => {
+  const decode4 = decodeEffect2(NonEmptyArray(schema3));
+  return fromTransform((upstream, _scope) => succeed7(flatMap5(upstream, (chunk) => decode4(chunk))));
 };
 
 // node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/encoding/Sse.js
@@ -46211,7 +54364,7 @@ class SseError extends (/* @__PURE__ */ TaggedError2("SseError")) {
   }
 }
 var defaultMaxEventSize = 10 * 1024 * 1024;
-var decode3 = (options3) => fromTransform((upstream, _scope) => sync4(() => {
+var decode4 = (options3) => fromTransform((upstream, _scope) => sync4(() => {
   let buffer3 = [];
   let retry6;
   const parser = makeParser2((event) => {
@@ -46241,13 +54394,13 @@ var decode3 = (options3) => fromTransform((upstream, _scope) => sync4(() => {
     return flatMap5(pump, loop);
   });
 }));
-var decodeSchema = (schema3, options3) => pipeTo(decode3(options3), decode2(EventEncoded.pipe(decodeTo2(schema3)))());
+var decodeSchema = (schema3, options3) => pipeTo(decode4(options3), decode3(EventEncoded.pipe(decodeTo2(schema3)))());
 var decodeDataSchema = (schema3, options3) => {
   const eventSchema = Struct2({
     ...EventEncoded.fields,
     data: fromJsonString2(schema3)
   });
-  return pipeTo(decode3(options3), map9(decode2(eventSchema)(), map4((event) => ({
+  return pipeTo(decode4(options3), map9(decode3(eventSchema)(), map4((event) => ({
     ...event,
     id: event.id
   }))));
@@ -46284,12 +54437,12 @@ function makeParser2(onParse, options3) {
     }
     isFirstChunk = false;
     const length = buffer3.length;
-    let position = 0;
-    while (position < length) {
+    let position3 = 0;
+    while (position3 < length) {
       if (discardTrailingNewline) {
-        if (buffer3[position] === `
+        if (buffer3[position3] === `
 `) {
-          ++position;
+          ++position3;
         }
         discardTrailingNewline = false;
       }
@@ -46299,30 +54452,30 @@ function makeParser2(onParse, options3) {
       for (let index2 = startingPosition;lineLength < 0 && index2 < length; ++index2) {
         character = buffer3[index2];
         if (character === ":" && fieldLength < 0) {
-          fieldLength = index2 - position;
+          fieldLength = index2 - position3;
         } else if (character === "\r") {
           discardTrailingNewline = true;
-          lineLength = index2 - position;
+          lineLength = index2 - position3;
         } else if (character === `
 `) {
-          lineLength = index2 - position;
+          lineLength = index2 - position3;
         }
       }
       if (lineLength < 0) {
-        startingPosition = length - position;
+        startingPosition = length - position3;
         startingFieldLength = fieldLength;
         break;
       } else {
         startingPosition = 0;
         startingFieldLength = -1;
       }
-      parseEventStreamLine(buffer3, position, fieldLength, lineLength);
-      position += lineLength + 1;
+      parseEventStreamLine(buffer3, position3, fieldLength, lineLength);
+      position3 += lineLength + 1;
     }
-    if (position === length) {
+    if (position3 === length) {
       buffer3 = "";
-    } else if (position > 0) {
-      buffer3 = buffer3.slice(position);
+    } else if (position3 > 0) {
+      buffer3 = buffer3.slice(position3);
     }
     if (buffer3.length + data.length > maxEventSize) {
       const error2 = new SseError({
@@ -46358,19 +54511,19 @@ function makeParser2(onParse, options3) {
     } else {
       step = fieldLength + 1;
     }
-    const position = index2 + step;
+    const position3 = index2 + step;
     const valueLength = lineLength - step;
-    const value4 = lineBuffer.slice(position, position + valueLength).toString();
+    const value6 = lineBuffer.slice(position3, position3 + valueLength).toString();
     if (field === "data") {
-      data += value4 ? `${value4}
+      data += value6 ? `${value6}
 ` : `
 `;
     } else if (field === "event") {
-      eventName = value4;
-    } else if (field === "id" && !value4.includes("\x00")) {
-      lastEventId = value4;
-    } else if (field === "retry" && /^\d+$/.test(value4)) {
-      const retry6 = parseInt(value4, 10);
+      eventName = value6;
+    } else if (field === "id" && !value6.includes("\x00")) {
+      lastEventId = value6;
+    } else if (field === "retry" && /^\d+$/.test(value6)) {
+      const retry6 = parseInt(value6, 10);
       onParse(new Retry({
         duration: millis(retry6),
         lastEventId
@@ -46699,7 +54852,7 @@ var BetaFileMetadataSchema = /* @__PURE__ */ Struct2({
     description: "RFC 3339 datetime string representing when the file was created.",
     format: "date-time"
   }),
-  downloadable: optionalKey2(Boolean3.annotate({
+  downloadable: optionalKey2(Boolean4.annotate({
     title: "Downloadable",
     description: "Whether the file can be downloaded.",
     default: false
@@ -47071,7 +55224,7 @@ var BetaResponseCharLocationCitation = /* @__PURE__ */ Struct2({
   title: "ResponseCharLocationCitation"
 });
 var BetaResponseCitationsConfig = /* @__PURE__ */ Struct2({
-  enabled: Boolean3.annotate({
+  enabled: Boolean4.annotate({
     title: "Enabled",
     default: false
   })
@@ -47266,7 +55419,7 @@ var BetaResponseSearchResultLocationCitation = /* @__PURE__ */ Struct2({
   title: "ResponseSearchResultLocationCitation"
 });
 var BetaResponseTextEditorCodeExecutionCreateResultBlock = /* @__PURE__ */ Struct2({
-  is_file_update: Boolean3.annotate({
+  is_file_update: Boolean4.annotate({
     title: "Is File Update"
   }),
   type: Literal2("text_editor_code_execution_create_result").annotate({
@@ -47789,7 +55942,7 @@ var FileMetadataSchema = /* @__PURE__ */ Struct2({
     description: "RFC 3339 datetime string representing when the file was created.",
     format: "date-time"
   }),
-  downloadable: optionalKey2(Boolean3.annotate({
+  downloadable: optionalKey2(Boolean4.annotate({
     title: "Downloadable",
     description: "Whether the file can be downloaded.",
     default: false
@@ -48142,7 +56295,7 @@ var ResponseCharLocationCitation = /* @__PURE__ */ Struct2({
   title: "ResponseCharLocationCitation"
 });
 var ResponseCitationsConfig = /* @__PURE__ */ Struct2({
-  enabled: Boolean3.annotate({
+  enabled: Boolean4.annotate({
     title: "Enabled",
     default: false
   })
@@ -48264,7 +56417,7 @@ var ResponseSearchResultLocationCitation = /* @__PURE__ */ Struct2({
   title: "ResponseSearchResultLocationCitation"
 });
 var ResponseTextEditorCodeExecutionCreateResultBlock = /* @__PURE__ */ Struct2({
-  is_file_update: Boolean3.annotate({
+  is_file_update: Boolean4.annotate({
     title: "Is File Update"
   }),
   type: Literal2("text_editor_code_execution_create_result").annotate({
@@ -48646,7 +56799,7 @@ var BetaFileListResponse = /* @__PURE__ */ Struct2({
     title: "First Id",
     description: "ID of the first file in this page of results."
   })),
-  has_more: optionalKey2(Boolean3.annotate({
+  has_more: optionalKey2(Boolean4.annotate({
     title: "Has More",
     description: "Whether there are more results available.",
     default: false
@@ -48666,7 +56819,7 @@ var BetaListResponse_MessageBatch_ = /* @__PURE__ */ Struct2({
     title: "First Id",
     description: "First ID in the `data` list. Can be used as the `before_id` for the previous page."
   }),
-  has_more: Boolean3.annotate({
+  has_more: Boolean4.annotate({
     title: "Has More",
     description: "Indicates if there are more results in the requested page direction."
   }),
@@ -48685,7 +56838,7 @@ var BetaListResponse_ModelInfo_ = /* @__PURE__ */ Struct2({
     title: "First Id",
     description: "First ID in the `data` list. Can be used as the `before_id` for the previous page."
   }),
-  has_more: Boolean3.annotate({
+  has_more: Boolean4.annotate({
     title: "Has More",
     description: "Indicates if there are more results in the requested page direction."
   }),
@@ -48853,7 +57006,7 @@ var BetaResponseMCPToolResultBlock = /* @__PURE__ */ Struct2({
   })]).annotate({
     title: "Content"
   }),
-  is_error: Boolean3.annotate({
+  is_error: Boolean4.annotate({
     title: "Is Error",
     default: false
   }),
@@ -48953,7 +57106,7 @@ var BetaListSkillVersionsResponse = /* @__PURE__ */ Struct2({
     title: "Data",
     description: "List of skill versions."
   }),
-  has_more: Boolean3.annotate({
+  has_more: Boolean4.annotate({
     title: "Has More",
     description: "Indicates if there are more results in the requested page direction."
   }),
@@ -49013,7 +57166,7 @@ var BetaListSkillsResponse = /* @__PURE__ */ Struct2({
     title: "Data",
     description: "List of skills."
   }),
-  has_more: Boolean3.annotate({
+  has_more: Boolean4.annotate({
     title: "Has More",
     description: "Whether there are more results available.\n\nIf `true`, there are additional results that can be fetched using the `next_page` token."
   }),
@@ -49042,7 +57195,7 @@ var FileListResponse = /* @__PURE__ */ Struct2({
     title: "First Id",
     description: "ID of the first file in this page of results."
   })),
-  has_more: optionalKey2(Boolean3.annotate({
+  has_more: optionalKey2(Boolean4.annotate({
     title: "Has More",
     description: "Whether there are more results available.",
     default: false
@@ -49062,7 +57215,7 @@ var ListResponse_MessageBatch_ = /* @__PURE__ */ Struct2({
     title: "First Id",
     description: "First ID in the `data` list. Can be used as the `before_id` for the previous page."
   }),
-  has_more: Boolean3.annotate({
+  has_more: Boolean4.annotate({
     title: "Has More",
     description: "Indicates if there are more results in the requested page direction."
   }),
@@ -49081,7 +57234,7 @@ var ListResponse_ModelInfo_ = /* @__PURE__ */ Struct2({
     title: "First Id",
     description: "First ID in the `data` list. Can be used as the `before_id` for the previous page."
   }),
-  has_more: Boolean3.annotate({
+  has_more: Boolean4.annotate({
     title: "Has More",
     description: "Indicates if there are more results in the requested page direction."
   }),
@@ -49276,7 +57429,7 @@ var ListSkillsResponse = /* @__PURE__ */ Struct2({
     title: "Data",
     description: "List of skills."
   }),
-  has_more: Boolean3.annotate({
+  has_more: Boolean4.annotate({
     title: "Has More",
     description: "Whether there are more results available.\n\nIf `true`, there are additional results that can be fetched using the `next_page` token."
   }),
@@ -49292,7 +57445,7 @@ var ListSkillVersionsResponse = /* @__PURE__ */ Struct2({
     title: "Data",
     description: "List of skill versions."
   }),
-  has_more: Boolean3.annotate({
+  has_more: Boolean4.annotate({
     title: "Has More",
     description: "Indicates if there are more results in the requested page direction."
   }),
@@ -49706,7 +57859,7 @@ var BetaContentBlockStartEvent = /* @__PURE__ */ Struct2({
 var BetaContentBlock = /* @__PURE__ */ Union2([BetaResponseTextBlock, BetaResponseThinkingBlock, BetaResponseRedactedThinkingBlock, BetaResponseToolUseBlock, BetaResponseServerToolUseBlock, BetaResponseWebSearchToolResultBlock, BetaResponseWebFetchToolResultBlock, BetaResponseCodeExecutionToolResultBlock, BetaResponseBashCodeExecutionToolResultBlock, BetaResponseTextEditorCodeExecutionToolResultBlock, BetaResponseToolSearchToolResultBlock, BetaResponseMCPToolUseBlock, BetaResponseMCPToolResultBlock, BetaResponseContainerUploadBlock, BetaResponseCompactionBlock], {
   mode: "oneOf"
 });
-var ContentBlock2 = /* @__PURE__ */ Union2([ResponseTextBlock, ResponseThinkingBlock, ResponseRedactedThinkingBlock, ResponseToolUseBlock, ResponseServerToolUseBlock, ResponseWebSearchToolResultBlock, ResponseWebFetchToolResultBlock, ResponseCodeExecutionToolResultBlock, ResponseBashCodeExecutionToolResultBlock, ResponseTextEditorCodeExecutionToolResultBlock, ResponseToolSearchToolResultBlock, ResponseContainerUploadBlock], {
+var ContentBlock4 = /* @__PURE__ */ Union2([ResponseTextBlock, ResponseThinkingBlock, ResponseRedactedThinkingBlock, ResponseToolUseBlock, ResponseServerToolUseBlock, ResponseWebSearchToolResultBlock, ResponseWebFetchToolResultBlock, ResponseCodeExecutionToolResultBlock, ResponseBashCodeExecutionToolResultBlock, ResponseTextEditorCodeExecutionToolResultBlock, ResponseToolSearchToolResultBlock, ResponseContainerUploadBlock], {
   mode: "oneOf"
 });
 var BetaMessage = /* @__PURE__ */ Struct2({
@@ -49820,7 +57973,7 @@ The format and length of IDs may change over time.`
     description: 'Conversational role of the generated message.\n\nThis will always be `"assistant"`.',
     default: "assistant"
   }),
-  content: ArraySchema(ContentBlock2).annotate({
+  content: ArraySchema(ContentBlock4).annotate({
     title: "Content",
     description: 'Content generated by the model.\n\nThis is an array of content blocks, each of which has a `type` that determines its shape.\n\nExample:\n\n```json\n[{"type": "text", "text": "Hi, I\'m Claude."}]\n```\n\nIf the request input `messages` ended with an `assistant` turn, then the response `content` will continue directly from that last turn. You can use this to constrain the model\'s output.\n\nFor example, if the input `messages` were:\n```json\n[\n  {"role": "user", "content": "What\'s the Greek name for Sun? (A) Sol (B) Helios (C) Sun"},\n  {"role": "assistant", "content": "The best answer is ("}\n]\n```\n\nThen the response `content` might be:\n\n```json\n[{"type": "text", "text": "B)"}]\n```'
   }),
@@ -49983,7 +58136,7 @@ var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet200 = BetaGetSkillVersio
 var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet4XX = BetaErrorResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete200 = BetaDeleteSkillVersionResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete4XX = BetaErrorResponse;
-var make63 = (httpClient, options3 = {}) => {
+var make68 = (httpClient, options3 = {}) => {
   const unexpectedStatus = (response) => flatMap5(orElseSucceed2(response.json, () => "Unexpected status code"), (description) => fail7(new HttpClientError({
     reason: new StatusCodeError({
       request: response.request,
@@ -49997,7 +58150,7 @@ var make63 = (httpClient, options3 = {}) => {
   };
   const binaryRequest = (request3) => filterStatusOk2(httpClient).execute(request3).pipe(map8((response) => response.stream), unwrap4);
   const decodeSuccess = (schema3) => (response) => schemaBodyJson2(schema3)(response);
-  const decodeError = (tag2, schema3) => (response) => flatMap5(schemaBodyJson2(schema3)(response), (cause) => fail7(AnthropicClientError(tag2, cause, response)));
+  const decodeError = (tag4, schema3) => (response) => flatMap5(schemaBodyJson2(schema3)(response), (cause) => fail7(AnthropicClientError(tag4, cause, response)));
   return {
     httpClient,
     messagesPost: (options4) => post(`/v1/messages`).pipe(setHeaders({
@@ -50015,7 +58168,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("CompletePost4XX", CompletePost4XX),
       orElse: unexpectedStatus
     }))),
-    modelsList: (options4) => get10(`/v1/models`).pipe(setUrlParams({
+    modelsList: (options4) => get11(`/v1/models`).pipe(setUrlParams({
       before_id: options4?.params?.["before_id"],
       after_id: options4?.params?.["after_id"],
       limit: options4?.params?.["limit"]
@@ -50028,7 +58181,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("ModelsList4XX", ModelsList4XX),
       orElse: unexpectedStatus
     }))),
-    modelsGet: (modelId, options4) => get10(`/v1/models/${modelId}`).pipe(setHeaders({
+    modelsGet: (modelId, options4) => get11(`/v1/models/${modelId}`).pipe(setHeaders({
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined,
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined
@@ -50037,7 +58190,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("ModelsGet4XX", ModelsGet4XX),
       orElse: unexpectedStatus
     }))),
-    messageBatchesList: (options4) => get10(`/v1/messages/batches`).pipe(setUrlParams({
+    messageBatchesList: (options4) => get11(`/v1/messages/batches`).pipe(setUrlParams({
       before_id: options4?.params?.["before_id"],
       after_id: options4?.params?.["after_id"],
       limit: options4?.params?.["limit"]
@@ -50056,7 +58209,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("MessageBatchesPost4XX", MessageBatchesPost4XX),
       orElse: unexpectedStatus
     }))),
-    messageBatchesRetrieve: (messageBatchId, options4) => get10(`/v1/messages/batches/${messageBatchId}`).pipe(setHeaders({
+    messageBatchesRetrieve: (messageBatchId, options4) => get11(`/v1/messages/batches/${messageBatchId}`).pipe(setHeaders({
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
     }), withResponse(options4?.config)(matchStatus({
@@ -50079,7 +58232,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("MessageBatchesCancel4XX", MessageBatchesCancel4XX),
       orElse: unexpectedStatus
     }))),
-    messageBatchesResults: (messageBatchId, options4) => get10(`/v1/messages/batches/${messageBatchId}/results`).pipe(setHeaders({
+    messageBatchesResults: (messageBatchId, options4) => get11(`/v1/messages/batches/${messageBatchId}/results`).pipe(setHeaders({
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
     }), withResponse(options4?.config)(matchStatus({
@@ -50093,7 +58246,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("MessagesCountTokensPost4XX", MessagesCountTokensPost4XX),
       orElse: unexpectedStatus
     }))),
-    listFilesV1FilesGet: (options4) => get10(`/v1/files`).pipe(setUrlParams({
+    listFilesV1FilesGet: (options4) => get11(`/v1/files`).pipe(setUrlParams({
       before_id: options4?.params?.["before_id"],
       after_id: options4?.params?.["after_id"],
       limit: options4?.params?.["limit"]
@@ -50114,7 +58267,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("UploadFileV1FilesPost4XX", UploadFileV1FilesPost4XX),
       orElse: unexpectedStatus
     }))),
-    getFileMetadataV1FilesFileIdGet: (fileId, options4) => get10(`/v1/files/${fileId}`).pipe(setHeaders({
+    getFileMetadataV1FilesFileIdGet: (fileId, options4) => get11(`/v1/files/${fileId}`).pipe(setHeaders({
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined,
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
@@ -50132,19 +58285,19 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("DeleteFileV1FilesFileIdDelete4XX", DeleteFileV1FilesFileIdDelete4XX),
       orElse: unexpectedStatus
     }))),
-    downloadFileV1FilesFileIdContentGet: (fileId, options4) => get10(`/v1/files/${fileId}/content`).pipe(setHeaders({
+    downloadFileV1FilesFileIdContentGet: (fileId, options4) => get11(`/v1/files/${fileId}/content`).pipe(setHeaders({
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined,
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
     }), withResponse(options4?.config)(matchStatus({
       orElse: unexpectedStatus
     }))),
-    downloadFileV1FilesFileIdContentGetStream: (fileId, options4) => get10(`/v1/files/${fileId}/content`).pipe(setHeaders({
+    downloadFileV1FilesFileIdContentGetStream: (fileId, options4) => get11(`/v1/files/${fileId}/content`).pipe(setHeaders({
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined,
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
     }), binaryRequest),
-    listSkillsV1SkillsGet: (options4) => get10(`/v1/skills`).pipe(setUrlParams({
+    listSkillsV1SkillsGet: (options4) => get11(`/v1/skills`).pipe(setUrlParams({
       page: options4?.params?.["page"],
       limit: options4?.params?.["limit"],
       source: options4?.params?.["source"]
@@ -50165,7 +58318,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("CreateSkillV1SkillsPost4XX", CreateSkillV1SkillsPost4XX),
       orElse: unexpectedStatus
     }))),
-    getSkillV1SkillsSkillIdGet: (skillId, options4) => get10(`/v1/skills/${skillId}`).pipe(setHeaders({
+    getSkillV1SkillsSkillIdGet: (skillId, options4) => get11(`/v1/skills/${skillId}`).pipe(setHeaders({
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined,
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
@@ -50183,7 +58336,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("DeleteSkillV1SkillsSkillIdDelete4XX", DeleteSkillV1SkillsSkillIdDelete4XX),
       orElse: unexpectedStatus
     }))),
-    listSkillVersionsV1SkillsSkillIdVersionsGet: (skillId, options4) => get10(`/v1/skills/${skillId}/versions`).pipe(setUrlParams({
+    listSkillVersionsV1SkillsSkillIdVersionsGet: (skillId, options4) => get11(`/v1/skills/${skillId}/versions`).pipe(setUrlParams({
       page: options4?.params?.["page"],
       limit: options4?.params?.["limit"]
     }), setHeaders({
@@ -50203,7 +58356,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("CreateSkillVersionV1SkillsSkillIdVersionsPost4XX", CreateSkillVersionV1SkillsSkillIdVersionsPost4XX),
       orElse: unexpectedStatus
     }))),
-    getSkillVersionV1SkillsSkillIdVersionsVersionGet: (skillId, version, options4) => get10(`/v1/skills/${skillId}/versions/${version}`).pipe(setHeaders({
+    getSkillVersionV1SkillsSkillIdVersionsVersionGet: (skillId, version, options4) => get11(`/v1/skills/${skillId}/versions/${version}`).pipe(setHeaders({
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined,
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
@@ -50229,7 +58382,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("BetaMessagesPost4XX", BetaMessagesPost4XX),
       orElse: unexpectedStatus
     }))),
-    betaModelsList: (options4) => get10(`/v1/models?beta=true`).pipe(setUrlParams({
+    betaModelsList: (options4) => get11(`/v1/models?beta=true`).pipe(setUrlParams({
       before_id: options4?.params?.["before_id"],
       after_id: options4?.params?.["after_id"],
       limit: options4?.params?.["limit"]
@@ -50242,7 +58395,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("BetaModelsList4XX", BetaModelsList4XX),
       orElse: unexpectedStatus
     }))),
-    betaModelsGet: (modelId, options4) => get10(`/v1/models/${modelId}?beta=true`).pipe(setHeaders({
+    betaModelsGet: (modelId, options4) => get11(`/v1/models/${modelId}?beta=true`).pipe(setHeaders({
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined,
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined
@@ -50251,7 +58404,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("BetaModelsGet4XX", BetaModelsGet4XX),
       orElse: unexpectedStatus
     }))),
-    betaMessageBatchesList: (options4) => get10(`/v1/messages/batches?beta=true`).pipe(setUrlParams({
+    betaMessageBatchesList: (options4) => get11(`/v1/messages/batches?beta=true`).pipe(setUrlParams({
       before_id: options4?.params?.["before_id"],
       after_id: options4?.params?.["after_id"],
       limit: options4?.params?.["limit"]
@@ -50272,7 +58425,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("BetaMessageBatchesPost4XX", BetaMessageBatchesPost4XX),
       orElse: unexpectedStatus
     }))),
-    betaMessageBatchesRetrieve: (messageBatchId, options4) => get10(`/v1/messages/batches/${messageBatchId}?beta=true`).pipe(setHeaders({
+    betaMessageBatchesRetrieve: (messageBatchId, options4) => get11(`/v1/messages/batches/${messageBatchId}?beta=true`).pipe(setHeaders({
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined,
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
@@ -50298,7 +58451,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("BetaMessageBatchesCancel4XX", BetaMessageBatchesCancel4XX),
       orElse: unexpectedStatus
     }))),
-    betaMessageBatchesResults: (messageBatchId, options4) => get10(`/v1/messages/batches/${messageBatchId}/results?beta=true`).pipe(setHeaders({
+    betaMessageBatchesResults: (messageBatchId, options4) => get11(`/v1/messages/batches/${messageBatchId}/results?beta=true`).pipe(setHeaders({
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined,
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
@@ -50314,7 +58467,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("BetaMessagesCountTokensPost4XX", BetaMessagesCountTokensPost4XX),
       orElse: unexpectedStatus
     }))),
-    betaListFilesV1FilesGet: (options4) => get10(`/v1/files?beta=true`).pipe(setUrlParams({
+    betaListFilesV1FilesGet: (options4) => get11(`/v1/files?beta=true`).pipe(setUrlParams({
       before_id: options4?.params?.["before_id"],
       after_id: options4?.params?.["after_id"],
       limit: options4?.params?.["limit"]
@@ -50335,7 +58488,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("BetaUploadFileV1FilesPost4XX", BetaUploadFileV1FilesPost4XX),
       orElse: unexpectedStatus
     }))),
-    betaGetFileMetadataV1FilesFileIdGet: (fileId, options4) => get10(`/v1/files/${fileId}?beta=true`).pipe(setHeaders({
+    betaGetFileMetadataV1FilesFileIdGet: (fileId, options4) => get11(`/v1/files/${fileId}?beta=true`).pipe(setHeaders({
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined,
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
@@ -50353,19 +58506,19 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("BetaDeleteFileV1FilesFileIdDelete4XX", BetaDeleteFileV1FilesFileIdDelete4XX),
       orElse: unexpectedStatus
     }))),
-    betaDownloadFileV1FilesFileIdContentGet: (fileId, options4) => get10(`/v1/files/${fileId}/content?beta=true`).pipe(setHeaders({
+    betaDownloadFileV1FilesFileIdContentGet: (fileId, options4) => get11(`/v1/files/${fileId}/content?beta=true`).pipe(setHeaders({
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined,
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
     }), withResponse(options4?.config)(matchStatus({
       orElse: unexpectedStatus
     }))),
-    betaDownloadFileV1FilesFileIdContentGetStream: (fileId, options4) => get10(`/v1/files/${fileId}/content?beta=true`).pipe(setHeaders({
+    betaDownloadFileV1FilesFileIdContentGetStream: (fileId, options4) => get11(`/v1/files/${fileId}/content?beta=true`).pipe(setHeaders({
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined,
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
     }), binaryRequest),
-    betaListSkillsV1SkillsGet: (options4) => get10(`/v1/skills?beta=true`).pipe(setUrlParams({
+    betaListSkillsV1SkillsGet: (options4) => get11(`/v1/skills?beta=true`).pipe(setUrlParams({
       page: options4?.params?.["page"],
       limit: options4?.params?.["limit"],
       source: options4?.params?.["source"]
@@ -50386,7 +58539,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("BetaCreateSkillV1SkillsPost4XX", BetaCreateSkillV1SkillsPost4XX),
       orElse: unexpectedStatus
     }))),
-    betaGetSkillV1SkillsSkillIdGet: (skillId, options4) => get10(`/v1/skills/${skillId}?beta=true`).pipe(setHeaders({
+    betaGetSkillV1SkillsSkillIdGet: (skillId, options4) => get11(`/v1/skills/${skillId}?beta=true`).pipe(setHeaders({
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined,
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
@@ -50404,7 +58557,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("BetaDeleteSkillV1SkillsSkillIdDelete4XX", BetaDeleteSkillV1SkillsSkillIdDelete4XX),
       orElse: unexpectedStatus
     }))),
-    betaListSkillVersionsV1SkillsSkillIdVersionsGet: (skillId, options4) => get10(`/v1/skills/${skillId}/versions?beta=true`).pipe(setUrlParams({
+    betaListSkillVersionsV1SkillsSkillIdVersionsGet: (skillId, options4) => get11(`/v1/skills/${skillId}/versions?beta=true`).pipe(setUrlParams({
       page: options4?.params?.["page"],
       limit: options4?.params?.["limit"]
     }), setHeaders({
@@ -50424,7 +58577,7 @@ var make63 = (httpClient, options3 = {}) => {
       "4xx": decodeError("BetaCreateSkillVersionV1SkillsSkillIdVersionsPost4XX", BetaCreateSkillVersionV1SkillsSkillIdVersionsPost4XX),
       orElse: unexpectedStatus
     }))),
-    betaGetSkillVersionV1SkillsSkillIdVersionsVersionGet: (skillId, version, options4) => get10(`/v1/skills/${skillId}/versions/${version}?beta=true`).pipe(setHeaders({
+    betaGetSkillVersionV1SkillsSkillIdVersionsVersionGet: (skillId, version, options4) => get11(`/v1/skills/${skillId}/versions/${version}?beta=true`).pipe(setHeaders({
       "anthropic-beta": options4?.params?.["anthropic-beta"] ?? undefined,
       "anthropic-version": options4?.params?.["anthropic-version"] ?? undefined,
       "x-api-key": options4?.params?.["x-api-key"] ?? undefined
@@ -50447,8 +58600,8 @@ var make63 = (httpClient, options3 = {}) => {
 
 class AnthropicClientErrorImpl extends Error3 {
 }
-var AnthropicClientError = (tag2, cause, response) => new AnthropicClientErrorImpl({
-  _tag: tag2,
+var AnthropicClientError = (tag4, cause, response) => new AnthropicClientErrorImpl({
+  _tag: tag4,
   cause,
   response,
   request: response.request
@@ -50579,13 +58732,13 @@ var mapStatusCodeError = /* @__PURE__ */ fnUntraced2(function* (error2, method) 
       body = responseBody.value;
     }
   }
-  let json2 = undefined;
+  let json3 = undefined;
   try {
-    json2 = isNotUndefined(body) ? JSON.parse(body) : undefined;
+    json3 = isNotUndefined(body) ? JSON.parse(body) : undefined;
   } catch {
-    json2 = undefined;
+    json3 = undefined;
   }
-  const decoded = decodeUnknownOption2(AnthropicErrorBody)(json2);
+  const decoded = decodeUnknownOption2(AnthropicErrorBody)(json3);
   const reason = mapStatusCodeToReason({
     status,
     headers,
@@ -50772,11 +58925,11 @@ var RedactedAnthropicHeaders = {
   AnthropicApiKey: "x-api-key"
 };
 var withRedactedHeaders = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedAnthropicHeaders)));
-var make64 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make69 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiVersion = options3.apiVersion ?? "2023-06-01";
   const httpClient = baseClient.pipe(mapRequest((request3) => request3.pipe(prependUrl(options3.apiUrl ?? "https://api.anthropic.com"), isNotUndefined(options3.apiKey) ? setHeader(RedactedAnthropicHeaders.AnthropicApiKey, value3(options3.apiKey)) : identity, setHeader("anthropic-version", apiVersion), acceptJson)), isNotUndefined(options3.transformClient) ? options3.transformClient : identity);
-  const client = make63(httpClient, {
+  const client = make68(httpClient, {
     transformClient: fnUntraced2(function* (client2) {
       const config = yield* AnthropicConfig.getOrUndefined;
       if (isNotUndefined(config?.transformClient)) {
@@ -50830,12 +58983,12 @@ var make64 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createMessageStream
   });
 }, withRedactedHeaders);
-var layer17 = (options3) => effect(AnthropicClient, make64(options3));
+var layer17 = (options3) => effect(AnthropicClient, make69(options3));
 var layerConfig = (options3) => effect(AnthropicClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const apiVersion = isNotUndefined(options3?.apiVersion) ? yield* options3.apiVersion : undefined;
-  return yield* make64({
+  return yield* make69({
     apiKey,
     apiUrl,
     apiVersion,
@@ -50847,7 +59000,7 @@ var exports_AnthropicLanguageModel = {};
 __export(exports_AnthropicLanguageModel, {
   Config: () => Config,
   layer: () => layer18,
-  make: () => make65,
+  make: () => make70,
   model: () => model,
   withConfigOverride: () => withConfigOverride
 });
@@ -50899,11 +59052,11 @@ function transform5(root) {
           return objectToEntries(ast, recur3);
         }
         const propertySignatures = mapOrSame(ast.propertySignatures, (propertySignature) => {
-          let type = recur3(propertySignature.type);
+          let type2 = recur3(propertySignature.type);
           if (isOptional(propertySignature.type)) {
-            type = optionalToNullable(type);
+            type2 = optionalToNullable(type2);
           }
-          return type === propertySignature.type ? propertySignature : new PropertySignature(propertySignature.name, type);
+          return type2 === propertySignature.type ? propertySignature : new PropertySignature(propertySignature.name, type2);
         });
         const checks = prepareChecks(ast.checks);
         if (propertySignatures === ast.propertySignatures && checks === ast.checks) {
@@ -50980,8 +59133,8 @@ function tupleToObject(ast, recur3) {
 function objectToEntries(ast, recur3) {
   const checks = combineChecks2(recordChecks(ast.checks), compilerChecks(ast.checks));
   const key = unionOrSingle([...ast.propertySignatures.map((propertySignature) => new Literal(propertySignature.name)), ...ast.indexSignatures.map((indexSignature) => indexSignature.parameter)]);
-  const value4 = unionOrSingle([...ast.propertySignatures.map((propertySignature) => propertySignature.type), ...ast.indexSignatures.map((indexSignature) => indexSignature.type)]);
-  const from = recur3(new Arrays(false, [], [new Arrays(false, [key, value4], [])], structuralAnnotations(ast, RECORD_DESCRIPTION), checks));
+  const value6 = unionOrSingle([...ast.propertySignatures.map((propertySignature) => propertySignature.type), ...ast.indexSignatures.map((indexSignature) => indexSignature.type)]);
+  const from = recur3(new Arrays(false, [], [new Arrays(false, [key, value6], [])], structuralAnnotations(ast, RECORD_DESCRIPTION), checks));
   return decodeTo(from, ast, transform2({
     decode: Object.fromEntries,
     encode: Object.entries
@@ -51029,8 +59182,8 @@ function compilerAnnotations(annotations2) {
     toJsonSchema: annotations2.toJsonSchema
   };
 }
-function optionalToNullable(type) {
-  return decodeTo(new Union([type, null_], "anyOf"), optionalKey(type), transformOptional2({
+function optionalToNullable(type2) {
+  return decodeTo(new Union([type2, null_], "anyOf"), optionalKey(type2), transformOptional2({
     decode: filter(isNotNull),
     encode: orElseSome(() => null)
   }));
@@ -51066,7 +59219,7 @@ function recordCheck(check2) {
     return check2.checks.flatMap(recordCheck);
   const representation = check2.annotations?.representation;
   const payload = representation?.payload;
-  if (!isJsonObject2(payload))
+  if (!isJsonObject3(payload))
     return [];
   switch (representation?.id) {
     case "effect/schema/isMinProperties":
@@ -51077,7 +59230,7 @@ function recordCheck(check2) {
       return [];
   }
 }
-function isJsonObject2(input) {
+function isJsonObject3(input) {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 function withoutDescription(check2) {
@@ -51113,36 +59266,36 @@ function appendAnnotationDescription(descriptions, annotations2) {
 }
 function walkJsonSchema(schema3, visitor) {
   const out = {};
-  for (const [key, value4] of Object.entries(schema3)) {
+  for (const [key, value6] of Object.entries(schema3)) {
     switch (key) {
       case "properties":
       case "patternProperties": {
-        if (isJsonSchema(value4)) {
+        if (isJsonSchema(value6)) {
           const properties = {};
-          for (const [name, property] of Object.entries(value4)) {
+          for (const [name, property] of Object.entries(value6)) {
             assignProperty(properties, name, isJsonSchema(property) ? walkJsonSchema(property, visitor) : property);
           }
           assignProperty(out, key, properties);
         } else {
-          assignProperty(out, key, value4);
+          assignProperty(out, key, value6);
         }
         break;
       }
       case "additionalProperties":
       case "items":
       case "propertyNames": {
-        assignProperty(out, key, isJsonSchema(value4) ? walkJsonSchema(value4, visitor) : value4);
+        assignProperty(out, key, isJsonSchema(value6) ? walkJsonSchema(value6, visitor) : value6);
         break;
       }
       case "prefixItems":
       case "allOf":
       case "anyOf":
       case "oneOf": {
-        assignProperty(out, key, Array.isArray(value4) ? value4.map((member) => isJsonSchema(member) ? walkJsonSchema(member, visitor) : member) : value4);
+        assignProperty(out, key, Array.isArray(value6) ? value6.map((member) => isJsonSchema(member) ? walkJsonSchema(member, visitor) : member) : value6);
         break;
       }
       default:
-        assignProperty(out, key, value4);
+        assignProperty(out, key, value6);
         break;
     }
   }
@@ -51184,15 +59337,15 @@ function rewriteOpenAI(schema3) {
     const normalized = normalizeAllOf(schema4);
     const out = {};
     let unsupportedFormat;
-    for (const [key, value4] of Object.entries(normalized)) {
+    for (const [key, value6] of Object.entries(normalized)) {
       if (key === "format") {
-        if (typeof value4 === "string" && formats.has(value4) && supportsType(key, normalized.type))
-          out.format = value4;
-        else if (typeof value4 === "string")
-          unsupportedFormat = value4;
+        if (typeof value6 === "string" && formats.has(value6) && supportsType(key, normalized.type))
+          out.format = value6;
+        else if (typeof value6 === "string")
+          unsupportedFormat = value6;
       } else if (supportedKeywords.has(key) && supportsType(key, normalized.type)) {
-        if (key !== "additionalProperties" || value4 === false)
-          out[key] = value4;
+        if (key !== "additionalProperties" || value6 === false)
+          out[key] = value6;
       }
     }
     if (unsupportedFormat !== undefined) {
@@ -51204,28 +59357,28 @@ function rewriteOpenAI(schema3) {
     return out;
   });
 }
-function supportsType(key, type) {
-  if (typeof type !== "string")
+function supportsType(key, type2) {
+  if (typeof type2 !== "string")
     return true;
   switch (key) {
     case "pattern":
     case "format":
-      return type === "string";
+      return type2 === "string";
     case "multipleOf":
     case "minimum":
     case "exclusiveMinimum":
     case "maximum":
     case "exclusiveMaximum":
-      return type === "number" || type === "integer";
+      return type2 === "number" || type2 === "integer";
     case "items":
     case "minItems":
     case "maxItems":
-      return type === "array";
+      return type2 === "array";
     case "properties":
     case "patternProperties":
     case "required":
     case "additionalProperties":
-      return type === "object";
+      return type2 === "object";
     default:
       return true;
   }
@@ -51238,20 +59391,20 @@ function normalizeAllOf(schema3) {
   const baseKeywords = new Set;
   const memberKeywords = new Set;
   const ambiguousKeywords = new Set;
-  for (const [key, value4] of Object.entries(schema3)) {
+  for (const [key, value6] of Object.entries(schema3)) {
     if (key === "allOf")
       continue;
     baseKeywords.add(key);
-    if (key === "pattern" && typeof value4 === "string")
-      patterns.push(value4);
+    if (key === "pattern" && typeof value6 === "string")
+      patterns.push(value6);
     else
-      out[key] = value4;
+      out[key] = value6;
   }
   for (const member of schema3.allOf) {
     if (!isJsonSchema(member))
       continue;
-    for (const [key, value4] of Object.entries(member)) {
-      mergeAllOfKeyword(out, key, value4, patterns, baseKeywords, memberKeywords, ambiguousKeywords);
+    for (const [key, value6] of Object.entries(member)) {
+      mergeAllOfKeyword(out, key, value6, patterns, baseKeywords, memberKeywords, ambiguousKeywords);
     }
   }
   const uniquePatterns = Array.from(new Set(patterns));
@@ -51263,37 +59416,37 @@ function normalizeAllOf(schema3) {
   }
   return out;
 }
-function mergeAllOfKeyword(out, key, value4, patterns, baseKeywords, memberKeywords, ambiguousKeywords) {
+function mergeAllOfKeyword(out, key, value6, patterns, baseKeywords, memberKeywords, ambiguousKeywords) {
   switch (key) {
     case "description":
-      if (typeof value4 === "string")
-        appendDescription(out, value4);
+      if (typeof value6 === "string")
+        appendDescription(out, value6);
       return;
     case "pattern":
-      if (typeof value4 === "string")
-        patterns.push(value4);
+      if (typeof value6 === "string")
+        patterns.push(value6);
       return;
     case "minimum":
     case "exclusiveMinimum":
-      mergeLowerBound(out, key, value4);
+      mergeLowerBound(out, key, value6);
       return;
     case "maximum":
     case "exclusiveMaximum":
-      mergeUpperBound(out, key, value4);
+      mergeUpperBound(out, key, value6);
       return;
     case "minItems":
-      mergeMinimum(out, key, value4);
+      mergeMinimum(out, key, value6);
       return;
     case "maxItems":
-      mergeMaximum(out, key, value4);
+      mergeMaximum(out, key, value6);
       return;
     default:
       if (!normalizableAllOfKeywords.has(key) || baseKeywords.has(key) || ambiguousKeywords.has(key))
         return;
       if (!memberKeywords.has(key)) {
-        out[key] = value4;
+        out[key] = value6;
         memberKeywords.add(key);
-      } else if (out[key] !== value4) {
+      } else if (out[key] !== value6) {
         delete out[key];
         memberKeywords.delete(key);
         ambiguousKeywords.add(key);
@@ -51301,24 +59454,24 @@ function mergeAllOfKeyword(out, key, value4, patterns, baseKeywords, memberKeywo
       return;
   }
 }
-function mergeMinimum(schema3, key, value4) {
-  if (typeof value4 !== "number")
+function mergeMinimum(schema3, key, value6) {
+  if (typeof value6 !== "number")
     return;
   const current = schema3[key];
-  if (typeof current !== "number" || value4 > current)
-    schema3[key] = value4;
+  if (typeof current !== "number" || value6 > current)
+    schema3[key] = value6;
 }
-function mergeMaximum(schema3, key, value4) {
-  if (typeof value4 !== "number")
+function mergeMaximum(schema3, key, value6) {
+  if (typeof value6 !== "number")
     return;
   const current = schema3[key];
-  if (typeof current !== "number" || value4 < current)
-    schema3[key] = value4;
+  if (typeof current !== "number" || value6 < current)
+    schema3[key] = value6;
 }
-function mergeLowerBound(schema3, key, value4) {
-  if (typeof value4 !== "number") {
+function mergeLowerBound(schema3, key, value6) {
+  if (typeof value6 !== "number") {
     if (!Object.hasOwn(schema3, key))
-      schema3[key] = value4;
+      schema3[key] = value6;
     return;
   }
   const minimum = typeof schema3.minimum === "number" ? schema3.minimum : undefined;
@@ -51336,7 +59489,7 @@ function mergeLowerBound(schema3, key, value4) {
     };
   }
   const candidate = {
-    value: value4,
+    value: value6,
     exclusive: key === "exclusiveMinimum"
   };
   if (current === undefined || candidate.value > current.value || candidate.value === current.value && candidate.exclusive) {
@@ -51346,10 +59499,10 @@ function mergeLowerBound(schema3, key, value4) {
   delete schema3.exclusiveMinimum;
   schema3[current.exclusive ? "exclusiveMinimum" : "minimum"] = current.value;
 }
-function mergeUpperBound(schema3, key, value4) {
-  if (typeof value4 !== "number") {
+function mergeUpperBound(schema3, key, value6) {
+  if (typeof value6 !== "number") {
     if (!Object.hasOwn(schema3, key))
-      schema3[key] = value4;
+      schema3[key] = value6;
     return;
   }
   const maximum = typeof schema3.maximum === "number" ? schema3.maximum : undefined;
@@ -51367,7 +59520,7 @@ function mergeUpperBound(schema3, key, value4) {
     };
   }
   const candidate = {
-    value: value4,
+    value: value6,
     exclusive: key === "exclusiveMaximum"
   };
   if (current === undefined || candidate.value < current.value || candidate.value === current.value && candidate.exclusive) {
@@ -51412,8 +59565,8 @@ function hasReferenceCycle(root, definitions) {
     let cycle = false;
     walkJsonSchema(schema3, (node) => {
       if (!cycle && typeof node.$ref === "string") {
-        const target = node.$ref === "#" ? root : resolve$ref(node.$ref, definitions);
-        if (target !== undefined && visit(target))
+        const target2 = node.$ref === "#" ? root : resolve$ref(node.$ref, definitions);
+        if (target2 !== undefined && visit(target2))
           cycle = true;
       }
       return node;
@@ -51429,15 +59582,15 @@ function rewriteAnthropic(schema3) {
     const normalized = hoistAllOfDescriptions(schema4);
     const out = {};
     let unsupportedFormat;
-    for (const [key, value4] of Object.entries(normalized)) {
+    for (const [key, value6] of Object.entries(normalized)) {
       if (key === "format") {
-        if (typeof value4 === "string" && formats2.has(value4) && (normalized.type === undefined || normalized.type === "string")) {
-          out.format = value4;
-        } else if (typeof value4 === "string")
-          unsupportedFormat = value4;
+        if (typeof value6 === "string" && formats2.has(value6) && (normalized.type === undefined || normalized.type === "string")) {
+          out.format = value6;
+        } else if (typeof value6 === "string")
+          unsupportedFormat = value6;
       } else if (supportedKeywords2.has(key)) {
-        if (key !== "additionalProperties" || value4 === false)
-          out[key] = value4;
+        if (key !== "additionalProperties" || value6 === false)
+          out[key] = value6;
       }
     }
     if (unsupportedFormat !== undefined) {
@@ -51450,9 +59603,9 @@ function hoistAllOfDescriptions(schema3) {
   if (!Array.isArray(schema3.allOf))
     return schema3;
   const out = {};
-  for (const [key, value4] of Object.entries(schema3)) {
+  for (const [key, value6] of Object.entries(schema3)) {
     if (key !== "allOf")
-      out[key] = value4;
+      out[key] = value6;
   }
   const members = [];
   for (const member of schema3.allOf) {
@@ -51530,7 +59683,7 @@ var model = (model2, config) => make60("anthropic", model2, layer18({
   model: model2,
   config
 }));
-var make65 = /* @__PURE__ */ fnUntraced2(function* ({
+var make70 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model2,
   config: providerConfig
 }) {
@@ -51653,7 +59806,7 @@ var make65 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer18 = (options3) => effect(LanguageModel, make65(options3));
+var layer18 = (options3) => effect(LanguageModel, make70(options3));
 var withConfigOverride = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config), (config) => provideService2(self, Config, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -51846,7 +59999,7 @@ var prepareMessages = /* @__PURE__ */ fnUntraced2(function* ({
                     });
                   } else if (toolName === "code_execution" && hasProperty(part.params, "type") && part.params.type === "programmatic-tool-call") {
                     const {
-                      type,
+                      type: type2,
                       ...params
                     } = part.params;
                     content.push({
@@ -52512,18 +60665,18 @@ var makeResponse = /* @__PURE__ */ fnUntraced2(function* ({
             result: part.content
           });
           const content = part.content;
-          for (const result4 of content) {
+          for (const result5 of content) {
             const id2 = yield* idGenerator.generateId();
             parts2.push({
               type: "source",
               sourceType: "url",
               id: id2,
-              url: result4.url,
-              title: result4.title,
+              url: result5.url,
+              title: result5.title,
               metadata: {
                 anthropic: {
                   source: "web",
-                  pageAge: result4.page_age
+                  pageAge: result5.page_age
                 }
               }
             });
@@ -52870,18 +61023,18 @@ var makeStreamResponse = /* @__PURE__ */ fnUntraced2(function* ({
                 result: part.content
               });
               const content = part.content;
-              for (const result4 of content) {
+              for (const result5 of content) {
                 const id2 = yield* idGenerator.generateId();
                 parts2.push({
                   type: "source",
                   sourceType: "url",
                   id: id2,
-                  url: result4.url,
-                  title: result4.title,
+                  url: result5.url,
+                  title: result5.title,
                   metadata: {
                     anthropic: {
                       source: "web",
-                      pageAge: result4.page_age
+                      pageAge: result5.page_age
                     }
                   }
                 });
@@ -53445,221 +61598,8 @@ __export(exports_OpenAiClient, {
   layer: () => layer19,
   layerConfig: () => layerConfig2,
   layerWebSocketMode: () => layerWebSocketMode,
-  make: () => make67,
+  make: () => make71,
   withWebSocketMode: () => withWebSocketMode
-});
-
-// node_modules/.bun/effect@4.0.0-rc.111/node_modules/effect/dist/unstable/socket/Socket.js
-var TypeId61 = "~effect/socket/Socket";
-var Socket = /* @__PURE__ */ Service("effect/socket/Socket");
-var make66 = (options3) => Socket.of({
-  [TypeId61]: TypeId61,
-  runRaw: options3.runRaw,
-  run: options3.run ?? ((handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(encoder3.encode(data)) : data instanceof Uint8Array ? handler(data) : handler(new Uint8Array(data)), opts)),
-  runString: options3.runString ?? (options3.run ? (handler, opts) => options3.run((data) => handler(decoder2.decode(data)), opts) : (handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(data) : data instanceof Uint8Array ? handler(decoder2.decode(data)) : handler(decoder2.decode(new Uint8Array(data))), opts)),
-  writer: options3.writer
-});
-var encoder3 = /* @__PURE__ */ new TextEncoder;
-var decoder2 = /* @__PURE__ */ new TextDecoder;
-var CloseEventTypeId = "~effect/socket/Socket/CloseEvent";
-
-class CloseEvent {
-  [CloseEventTypeId];
-  code;
-  reason;
-  constructor(code = 1000, reason) {
-    this[CloseEventTypeId] = CloseEventTypeId;
-    this.code = code;
-    this.reason = reason;
-  }
-  toString() {
-    return this.reason ? `${this.code}: ${this.reason}` : `${this.code}`;
-  }
-}
-var isCloseEvent = (u) => hasProperty(u, CloseEventTypeId);
-var SocketErrorTypeId = "~effect/socket/Socket/SocketError";
-var isSocketError = (u) => hasProperty(u, SocketErrorTypeId);
-
-class SocketReadError extends (/* @__PURE__ */ Error4("effect/socket/Socket/SocketReadError")({
-  _tag: /* @__PURE__ */ tag("SocketReadError"),
-  cause: /* @__PURE__ */ Defect()
-})) {
-  message = `An error occurred during Read`;
-}
-
-class SocketWriteError extends (/* @__PURE__ */ Error4("effect/socket/Socket/SocketWriteError")({
-  _tag: /* @__PURE__ */ tag("SocketWriteError"),
-  cause: /* @__PURE__ */ Defect()
-})) {
-  message = `An error occurred during Write`;
-}
-
-class SocketOpenError extends (/* @__PURE__ */ Error4("effect/socket/Socket/SocketOpenError")({
-  _tag: /* @__PURE__ */ tag("SocketOpenError"),
-  kind: /* @__PURE__ */ Literals(["Unknown", "Timeout"]),
-  cause: /* @__PURE__ */ Defect()
-})) {
-  get message() {
-    return this.kind === "Timeout" ? `timeout waiting for "open"` : `An error occurred during Open`;
-  }
-}
-
-class SocketCloseError extends (/* @__PURE__ */ Error4("effect/socket/Socket/SocketCloseError")({
-  _tag: /* @__PURE__ */ tag("SocketCloseError"),
-  code: Int,
-  closeReason: /* @__PURE__ */ optional2(String6)
-})) {
-  static filterClean(isClean) {
-    return function(u) {
-      return SocketError.is(u) && u.reason._tag === "SocketCloseError" && isClean(u.reason.code) ? succeed2(u.reason) : fail2(u);
-    };
-  }
-  get message() {
-    if (this.closeReason) {
-      return `${this.code}: ${this.closeReason}`;
-    }
-    return `${this.code}`;
-  }
-}
-var SocketErrorReason = /* @__PURE__ */ Union2([SocketReadError, SocketWriteError, SocketOpenError, SocketCloseError]);
-
-class SocketError extends (/* @__PURE__ */ TaggedError3(SocketErrorTypeId)("SocketError", {
-  _tag: /* @__PURE__ */ tag("SocketError"),
-  reason: SocketErrorReason
-})) {
-  constructor(props) {
-    if ("cause" in props.reason) {
-      super({
-        ...props,
-        cause: props.reason.cause
-      });
-    } else {
-      super(props);
-    }
-  }
-  [SocketErrorTypeId] = SocketErrorTypeId;
-  static is(u) {
-    return isSocketError(u);
-  }
-  message = this.reason.message;
-}
-var defaultCloseCodeIsError = (_code) => true;
-
-class WebSocket extends (/* @__PURE__ */ Service()("~effect/socket/Socket/WebSocket")) {
-}
-
-class WebSocketConstructor extends (/* @__PURE__ */ Service()("@effect/platform/Socket/WebSocketConstructor")) {
-}
-var makeWebSocket = (url2, options3) => WebSocketConstructor.use((makeWs) => fromWebSocket(acquireRelease2((typeof url2 === "string" ? succeed7(url2) : url2).pipe(map8((url3) => makeWs(url3, options3?.protocols))), (ws) => sync4(() => ws.close(1000))), options3));
-var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
-  let currentWS;
-  let initial = true;
-  const latch = makeUnsafe5(false);
-  const acquireContext = fiber3.context;
-  const closeCodeIsError = options3?.closeCodeIsError ?? defaultCloseCodeIsError;
-  const runRaw = (handler, opts) => scopedWith2(fnUntraced2(function* (scope3) {
-    const fiberSet = yield* make55().pipe(provide(scope3));
-    const ws = yield* provide(acquire, scope3);
-    const run5 = yield* provideService2(runtime(fiberSet)(), WebSocket, ws);
-    let open3 = false;
-    function onMessage(event) {
-      if (event.data instanceof Blob) {
-        const effect2 = flatMap5(promise2(() => event.data.arrayBuffer()), (buffer3) => {
-          const result5 = handler(new Uint8Array(buffer3));
-          return isEffect2(result5) ? result5 : void_5;
-        });
-        return run5(effect2);
-      }
-      const result4 = handler(event.data instanceof ArrayBuffer ? new Uint8Array(event.data) : event.data);
-      if (isEffect2(result4)) {
-        run5(result4);
-      }
-    }
-    function onError5(cause) {
-      ws.removeEventListener("message", onMessage);
-      ws.removeEventListener("close", onClose);
-      doneUnsafe(fiberSet.deferred, fail7(new SocketError({
-        reason: open3 ? new SocketReadError({
-          cause
-        }) : new SocketOpenError({
-          kind: "Unknown",
-          cause
-        })
-      })));
-    }
-    function onClose(event) {
-      const code = typeof event.code === "number" ? event.code : 1001;
-      ws.removeEventListener("message", onMessage);
-      ws.removeEventListener("error", onError5);
-      doneUnsafe(fiberSet.deferred, fail7(new SocketError({
-        reason: new SocketCloseError({
-          code,
-          closeReason: event.reason
-        })
-      })));
-    }
-    ws.addEventListener("close", onClose, {
-      once: true
-    });
-    ws.addEventListener("error", onError5, {
-      once: true
-    });
-    ws.addEventListener("message", onMessage);
-    if (ws.readyState !== 1) {
-      const openDeferred = makeUnsafe2();
-      ws.addEventListener("open", () => {
-        open3 = true;
-        doneUnsafe(openDeferred, void_5);
-      }, {
-        once: true
-      });
-      yield* _await(openDeferred).pipe(timeoutOrElse2({
-        duration: options3?.openTimeout ?? 1e4,
-        orElse: () => fail7(new SocketError({
-          reason: new SocketOpenError({
-            kind: "Timeout",
-            cause: new Error('timeout waiting for "open"')
-          })
-        }))
-      }), raceFirst2(join4(fiberSet)));
-    }
-    open3 = true;
-    currentWS = ws;
-    latch.openUnsafe();
-    if (initial && options3?.onInitialRun) {
-      initial = false;
-      for (const event of options3.onInitialRun(ws))
-        onMessage(event);
-    }
-    if (opts?.onOpen)
-      yield* opts.onOpen;
-    return yield* catchFilter2(join4(fiberSet), SocketCloseError.filterClean((_) => !closeCodeIsError(_)), () => void_5);
-  })).pipe(updateContext2((input) => merge(acquireContext, input)), ensuring2(sync4(() => {
-    latch.closeUnsafe();
-    currentWS = undefined;
-  })));
-  const write2 = (chunk) => latch.whenOpen(suspend3(() => {
-    try {
-      const ws = currentWS;
-      if (isCloseEvent(chunk)) {
-        ws.close(chunk.code, chunk.reason);
-      } else {
-        ws.send(chunk);
-      }
-      return void_5;
-    } catch (cause) {
-      return fail7(new SocketError({
-        reason: new SocketWriteError({
-          cause
-        })
-      }));
-    }
-  }));
-  const writer = succeed7(write2);
-  return succeed7(make66({
-    runRaw,
-    writer
-  }));
 });
 
 // node_modules/.bun/@effect+ai-openai@4.0.0-rc.111+def9bb16a7ea1143/node_modules/@effect/ai-openai/dist/internal/errors.js
@@ -53762,14 +61702,14 @@ var mapStatusCodeError2 = /* @__PURE__ */ fnUntraced2(function* (error2, method)
       body = responseBody.value;
     }
   }
-  let json2 = undefined;
+  let json3 = undefined;
   try {
-    json2 = isNotUndefined(body) ? JSON.parse(body) : undefined;
+    json3 = isNotUndefined(body) ? JSON.parse(body) : undefined;
   } catch {
-    json2 = undefined;
+    json3 = undefined;
   }
-  const decoded = decodeUnknownOption2(OpenAiErrorBody)(json2);
-  const compatibleDecoded = decodeUnknownOption2(OpenAiCompatibleErrorBody)(json2);
+  const decoded = decodeUnknownOption2(OpenAiErrorBody)(json3);
+  const compatibleDecoded = decodeUnknownOption2(OpenAiCompatibleErrorBody)(json3);
   const message = isSome2(decoded) ? decoded.value.error.message : isSome2(compatibleDecoded) ? compatibleDecoded.value.error : undefined;
   const errorCode = isSome2(decoded) ? decoded.value.error.code ?? null : isSome2(compatibleDecoded) ? compatibleDecoded.value.code ?? null : null;
   const reason = mapStatusCodeToReason2({
@@ -53989,7 +61929,7 @@ var RefusalContent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("refusal"),
   refusal: String6
 });
-var TextContent2 = /* @__PURE__ */ Struct2({
+var TextContent5 = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("text"),
   text: String6
 });
@@ -54024,14 +61964,14 @@ var FilePathAnnotation = /* @__PURE__ */ Struct2({
   file_id: String6,
   index: Int
 });
-var Annotation = /* @__PURE__ */ Union2([FileCitationAnnotation, UrlCitationAnnotation, ContainerFileCitationAnnotation, FilePathAnnotation]);
+var Annotation2 = /* @__PURE__ */ Union2([FileCitationAnnotation, UrlCitationAnnotation, ContainerFileCitationAnnotation, FilePathAnnotation]);
 var OutputTextContent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("output_text"),
   text: String6,
-  annotations: /* @__PURE__ */ ArraySchema(Annotation),
+  annotations: /* @__PURE__ */ ArraySchema(Annotation2),
   logprobs: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ ArraySchema(Unknown2))
 });
-var OutputMessageContent = /* @__PURE__ */ Union2([InputTextContent, OutputTextContent, TextContent2, SummaryTextContent, ReasoningTextContent, RefusalContent, InputImageContent, ComputerScreenshotContent, InputFileContent]);
+var OutputMessageContent = /* @__PURE__ */ Union2([InputTextContent, OutputTextContent, TextContent5, SummaryTextContent, ReasoningTextContent, RefusalContent, InputImageContent, ComputerScreenshotContent, InputFileContent]);
 var OutputMessage = /* @__PURE__ */ Struct2({
   id: String6,
   type: /* @__PURE__ */ Literal2("message"),
@@ -54207,7 +62147,7 @@ var ResponseOutputTextAnnotationAddedEvent = /* @__PURE__ */ Struct2({
   content_index: Int,
   annotation_index: Int,
   sequence_number: Int,
-  annotation: Annotation
+  annotation: Annotation2
 });
 var ResponseReasoningSummaryPartAddedEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.reasoning_summary_part.added"),
@@ -54322,7 +62262,7 @@ var NestedResponseErrorEvent = /* @__PURE__ */ Struct2({
   })
 })));
 var knownResponseStreamEventTypes = /* @__PURE__ */ new Set(["response.created", "response.completed", "response.incomplete", "response.failed", "response.output_item.added", "response.output_item.done", "response.output_text.delta", "response.output_text.annotation.added", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.reasoning_summary_text.delta", "response.function_call_arguments.delta", "response.function_call_arguments.done", "response.code_interpreter_call_code.delta", "response.code_interpreter_call_code.done", "response.apply_patch_call_operation_diff.delta", "response.apply_patch_call_operation_diff.done", "response.image_generation_call.partial_image", "error"]);
-var UnknownResponseStreamEvent = /* @__PURE__ */ declare((value4) => hasProperty(value4, "type") && typeof value4.type === "string" && !knownResponseStreamEventTypes.has(value4.type), {
+var UnknownResponseStreamEvent = /* @__PURE__ */ declare((value6) => hasProperty(value6, "type") && typeof value6.type === "string" && !knownResponseStreamEventTypes.has(value6.type), {
   identifier: "UnknownResponseStreamEvent",
   description: "Fallback for unknown future stream events"
 });
@@ -54350,7 +62290,7 @@ var RedactedOpenAiHeaders = {
   OpenAiProject: "OpenAI-Project"
 };
 var withRedactedHeaders2 = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedOpenAiHeaders)));
-var make67 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make71 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiUrl = options3.apiUrl ?? "https://api.openai.com/v1";
   const httpClient = baseClient.pipe(mapRequest(flow(prependUrl(apiUrl), options3.apiKey ? bearerToken(value3(options3.apiKey)) : identity, options3.organizationId ? setHeader(RedactedOpenAiHeaders.OpenAiOrganization, value3(options3.organizationId)) : identity, options3.projectId ? setHeader(RedactedOpenAiHeaders.OpenAiProject, value3(options3.projectId)) : identity, acceptJson)), filterStatusOk2, options3.transformClient ? options3.transformClient : identity);
@@ -54396,13 +62336,13 @@ var make67 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createEmbedding
   });
 }, withRedactedHeaders2);
-var layer19 = (options3) => effect(OpenAiClient, make67(options3));
+var layer19 = (options3) => effect(OpenAiClient, make71(options3));
 var layerConfig2 = (options3) => effect(OpenAiClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const organizationId = isNotUndefined(options3?.organizationId) ? yield* options3.organizationId : undefined;
   const projectId = isNotUndefined(options3?.projectId) ? yield* options3.projectId : undefined;
-  return yield* make67({
+  return yield* make71({
     apiKey,
     apiUrl,
     organizationId,
@@ -54422,7 +62362,7 @@ var makeSocket = /* @__PURE__ */ gen4(function* () {
     return orDie3(httpClient.preprocess(post("/responses")));
   });
   const makeWebSocket2 = yield* WebSocketConstructor;
-  const decoder3 = new TextDecoder;
+  const decoder4 = new TextDecoder;
   const queueRef = yield* make19({
     idleTimeToLive: 60000,
     acquire: gen4(function* () {
@@ -54456,22 +62396,22 @@ var makeSocket = /* @__PURE__ */ gen4(function* () {
         })
       })));
       yield* socket.runRaw((msg) => {
-        const text2 = typeof msg === "string" ? msg : decoder3.decode(msg);
+        const text2 = typeof msg === "string" ? msg : decoder4.decode(msg);
         try {
           const event = decodeEvent(text2);
           if (event.type === "error" && "status" in event) {
             const status = Number(event.status);
             const error2 = "error" in event ? event.error : event;
-            const json2 = JSON.stringify(error2);
+            const json3 = JSON.stringify(error2);
             return fail7(make51({
               module: "OpenAiClient",
               method: "createResponseStream",
               reason: reasonFromHttpStatus({
-                description: json2,
+                description: json3,
                 status: isNaN(status) ? Object.hasOwn(errorTypeToStatus, error2.type) ? errorTypeToStatus[error2.type] : 500 : status,
                 metadata: error2,
                 http: {
-                  body: json2,
+                  body: json3,
                   request: {
                     method: "POST",
                     url: request4.url,
@@ -54562,7 +62502,7 @@ var exports_OpenAiLanguageModel = {};
 __export(exports_OpenAiLanguageModel, {
   Config: () => Config2,
   layer: () => layer20,
-  make: () => make68,
+  make: () => make72,
   model: () => model2,
   withConfigOverride: () => withConfigOverride2
 });
@@ -54617,7 +62557,7 @@ var model2 = (model3, config) => make60("openai", model3, layer20({
   model: model3,
   config
 }));
-var make68 = /* @__PURE__ */ fnUntraced2(function* ({
+var make72 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model3,
   config: providerConfig
 }) {
@@ -54721,7 +62661,7 @@ var make68 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer20 = (options3) => effect(LanguageModel, make68(options3));
+var layer20 = (options3) => effect(LanguageModel, make72(options3));
 var withConfigOverride2 = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config2), (config) => provideService2(self, Config2, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -56754,8 +64694,8 @@ var getUsage = (usage2) => {
     }
   };
 };
-var toServiceTier = (value4) => {
-  switch (value4) {
+var toServiceTier = (value6) => {
+  switch (value6) {
     case "default":
     case "auto":
     case "flex":
@@ -56764,7 +64704,7 @@ var toServiceTier = (value4) => {
       return {
         metadata: {
           openai: {
-            serviceTier: value4
+            serviceTier: value6
           }
         }
       };
@@ -56925,36 +64865,36 @@ var artifactPath = exports_Effect.fn("artifactPath")(function* (name) {
   const path = yield* exports_Path.Path;
   return path.join(yield* artifactDirectory, phaseFiles[name]);
 });
-var encodeArtifact = (name, value4) => {
+var encodeArtifact = (name, value6) => {
   switch (name) {
     case "admission":
-      return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(WorkOrderAdmission))(value4);
+      return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(WorkOrderAdmission))(value6);
     case "proposal":
-      return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(ProposedWorkOrder))(value4);
+      return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(ProposedWorkOrder))(value6);
     case "settlement":
-      return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(SettledWorkOrder))(value4);
+      return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(SettledWorkOrder))(value6);
     case "checked":
-      return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(CheckedWorkOrder))(value4);
+      return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(CheckedWorkOrder))(value6);
     case "implementationTerminal":
     case "checksTerminal":
     case "publicationTerminal":
-      return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(WorkOrderTerminal))(value4);
+      return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(WorkOrderTerminal))(value6);
   }
 };
-var writeArtifact = exports_Effect.fn("writeArtifact")(function* (name, value4) {
+var writeArtifact = exports_Effect.fn("writeArtifact")(function* (name, value6) {
   const fs = yield* exports_FileSystem.FileSystem;
   const path = yield* exports_Path.Path;
   const directory = yield* artifactDirectory;
   yield* fs.makeDirectory(directory, { recursive: true }).pipe(exports_Effect.mapError((cause) => failure("create artifact directory", cause)));
-  const encoded = yield* encodeArtifact(name, value4).pipe(exports_Effect.mapError((cause) => failure(`encode ${name} artifact`, cause)));
-  const target = path.join(directory, phaseFiles[name]);
-  const next2 = `${target}.next`;
-  yield* fs.writeFileString(next2, encoded).pipe(exports_Effect.andThen(fs.rename(next2, target)), exports_Effect.mapError((cause) => failure(`write ${name} artifact`, cause)));
+  const encoded = yield* encodeArtifact(name, value6).pipe(exports_Effect.mapError((cause) => failure(`encode ${name} artifact`, cause)));
+  const target2 = path.join(directory, phaseFiles[name]);
+  const next2 = `${target2}.next`;
+  yield* fs.writeFileString(next2, encoded).pipe(exports_Effect.andThen(fs.rename(next2, target2)), exports_Effect.mapError((cause) => failure(`write ${name} artifact`, cause)));
 });
 var readWithSchema = exports_Effect.fn("readArtifact")(function* (name, schema3) {
   const fs = yield* exports_FileSystem.FileSystem;
-  const target = yield* artifactPath(name);
-  const text2 = yield* fs.readFileString(target).pipe(exports_Effect.mapError((cause) => failure(`read ${name} artifact`, cause)));
+  const target2 = yield* artifactPath(name);
+  const text2 = yield* fs.readFileString(target2).pipe(exports_Effect.mapError((cause) => failure(`read ${name} artifact`, cause)));
   return yield* exports_Schema.decodeUnknownEffect(exports_Schema.fromJsonString(schema3))(text2).pipe(exports_Effect.mapError((cause) => failure(`decode ${name} artifact`, cause)));
 });
 var readAdmissionArtifact = readWithSchema("admission", WorkOrderAdmission);
@@ -56964,8 +64904,8 @@ var readCheckedArtifact = readWithSchema("checked", CheckedWorkOrder);
 var readTerminalArtifactOption = exports_Effect.fn("readTerminalArtifactOption")(function* () {
   const fs = yield* exports_FileSystem.FileSystem;
   for (const name of ["publicationTerminal", "checksTerminal", "implementationTerminal"]) {
-    const target = yield* artifactPath(name);
-    const present = yield* fs.exists(target).pipe(exports_Effect.mapError((cause) => failure(`inspect ${name} artifact`, cause)));
+    const target2 = yield* artifactPath(name);
+    const present = yield* fs.exists(target2).pipe(exports_Effect.mapError((cause) => failure(`inspect ${name} artifact`, cause)));
     if (present)
       return yield* readWithSchema(name, WorkOrderTerminal);
   }
@@ -57130,7 +65070,7 @@ var runIsolatedContainer = exports_Effect.fn("workOrderAction.runIsolatedContain
     reason: String(cause).slice(0, 4096)
   })));
   const runtimeRoot = yield* fs.realPath(input.runtimeRoot).pipe(exports_Effect.mapError((cause) => WorkspaceOperationFailure.make({ operation: input.operation, reason: String(cause) })));
-  if ([root, runtimeRoot].some((value4) => value4.includes(",") || [...value4].some((character) => character.charCodeAt(0) <= 31))) {
+  if ([root, runtimeRoot].some((value6) => value6.includes(",") || [...value6].some((character) => character.charCodeAt(0) <= 31))) {
     return yield* WorkspaceOperationFailure.make({
       operation: input.operation,
       reason: "worktree path cannot be expressed as a Docker bind mount"
@@ -57193,7 +65133,7 @@ var collectPatch = exports_Effect.fn("workOrderAction.collectPatch")(function* (
 var exactStrings = (left, right) => {
   const a = [...left].sort();
   const b = [...right].sort();
-  return a.length === b.length && a.every((value4, index2) => value4 === b[index2]);
+  return a.length === b.length && a.every((value6, index2) => value6 === b[index2]);
 };
 var validateProposedWorkOrder = exports_Effect.fn("validateProposedWorkOrder")(function* (input) {
   const fs = yield* exports_FileSystem.FileSystem;
@@ -57215,8 +65155,8 @@ var validateProposedWorkOrder = exports_Effect.fn("validateProposedWorkOrder")(f
       detail: "configured check names differ from the proposal trust envelope"
     });
   }
-  const head5 = yield* runGit(repositoryPath, ["rev-parse", "HEAD"], "resolve checked head").pipe(exports_Effect.flatMap((output) => decodeSha2("resolve checked head", output)));
-  if (head5 !== proposal.order.headSha) {
+  const head6 = yield* runGit(repositoryPath, ["rev-parse", "HEAD"], "resolve checked head").pipe(exports_Effect.flatMap((output) => decodeSha2("resolve checked head", output)));
+  if (head6 !== proposal.order.headSha) {
     return yield* WorkOrderValidationFailure.make({
       reason: "work-order-mismatch",
       detail: "check checkout is not the admitted pull-request head"
@@ -57286,7 +65226,7 @@ var validateProposedWorkOrder = exports_Effect.fn("validateProposedWorkOrder")(f
         detail: `fresh checkout for required check ${check2.name} did not reproduce the validated patch`
       });
     }
-    const result4 = yield* runIsolatedContainer({
+    const result5 = yield* runIsolatedContainer({
       args: check2.args,
       command: check2.command,
       containerImage,
@@ -57307,11 +65247,11 @@ var validateProposedWorkOrder = exports_Effect.fn("validateProposedWorkOrder")(f
     }
     return WorkOrderCheckResult.make({
       name: check2.name,
-      status: result4.exitCode === 0 ? "passed" : "failed",
-      summary: result4.output.slice(0, 2000) || (result4.exitCode === 0 ? "passed" : "failed")
+      status: result5.exitCode === 0 ? "passed" : "failed",
+      summary: result5.output.slice(0, 2000) || (result5.exitCode === 0 ? "passed" : "failed")
     });
   }).pipe(exports_Effect.scoped));
-  const failed = results.find((result4) => result4.status === "failed");
+  const failed = results.find((result5) => result5.status === "failed");
   if (failed !== undefined) {
     return yield* RequiredCheckFailed.make({ check: failed.name, summary: failed.summary });
   }
@@ -57357,9 +65297,9 @@ var reproduceCheckedPatch = exports_Effect.fn("reproduceCheckedPatch")(function*
         detail: `publisher did not load expected-head content for ${relative}`
       });
     }
-    const target = path.join(root, relative);
-    yield* fs.makeDirectory(path.dirname(target), { recursive: true });
-    yield* fs.writeFileString(target, content);
+    const target2 = path.join(root, relative);
+    yield* fs.makeDirectory(path.dirname(target2), { recursive: true });
+    yield* fs.writeFileString(target2, content);
   }
   yield* runGit(root, ["add", "--", ...changedPaths], "stage publisher base files");
   yield* runGit(root, [
@@ -57567,20 +65507,20 @@ var liveGitHubApiLayer = (options3) => exports_Layer.effect(GitHubApi, exports_E
     operation,
     reason: `${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
   });
-  const withHeaders = (request3) => request3.pipe(exports_HttpClientRequest.setHeaders({
+  const withHeaders2 = (request3) => request3.pipe(exports_HttpClientRequest.setHeaders({
     "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "effect-agent-pr-work-order-ingress"
   }), exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.bearerToken(options3.token));
   const execute2 = (operation, request3) => exports_HttpClient.execute(request3).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asFailure(operation)), exports_Effect.provideService(exports_HttpClient.HttpClient, client));
   const decodeJson = (schema3, operation) => (response) => response.json.pipe(exports_Effect.mapError(asFailure(operation)), exports_Effect.flatMap((payload) => exports_Schema.decodeUnknownEffect(schema3)(payload).pipe(exports_Effect.mapError(asFailure(operation)))));
   const loadPull = (repository, pullRequestNumber) => exports_Effect.gen(function* () {
-    const response = yield* execute2("get pull request", withHeaders(exports_HttpClientRequest.get(`${apiUrl}/repos/${repository}/pulls/${String(pullRequestNumber)}`)));
+    const response = yield* execute2("get pull request", withHeaders2(exports_HttpClientRequest.get(`${apiUrl}/repos/${repository}/pulls/${String(pullRequestNumber)}`)));
     return yield* decodeJson(GitHubPullWire, "get pull request")(response);
   });
   return GitHubApi.of({
     getPullRequest: (repository, pullRequestNumber) => loadPull(repository, pullRequestNumber).pipe(exports_Effect.map((wire) => pullRequestFromWire(repository, wire))),
     getReviewComment: (repository, commentId) => exports_Effect.gen(function* () {
-      const response = yield* execute2("get review comment", withHeaders(exports_HttpClientRequest.get(`${apiUrl}/repos/${repository}/pulls/comments/${commentId}`)));
+      const response = yield* execute2("get review comment", withHeaders2(exports_HttpClientRequest.get(`${apiUrl}/repos/${repository}/pulls/comments/${commentId}`)));
       const wire = yield* decodeJson(GitHubReviewCommentWire, "get review comment")(response);
       return reviewCommentFromWire(wire);
     })
@@ -57627,19 +65567,19 @@ var liveWorkOrderGitHubLayer = (options3) => exports_Layer.effect(WorkOrderGitHu
     operation,
     reason: String(cause).slice(0, 4096)
   });
-  const request3 = (value4) => value4.pipe(exports_HttpClientRequest.setHeaders({
+  const request3 = (value6) => value6.pipe(exports_HttpClientRequest.setHeaders({
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "effect-agent-pr-work-order"
   }), exports_HttpClientRequest.bearerToken(options3.token));
-  const execute2 = (operation, value4) => exports_HttpClient.execute(request3(value4)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError((cause) => failure2(operation, cause)), exports_Effect.provideService(exports_HttpClient.HttpClient, client));
-  const decode4 = (schema3, operation) => (response) => response.json.pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(schema3)), exports_Effect.mapError((cause) => failure2(operation, cause)));
-  const getPullRequest = (repository, pullRequestNumber) => execute2("get pull request", exports_HttpClientRequest.get(`${apiUrl}/repos/${repository}/pulls/${String(pullRequestNumber)}`)).pipe(exports_Effect.flatMap(decode4(GitHubPullWire, "get pull request")), exports_Effect.map((wire) => pullRequestFromWire(repository, wire)));
+  const execute2 = (operation, value6) => exports_HttpClient.execute(request3(value6)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError((cause) => failure2(operation, cause)), exports_Effect.provideService(exports_HttpClient.HttpClient, client));
+  const decode5 = (schema3, operation) => (response) => response.json.pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(schema3)), exports_Effect.mapError((cause) => failure2(operation, cause)));
+  const getPullRequest = (repository, pullRequestNumber) => execute2("get pull request", exports_HttpClientRequest.get(`${apiUrl}/repos/${repository}/pulls/${String(pullRequestNumber)}`)).pipe(exports_Effect.flatMap(decode5(GitHubPullWire, "get pull request")), exports_Effect.map((wire) => pullRequestFromWire(repository, wire)));
   const listReviewComments = (repository, pullRequestNumber) => exports_Effect.gen(function* () {
     const all6 = [];
     for (let page = 1;page <= 10; page += 1) {
       const response = yield* execute2("list review comments", exports_HttpClientRequest.get(`${apiUrl}/repos/${repository}/pulls/${String(pullRequestNumber)}/comments?per_page=100&page=${String(page)}`));
-      const decoded = yield* decode4(exports_Schema.Array(ReviewCommentWire), "list review comments")(response);
+      const decoded = yield* decode5(exports_Schema.Array(ReviewCommentWire), "list review comments")(response);
       all6.push(...decoded.map(commentFromWire));
       if (decoded.length < 100)
         return all6;
@@ -57649,11 +65589,11 @@ var liveWorkOrderGitHubLayer = (options3) => exports_Layer.effect(WorkOrderGitHu
       reason: "review comment history exceeds the 1,000-comment admission bound"
     });
   });
-  const createReply = (input) => execute2("create work-order journal reply", exports_HttpClientRequest.post(`${apiUrl}/repos/${input.repository}/pulls/${String(input.pullRequestNumber)}/comments/${input.commentId}/replies`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({ body: input.body }))).pipe(exports_Effect.flatMap(decode4(ReviewCommentWire, "create work-order journal reply")), exports_Effect.map(commentFromWire));
-  const updateComment = (input) => execute2("update work-order journal reply", exports_HttpClientRequest.patch(`${apiUrl}/repos/${input.repository}/pulls/comments/${input.commentId}`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({ body: input.body }))).pipe(exports_Effect.flatMap(decode4(ReviewCommentWire, "update work-order journal reply")), exports_Effect.map(commentFromWire));
+  const createReply = (input) => execute2("create work-order journal reply", exports_HttpClientRequest.post(`${apiUrl}/repos/${input.repository}/pulls/${String(input.pullRequestNumber)}/comments/${input.commentId}/replies`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({ body: input.body }))).pipe(exports_Effect.flatMap(decode5(ReviewCommentWire, "create work-order journal reply")), exports_Effect.map(commentFromWire));
+  const updateComment = (input) => execute2("update work-order journal reply", exports_HttpClientRequest.patch(`${apiUrl}/repos/${input.repository}/pulls/comments/${input.commentId}`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({ body: input.body }))).pipe(exports_Effect.flatMap(decode5(ReviewCommentWire, "update work-order journal reply")), exports_Effect.map(commentFromWire));
   const getFileContent = (input) => {
     const encodedPath = input.path.split("/").map(encodeURIComponent).join("/");
-    return execute2(`read expected-head file ${input.path}`, exports_HttpClientRequest.get(`${apiUrl}/repos/${input.repository}/contents/${encodedPath}?ref=${input.ref}`)).pipe(exports_Effect.flatMap(decode4(GitHubFileWire, `read expected-head file ${input.path}`)), exports_Effect.flatMap((wire) => {
+    return execute2(`read expected-head file ${input.path}`, exports_HttpClientRequest.get(`${apiUrl}/repos/${input.repository}/contents/${encodedPath}?ref=${input.ref}`)).pipe(exports_Effect.flatMap(decode5(GitHubFileWire, `read expected-head file ${input.path}`)), exports_Effect.flatMap((wire) => {
       const bytes2 = exports_Result.getOrUndefined(exports_Encoding.decodeBase64(wire.content.replaceAll(`
 `, "")));
       const content = bytes2 === undefined ? undefined : exports_Result.getOrUndefined(exports_Result.try({
@@ -57701,7 +65641,7 @@ var liveWorkOrderGitHubLayer = (options3) => exports_Layer.effect(WorkOrderGitHu
         }
       }
     };
-    const attempted = yield* execute2("publish work-order commit", exports_HttpClientRequest.post(graphqlUrl).pipe(exports_HttpClientRequest.bodyJsonUnsafe(body))).pipe(exports_Effect.flatMap(decode4(GraphQlCommitResponse, "publish work-order commit")), exports_Effect.option);
+    const attempted = yield* execute2("publish work-order commit", exports_HttpClientRequest.post(graphqlUrl).pipe(exports_HttpClientRequest.bodyJsonUnsafe(body))).pipe(exports_Effect.flatMap(decode5(GraphQlCommitResponse, "publish work-order commit")), exports_Effect.option);
     let confirmedError;
     if (attempted._tag === "Some") {
       const published = attempted.value.data?.createCommitOnBranch?.commit.oid;
@@ -57743,22 +65683,22 @@ var liveWorkOrderGitHubLayer = (options3) => exports_Layer.effect(WorkOrderGitHu
 }));
 
 // examples/pr-work-order-ingress/src/construct.ts
-var constructWorkOrder = exports_Effect.fn("constructWorkOrder")(function* (target, eventId) {
+var constructWorkOrder = exports_Effect.fn("constructWorkOrder")(function* (target2, eventId) {
   const policy2 = yield* IngressPolicy;
-  if (!policy2.authorizedActorIds.includes(target.actorId)) {
+  if (!policy2.authorizedActorIds.includes(target2.actorId)) {
     return yield* DispatchUnauthorized.make({
-      actorId: target.actorId,
+      actorId: target2.actorId,
       reason: "dispatch actor id is not a configured human principal"
     });
   }
-  if (target.repository !== policy2.repository || target.pullRequestNumber !== policy2.pullRequestNumber) {
+  if (target2.repository !== policy2.repository || target2.pullRequestNumber !== policy2.pullRequestNumber) {
     return yield* UntrustedPullRequest.make({
       reason: "event does not target the configured repository and pull request"
     });
   }
   const github = yield* GitHubApi;
-  const comment = yield* github.getReviewComment(target.repository, target.targetCommentId);
-  const pull = yield* github.getPullRequest(target.repository, target.pullRequestNumber);
+  const comment = yield* github.getReviewComment(target2.repository, target2.targetCommentId);
+  const pull = yield* github.getPullRequest(target2.repository, target2.pullRequestNumber);
   if (pull.repository !== policy2.repository || pull.pullRequestNumber !== policy2.pullRequestNumber || pull.baseRepository !== policy2.repository || pull.headRepository !== policy2.repository || pull.headIsFork) {
     return yield* UntrustedPullRequest.make({
       reason: "pull request is a fork or is not the configured same-repository target"
@@ -57800,10 +65740,10 @@ var constructWorkOrder = exports_Effect.fn("constructWorkOrder")(function* (targ
       body: comment.body
     },
     dispatch: {
-      kind: target.kind,
+      kind: target2.kind,
       eventId,
-      actorId: target.actorId,
-      actorLogin: target.actorLogin
+      actorId: target2.actorId,
+      actorLogin: target2.actorLogin
     }
   }));
 });
@@ -57833,8 +65773,8 @@ var hmacKey = (secret, operation) => exports_Effect.tryPromise({
 class WorkOrderJournalAuthenticator extends exports_Context.Service()("@effect-agent/example-pr-work-order-ingress/WorkOrderJournalAuthenticator") {
   static layer = (secret) => exports_Layer.succeed(WorkOrderJournalAuthenticator, WorkOrderJournalAuthenticator.of({
     render: (state, visible) => exports_Effect.gen(function* () {
-      const json2 = yield* exports_Schema.encodeEffect(exports_Schema.fromJsonString(WorkOrderJournalState))(state).pipe(exports_Effect.mapError((cause) => failure2("encode work-order journal", cause)));
-      const payload = exports_Encoding.encodeBase64(json2);
+      const json3 = yield* exports_Schema.encodeEffect(exports_Schema.fromJsonString(WorkOrderJournalState))(state).pipe(exports_Effect.mapError((cause) => failure2("encode work-order journal", cause)));
+      const payload = exports_Encoding.encodeBase64(json3);
       const key = yield* hmacKey(secret, "sign work-order journal");
       const signature = yield* exports_Effect.tryPromise({
         try: () => globalThis.crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${SIGNATURE_DOMAIN}${payload}`)),
@@ -57856,11 +65796,11 @@ ${MARKER_PREFIX}${payload}.${hex2}${MARKER_SUFFIX}`;
           const signature = match9[2];
           if (payload === undefined || signature === undefined)
             continue;
-          const json2 = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(payload));
+          const json3 = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(payload));
           const bytes2 = signatureBuffer(signature);
-          if (json2 === undefined || bytes2 === undefined)
+          if (json3 === undefined || bytes2 === undefined)
             continue;
-          const state = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(WorkOrderJournalState))(json2);
+          const state = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(WorkOrderJournalState))(json3);
           if (exports_Option.isNone(state))
             continue;
           const valid = yield* exports_Effect.tryPromise({
@@ -58134,15 +66074,15 @@ var terminalFailure = (admission, error2) => {
     detail: described.detail
   });
 };
-var outputLine = (name, value4) => `${name}=${value4.replaceAll(`
+var outputLine = (name, value6) => `${name}=${value6.replaceAll(`
 `, " ").slice(0, 1000)}
 `;
 var writeOutputs = exports_Effect.fn("workOrderAction.writeOutputs")(function* (entries3) {
-  const target = yield* exports_Config.string("GITHUB_OUTPUT").pipe(exports_Config.withDefault(""));
-  if (target === "")
+  const target2 = yield* exports_Config.string("GITHUB_OUTPUT").pipe(exports_Config.withDefault(""));
+  if (target2 === "")
     return;
   const fs = yield* exports_FileSystem.FileSystem;
-  yield* fs.writeFileString(target, entries3.map(([name, value4]) => outputLine(name, value4)).join(""), { flag: "a" });
+  yield* fs.writeFileString(target2, entries3.map(([name, value6]) => outputLine(name, value6)).join(""), { flag: "a" });
 });
 var parseJsonConfig = exports_Effect.fn("workOrderAction.parseJsonConfig")(function* (name, schema3) {
   const text2 = yield* exports_Config.string(name).pipe(exports_Config.withDefault("[]"));
@@ -58216,8 +66156,8 @@ var admissionContext = exports_Effect.fn("workOrderAction.admissionContext")(fun
 });
 var admitWorkOrder = exports_Effect.fn("workOrderAction.admit")(function* (request3) {
   const { delivery, runId } = request3;
-  const target = yield* parseDispatchTarget(delivery);
-  const order = yield* constructWorkOrder(target, delivery.deliveryId);
+  const target2 = yield* parseDispatchTarget(delivery);
+  const order = yield* constructWorkOrder(target2, delivery.deliveryId);
   const eventId = order.dispatch.eventId;
   const repository = order.repository;
   const digest2 = yield* workOrderDigest(order);
@@ -58325,7 +66265,7 @@ var implement = exports_Effect.fn("workOrderAction.implement")(function* () {
     timeout: exports_Duration.minutes(timeoutMinutes)
   }).pipe(exports_Effect.provide(exports_Layer.merge(host2, exports_OpenAiClient.layerConfig({ apiKey: exports_Config.redacted("OPENAI_API_KEY") }).pipe(exports_Layer.provide(exports_FetchHttpClient.layer)))));
   yield* run5.pipe(exports_Effect.matchEffect({
-    onSuccess: (result4) => result4._tag === "proposed" ? writeArtifact("proposal", result4).pipe(exports_Effect.andThen(writeOutputs([["candidate", "true"]]))) : writeArtifact("settlement", result4).pipe(exports_Effect.andThen(writeArtifact("implementationTerminal", terminalFromSettlement(result4))), exports_Effect.andThen(writeOutputs([["candidate", "false"]]))),
+    onSuccess: (result5) => result5._tag === "proposed" ? writeArtifact("proposal", result5).pipe(exports_Effect.andThen(writeOutputs([["candidate", "true"]]))) : writeArtifact("settlement", result5).pipe(exports_Effect.andThen(writeArtifact("implementationTerminal", terminalFromSettlement(result5))), exports_Effect.andThen(writeOutputs([["candidate", "false"]]))),
     onFailure: (error2) => writeArtifact("implementationTerminal", terminalFailure(admission, error2)).pipe(exports_Effect.andThen(writeOutputs([["candidate", "false"]])))
   }));
 });
@@ -58351,7 +66291,7 @@ var checks = exports_Effect.fn("workOrderAction.checks")(function* () {
 var exactStrings2 = (left, right) => {
   const a = [...left].sort();
   const b = [...right].sort();
-  return a.length === b.length && a.every((value4, index2) => value4 === b[index2]);
+  return a.length === b.length && a.every((value6, index2) => value6 === b[index2]);
 };
 var verifyPublisherEnvelope = exports_Effect.fn("verifyPublisherEnvelope")(function* (input) {
   const { admission, proposal } = input.checked;
@@ -58592,10 +66532,10 @@ var gid = process.getgid?.();
 if (uid !== undefined && gid !== undefined) {
   process.env.EFFECT_AGENT_RUNNER_USER = `${String(uid)}:${String(gid)}`;
 }
-for (const [input, target] of INPUT_TO_ENV) {
-  const value4 = process.env[input];
-  if (value4 !== undefined && value4 !== "" && (process.env[target] ?? "") === "") {
-    process.env[target] = value4;
+for (const [input, target2] of INPUT_TO_ENV) {
+  const value6 = process.env[input];
+  if (value6 !== undefined && value6 !== "" && (process.env[target2] ?? "") === "") {
+    process.env[target2] = value6;
   }
 }
 exports_NodeRuntime.runMain(workOrderActionProgram.pipe(exports_Effect.scoped, exports_Effect.provide(exports_Layer.mergeAll(exports_NodeServices.layer, exports_FetchHttpClient.layer))), { disableErrorReporting: true });
