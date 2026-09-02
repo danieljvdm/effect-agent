@@ -5,7 +5,7 @@ const ErrorTag = Schema.Struct({ _tag: Schema.NonEmptyString });
 const decodeErrorMessage = Schema.decodeUnknownOption(ErrorMessage);
 const decodeErrorTag = Schema.decodeUnknownOption(ErrorTag);
 
-export interface ForeignDiagnostic {
+interface ForeignDiagnostic {
   readonly tag?: string | undefined;
   readonly message?: string | undefined;
 }

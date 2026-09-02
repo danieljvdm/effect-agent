@@ -1,5 +1,0 @@
-# TLC metadirs and pcal.trans backups
-states/
-*.old
-# a locally downloaded copy of the TLA+ tools (see README.md)
-tla2tools.jar
